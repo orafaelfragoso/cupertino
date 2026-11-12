@@ -496,6 +496,18 @@ pub(crate) struct Blink {
     since: Timestamp,
 }
 
+/// The opacity of a caret whose blink restarted at `since`, at `now`: shown for the first stretch, then fading out and
+/// in, steady with Reduce Motion and once it has blinked a while. For a caret a view draws itself.
+pub fn caret_opacity(env: &Environment, since: Timestamp, now: Timestamp) -> f32 {
+    Blink { since }.opacity(env, now)
+}
+
+/// Whether a caret whose blink restarted at `since` may still change its opacity after `now`, so its view keeps
+/// drawing frames.
+pub fn caret_blinking(env: &Environment, since: Timestamp, now: Timestamp) -> bool {
+    Blink { since }.next_edge(env, now).is_some()
+}
+
 /// Where `elapsed` nanoseconds after a restart lies in the blink cycle of a phase of `phase` nanoseconds.
 enum Cycle {
     /// Fully shown for this many more nanoseconds.

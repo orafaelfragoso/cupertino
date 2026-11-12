@@ -57,19 +57,28 @@ const PAGE_INSET: Insets = Insets {
 };
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
-/// How far a pane may pass its window's height, in points, before it counts as longer than the window.
-const OVERFLOW_SLACK: f64 = 0.5;
+/// How much wider the sidebar is when the session asks for scroll bars that always show: the list keeps its width
+/// beside the track.
+const ALWAYS_SHOWN_SIDEBAR_EXTRA: f64 = 17.0;
+
+/// The room the sidebar gains for the scroll bar's track: nothing while bars show only when scrolling.
+fn sidebar_extra() -> f64 {
+    match cupertino_kit::core::session_scroll_bars() {
+        Some(cupertino_kit::platform::ScrollBars::Always) => ALWAYS_SHOWN_SIDEBAR_EXTRA,
+        _ => 0.0,
+    }
+}
 
 /// Window metrics (§4.1).
 pub mod metrics {
     /// The default content width before the scale factor, and the height.
-    pub const DEFAULT_WIDTH: f64 = 739.0;
-    pub const DEFAULT_HEIGHT: f64 = 625.0;
+    pub const DEFAULT_WIDTH: f64 = 740.0;
+    pub const DEFAULT_HEIGHT: f64 = 748.0;
     /// Smallest window height: approximate (the standard panel's minimum content height, by analogy; O6).
     pub const MIN_HEIGHT: f64 = 400.0;
 }
 
-/// The default window size at interface width factor `f`: `(ceil(739 f), 625)`.
+/// The default window size at interface width factor `f`: `(ceil(740 f), 748)`.
 pub fn default_size(f: f64) -> Size {
     Size::new((metrics::DEFAULT_WIDTH * f).ceil(), metrics::DEFAULT_HEIGHT)
 }
@@ -194,6 +203,8 @@ pub struct Shell {
     split: SplitLayout,
     sidebar_scroll: ScrollState,
     content_scroll: ScrollState,
+    /// How far each strip of thumbnails is scrolled, by control.
+    tile_scrolls: Vec<(ControlId, ScrollState)>,
     /// Where the sheet's list is scrolled, and the rows it was scrolled on: another list starts at its top.
     sheet_scroll: (Vec<String>, ScrollState),
     query: String,
@@ -212,6 +223,8 @@ pub enum Message {
     ContentScroll(ScrollState),
     /// The sheet's list scrolled.
     SheetScroll(ScrollState),
+    /// The strip of thumbnails of this control scrolled.
+    TileScroll(ControlId, ScrollState),
     Query(TextChange),
     /// Return in the search field: the first result.
     Search,
@@ -342,9 +355,20 @@ impl Shell {
                     self.state.follow()?;
                 }
             }
-            Message::Split(split) => self.split = split,
+            Message::Split(split) => {
+                self.split = SplitLayout {
+                    position: (split.position - sidebar_extra()).max(0.0),
+                    ..split
+                }
+            }
             Message::SidebarScroll(scroll) => self.sidebar_scroll = scroll,
             Message::ContentScroll(scroll) => self.content_scroll = scroll,
+            Message::TileScroll(id, scroll) => {
+                match self.tile_scrolls.iter_mut().find(|(i, _)| *i == id) {
+                    Some(entry) => entry.1 = scroll,
+                    None => self.tile_scrolls.push((id, scroll)),
+                }
+            }
             Message::SheetScroll(scroll) => {
                 let rows = self.state.sheet.as_ref().and_then(|s| s.rows());
                 self.sheet_scroll = (rows.map(|(r, _)| r).unwrap_or_default(), scroll);
@@ -522,13 +546,9 @@ impl Shell {
         .key("sidebar")
     }
 
-    /// The page's title after the back and forward buttons, sharing the toolbar row; none for a pane whose page shows
-    /// its title on its header card ([`pages::has_header_card`]).
+    /// The page's title after the back and forward buttons, sharing the toolbar row.
     fn toolbar(&self) -> Vec<Element<Message>> {
         let page = self.state.history.current();
-        if page.sub.is_none() && pages::has_header_card(page.pane) {
-            return Vec::new();
-        }
         vec![Element::new(ToolbarTitle {
             text: page.title(self.state.live.has_battery()).into(),
         })
@@ -540,15 +560,29 @@ impl Shell {
             let page = self.state.history.current();
             let sections = self.state.sections();
             let has_battery = self.state.live.has_battery();
-            let header = (page.sub.is_none() && pages::has_header_card(page.pane)).then(|| {
-                form::header(
+            let mut blocks = pages::blocks(page, sections.clone());
+            let has_header = page.sub.is_none() && pages::has_header(page.pane);
+            let master = if has_header {
+                form::take_master(page.pane, &mut blocks)
+            } else {
+                None
+            };
+            let header = has_header.then(|| {
+                form::pane_header(
                     page.pane,
                     page.pane.title(has_battery),
                     pages::description(page.pane, has_battery),
+                    master.as_ref(),
                 )
             });
-            let blocks = pages::blocks(page, sections.clone());
-            form::page(header, &blocks, &sections, self.open)
+            let icons = self.state.app_icons();
+            let view = form::View {
+                open: self.open,
+                icons: &icons,
+                thumbnails: &self.state.thumbnail_images,
+                tile_scrolls: &self.tile_scrolls,
+            };
+            form::page(header, &blocks, &sections, &view)
         } else {
             form::results(&self.hits())
         };
@@ -564,13 +598,9 @@ impl Shell {
             align: Align::Stretch,
             children: vec![body],
         });
-        // a pane longer than the window keeps its scroll bar shown beside it, so that it shows it goes on below
-        let scroll = self.content_scroll;
-        let scroller = if scroll.content.height > scroll.viewport.height + OVERFLOW_SLACK {
-            Scroller::Always
-        } else {
-            Scroller::Overlay
-        };
+        // overlay bars, as everywhere; the session may ask for bars that always show
+        let scroller = Scroller::Overlay;
+        let current = self.state.history.current();
         let stack = Element::from(NavigationStack {
             content: Element::from(ScrollView {
                 content: page,
@@ -580,7 +610,8 @@ impl Shell {
                 scroller,
                 on_scroll: Box::new(Message::ContentScroll),
             })
-            .key("content"),
+            // each page is a view of its own, so its scroll bar shows when the page appears
+            .key(format!("content-{}-{:?}", current.pane.key(), current.sub)),
             toolbar: self.toolbar(),
             can_go_back: self.state.history.can_go_back(),
             can_go_forward: self.state.history.can_go_forward(),
@@ -627,6 +658,7 @@ impl Application for SettingsApp {
             },
             sidebar_scroll: UNSCROLLED,
             content_scroll: UNSCROLLED,
+            tile_scrolls: Vec::new(),
             sheet_scroll: (Vec::new(), UNSCROLLED),
             query: String::new(),
             query_revision: 0,
@@ -652,7 +684,10 @@ impl Application for SettingsApp {
             .collect();
         let split = Element::from(SidebarWindow {
             label: "Sidebar".into(),
-            layout: shell.split,
+            layout: SplitLayout {
+                position: shell.split.position + sidebar_extra(),
+                ..shell.split
+            },
             min_sidebar: MIN_SIDEBAR,
             min_content: MIN_CONTENT,
             on_change: Some(Box::new(Message::Split)),

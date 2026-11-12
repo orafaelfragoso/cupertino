@@ -4,7 +4,10 @@
 use crate::icon;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::{FormBackground, FormGroup, FormHeader, FormRow, IconTile, NavigationRow, TileColor};
+use crate::{
+    AppIcon, AppIconRow, FormBackground, FormGroup, FormHeader, FormRow, IconTile, NavigationRow,
+    PaneHeader, Stack, Text, TextRole, TileColor,
+};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Environment, Event, EventCx,
@@ -37,9 +40,14 @@ const SEPARATOR_ALPHA: f32 = 0.047;
 const SEPARATOR: f64 = 1.0;
 const SEPARATOR_INSET: f64 = 10.0;
 
-/// A row's least height, and with an icon tile.
+/// A row's least height, and with an icon tile of the standard size.
 pub const FORM_ROW_HEIGHT: f64 = 36.5;
 pub const FORM_TILE_ROW_HEIGHT: f64 = 48.0;
+/// The least height of a row with a 22 pt icon, and with a 20 pt one.
+pub const FORM_ICON_ROW_HEIGHT: f64 = 43.0;
+pub const FORM_SMALL_ICON_ROW_HEIGHT: f64 = 42.0;
+/// The least height of a row with an icon and a second line of text.
+pub const FORM_ICON_TWO_LINE_ROW_HEIGHT: f64 = 53.0;
 /// A row's padding: above and below its content (a control padded out to the least pointer target, as a pop-up
 /// button is, still leaves the row at the least height), at its edges, and at the leading edge before a tile.
 const ROW_PADDING_Y: f64 = 6.0;
@@ -48,6 +56,12 @@ const TILE_ROW_LEADING: f64 = 12.0;
 /// The tile of a row, and the space between it and the content.
 const ROW_TILE: f64 = 24.0;
 const ROW_TILE_GAP: f64 = 12.0;
+/// The sides of the smaller icons a row may carry.
+const ICON_TILE: f64 = 22.0;
+const SMALL_ICON_TILE: f64 = 20.0;
+/// A smaller icon's row: the space before it and between it and the content.
+const ICON_ROW_LEADING: f64 = 9.0;
+const ICON_ROW_GAP: f64 = 10.0;
 /// The chevron of a navigation row: its symbol's size and the slot it is centred in at the trailing edge.
 const CHEVRON: f64 = 11.0;
 const CHEVRON_SLOT: f64 = 12.0;
@@ -339,27 +353,59 @@ impl<M: 'static> Widget<M> for Strut {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The padding of a row: a tile row starts further in.
-fn row_insets(tiled: bool) -> Insets {
+/// What a row's icon asks of the row: its side, the space before it and after it, and the row's least height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IconRow {
+    side: f64,
+    leading: f64,
+    gap: f64,
+    height: f64,
+}
+
+/// The row of an icon `size` points across: a 20 or 22 pt icon sits in a shorter row, closer to the edge, than the
+/// standard 24 pt tile. A size in between takes the next one up.
+fn icon_row(size: f64) -> IconRow {
+    if size <= SMALL_ICON_TILE + 0.5 {
+        IconRow {
+            side: SMALL_ICON_TILE,
+            leading: ICON_ROW_LEADING,
+            gap: ICON_ROW_GAP,
+            height: FORM_SMALL_ICON_ROW_HEIGHT,
+        }
+    } else if size <= ICON_TILE + 0.5 {
+        IconRow {
+            side: ICON_TILE,
+            leading: ICON_ROW_LEADING,
+            gap: ICON_ROW_GAP,
+            height: FORM_ICON_ROW_HEIGHT,
+        }
+    } else {
+        IconRow {
+            side: ROW_TILE,
+            leading: TILE_ROW_LEADING,
+            gap: ROW_TILE_GAP,
+            height: FORM_TILE_ROW_HEIGHT,
+        }
+    }
+}
+
+/// The padding of a row: a row with an icon starts further in or less far, by the icon's size.
+fn row_insets(icon: Option<IconRow>) -> Insets {
     Insets {
         top: ROW_PADDING_Y,
-        left: if tiled { TILE_ROW_LEADING } else { ROW_PADDING },
+        left: icon.map_or(ROW_PADDING, |i| i.leading),
         bottom: ROW_PADDING_Y,
         right: ROW_PADDING,
     }
 }
 
-fn row_height(tiled: bool) -> f64 {
-    if tiled {
-        FORM_TILE_ROW_HEIGHT
-    } else {
-        FORM_ROW_HEIGHT
-    }
+fn row_height(icon: Option<IconRow>) -> f64 {
+    icon.map_or(FORM_ROW_HEIGHT, |i| i.height)
 }
 
 /// A row's tile, content and strut side by side; the content takes what the others leave.
 struct Row<M> {
-    tiled: bool,
+    icon: Option<IconRow>,
     children: Vec<Element<M>>,
 }
 
@@ -401,17 +447,17 @@ impl<M: 'static> Widget<M> for Gap {
 
 impl<M: 'static> From<FormRow<M>> for Element<M> {
     fn from(row: FormRow<M>) -> Self {
-        let tiled = row.tile.is_some();
-        let mut children = vec![Element::new(Strut(row_height(tiled) - 2.0 * ROW_PADDING_Y))];
-        if let Some(tile) = row.tile {
+        let icon = row.tile.as_ref().map(|t| icon_row(t.size));
+        let mut children = vec![Element::new(Strut(row_height(icon) - 2.0 * ROW_PADDING_Y))];
+        if let (Some(tile), Some(icon)) = (row.tile, icon) {
             children.push(Element::new(IconTile {
-                size: ROW_TILE,
+                size: icon.side,
                 ..tile
             }));
-            children.push(Element::new(Gap(ROW_TILE_GAP)));
+            children.push(Element::new(Gap(icon.gap)));
         }
         children.push(row.content.fill());
-        Element::new(Row { tiled, children })
+        Element::new(Row { icon, children })
     }
 }
 
@@ -421,7 +467,7 @@ impl<M: 'static> Widget<M> for Row<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fill,
-            insets: row_insets(self.tiled),
+            insets: row_insets(self.icon),
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Horizontal,
                 spacing: 0.0,
@@ -438,7 +484,7 @@ impl<M: 'static> Widget<M> for Row<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.tiled != old.tiled {
+        if self.icon != old.icon {
             Change::Layout
         } else {
             Change::None
@@ -462,11 +508,12 @@ impl<M: Clone + 'static> NavigationRow<M> {
     /// The tile's square, the label's room and the chevron's slot of a row `size` big, from its leading edge; mirror
     /// them for a right-to-left layout.
     fn places(&self, size: Size) -> (Option<Rect>, Rect, Rect) {
-        let insets = row_insets(self.tile.is_some());
+        let icon = self.tile.as_ref().map(|t| icon_row(t.size));
+        let insets = row_insets(icon);
         let mut start = insets.left;
-        let tile = self.tile.as_ref().map(|_| {
-            let rect = Rect::new(start, (size.height - ROW_TILE) / 2.0, ROW_TILE, ROW_TILE);
-            start += ROW_TILE + ROW_TILE_GAP;
+        let tile = icon.map(|icon| {
+            let rect = Rect::new(start, (size.height - icon.side) / 2.0, icon.side, icon.side);
+            start += icon.side + icon.gap;
             rect
         });
         let chevron = Rect::new(
@@ -513,7 +560,9 @@ impl<M: Clone + 'static> Widget<M> for NavigationRow<M> {
     }
 
     fn update(&self, old: &Self, _: &mut Press) -> Change {
-        if self.tile.is_some() != old.tile.is_some() {
+        if self.tile.as_ref().map(|t| icon_row(t.size))
+            != old.tile.as_ref().map(|t| icon_row(t.size))
+        {
             Change::Layout
         } else if self.label != old.label
             || self.tile != old.tile
@@ -527,7 +576,10 @@ impl<M: Clone + 'static> Widget<M> for NavigationRow<M> {
 
     fn measure(&self, _: &Press, constraints: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(constraints.width.ideal(), row_height(self.tile.is_some())),
+            size: Size::new(
+                constraints.width.ideal(),
+                row_height(self.tile.as_ref().map(|t| icon_row(t.size))),
+            ),
             baseline: None,
         }
     }
@@ -607,6 +659,209 @@ impl<M: Clone + 'static> Widget<M> for NavigationRow<M> {
             cx.action(Action::Click);
         }
     }
+}
+
+impl<M: 'static> From<AppIconRow<M>> for Element<M> {
+    fn from(row: AppIconRow<M>) -> Self {
+        let icon = icon_row(row.size);
+        let height = if row.two_line {
+            FORM_ICON_TWO_LINE_ROW_HEIGHT
+        } else {
+            icon.height
+        };
+        let children = vec![
+            Element::new(Strut(height - 2.0 * ROW_PADDING_Y)),
+            Element::new(AppIcon {
+                name: row.icon,
+                size: icon.side,
+            }),
+            Element::new(Gap(icon.gap)),
+            row.content.fill(),
+        ];
+        Element::new(Row {
+            icon: Some(icon),
+            children,
+        })
+    }
+}
+
+impl<M: 'static> Widget<M> for AppIcon {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.size != old.size {
+            Change::Layout
+        } else if self != old {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(self.size, self.size),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    /// Drawn at the device's pixels, centred in the node.
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let env = cx.env();
+        let scale = env.scale;
+        let px = (self.size * scale).round().max(1.0) as u32;
+        let Some(icon) = env.icons.named(&self.name, px) else {
+            return;
+        };
+        let size = cx.size();
+        let side = self.size.min(size.width).min(size.height);
+        let dst = Rect::new(
+            (size.width - side) / 2.0,
+            (size.height - side) / 2.0,
+            side,
+            side,
+        );
+        cx.image(
+            icon.id,
+            &icon.image,
+            dst,
+            cupertino_ui_render::Sampling::Linear,
+        );
+    }
+
+    /// Decorative: the row it stands in names it.
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// The tile of a compact pane header, and the space between it and the text; the header's padding.
+const PANE_HEADER_TILE: f64 = 26.0;
+const PANE_HEADER_GAP: f64 = 10.0;
+const PANE_HEADER_PADDING: Insets = Insets {
+    top: 12.0,
+    left: 12.0,
+    bottom: 12.0,
+    right: 12.0,
+};
+/// A compact pane header's description, in points, and the space between the title and it.
+const PANE_HEADER_DESCRIPTION: f32 = 11.0;
+const PANE_HEADER_LINE_GAP: f64 = 2.0;
+
+impl<M: 'static> From<PaneHeader<M>> for Element<M> {
+    fn from(header: PaneHeader<M>) -> Self {
+        let text = |content: &str, style: TextStyle, secondary: bool| {
+            Element::new(Text {
+                content: AttributedText::plain(content, style),
+                role: TextRole::Body,
+                wrap: true,
+                secondary,
+                selected: false,
+            })
+        };
+        let body = TextStyle::new(13.0);
+        let mut lines = vec![text(
+            &header.title,
+            TextStyle {
+                weight: FontWeight(700),
+                ..body
+            },
+            false,
+        )];
+        if !header.description.is_empty() {
+            lines.push(text(
+                &header.description,
+                TextStyle::new(PANE_HEADER_DESCRIPTION),
+                true,
+            ));
+        }
+        let mut children = vec![
+            Element::new(IconTile {
+                size: PANE_HEADER_TILE,
+                ..header.tile
+            }),
+            Element::new(Gap(PANE_HEADER_GAP)),
+            Element::new(Stack {
+                axis: Axis::Vertical,
+                padding: Insets::ZERO,
+                spacing: PANE_HEADER_LINE_GAP,
+                align: Align::Stretch,
+                children: lines,
+            })
+            .fill(),
+        ];
+        children.extend(header.switch.map(|s| {
+            Element::new(Stack {
+                axis: Axis::Horizontal,
+                padding: Insets {
+                    left: PANE_HEADER_GAP,
+                    ..Insets::ZERO
+                },
+                spacing: 0.0,
+                align: Align::Center,
+                children: vec![s],
+            })
+        }));
+        Element::new(Group {
+            rows: vec![Element::new(HeaderRow {
+                children,
+                insets: PANE_HEADER_PADDING,
+            })],
+        })
+    }
+}
+
+/// The compact header's tile, text and switch side by side, the tile and switch centred on the text's height.
+struct HeaderRow<M> {
+    children: Vec<Element<M>>,
+    insets: Insets,
+}
+
+impl<M: 'static> Widget<M> for HeaderRow<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fill,
+            insets: self.insets,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Center,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The header's tile, title and description laid out for a card `width` wide.

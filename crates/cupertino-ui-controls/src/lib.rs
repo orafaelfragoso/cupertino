@@ -41,6 +41,7 @@ mod stepper;
 mod tabs;
 mod text;
 mod text_box;
+mod thumbnail;
 mod tile_sidebar;
 mod toggle;
 mod toolbar;
@@ -51,8 +52,11 @@ mod window_group;
 pub use choice::{segment_at, ChoiceState};
 pub use date_picker::DatePickerState;
 pub use editor::EditorState;
-pub use field::{FieldState, SecureState};
-pub use form::{FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT};
+pub use field::{caret_blinking, caret_opacity, FieldState, SecureState};
+pub use form::{
+    FORM_ICON_ROW_HEIGHT, FORM_ICON_TWO_LINE_ROW_HEIGHT, FORM_ROW_HEIGHT,
+    FORM_SMALL_ICON_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT,
+};
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
 pub use list::ListState;
 pub use press::Press;
@@ -158,6 +162,20 @@ pub enum ImageFit {
 pub struct ImageSource {
     pub id: ResourceId,
     pub image: ImageResource,
+}
+
+/// A picture of a grid of pictures: the `image` cropped to `size` points with rounded corners, `label` as its caption
+/// under it when `caption`, and a neutral ring around it when `selected`. One Tab stop; a click, Space or Return sends
+/// `on_press`. It takes up `size` and the room the ring needs on every side, and the caption's line under it.
+pub struct ThumbnailTile<M> {
+    pub label: String,
+    pub image: Option<ImageSource>,
+    pub size: Size,
+    pub radius: f64,
+    pub caption: bool,
+    pub selected: bool,
+    pub enabled: bool,
+    pub on_press: Option<M>,
 }
 
 /// A raster image drawn from the rendition that best covers its box at the device's scale.
@@ -371,6 +389,10 @@ pub struct SegmentedControl<M> {
     pub on_select: Option<Handler<usize, M>>,
 }
 
+/// A [`SegmentedControl`] that stretches to the full width of its row, as one inside a form's group does, its segments
+/// equal shares of it.
+pub struct FullWidthSegmentedControl<M>(pub SegmentedControl<M>);
+
 /// A row of tabs over a panel showing the selected tab's content; one Tab stop, the arrows select. Only `content`,
 /// the selected tab's, is mounted.
 pub struct Tabs<M> {
@@ -392,6 +414,12 @@ pub struct Toggle<M> {
 /// A [`Toggle`] at the small size of a settings form's rows, made with [`Toggle::small`]: a 36 × 16 pt track and a
 /// capsule thumb. It behaves and reads to assistive technology as the toggle does.
 pub struct SmallToggle<M> {
+    pub toggle: Toggle<M>,
+}
+
+/// A [`Toggle`] at the size of a settings pane's header, made with [`Toggle::header`]: a 44.5 × 20 pt track and a
+/// capsule thumb. It behaves and reads to assistive technology as the toggle does.
+pub struct HeaderToggle<M> {
     pub toggle: Toggle<M>,
 }
 
@@ -547,7 +575,7 @@ pub struct Stack<M> {
 /// How a scroll view shows where it is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Scroller {
-    /// Thin thumbs over the content that show while it moves and fade a second after.
+    /// Thin thumbs over the content that show while it moves and fade half a second after.
     #[default]
     Overlay,
     /// Tracks beside the content, always shown, that a click pages and a drag moves.
@@ -937,6 +965,12 @@ pub struct PopUpButton<M> {
     pub on_open: Option<M>,
 }
 
+/// A [`PopUpButton`] as a row of a grouped form shows it: the chosen value as plain text with no bezel, then a round
+/// grey disc holding the up and down chevrons. It behaves as a [`PopUpButton`] does and opens the same menu; use the
+/// bordered [`PopUpButton`] outside grouped rows. Give its element a key and declare [`InlinePopUpButton::menu`] while
+/// it is open.
+pub struct InlinePopUpButton<M>(pub PopUpButton<M>);
+
 /// The selected rows of a list, as indices into the rows as currently shown, and the row the keyboard is on. When the
 /// application sorts or changes its rows, it maps the selection to the new indices itself, or [`clamp`]s it.
 ///
@@ -1195,6 +1229,36 @@ pub struct FormGroup<M> {
 pub struct FormRow<M> {
     pub tile: Option<IconTile>,
     pub content: Element<M>,
+}
+
+/// An installed application's icon, by the `Icon=` name of its desktop entry; the generic application icon where the
+/// icon theme has none. Decorative: the row it stands in names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppIcon {
+    pub name: String,
+    /// The side of the square, in points.
+    pub size: f64,
+}
+
+/// One row of a [`FormGroup`] that starts with an application's or category's icon, `size` points across (20, 22 or the
+/// standard 24), then `content`, which takes the rest of the row. The row's height follows the icon (42, 43 or 48 pt),
+/// and is taller with `two_line` content. Build its element with `Element::from`.
+pub struct AppIconRow<M> {
+    pub icon: String,
+    pub size: f64,
+    pub two_line: bool,
+    pub content: Element<M>,
+}
+
+/// The header of a settings pane that has a master switch or a short description: on a group's rounded fill, a 26 pt
+/// icon tile, the title in bold with its description under it in secondary text, and the optional `switch` (a
+/// [`Toggle::header`]) at the trailing edge. Build its element with `Element::from`; the large centred [`FormHeader`]
+/// is the card of a pane's first page.
+pub struct PaneHeader<M> {
+    pub tile: IconTile,
+    pub title: String,
+    pub description: String,
+    pub switch: Option<Element<M>>,
 }
 
 /// A row of a [`FormGroup`] that opens a page: an optional icon tile, the label and a chevron at the trailing edge.

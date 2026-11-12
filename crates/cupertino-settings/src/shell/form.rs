@@ -5,24 +5,37 @@
 use std::collections::HashMap;
 
 use cupertino_kit::controls::{
-    FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton, SegmentedControl, Slider,
-    SliderStyle, TextRole, TileColor,
+    AppIcon, AppIconRow, FormGroup, FormRow, FullWidthSegmentedControl, IconTile, ImageSource,
+    InlinePopUpButton, NavigationRow, PaneHeader, PopUpButton, ScrollView, Scroller,
+    SegmentedControl, Slider, SliderStyle, TextRole, ThumbnailTile, TileColor,
 };
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
 };
 use cupertino_kit::geometry::{Insets, Size};
+use cupertino_kit::layout::ScrollState;
 use cupertino_kit::layout::{Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 
-use super::Message;
+use super::{Message, UNSCROLLED};
 use crate::controls::{metrics, Control, Value};
 use crate::pages::{Block, SubPage};
 use crate::pane::{Enclosure, PaneId};
 use crate::panes::{ControlId, Row, Section};
 use crate::search::Hit;
 
+/// What a page draws besides its rows' own values: the control whose menu is open, the application icons by name, the
+/// decoded thumbnails by picture, and how far each strip of thumbnails is scrolled.
+pub struct View<'a> {
+    pub open: Option<ControlId>,
+    pub icons: &'a HashMap<String, String>,
+    pub thumbnails: &'a HashMap<std::path::PathBuf, ImageSource>,
+    pub tile_scrolls: &'a [(ControlId, ScrollState)],
+}
+
+/// Between a row's label and the segmented control under it.
+const SEGMENTED_LABEL_GAP: f64 = 6.0;
 /// Between the controls in a row, and between a row's label and its control.
 pub const ROW_GAP: f64 = 8.0;
 /// Between a page's groups, with or without a title above them.
@@ -36,10 +49,15 @@ const SECTION_TITLE_INSET: f64 = 10.0;
 /// A footer below a group: the space between them and its inset at both sides.
 pub(crate) const FOOTER_GAP: f64 = 6.0;
 const FOOTER_INSET: f64 = 10.0;
-/// The tile of a pane's header card.
-const HEADER_TILE: f64 = 48.0;
-/// The side of a row's tile.
+/// The tile of a pane's header.
+const HEADER_TILE: f64 = 26.0;
+/// The side of a row's tile, and of the icon of a row that names an application or a category.
 const ROW_TILE: f64 = 24.0;
+const ROW_ICON: f64 = 22.0;
+/// The icon before an application's section title.
+const TITLE_ICON: f64 = 20.0;
+/// Between a section title's icon and its text.
+const TITLE_ICON_GAP: f64 = 6.0;
 
 /// The tile colour of an enclosure.
 pub fn tile_color(enclosure: Enclosure) -> TileColor {
@@ -54,10 +72,38 @@ pub fn tile_color(enclosure: Enclosure) -> TileColor {
     }
 }
 
-/// The header card of `pane`: its tile, `title` and description.
-pub fn header(pane: PaneId, title: &str, description: &str) -> Element<Message> {
+/// The header of `pane`: its tile, `title` and description, and the pane's master switch, which is `master`'s control
+/// when the pane has one.
+pub fn pane_header(
+    pane: PaneId,
+    title: &str,
+    description: &str,
+    master: Option<&Row>,
+) -> Element<Message> {
     let p = pane.pane();
-    Element::new(FormHeader {
+    // what keeps the master switch from working says so where the description would
+    let description = master
+        .and_then(|row| row.error.as_ref().or(row.disabled.as_ref()))
+        .map_or(description, String::as_str);
+    let switch = master.and_then(|row| {
+        let Control::Switch { on } = &row.control else {
+            return None;
+        };
+        let id = row.id;
+        Some(
+            Element::new(
+                Toggle {
+                    label: row.label.clone(),
+                    on: *on,
+                    enabled: row.disabled.is_none(),
+                    on_toggle: Some(Box::new(move |on| Message::Commit(id, Value::Bool(on)))),
+                }
+                .header(),
+            )
+            .key(control_key(id)),
+        )
+    });
+    Element::from(PaneHeader {
         tile: IconTile {
             symbol: p.symbol.into(),
             color: tile_color(p.enclosure),
@@ -65,8 +111,29 @@ pub fn header(pane: PaneId, title: &str, description: &str) -> Element<Message> 
         },
         title: title.into(),
         description: description.into(),
+        switch,
     })
     .key("header")
+}
+
+/// The pane's master switch: its first block's only row, a switch that stands on its own, taken out of `blocks`.
+pub fn take_master(pane: PaneId, blocks: &mut Vec<Block>) -> Option<Row> {
+    if !matches!(pane, PaneId::Wifi | PaneId::Bluetooth) {
+        return None;
+    }
+    let Some(Block::Section(first)) = blocks.first() else {
+        return None;
+    };
+    let single = first.header.is_none()
+        && first.footer.is_none()
+        && matches!(first.rows.as_slice(), [row] if matches!(row.control, Control::Switch { .. }));
+    if !single {
+        return None;
+    }
+    match blocks.remove(0) {
+        Block::Section(mut section) => section.rows.pop(),
+        Block::Links(_) => None,
+    }
 }
 
 /// What assistive technology calls each control of `sections`: its row's label, with the section's title after it
@@ -161,7 +228,7 @@ fn control_key(id: ControlId) -> Key {
 }
 
 /// The control of `row`, named `name`; a disabled row's control takes no input.
-fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Message>> {
+fn control(row: &Row, name: &str, view: &View<'_>) -> Option<Element<Message>> {
     let id = row.id;
     let enabled = row.disabled.is_none();
     let commit = move |value: Value| Message::Commit(id, value);
@@ -175,40 +242,24 @@ fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Mes
             }
             .small(),
         ),
-        Control::Segmented { segments, selected } => Element::new(SegmentedControl {
-            label: name.to_owned(),
-            segments: segments.iter().map(|s| s.to_string()).collect(),
-            selected: Some(*selected),
-            enabled,
-            on_select: Some(Box::new(move |i| commit(Value::Index(i)))),
-        }),
-        Control::Popup { choices, selected } => Element::new(PopUpButton {
+        Control::Segmented { segments, selected } => {
+            Element::new(FullWidthSegmentedControl(SegmentedControl {
+                label: name.to_owned(),
+                segments: segments.iter().map(|s| s.to_string()).collect(),
+                selected: Some(*selected),
+                enabled,
+                on_select: Some(Box::new(move |i| commit(Value::Index(i)))),
+            }))
+        }
+        Control::Popup { choices, selected } => Element::new(InlinePopUpButton(PopUpButton {
             label: name.to_owned(),
             options: choices.clone(),
             selected: *selected,
-            open: open == Some(id),
+            open: view.open == Some(id),
             enabled,
             on_open: Some(Message::Open(Some(id))),
-        }),
-        Control::Slider { value, stops, .. } => {
-            let stops = stops.filter(|n| *n > 1);
-            Element::new(Slider {
-                label: name.to_owned(),
-                value: *value,
-                min: 0.0,
-                max: 1.0,
-                step: stops.map(|n| 1.0 / (n - 1) as f64),
-                style: SliderStyle::Regular,
-                ticks: stops.map_or(0, |n| n as u32),
-                enabled,
-                on_change: Some(Box::new(move |v| match stops {
-                    Some(n) => commit(Value::Index(Control::nearest_stop(v, n))),
-                    None => Message::Slide(id, v),
-                })),
-                on_end: None,
-            })
-            .width(metrics::SLIDER_WIDTH)
-        }
+        })),
+        Control::Slider { .. } => slider_column(row, name, metrics::SLIDER_WIDTH, false),
         Control::Level { value } => Element::new(Slider {
             label: name.to_owned(),
             value: *value,
@@ -267,23 +318,169 @@ fn control(row: &Row, name: &str, open: Option<ControlId>) -> Option<Element<Mes
                 .collect();
             column(2.0, lines)
         }
-        Control::Tiles { tiles, selected } => column(
-            ROW_GAP,
-            tiles
-                .iter()
-                .enumerate()
-                .map(|(i, tile)| {
-                    let label = if *selected == Some(i) {
-                        format!("{} ✓", tile.title)
-                    } else {
-                        tile.title.clone()
-                    };
-                    button(&label, enabled, commit(Value::Index(i)))
-                })
-                .collect(),
-        ),
+        Control::Tiles { tiles, selected } => tile_strip(id, tiles, *selected, enabled, view),
     };
     Some(control.key(control_key(id)))
+}
+
+/// The width of each slider of a pair sharing one row.
+const PAIRED_SLIDER_WIDTH: f64 = 200.0;
+/// Between a slider and the end labels under it.
+const SLIDER_LABEL_GAP: f64 = 2.0;
+
+/// The slider of `row` `width` wide with its two end labels under it, and over it the row's label when `titled`.
+fn slider_column(row: &Row, name: &str, width: f64, titled: bool) -> Element<Message> {
+    let Control::Slider {
+        value,
+        stops,
+        labels,
+        ..
+    } = &row.control
+    else {
+        return column(0.0, Vec::new());
+    };
+    let id = row.id;
+    let enabled = row.disabled.is_none();
+    let stops = stops.filter(|n| *n > 1);
+    let slider = Element::new(Slider {
+        label: name.to_owned(),
+        value: *value,
+        min: 0.0,
+        max: 1.0,
+        step: stops.map(|n| 1.0 / (n - 1) as f64),
+        style: SliderStyle::Regular,
+        ticks: stops.map_or(0, |n| n as u32),
+        enabled,
+        on_change: Some(Box::new(move |v| match stops {
+            Some(n) => Message::Commit(id, Value::Index(Control::nearest_stop(v, n))),
+            None => Message::Slide(id, v),
+        })),
+        on_end: None,
+    })
+    .key(control_key(id));
+    let caption = |content: &str| line(content, TextRole::Caption, false);
+    let ends = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align: Align::Center,
+        children: vec![
+            caption(labels.0),
+            Element::new(Spacer::default()),
+            caption(labels.1),
+        ],
+    });
+    let mut parts = Vec::new();
+    if titled {
+        parts.extend(text(&row.label, TextRole::Body));
+    }
+    parts.push(slider);
+    parts.push(ends);
+    column(SLIDER_LABEL_GAP, parts)
+        .width(width)
+        .key(format!("{:?}-slider", row.id))
+}
+
+/// Two sliders side by side in one row, each under its label.
+fn slider_pair(first: &Row, second: &Row, names: &Names) -> Element<Message> {
+    let name = |row: &Row| names.get(row.id).unwrap_or(&row.label).to_owned();
+    Element::from(FormRow {
+        tile: None,
+        content: Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::ZERO,
+            spacing: ROW_GAP,
+            align: Align::Start,
+            children: vec![
+                slider_column(first, &name(first), PAIRED_SLIDER_WIDTH, true),
+                Element::new(Spacer::default()),
+                slider_column(second, &name(second), PAIRED_SLIDER_WIDTH, true),
+            ],
+        }),
+    })
+    .key(format!("{:?}-{:?}", first.id, second.id))
+}
+
+/// Whether `row` is a slider that can share its row: it has no second line.
+fn pairs(row: &Row) -> bool {
+    matches!(row.control, Control::Slider { .. })
+        && row.error.is_none()
+        && row.disabled.is_none()
+        && row.detail.is_none()
+}
+
+/// The rows of a section as elements, two sliders in a row of their own side by side.
+fn rows(rows: &[Row], names: &Names, view: &View<'_>) -> Vec<Element<Message>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        if i + 1 < rows.len() && pairs(&rows[i]) && pairs(&rows[i + 1]) {
+            out.push(slider_pair(&rows[i], &rows[i + 1], names));
+            i += 2;
+        } else {
+            out.push(row(&rows[i], names, view));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The thumbnail's width and height, its corners, and the space between two of them.
+const THUMBNAIL: Size = Size::new(108.5, 72.0);
+const THUMBNAIL_RADIUS: f64 = 5.0;
+const THUMBNAIL_GAP: f64 = 9.5;
+/// The room a thumbnail's ring takes on each side of the picture: the strip's spacing leaves it out.
+const THUMBNAIL_RING_ROOM: f64 = 3.0;
+/// The strip's height: a thumbnail with its ring room and its caption.
+const STRIP_HEIGHT: f64 = THUMBNAIL.height + 2.0 * THUMBNAIL_RING_ROOM + 3.0 + 14.0;
+
+/// One row of thumbnails, scrolling sideways: the pictures of `tiles` side by side, the chosen one ringed. The strip
+/// runs on past the page's inset to the window's edge.
+fn tile_strip(
+    id: ControlId,
+    tiles: &[crate::controls::Tile],
+    selected: Option<usize>,
+    enabled: bool,
+    view: &View<'_>,
+) -> Element<Message> {
+    let children = tiles
+        .iter()
+        .enumerate()
+        .map(|(i, tile)| {
+            Element::new(ThumbnailTile {
+                label: tile.title.clone(),
+                image: view.thumbnails.get(&tile.image).cloned(),
+                size: THUMBNAIL,
+                radius: THUMBNAIL_RADIUS,
+                caption: true,
+                selected: selected == Some(i),
+                enabled,
+                on_press: Some(Message::Commit(id, Value::Index(i))),
+            })
+            .key(i as u64)
+        })
+        .collect();
+    let content = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets::ZERO,
+        spacing: THUMBNAIL_GAP - 2.0 * THUMBNAIL_RING_ROOM,
+        align: Align::Start,
+        children,
+    });
+    let state = view
+        .tile_scrolls
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map_or(UNSCROLLED, |(_, s)| *s);
+    Element::from(ScrollView {
+        content,
+        state,
+        horizontal: true,
+        vertical: false,
+        scroller: Scroller::Overlay,
+        on_scroll: Box::new(move |s| Message::TileScroll(id, s)),
+    })
+    .height(STRIP_HEIGHT)
 }
 
 /// A row's label over its second line. When the row is too narrow for it and its control, it shrinks along the row (not
@@ -389,37 +586,62 @@ impl<M: 'static> Widget<M> for Described<M> {
     }
 }
 
-fn row(row: &Row, names: &Names, open: Option<ControlId>) -> Element<Message> {
+fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
     let second = row
         .error
         .as_ref()
         .or(row.disabled.as_ref())
         .or(row.detail.as_ref());
-    let label = text(&row.label, TextRole::Body)
+    let label: Vec<Element<Message>> = text(&row.label, TextRole::Body)
         .into_iter()
         .chain(second.and_then(|s| styled(s, TextRole::Caption, true)))
         .collect();
-    let mut children = vec![
-        Element::new(Label { lines: label }),
-        Element::new(Spacer::default()),
-    ];
     let name = names.get(row.id).unwrap_or(&row.label);
-    children.extend(control(row, name, open));
-    Element::from(FormRow {
-        tile: None,
-        content: Element::new(Stack {
+    // a segmented control takes the whole width of its row, under the row's label
+    let content = if matches!(row.control, Control::Segmented { .. }) {
+        let mut children = Vec::new();
+        if !label.is_empty() {
+            children.push(Element::new(Label { lines: label }));
+        }
+        children.extend(control(row, name, view));
+        Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: SEGMENTED_LABEL_GAP,
+            align: Align::Stretch,
+            children,
+        })
+    } else {
+        let mut children = vec![
+            Element::new(Label { lines: label }),
+            Element::new(Spacer::default()),
+        ];
+        children.extend(control(row, name, view));
+        Element::new(Stack {
             axis: Axis::Horizontal,
             padding: Insets::ZERO,
             spacing: ROW_GAP,
             align: Align::Center,
             children,
+        })
+    };
+    match &row.icon {
+        Some(icon) => Element::from(AppIconRow {
+            icon: icon.clone(),
+            size: ROW_ICON,
+            two_line: second.is_some(),
+            content,
         }),
-    })
+        None => Element::from(FormRow {
+            tile: None,
+            content,
+        }),
+    }
     .key(format!("{:?}", row.id))
 }
 
-/// A section title, bold, over its group.
-fn section_title(title: &str, top: f64) -> Element<Message> {
+/// A section title, bold, over its group, after the application's `icon` when it has one.
+fn section_title(title: &str, top: f64, icon: Option<&str>) -> Element<Message> {
     let style = TextStyle {
         weight: FontWeight(SECTION_TITLE_WEIGHT),
         ..TextStyle::new(13.0)
@@ -431,6 +653,22 @@ fn section_title(title: &str, top: f64) -> Element<Message> {
         secondary: false,
         selected: false,
     });
+    let content = match icon {
+        Some(icon) => Element::new(Stack {
+            axis: Axis::Horizontal,
+            padding: Insets::ZERO,
+            spacing: TITLE_ICON_GAP,
+            align: Align::Center,
+            children: vec![
+                Element::new(AppIcon {
+                    name: icon.to_owned(),
+                    size: TITLE_ICON,
+                }),
+                title,
+            ],
+        }),
+        None => title,
+    };
     Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets {
@@ -441,7 +679,7 @@ fn section_title(title: &str, top: f64) -> Element<Message> {
         },
         spacing: 0.0,
         align: Align::Stretch,
-        children: vec![title],
+        children: vec![content],
     })
 }
 
@@ -450,17 +688,21 @@ fn section_title(title: &str, top: f64) -> Element<Message> {
 fn section(
     section: &Section,
     names: &Names,
-    open: Option<ControlId>,
+    view: &View<'_>,
     at_top: bool,
 ) -> Vec<Element<Message>> {
     let mut out = Vec::new();
     if let Some(header) = section.header.as_deref().filter(|h| !h.is_empty()) {
         let top = if at_top { 0.0 } else { SECTION_TITLE_TOP };
-        out.push(section_title(header, top));
+        out.push(section_title(
+            header,
+            top,
+            view.icons.get(header).map(String::as_str),
+        ));
     }
     if !section.rows.is_empty() {
         out.push(Element::from(FormGroup {
-            rows: section.rows.iter().map(|r| row(r, names, open)).collect(),
+            rows: rows(&section.rows, names, view),
         }));
     }
     if let Some(footer) = section
@@ -511,14 +753,14 @@ pub fn page(
     header: Option<Element<Message>>,
     blocks: &[Block],
     sections: &[Section],
-    open: Option<ControlId>,
+    view: &View<'_>,
 ) -> Element<Message> {
     let names = control_names(sections);
     let at_top = header.is_none();
     let mut children: Vec<Element<Message>> = header.into_iter().collect();
     for (i, block) in blocks.iter().enumerate() {
         let parts = match block {
-            Block::Section(s) => section(s, &names, open, at_top && i == 0),
+            Block::Section(s) => section(s, &names, view, at_top && i == 0),
             Block::Links(subs) => vec![links(subs)],
         };
         // each block is keyed by its place, so its rows keep their state while other blocks come and go

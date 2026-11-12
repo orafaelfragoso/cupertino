@@ -3,7 +3,7 @@
 
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::{RadioGroup, SegmentedControl};
+use crate::{FullWidthSegmentedControl, RadioGroup, SegmentedControl};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
@@ -100,6 +100,8 @@ struct Item<M> {
     enabled: bool,
     /// The message choosing each item, in order; empty without a handler.
     messages: Rc<[M]>,
+    /// The item grows to share the room of a control that fills its row.
+    fill: bool,
 }
 
 pub(crate) fn items<M>(
@@ -109,6 +111,22 @@ pub(crate) fn items<M>(
     axis: Axis,
     enabled: bool,
     on_select: Option<&crate::Handler<usize, M>>,
+) -> Vec<Element<M>>
+where
+    M: Clone + 'static,
+{
+    items_sized(look, labels, selected, axis, enabled, on_select, false)
+}
+
+/// [`items`], with each item growing to share the room its row gives equally when `fill`.
+pub(crate) fn items_sized<M>(
+    look: Look,
+    labels: &[String],
+    selected: Option<usize>,
+    axis: Axis,
+    enabled: bool,
+    on_select: Option<&crate::Handler<usize, M>>,
+    fill: bool,
 ) -> Vec<Element<M>>
 where
     M: Clone + 'static,
@@ -127,6 +145,7 @@ where
                 axis,
                 enabled,
                 messages: Rc::clone(&messages),
+                fill,
             })
         })
         .collect()
@@ -163,7 +182,11 @@ impl<M: Clone + 'static> Item<M> {
             if at.y < bounds.min_y() || at.y >= bounds.max_y() {
                 return None;
             }
-            let segment = segment_width(cx.env(), &self.labels);
+            let segment = if self.fill {
+                bounds.width()
+            } else {
+                segment_width(cx.env(), &self.labels)
+            };
             let rtl = cx.env().direction == LayoutDirection::Rtl;
             segment_at(at.x, bounds, self.index, self.labels.len(), segment, rtl)
         };
@@ -229,7 +252,14 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
     type State = ChoiceState;
 
     fn layout(&self) -> LayoutSpec {
-        LayoutSpec::new(ContainerKind::Leaf)
+        LayoutSpec {
+            flex: if self.fill {
+                cupertino_ui_layout::Flex::grow(1.0)
+            } else {
+                cupertino_ui_layout::Flex::NONE
+            },
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
     }
 
     fn state(&self) -> ChoiceState {
@@ -609,11 +639,58 @@ impl<M: Clone + 'static> Widget<M> for SegmentedControl<M> {
 
     /// The chrome around every segment and the dividers between them; each segment paints its selection and label.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        paint_segments(cx, &self.segments, self.selected, self.enabled);
+        paint_segments(cx, &self.segments, self.selected, self.enabled, false);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         group_semantics(&self.label, cx);
+    }
+}
+
+/// The segmented control that fills its row: [`FullWidthSegmentedControl`] lays its segments out as equal shares of
+/// the room, and behaves and reads as the control does.
+impl<M: Clone + 'static> Widget<M> for FullWidthSegmentedControl<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: cupertino_ui_layout::SizeSpec::Fill,
+            ..self.0.layout()
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        items_sized(
+            Look::Segment,
+            &self.0.segments,
+            self.0.selected,
+            Axis::Horizontal,
+            self.0.enabled,
+            self.0.on_select.as_ref(),
+            true,
+        )
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, state: &mut ()) -> Change {
+        self.0.update(&old.0, state)
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        paint_segments(cx, &self.0.segments, self.0.selected, self.0.enabled, true);
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        group_semantics(&self.0.label, cx);
     }
 }
 
@@ -623,6 +700,7 @@ pub(crate) fn paint_segments(
     segments: &[String],
     selected: Option<usize>,
     enabled: bool,
+    fill: bool,
 ) {
     let theme = cx.env().theme.clone();
     let state = ControlState {
@@ -635,7 +713,11 @@ pub(crate) fn paint_segments(
     let radius = segment_radius(&theme);
     let count = segments.len();
     // the segments, not the width a stretching parent gives the control
-    let segment = segment_width(cx.env(), segments);
+    let segment = if fill {
+        size.width / segments.len().max(1) as f64
+    } else {
+        segment_width(cx.env(), segments)
+    };
     let chrome = Rect::new(
         0.0,
         (size.height - height) / 2.0,

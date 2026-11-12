@@ -51,6 +51,13 @@ pub(crate) const BEZEL: Shares = Shares {
     pressed: 0.16,
     disabled: 0.035,
 };
+/// The round disc of an inline pop-up: a little stronger than a bezel, darker still under the pointer and pressed.
+pub(crate) const DISC: Shares = Shares {
+    normal: 0.09,
+    hover: 0.11,
+    pressed: 0.16,
+    disabled: 0.045,
+};
 /// The well of a check box, a radio button and an empty track: a little stronger than a bezel.
 pub(crate) const WELL: Shares = Shares {
     normal: 0.095,

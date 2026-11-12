@@ -29,9 +29,11 @@ const LEVEL: f64 = 22.0;
 const LEVEL_SYMBOL: f64 = 14.0;
 const PANEL_TRACK_BORDER: f64 = 0.5;
 /// A tick mark: a round dot under the track at each step position.
-const TICK_DOT: f64 = 4.0;
+const TICK_DOT: f64 = 2.0;
 /// Between the track's bottom and the dots under it.
-const TICK_GAP: f64 = 2.0;
+const TICK_GAP: f64 = 3.0;
+/// How much of the secondary text colour a tick dot keeps: lighter than the text.
+const TICK_SHARE: f32 = 0.6;
 /// The ring around the knob, and its width with Increase Contrast, where the knob takes the colour of the fill it sits
 /// on and only the ring tells them apart.
 const KNOB_RING: f64 = 1.0;
@@ -364,7 +366,10 @@ impl<M: 'static> Widget<M> for Slider<M> {
             look::fill(cx, filled, radius, fill);
         }
         if self.ticks >= 2 && self.style == SliderStyle::Regular {
-            let dot = look::color(&theme, ColorRole::SecondaryText, &look_state);
+            let dot = look::faded(
+                look::color(&theme, ColorRole::SecondaryText, &look_state),
+                TICK_SHARE,
+            );
             for i in 0..self.ticks {
                 let x = from + (to - from) * f64::from(i) / f64::from(self.ticks - 1);
                 let at = Rect::new(

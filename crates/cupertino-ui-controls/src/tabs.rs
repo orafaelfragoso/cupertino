@@ -216,7 +216,7 @@ impl<M: 'static> Widget<M> for TabRow<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        paint_segments(cx, &self.tabs, Some(self.selected), true);
+        paint_segments(cx, &self.tabs, Some(self.selected), true, false);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

@@ -1,6 +1,6 @@
 //! The pages the window shows: each pane, and the pages some panes open from a navigation row. The page of a pane
-//! that gathers sub-pages ([`has_header_card`]) starts with a header card (its tile, title and [`description`]); every
-//! other page shows its title in the toolbar row instead. The sections a sub-page holds leave the pane's page, which
+//! with a header ([`has_header`]) starts with a header row (its tile, title and [`description`]); every
+//! page shows its title in the toolbar row too. The sections a sub-page holds leave the pane's page, which
 //! shows a row for each sub-page where the first of them stood. The back and forward history holds pages.
 
 use cupertino_defaults::desktop_control::Service;
@@ -129,11 +129,17 @@ pub fn symbols() -> Vec<&'static str> {
     SubPage::ALL.iter().map(|s| s.symbol()).collect()
 }
 
-/// Whether the pane's own page starts with a header card: the panes that gather sub-pages behind rows of their own
-/// (Accessibility, Privacy & Security). Their toolbar row shows no title; every other pane, and every sub-page, shows
-/// its title there, after the back and forward buttons, and has no card.
-pub fn has_header_card(pane: PaneId) -> bool {
-    matches!(pane, PaneId::Accessibility | PaneId::Privacy)
+/// Whether the pane's own page starts with a header row: its icon, title and description, and the pane's master
+/// switch where it has one. Every other pane, and every sub-page, goes straight to its sections.
+pub fn has_header(pane: PaneId) -> bool {
+    matches!(
+        pane,
+        PaneId::Wifi
+            | PaneId::Bluetooth
+            | PaneId::Network
+            | PaneId::Accessibility
+            | PaneId::Privacy
+    )
 }
 
 /// The pane's one-line description on its header card.

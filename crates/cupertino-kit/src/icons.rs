@@ -34,6 +34,8 @@ struct Application {
     assets: Assets,
     themes: OnceLock<Mutex<ThemeIcons>>,
     drawn: Mutex<HashMap<u32, Option<IconImage>>>,
+    /// The icons of installed applications by name and size.
+    named: Mutex<HashMap<(String, u32), IconImage>>,
 }
 
 /// The pack's icon for an application without one of its own.
@@ -53,6 +55,7 @@ impl PackIcons {
                 assets: assets.clone(),
                 themes: OnceLock::new(),
                 drawn: Mutex::new(HashMap::new()),
+                named: Mutex::new(HashMap::new()),
             },
         )
     }
@@ -113,6 +116,33 @@ impl PackIcons {
         }
         let p = icons.raster(GENERIC_APPLICATION, px);
         Some(image_of(p.width(), p.height(), p.data()))
+    }
+}
+
+impl PackIcons {
+    /// The icon of the application `name` at `px`: a pack's icon of that name, else the host's themes or a file, else
+    /// the packs' generic application icon.
+    fn draw_named(&self, name: &str, px: u32) -> IconImage {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let icons = &mut state.0;
+        if !name.is_empty() {
+            if IconName::new(name).is_ok() && icons.has_raster(name, px) {
+                let p = icons.raster(name, px);
+                return image_of(p.width(), p.height(), p.data());
+            }
+            let app = &self.application;
+            let found = app
+                .themes
+                .get_or_init(|| Mutex::new(ThemeIcons::new(&app.assets)))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .load(name, px);
+            if let Some(p) = found {
+                return image_of(p.width(), p.height(), p.data());
+            }
+        }
+        let p = icons.raster(GENERIC_APPLICATION, px);
+        image_of(p.width(), p.height(), p.data())
     }
 }
 
@@ -177,6 +207,27 @@ impl Icons for PackIcons {
         image
     }
 
+    fn named(&self, name: &str, px: u32) -> Option<IconImage> {
+        let key = (name.to_owned(), px.max(1));
+        let cached = self
+            .application
+            .named
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .cloned();
+        if let Some(image) = cached {
+            return Some(image);
+        }
+        let image = self.draw_named(name, key.1);
+        self.application
+            .named
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, image.clone());
+        Some(image)
+    }
+
     fn application(&self, px: u32) -> Option<IconImage> {
         let px = px.max(1);
         if let Some(drawn) = self
@@ -224,6 +275,7 @@ mod tests {
                 assets: assets.clone(),
                 themes,
                 drawn: Mutex::new(HashMap::new()),
+                named: Mutex::new(HashMap::new()),
             },
         )
     }

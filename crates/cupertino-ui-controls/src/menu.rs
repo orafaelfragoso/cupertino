@@ -12,8 +12,8 @@ use crate::button::ButtonLook;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{
-    ButtonRole, ButtonStyle, ContextMenu, Handler, Menu, MenuAnchor, MenuItem, MenuStyle,
-    PopUpButton, PullDownButton,
+    ButtonRole, ButtonStyle, ContextMenu, Handler, InlinePopUpButton, Menu, MenuAnchor, MenuItem,
+    MenuStyle, PopUpButton, PullDownButton,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
@@ -115,6 +115,12 @@ const CHEVRONS_GAP: f64 = 6.0;
 const POPUP_CHEVRON: f64 = 6.0;
 const POPUP_CHEVRON_GAP: f64 = 2.75;
 const POPUP_CHEVRON_STROKE: f64 = 1.25;
+/// An inline pop-up's disc across, and the space between its value and the disc.
+const INLINE_DISC: f64 = 20.0;
+const INLINE_GAP: f64 = 12.5;
+/// An inline pop-up's chevrons: their width, and each one's distance from the middle of the disc.
+const INLINE_CHEVRON: f64 = 7.5;
+const INLINE_CHEVRON_GAP: f64 = 3.375;
 /// Between a pop-up button's sides and its label or chevrons; its menu lines its rows' labels up with the label.
 const LABEL_INSET: f64 = 10.0;
 
@@ -1850,6 +1856,142 @@ fn paint_menu_button(
         }
     }
     paint_focus_ring(cx, chrome, radius);
+}
+
+impl<M: Clone + 'static> InlinePopUpButton<M> {
+    /// The menu of the options over the button ([`PopUpButton::menu`]).
+    pub fn menu(
+        &self,
+        parent: WindowKey,
+        anchor: Key,
+        on_select: Handler<usize, M>,
+        on_close: M,
+    ) -> Menu<M> {
+        self.0.menu(parent, anchor, on_select, on_close)
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for InlinePopUpButton<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, state: &mut Press) -> Change {
+        self.0.update(&old.0, state)
+    }
+
+    /// Wide enough for the widest option and the disc, so choosing another never moves what follows.
+    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        let env = cx.env();
+        let metrics = env.theme.metrics;
+        let widest = self
+            .0
+            .options
+            .iter()
+            .filter_map(|o| look::label(env, o))
+            .map(|l| l.size().width)
+            .fold(0.0, f64::max);
+        let height = look::geometry(&env.theme, ControlFamily::PopUp).height;
+        Measured {
+            size: Size::new(
+                (widest + INLINE_GAP + INLINE_DISC).max(metrics.min_target.width),
+                height.max(metrics.min_target.height),
+            ),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.0.event(press, event, cx)
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        let env = cx.env().clone();
+        let theme = &env.theme;
+        let popup = &self.0;
+        let state = ControlState {
+            enabled: popup.enabled,
+            hovered: press.hovered(),
+            pressed: press.pressed() || popup.open,
+            focused: cx.is_focused(),
+            focus_visible: cx.focus_visible(),
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
+        let size = cx.size();
+        let height = look::geometry(theme, ControlFamily::PopUp).height;
+        let chrome = Rect::new(0.0, (size.height - height) / 2.0, size.width, height);
+        let rtl = env.direction == LayoutDirection::Rtl;
+        let disc = Rect::new(
+            if rtl {
+                chrome.min_x()
+            } else {
+                chrome.max_x() - INLINE_DISC
+            },
+            chrome.min_y() + (chrome.height() - INLINE_DISC) / 2.0,
+            INLINE_DISC,
+            INLINE_DISC,
+        );
+        look::fill(
+            cx,
+            disc,
+            INLINE_DISC / 2.0,
+            Some(look::quiet(theme, look::DISC, &state)),
+        );
+        let bezel = ButtonLook::of(ButtonRole::Normal, ButtonStyle::Bordered, theme, &state);
+        if theme.preferences.appearance.is_high_contrast() {
+            look::stroke(
+                cx,
+                disc.inset(Insets::uniform(0.5)),
+                INLINE_DISC / 2.0 - 0.5,
+                1.0,
+                bezel.border,
+            );
+        }
+        let text = bezel.text;
+        // the value, against the disc
+        if let Some(label) = look::label(&env, popup.chosen()) {
+            let width = label.size().width;
+            let x = if rtl {
+                disc.max_x() + INLINE_GAP
+            } else {
+                disc.min_x() - INLINE_GAP - width
+            };
+            look::glyphs(
+                cx,
+                &label,
+                Point::new(x, look::top(&label, chrome, &env)),
+                text,
+            );
+        }
+        if let Some(color) = text {
+            let mid = disc.min_y() + disc.height() / 2.0;
+            let x = disc.min_x() + disc.width() / 2.0;
+            for up in [true, false] {
+                let offset = if up {
+                    -INLINE_CHEVRON_GAP
+                } else {
+                    INLINE_CHEVRON_GAP
+                };
+                cx.push(PaintOp::Stroke {
+                    shape: look::chevron(Point::new(x, mid + offset), INLINE_CHEVRON, up),
+                    width: POPUP_CHEVRON_STROKE,
+                    paint: Paint::Solid(color),
+                });
+            }
+        }
+        paint_focus_ring(cx, chrome, height / 2.0);
+    }
+
+    fn semantics(&self, press: &Press, cx: &mut SemanticsCx<'_>) {
+        self.0.semantics(press, cx);
+    }
 }
 
 impl<M: Clone + 'static> PullDownButton<M> {

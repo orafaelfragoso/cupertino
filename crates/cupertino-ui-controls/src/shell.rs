@@ -22,6 +22,54 @@ pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
 /// How far the sidebar panel lies inside the window's edges. The panel meets the top, leading and bottom edges, its
 /// corners there the window's own; a panel inset from them would have [`nested_radius`] corners.
 pub const SIDEBAR_PANEL_INSET: f64 = 0.0;
+/// How far in from the panel's edges its warmer band reaches, and the band's colour at the edge, which fades out
+/// towards the inside.
+const EDGE_BAND: f64 = 20.0;
+const EDGE_BAND_COLOR: [u8; 3] = [222, 214, 207];
+
+/// The warm band along the leading and bottom edges of a panel `size` big.
+fn paint_edge_band(cx: &mut PaintCx<'_>, size: Size) {
+    use cupertino_geometry::Point;
+    use cupertino_ui_render::GradientStop;
+    use cupertino_ui_theme::Color;
+    let edge = Color::from_rgba8([
+        EDGE_BAND_COLOR[0],
+        EDGE_BAND_COLOR[1],
+        EDGE_BAND_COLOR[2],
+        255,
+    ]);
+    let stops = |inner: Color| {
+        vec![
+            GradientStop {
+                offset: 0.0,
+                color: edge,
+            },
+            GradientStop {
+                offset: 1.0,
+                color: inner,
+            },
+        ]
+    };
+    let clear = edge.with_alpha(0.0);
+    let band = EDGE_BAND.min(size.width).min(size.height);
+    cx.push(PaintOp::Fill {
+        shape: Shape::Rect(Rect::new(0.0, 0.0, band, size.height)),
+        paint: Paint::Linear {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(band, 0.0),
+            stops: stops(clear),
+        },
+    });
+    cx.push(PaintOp::Fill {
+        shape: Shape::Rect(Rect::new(band, size.height - band, size.width - band, band)),
+        paint: Paint::Linear {
+            start: Point::new(0.0, size.height),
+            end: Point::new(0.0, size.height - band),
+            stops: stops(clear),
+        },
+    });
+}
+
 /// The top of the sidebar panel that holds the window control buttons: the toolbar row's height.
 pub const SIDEBAR_TOP: f64 = TOOLBAR_ROW;
 
@@ -176,12 +224,23 @@ impl<M: 'static> Widget<M> for PanelBody<M> {
         } else {
             0.0
         };
-        paint_glass(
+        let shown = paint_glass(
             cx,
             GlassRole::SidebarPanel,
             Rect::new(0.0, 0.0, size.width, size.height),
             radius,
         );
+        // over a light window's panel, along its leading and bottom edges, a warmer band where more of the desktop
+        // shows through
+        let prefs = cx.env().theme.preferences;
+        if shown
+            && cx.window_active()
+            && !prefs.appearance.is_dark()
+            && !prefs.appearance.is_high_contrast()
+            && !prefs.reduce_transparency
+        {
+            paint_edge_band(cx, size);
+        }
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

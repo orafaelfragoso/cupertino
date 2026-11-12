@@ -22,7 +22,9 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
-use cupertino_kit::platform::{DecorationMode, KeyEvent, MouseButton, PointerEvent, WindowSpec};
+use cupertino_kit::platform::{
+    DecorationMode, KeyEvent, MouseButton, PointerEvent, Timestamp, WindowSpec,
+};
 use cupertino_kit::render::{
     Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
 };
@@ -30,7 +32,7 @@ use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, TextSystem,
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant, Surface};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -70,8 +72,8 @@ const FIELD_FILL_LIGHT: Rgba = [1.0, 1.0, 1.0, 1.0];
 const FIELD_TEXT_INSET: f64 = 12.0;
 /// Space between the search field's box and the chord after it in points. approximate.
 const FIELD_CHORD_GAP: f64 = 8.0;
-/// Width of the search field's caret in points. approximate.
-const CARET_WIDTH: f64 = 1.0;
+/// Width of the search field's caret in points.
+const CARET_WIDTH: f64 = 2.0;
 /// Opacity factor of the row highlight colour behind the field's selected text. approximate.
 const FIELD_SELECTION_ALPHA: f32 = 0.35;
 /// Inset of a row's highlight from the menu's sides, and its corner radius, in points.
@@ -1349,7 +1351,7 @@ impl<M> RowNode<M> {
         modifiers_x
     }
 
-    /// The search field: a box with the text, its selection and a steady caret, or the dimmed label while it is empty.
+    /// The search field: a box with the text, its selection and a caret that fades in and out, or the dimmed label while it is empty.
     /// The box ends before `chord_left`, where the row's chord begins.
     fn field(
         &self,
@@ -1357,6 +1359,7 @@ impl<M> RowNode<M> {
         field: &Field,
         palette: &MenuPalette,
         chord_left: Option<f64>,
+        caret_opacity: f32,
     ) {
         let size = cx.size();
         let left = FIELD_INSET_X;
@@ -1390,7 +1393,7 @@ impl<M> RowNode<M> {
         );
         if field.selection.is_empty() {
             let caret = Rect::new(offset(cx, field.caret), y, CARET_WIDTH, h);
-            fill(cx, caret, 0.0, palette.text);
+            fill(cx, caret, 0.0, faded(palette.text, caret_opacity));
         } else {
             let (start, end) = (
                 offset(cx, field.selection.start),
@@ -1412,8 +1415,16 @@ impl<M> RowNode<M> {
     }
 }
 
+/// What a row remembers between frames: where its search field's caret blink restarted, and the text and caret
+/// position it restarted for.
+#[derive(Default)]
+struct CaretBlink {
+    since: Cell<Timestamp>,
+    seen: RefCell<Option<(String, usize)>>,
+}
+
 impl<M: Clone + 'static> Widget<M> for RowNode<M> {
-    type State = ();
+    type State = CaretBlink;
 
     fn layout(&self) -> LayoutSpec {
         let r = self.row.rect;
@@ -1425,9 +1436,11 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         ))
     }
 
-    fn state(&self) {}
+    fn state(&self) -> CaretBlink {
+        CaretBlink::default()
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut CaretBlink) -> Change {
         if self.row.rect != old.row.rect || self.origin != old.origin {
             Change::Layout
         } else if self.row != old.row
@@ -1446,33 +1459,49 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &CaretBlink, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
             size: Size::new(self.row.rect.w, self.row.rect.h),
             baseline: None,
         }
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, _: &mut CaretBlink, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        // the caret fades: draw it again each frame while it may change
+        if let (Event::AnimationFrame(_), Some(_)) = (event, &self.field) {
+            cx.request_paint();
+            return Propagation::Continue;
+        }
         if self.row.item.separator || !self.row.item.enabled {
             return Propagation::Continue;
         }
         clicked(event, cx, self.bar, centre(self.row.rect), self.input)
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, blink: &CaretBlink, cx: &mut PaintCx<'_>) {
         let palette = popup_palette(cx.env());
         let size = cx.size();
         let m = &self.metrics;
         let item = &self.row.item;
         if let Some(field) = &self.field {
+            // an edit or a move restarts the caret's blink
+            let now = cx.now();
+            let at = (field.text.clone(), field.caret);
+            if blink.seen.borrow().as_ref() != Some(&at) {
+                *blink.seen.borrow_mut() = Some(at);
+                blink.since.set(now);
+            }
+            let opacity = cupertino_kit::controls::caret_opacity(cx.env(), blink.since.get(), now);
+            if cupertino_kit::controls::caret_blinking(cx.env(), blink.since.get(), now) {
+                cx.request_animation_frame();
+            }
             let faded_text = faded(palette.text, SHORTCUT_ALPHA);
             let chord_left = self
                 .row
                 .shortcut
                 .as_ref()
                 .map(|sc| self.shortcut(cx, sc, size.width, faded_text));
-            self.field(cx, field, &palette, chord_left);
+            self.field(cx, field, &palette, chord_left, opacity);
             return;
         }
         if let Some(row) = &item.panel {
@@ -1597,7 +1626,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &CaretBlink, cx: &mut SemanticsCx<'_>) {
         let item = &self.row.item;
         if item.separator {
             cx.role(Role::Separator);

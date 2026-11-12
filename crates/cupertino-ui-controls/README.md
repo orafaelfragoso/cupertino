@@ -18,7 +18,7 @@ from the application's model and reports changes as messages.
   on a slightly stronger well. A default button is the accent; a destructive one a red label over a faint red tint
   (a red fill with a light label under Increase Contrast). `ButtonStyle::Glass` is an action on glass of its own: a
   translucent body with a fine bright rim, toolkit-painted since the compositor's glass lies under the window's
-  opaque content. `Toggle::small` gives a `SmallToggle`, the switch of a settings form's rows: a 36 × 16 pt track
+  opaque content. `Toggle::header` gives a `HeaderToggle`, the switch of a pane's header (a 44.5 × 20 pt track, a 25.5 × 15 pt thumb). `Toggle::small` gives a `SmallToggle`, the switch of a settings form's rows: a 36 × 16 pt track
   and a 21 × 13 pt capsule thumb 1.5 pt inside it, with the toggle's behaviour and reading. In a high-contrast
   appearance every bezel and well strokes its border and every quiet fill is a little stronger. A theme without a colour for a role paints
   nothing rather than a guess. The keyboard focus
@@ -31,6 +31,17 @@ from the application's model and reports changes as messages.
   and no inertia of their own. The model's offset never leaves the range: the stretch is drawn on top of it. A gesture
   belongs to the view its first movement can move, or for a finger to the view it pulls past an edge along an axis
   that view scrolls; the content coasts on while the pointer goes elsewhere, and a new finger catches it where it is.
+- **Overlay scroll bars.** An overlay bar flashes when its content first has something to scroll (shown 1 s), shows
+  while the content moves and for 0.5 s after, then fades out over 0.25 s; a hide held back by the pointer on the thumb
+  or a drag of it waits 0.3 s once the hold ends. The pointer on a shown thumb widens it after 0.05 s over 0.125 s.
+  Under Reduce Motion the bar disappears without a fade or a widening.
+- **Pop-ups in rows.** `InlinePopUpButton` wraps a `PopUpButton` for a grouped form's row: the value as plain text,
+  then a 20 pt round grey disc with the up and down chevrons (darker under the pointer and pressed). `PopUpButton`
+  keeps its bordered bezel elsewhere. `FullWidthSegmentedControl` stretches a segmented control's equal segments
+  over its row. `AppIconRow` is a form row that starts with an application's icon (`AppIcon`, by the name of its
+  desktop entry, through `Icons::named`), 20 or 22 pt in a 42 or 43 pt row (53 pt with a second line); `PaneHeader` is
+  the compact header of a pane (26 pt tile, title, description and an optional master switch); `ThumbnailTile` is a
+  picture of a grid of pictures with its caption and, when chosen, a neutral ring.
 - **Targets.** Chrome is centred in a node padded out to the theme's minimum target, so the whole padded node takes
   the press and nothing overlaps a neighbour. The layout never follows the paint: a held thumb's lens, a press or a
   focus ring draws past the chrome without moving anything.
@@ -203,8 +214,8 @@ from the application's model and reports changes as messages.
   `ScrollView` whose content starts that far down scrolls behind the row. The row is a raised node
   (`Widget::raised`): where the window system has a raised layer it draws over the page with its glass between the two,
   so the page shows through the glass and never covers it, and a scroll view under it draws the scroll edge over
-  what it covers (`scroll_edge`): a soft veil of the window background, 90 % over the top 30 % of the band and easing
-  out (smoothstep) to nothing at its bottom, or, with Reduce Transparency and in high contrast, the band filled with
+  what it covers (`scroll_edge`): a soft veil of the window background, shown only once the page is scrolled, 96 % at the top of the
+  band thinning in a straight line to 72 % at its bottom, with a hairline of 0.5 pt along the bottom, or, with Reduce Transparency and in high contrast, the band filled with
   the window background and a separator along its bottom. In a window that is not active the band is the inactive
   title bar colour (`ColorRole::InactiveTitlebar`), solid with a hard edge and no veil, with the separator under it
   where the active band has one. Its bar, paging and focus scrolling keep below the row.

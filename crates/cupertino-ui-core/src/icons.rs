@@ -32,6 +32,13 @@ pub trait Icons: Send + Sync + fmt::Debug {
     fn application(&self, _px: u32) -> Option<IconImage> {
         None
     }
+
+    /// The icon of the installed application `name` (its desktop entry's `Icon=` value), drawn to fit `px` × `px`
+    /// device pixels; the generic application icon when the source has none for the name. `None` when the source
+    /// draws no application icons.
+    fn named(&self, _name: &str, _px: u32) -> Option<IconImage> {
+        None
+    }
 }
 
 /// Draws every symbol, and the application's icon, as the outline of a square, for tests and for apps without asset

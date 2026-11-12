@@ -22,6 +22,9 @@ use cupertino_ui_theme::ColorRole;
 use std::cell::Cell;
 use std::rc::Rc;
 
+/// A view is scrolled once its offset passes this many points.
+const SCROLLED_AT: f64 = 0.5;
+
 const HOME: Keysym = Keysym(0xff50);
 const LEFT: Keysym = Keysym(0xff51);
 const UP: Keysym = Keysym(0xff52);
@@ -48,10 +51,20 @@ const TRACK_THUMB: f64 = 11.0;
 const THUMB_MIN: f64 = 24.0;
 /// Between an overlay thumb and the ends of its strip.
 const INSET: f64 = 2.0;
-/// An overlay bar stays shown this long after the content last moved or the pointer last left or let go of it, then
-/// fades for [`FADE_NS`].
-const SHOWN_NS: u64 = 1_000_000_000;
-const FADE_NS: u64 = 300_000_000;
+/// An overlay bar stays shown this long after the content last moved, then fades for [`FADE_NS`].
+const SHOWN_NS: u64 = 500_000_000;
+/// How long a hide that was held back, by the pointer on the thumb or a drag of it, waits once the hold ends.
+const RESTART_SHOWN_NS: u64 = 300_000_000;
+/// How long the flash an overlay bar makes when its content first has something to scroll stays shown.
+const FLASH_NS: u64 = 1_000_000_000;
+/// How long a hiding overlay bar takes to fade out.
+const FADE_NS: u64 = 250_000_000;
+/// The pointer on a shown overlay thumb widens it after this delay...
+const HOVER_DELAY_NS: u64 = 50_000_000;
+/// ...over this long.
+const HOVER_GROW_NS: u64 = 125_000_000;
+/// An overlay thumb's width with the pointer on it.
+const OVERLAY_THUMB_HOVER: f64 = 10.0;
 
 /// A fitted frame keeps its content's size until the room runs out, then gives way.
 const SHRINK: Flex = Flex {
@@ -163,6 +176,7 @@ fn edged<M: 'static>(
                     kind: Some(Axis::Horizontal),
                     fit: false,
                     edge: false,
+                    scrolled: false,
                     firm: false,
                     children: vec![inner, bars.next().expect("one bar per scrolled axis")],
                 });
@@ -173,6 +187,7 @@ fn edged<M: 'static>(
                 kind: Some(Axis::Vertical),
                 fit: false,
                 edge: vertical,
+                scrolled: state.offset.y > SCROLLED_AT,
                 firm,
                 children,
             });
@@ -182,6 +197,7 @@ fn edged<M: 'static>(
         kind: None,
         fit: false,
         edge: vertical,
+        scrolled: state.offset.y > SCROLLED_AT,
         firm,
         children,
     })
@@ -198,6 +214,7 @@ pub(crate) fn fitted<M: 'static>(
         kind: None,
         fit: true,
         edge: true,
+        scrolled: state.offset.y > SCROLLED_AT,
         firm: false,
         children: vec![
             Element::new(Viewport {
@@ -228,6 +245,8 @@ pub(crate) struct Frame<M> {
     /// The frame of a view that scrolls vertically: where raised nodes cover its top, it draws the scroll edge there
     /// ([`crate::scroll_edge`]).
     pub(crate) edge: bool,
+    /// The content is scrolled: something lies under the covered band, so the edge shows.
+    pub(crate) scrolled: bool,
     /// The covered band holds text outside glass: the edge there is the solid one ([`pinned`]).
     pub(crate) firm: bool,
     pub(crate) children: Vec<Element<M>>,
@@ -271,7 +290,7 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn update(&self, old: &Self, _: &mut Self::State) -> Change {
         if self.kind != old.kind || self.fit != old.fit {
             Change::Layout
-        } else if self.edge != old.edge || self.firm != old.firm {
+        } else if self.edge != old.edge || self.scrolled != old.scrolled || self.firm != old.firm {
             Change::Paint
         } else {
             Change::None
@@ -292,7 +311,7 @@ impl<M: 'static> Widget<M> for Frame<M> {
     fn paint(&self, edge: &Self::State, cx: &mut PaintCx<'_>) {
         let top = cx.obscured().top;
         let look = (self.edge && top > 0.0)
-            .then(|| crate::scroll_edge::EdgeLook::of(cx, top, self.firm))
+            .then(|| crate::scroll_edge::EdgeLook::of(cx, top, self.firm, self.scrolled))
             .flatten();
         edge.set(look);
         if look.is_some() {
@@ -769,6 +788,12 @@ pub struct BarState {
     grab: Option<f64>,
     /// The pointer is on the shown thumb: an overlay bar stays shown.
     hover: bool,
+    /// How long the bar stays shown from `shown_from`, before it fades.
+    hold_ns: Cell<u64>,
+    /// The bar had something to scroll at its last paint: when it gains something, it flashes.
+    scrollable: Cell<bool>,
+    /// The thumb's widening: when it last turned, how wide it was then (0 to 1) and where it heads.
+    widen: Cell<(Timestamp, f32, bool)>,
     /// The bar's size and direction at its last paint, for hit-testing.
     painted: Cell<Option<(Size, bool)>>,
     /// How far raised nodes cover the top of a vertical bar at its last paint: its track starts below them.
@@ -908,7 +933,8 @@ impl<M: 'static> Bar<M> {
         if state.shown_from.get().is_some() {
             let now = cx.now();
             state.shown_from.set(Some(now));
-            cx.wake_at(Timestamp(now.0 + SHOWN_NS));
+            state.hold_ns.set(RESTART_SHOWN_NS);
+            cx.wake_at(Timestamp(now.0 + RESTART_SHOWN_NS));
             cx.request_paint();
         }
     }
@@ -921,7 +947,7 @@ impl<M: 'static> Bar<M> {
         if state.hover || state.grab.is_some() {
             return Shown::Until(Timestamp(now.0 + SHOWN_NS));
         }
-        let until = from.0 + SHOWN_NS;
+        let until = from.0 + state.hold_ns.get();
         if now.0 < until {
             Shown::Until(Timestamp(until))
         } else if !reduce && now.0 < until + FADE_NS {
@@ -929,6 +955,24 @@ impl<M: 'static> Bar<M> {
         } else {
             Shown::Hidden
         }
+    }
+
+    /// How wide the thumb is, from 0 (resting) to 1 (widened by the pointer), at `now`, and whether it is still moving.
+    fn widening(state: &BarState, now: Timestamp, reduce: bool) -> (f32, bool) {
+        let (from_time, from, to) = state.widen.get();
+        let target = if to { 1.0 } else { 0.0 };
+        if reduce {
+            return (target, false);
+        }
+        let start = from_time.0 + if to { HOVER_DELAY_NS } else { 0 };
+        let progress = (now.0.saturating_sub(start) as f32 / HOVER_GROW_NS as f32).min(1.0);
+        (from + (target - from) * progress, progress < 1.0)
+    }
+
+    /// The pointer came onto or left the thumb: the widening turns from where it is.
+    fn turn_widening(state: &BarState, now: Timestamp, reduce: bool, to: bool) {
+        let (value, _) = Self::widening(state, now, reduce);
+        state.widen.set((now, value, to));
     }
 
     /// The offset that puts the thumb's start at `thumb_start` along the bar.
@@ -1025,7 +1069,13 @@ impl<M: 'static> Widget<M> for Bar<M> {
         match *event {
             Event::AnimationFrame(now) | Event::Wake(now) if self.scroller == Scroller::Overlay => {
                 match self.shown(state, now, cx.env().theme.motion.reduce) {
-                    Shown::Until(until) => cx.wake_at(until),
+                    Shown::Until(until) => {
+                        cx.wake_at(until);
+                        if Self::widening(state, now, cx.env().theme.motion.reduce).1 {
+                            cx.request_animation_frame();
+                            cx.request_paint();
+                        }
+                    }
                     Shown::Fading(_) => {
                         cx.request_animation_frame();
                         cx.request_paint();
@@ -1099,9 +1149,15 @@ impl<M: 'static> Widget<M> for Bar<M> {
             }
             Event::Pointer(PointerEvent::Enter { .. }, _) if cx.node() == cx.target() => {
                 state.hover = true;
+                let reduce = cx.env().theme.motion.reduce;
+                Self::turn_widening(state, cx.now(), reduce, true);
+                cx.request_animation_frame();
             }
             Event::Pointer(PointerEvent::Leave, _) if cx.node() == cx.target() => {
                 state.hover = false;
+                let reduce = cx.env().theme.motion.reduce;
+                Self::turn_widening(state, cx.now(), reduce, false);
+                cx.request_animation_frame();
                 if state.grab.is_none() {
                     self.release_hold(state, cx);
                 }
@@ -1109,6 +1165,8 @@ impl<M: 'static> Widget<M> for Bar<M> {
             Event::Cancel => {
                 state.grab = None;
                 state.hover = false;
+                let reduce = cx.env().theme.motion.reduce;
+                Self::turn_widening(state, cx.now(), reduce, false);
                 self.release_hold(state, cx);
             }
             _ => return Propagation::Continue,
@@ -1153,8 +1211,15 @@ impl<M: 'static> Widget<M> for Bar<M> {
                 1.0
             }
             Scroller::Overlay => {
-                if state.moved.replace(false) && self.thumb(size).is_some() {
+                let scrolls = self.thumb(size).is_some();
+                let moved = state.moved.replace(false) && scrolls;
+                let appeared = scrolls && !state.scrollable.replace(scrolls);
+                if !scrolls {
+                    state.scrollable.set(false);
+                }
+                if moved || appeared {
                     state.shown_from.set(Some(cx.now()));
+                    state.hold_ns.set(if moved { SHOWN_NS } else { FLASH_NS });
                     cx.request_animation_frame();
                 }
                 match self.shown(state, cx.now(), theme.motion.reduce) {
@@ -1169,6 +1234,35 @@ impl<M: 'static> Widget<M> for Bar<M> {
         };
         let color = look::color(&theme, ColorRole::ScrollerThumb, &normal)
             .map(|c| c.with_alpha(c.a * alpha));
+        let mut thumb = thumb;
+        if self.scroller == Scroller::Overlay {
+            let (grow, busy) = Self::widening(state, cx.now(), theme.motion.reduce);
+            if busy {
+                cx.request_animation_frame();
+            }
+            let extra = (OVERLAY_THUMB_HOVER - OVERLAY_THUMB) * f64::from(grow);
+            // the thumb widens inward, away from the outer edge it rests against
+            thumb = match self.axis {
+                Axis::Vertical if rtl => Rect::new(
+                    thumb.min_x(),
+                    thumb.min_y(),
+                    thumb.width() + extra,
+                    thumb.height(),
+                ),
+                Axis::Vertical => Rect::new(
+                    thumb.min_x() - extra,
+                    thumb.min_y(),
+                    thumb.width() + extra,
+                    thumb.height(),
+                ),
+                Axis::Horizontal => Rect::new(
+                    thumb.min_x(),
+                    thumb.min_y() - extra,
+                    thumb.width(),
+                    thumb.height() + extra,
+                ),
+            };
+        }
         let radius = thumb.width().min(thumb.height()) / 2.0;
         look::fill(cx, below(thumb), radius, color);
     }

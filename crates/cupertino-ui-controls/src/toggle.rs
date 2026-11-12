@@ -1,7 +1,7 @@
 use crate::lens::{paint_lens, Lens, LensKind};
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
-use crate::{SmallToggle, Toggle};
+use crate::{HeaderToggle, SmallToggle, Toggle};
 use cupertino_geometry::{Rect, Size};
 use cupertino_ui_core::Phase;
 use cupertino_ui_core::{
@@ -106,6 +106,13 @@ impl SwitchShape {
         }
     }
 
+    /// The switch at the head of a settings pane: a little larger than a row's.
+    const HEADER: SwitchShape = SwitchShape {
+        track: Size::new(44.5, 20.0),
+        thumb: Size::new(25.5, 15.0),
+        inset: 2.5,
+    };
+
     const SMALL: SwitchShape = SwitchShape {
         track: SMALL_TRACK,
         thumb: SMALL_THUMB,
@@ -195,6 +202,11 @@ impl SwitchState {
 }
 
 impl<M: 'static> Toggle<M> {
+    /// The same switch at the size of a settings pane's header: a 44.5 × 20 pt track and a capsule thumb.
+    pub fn header(self) -> HeaderToggle<M> {
+        HeaderToggle { toggle: self }
+    }
+
     /// The same switch at the small size of a settings form's rows: a 36 × 16 pt track and a capsule thumb.
     pub fn small(self) -> SmallToggle<M> {
         SmallToggle { toggle: self }
@@ -409,6 +421,52 @@ impl<M: 'static> Widget<M> for SmallToggle<M> {
 
     fn paint(&self, state: &SwitchState, cx: &mut PaintCx<'_>) {
         self.toggle.paint_shaped(state, cx, &SwitchShape::SMALL);
+    }
+
+    fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {
+        self.toggle.semantics_of(cx)
+    }
+}
+
+/// The pane header's switch: the toggle's behaviour, reading and look at [`SwitchShape::HEADER`]'s size.
+impl<M: 'static> Widget<M> for HeaderToggle<M> {
+    type State = SwitchState;
+
+    fn layout(&self) -> LayoutSpec {
+        self.toggle.layout()
+    }
+
+    fn state(&self) -> SwitchState {
+        SwitchState::default()
+    }
+
+    fn update(&self, old: &Self, state: &mut SwitchState) -> Change {
+        self.toggle.update(&old.toggle, state)
+    }
+
+    fn measure(&self, _: &SwitchState, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: SwitchShape::HEADER.track,
+            baseline: None,
+        }
+    }
+
+    fn target(&self, state: &SwitchState, env: &Environment) -> Size {
+        self.toggle.target(state, env)
+    }
+
+    fn event(
+        &self,
+        state: &mut SwitchState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        self.toggle
+            .drag_event(state, event, cx, &SwitchShape::HEADER)
+    }
+
+    fn paint(&self, state: &SwitchState, cx: &mut PaintCx<'_>) {
+        self.toggle.paint_shaped(state, cx, &SwitchShape::HEADER);
     }
 
     fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {

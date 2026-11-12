@@ -190,7 +190,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     close and the field keeps its text. Esc clears the field, then closes the menu and the keyboard goes back; a lock
     closes it as every menu. A version 11 server never sends the event, so the chord does nothing there.
   - Not yet: highlighting the found item in its real menu on hover. The bar has no clipboard, so copy, cut and paste in
-    the field only change its text where they edit it. The caret does not blink, and a text wider than the field is not
+    the field only change its text where they edit it. The caret is 2 pt wide and fades in and out as every text field's does, and a text wider than the field is not
     scrolled.
   - Known limit: dead keys and the Compose key do not compose in the field. The field gets the character of each key
     press as the bar's keymap translates it (`cupertino-wayland-client`), and the keyboard library of the project

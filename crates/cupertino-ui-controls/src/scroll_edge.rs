@@ -1,8 +1,9 @@
 //! The scroll edge: what a view that scrolls under raised nodes, such as a page under a toolbar row, draws over its
 //! content where they cover it, so what passes under them recedes and their controls stay legible.
 //!
-//! The soft edge veils the content with the window background, strong over the upper part of the covered band and
-//! easing out to nothing at its bottom ([`soft_edge_opacity`]), so content fades as it passes under the row. The hard
+//! The soft edge, shown only once the page is scrolled, veils the content with the window background, near-solid over
+//! the top of the covered band and a little thinner towards its bottom ([`soft_edge_opacity`]), with a hairline along
+//! the bottom, so content recedes as it passes under the row. The hard
 //! edge fills the band with the window background and draws a separator along its bottom, so the row reads as a solid
 //! bar: with Reduce Transparency and in high contrast. A band that holds text outside glass, a table's pinned header
 //! under the row, is always the hard edge, its header drawing the line along its bottom. Where the window system has no raised layer nothing scrolls
@@ -18,16 +19,24 @@ use cupertino_ui_render::{GradientStop, Paint};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant, ThemePreferences};
 
 /// The soft edge's veil over the top of the band: this much of the window background shows over the content.
-pub const SOFT_EDGE_MAX: f64 = 0.9;
-/// How far down the band, as a share of its height, the veil keeps its full strength before it eases out.
-pub const SOFT_EDGE_HOLD: f64 = 0.3;
+pub const SOFT_EDGE_MAX: f64 = 0.96;
+/// The soft edge's veil at the bottom of the band, just above its hairline.
+pub const SOFT_EDGE_MIN: f64 = 0.72;
+/// How far down the band, as a share of its height, the veil keeps its full strength before it eases down.
+pub const SOFT_EDGE_HOLD: f64 = 0.0;
 /// Points at which the soft edge's gradient samples [`soft_edge_opacity`], from the band's top to its bottom.
 pub const SOFT_EDGE_STOPS: usize = 9;
+/// The soft edge's hairline along the bottom of the band, in points.
+const HAIRLINE: f64 = 0.5;
+/// The hairline's strength: black over a light window, white over a dark one.
+const HAIRLINE_LIGHT: f32 = 0.11;
+const HAIRLINE_DARK: f32 = 0.06;
 
 /// How a scroll view's content is set off where raised nodes cover it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollEdge {
-    /// A veil that fades out down the covered band.
+    /// A near-solid veil, a little thinner towards the band's bottom, with a hairline there, shown while the content
+    /// is scrolled.
     Soft,
     /// The band filled, with a separator along its bottom.
     Hard,
@@ -42,19 +51,22 @@ pub fn scroll_edge(preferences: &ThemePreferences) -> ScrollEdge {
     }
 }
 
-/// The soft edge's veil, from 0 to [`SOFT_EDGE_MAX`], `depth` points below the top of a covered band `band` points
-/// tall: full over the band's top [`SOFT_EDGE_HOLD`], then easing out (smoothstep) to nothing at its bottom, and
-/// nothing below it.
+/// The soft edge's veil, from [`SOFT_EDGE_MAX`] down to [`SOFT_EDGE_MIN`], `depth` points below the top of a covered
+/// band `band` points tall: full over the band's top [`SOFT_EDGE_HOLD`], then thinning in a straight line to the
+/// band's bottom, and nothing below it.
 pub fn soft_edge_opacity(depth: f64, band: f64) -> f64 {
     if band.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !depth.is_finite() {
         return 0.0;
     }
-    let t = (depth / band).clamp(0.0, 1.0);
+    if depth > band {
+        return 0.0;
+    }
+    let t = depth / band;
     if t <= SOFT_EDGE_HOLD {
         return SOFT_EDGE_MAX;
     }
-    let u = (1.0 - t) / (1.0 - SOFT_EDGE_HOLD);
-    SOFT_EDGE_MAX * u * u * (3.0 - 2.0 * u)
+    let u = ((t - SOFT_EDGE_HOLD) / (1.0 - SOFT_EDGE_HOLD)).clamp(0.0, 1.0);
+    SOFT_EDGE_MAX + (SOFT_EDGE_MIN - SOFT_EDGE_MAX) * u
 }
 
 /// The soft edge's gradient stops in `color`, from the band's top (offset 0) to its bottom (offset 1).
@@ -76,6 +88,10 @@ pub(crate) struct EdgeLook {
     edge: ScrollEdge,
     background: Color,
     separator: Option<Color>,
+    /// The soft edge's hairline.
+    hairline: Option<Color>,
+    /// Content is scrolled under the band: the soft edge shows only then.
+    scrolled: bool,
     /// The band's fill in a window that is not active, which replaces the veil.
     inactive: Option<Color>,
     band: f64,
@@ -85,7 +101,7 @@ impl EdgeLook {
     /// The edge of a node `band` points of whose top raised nodes cover; none where they draw in place, with nothing
     /// scrolled under them. A `firm` band, which holds text outside glass such as a table's pinned header, is solid in
     /// every appearance, without a separator of its own: what it holds draws the line along its bottom.
-    pub(crate) fn of(cx: &PaintCx<'_>, band: f64, firm: bool) -> Option<Self> {
+    pub(crate) fn of(cx: &PaintCx<'_>, band: f64, firm: bool, scrolled: bool) -> Option<Self> {
         if !cx.raised_layer() {
             return None;
         }
@@ -116,6 +132,14 @@ impl EdgeLook {
                 ScrollEdge::Hard if !firm => theme.colors.get(ColorRole::Separator, state),
                 _ => None,
             },
+            hairline: (!firm && edge == ScrollEdge::Soft).then(|| {
+                if theme.preferences.appearance.is_dark() {
+                    Color::new(1.0, 1.0, 1.0, HAIRLINE_DARK)
+                } else {
+                    Color::new(0.0, 0.0, 0.0, HAIRLINE_LIGHT)
+                }
+            }),
+            scrolled,
             band,
         })
     }
@@ -136,14 +160,26 @@ impl EdgeLook {
             return;
         }
         match self.edge {
-            ScrollEdge::Soft => cx.fill(
-                rect,
-                Paint::Linear {
-                    start: Point::new(0.0, 0.0),
-                    end: Point::new(0.0, band),
-                    stops: soft_edge_stops(self.background),
-                },
-            ),
+            ScrollEdge::Soft => {
+                // nothing lies under the band until the page is scrolled
+                if !self.scrolled {
+                    return;
+                }
+                cx.fill(
+                    rect,
+                    Paint::Linear {
+                        start: Point::new(0.0, 0.0),
+                        end: Point::new(0.0, band),
+                        stops: soft_edge_stops(self.background),
+                    },
+                );
+                if let Some(hairline) = self.hairline {
+                    cx.fill_pixels(
+                        Rect::new(0.0, band - HAIRLINE, size.width, HAIRLINE),
+                        hairline,
+                    );
+                }
+            }
             ScrollEdge::Hard => {
                 cx.fill(rect, Paint::Solid(self.background));
                 if let Some(separator) = self.separator {

@@ -2119,33 +2119,13 @@
       "fills": [
        {
         "rgba": [
-         0.9647,
-         0.9647,
-         0.9647,
-         0.84
+         0.9137,
+         0.9059,
+         0.898,
+         0.98
         ],
         "blend": "normal",
         "tint": false
-       },
-       {
-        "rgba": [
-         0.915,
-         0.915,
-         0.915,
-         1.0
-        ],
-        "blend": "darken",
-        "tint": false
-       },
-       {
-        "rgba": [
-         0.0,
-         0.0,
-         0.0,
-         0.05
-        ],
-        "blend": "normal",
-        "tint": true
        }
       ],
       "corner_radius": null,
@@ -4727,33 +4707,13 @@
       "fills": [
        {
         "rgba": [
-         0.15690002,
-         0.15690002,
-         0.15690002,
-         0.8
+         0.137,
+         0.137,
+         0.137,
+         0.966
         ],
         "blend": "normal",
         "tint": false
-       },
-       {
-        "rgba": [
-         0.13999999,
-         0.13999999,
-         0.13999999,
-         1.0
-        ],
-        "blend": "lighten",
-        "tint": false
-       },
-       {
-        "rgba": [
-         0.0,
-         0.0,
-         0.0,
-         0.05
-        ],
-        "blend": "normal",
-        "tint": true
        }
       ],
       "corner_radius": null,

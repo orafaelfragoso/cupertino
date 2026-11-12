@@ -85,6 +85,7 @@ pub struct Element<M> {
     pub(crate) key: Option<Key>,
     pub(crate) widget: Box<dyn AnyWidget<M>>,
     pub(crate) width: Option<f64>,
+    pub(crate) height: Option<f64>,
     pub(crate) span: Option<GridSpan>,
     pub(crate) fill: bool,
 }
@@ -95,6 +96,7 @@ impl<M: 'static> Element<M> {
             key: None,
             widget: Box::new(widget),
             width: None,
+            height: None,
             span: None,
             fill: false,
         }
@@ -108,6 +110,12 @@ impl<M: 'static> Element<M> {
     /// Holds the element at `points` wide, or at its parent's limit when that is narrower.
     pub fn width(mut self, points: f64) -> Self {
         self.width = Some(points);
+        self
+    }
+
+    /// Holds the element at `points` high.
+    pub fn height(mut self, points: f64) -> Self {
+        self.height = Some(points);
         self
     }
 
@@ -133,6 +141,9 @@ impl<M: 'static> Element<M> {
         if let Some(width) = self.width {
             spec.width = SizeSpec::Fixed(width);
         }
+        if let Some(height) = self.height {
+            spec.height = SizeSpec::Fixed(height);
+        }
         if let Some(span) = self.span {
             spec.span = span;
         }
@@ -146,6 +157,7 @@ impl<M> fmt::Debug for Element<M> {
             .field("key", &self.key)
             .field("widget", &self.widget.type_name())
             .field("width", &self.width)
+            .field("height", &self.height)
             .field("span", &self.span)
             .field("fill", &self.fill)
             .finish()

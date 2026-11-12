@@ -46,6 +46,8 @@ pub(crate) enum Background {
     Thumbnail {
         image: std::path::PathBuf,
         thumbnail: std::path::PathBuf,
+        /// The thumbnail's pixels, decoded on the thread that made it.
+        pixels: Option<cupertino_kit::controls::ImageSource>,
     },
     /// Whether the Login Screen section shows, asked at the Accessibility pane's opening `opening`.
     LoginScreen {
@@ -54,6 +56,28 @@ pub(crate) enum Background {
     },
     /// sessiond answered Use Mine.
     LoginScreenSaved(std::result::Result<(), String>),
+}
+
+/// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
+const THUMBNAIL_EDGE: u32 = 256;
+
+/// The pixels of the thumbnail file `path`, as an image of its own for the window to draw; run on the thumbnail
+/// thread, never the window's.
+fn decode_thumbnail(path: &std::path::Path) -> Option<cupertino_kit::controls::ImageSource> {
+    use cupertino_kit::render::{ImageResource, PixelFormat};
+    let data = std::fs::read(path).ok()?;
+    let icon = cupertino_icons::decode_png(&data, THUMBNAIL_EDGE)?;
+    Some(cupertino_kit::controls::ImageSource {
+        id: cupertino_kit::core::next_resource_id(),
+        image: ImageResource {
+            revision: 1,
+            width: icon.width,
+            height: icon.height,
+            stride: icon.width * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: std::sync::Arc::from(icon.rgba),
+        },
+    })
 }
 
 /// What a listing thread reads: the packs' pictures, the pictures of an added folder, or a folder of the chooser.
@@ -137,6 +161,8 @@ pub struct State {
     pub(crate) assets: Assets,
     /// Each picture's thumbnail once made.
     pub(crate) thumbnails: HashMap<PathBuf, PathBuf>,
+    /// Each thumbnail's decoded pixels, ready to draw.
+    pub(crate) thumbnail_images: HashMap<PathBuf, cupertino_kit::controls::ImageSource>,
     pub(crate) thumbnails_asked: std::collections::HashSet<PathBuf>,
     pub(crate) listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
     pub(crate) agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
@@ -230,6 +256,7 @@ impl State {
             notify,
             assets: Assets::discover(),
             thumbnails: HashMap::new(),
+            thumbnail_images: HashMap::new(),
             thumbnails_asked: std::collections::HashSet::new(),
             listings: Reads::default(),
             agent_answer: None,
@@ -419,6 +446,24 @@ impl State {
                 eprintln!("cupertino-settings: Bluetooth pairing agent: {e}");
             }
         }
+    }
+
+    /// The icon of each installed application by the name its section shows: the notification apps' sections wear it
+    /// before their titles.
+    pub(crate) fn app_icons(&self) -> HashMap<String, String> {
+        if self.pane() != PaneId::Notifications {
+            return HashMap::new();
+        }
+        self.live
+            .apps
+            .iter()
+            .map(|app| {
+                (
+                    app.entry.name.clone(),
+                    app.entry.icon.clone().unwrap_or_default(),
+                )
+            })
+            .collect()
     }
 
     /// The current pane's sections with the values in effect and the errors of refused changes.
@@ -790,7 +835,14 @@ impl State {
                 let cache = cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings");
                 for image in wanted {
                     match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
-                        Ok(thumbnail) => notify(Background::Thumbnail { image, thumbnail }),
+                        Ok(thumbnail) => {
+                            let pixels = decode_thumbnail(&thumbnail);
+                            notify(Background::Thumbnail {
+                                image,
+                                thumbnail,
+                                pixels,
+                            })
+                        }
                         Err(e) => {
                             eprintln!(
                                 "cupertino-settings: no thumbnail of {}: {e}",
@@ -881,7 +933,14 @@ impl State {
                     sheet.apply_listing(listing);
                 }
             }
-            Background::Thumbnail { image, thumbnail } => {
+            Background::Thumbnail {
+                image,
+                thumbnail,
+                pixels,
+            } => {
+                if let Some(pixels) = pixels {
+                    self.thumbnail_images.insert(image.clone(), pixels);
+                }
                 self.thumbnails.insert(image, thumbnail);
             }
             Background::LoginScreen { opening, allowed } => {

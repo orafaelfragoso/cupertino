@@ -29,13 +29,17 @@ const END: Keysym = Keysym(0xff57);
 pub const TILE_SIDEBAR_ROW_HEIGHT: f64 = 32.0;
 /// Between two groups, and below the last.
 const GROUP_GAP: f64 = 13.0;
-/// Between the sidebar's edges and a row's selection or the header.
-const ROW_INSET: f64 = 9.0;
+/// Between the sidebar's leading and trailing edges and a row's selection.
+const SELECTION_LEADING: f64 = 10.5;
+const SELECTION_TRAILING: f64 = 9.5;
+/// Between the sidebar's leading and trailing edges and the header.
+const HEADER_LEADING: f64 = 10.0;
+const HEADER_TRAILING: f64 = 9.0;
 /// Above the header, and between the header and the first row.
 const HEADER_TOP: f64 = 9.0;
 const HEADER_GAP: f64 = 12.0;
 /// The selection's corner radius.
-const SELECTION_RADIUS: f64 = 7.0;
+const SELECTION_RADIUS: f64 = 7.5;
 /// The tile: its side and its leading edge from the selection's.
 const TILE: f64 = 20.0;
 const TILE_X: f64 = 9.0;
@@ -97,9 +101,9 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
                 axis: Axis::Vertical,
                 padding: Insets {
                     top: HEADER_TOP,
-                    left: ROW_INSET,
+                    left: HEADER_LEADING,
                     bottom: HEADER_GAP,
-                    right: ROW_INSET,
+                    right: HEADER_TRAILING,
                 },
                 spacing: 0.0,
                 align: Align::Stretch,
@@ -326,14 +330,18 @@ impl<M: 'static> Widget<M> for TileRow<M> {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
+        let rtl = cx.env().direction == LayoutDirection::Rtl;
         let chrome = Rect::new(
-            ROW_INSET,
+            if rtl {
+                SELECTION_TRAILING
+            } else {
+                SELECTION_LEADING
+            },
             0.0,
-            (size.width - 2.0 * ROW_INSET).max(0.0),
+            (size.width - SELECTION_LEADING - SELECTION_TRAILING).max(0.0),
             size.height,
         );
         let theme = cx.env().theme.clone();
-        let rtl = cx.env().direction == LayoutDirection::Rtl;
         let state = ControlState {
             enabled: true,
             selected: true,

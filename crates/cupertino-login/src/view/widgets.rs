@@ -44,6 +44,9 @@ const WALLPAPER_BLOBS: [([f64; 2], f32, [f32; 3]); 2] = [
 const BLOB_STRENGTH: f32 = 0.85;
 /// How many stops sample a blob's falloff.
 const BLOB_STOPS: u32 = 6;
+/// Side of the square tiles the wallpaper is drawn in, points: a change over it (a typed character) draws again only
+/// the tiles under the change instead of every gradient over the whole screen.
+const WALLPAPER_TILE: f64 = 128.0;
 
 /// Avatar halo: how far the shadow reaches past the disc and its opacity at the disc.
 const AVATAR_SHADOW_RADIUS: f64 = 15.0;
@@ -129,18 +132,29 @@ fn circle(center: Point, radius: f64) -> Shape {
     }
 }
 
-/// The procedural wallpaper with the lock screen's treatment on top, over `size`: a darkening, a lightening and a
-/// vignette, each drawn over the one before.
-fn paint_wallpaper(cx: &mut PaintCx<'_>, size: Size) {
-    let whole = Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height));
+/// The part under `tile` (screen points) of the procedural wallpaper with the lock screen's treatment on top, over a
+/// screen of `size`: a darkening, a lightening and a vignette, each drawn over the one before. The tile's edges are
+/// put on device pixels, so neighbouring tiles meet without a seam at any scale.
+fn paint_wallpaper(cx: &mut PaintCx<'_>, size: Size, tile: Rect) {
+    let scale = cx.env().scale;
+    let snap = |v: f64| (v * scale).round() / scale;
+    let (x0, y0) = (snap(tile.min_x()), snap(tile.min_y()));
+    let whole = Shape::Rect(Rect::new(
+        x0 - tile.min_x(),
+        y0 - tile.min_y(),
+        snap(tile.max_x()) - x0,
+        snap(tile.max_y()) - y0,
+    ));
+    // screen points to the tile's own
+    let at = |x: f64, y: f64| Point::new(x - tile.min_x(), y - tile.min_y());
     let (w, h) = (size.width, size.height);
     let (a, b) = WALLPAPER_DIAGONAL;
     let norm = a * a + b * b;
     cx.push(PaintOp::Fill {
         shape: whole.clone(),
         paint: Paint::Linear {
-            start: Point::ZERO,
-            end: Point::new(f64::from(a / norm) * w, f64::from(b / norm) * h),
+            start: at(0.0, 0.0),
+            end: at(f64::from(a / norm) * w, f64::from(b / norm) * h),
             stops: vec![
                 GradientStop {
                     offset: 0.0,
@@ -168,7 +182,7 @@ fn paint_wallpaper(cx: &mut PaintCx<'_>, size: Size) {
         cx.push(PaintOp::Fill {
             shape: whole.clone(),
             paint: Paint::Radial {
-                center: Point::new(center[0] * w, center[1] * h),
+                center: at(center[0] * w, center[1] * h),
                 radius: f64::from(reach) * h,
                 stops,
             },
@@ -180,7 +194,7 @@ fn paint_wallpaper(cx: &mut PaintCx<'_>, size: Size) {
     cx.push(PaintOp::Fill {
         shape: whole,
         paint: Paint::Radial {
-            center: Point::new(w / 2.0, h / 2.0),
+            center: at(w / 2.0, h / 2.0),
             radius: w.hypot(h) / 2.0,
             stops: vec![
                 GradientStop {
@@ -200,8 +214,8 @@ fn paint_wallpaper(cx: &mut PaintCx<'_>, size: Size) {
 /// Any of them is activity; while the interface is hidden the key or press only shows it again and goes no further.
 /// Escape and the keys `keys` maps go to the application instead of the focused control.
 pub(crate) struct Backdrop<M> {
-    /// Paint the treated wallpaper (the lock screen and the greeter); a panel paints nothing.
-    pub wallpaper: bool,
+    /// The screen size to paint the treated wallpaper over (the lock screen and the greeter); a panel paints nothing.
+    pub wallpaper: Option<Size>,
     pub hidden: bool,
     pub on_activity: Option<M>,
     /// What a key the application takes means; `None` passes the key on to the focus.
@@ -226,17 +240,22 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
-        std::mem::take(&mut self.children)
+        let mut children: Vec<Element<M>> = self
+            .wallpaper
+            .map(|size| {
+                tiles(size)
+                    .map(|rect| Element::new(WallpaperTile { size, rect }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        children.append(&mut self.children);
+        children
     }
 
     fn state(&self) {}
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.wallpaper != old.wallpaper {
-            Change::Paint
-        } else {
-            Change::None
-        }
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -282,12 +301,7 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if self.wallpaper {
-            let size = cx.size();
-            paint_wallpaper(cx, size);
-        }
-    }
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
@@ -304,7 +318,76 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 }
 
-/// Everything of a screen but its wallpaper, drawn as one layer at `opacity`.
+/// The squares of [`WALLPAPER_TILE`] points that cover a screen of `size`, row by row; those at the right and bottom
+/// edges are cut to the screen.
+fn tiles(size: Size) -> impl Iterator<Item = Rect> {
+    let count = |side: f64| (side.max(0.0) / WALLPAPER_TILE).ceil() as usize;
+    let (columns, rows) = (count(size.width), count(size.height));
+    (0..rows).flat_map(move |row| {
+        (0..columns).map(move |column| {
+            let (x, y) = (column as f64 * WALLPAPER_TILE, row as f64 * WALLPAPER_TILE);
+            Rect::new(
+                x,
+                y,
+                WALLPAPER_TILE.min(size.width - x),
+                WALLPAPER_TILE.min(size.height - y),
+            )
+        })
+    })
+}
+
+/// One tile of the treated wallpaper of a screen of `size`, at `rect`.
+struct WallpaperTile {
+    size: Size,
+    rect: Rect,
+}
+
+impl<M: 'static> Widget<M> for WallpaperTile {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.rect.width()),
+            height: SizeSpec::Fixed(self.rect.height()),
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect {
+            Change::Layout
+        } else if self.size != old.size {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.rect.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        paint_wallpaper(cx, self.size, self.rect);
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
+/// Everything of a screen but its wallpaper, drawn as one layer while it is partly faded; fully shown it is drawn
+/// straight over the wallpaper, which looks the same, so a change in it repaints only what it covers.
 pub(crate) struct Fade<M> {
     pub opacity: f64,
     pub children: Vec<Element<M>>,
@@ -344,7 +427,10 @@ impl<M: 'static> Widget<M> for Fade<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
+        let opacity = self.opacity.clamp(0.0, 1.0);
+        if opacity < 1.0 {
+            cx.set_group(opacity as f32, Vec::new());
+        }
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

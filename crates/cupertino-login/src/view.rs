@@ -558,7 +558,7 @@ pub fn screen<M: Clone + 'static>(
     }
     children.extend(notice_cards(screen.notices, screen.size, metrics));
     Element::new(Backdrop {
-        wallpaper: true,
+        wallpaper: Some(screen.size),
         hidden: screen.hidden,
         on_activity: Some(map(Input::Activity)),
         keys: field_keys(screen.power.is_some(), map),
@@ -694,7 +694,7 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
     let power = screen.power.is_some();
     let selected = picker.selected_index();
     Element::new(Backdrop {
-        wallpaper: true,
+        wallpaper: Some(screen.size),
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, _| {
@@ -975,7 +975,7 @@ pub fn panel<M: Clone + 'static>(
         );
     }
     let content = Element::new(Backdrop {
-        wallpaper: false,
+        wallpaper: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, text| {
@@ -1236,7 +1236,7 @@ pub fn desktop_control<M: Clone + 'static>(
     let cancel = map(Input::DesktopControl(ControlChoice::Dismiss));
     let close = cancel.clone();
     let content = Element::new(Backdrop {
-        wallpaper: false,
+        wallpaper: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |sym, _| (sym == ESCAPE).then(|| cancel.clone())),
@@ -1297,7 +1297,7 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
         );
     }
     let content = Element::new(Backdrop {
-        wallpaper: false,
+        wallpaper: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, text| {

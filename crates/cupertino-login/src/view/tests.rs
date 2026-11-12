@@ -20,7 +20,10 @@ use cupertino_kit::platform::{
     Capabilities, KeyEvent, Mods, MouseButton, PlatformEvent, PointerEvent, Timestamp, WindowEvent,
     WindowId, WindowStates,
 };
-use cupertino_kit::render::{CpuConfig, CpuRenderer};
+use cupertino_kit::render::{
+    CpuConfig, CpuFrame, CpuRenderer, RenderError, RenderFrameId, RenderRequest, RenderStats,
+    UiRenderer,
+};
 use cupertino_kit::text::{FontIndex, GlyphRaster, ImeBatch, ImeEvent};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver, LOOK_DIR};
@@ -319,6 +322,28 @@ struct Run {
     driver: TestDriver<Shown>,
     window: WindowId,
     assistive: Assistive,
+    /// What the renderer did in each frame since the last [`Run::take_stats`].
+    stats: Rc<RefCell<Vec<RenderStats>>>,
+}
+
+/// The CPU renderer, keeping what it did in each frame for the test.
+struct Counted {
+    inner: CpuRenderer<GlyphRaster>,
+    stats: Rc<RefCell<Vec<RenderStats>>>,
+}
+
+impl UiRenderer for Counted {
+    type Frame = CpuFrame;
+
+    fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        let id = self.inner.render(request)?;
+        self.stats.borrow_mut().push(*self.inner.stats());
+        Ok(id)
+    }
+
+    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        self.inner.frame(id)
+    }
 }
 
 impl Run {
@@ -338,6 +363,8 @@ impl Run {
         )
         .unwrap();
         let assistive = Assistive::default();
+        let stats = Rc::new(RefCell::new(Vec::new()));
+        let counted = Rc::clone(&stats);
         let options = RuntimeOptions {
             theme: Arc::new(theme),
             text,
@@ -345,15 +372,18 @@ impl Run {
             direction: LayoutDirection::Ltr,
             node_limit: 1000,
             renderers: Box::new(move || {
-                Box::new(CpuRenderer::new(
-                    CpuConfig {
-                        max_pixels: 1 << 23,
-                        glyph_cache_bytes: 1 << 20,
-                        image_cache_bytes: 1 << 20,
-                        font_smoothing: true,
-                    },
-                    GlyphRaster::new(Arc::clone(&glyphs)),
-                ))
+                Box::new(Counted {
+                    inner: CpuRenderer::new(
+                        CpuConfig {
+                            max_pixels: 1 << 23,
+                            glyph_cache_bytes: 1 << 20,
+                            image_cache_bytes: 1 << 20,
+                            font_smoothing: true,
+                        },
+                        GlyphRaster::new(Arc::clone(&glyphs)),
+                    ),
+                    stats: Rc::clone(&counted),
+                })
             }),
             accessibility: Some(Box::new(assistive.clone())),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
@@ -378,6 +408,7 @@ impl Run {
             driver,
             window,
             assistive,
+            stats,
         };
         run.settle();
         run
@@ -531,6 +562,18 @@ impl Run {
 
     fn dump(&self) -> String {
         Inspector::default().dump(&self.driver.runtime().snapshot(self.window).unwrap())
+    }
+
+    /// What the renderer did in each frame since the last call.
+    fn take_stats(&mut self) -> Vec<RenderStats> {
+        std::mem::take(&mut *self.stats.borrow_mut())
+    }
+
+    /// The window's last frame: its width in pixels and its premultiplied RGBA pixels.
+    fn pixels(&mut self) -> (usize, Vec<u8>) {
+        let system = self.driver.window_system_mut();
+        let width = system.frames(self.window).unwrap().last().unwrap().width as usize;
+        (width, system.composited(self.window).unwrap().unwrap())
     }
 
     fn model(&self) -> &Model {
@@ -1221,4 +1264,73 @@ fn a_notice_arriving_on_the_lock_screen_is_said_once_and_the_rest_are_counted() 
         "one line of body"
     );
     assert_eq!(calendar.y(), chat.max_y());
+}
+
+/// The box, in pixels, of every pixel that differs between two frames of `width` pixels a row; `None` when none does.
+fn changed(width: usize, before: &[u8], after: &[u8]) -> Option<(usize, usize, usize, usize)> {
+    before
+        .chunks(4)
+        .zip(after.chunks(4))
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(i, _)| (i % width, i / width))
+        .fold(None, |held, (x, y)| {
+            let (x0, y0, x1, y1) = held.unwrap_or((x, y, x, y));
+            Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y)))
+        })
+}
+
+#[test]
+fn a_typed_character_adds_its_dot_and_moves_the_caret_and_nothing_else_of_the_screen_moves() {
+    let mut run = Run::new(Surface::Lock);
+    let field = {
+        let runtime = run.driver.runtime();
+        let id = runtime.find(run.window, &Key::from("password-0")).unwrap();
+        let snapshot = runtime.snapshot(run.window).unwrap();
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
+    };
+    run.type_text("x");
+    let (width, mut before) = run.pixels();
+    let mut right = 0;
+    for typed in 2..=12 {
+        run.type_text("x");
+        let (_, after) = run.pixels();
+        let (x0, y0, x1, y1) = changed(width, &before, &after).expect("a dot was added");
+        // inside the field's frame, on the line of its text, and only from where the caret was onwards: the dots
+        // already typed, the frame and the rest of the screen stay as they were
+        assert!(
+            field.min_x() <= x0 as f64
+                && (x1 as f64) < field.max_x()
+                && field.min_y() <= y0 as f64
+                && (y1 as f64) < field.max_y(),
+            "character {typed} changed ({x0}, {y0}) to ({x1}, {y1}) outside the field {field:?}"
+        );
+        assert!(
+            x0 >= right.max(1) - 1 && x1 - x0 < 20,
+            "character {typed} changed columns {x0} to {x1}, the last one ended at {right}"
+        );
+        right = x1;
+        before = after;
+    }
+}
+
+#[test]
+fn a_typed_character_repaints_only_around_the_field() {
+    let mut run = Run::new(Surface::Lock);
+    run.type_text("x");
+    run.take_stats();
+    run.type_text("x");
+    let stats = run.take_stats();
+    assert!(!stats.is_empty(), "the character was drawn");
+    let screen = (SCREEN.width * SCREEN.height) as u64 * 4;
+    for frame in &stats {
+        // the wallpaper's gradients are drawn only in the tiles under the change, and the interface is no layer of
+        // its own while fully shown: a key costs a few tiles, not the screen
+        assert_eq!(frame.groups_painted, 0, "{frame:?}");
+        assert!(
+            frame.scratch_images.bytes < screen / 10,
+            "a frame of a typed character drew {} bytes of a screen of {screen}: {frame:?}",
+            frame.scratch_images.bytes
+        );
+    }
 }

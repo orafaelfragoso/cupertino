@@ -1274,6 +1274,7 @@ impl Cupertino {
         }
         let mp = MPoint::new(pos.x, pos.y);
         self.command(Command::FocusWindow { window: id });
+        self.return_keyboard_to_key_window(id);
         match hit {
             Hit::Button(kind) if self.decor_button_enabled(id, kind) => {
                 self.decor.pressed = Some((id, kind));
@@ -1381,11 +1382,27 @@ impl Cupertino {
         }
     }
 
+    /// Gives the keyboard back to `window` when it is still the key window but a layer surface that takes the keyboard
+    /// on demand (the desktop) holds it: the window manager sees no change of key window then and moves nothing.
+    fn return_keyboard_to_key_window(&mut self, window: cupertino_wm::WindowId) {
+        if self.exclusive_layer.is_some() || self.wm.key_window() != Some(window) {
+            return;
+        }
+        let Some(surface) = self.entry(window).map(|e| e.surface().clone()) else {
+            return;
+        };
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        if focus.as_ref() != Some(&surface) {
+            self.set_keyboard_focus(Some(surface));
+        }
+    }
+
     /// Click-to-focus at `pos`. A modified click reaches the client unchanged: the design has no
     /// modifier drag that moves or resizes windows, so a primary-modifier click stays the client's.
     fn focus_at(&mut self, pos: Point<f64, Logical>) {
         if let Some((id, _, _)) = self.window_surface_under(pos) {
             self.command(Command::FocusWindow { window: id });
+            self.return_keyboard_to_key_window(id);
             return;
         }
         if let Some((surface, _)) = self.surface_under(pos) {

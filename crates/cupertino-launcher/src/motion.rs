@@ -6,7 +6,7 @@
 //!
 //! * **Opening**: the enclosure starts a little larger than it settles (about 1.1) and shrinks to its size about its
 //!   centre on an underdamped spring, so it undershoots a hair, while it fades in over a tenth of a second. A scope's
-//!   content follows a moment later. With the mode buttons, the bar starts as one wide capsule that contracts while the
+//!   content is part of it from the first frame: header, filters and grid fade in with the enclosure. With the mode buttons, the bar starts as one wide capsule that contracts while the
 //!   buttons bud off its end as one shape and pinch apart, going a little past their places on a slower spring.
 //! * **Folding** a scope into the search field: the content fades out at once, the header becomes the search
 //!   field's, then the enclosure contracts along a spring, its top edge fixed and its sides closing in evenly, its
@@ -33,9 +33,6 @@ pub const OPEN_FADE: f64 = 0.10;
 pub const ENTER_SCALE: f64 = 1.1;
 pub const OPEN_RESPONSE: f64 = 0.30;
 pub const OPEN_DAMPING: f64 = 0.7;
-/// The scope's content fading in after the enclosure opened: its delay and its duration.
-pub const CONTENT_DELAY: f64 = 0.08;
-pub const CONTENT_FADE: f64 = 0.10;
 /// The content fading out when a scope folds; the enclosure starts contracting after it.
 pub const FOLD_FADE: f64 = 0.05;
 /// The enclosure's spring between shapes: its response and damping ratio when it grows and when it shrinks. Both
@@ -355,11 +352,14 @@ impl Motion {
         self.header = (header, header);
         self.dip = None;
         if header.is_scope() {
-            if !closing {
-                self.content = Fade::at(0.0);
+            // the content fades in with the enclosure, not after it: shown at once, the enclosure's fade carries it;
+            // reopened while closing, it comes back alongside the enclosure
+            if closing {
+                self.content
+                    .retarget(1.0, now, 0.0, OPEN_FADE, CubicBezier::LINEAR);
+            } else {
+                self.content = Fade::at(1.0);
             }
-            self.content
-                .retarget(1.0, now, CONTENT_DELAY, CONTENT_FADE, CubicBezier::EASE_OUT);
         } else {
             self.content
                 .retarget(0.0, now, 0.0, 0.0, CubicBezier::LINEAR);
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_the_browser_shows_the_enclosure_before_the_content() {
+    fn opening_the_browser_fades_its_content_in_with_the_enclosure() {
         let mut m = Motion::new(COMPACT);
         m.show(OPEN, true, 0.0);
         let f = m.frame(0.0);
@@ -638,14 +638,15 @@ mod tests {
             f.shape, OPEN,
             "the shape is set; the enclosure grows by its scale"
         );
-        assert_eq!((f.alpha, f.scale, f.content), (0.0, ENTER_SCALE, 0.0));
+        assert_eq!((f.alpha, f.scale, f.content), (0.0, ENTER_SCALE, 1.0));
         assert_eq!(f.header, Header::Browse);
-        // the enclosure is well on its way, shrinking towards its size, while the content has not started
-        let f = m.frame(CONTENT_DELAY);
-        assert!(f.alpha > 0.5 && f.scale < ENTER_SCALE, "{f:?}");
-        assert_eq!(f.content, 0.0);
-        let f = m.frame(CONTENT_DELAY + CONTENT_FADE / 2.0);
-        assert!(f.content > 0.0 && f.content < 1.0, "{f:?}");
+        // half way through the enclosure's fade the content shows as much as the enclosure does: no stagger
+        let f = m.frame(OPEN_FADE / 2.0);
+        assert!(
+            f.alpha > 0.3 && f.alpha < 0.7 && f.scale < ENTER_SCALE,
+            "{f:?}"
+        );
+        assert_eq!(f.content, 1.0);
         let f = m.frame(settled(0.0));
         assert_eq!((f.alpha, f.content), (1.0, 1.0));
         assert!((f.scale - 1.0).abs() < 1e-9, "{f:?}");

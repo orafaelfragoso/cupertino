@@ -268,6 +268,11 @@ struct WindowState<M> {
     drop: Option<drops::DropState>,
     /// The popup closed and is fading out; it takes no input and the view no longer holds it.
     fade: Option<fade::Fade>,
+    /// The point of this popover it grows out of as it opens and shrinks into as it closes
+    /// ([`Widget::grows_from_anchor`]), in its coordinates; set as its first frame is drawn.
+    grows_from: Option<Point>,
+    /// The popover is growing to its size.
+    grow: Option<morph::Grow>,
     /// When the window last became active, while its colours still cross from the inactive ones.
     activated_at: Option<Timestamp>,
 }
@@ -586,6 +591,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn turn(&mut self) -> Result<(), UiError> {
         self.wake_due();
         self.advance_fades();
+        self.advance_grows();
         for event in std::mem::take(&mut self.events) {
             self.platform_event(event)?;
         }
@@ -998,6 +1004,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             popups: Vec::new(),
             drop: None,
             fade: None,
+            grows_from: None,
+            grow: None,
             activated_at: None,
         }
     }
@@ -2373,6 +2381,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 Err(e) => return Err(UiError::Platform(e)),
             }
         }
+        self.begin_grow(i, now);
+        let w = &mut self.windows[i];
         let capabilities = self.system.capabilities();
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
@@ -2406,6 +2416,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             cupertino_ui_theme::set_activation(1.0);
             if let Some(fade) = w.fade {
                 fade::dim(&mut painting.list, fade.opacity);
+                if let Some(into) = fade.into {
+                    morph::apply(
+                        &mut painting.list,
+                        &mut painting.materials,
+                        into,
+                        fade.scale,
+                    );
+                    morph::fade_materials(&mut painting.materials, fade.opacity);
+                }
+            } else if let Some(scale) = w.grow.and_then(|g| g.scale(now)) {
+                let origin = w.grow.map_or(Point::ZERO, |g| g.origin);
+                morph::apply(&mut painting.list, &mut painting.materials, origin, scale);
             }
             painting
         };
@@ -3074,6 +3096,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 
 mod drops;
 mod fade;
+mod morph;
 mod semantics;
 mod ungrabbed;
 

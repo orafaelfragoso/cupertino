@@ -78,6 +78,12 @@ pub trait Widget<M>: 'static {
     fn raised(&self, _state: &Self::State) -> bool {
         false
     }
+    /// Whether the window whose root this widget is grows out of what it opened from: a popup that is a popover
+    /// starts small at the point of its anchor nearest to it, springs to its full size, and shrinks back into that
+    /// point as it closes, its glass with it. Under Reduce Motion it shows and goes at once.
+    fn grows_from_anchor(&self) -> bool {
+        false
+    }
 }
 
 /// An immutable description of one widget and its children.
@@ -216,6 +222,7 @@ pub(crate) trait AnyWidget<M> {
     fn target(&self, state: &dyn Any, env: &Environment) -> Size;
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
     fn raised(&self, state: &dyn Any) -> bool;
+    fn grows_from_anchor(&self) -> bool;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -296,5 +303,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn raised(&self, state: &dyn Any) -> bool {
         Widget::raised(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn grows_from_anchor(&self) -> bool {
+        Widget::grows_from_anchor(self)
     }
 }

@@ -212,6 +212,11 @@ impl<M: Clone + 'static> Widget<M> for Callout<M> {
         Propagation::Continue
     }
 
+    /// The popover grows out of its anchor as it opens and shrinks back into it as it closes.
+    fn grows_from_anchor(&self) -> bool {
+        true
+    }
+
     fn hit(&self, _: &(), _: Point) -> bool {
         false
     }

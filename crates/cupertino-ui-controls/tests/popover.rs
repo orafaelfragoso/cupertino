@@ -416,3 +416,69 @@ fn without_the_glass_it_is_the_opaque_fill_in_a_16_point_corner_with_its_own_edg
         "the edge: {ops:?}"
     );
 }
+
+/// The glass the popover asked for at each frame, as one rectangle around all its regions.
+fn glass_shapes(h: &Harness<Options>, id: WindowId) -> Vec<cupertino_geometry::Rect> {
+    h.rt.window_system()
+        .requests(id)
+        .unwrap()
+        .iter()
+        .filter_map(|request| match request {
+            WindowRequest::Materials(regions) if !regions.is_empty() => Some(
+                regions
+                    .iter()
+                    .map(|r| r.rect)
+                    .reduce(|a, b| a.union(&b))
+                    .unwrap(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Opens the popover on a desktop with glass and draws it until it rests.
+fn open_with_glass(theme: cupertino_ui_theme::ThemeTokens) -> (Harness<Options>, WindowId) {
+    OPEN_AT_START.set(false);
+    let mut h = Harness::with_effects(theme);
+    h.click(h.center("Open"));
+    enter(&mut h);
+    let id = h.window;
+    (h, id)
+}
+
+#[test]
+fn its_glass_grows_from_a_tenth_at_its_anchor_to_its_size_and_rests_there() {
+    let (h, id) = open_with_glass(support::theme());
+    let shapes = glass_shapes(&h, id);
+    let (first, last) = (shapes[0], *shapes.last().unwrap());
+    // the first frame: a tenth of the popover, about the tip of its pointer, at the middle of its top edge under the
+    // button
+    assert!(
+        (first.width() - last.width() * 0.1).abs() < 0.5,
+        "{first:?} of {last:?}"
+    );
+    assert!(
+        (first.height() - last.height() * 0.1).abs() < 0.5,
+        "{first:?} of {last:?}"
+    );
+    let middle = |r: cupertino_geometry::Rect| r.min_x() + r.width() / 2.0;
+    assert!((middle(first) - middle(last)).abs() < 0.5);
+    assert!(first.min_y() < 1.0);
+    // it grows over the frames between, a little past its size at most, and rests whole
+    assert!(shapes.len() > 10, "{} frames", shapes.len());
+    assert!(shapes.iter().all(|s| s.width() <= last.width() * 1.015));
+    assert!(shapes[1].width() > first.width());
+    // it settles: the frame before the last is within half a percent of the whole popover
+    let frames = shapes.len();
+    assert!((shapes[frames - 2].width() - last.width()).abs() < last.width() * 0.005);
+}
+
+#[test]
+fn with_reduce_motion_its_glass_shows_at_its_size_at_once() {
+    let mut theme = support::theme();
+    theme.motion.reduce = true;
+    theme.preferences.reduce_motion = true;
+    let (h, id) = open_with_glass(theme);
+    let shapes = glass_shapes(&h, id);
+    assert!(shapes.windows(2).all(|w| w[0] == w[1]), "{shapes:?}");
+}

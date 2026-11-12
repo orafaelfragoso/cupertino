@@ -2,9 +2,12 @@
 //! its window, takes it out of the input, and shows it at a falling opacity until the fade is over; then it destroys
 //! it. Only a menu's first level fades, and only when no other menu opens in its place; a submenu that closes while
 //! its menu stays open, and a menu that another one replaces, go at once, as does every menu with Reduce Motion.
+//! A popover that closes shrinks back into its anchor as it fades ([`super::morph`]), unless another opens in its
+//! place or Reduce Motion is on.
 
-use super::{set_background, sync_backdrop, Runtime, WindowState};
+use super::{morph, set_background, sync_backdrop, Runtime, WindowState};
 use crate::{Application, WindowBackground, WindowKey};
+use cupertino_geometry::Point;
 use cupertino_ui_platform::{Timestamp, WindowRequest, WindowSystem};
 use cupertino_ui_render::{DisplayList, Group};
 use cupertino_ui_theme::Surface;
@@ -13,16 +16,24 @@ use std::collections::HashMap;
 /// How long a closing menu takes to fade out, in nanoseconds.
 const MENU_FADE_NS: u64 = 236_000_000;
 
-/// A popup that is closing: when it began and how much of its opacity it has left.
+/// A popup that is closing: when it began and how much of its opacity it has left; a popover also shrinks into the
+/// point of its window it grew from, to `scale` of its size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Fade {
     start: Timestamp,
     pub(super) opacity: f32,
+    pub(super) into: Option<Point>,
+    pub(super) scale: f64,
 }
 
 impl Fade {
     fn ends(&self) -> Timestamp {
-        Timestamp(self.start.0.saturating_add(MENU_FADE_NS))
+        let length = if self.into.is_some() {
+            morph::CLOSE_NS
+        } else {
+            MENU_FADE_NS
+        };
+        Timestamp(self.start.0.saturating_add(length))
     }
 }
 
@@ -82,6 +93,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let keep = match self.windows.iter().find(|p| p.key == parent_key) {
                 None => false,
                 Some(_) if w.fade.is_some() => w.fade.is_some_and(|f| now < f.ends()),
+                Some(_) if w.grows_from.is_some() => {
+                    w.committed && !reopened && !w.env.theme.preferences.reduce_motion
+                }
                 Some(parent) => {
                     is_menu(&w)
                         && w.committed
@@ -116,6 +130,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         w.fade = Some(Fade {
             start: now,
             opacity: 1.0,
+            into: w.grows_from,
+            scale: 1.0,
         });
         let _ = self
             .system
@@ -152,7 +168,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         for w in &mut self.windows {
             let Some(fade) = &mut w.fade else { continue };
-            let opacity = opacity_at(now.0.saturating_sub(fade.start.0));
+            let elapsed = now.0.saturating_sub(fade.start.0);
+            let opacity = if fade.into.is_some() {
+                fade.scale = morph::close_scale(elapsed);
+                fade.scale as f32
+            } else {
+                opacity_at(elapsed)
+            };
             fade.opacity = opacity;
             // the material the compositor draws fades with the content; an opaque fill the window paints itself does
             // so as part of it

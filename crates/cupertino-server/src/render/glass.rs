@@ -662,6 +662,10 @@ pub struct GlassDraw<'a> {
     pub damage: &'a [Rectangle<i32, Physical>],
 }
 
+/// The Gaussian deviation of a glass blur per unit of its radius: a recipe's blur radius spans two deviations, so the
+/// backdrop keeps the structure that shows through clear glass.
+const SIGMA_PER_RADIUS: f32 = 0.5;
+
 impl MaterialGl {
     /// `src` blurred with a Gaussian of `sigma_pt` points at `px_per_pt` texels per point, into a new target.
     unsafe fn blurred(
@@ -772,12 +776,12 @@ impl MaterialGl {
         let mut slots = [usize::MAX; BLUR_LEVELS + 1];
         for (i, (radius, used)) in glass.levels().into_iter().enumerate() {
             if used {
-                targets.push(self.blurred(gl, src, radius, px_per_pt)?);
+                targets.push(self.blurred(gl, src, radius * SIGMA_PER_RADIUS, px_per_pt)?);
                 slots[i] = targets.len() - 1;
             }
         }
         if let Some(radius) = glass.fill_radius() {
-            targets.push(self.blurred(gl, src, radius, px_per_pt)?);
+            targets.push(self.blurred(gl, src, radius * SIGMA_PER_RADIUS, px_per_pt)?);
             slots[BLUR_LEVELS] = targets.len() - 1;
         }
         // a level no shape reads has no weight: any texture will do

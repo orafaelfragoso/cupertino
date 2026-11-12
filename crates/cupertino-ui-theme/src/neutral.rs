@@ -61,6 +61,7 @@ pub(crate) const LIGHT: Palette<[u8; 4]> = Palette {
         (TertiaryText, gray(105)),
         (InactiveSidebarText, gray(105)),
         (InactiveTitlebar, gray(247)),
+        (AlternatingRow, gray(244)),
     ],
     states: StateColors {
         emphasized_border: gray(100),
@@ -127,6 +128,7 @@ pub(crate) const DARK: Palette<[u8; 4]> = Palette {
         (TertiaryText, gray(163)),
         (InactiveSidebarText, gray(163)),
         (InactiveTitlebar, gray(37)),
+        (AlternatingRow, gray(41)),
     ],
     states: StateColors {
         emphasized_border: gray(159),
@@ -192,6 +194,7 @@ pub(crate) const HIGH_CONTRAST_LIGHT: Palette<[u8; 4]> = Palette {
         (TertiaryText, gray(60)),
         (InactiveSidebarText, gray(60)),
         (InactiveTitlebar, gray(247)),
+        (AlternatingRow, gray(244)),
     ],
     states: StateColors {
         emphasized_border: BLACK,
@@ -257,6 +260,7 @@ pub(crate) const HIGH_CONTRAST_DARK: Palette<[u8; 4]> = Palette {
         (TertiaryText, gray(210)),
         (InactiveSidebarText, gray(210)),
         (InactiveTitlebar, [40, 41, 46, 255]),
+        (AlternatingRow, [44, 45, 50, 255]),
     ],
     states: StateColors {
         emphasized_border: WHITE,

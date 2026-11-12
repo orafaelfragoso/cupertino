@@ -72,6 +72,14 @@ pub enum Command {
     SetView(ViewMode),
     /// Preview the selection in the preview window.
     Peek,
+    /// Ask whether to delete everything in the trash for good.
+    EmptyTrash,
+    /// Go to the place with this index in the session's places, as a click on its sidebar row does.
+    OpenPlace(usize),
+    /// Open the folder of the place with this index in a window of its own.
+    OpenPlaceInNewWindow(usize),
+    /// Eject the removable file system of the place with this index.
+    EjectPlace(usize),
 }
 
 impl Command {
@@ -95,7 +103,12 @@ impl Command {
             Command::Paste => MenuAction::Paste,
             Command::MoveHere => MenuAction::MoveHere,
             Command::Peek => MenuAction::Peek,
-            Command::OpenWith(_) | Command::ToggleTag(_) => return None,
+            Command::OpenWith(_)
+            | Command::ToggleTag(_)
+            | Command::EmptyTrash
+            | Command::OpenPlace(_)
+            | Command::OpenPlaceInNewWindow(_)
+            | Command::EjectPlace(_) => return None,
         })
     }
 }

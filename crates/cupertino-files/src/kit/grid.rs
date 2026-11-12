@@ -141,6 +141,8 @@ pub(super) struct IconGrid {
     pub items: Rc<[Item]>,
     pub scroll: ScrollState,
     pub selection: Selection,
+    /// The items a context menu is open on, which wear an accent ring.
+    pub ringed: Selection,
     /// The rubber band being drawn, in the grid.
     pub band: Option<Rect>,
     /// How far down the scroll view's content the grid starts: the part of the view the toolbar row covers at rest,
@@ -561,6 +563,7 @@ impl Widget<Message> for IconGrid {
                     icon_top: y,
                     gap: label.min_y() - icon.max_y(),
                     selected,
+                    ringed: self.ringed.contains(index),
                     stop: at == Some(index),
                     name: self.items[index].name.clone(),
                     pick: Rc::clone(&pick),
@@ -811,6 +814,8 @@ struct Cell {
     /// Between the icon and its name.
     gap: f64,
     selected: bool,
+    /// A context menu is open on the item: its selection's shape wears an accent ring.
+    ringed: bool,
     /// The grid's one Tab stop.
     stop: bool,
     name: String,
@@ -850,7 +855,9 @@ impl Widget<Message> for Cell {
             != (old.frame, old.icon, old.icon_top, old.gap)
         {
             Change::Layout
-        } else if (self.selected, self.stop, &self.name) != (old.selected, old.stop, &old.name) {
+        } else if (self.selected, self.ringed, self.stop, &self.name)
+            != (old.selected, old.ringed, old.stop, &old.name)
+        {
             Change::Paint
         } else {
             Change::None
@@ -889,9 +896,11 @@ impl Widget<Message> for Cell {
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let theme = cx.env().theme.clone();
-        // the bubble: the icon grown by its padding, which is also its radius, in the same colour in an active and an
-        // inactive window, with a white border
-        let pad = self.icon.size.width.max(self.icon.size.height) / sel::BUBBLE_DIVISOR;
+        // the bubble: the icon grown by its padding, in the same colour in an active and an inactive window, with a
+        // white border
+        let longest = self.icon.size.width.max(self.icon.size.height);
+        let pad = longest / sel::BUBBLE_DIVISOR;
+        let round = longest * sel::BUBBLE_RADIUS_RATIO;
         let bubble = self.icon.outset(pad);
         if self.selected {
             if let Some(color) = theme
@@ -901,7 +910,7 @@ impl Widget<Message> for Cell {
                 cx.push(PaintOp::Fill {
                     shape: Shape::RoundedRect {
                         rect: bubble,
-                        radius: pad,
+                        radius: round,
                     },
                     paint: Paint::Solid(color),
                 });
@@ -911,10 +920,25 @@ impl Widget<Message> for Cell {
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
                         rect: bubble.outset(-border / 2.0),
-                        radius: (pad - border / 2.0).max(0.0),
+                        radius: (round - border / 2.0).max(0.0),
                     },
                     paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, sel::BUBBLE_BORDER_ALPHA)),
                     width: border,
+                });
+            }
+        }
+        if self.ringed {
+            if let Some(accent) = theme
+                .colors
+                .get(ColorRole::ControlFill, selected_variant(cx.window_active()))
+            {
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::RoundedRect {
+                        rect: bubble.outset(-sel::CONTEXT_RING / 2.0),
+                        radius: (round - sel::CONTEXT_RING / 2.0).max(0.0),
+                    },
+                    paint: Paint::Solid(accent),
+                    width: sel::CONTEXT_RING,
                 });
             }
         }
@@ -927,7 +951,7 @@ impl Widget<Message> for Cell {
                 cx.push(PaintOp::Stroke {
                     shape: Shape::RoundedRect {
                         rect: bubble.outset(ring.outset + ring.width / 2.0),
-                        radius: pad + ring.radius_extra,
+                        radius: round + ring.radius_extra,
                     },
                     paint: Paint::Solid(color),
                     width: ring.width,

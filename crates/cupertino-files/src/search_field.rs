@@ -14,16 +14,13 @@ pub fn is_open(focused: bool, text: &str) -> bool {
     focused || !text.is_empty()
 }
 
-/// The width of the toolbar's controls between the title and the field, with the gap after each.
+/// The width of the toolbar's controls between the title and the open field, with the gap after each: the four views
+/// are one pop-up while the field is open.
 pub fn controls() -> f64 {
-    [
-        window::TOOLBAR_VIEW_MODES,
-        window::TOOLBAR_VIEW_MENU,
-        window::TOOLBAR_ACTIONS,
-    ]
-    .iter()
-    .map(|(w, _)| w + window::TOOLBAR_ITEM_GAP)
-    .sum()
+    [window::TOOLBAR_VIEW_MENU, window::TOOLBAR_ACTIONS]
+        .iter()
+        .map(|(w, _)| w + window::TOOLBAR_ITEM_GAP)
+        .sum()
 }
 
 /// The open width in a toolbar `toolbar` points wide, whose items before the field are the back and forward buttons,

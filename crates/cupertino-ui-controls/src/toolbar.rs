@@ -85,6 +85,8 @@ const MENU_CHEVRON: Size = Size {
 };
 const MENU_CHEVRON_STROKE: f64 = 1.5;
 const MENU_CHEVRON_GAP: f64 = 6.0;
+/// The room between the two chevrons of a picker.
+const PICKER_CHEVRON_GAP: f64 = 2.0;
 const MENU_MARGIN: f64 = 8.0;
 /// The "more" glyph: three dots this wide, this far apart.
 /// The resting search field's symbol.
@@ -135,6 +137,19 @@ pub struct ToolbarGroup<M> {
 /// A floating glass capsule that opens a menu: a symbol and a chevron. Build its element with `Element::from`.
 pub struct ToolbarMenuButton<M> {
     pub key: Option<Key>,
+    pub symbol: String,
+    pub label: String,
+    /// Sent on the press; `None` disables it.
+    pub on_press: Option<M>,
+    /// Its menu is open.
+    pub expanded: bool,
+}
+
+/// A floating glass capsule that opens a menu to pick one of several, as the view's mode: the pick's symbol and a pair
+/// of chevrons, up over down. Build its element with `Element::from`.
+pub struct ToolbarPicker<M> {
+    pub key: Option<Key>,
+    /// The symbol of what is picked now.
     pub symbol: String,
     pub label: String,
     /// Sent on the press; `None` disables it.
@@ -207,6 +222,7 @@ impl<M: Clone + 'static> From<ToolbarGroup<M>> for Element<M> {
                         menu: item.menu,
                         width,
                         chosen: choice.then_some(group.selected == Some(i)),
+                        picker: false,
                     }),
                     key,
                 )
@@ -234,6 +250,31 @@ impl<M: Clone + 'static> From<ToolbarMenuButton<M>> for Element<M> {
             menu: Some(button.expanded),
             width: TOOLBAR_MENU_BUTTON,
             chosen: None,
+            picker: false,
+        });
+        Element::new(Capsule {
+            label: String::new(),
+            width: TOOLBAR_MENU_BUTTON,
+            selected: None,
+            segment: TOOLBAR_MENU_BUTTON,
+            dividers: false,
+            enabled: Vec::new(),
+            children: vec![keyed(segment, key)],
+        })
+    }
+}
+
+impl<M: Clone + 'static> From<ToolbarPicker<M>> for Element<M> {
+    fn from(picker: ToolbarPicker<M>) -> Self {
+        let key = picker.key.clone();
+        let segment = Element::new(Segment {
+            glyph: ToolbarGlyph::Symbol(picker.symbol),
+            label: picker.label,
+            message: picker.on_press,
+            menu: Some(picker.expanded),
+            width: TOOLBAR_MENU_BUTTON,
+            chosen: None,
+            picker: true,
         });
         Element::new(Capsule {
             label: String::new(),
@@ -257,6 +298,7 @@ impl<M: Clone + 'static> From<ToolbarButton<M>> for Element<M> {
             menu: None,
             width: TOOLBAR_CONTROL,
             chosen: None,
+            picker: false,
         });
         Element::new(Capsule {
             label: String::new(),
@@ -618,6 +660,9 @@ struct Segment<M> {
     width: f64,
     /// In a choice: whether it is the chosen one.
     chosen: Option<bool>,
+    /// A menu button's chevron is a pair, up over down, for a button that picks one of several: the pick's own symbol
+    /// shows.
+    picker: bool,
 }
 
 impl<M> Segment<M> {
@@ -657,6 +702,7 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
             || self.glyph != old.glyph
             || self.menu != old.menu
             || self.chosen != old.chosen
+            || self.picker != old.picker
         {
             Change::Paint
         } else {
@@ -790,21 +836,34 @@ impl<M: Clone + 'static> Widget<M> for Segment<M> {
                 x
             };
             let y = (size.height - MENU_CHEVRON.height) / 2.0;
-            cx.push(PaintOp::Stroke {
-                shape: Shape::Path {
-                    verbs: vec![
-                        PathVerb::MoveTo(Point::new(x, y)),
-                        PathVerb::LineTo(Point::new(
-                            x + MENU_CHEVRON.width / 2.0,
-                            y + MENU_CHEVRON.height,
-                        )),
-                        PathVerb::LineTo(Point::new(x + MENU_CHEVRON.width, y)),
-                    ],
-                    fill_rule: Default::default(),
-                },
-                width: MENU_CHEVRON_STROKE,
-                paint: Paint::Solid(color),
-            });
+            let mut path = |y: f64, down: bool| {
+                let (near, far) = if down {
+                    (y, y + MENU_CHEVRON.height)
+                } else {
+                    (y + MENU_CHEVRON.height, y)
+                };
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::Path {
+                        verbs: vec![
+                            PathVerb::MoveTo(Point::new(x, near)),
+                            PathVerb::LineTo(Point::new(x + MENU_CHEVRON.width / 2.0, far)),
+                            PathVerb::LineTo(Point::new(x + MENU_CHEVRON.width, near)),
+                        ],
+                        fill_rule: Default::default(),
+                    },
+                    width: MENU_CHEVRON_STROKE,
+                    paint: Paint::Solid(color),
+                });
+            };
+            if self.picker {
+                // up over down, the pair as tall as the chevron and the gap between them
+                let pair = MENU_CHEVRON.height * 2.0 + PICKER_CHEVRON_GAP;
+                let top = (size.height - pair) / 2.0;
+                path(top, false);
+                path(top + MENU_CHEVRON.height + PICKER_CHEVRON_GAP, true);
+            } else {
+                path(y, true);
+            }
         }
         paint_focus_ring(cx, pill, radius);
     }

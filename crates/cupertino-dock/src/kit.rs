@@ -84,11 +84,10 @@ pub const NEEDS_ATTENTION: &str = "Needs attention";
 pub const MINIMIZED: &str = "Minimized window";
 pub const TRASH_FULL: &str = "Contains items";
 /// What the question before the trash is emptied says: its title, what happens, and its two buttons.
-pub const EMPTY_TRASH_TITLE: &str = "Empty the Trash?";
-pub const EMPTY_TRASH_MESSAGE: &str =
-    "Everything in the Trash is deleted for good. This cannot be undone.";
-pub const EMPTY_TRASH: &str = "Empty Trash";
-pub const CANCEL: &str = "Cancel";
+pub const EMPTY_TRASH_TITLE: &str = cupertino_trash::EMPTY_TITLE;
+pub const EMPTY_TRASH_MESSAGE: &str = cupertino_trash::EMPTY_MESSAGE;
+pub const EMPTY_TRASH: &str = cupertino_trash::EMPTY_BUTTON;
+pub const CANCEL: &str = cupertino_trash::CANCEL_BUTTON;
 /// What the name over the tile of an application that runs without windows says under the name.
 pub const NO_WINDOWS: &str = "No open windows";
 

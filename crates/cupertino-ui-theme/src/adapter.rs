@@ -72,6 +72,7 @@ pub(crate) const LIGHT: Palette<Source> = Palette {
         (InactiveSidebarText, Rgba([0, 0, 0, 102])),
         // black at 3 % over the white window background
         (InactiveTitlebar, Rgba([247, 247, 247, 255])),
+        (AlternatingRow, Token("alternating-row")),
     ],
     states: StateColors {
         emphasized_border: Rgba([0, 0, 0, 96]),
@@ -146,6 +147,7 @@ pub(crate) const DARK: Palette<Source> = Palette {
         (InactiveSidebarText, Rgba([255, 255, 255, 89])),
         // white at 3 % over the dark window background
         (InactiveTitlebar, Rgba([37, 37, 37, 255])),
+        (AlternatingRow, Token("alternating-row")),
     ],
     states: StateColors {
         emphasized_border: Rgba([255, 255, 255, 96]),

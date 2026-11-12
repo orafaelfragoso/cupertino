@@ -53,6 +53,7 @@ mod tooltip;
 mod window_drag;
 mod window_group;
 
+pub use button::CompactButton;
 pub use choice::{segment_at, ChoiceState};
 pub use date_picker::DatePickerState;
 pub use editor::EditorState;
@@ -62,7 +63,7 @@ pub use form::{
     FORM_SMALL_ICON_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT,
 };
 pub use glass::{nested_radius, paint_glass, GlassMaterial, GlassRole};
-pub use list::ListState;
+pub use list::{striped_element, ListState};
 pub use press::Press;
 pub use scroll::{BarState, ViewportState};
 pub use shell::{SidebarWindow, SIDEBAR_PANEL_INSET, SIDEBAR_TOP, WINDOW_CORNER_RADIUS};
@@ -74,9 +75,10 @@ pub use tile_sidebar::TILE_SIDEBAR_ROW_HEIGHT;
 pub use toggle::SwitchState;
 pub use toolbar::{
     unobscured_insets, ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton,
-    ToolbarSearch, ToolbarTitle, COMPACT_TOOLBAR_ROW, TOOLBAR_CHOICE_INSET, TOOLBAR_CHOICE_SEGMENT,
-    TOOLBAR_CONTROL, TOOLBAR_DIVIDER, TOOLBAR_EDGE, TOOLBAR_GAP, TOOLBAR_MENU_BUTTON, TOOLBAR_ROW,
-    TOOLBAR_SEGMENT, TOOLBAR_SYMBOL, TOOLBAR_TITLE_GAP, TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
+    ToolbarPicker, ToolbarSearch, ToolbarTitle, COMPACT_TOOLBAR_ROW, TOOLBAR_CHOICE_INSET,
+    TOOLBAR_CHOICE_SEGMENT, TOOLBAR_CONTROL, TOOLBAR_DIVIDER, TOOLBAR_EDGE, TOOLBAR_GAP,
+    TOOLBAR_MENU_BUTTON, TOOLBAR_ROW, TOOLBAR_SEGMENT, TOOLBAR_SYMBOL, TOOLBAR_TITLE_GAP,
+    TOOLBAR_TITLE_SIZE, TOOLBAR_TITLE_WEIGHT,
 };
 pub use tooltip::{TooltipChange, TooltipState};
 

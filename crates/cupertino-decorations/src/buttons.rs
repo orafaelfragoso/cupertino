@@ -4,7 +4,8 @@
 //! zoom; the shapes are as designed only as "×, −, + appear on all three buttons while the group is
 //! hovered"), their proportions are approximate.
 //!
-//! States: normal (coloured), hover-group (glyphs on all three), pressed (darker),
+//! States: normal (coloured), hover-group (glyphs on all three), pressed (its own fill, which is lighter than the
+//! normal one in the dark appearance),
 //! inactive window (a translucent grey disc without a ring, colour returns while the group is hovered), disabled (the
 //! same disc, no glyph).
 
@@ -52,8 +53,6 @@ impl ButtonState {
     }
 }
 
-/// Darkening factor of a pressed button (approximate).
-pub const PRESSED_DARKEN: f32 = 0.78;
 /// Darkening factor of the ring around a button (approximate).
 pub const RING_DARKEN: f32 = 0.84;
 
@@ -62,20 +61,19 @@ fn darken(c: Rgba, f: f32) -> Rgba {
 }
 
 pub fn button_fill(palette: &Palette, kind: ButtonKind, v: ButtonVisual) -> Rgba {
-    let base = if v.colored {
-        palette.button_color(kind)
-    } else {
-        palette.button_inactive
-    };
-    if v.pressed {
-        darken(base, PRESSED_DARKEN)
-    } else {
-        base
+    match (v.colored, v.pressed) {
+        (true, true) => palette.pressed_fill(kind),
+        (true, false) => palette.button_color(kind),
+        (false, _) => palette.button_inactive,
     }
 }
 
 pub fn button_ring(palette: &Palette, kind: ButtonKind, v: ButtonVisual) -> Rgba {
-    darken(button_fill(palette, kind, v), RING_DARKEN)
+    if v.colored && !v.pressed {
+        palette.rim_of(kind)
+    } else {
+        darken(button_fill(palette, kind, v), RING_DARKEN)
+    }
 }
 
 /// One straight glyph stroke between two points relative to the button centre, in points.
@@ -157,7 +155,7 @@ pub fn draw_button(
         );
     }
     if v.glyph {
-        paint.set_color(color(palette.glyph));
+        paint.set_color(color(palette.glyph_of(kind)));
         let stroke = Stroke {
             width: (metrics.glyph_stroke * scale) as f32,
             line_cap: LineCap::Round,

@@ -32,7 +32,7 @@ pub mod window {
     pub const TOOLBAR_BACK_FORWARD: (f64, f64) = (73.0, 36.0);
     pub const TOOLBAR_SEARCH_FIELD: (f64, f64) = (36.0, 36.0);
     /// The search field's width while it has the keyboard or holds text, and the time it takes to change (seconds).
-    pub const SEARCH_OPEN: f64 = 280.0;
+    pub const SEARCH_OPEN: f64 = 249.0;
     pub const SEARCH_GROW_SECONDS: f64 = 0.2;
     /// The most of the toolbar the open search field takes.
     pub const SEARCH_MAX_SHARE: f64 = 0.5;
@@ -251,13 +251,27 @@ pub mod menu {
     pub const TAG_DOT_TOP: f64 = 8.0;
 }
 
+/// The strip under the toolbar of the trash's view, which holds its Empty button.
+pub mod trash {
+    /// Height of the strip, its separator line included.
+    pub const STRIP_HEIGHT: f64 = 38.0;
+    /// From the window's leading edge to the strip's label.
+    pub const STRIP_INSET: f64 = 20.0;
+    /// From the Empty button to the window's trailing edge.
+    pub const BUTTON_INSET: f64 = 18.0;
+}
+
 /// Selection look.
 pub mod selection {
-    /// The icon bubble's padding and corner radius are the longest side of the icon over this: `max(w, h) * 2 * 0.03125`..
+    /// The icon bubble's padding is the longest side of the icon over this: `max(w, h) * 2 * 0.03125`..
     pub const BUBBLE_DIVISOR: f64 = 16.0;
+    /// The bubble's corner radius over the longest side of the icon: 7 pt around a 64 pt icon.
+    pub const BUBBLE_RADIUS_RATIO: f64 = 7.0 / 64.0;
     /// Upper bound of the bubble's border width, which is `min(2, trunc(padding)); the border is white at this alpha..
     pub const BUBBLE_BORDER_MAX: f64 = 2.0;
     pub const BUBBLE_BORDER_ALPHA: f32 = 0.5;
+    /// The width of the accent ring round the item a context menu is open on.
+    pub const CONTEXT_RING: f64 = 2.0;
 }
 
 /// The rubber band drawn while dragging on empty space.

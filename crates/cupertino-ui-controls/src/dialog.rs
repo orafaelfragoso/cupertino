@@ -1,7 +1,8 @@
-//! A window's modal dialogs: the content behind, the scrim that dims it, and the panel hanging under the toolbar
-//! row. A dialog is a sheet, a solid panel with its controls; an alert is a narrow, nearly opaque panel with the
-//! application's icon, its title and message and a column of capsule buttons. Both show at once: the window draws no
-//! motion for them, which a dialog shown as a window of its own gets from the compositor.
+//! A window's modal dialogs: the content behind and the panel hanging near the window's top. A dialog is a sheet, a
+//! solid panel with its controls over a scrim that dims the window; an alert is a narrow, nearly opaque panel with the
+//! application's icon, its title and message and a column of capsule buttons, hanging closer to the top with no scrim.
+//! A sheet shows at once, which a dialog shown as a window of its own gets motion for from the compositor; an alert
+//! pops in (its panel grows past its size and settles, its content fading in a little after) and goes at once.
 
 use crate::button::{SheetButton, CAPSULE_INSET};
 use crate::glass::nested_radius;
@@ -17,10 +18,11 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec, Track,
 };
-use cupertino_ui_platform::Keysym;
+use cupertino_ui_platform::{Keysym, Timestamp};
 use cupertino_ui_render::{Effect, Sampling};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
+use std::cell::Cell;
 
 const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
@@ -54,6 +56,22 @@ const ALERT_RIM_DARK: f32 = 0.12;
 const ALERT_RIM_LIGHT: f32 = 0.06;
 /// How far below the window's top a dialog hangs: under the toolbar row.
 const HANG: f64 = 52.0;
+/// How far below the window's top an alert hangs.
+const ALERT_HANG: f64 = 24.0;
+/// An alert's pop-in. The panel starts at [`POP_START`] of its size, grows to `1 + POP_OVERSHOOT` of it at
+/// [`POP_PEAK`] of the way through [`POP_DURATION`] and settles back to its size by the end; it fades in over
+/// [`POP_PANEL_FADE`] seconds, and its content fades in between [`POP_CONTENT_DELAY`] and the same again later.
+const POP_DURATION: f64 = 0.26;
+const POP_START: f64 = 0.07;
+const POP_OVERSHOOT: f64 = 0.2;
+const POP_PEAK: f64 = 0.52;
+const POP_PANEL_FADE: f64 = 0.1;
+const POP_CONTENT_DELAY: f64 = 0.06;
+const POP_CONTENT_FADE: f64 = 0.08;
+/// The alert's shadow: lower and fainter above than below.
+const ALERT_SHADOW_OFFSET: f64 = 5.0;
+const ALERT_SHADOW_BLUR: f64 = 20.0;
+const ALERT_SHADOW_ALPHA: f32 = 0.16;
 /// The alert: its width, corner radius and padding; the icon and the text sit further in than the buttons.
 const ALERT_WIDTH: f64 = 260.0;
 const ALERT_RADIUS: f64 = 26.0;
@@ -89,8 +107,15 @@ impl<M: Clone + 'static> From<Modal<M>> for Element<M> {
             children: vec![modal.content],
         })];
         if let Some(dialog) = modal.dialog {
-            children.push(Element::new(Scrim));
+            // an alert dims nothing, but still takes every press meant for the content
+            children.push(Element::new(Scrim {
+                dim: dialog.kind == DialogKind::Dialog,
+            }));
             children.push(Element::new(Hang {
+                top: match dialog.kind {
+                    DialogKind::Dialog => HANG,
+                    DialogKind::Alert => ALERT_HANG,
+                },
                 children: vec![match dialog.kind {
                     DialogKind::Dialog => sheet(dialog),
                     DialogKind::Alert => alert(dialog),
@@ -290,12 +315,13 @@ fn alert<M: Clone + 'static>(dialog: Dialog<M>) -> Element<M> {
         message: dialog.message,
         default,
         cancel,
-        children,
+        children: vec![Element::new(Reveal { children })],
     })
 }
 
-/// Hangs the dialog under the toolbar row, centred across the window.
+/// Hangs the dialog `top` points below the window's top, centred across the window.
 struct Hang<M> {
+    top: f64,
     children: Vec<Element<M>>,
 }
 
@@ -305,7 +331,7 @@ impl<M: 'static> Widget<M> for Hang<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             insets: Insets {
-                top: HANG,
+                top: self.top,
                 left: 0.0,
                 bottom: 0.0,
                 right: 0.0,
@@ -327,8 +353,12 @@ impl<M: 'static> Widget<M> for Hang<M> {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.top != old.top {
+            Change::Layout
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -604,8 +634,10 @@ impl<M: 'static> Widget<M> for Body<M> {
     }
 }
 
-/// Dims the content and takes every press and movement meant for it.
-struct Scrim;
+/// Takes every press and movement meant for the content, and dims it when `dim`.
+struct Scrim {
+    dim: bool,
+}
 
 impl<M: 'static> Widget<M> for Scrim {
     type State = ();
@@ -616,8 +648,12 @@ impl<M: 'static> Widget<M> for Scrim {
 
     fn state(&self) {}
 
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.dim != old.dim {
+            Change::Paint
+        } else {
+            Change::None
+        }
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -632,6 +668,9 @@ impl<M: 'static> Widget<M> for Scrim {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if !self.dim {
+            return;
+        }
         let size = cx.size();
         let color = cx
             .env()
@@ -654,8 +693,99 @@ struct Sheet<M> {
     children: Vec<Element<M>>,
 }
 
+/// When a node first painted, which times an alert's pop-in.
+type Born = Cell<Option<Timestamp>>;
+
+/// Seconds since the node first painted (the first paint is 0), and a request for the next frame while the pop-in
+/// lasts; `None` once it is over.
+fn pop_time(born: &Born, cx: &mut PaintCx<'_>) -> Option<f64> {
+    let now = cx.now();
+    let start = born.get().unwrap_or_else(|| {
+        born.set(Some(now));
+        now
+    });
+    let elapsed = now.0.saturating_sub(start.0) as f64 / 1e9;
+    (elapsed < POP_DURATION).then(|| {
+        cx.request_animation_frame();
+        elapsed
+    })
+}
+
+/// The alert panel's size at `t` seconds into its pop-in, as a share of its size: it grows past it and eases back.
+fn pop_scale(t: f64) -> f64 {
+    let peak = POP_DURATION * POP_PEAK;
+    if t >= POP_DURATION {
+        1.0
+    } else if t < peak {
+        let u = (t / peak).clamp(0.0, 1.0);
+        POP_START + (1.0 + POP_OVERSHOOT - POP_START) * u.powf(1.4)
+    } else {
+        let u = ((t - peak) / (POP_DURATION - peak)).clamp(0.0, 1.0);
+        1.0 + POP_OVERSHOOT * (1.0 - u).powi(3)
+    }
+}
+
+/// A fade from 0 at `delay` seconds to 1 at `delay + length`.
+fn ramp(t: f64, delay: f64, length: f64) -> f32 {
+    ((t - delay) / length).clamp(0.0, 1.0) as f32
+}
+
+/// An alert's content: it fades in a little after its panel has begun to grow.
+struct Reveal<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Reveal<M> {
+    type State = Born;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Stack {
+            axis: Axis::Vertical,
+            spacing: 0.0,
+            align: Align::Stretch,
+            justify: Justify::Start,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) -> Born {
+        Cell::new(None)
+    }
+
+    fn update(&self, _: &Self, _: &mut Born) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &Born, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut Born, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if let Event::AnimationFrame(_) = event {
+            cx.request_paint();
+        }
+        Propagation::Continue
+    }
+
+    fn paint(&self, born: &Born, cx: &mut PaintCx<'_>) {
+        if let Some(t) = pop_time(born, cx) {
+            let (delay, length) = if cx.env().theme.motion.reduce {
+                (0.0, POP_PANEL_FADE)
+            } else {
+                (POP_CONTENT_DELAY, POP_CONTENT_FADE)
+            };
+            cx.set_group(ramp(t, delay, length), Vec::new());
+        }
+    }
+
+    fn semantics(&self, _: &Born, _: &mut SemanticsCx<'_>) {}
+}
+
 impl<M: Clone + 'static> Widget<M> for Sheet<M> {
-    type State = ();
+    type State = Born;
 
     fn layout(&self) -> LayoutSpec {
         let (width, insets, spacing) = match self.kind {
@@ -678,9 +808,11 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         std::mem::take(&mut self.children)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> Born {
+        Cell::new(None)
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut Born) -> Change {
         if self.kind != old.kind {
             Change::Layout
         } else if self.title != old.title || self.message != old.message {
@@ -690,13 +822,17 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &Born, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         no_measure()
     }
 
     /// Return and Escape answer the sheet once the focused control has passed them on; every other key the sheet's
     /// controls leave stops here, so the window's shortcuts stay out while it is up. Tab still moves the focus.
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, _: &mut Born, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if let Event::AnimationFrame(_) = event {
+            cx.request_paint();
+            return Propagation::Continue;
+        }
         let Event::Key(key, _) = event else {
             return Propagation::Continue;
         };
@@ -717,10 +853,30 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
 
     /// A sheet is solid with a shadow and, in the dark appearance, a light rim just inside its edge; an alert is a
     /// nearly opaque grey with a rim; both have a dark hairline just outside their edge.
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, born: &Born, cx: &mut PaintCx<'_>) {
         let size = cx.size();
-        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        let mut rect = Rect::new(0.0, 0.0, size.width, size.height);
         let theme = cx.env().theme.clone();
+        // an alert pops in: its panel grows about its centre and fades in, as a group with its shadow
+        let mut grow = 1.0;
+        if self.kind == DialogKind::Alert {
+            let shadow = vec![Effect::DropShadow {
+                offset: Point::new(0.0, ALERT_SHADOW_OFFSET),
+                blur: ALERT_SHADOW_BLUR,
+                color: Color::new(0.0, 0.0, 0.0, ALERT_SHADOW_ALPHA),
+            }];
+            match pop_time(born, cx) {
+                Some(t) => {
+                    if !theme.motion.reduce {
+                        grow = pop_scale(t);
+                    }
+                    cx.set_group(ramp(t, 0.0, POP_PANEL_FADE), shadow);
+                }
+                None => cx.set_group(1.0, shadow),
+            }
+            let (w, h) = (size.width * grow, size.height * grow);
+            rect = Rect::new((size.width - w) / 2.0, (size.height - h) / 2.0, w, h);
+        }
         let dark = theme.preferences.appearance.is_dark();
         let px = 1.0 / cx.env().scale.max(1.0);
         let outline = Color::new(
@@ -763,20 +919,16 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
                     (ALERT_BODY_LIGHT, Color::new(0.0, 0.0, 0.0, ALERT_RIM_LIGHT))
                 };
                 let alpha = if opaque { 1.0 } else { ALERT_BODY_ALPHA };
-                look::fill(
-                    cx,
-                    rect,
-                    ALERT_RADIUS,
-                    Some(Color::new(grey, grey, grey, alpha)),
-                );
+                let round = ALERT_RADIUS * grow;
+                look::fill(cx, rect, round, Some(Color::new(grey, grey, grey, alpha)));
                 look::stroke(
                     cx,
                     rect.inset(Insets::uniform(px / 2.0)),
-                    nested_radius(ALERT_RADIUS, px / 2.0),
+                    nested_radius(round, px / 2.0),
                     px,
                     Some(rim),
                 );
-                ALERT_RADIUS
+                round
             }
         };
         look::stroke(
@@ -788,7 +940,7 @@ impl<M: Clone + 'static> Widget<M> for Sheet<M> {
         );
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &Born, cx: &mut SemanticsCx<'_>) {
         cx.role(match self.kind {
             DialogKind::Dialog => Role::Dialog,
             DialogKind::Alert => Role::AlertDialog,

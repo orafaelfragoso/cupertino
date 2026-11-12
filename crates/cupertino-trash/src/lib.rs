@@ -17,6 +17,14 @@ use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+/// What the question asked before the trash is emptied says, for every program that asks it: its title, what happens
+/// and the labels of its two buttons.
+pub const EMPTY_TITLE: &str = "Empty the Trash?";
+pub const EMPTY_MESSAGE: &str =
+    "Everything in the Trash is deleted for good. This cannot be undone.";
+pub const EMPTY_BUTTON: &str = "Empty Trash";
+pub const CANCEL_BUTTON: &str = "Cancel";
+
 /// Characters percent-encoded in `Path=` (everything but unreserved characters and `/`).
 const PATH_SET: &AsciiSet = &CONTROLS
     .add(b' ')

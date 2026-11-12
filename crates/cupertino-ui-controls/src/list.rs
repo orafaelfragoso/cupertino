@@ -45,6 +45,12 @@ const OVERSCAN: f64 = 0.5;
 /// Between a row's edges and its selection.
 const SELECTION_INSET: f64 = 4.0;
 const SELECTION_RADIUS: f64 = 5.0;
+/// Between the sides of a striped table and its stripes and its rows' selection.
+const STRIPE_INSET: f64 = 10.0;
+/// The corner radius of a striped table's stripes and its rows' selection.
+const STRIPE_RADIUS: f64 = 6.5;
+/// The width of the accent ring round a row whose context menu is open, inside the selection's shape.
+const MENU_RING: f64 = 2.0;
 /// Between a row's edges and its content; an approximate design value.
 const CONTENT_INSET: f64 = 10.0;
 /// Between a cell's edges and its content, so neighbouring columns keep apart; an approximate design value.
@@ -219,6 +225,11 @@ impl<M: 'static> ListView<M> {
     /// [`inset_element`](Self::inset_element) for a list that fills a pane under a toolbar row `lead` points tall
     /// ([`crate::unobscured_insets`]): its rows start below the row and scroll under it.
     pub fn under_element(self, selection_inset: f64, lead: f64) -> Element<M> {
+        self.rounded_element(selection_inset, SELECTION_RADIUS, lead)
+    }
+
+    /// [`under_element`](Self::under_element) with each row's selection and focus ring `radius` points round.
+    pub fn rounded_element(self, selection_inset: f64, radius: f64, lead: f64) -> Element<M> {
         let list = self;
         let rows = Rows {
             kind: Kind::List,
@@ -237,6 +248,9 @@ impl<M: 'static> ListView<M> {
             on_row_key: None,
             outline: None,
             selection_inset,
+            selection_radius: radius,
+            striped: false,
+            ringed: Selection::default(),
             lead,
         };
         scroll::frame(
@@ -271,6 +285,9 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
                 on_toggle: tree.on_toggle,
             })),
             selection_inset: SELECTION_INSET,
+            selection_radius: SELECTION_RADIUS,
+            striped: false,
+            ringed: Selection::default(),
             lead: 0.0,
         };
         scroll::frame(
@@ -285,7 +302,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
 
 impl<M: 'static> From<TableView<M>> for Element<M> {
     fn from(table: TableView<M>) -> Self {
-        table_element(table, None, None)
+        table_element(table, None, None, false, Selection::default())
     }
 }
 
@@ -295,14 +312,40 @@ impl<M: 'static> From<OutlineTable<M>> for Element<M> {
             item: outline.item,
             on_toggle: outline.on_toggle,
         };
-        table_element(outline.table, Some(Rc::new(outline_rows)), outline.key)
+        table_element(
+            outline.table,
+            Some(Rc::new(outline_rows)),
+            outline.key,
+            false,
+            Selection::default(),
+        )
     }
+}
+
+/// The element of a [`OutlineTable`] whose every other row is filled with the alternating-row colour, as a rounded
+/// stripe inset from the table's sides; the stripes go on below the last row to the bottom of the view, and a row's
+/// selection takes the stripe's shape. The rows in `ringed` wear an accent ring, as the rows a context menu is open
+/// on do.
+pub fn striped_element<M: 'static>(outline: OutlineTable<M>, ringed: Selection) -> Element<M> {
+    let rows = Outline {
+        item: outline.item,
+        on_toggle: outline.on_toggle,
+    };
+    table_element(
+        outline.table,
+        Some(Rc::new(rows)),
+        outline.key,
+        true,
+        ringed,
+    )
 }
 
 fn table_element<M: 'static>(
     table: TableView<M>,
     outline: Option<Rc<Outline<M>>>,
     key: Option<Box<dyn Fn(usize) -> Key>>,
+    striped: bool,
+    ringed: Selection,
 ) -> Element<M> {
     let columns: Rc<[Column]> = table.columns.into();
     let cell = table.cell;
@@ -338,7 +381,18 @@ fn table_element<M: 'static>(
         on_activate: table.on_activate,
         on_row_key: table.on_row_key,
         outline,
-        selection_inset: SELECTION_INSET,
+        selection_inset: if striped {
+            STRIPE_INSET
+        } else {
+            SELECTION_INSET
+        },
+        selection_radius: if striped {
+            STRIPE_RADIUS
+        } else {
+            SELECTION_RADIUS
+        },
+        striped,
+        ringed,
         lead: table.header_top + HEADER_HEIGHT * f64::from(u8::from(table.header_top > 0.0)),
     };
     let on_sort = table.on_sort.map(Rc::new);
@@ -430,6 +484,12 @@ struct Rows<M> {
     outline: Option<Rc<Outline<M>>>,
     /// From a row's sides to its selection.
     selection_inset: f64,
+    /// The corner radius of a row's selection.
+    selection_radius: f64,
+    /// Every other row has a stripe behind it, which goes on below the last row to the bottom of the view.
+    striped: bool,
+    /// The rows that wear the context menu's ring.
+    ringed: Selection,
     /// How far above the first row the scroll view's content starts: the part raised nodes over the view's top cover
     /// at rest, which the rows scroll under.
     lead: f64,
@@ -451,6 +511,17 @@ impl<M: 'static> Rows<M> {
         self.key
             .as_ref()
             .map_or(Key::Int(index as u64), |key| key(index))
+    }
+
+    /// The rows' height: every row's, or the view's below its top part for a striped table with room left, which
+    /// the stripes fill.
+    fn height(&self) -> f64 {
+        let rows = self.count as f64 * self.row_height;
+        if self.striped {
+            rows.max(self.scroll.viewport.height - self.lead)
+        } else {
+            rows
+        }
     }
 
     fn pick(&self) -> Option<Pick<M>> {
@@ -685,7 +756,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fill,
-            height: SizeSpec::Fixed(self.count as f64 * self.row_height),
+            height: SizeSpec::Fixed(self.height()),
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
@@ -718,6 +789,8 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     outline: self.outline.clone(),
                     pick: pick.clone(),
                     selection_inset: self.selection_inset,
+                    selection_radius: self.selection_radius,
+                    ringed: self.ringed.contains(index),
                     content,
                 })
                 .key(self.row_key(index))
@@ -730,7 +803,9 @@ impl<M: 'static> Widget<M> for Rows<M> {
     }
 
     fn update(&self, old: &Self, _: &mut ListState) -> Change {
-        if (self.count, self.row_height) != (old.count, old.row_height) {
+        if (self.count, self.row_height) != (old.count, old.row_height)
+            || (self.striped && self.height() != old.height())
+        {
             Change::Layout
         } else {
             Change::None
@@ -779,7 +854,29 @@ impl<M: 'static> Widget<M> for Rows<M> {
         }
     }
 
-    fn paint(&self, _: &ListState, _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &ListState, cx: &mut PaintCx<'_>) {
+        if !self.striped {
+            return;
+        }
+        let theme = cx.env().theme.clone();
+        let color = theme
+            .colors
+            .get(ColorRole::AlternatingRow, StateVariant::NORMAL);
+        let width = (cx.size().width - 2.0 * STRIPE_INSET).max(0.0);
+        let top = (self.scroll.offset.y - self.lead).max(0.0);
+        let first = (top / self.row_height).floor() as usize;
+        let last = ((top + self.scroll.viewport.height) / self.row_height).ceil() as usize;
+        // rows past the last item stripe too, as far as the view shows
+        for index in (first..=last).filter(|i| i % 2 == 1) {
+            let rect = Rect::new(
+                STRIPE_INSET,
+                index as f64 * self.row_height,
+                width,
+                self.row_height,
+            );
+            look::fill(cx, rect, STRIPE_RADIUS, color);
+        }
+    }
 
     fn semantics(&self, _: &ListState, cx: &mut SemanticsCx<'_>) {
         // A table's rows sit under its frame, with its header
@@ -819,6 +916,10 @@ struct ListRow<M> {
     pick: Option<Pick<M>>,
     /// From the row's sides to its selection.
     selection_inset: f64,
+    /// The corner radius of the row's selection and focus ring.
+    selection_radius: f64,
+    /// A context menu is open on the row: it wears an accent ring.
+    ringed: bool,
     content: Vec<Element<M>>,
 }
 
@@ -856,6 +957,8 @@ impl<M: 'static> Widget<M> for ListRow<M> {
             Change::Layout
         } else if (self.selected, self.cursor, self.item) != (old.selected, old.cursor, old.item)
             || self.selection_inset != old.selection_inset
+            || self.selection_radius != old.selection_radius
+            || self.ringed != old.ringed
         {
             Change::Paint
         } else {
@@ -935,14 +1038,24 @@ impl<M: 'static> Widget<M> for ListRow<M> {
             window_active: cx.window_active(),
             ..ControlState::default()
         };
+        let radius = self.selection_radius;
         if self.selected {
             let color = look::color(&theme, ColorRole::ControlFill, &selected);
-            look::fill(cx, chrome, SELECTION_RADIUS, color);
+            look::fill(cx, chrome, radius, color);
+        }
+        if self.ringed {
+            let accent = look::color(&theme, ColorRole::ControlFill, &selected);
+            look::stroke(
+                cx,
+                chrome.inset(Insets::uniform(MENU_RING / 2.0)),
+                (radius - MENU_RING / 2.0).max(0.0),
+                MENU_RING,
+                accent,
+            );
         }
         if cx.is_focused() && cx.focus_visible() && cx.window_active() {
             let inner = chrome.inset(Insets::uniform(theme.focus.outset + theme.focus.width));
-            let radius =
-                (SELECTION_RADIUS - theme.focus.width / 2.0 - theme.focus.radius_extra).max(0.0);
+            let radius = (radius - theme.focus.width / 2.0 - theme.focus.radius_extra).max(0.0);
             let (rect, radius) = look::focus_ring(inner, radius, &theme.focus);
             let color = if self.selected {
                 look::color(&theme, ColorRole::ControlText, &selected)

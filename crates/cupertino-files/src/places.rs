@@ -1,6 +1,6 @@
 //! The standard places of the sidebar: the home folder (under its own name), Applications, Desktop, Documents and
 //! Downloads under "Favorites", the design's default Favorites in its order without its nearby-sharing item, which has
-//! no counterpart here; the computer (the file system root, under the machine's name) and the trash under "Locations".
+//! no counterpart here; the computer (the file system root, under the machine's name), the network (the session's mounted network locations, only while the session has a GVFS folder) and the trash under "Locations".
 //! The other user directories are not in the sidebar but keep their folder icons ([`SessionPlaces`]). Recents, the
 //! virtual folder of [`crate::recents`], is not a row: the Go menu reaches it ([`recents_place`]).
 //!
@@ -50,6 +50,8 @@ pub enum PlaceKind {
     Recents,
     Applications,
     Computer,
+    /// The network locations the session has mounted ([`network_root`]).
+    Network,
     Trash,
     /// A file system of a removable drive (`crate::udisks`), in this state, on this kind of medium.
     Removable(Volume, Medium),
@@ -92,6 +94,7 @@ impl PlaceKind {
             PlaceKind::Recents => "symbol.recents",
             PlaceKind::Applications => "symbol.applications",
             PlaceKind::Computer => "symbol.computer",
+            PlaceKind::Network => "symbol.network",
             PlaceKind::Trash => "symbol.trash",
             PlaceKind::Removable(_, Medium::Disk) => "symbol.externaldrive",
             PlaceKind::Removable(_, Medium::Stick) => "symbol.flash-drive",
@@ -113,6 +116,7 @@ impl PlaceKind {
             PlaceKind::Recents => "symbol.recents.fill",
             PlaceKind::Applications => "symbol.applications.fill",
             PlaceKind::Computer => "symbol.computer.fill",
+            PlaceKind::Network => "symbol.network.fill",
             PlaceKind::Trash => "symbol.trash.fill",
             PlaceKind::Removable(_, Medium::Disk) => "symbol.externaldrive.fill",
             PlaceKind::Removable(_, Medium::Stick) => "symbol.flash-drive.fill",
@@ -133,7 +137,10 @@ impl PlaceKind {
             PlaceKind::Videos => Some("folder.movies"),
             PlaceKind::Applications => Some("folder.applications"),
             PlaceKind::Computer => Some("computer"),
-            PlaceKind::Recents | PlaceKind::Trash | PlaceKind::Removable(..) => None,
+            PlaceKind::Recents
+            | PlaceKind::Network
+            | PlaceKind::Trash
+            | PlaceKind::Removable(..) => None,
         }
     }
 }
@@ -180,10 +187,12 @@ pub fn window_title(dir: &Path, places: &[Place]) -> String {
     if dir == crate::recents::location() {
         return recents_place().name;
     }
-    if let Some(place) = places
-        .iter()
-        .find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir)
-    {
+    if let Some(place) = places.iter().find(|p| {
+        matches!(
+            p.kind,
+            PlaceKind::Trash | PlaceKind::Recents | PlaceKind::Network
+        ) && p.path == dir
+    }) {
         return place.name.clone();
     }
     dir.file_name().map_or_else(
@@ -371,10 +380,27 @@ pub fn standard_places(
         group: PlaceGroup::Locations,
         kind: PlaceKind::Computer,
     });
+    if let Some(root) = network_root() {
+        places.push(Place {
+            name: "Network".into(),
+            path: root,
+            group: PlaceGroup::Locations,
+            kind: PlaceKind::Network,
+        });
+    }
     if trash_files.is_dir() {
         places.push(trash_place(trash_files));
     }
     places
+}
+
+/// The folder the network locations of the session appear in, as the session's GIO volume monitor mounts them: the
+/// `gvfs` folder of the runtime directory, which holds one folder per mounted share or server. `None` without the
+/// runtime directory or while no GVFS daemon has made the folder, so a session with no network service has no row.
+pub fn network_root() -> Option<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    let root = runtime.join("gvfs");
+    root.is_dir().then_some(root)
 }
 
 fn trash_place(trash_files: &Path) -> Place {

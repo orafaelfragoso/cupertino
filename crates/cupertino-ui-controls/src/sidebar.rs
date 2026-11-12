@@ -61,13 +61,13 @@ const ACCENT: Metrics = Metrics {
 };
 
 /// [`SidebarLook::Neutral`]: 32 pt rows whose 22 pt symbol box is centred 18.75 pt in from the selection's edge, the
-/// label 36.5 pt in, a 17 pt heading 7 pt in, 15 pt between sections and a 10 pt selection radius.
+/// label 36.5 pt in, a 17 pt heading 7 pt in, 15 pt between sections and an 8 pt selection radius.
 const NEUTRAL: Metrics = Metrics {
     row: 32.0,
     heading: 17.0,
     top: 10.0,
     section_gap: 15.0,
-    selection_radius: 10.0,
+    selection_radius: 8.0,
     icon_x: 7.75,
     icon_box: 22.0,
     icon: 20.0,
@@ -89,13 +89,17 @@ const HEADING_SIZE: f32 = 11.0;
 const HEADING_WEIGHT: u16 = 600;
 /// Between the sidebar's edges and a row's selection.
 const ROW_INSET: f64 = 10.0;
-const LABEL_TRAILING: f64 = 4.0;
+/// The width of the accent ring round the row a context menu is open on, inside the selection's shape.
+const MENU_RING: f64 = 2.0;
+const LABEL_TRAILING: f64 = 4.5;
 /// A row's trailing button: its symbol centred in a slot that ends [`LABEL_TRAILING`] before the row's edge, and the
 /// press taken up to that edge.
 const ACCESSORY_SLOT: f64 = 24.0;
-const ACCESSORY_SYMBOL: f64 = 14.0;
+const ACCESSORY_SYMBOL: f64 = 11.0;
+/// The width of a busy row's activity indicator.
+const ACTIVITY_DIAMETER: f64 = 14.0;
 /// A busy row's activity indicator in the accessory slot: its spokes, their length and width from a circle of
-/// [`ACCESSORY_SYMBOL`] across, the opacity of the faintest spoke, and one turn of the brightest spoke.
+/// [`ACTIVITY_DIAMETER`] across, the opacity of the faintest spoke, and one turn of the brightest spoke.
 const ACTIVITY_SPOKES: usize = 8;
 const ACTIVITY_SPOKE_LENGTH: f64 = 3.5;
 const ACTIVITY_SPOKE_WIDTH: f64 = 1.5;
@@ -114,7 +118,20 @@ impl<M: 'static> From<Sidebar<M>> for Element<M> {
 impl<M: 'static> Sidebar<M> {
     /// The sidebar's element, its rows drawn in `look`.
     pub fn with_look(self, look: SidebarLook) -> Element<M> {
+        self.with_context(look, None, None)
+    }
+
+    /// [`with_look`](Self::with_look) for a sidebar whose rows have context menus: `ringed` is the row a context
+    /// menu is open on, which wears an accent ring, and a secondary press on a row sends `on_context` with its
+    /// index, without selecting it; the press goes on to what holds the sidebar, which opens the menu.
+    pub fn with_context(
+        self,
+        look: SidebarLook,
+        ringed: Option<usize>,
+        on_context: Option<Handler<usize, M>>,
+    ) -> Element<M> {
         let sidebar = self;
+        let on_context = on_context.map(Rc::new);
         let metrics = look.metrics();
         let count = sidebar.sections.iter().map(|s| s.items.len()).sum();
         let selected = sidebar.selected.filter(|&s| s < count);
@@ -165,8 +182,10 @@ impl<M: 'static> Sidebar<M> {
                             item,
                             selected,
                             cursor: cursor == Some(index),
+                            ringed: ringed == Some(index),
                             style,
                             on_select: on_select.clone(),
+                            on_context: on_context.clone(),
                             children,
                         })
                         .key(key)
@@ -429,8 +448,11 @@ struct Row<M> {
     selected: bool,
     /// The sidebar's one Tab stop.
     cursor: bool,
+    /// A context menu is open on the row: it wears an accent ring.
+    ringed: bool,
     style: Style,
     on_select: Select<M>,
+    on_context: Select<M>,
     children: Vec<Element<M>>,
 }
 
@@ -470,9 +492,16 @@ impl<M: 'static> Widget<M> for Row<M> {
             &self.item,
             self.selected,
             self.cursor,
+            self.ringed,
             self.style,
-        ) != (old.index, &old.item, old.selected, old.cursor, old.style)
-        {
+        ) != (
+            old.index,
+            &old.item,
+            old.selected,
+            old.cursor,
+            old.ringed,
+            old.style,
+        ) {
             Change::Paint
         } else {
             Change::None
@@ -502,6 +531,17 @@ impl<M: 'static> Widget<M> for Row<M> {
                     select(&self.on_select, self.index, cx);
                 }
                 Propagation::Stop
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Right,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) if cx.phase() != Phase::Capture => {
+                select(&self.on_context, self.index, cx);
+                Propagation::Continue
             }
             Event::Action(request) if cx.node() == cx.target() => match request.action {
                 Action::Click => {
@@ -553,6 +593,15 @@ impl<M: 'static> Widget<M> for Row<M> {
                 look::color(&theme, ColorRole::SidebarSelection, &selected)
             };
             look::fill(cx, chrome, m.selection_radius, fill);
+        }
+        if self.ringed {
+            look::stroke(
+                cx,
+                chrome.inset(cupertino_geometry::Insets::uniform(MENU_RING / 2.0)),
+                (m.selection_radius - MENU_RING / 2.0).max(0.0),
+                MENU_RING,
+                look::color(&theme, ColorRole::ControlFill, &selected),
+            );
         }
         // a row on the accent takes the selected text colour; on the neutral selection it keeps its own colours; in a
         // window that is not active every label is the inactive sidebar text, the selected row's too
@@ -698,7 +747,7 @@ fn paint_activity(cx: &mut PaintCx<'_>, centre: Point, color: cupertino_ui_theme
         let phase = (cx.now().0 % ACTIVITY_TURN_NS) as f64 / ACTIVITY_TURN_NS as f64;
         (phase * ACTIVITY_SPOKES as f64) as usize % ACTIVITY_SPOKES
     };
-    let outer = ACCESSORY_SYMBOL / 2.0;
+    let outer = ACTIVITY_DIAMETER / 2.0;
     let inner = outer - ACTIVITY_SPOKE_LENGTH;
     for spoke in 0..ACTIVITY_SPOKES {
         let angle = std::f64::consts::TAU * spoke as f64 / ACTIVITY_SPOKES as f64;

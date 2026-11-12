@@ -7,12 +7,13 @@ use std::rc::Rc;
 use cupertino_menu_model::{ActionName, MenuBar};
 
 use cupertino_kit::controls::{
-    unobscured_insets, Column, ColumnWidth, ContextMenu, Dialog, DialogAction, DialogButton,
-    DialogKind, Icon, IconDirection, Image, ImageFit, ImageSource, MenuAnchor, Modal,
-    NavigationStack, OutlineTable, Progress, ScrollView, Scroller, SecureField, Selection, Sidebar,
-    SidebarAccessory, SidebarItem, SidebarLook, SidebarSection, SidebarWindow, SortOrder, Spacer,
-    Stack, TableView, Text, TextField, TextRole, ToolbarGlyph, ToolbarGroup, ToolbarItem,
-    ToolbarMenuButton, ToolbarSearch, ToolbarTitle, TreeItem,
+    striped_element, unobscured_insets, Column, ColumnWidth, CompactButton, ContextMenu, Dialog,
+    DialogAction, DialogButton, DialogKind, Icon, IconDirection, Image, ImageFit, ImageSource,
+    MenuAnchor, Modal, NavigationStack, OutlineTable, Progress, ScrollView, Scroller, SearchField,
+    SecureField, Selection, Sidebar, SidebarAccessory, SidebarItem, SidebarLook, SidebarSection,
+    SidebarWindow, SortOrder, Spacer, Stack, TableView, Text, TextField, TextRole, ToolbarGlyph,
+    ToolbarGroup, ToolbarItem, ToolbarMenuButton, ToolbarPicker, ToolbarSearch, ToolbarTitle,
+    TreeItem,
 };
 use cupertino_kit::core::{CommandRegistry, Key, Menus, Shortcut, WindowBackground};
 use cupertino_kit::geometry::{Insets, Size};
@@ -21,7 +22,7 @@ use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
 use cupertino_kit::prelude::*;
 use cupertino_kit::text::SecureBuffer;
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
-use cupertino_kit::theme::ColorRole;
+use cupertino_kit::theme::{ColorRole, ControlSize};
 
 use super::announce::Announcer;
 use super::columns;
@@ -40,7 +41,7 @@ use crate::format::{human_size, relative_date};
 use crate::layout::icon::{self, Flow, FontMetrics, IconLayout, IconParams, SectionSpec};
 use crate::layout::list::RowSpec;
 use crate::menu_bar::MenuAction;
-use crate::metrics::{list_view, sidebar, window as window_metrics};
+use crate::metrics::{list_view, sidebar, trash, window as window_metrics};
 use crate::places::{window_title, PlaceGroup};
 use crate::places::{PlaceKind, Volume};
 use crate::settings::{default_columns, ColumnId, IconViewSettings};
@@ -128,7 +129,11 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             })
             .key("browser")
             .fill(),
-            dialog: win.unlock.as_ref().map(|unlock| unlock_sheet(id, unlock)),
+            dialog: win
+                .unlock
+                .as_ref()
+                .map(|unlock| unlock_sheet(id, unlock))
+                .or_else(|| win.confirm_empty.then(|| empty_trash_alert(id))),
         }),
     }
 }
@@ -248,6 +253,16 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 .iter()
                 .position(|&i| session.places[i].folder() == Some(dir))
         });
+    // the row a context menu is open on, among the shown ones
+    let ringed = win
+        .context
+        .as_ref()
+        .and_then(|menu| match menu.ring {
+            Some(super::context::Ringed::Place(place)) => Some(place),
+            _ => None,
+        })
+        .and_then(|place| shown.iter().position(|&i| i == place));
+    let pressed: Vec<usize> = shown.clone();
     let sidebar = Sidebar {
         label: "Sidebar".into(),
         sections,
@@ -260,8 +275,21 @@ fn places(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         })),
         on_accessory: Some(send(id, Event::Accessory)),
     }
-    .with_look(SidebarLook::Neutral { accent })
+    .with_context(
+        SidebarLook::Neutral { accent },
+        ringed,
+        Some(send(id, move |row: usize| match pressed.get(row) {
+            Some(&place) => Event::PlacePress(place),
+            // a tag has no menu
+            None => Event::PlacePress(usize::MAX),
+        })),
+    )
     .key("places");
+    // a secondary press on a row says which place it was on first, then the sidebar opens the menu there
+    let sidebar = Element::new(ContextMenu {
+        content: sidebar,
+        on_open: Some(send(id, Event::SidebarMenu)),
+    });
     drops::sidebar(session, id, sidebar)
 }
 
@@ -396,10 +424,105 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
     }
 }
 
+/// The question before the trash is emptied: an alert whose default button deletes everything for good.
+fn empty_trash_alert(id: u64) -> Dialog<Message> {
+    Dialog {
+        kind: DialogKind::Alert,
+        title: cupertino_trash::EMPTY_TITLE.into(),
+        message: cupertino_trash::EMPTY_MESSAGE.into(),
+        body: None,
+        buttons: vec![
+            DialogButton {
+                label: cupertino_trash::CANCEL_BUTTON.into(),
+                action: DialogAction::Cancel,
+                on_press: Message::Window(id, Event::EmptyTrashCancelled),
+            },
+            DialogButton {
+                label: cupertino_trash::EMPTY_BUTTON.into(),
+                action: DialogAction::Default,
+                on_press: Message::Window(id, Event::EmptyTrash),
+            },
+        ],
+    }
+}
+
+/// The strip under the toolbar in the trash: how many items it holds and the Empty button, which asks before it
+/// deletes and is off while there is nothing to delete.
+fn trash_strip(id: u64, win: &BrowserWindow) -> Element<Message> {
+    let items = win.browser.item_count();
+    let label = match items {
+        1 => "1 item".to_owned(),
+        n => format!("{n} items"),
+    };
+    let top = if win.tab_bar_shown() {
+        0.0
+    } else {
+        unobscured_insets(DecorationMode::Sidebar).top
+    };
+    let strip = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![
+            Element::new(Stack {
+                axis: Axis::Horizontal,
+                padding: Insets {
+                    top: 0.0,
+                    left: trash::STRIP_INSET,
+                    bottom: 0.0,
+                    right: trash::BUTTON_INSET,
+                },
+                spacing: 0.0,
+                align: Align::Center,
+                children: vec![
+                    Element::new(Text {
+                        content: AttributedText::plain(
+                            label,
+                            TextStyle {
+                                weight: cupertino_kit::text::FontWeight::BOLD,
+                                ..TextStyle::new(13.0)
+                            },
+                        ),
+                        role: TextRole::Body,
+                        wrap: false,
+                        secondary: true,
+                        selected: false,
+                    }),
+                    Element::new(Spacer { min: 0.0 }),
+                    Element::new(CompactButton {
+                        label: "Empty".into(),
+                        enabled: items > 0,
+                        on_press: Some(Message::Window(id, Event::AskEmptyTrash)),
+                    })
+                    .key("empty-trash"),
+                ],
+            })
+            .height(trash::STRIP_HEIGHT - 1.0),
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+        ],
+    })
+    .height(trash::STRIP_HEIGHT);
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top,
+            left: 0.0,
+            bottom: 0.0,
+            right: 0.0,
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![strip],
+    })
+}
+
 /// How far the toolbar row covers the top of the folder's view, which fills the pane under the row; none with the tab
-/// bar shown, which puts the view below the row and the bar.
+/// bar shown, which puts the view below the row and the bar, and none in the trash, whose strip lies under the row.
 pub(super) fn under_row(win: &BrowserWindow) -> f64 {
-    if win.tab_bar_shown() {
+    if win.tab_bar_shown() || win.in_trash() {
         0.0
     } else {
         unobscured_insets(DecorationMode::Sidebar).top
@@ -441,17 +564,27 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     })
     .fill();
     let folder = drops::folder(session, id, win, folder);
-    // the tab bar, under the toolbar
-    let folder = match win.tab_bar_shown() {
-        true => Element::new(Stack {
-            axis: Axis::Vertical,
-            padding: Insets::ZERO,
-            spacing: 0.0,
-            align: Align::Stretch,
-            children: vec![tab_bar(session, id, win), folder.fill()],
-        })
-        .fill(),
-        false => folder,
+    // the tab bar and the trash's strip, under the toolbar
+    let mut above = Vec::new();
+    if win.tab_bar_shown() {
+        above.push(tab_bar(session, id, win));
+    }
+    if win.in_trash() {
+        above.push(trash_strip(id, win));
+    }
+    let folder = match above.is_empty() {
+        false => {
+            above.push(folder.fill());
+            Element::new(Stack {
+                axis: Axis::Vertical,
+                padding: Insets::ZERO,
+                spacing: 0.0,
+                align: Align::Stretch,
+                children: above,
+            })
+            .fill()
+        }
+        true => folder,
     };
     let mut children = vec![Element::from(NavigationStack {
         content: Element::new(ContextMenu {
@@ -539,17 +672,21 @@ fn disabled_peek(session: &Session, win: &BrowserWindow) -> bool {
 /// Tags and Action group; then the search field, which rests as a round button and grows into the title's room while
 /// it has the keyboard or text ([`crate::search_field`]).
 fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Message>> {
-    let field = Element::new(TextField {
-        label: "Search".into(),
-        placeholder: "Search".into(),
-        value: win.search.clone(),
-        revision: win.search_revision,
-        purpose: ContentPurpose::Normal,
-        enabled: true,
-        on_change: Some(send(id, Event::Search)),
-        on_submit: None,
-        selection: None,
-        initial: false,
+    // the open field is a capsule as tall as the toolbar's controls
+    let field = Element::new(SearchField {
+        field: TextField {
+            label: "Search".into(),
+            placeholder: "Search".into(),
+            value: win.search.clone(),
+            revision: win.search_revision,
+            purpose: ContentPurpose::Normal,
+            enabled: true,
+            on_change: Some(send(id, Event::Search)),
+            on_submit: None,
+            selection: None,
+            initial: false,
+        },
+        size: Some(ControlSize::ExtraLarge),
     })
     .key("search");
     let expanded = |popup: Popup| {
@@ -635,19 +772,40 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
         selected: None,
         dividers: false,
     };
-    vec![
-        Element::new(ToolbarTitle {
-            text: win.title(session),
-        })
-        .key("title"),
-        Element::from(view_modes),
-        Element::from(ToolbarMenuButton {
+    // while the search field is open the title keeps its room: the four views fold into one pop-up that shows the
+    // current one, and the View button, which offers the same, steps aside
+    let views = if win.search_width.is_open() {
+        vec![Element::from(ToolbarPicker {
             key: Some(popup_key(Popup::View)),
-            symbol: "symbol.grid".into(),
-            label: "View".into(),
+            symbol: match win.view {
+                ViewMode::Icons => "symbol.grid",
+                ViewMode::List => "symbol.list",
+                ViewMode::Columns => "symbol.columns",
+                ViewMode::Gallery => "symbol.gallery",
+            }
+            .into(),
+            label: "View As".into(),
             on_press: popup(Popup::View),
             expanded: expanded(Popup::View),
-        }),
+        })]
+    } else {
+        vec![
+            Element::from(view_modes),
+            Element::from(ToolbarMenuButton {
+                key: Some(popup_key(Popup::View)),
+                symbol: "symbol.grid".into(),
+                label: "View".into(),
+                on_press: popup(Popup::View),
+                expanded: expanded(Popup::View),
+            }),
+        ]
+    };
+    let mut items = vec![Element::new(ToolbarTitle {
+        text: win.title(session),
+    })
+    .key("title")];
+    items.extend(views);
+    items.extend([
         Element::from(actions),
         Element::new(SearchSlot {
             window: id,
@@ -659,7 +817,8 @@ fn toolbar(session: &Session, id: u64, win: &BrowserWindow) -> Vec<Element<Messa
         })
         .key("search-slot")
         .width(win.search_width.width()),
-    ]
+    ]);
+    items
 }
 
 fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
@@ -778,20 +937,24 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         header_top: under_row(win),
     };
     let count = table.count;
-    let table = Element::from(OutlineTable {
-        table,
-        // the outline follows the entries; a row it does not know yet is a top-level one
-        item: Box::new(move |row| {
-            items.get(row).copied().unwrap_or(TreeItem {
-                level: 0,
-                expanded: None,
-                position: row,
-                siblings: count,
-            })
-        }),
-        key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
-        on_toggle: Some(send(id, Event::Toggle)),
-    })
+    let ringed = ringed_items(win);
+    let table = striped_element(
+        OutlineTable {
+            table,
+            // the outline follows the entries; a row it does not know yet is a top-level one
+            item: Box::new(move |row| {
+                items.get(row).copied().unwrap_or(TreeItem {
+                    level: 0,
+                    expanded: None,
+                    position: row,
+                    siblings: count,
+                })
+            }),
+            key: Some(Box::new(move |row| row_key(id, &paths[row].path))),
+            on_toggle: Some(send(id, Event::Toggle)),
+        },
+        ringed,
+    )
     .key("items");
     Element::new(Gestures {
         window: id,
@@ -959,6 +1122,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         items,
         scroll: win.scroll,
         selection: shown_selection(win),
+        ringed: ringed_items(win),
         band: win.band,
         lead: under_row(win),
         name: Box::new(
@@ -1160,6 +1324,14 @@ fn cell_text(e: &Entry, id: ColumnId, now: std::time::SystemTime) -> String {
 }
 
 /// The selection the views show: the browser's, with the folder about to spring open under a drag flashing as selected.
+/// The items a context menu is open on: the selection while a menu opened on items is up, else none.
+pub(super) fn ringed_items(win: &BrowserWindow) -> Selection {
+    match win.context.as_ref().and_then(|menu| menu.ring) {
+        Some(super::context::Ringed::Items) => selection(win.browser.selection()),
+        _ => Selection::default(),
+    }
+}
+
 pub(super) fn shown_selection(win: &BrowserWindow) -> Selection {
     let selected = win.browser.selection();
     let flashing = win

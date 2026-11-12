@@ -48,10 +48,13 @@ pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
         return vec![(dir.to_path_buf(), recents_place().name)];
     }
     for folder in dir.ancestors() {
-        if let Some(place) = places
-            .iter()
-            .find(|p| p.path == folder && matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents))
-        {
+        if let Some(place) = places.iter().find(|p| {
+            p.path == folder
+                && matches!(
+                    p.kind,
+                    PlaceKind::Trash | PlaceKind::Recents | PlaceKind::Network
+                )
+        }) {
             chain.push((folder.to_path_buf(), place.name.clone()));
             break;
         }

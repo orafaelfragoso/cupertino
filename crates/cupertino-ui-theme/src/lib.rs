@@ -91,10 +91,12 @@ pub enum ColorRole {
     /// The toolbar row of a window that is not active: an opaque band a little lighter (dark) or darker (light) than
     /// the window background, laid over the top of the content under the row.
     InactiveTitlebar,
+    /// The fill of every other row of a table or list, drawn as a rounded stripe behind the rows' content.
+    AlternatingRow,
 }
 
 impl ColorRole {
-    pub const ALL: [ColorRole; 43] = {
+    pub const ALL: [ColorRole; 44] = {
         use ColorRole::*;
         [
             WindowBackground,
@@ -140,6 +142,7 @@ impl ColorRole {
             TertiaryText,
             InactiveSidebarText,
             InactiveTitlebar,
+            AlternatingRow,
         ]
     };
 }

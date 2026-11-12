@@ -297,7 +297,7 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
 }
 
 /// Room between two pictures of a strip, and at its leading and trailing ends.
-pub const STRIP_SPACING: f64 = 6.0;
+pub const STRIP_SPACING: f64 = 5.0;
 /// Room above and below the pictures of a strip.
 pub const STRIP_INSET: f64 = 8.0;
 

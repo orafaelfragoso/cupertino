@@ -309,7 +309,7 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     ];
     // Empty Trash, in the trash only
     if ctx.in_trash {
-        rows.push(MenuItem::unavailable("Empty Trash"));
+        rows.push(MenuItem::command("Empty Trash", Command::EmptyTrash, true));
     }
     rows.push(MenuItem::separator());
     // Get Info, Show Inspector on Alt, Get Summary Info on Ctrl

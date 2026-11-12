@@ -61,8 +61,8 @@ const SELECTION_INSET: f64 = 10.0;
 /// From a list row's content box to the selection drawn around it: the list's content inset less
 /// [`SELECTION_INSET`], none as the two are the same.
 const HIGHLIGHT_OUTSET: f64 = 0.0;
-/// The highlight's corner radius, the list's selection's.
-const HIGHLIGHT_RADIUS: f64 = 5.0;
+/// The highlight's corner radius, the column rows' selection's.
+const HIGHLIGHT_RADIUS: f64 = 8.0;
 /// The side of an icon in the preview column.
 const PREVIEW_ICON: f64 = 128.0;
 /// The label of the preview column's actions button.
@@ -474,7 +474,7 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
     Element::new(ColumnKeys {
         window: id,
         children: vec![list
-            .under_element(SELECTION_INSET, view::under_row(win))
+            .rounded_element(SELECTION_INSET, HIGHLIGHT_RADIUS, view::under_row(win))
             .fill()],
     })
 }
@@ -551,7 +551,7 @@ fn other_column(
         })),
         on_activate: None,
     };
-    list.under_element(SELECTION_INSET, under)
+    list.rounded_element(SELECTION_INSET, HIGHLIGHT_RADIUS, under)
 }
 
 /// A row: its icon and name, then a folder's chevron at the far end.

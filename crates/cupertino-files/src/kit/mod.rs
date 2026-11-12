@@ -397,12 +397,18 @@ struct BrowserWindow {
     full_screen: bool,
     /// The passphrase prompt of a locked container.
     unlock: Option<Unlock>,
+    /// The question before the trash is emptied is up.
+    confirm_empty: bool,
+    /// The trash's folder, whose view has a strip with an Empty button.
+    trash_dir: PathBuf,
     /// How the folder is shown.
     view: ViewMode,
     /// The context menu open in the window.
     context: Option<context::OpenMenu>,
     /// What the latest secondary press was on, until its context menu opens: an item, or empty space.
     pressed: Option<Option<usize>>,
+    /// The sidebar's place the latest secondary press was on, until its context menu opens.
+    pressed_place: Option<usize>,
     /// The keyboard is in the sidebar.
     sidebar_focused: bool,
     /// The key of the sidebar row a click or the arrows last chose since the window last went to another folder: the
@@ -514,8 +520,18 @@ pub enum Event {
     /// Unlock with the passphrase typed: the sheet's default button, or Return in its field.
     Unlock,
     UnlockCancelled,
+    /// Ask whether to empty the trash: the Trash's Empty button, and its row of the context menu.
+    AskEmptyTrash,
+    /// Empty the trash: the question's default button.
+    EmptyTrash,
+    /// The question before the trash is emptied was answered with its Cancel button or Escape.
+    EmptyTrashCancelled,
     /// A secondary press on the item with this index, or on empty space.
     SecondaryPress(Option<usize>),
+    /// A secondary press on the sidebar's row of the place with this index in the session's places.
+    PlacePress(usize),
+    /// Open the context menu of the sidebar at this point of the window.
+    SidebarMenu(cupertino_kit::geometry::Point),
     /// Open the context menu at this point of the window.
     ContextMenu(cupertino_kit::geometry::Point),
     /// The context menu's open submenus changed.
@@ -853,9 +869,12 @@ impl Model {
             rename_when_listed: None,
             full_screen: false,
             unlock: None,
+            confirm_empty: false,
+            trash_dir: self.session.trash.home_trash().join("files"),
             view: prefs.view,
             context: None,
             pressed: None,
+            pressed_place: None,
             sidebar_focused: false,
             sidebar_row: None,
             band: None,
@@ -1067,8 +1086,11 @@ impl Model {
             }
             window.read_available();
         }
-        if matches!(transfer.work, transfer::Work::Trash { .. }) {
-            // the first item trashed makes the trash: its place comes at once
+        if matches!(
+            transfer.work,
+            transfer::Work::Trash { .. } | transfer::Work::EmptyTrash { .. }
+        ) {
+            // the first item trashed makes the trash, and the last one deleted leaves it empty: its place comes at once
             session.follow_places();
         }
         drop.map(|token| Command::FinishDrop(token, dropped(&transfer.work, &outcome)))
@@ -1081,6 +1103,7 @@ impl Model {
             Event::Place(index) => return self.open_place(id, index),
             Event::Accessory(key) => return self.accessory(&key),
             Event::Unlock => return self.unlock(id),
+            Event::EmptyTrash => return self.empty_trash(id),
             Event::MenuCommand(command) => return self.menu_command(id, command),
             Event::DragOut(grab) => return self.drag_out(id, &grab),
             Event::DragRows(grab) => return self.drag_rows(id, &grab),
@@ -1151,6 +1174,7 @@ impl Model {
             Event::Place(_)
             | Event::Accessory(_)
             | Event::Unlock
+            | Event::EmptyTrash
             | Event::MenuCommand(_)
             | Event::DragOut(_)
             | Event::DragRows(_)
@@ -1163,6 +1187,8 @@ impl Model {
                 }
             }
             Event::ContextMenu(at) => window.open_context(at, session),
+            Event::PlacePress(place) => window.pressed_place = Some(place),
+            Event::SidebarMenu(at) => window.open_place_menu(at, session),
             Event::MenuOpened(open) => {
                 if let Some(menu) = window.context.as_mut() {
                     menu.open = open;
@@ -1175,6 +1201,8 @@ impl Model {
                 }
             }
             Event::UnlockCancelled => window.unlock = None,
+            Event::AskEmptyTrash => window.ask_empty_trash(session),
+            Event::EmptyTrashCancelled => window.confirm_empty = false,
             Event::SpringOver(folder) => return window.spring_over(id, folder),
             Event::SpringDue(generation, step) => {
                 return window.spring_due(id, generation, step, session)
@@ -1611,6 +1639,31 @@ impl Model {
                         window.toggle_tag(color, &self.session);
                     }
                 }
+                MenuCommand::EmptyTrash => {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.ask_empty_trash(&self.session);
+                    }
+                }
+                MenuCommand::OpenPlace(place) => return self.open_place(id, place),
+                MenuCommand::OpenPlaceInNewWindow(place) => {
+                    let folder = self
+                        .session
+                        .places
+                        .get(place)
+                        .and_then(|p| p.folder())
+                        .map(Path::to_path_buf);
+                    return self.open_windows(folder.into_iter().collect());
+                }
+                MenuCommand::EjectPlace(place) => {
+                    if self
+                        .session
+                        .places
+                        .get(place)
+                        .is_some_and(|p| p.ejectable())
+                    {
+                        self.eject(place);
+                    }
+                }
                 _ => {}
             }
             return Vec::new();
@@ -1627,6 +1680,38 @@ impl Model {
             return Vec::new();
         }
         self.menu(id, action)
+    }
+
+    /// Empty the trash as a file operation, once its question was answered: it runs on a worker with the others,
+    /// the progress window lists it and a failure stays there.
+    fn empty_trash(&mut self, id: u64) -> Vec<Command<Message>> {
+        let Some(window) = self.windows.get_mut(&id) else {
+            return Vec::new();
+        };
+        window.confirm_empty = false;
+        let sources: Vec<PathBuf> = if window.in_trash() {
+            window
+                .browser
+                .entries()
+                .iter()
+                .map(|e| e.path.clone())
+                .collect()
+        } else {
+            // asked from another folder: the trash's own items, listed again by the worker
+            self.session
+                .trash
+                .list()
+                .map(|items| items.iter().map(|i| i.file_path()).collect())
+                .unwrap_or_default()
+        };
+        if sources.is_empty() {
+            return Vec::new();
+        }
+        let work = transfer::Work::EmptyTrash {
+            sources,
+            trash: self.session.trash.clone(),
+        };
+        self.start_job(id, work, None)
     }
 
     /// Take what the removable media reported: the rows follow the devices, a window on a file system that went away
@@ -2317,13 +2402,74 @@ impl BrowserWindow {
                 menu_spec::item_menu(&subject, &self.selection_apps(session)),
             )
         } else {
-            let background = self.background(session, in_trash);
             let label = crate::places::window_title(self.browser.dir(), &session.places);
-            (label, menu_spec::background_menu(&background))
+            (label, self.background_items(session, in_trash))
         };
         self.context = Some(context::OpenMenu {
+            ring: on_item.then_some(context::Ringed::Items),
             anchor: MenuAnchor::At(at),
             label,
+            items,
+            open: Vec::new(),
+        });
+    }
+
+    /// Whether the window shows the trash folder.
+    fn in_trash(&self) -> bool {
+        self.browser.dir() == self.trash_dir
+    }
+
+    /// Put up the question before the trash is emptied, unless it holds nothing.
+    fn ask_empty_trash(&mut self, session: &Session) {
+        let holds_items = if self.in_trash() {
+            !self.browser.entries().is_empty()
+        } else {
+            session.trash.list().is_ok_and(|items| !items.is_empty())
+        };
+        self.context = None;
+        self.confirm_empty = holds_items;
+    }
+
+    /// Open the context menu of the sidebar's place that a secondary press was on, at `at`.
+    fn open_place_menu(&mut self, at: cupertino_kit::geometry::Point, session: &Session) {
+        let Some(index) = self.pressed_place.take() else {
+            return;
+        };
+        let Some(place) = session.places.get(index) else {
+            return;
+        };
+        let mut items = vec![crate::context_menu::MenuItem::command(
+            "Open",
+            MenuCommand::OpenPlace(index),
+            true,
+        )];
+        if place.folder().is_some() {
+            items.push(crate::context_menu::MenuItem::command(
+                "Open in New Window",
+                MenuCommand::OpenPlaceInNewWindow(index),
+                true,
+            ));
+        }
+        if place.ejectable() {
+            items.push(crate::context_menu::MenuItem::separator());
+            items.push(crate::context_menu::MenuItem::command(
+                "Eject",
+                MenuCommand::EjectPlace(index),
+                true,
+            ));
+        }
+        if place.kind == crate::places::PlaceKind::Trash {
+            items.push(crate::context_menu::MenuItem::separator());
+            items.push(crate::context_menu::MenuItem::command(
+                "Empty Trash",
+                MenuCommand::EmptyTrash,
+                session.trash.list().is_ok_and(|items| !items.is_empty()),
+            ));
+        }
+        self.context = Some(context::OpenMenu {
+            ring: Some(context::Ringed::Place(index)),
+            anchor: MenuAnchor::At(at),
+            label: place.name.clone(),
             items,
             open: Vec::new(),
         });
@@ -2363,17 +2509,37 @@ impl BrowserWindow {
                 let items = menu_spec::item_menu(&subject, &self.selection_apps(session));
                 ("Action".to_owned(), items)
             }
-            Popup::Action | Popup::More => {
-                let background = self.background(session, in_trash);
-                ("Action".to_owned(), menu_spec::background_menu(&background))
-            }
+            Popup::Action | Popup::More => (
+                "Action".to_owned(),
+                self.background_items(session, in_trash),
+            ),
         };
         self.context = Some(context::OpenMenu {
+            ring: None,
             anchor: MenuAnchor::Below(view::popup_key(popup)),
             label,
             items,
             open: Vec::new(),
         });
+    }
+
+    /// The rows of the folder's menu, the row that empties the trash off while the trash holds nothing.
+    fn background_items(
+        &self,
+        session: &Session,
+        in_trash: bool,
+    ) -> Vec<crate::context_menu::MenuItem> {
+        let mut items = menu_spec::background_menu(&self.background(session, in_trash));
+        let empty = self.browser.entries().is_empty();
+        for item in &mut items {
+            if matches!(
+                item.kind,
+                crate::context_menu::ItemKind::Command(MenuCommand::EmptyTrash)
+            ) {
+                item.enabled &= !empty;
+            }
+        }
+        items
     }
 
     /// What the folder's menu depends on.
@@ -2777,7 +2943,9 @@ fn dropped(
             .zip(&outcome.results)
             .all(|(from, to)| to.as_ref().is_ok_and(|to| to != from))
             .then_some(Done::Move),
-        transfer::Work::Duplicate { .. } | transfer::Work::NewFolderWith { .. } => None,
+        transfer::Work::Duplicate { .. }
+        | transfer::Work::NewFolderWith { .. }
+        | transfer::Work::EmptyTrash { .. } => None,
     }
 }
 

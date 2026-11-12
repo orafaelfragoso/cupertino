@@ -19,11 +19,13 @@ pub mod metrics {
     pub const VERSION_HEIGHT: f64 = 16.0;
     pub const ROWS_Y: f64 = VERSION_Y + VERSION_HEIGHT + 16.0;
     pub const ROW_HEIGHT: f64 = 16.0;
-    pub const ROW_GAP: f64 = 6.0;
+    pub const ROW_GAP: f64 = 0.0;
+    /// The size of the type of the rows' labels and values.
+    pub const ROW_TEXT: f32 = 11.0;
     pub const COLUMN_GAP: f64 = 12.0;
     pub const BUTTON_GAP: f64 = 20.0;
-    pub const BUTTON_WIDTH: f64 = 96.0;
-    pub const BUTTON_HEIGHT: f64 = 20.0;
+    pub const BUTTON_WIDTH: f64 = 92.0;
+    pub const BUTTON_HEIGHT: f64 = 24.0;
     pub const BOTTOM: f64 = 20.0;
 }
 

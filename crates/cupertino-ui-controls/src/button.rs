@@ -415,3 +415,118 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         }
     }
 }
+
+/// The height of a [`CompactButton`]'s bezel and the least width of it.
+const COMPACT_HEIGHT: f64 = 19.0;
+const COMPACT_MIN_WIDTH: f64 = 53.5;
+/// The room beside a compact button's label, and the corner radius of its bezel.
+const COMPACT_INSET: f64 = 9.5;
+const COMPACT_RADIUS: f64 = 5.5;
+
+/// A push button smaller than the ordinary one, for a strip of a list that holds one action: a quiet rounded bezel 19
+/// points tall and at least 53.5 wide with its label, Space and Return activating it. It is taken out of the Tab
+/// order while disabled.
+pub struct CompactButton<M> {
+    pub label: String,
+    pub enabled: bool,
+    pub on_press: Option<M>,
+}
+
+impl<M: Clone> CompactButton<M> {
+    fn plain(&self) -> Button<M> {
+        Button {
+            label: self.label.clone(),
+            role: ButtonRole::Normal,
+            style: ButtonStyle::Bordered,
+            enabled: self.enabled,
+            busy: false,
+            on_press: self.on_press.clone(),
+        }
+    }
+}
+
+impl<M: Clone + 'static> Widget<M> for CompactButton<M> {
+    type State = Press;
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Leaf)
+    }
+
+    fn state(&self) -> Press {
+        Press::default()
+    }
+
+    fn update(&self, old: &Self, _: &mut Press) -> Change {
+        if self.label != old.label {
+            Change::Layout
+        } else if self.enabled != old.enabled {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        let label = look::label(cx.env(), &self.label).map_or(0.0, |l| l.size().width);
+        Measured {
+            size: Size::new(
+                (label + 2.0 * COMPACT_INSET).max(COMPACT_MIN_WIDTH),
+                COMPACT_HEIGHT,
+            ),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, press: &mut Press, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        self.plain().press(press, event, Keys::SpaceAndReturn, cx)
+    }
+
+    fn paint(&self, press: &Press, cx: &mut PaintCx<'_>) {
+        let theme = cx.env().theme.clone();
+        let state = ControlState {
+            enabled: self.enabled,
+            hovered: press.hovered(),
+            pressed: press.pressed(),
+            focused: cx.is_focused(),
+            focus_visible: cx.focus_visible(),
+            window_active: cx.window_active(),
+            ..ControlState::default()
+        };
+        let size = cx.size();
+        let chrome = Rect::new(
+            0.0,
+            (size.height - COMPACT_HEIGHT) / 2.0,
+            size.width,
+            COMPACT_HEIGHT,
+        );
+        let look = ButtonLook::of(ButtonRole::Normal, ButtonStyle::Bordered, &theme, &state);
+        look::fill(cx, chrome, COMPACT_RADIUS, look.fill);
+        if let Some(border) = look.border {
+            look::stroke(
+                cx,
+                chrome.inset(cupertino_geometry::Insets::uniform(0.5)),
+                COMPACT_RADIUS - 0.5,
+                1.0,
+                Some(border),
+            );
+        }
+        if let Some(label) = look::label(cx.env(), &self.label) {
+            let origin = look::centred(&label, chrome, cx.env());
+            look::glyphs(cx, &label, origin, look.text);
+        }
+        paint_focus_ring(cx, chrome, COMPACT_RADIUS);
+    }
+
+    fn semantics(&self, _: &Press, cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Button);
+        cx.name(self.label.clone());
+        cx.states(AccessibleStates {
+            disabled: !self.enabled,
+            ..AccessibleStates::default()
+        });
+        if self.enabled {
+            cx.focusable();
+            cx.action(Action::Click);
+        }
+    }
+}

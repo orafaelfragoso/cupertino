@@ -25,9 +25,20 @@ use super::{window_key, Event as WindowEvent, Message};
 use crate::context_menu::Command as MenuCommand;
 use crate::context_menu::{ItemKind, MenuItem, TAG_ROW_ORDER};
 
+/// What an open context menu was opened on, which wears a ring while the menu is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Ringed {
+    /// The window's selected items.
+    Items,
+    /// The sidebar's place with this index in the session's places.
+    Place(usize),
+}
+
 /// An open context menu of a window.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct OpenMenu {
+    /// What the ring goes around; none for the folder's own menu.
+    pub ring: Option<Ringed>,
     /// Where it opens: at a point of the window, or below a toolbar button.
     pub anchor: MenuAnchor,
     /// What assistive technology calls it.

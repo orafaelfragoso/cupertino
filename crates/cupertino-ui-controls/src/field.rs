@@ -713,8 +713,29 @@ fn paint_search_chrome(cx: &mut PaintCx<'_>, rect: Rect, state: &ControlState) {
             area,
         );
     }
-    paint_focus_ring(cx, rect, radius);
+    // a focused search field is ringed all round in the accent, softly, whether or not the keyboard moved the focus
+    if state.focused && state.enabled && state.window_active {
+        let accent = look::color(
+            &theme,
+            ColorRole::ControlFill,
+            &ControlState {
+                selected: true,
+                ..*state
+            },
+        );
+        look::stroke(
+            cx,
+            rect.outset(SEARCH_RING / 2.0),
+            radius + SEARCH_RING / 2.0,
+            SEARCH_RING,
+            accent.map(|c| c.with_alpha(SEARCH_RING_ALPHA)),
+        );
+    }
 }
+
+/// A focused search field's ring: its width, outside the capsule, and its opacity.
+const SEARCH_RING: f64 = 3.5;
+const SEARCH_RING_ALPHA: f32 = 0.6;
 
 /// A search field's capsule on a material: a light fill and its rim. Under increased contrast the rim is the theme's
 /// stronger field border.

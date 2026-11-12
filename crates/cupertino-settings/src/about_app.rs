@@ -84,7 +84,7 @@ pub fn layout(about: &About, text: &TextSystem, theme: &ThemeTokens) -> Layout {
     about.layout(|line| {
         let style = TextStyle {
             weight: FontWeight(body.weight),
-            ..TextStyle::new(body.size)
+            ..TextStyle::new(metrics::ROW_TEXT)
         };
         text.measure(
             &AttributedText::plain(line, style),
@@ -253,8 +253,13 @@ impl Application for AboutApp {
 }
 
 fn text(content: &str, role: TextRole, secondary: bool) -> Element<Message> {
+    sized_text(content, role, secondary, 13.0)
+}
+
+/// [`text`] at `size` points.
+fn sized_text(content: &str, role: TextRole, secondary: bool, size: f32) -> Element<Message> {
     Element::new(Text {
-        content: AttributedText::plain(content, TextStyle::new(13.0)),
+        content: AttributedText::plain(content, TextStyle::new(size)),
         role,
         wrap: true,
         secondary,
@@ -296,13 +301,16 @@ fn content(about: &About, layout: &Layout) -> Element<Message> {
         let label = if row.label.is_empty() {
             Element::new(Spacer { min: 0.0 })
         } else {
-            cell(Align::End, vec![text(row.label, TextRole::Body, true)])
+            cell(
+                Align::End,
+                vec![sized_text(row.label, TextRole::Body, true, ROW_TEXT)],
+            )
         };
         children.push(label);
         children.push(Element::new(Spacer { min: 0.0 }));
         children.push(cell(
             Align::Start,
-            vec![text(&value.value, TextRole::Body, false)],
+            vec![sized_text(&value.value, TextRole::Body, false, ROW_TEXT)],
         ));
     }
     if layout.rows.is_empty() {

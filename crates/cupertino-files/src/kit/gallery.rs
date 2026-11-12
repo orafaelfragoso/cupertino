@@ -38,6 +38,8 @@ const NAME_GAP: f64 = 8.0;
 const NAME_SIZE: f32 = 13.0;
 /// The field a name is edited in under the large picture.
 const FIELD: (f64, f64) = (240.0, 22.0);
+/// The side of the pictures of the strip under the large one; with their padding each takes a 54 point cell.
+const STRIP_ICON: u32 = 48;
 
 /// The item the large picture shows: the selection's cursor when it is selected, else the first item selected, else
 /// the folder's first item; `None` in an empty folder.
@@ -53,15 +55,7 @@ pub(super) fn item(win: &BrowserWindow) -> Option<usize> {
 
 /// The strip's parameters at the gallery's settings, and its row of every item.
 fn strip_layout(win: &BrowserWindow) -> (IconParams, IconLayout) {
-    let settings = GalleryViewSettings::default();
-    let params = IconParams::new(
-        settings.icon_size,
-        0,
-        12,
-        true,
-        false,
-        FontMetrics::estimate(12.0),
-    );
+    let params = IconParams::new(STRIP_ICON, 0, 12, true, false, FontMetrics::estimate(12.0));
     let layout = icon::strip(&params, win.browser.entries().len());
     (params, layout)
 }
@@ -209,6 +203,7 @@ fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         items,
         scroll: win.scroll,
         selection: shown_selection(win),
+        ringed: Default::default(),
         band: None,
         lead: 0.0,
         // the strip names no picture: the name is under the large one

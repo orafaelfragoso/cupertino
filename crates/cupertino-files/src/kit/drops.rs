@@ -154,7 +154,7 @@ pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> 
             let place = &session.places[i];
             let to = match place.kind {
                 PlaceKind::Trash => Destination::Trash,
-                PlaceKind::Recents => return None,
+                PlaceKind::Recents | PlaceKind::Network => return None,
                 _ => Destination::Folder(place.folder()?.to_path_buf()),
             };
             Some((super::view::place_key(session, i), to))

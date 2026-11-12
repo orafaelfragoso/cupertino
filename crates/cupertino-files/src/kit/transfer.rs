@@ -34,6 +34,8 @@ pub(super) enum Work {
     NewFolderWith { dir: PathBuf, sources: Vec<PathBuf> },
     /// Move `sources` to `trash`: a drop on the Trash.
     Trash { sources: Vec<PathBuf>, trash: Trash },
+    /// Delete for good everything in `trash`; `sources` are the items it held when the work began.
+    EmptyTrash { sources: Vec<PathBuf>, trash: Trash },
 }
 
 /// What a transfer did.
@@ -153,7 +155,8 @@ impl Transfer {
             Work::Transfer { sources, .. }
             | Work::Duplicate { sources }
             | Work::NewFolderWith { sources, .. }
-            | Work::Trash { sources, .. } => sources,
+            | Work::Trash { sources, .. }
+            | Work::EmptyTrash { sources, .. } => sources,
         }
     }
 
@@ -171,11 +174,15 @@ impl Transfer {
             Work::Duplicate { .. } => ("Duplicating", "Duplicated", "duplicate", String::new()),
             Work::NewFolderWith { .. } => ("Moving", "Moved", "move", " into a new folder".into()),
             Work::Trash { .. } => ("Moving", "Moved", "move", " to the Trash".into()),
+            Work::EmptyTrash { .. } => ("Emptying", "Emptied", "empty", String::new()),
         }
     }
 
     /// The items, as "“a.txt”" or "3 items".
     fn what(&self) -> String {
+        if matches!(self.work, Work::EmptyTrash { .. }) {
+            return "the Trash".into();
+        }
         match self.sources() {
             [one] => format!("“{}”", name(one)),
             many => format!("{} items", many.len()),
@@ -272,6 +279,50 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
                 done.items += 1;
                 done.current = None;
                 report(&done);
+            }
+            Outcome {
+                results,
+                folder: None,
+            }
+        }
+        Work::EmptyTrash { sources, trash } => {
+            // each item deleted counts as one; the trash is read again here, so what was put in since goes too
+            let listed = trash.list();
+            let items = match &listed {
+                Ok(items) => items.as_slice(),
+                Err(_) => &[],
+            };
+            let mut done = Progress {
+                total_items: items.len().max(sources.len()),
+                ..Progress::default()
+            };
+            let mut results = Vec::with_capacity(items.len());
+            for item in items {
+                if cancel.is_cancelled() {
+                    results.push(Err(operations::stopped()));
+                    continue;
+                }
+                done.current = item
+                    .file_path()
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned());
+                report(&done);
+                results.push(
+                    trash
+                        .delete(item)
+                        .map(|()| item.file_path())
+                        .map_err(|e| io::Error::other(e.to_string())),
+                );
+                done.items += 1;
+                done.current = None;
+                report(&done);
+            }
+            // a trash that cannot be listed fails as a whole, whatever it held
+            if let Err(e) = listed {
+                results = sources
+                    .iter()
+                    .map(|_| Err(io::Error::other(e.to_string())))
+                    .collect();
             }
             Outcome {
                 results,

@@ -169,9 +169,19 @@ pub(crate) fn paragraph_sized(
     direction: Option<Direction>,
     size: f32,
 ) -> Option<ParagraphLayout> {
-    let body = env.theme.type_scale.body;
+    paragraph_weighted(env, text, direction, size, env.theme.type_scale.body.weight)
+}
+
+/// [`paragraph_sized`] in `weight`.
+pub(crate) fn paragraph_weighted(
+    env: &Environment,
+    text: &str,
+    direction: Option<Direction>,
+    size: f32,
+    weight: u16,
+) -> Option<ParagraphLayout> {
     let style = TextStyle {
-        weight: FontWeight(body.weight),
+        weight: FontWeight(weight),
         ..TextStyle::new(size)
     };
     let paragraph = env

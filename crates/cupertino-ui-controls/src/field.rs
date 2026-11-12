@@ -3,7 +3,7 @@
 //! method, and assistive technology learns only that there is a value.
 
 use crate::look::{self, paint_focus_ring};
-use crate::{BareField, SearchField, SecureField, TextChange, TextField};
+use crate::{BareField, BareSecureField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
@@ -234,8 +234,9 @@ pub(crate) enum FieldLook {
     Plain,
     /// A capsule with a magnifying glass before the text: a [`SearchField`], at its own control size or the window's.
     Search(Option<ControlSize>),
-    /// No chrome, the text at this many points: a [`BareField`].
-    Bare(u16),
+    /// No chrome, the text at this many points and in this weight (the body type's when `None`): a [`BareField`] or a
+    /// [`BareSecureField`].
+    Bare(u16, Option<u16>),
 }
 
 /// A bare field's height as a share of its text size: one line with room for its ascenders and descenders.
@@ -254,7 +255,7 @@ impl FieldLook {
                 )
                 .height
             }
-            FieldLook::Bare(size) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
+            FieldLook::Bare(size, _) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
         }
     }
 
@@ -262,18 +263,27 @@ impl FieldLook {
     fn text_size(self, theme: &ThemeTokens) -> f32 {
         match self {
             FieldLook::Plain | FieldLook::Search(_) => theme.type_scale.body.size,
-            FieldLook::Bare(size) => f32::from(size),
+            FieldLook::Bare(size, _) => f32::from(size),
+        }
+    }
+
+    /// The weight of the field's text: the body type's, or a bare field's own.
+    fn text_weight(self, theme: &ThemeTokens) -> u16 {
+        match self {
+            FieldLook::Bare(_, Some(weight)) => weight,
+            _ => theme.type_scale.body.weight,
         }
     }
 }
 
 /// `text` on one line in the field's type.
 fn field_paragraph(env: &Environment, text: &str, field: FieldLook) -> Option<ParagraphLayout> {
-    look::paragraph_sized(
+    look::paragraph_weighted(
         env,
         text,
         Some(look::direction(env)),
         field.text_size(&env.theme),
+        field.text_weight(&env.theme),
     )
 }
 
@@ -282,7 +292,13 @@ fn field_label(env: &Environment, text: &str, field: FieldLook) -> Option<Paragr
     if text.is_empty() {
         return None;
     }
-    look::paragraph_sized(env, text, None, field.text_size(&env.theme))
+    look::paragraph_weighted(
+        env,
+        text,
+        None,
+        field.text_size(&env.theme),
+        field.text_weight(&env.theme),
+    )
 }
 
 /// The y of `layout`'s top that puts its first baseline where the field's text sits in `chrome`.
@@ -304,7 +320,7 @@ fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutD
     let (start, end) = match look {
         FieldLook::Plain => (inset, inset),
         FieldLook::Search(_) => (SEARCH_TEXT_X, inset),
-        FieldLook::Bare(_) => (0.0, 0.0),
+        FieldLook::Bare(..) => (0.0, 0.0),
     };
     let (left, right) = match direction {
         LayoutDirection::Ltr => (start, end),
@@ -446,7 +462,7 @@ fn paint_text(
             // field's
             let role = match field {
                 FieldLook::Plain => ColorRole::PlaceholderText,
-                FieldLook::Search(_) | FieldLook::Bare(_) => ColorRole::SecondaryText,
+                FieldLook::Search(_) | FieldLook::Bare(..) => ColorRole::SecondaryText,
             };
             look::glyphs(cx, &placeholder, at, color(role));
         }
@@ -470,7 +486,7 @@ fn paint_text(
         // a bare field's caret is drawn in its text's colour, as it stands alone in a larger surface; a field with
         // chrome draws it in the accent colour
         let ink = match field {
-            FieldLook::Bare(_) => ColorRole::Text,
+            FieldLook::Bare(..) => ColorRole::Text,
             FieldLook::Plain | FieldLook::Search(_) => ColorRole::DefaultButtonFill,
         };
         marks.caret(
@@ -641,7 +657,7 @@ fn paint_chrome(cx: &mut PaintCx<'_>, state: &ControlState, field: FieldLook) {
             return;
         }
         // the surface it sits on is its chrome
-        FieldLook::Bare(_) => return,
+        FieldLook::Bare(..) => return,
         FieldLook::Plain => {}
     }
     let radius = theme.metrics.field_radius;
@@ -1301,6 +1317,8 @@ pub struct SecureState {
     drag: Option<usize>,
     /// When and at which bullet the last press went down, for a double click.
     last_press: Option<(Timestamp, usize)>,
+    /// The field's chrome and type: a [`BareSecureField`]'s has none.
+    look: FieldLook,
 }
 
 impl SecureState {
@@ -1308,13 +1326,7 @@ impl SecureState {
     fn mask_index<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
         let bounds = cx.bounds()?;
         let mask = self.buffer.mask(BULLET);
-        let (layout, origin) = placed(
-            cx.env(),
-            &mask,
-            bounds.size,
-            self.scroll.get(),
-            FieldLook::Plain,
-        )?;
+        let (layout, origin) = placed(cx.env(), &mask, bounds.size, self.scroll.get(), self.look)?;
         Some(layout.index_at(point - bounds.origin - origin).byte / BULLET.len_utf8())
     }
 
@@ -1548,6 +1560,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             marks: Marks::default(),
             drag: None,
             last_press: None,
+            look: FieldLook::Plain,
         }
     }
 
@@ -1567,11 +1580,11 @@ impl<M: 'static> Widget<M> for SecureField<M> {
 
     fn measure(
         &self,
-        _: &SecureState,
+        state: &SecureState,
         constraints: Constraints,
         cx: &mut MeasureCx<'_>,
     ) -> Measured {
-        measure(constraints, cx, FieldLook::Plain)
+        measure(constraints, cx, state.look)
     }
 
     fn target(&self, _: &SecureState, env: &Environment) -> Size {
@@ -1595,7 +1608,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             protected: true,
             ..control_state(self.enabled, state.hovered, cx)
         };
-        paint_chrome(cx, &look, FieldLook::Plain);
+        paint_chrome(cx, &look, state.look);
         // the text system shapes only bullets: one per grapheme, with the caret and selection counted in graphemes
         let (caret, selection) = state.buffer.masked_selection();
         let width = BULLET.len_utf8();
@@ -1616,7 +1629,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             &self.placeholder,
             &state.scroll,
             &state.marks,
-            FieldLook::Plain,
+            state.look,
         );
     }
 
@@ -1642,6 +1655,73 @@ impl<M: 'static> Widget<M> for SecureField<M> {
                 cx.initial_focus();
             }
         }
+    }
+}
+
+/// A bare secure field is its secure field without chrome: the same buffer, keys, input method and semantics.
+impl<M: 'static> Widget<M> for BareSecureField<M> {
+    type State = SecureState;
+
+    fn layout(&self) -> LayoutSpec {
+        layout()
+    }
+
+    fn state(&self) -> SecureState {
+        SecureState {
+            look: bare_secure_look(self.size, self.weight),
+            ..self.field.state()
+        }
+    }
+
+    fn update(&self, old: &Self, state: &mut SecureState) -> Change {
+        let change = self.field.update(&old.field, state);
+        if self.size != old.size || self.weight != old.weight {
+            state.look = bare_secure_look(self.size, self.weight);
+            return Change::Layout;
+        }
+        change
+    }
+
+    fn measure(
+        &self,
+        state: &SecureState,
+        constraints: Constraints,
+        cx: &mut MeasureCx<'_>,
+    ) -> Measured {
+        self.field.measure(state, constraints, cx)
+    }
+
+    fn target(&self, state: &SecureState, env: &Environment) -> Size {
+        self.field.target(state, env)
+    }
+
+    fn event(
+        &self,
+        state: &mut SecureState,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
+        self.field.event(state, event, cx)
+    }
+
+    fn paint(&self, state: &SecureState, cx: &mut PaintCx<'_>) {
+        self.field.paint(state, cx)
+    }
+
+    fn overlay(&self, state: &SecureState, cx: &mut OverlayCx<'_>) {
+        self.field.overlay(state, cx)
+    }
+
+    fn semantics(&self, state: &SecureState, cx: &mut SemanticsCx<'_>) {
+        self.field.semantics(state, cx)
+    }
+}
+
+/// The look of a bare secure field of text `size` points large (whole points from 1 to 200) in `weight`.
+fn bare_secure_look(size: f64, weight: Option<u16>) -> FieldLook {
+    match bare_look(size) {
+        FieldLook::Bare(size, _) => FieldLook::Bare(size, weight),
+        look => look,
     }
 }
 
@@ -1757,5 +1837,5 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
 /// The look of a bare field of text `size` points large, in whole points from 1 to 200.
 fn bare_look(size: f64) -> FieldLook {
     let size = if size.is_finite() { size } else { 0.0 };
-    FieldLook::Bare(size.round().clamp(1.0, 200.0) as u16)
+    FieldLook::Bare(size.round().clamp(1.0, 200.0) as u16, None)
 }

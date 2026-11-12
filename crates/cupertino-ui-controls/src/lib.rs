@@ -1353,6 +1353,16 @@ pub struct BareField<M> {
     pub size: f64,
 }
 
+/// A [`SecureField`] without chrome, its text set at `size` points (whole points, 1 to 200) in `weight` (the body
+/// type's when `None`): for a password field that stands on a capsule drawn around it, such as a lock screen's. It
+/// behaves, edits and reads to assistive technology as its field does; its placeholder takes the secondary label colour
+/// and its caret the text colour.
+pub struct BareSecureField<M> {
+    pub field: SecureField<M>,
+    pub size: f64,
+    pub weight: Option<u16>,
+}
+
 /// A row of a [`TileSidebar`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct TileSidebarItem {

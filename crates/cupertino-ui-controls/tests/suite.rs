@@ -8,6 +8,8 @@ mod support;
 mod badge;
 #[path = "bare_field.rs"]
 mod bare_field;
+#[path = "bare_secure_field.rs"]
+mod bare_secure_field;
 #[path = "button.rs"]
 mod button;
 #[path = "canvas.rs"]

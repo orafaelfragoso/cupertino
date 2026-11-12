@@ -969,6 +969,6 @@ mod tests {
         controller.tick(0.5);
         assert_eq!(controller.next_wakeup(0.5), Some(0.5));
         controller.dismiss(0.6);
-        assert!((controller.next_wakeup(0.7).unwrap() - 0.138).abs() < 1e-9);
+        assert!((controller.next_wakeup(0.7).unwrap() - 0.08).abs() < 1e-9);
     }
 }

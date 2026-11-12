@@ -11,6 +11,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
+use cupertino_controlcenter::layout::{SURFACE, WINDOW_ORIGIN};
 use cupertino_controlcenter::model::{
     Controls, Detail, Device, MediaCommand, Module, Network, Output, Reading, Slider, VolumeState,
     WifiStatus,
@@ -33,6 +34,8 @@ use cupertino_theme::Theme;
 use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
 
+/// Where the window's corner lies in the surface, past the margin its shadow takes.
+const ORIGIN: Point = WINDOW_ORIGIN;
 const ESCAPE: u32 = 0xff1b;
 const TAB: u32 = 0xff09;
 const SPACE: u32 = 0x20;
@@ -358,7 +361,7 @@ fn check(
         Run::start(tokens(appearance, reduce_transparency), presentation).capture();
     assert_eq!(
         (actual.width(), actual.height()),
-        (308, 500),
+        (SURFACE.width as u32, SURFACE.height as u32),
         "{scene}: the panel is drawn at 1x"
     );
     if std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1") {
@@ -430,33 +433,20 @@ fn the_panel_in_a_light_session_matches_its_golden() {
     check("light-session", Appearance::Dark, false, light);
 }
 
-/// A point on the media tile's glass, clear of its artwork, text and buttons: near its top-right corner.
-const MEDIA_GLASS: (u32, u32) = (280, 30);
-
+/// The panel keeps one look in both appearances: a light session draws it as a dark one does.
 #[test]
-fn a_light_session_darkens_the_glass_by_about_a_quarter() {
+fn a_light_session_draws_the_panel_as_a_dark_one_does() {
     let light = Presentation {
         light: true,
         ..Presentation::SHOWN
     };
-    let (frame, _) = Run::start(tokens(Appearance::Dark, false), light).capture();
-    let tint = frame.pixel(MEDIA_GLASS.0, MEDIA_GLASS.1).unwrap();
-    assert_eq!((tint.red(), tint.green(), tint.blue()), (0, 0, 0));
-    assert!(
-        (60..=78).contains(&tint.alpha()),
-        "a quarter black keeps a tile over a white page mid-light grey, not dark: alpha {}",
-        tint.alpha()
-    );
+    let (light, _) = Run::start(tokens(Appearance::Dark, false), light).capture();
     let (dark, _) = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN).capture();
-    assert_eq!(
-        dark.pixel(MEDIA_GLASS.0, MEDIA_GLASS.1).unwrap().alpha(),
-        0,
-        "the dark session draws the glass alone"
-    );
+    assert!(light.data() == dark.data(), "the same frame");
 }
 
-/// A tile's state is set in the theme's caption size under its title in the body size, and drawn quieter: the title
-/// in white at 0.85, the state at 0.70, so the state reads as a second line rather than a second title. The slider
+/// A tile's state is set in the theme's caption size under its title in the body size: the title in white at 0.85, the
+/// state in full white at a medium weight, so it reads as the brighter line under the name. The slider
 /// tiles' titles and Edit Controls are full white, in the body size. Increase Contrast draws the theme's own colours.
 #[test]
 fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
@@ -468,7 +458,7 @@ fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
         assert_eq!((title_size, state_size), (13.0, 11.0), "{title}");
         assert_eq!(
             (alpha(title_color), alpha(state_color)),
-            (0.85, 0.7),
+            (0.85, 1.0),
             "{title}"
         );
     }
@@ -573,7 +563,7 @@ fn glass_regions(run: &mut Run) -> Vec<Rect> {
 /// own.
 #[test]
 fn edit_controls_is_glass_as_the_tiles_are() {
-    let capsule = Rect::new(107.0, 468.0, 94.0, 24.0);
+    let capsule = Rect::new(107.0 + ORIGIN.x, 468.0 + ORIGIN.y, 94.0, 24.0);
     for light in [false, true] {
         let mut run = Run::start(
             tokens(Appearance::Dark, false),
@@ -600,6 +590,7 @@ fn the_opaque_panel_of_reduce_transparency_holds_edit_controls_too() {
     let (frame, _) = Run::start(tokens(Appearance::Dark, true), Presentation::SHOWN).capture();
     // beside the Edit Controls capsule, at its height, and just above the panel's bottom edge under it
     for (x, y) in [(40, 480), (154, 496)] {
+        let (x, y) = (x + ORIGIN.x as u32, y + ORIGIN.y as u32);
         let pixel = frame.pixel(x, y).unwrap();
         assert_eq!(pixel.alpha(), 255, "opaque at ({x}, {y})");
         assert!(
@@ -608,7 +599,9 @@ fn the_opaque_panel_of_reduce_transparency_holds_edit_controls_too() {
             pixel.red()
         );
     }
-    let capsule = frame.pixel(154, 470).unwrap();
+    let capsule = frame
+        .pixel(154 + ORIGIN.x as u32, 470 + ORIGIN.y as u32)
+        .unwrap();
     assert!(
         capsule.red() < 40,
         "the capsule is a dark tile on the panel: {}",
@@ -640,7 +633,12 @@ fn the_panel_is_a_transparent_window_of_its_own_tiles() {
     let shown = view::panel::<()>(&controls(), Presentation::SHOWN, |_| ());
     assert_eq!(shown.background, WindowBackground::None);
     assert_eq!(shown.spec.app_id, view::APP_ID);
-    assert_eq!(shown.spec.size, Size::new(308.0, 500.0));
+    assert_eq!(shown.spec.size, SURFACE);
+    assert_eq!(
+        SURFACE,
+        Size::new(436.0, 646.0),
+        "the window with its shadow's margin"
+    );
 }
 
 fn frame(r: Rect) -> (f64, f64, f64, f64) {
@@ -650,7 +648,12 @@ fn frame(r: Rect) -> (f64, f64, f64, f64) {
 #[test]
 fn the_tiles_sit_on_their_grid_eight_points_in() {
     let run = Run::shown();
-    let group = |name| frame(run.bounds(Role::Group, name));
+    // in the window, whose corner lies past the shadow's margin
+    let within = |r: Rect| {
+        let (x, y, w, h) = frame(r);
+        (x - ORIGIN.x, y - ORIGIN.y, w, h)
+    };
+    let group = |name| within(run.bounds(Role::Group, name));
     assert_eq!(group("Wi-Fi"), (8.0, 8.0, 140.0, 64.0));
     assert_eq!(group("Bluetooth"), (8.0, 84.0, 140.0, 64.0));
     assert_eq!(group("Now Playing"), (160.0, 8.0, 140.0, 140.0));
@@ -664,12 +667,12 @@ fn the_tiles_sit_on_their_grid_eight_points_in() {
     assert_eq!(group("Sound"), (8.0, 388.0, 292.0, 64.0));
     assert_eq!(group("Edit Controls"), (107.0, 468.0, 94.0, 24.0));
     assert_eq!(
-        frame(run.bounds(Role::Switch, "Wi-Fi")),
+        within(run.bounds(Role::Switch, "Wi-Fi")),
         (22.0, 22.0, 36.0, 36.0),
         "the badge is 36 across, 14 in from the capsule's edges"
     );
     assert_eq!(
-        frame(run.bounds(Role::Slider, "Sound")),
+        within(run.bounds(Role::Slider, "Sound")),
         (37.0, 420.0, 188.0, 20.0),
         "the level's band is centred 42 below the tile's top and reaches 4 past each end of the track"
     );
@@ -795,10 +798,10 @@ fn escape_dismisses_the_panel_and_collapses_an_open_view() {
 fn a_press_between_the_tiles_dismisses_the_panel_and_one_on_a_tile_does_not() {
     let mut run = Run::shown();
     // inside the media tile, away from its buttons
-    click(&mut run, Point::new(280.0, 30.0));
+    click(&mut run, Point::new(280.0 + ORIGIN.x, 30.0 + ORIGIN.y));
     assert_eq!(run.heard(), []);
     // the gap between the two columns
-    click(&mut run, Point::new(154.0, 40.0));
+    click(&mut run, Point::new(154.0 + ORIGIN.x, 40.0 + ORIGIN.y));
     assert_eq!(run.heard(), [Input::Dismiss]);
 }
 

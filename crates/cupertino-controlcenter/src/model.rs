@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(icon(0.0, false), "symbol.speaker.slash");
         assert_eq!(icon(0.9, true), "symbol.speaker.slash");
         assert_eq!(icon(0.33, false), "symbol.speaker.low");
-        assert_eq!(icon(0.34, false), "symbol.speaker");
+        assert_eq!(icon(0.34, false), "symbol.speaker.medium");
         assert_eq!(icon(0.67, false), "symbol.speaker.high");
     }
 }

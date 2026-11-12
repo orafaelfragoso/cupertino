@@ -157,7 +157,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_toggle_opens_the_panel_at_full_opacity() {
+    fn a_toggle_opens_the_panel_fading_in_to_full_opacity() {
         let mut lifecycle = Lifecycle::new();
         assert_eq!(
             (lifecycle.phase(0.0), lifecycle.opacity(0.0)),
@@ -166,8 +166,14 @@ mod tests {
         lifecycle.toggle(10.0);
         assert_eq!(
             (lifecycle.phase(10.0), lifecycle.opacity(10.0)),
-            (Phase::Shown, 1.0)
+            (Phase::Shown, 0.0)
         );
+        assert!(lifecycle.opening(10.1));
+        let mid = lifecycle.opacity(10.05);
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
+        assert!(lifecycle.opacity(10.1) > mid, "it rises");
+        assert!(!lifecycle.opening(10.0 + OPEN_SECONDS));
+        assert_eq!(lifecycle.opacity(10.0 + OPEN_SECONDS), 1.0);
         assert_eq!(
             (lifecycle.phase(500.0), lifecycle.opacity(500.0)),
             (Phase::Shown, 1.0)
@@ -175,7 +181,21 @@ mod tests {
     }
 
     #[test]
-    fn dismissing_fades_out_linearly_over_238_milliseconds() {
+    fn under_reduce_motion_the_panel_appears_and_goes_at_once() {
+        let mut lifecycle = Lifecycle::new();
+        lifecycle.set_reduce_motion(true);
+        lifecycle.toggle(1.0);
+        assert_eq!(lifecycle.opacity(1.0), 1.0);
+        assert!(!lifecycle.opening(1.0));
+        lifecycle.dismiss(2.0);
+        assert_eq!(
+            (lifecycle.phase(2.0), lifecycle.opacity(2.0)),
+            (Phase::Hidden, 0.0)
+        );
+    }
+
+    #[test]
+    fn dismissing_fades_out_quickly_at_first_and_ends_after_180_milliseconds() {
         let mut lifecycle = Lifecycle::new();
         lifecycle.toggle(0.0);
         lifecycle.dismiss(1.0);
@@ -183,10 +203,20 @@ mod tests {
             (lifecycle.phase(1.0), lifecycle.opacity(1.0)),
             (Phase::Hiding, 1.0)
         );
-        assert_eq!(lifecycle.opacity(1.119), 0.5);
-        assert_eq!(lifecycle.phase(1.2379), Phase::Hiding);
+        let (first, second) = (
+            1.0 - lifecycle.opacity(1.06),
+            lifecycle.opacity(1.06) - lifecycle.opacity(1.12),
+        );
+        assert!(first > 2.0 * second, "{first} then {second}");
+        assert!(
+            (lifecycle.opacity(1.06)
+                - ((-1.0f64).exp() - (-3.0f64).exp()) / (1.0 - (-3.0f64).exp()))
+            .abs()
+                < 1e-9
+        );
+        assert_eq!(lifecycle.phase(1.1799), Phase::Hiding);
         assert_eq!(
-            (lifecycle.phase(1.238), lifecycle.opacity(1.238)),
+            (lifecycle.phase(1.1801), lifecycle.opacity(1.1801)),
             (Phase::Hidden, 0.0)
         );
     }
@@ -198,21 +228,23 @@ mod tests {
         lifecycle.toggle(0.0);
         assert_eq!(lifecycle.until_hidden(0.0), None);
         lifecycle.dismiss(2.0);
-        assert!((lifecycle.until_hidden(2.1).expect("hiding") - 0.138).abs() < 1e-9);
+        assert!((lifecycle.until_hidden(2.1).expect("hiding") - 0.08).abs() < 1e-9);
         assert_eq!(lifecycle.until_hidden(2.3), None);
     }
 
     #[test]
-    fn a_toggle_while_shown_dismisses_and_a_toggle_while_hiding_reopens() {
+    fn a_toggle_while_shown_dismisses_and_a_toggle_while_hiding_reopens_from_where_the_fade_was() {
         let mut lifecycle = Lifecycle::new();
         lifecycle.toggle(0.0);
         lifecycle.toggle(1.0);
         assert_eq!(lifecycle.phase(1.1), Phase::Hiding);
+        let left = lifecycle.opacity(1.1);
         lifecycle.toggle(1.1);
         assert_eq!(
             (lifecycle.phase(1.1), lifecycle.opacity(1.1)),
-            (Phase::Shown, 1.0)
+            (Phase::Shown, left)
         );
+        assert_eq!(lifecycle.opacity(1.1 + OPEN_SECONDS + 1e-6), 1.0);
     }
 
     #[test]

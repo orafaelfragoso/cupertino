@@ -3,8 +3,8 @@
 //! power item.
 
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, Element, Event, EventCx, Live, MeasureCx, PaintCx, Phase,
-    Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, Element, Event, EventCx, Glass, Live, MeasureCx, PaintCx,
+    Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -16,7 +16,7 @@ use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
     Wrap,
 };
-use cupertino_kit::theme::{Color, ColorRole, StateVariant};
+use cupertino_kit::theme::{Color, ColorRole, StateVariant, Surface};
 
 use crate::spinner;
 
@@ -65,7 +65,7 @@ const LOGGED_IN_CHECK_WIDTH: f64 = 1.8;
 const FAILURE_OUTLINE: [f32; 3] = [1.0, 69.0 / 255.0, 58.0 / 255.0];
 pub(crate) const FAILURE_OUTLINE_WIDTH: f64 = 2.0;
 /// Corner radius of the outline around the field.
-const FAILURE_OUTLINE_RADIUS: f64 = 7.0;
+const FAILURE_OUTLINE_RADIUS_OUTSET: f64 = 1.0;
 
 /// Caps Lock badge: a rounded square of corner radius 4 in 16-unit space, centred in the field's trailing slot.
 const CAPS_BADGE_UNITS: f64 = 16.0;
@@ -301,7 +301,12 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
         }
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        // the lock screen and the greeter stand on a darkened picture whatever the session's appearance
+        if self.wallpaper.is_some() {
+            cx.pin_appearance(true);
+        }
+    }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.role(self.role);
@@ -316,6 +321,75 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
             });
         }
     }
+}
+
+/// An alert's body on glass, `width` wide and as tall as its content, which it pads by `padding`: its corners rounded
+/// by `radius`, and the popover surface's fill where the window cannot show glass.
+pub(crate) struct AlertBody<M> {
+    pub width: f64,
+    pub radius: f64,
+    pub padding: cupertino_kit::geometry::Insets,
+    pub children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for AlertBody<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.width),
+            insets: self.padding,
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Vertical,
+                spacing: 0.0,
+                align: Align::Stretch,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.width != old.width || self.padding != old.padding {
+            Change::Layout
+        } else if self.radius != old.radius {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if cx.glass(Glass::regular().radius(self.radius)) {
+            return;
+        }
+        let size = cx.size();
+        if let Some(color) = cx.env().theme.surface(Surface::Popover).fill {
+            fill(
+                cx,
+                Shape::RoundedRect {
+                    rect: Rect::new(0.0, 0.0, size.width, size.height),
+                    radius: self.radius,
+                },
+                color,
+            );
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The squares of [`WALLPAPER_TILE`] points that cover a screen of `size`, row by row; those at the right and bottom
@@ -759,8 +833,15 @@ impl<M: 'static> Widget<M> for Avatar<M> {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
-/// The box of a field at `rect`, its field centred in it: the outline after a wrong password, and a focus scope keyed
-/// by the field's generation, so a new field takes the focus on every screen that shows it.
+/// Fill of the field's capsule over the darkened wallpaper: white at this opacity. The capsule shows no blurred backdrop:
+/// what lies under a lock surface is the unlocked desktop, which it must never show.
+const FIELD_FILL_ALPHA: f32 = 0.18;
+/// Space between the capsule's leading edge and the text, points.
+const FIELD_TEXT_INSET: f64 = 10.0;
+
+/// The capsule of a field at `rect`, its chromeless field centred in it, clear of the trailing slot: the outline after a
+/// wrong password, and a focus scope keyed by the field's generation, so a new field takes the focus on every screen
+/// that shows it.
 pub(crate) struct FieldFrame<M> {
     pub rect: Rect,
     pub outline: bool,
@@ -775,6 +856,12 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
             width: SizeSpec::Fixed(self.rect.width()),
             height: SizeSpec::Fixed(self.rect.height()),
             position: self.rect.origin,
+            insets: cupertino_kit::geometry::Insets {
+                top: 0.0,
+                left: FIELD_TEXT_INSET,
+                bottom: 0.0,
+                right: super::SLOT_WIDTH,
+            },
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
@@ -812,11 +899,20 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let capsule = size.height / 2.0;
+        fill(
+            cx,
+            Shape::RoundedRect {
+                rect: Rect::new(0.0, 0.0, size.width, size.height),
+                radius: capsule,
+            },
+            Color::new(1.0, 1.0, 1.0, FIELD_FILL_ALPHA),
+        );
         if !self.outline {
             return;
         }
         let half = FAILURE_OUTLINE_WIDTH / 2.0;
-        let size = cx.size();
         cx.push(PaintOp::Stroke {
             shape: Shape::RoundedRect {
                 rect: Rect::new(
@@ -825,7 +921,7 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
                     size.width + 2.0 * half,
                     size.height + 2.0 * half,
                 ),
-                radius: FAILURE_OUTLINE_RADIUS,
+                radius: capsule + FAILURE_OUTLINE_RADIUS_OUTSET,
             },
             width: FAILURE_OUTLINE_WIDTH,
             paint: Paint::Solid(rgba(FAILURE_OUTLINE, 1.0)),

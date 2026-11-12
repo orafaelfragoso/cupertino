@@ -17,8 +17,8 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    Capabilities, KeyEvent, Mods, MouseButton, PlatformEvent, PointerEvent, Timestamp, WindowEvent,
-    WindowId, WindowStates,
+    Capabilities, KeyEvent, Mods, MouseButton, PlatformEvent, PointerEvent, SystemAppearance,
+    Timestamp, WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{
     CpuConfig, CpuFrame, CpuRenderer, RenderError, RenderFrameId, RenderRequest, RenderStats,
@@ -58,6 +58,8 @@ enum Asking {
     Terminal,
     /// A program without one, for capture only, whose answer cannot be remembered.
     Program,
+    /// A program with the longest name and path the panel shows, asking for every right.
+    Longest,
 }
 
 /// The request `asking` makes.
@@ -70,6 +72,14 @@ fn control_request(asking: Asking) -> ControlRequest {
             desktop: true,
             services: 3,
             remembered: true,
+            icon: Vec::new(),
+        }),
+        Asking::Longest => Some(RequestingApp {
+            name: "W".repeat(200),
+            identity: format!("/{}", "w".repeat(300)),
+            desktop: false,
+            services: 3,
+            remembered: false,
             icon: Vec::new(),
         }),
         Asking::Program => Some(RequestingApp {
@@ -394,6 +404,22 @@ impl Run {
             options,
             ManualClock::new(Timestamp(0)),
         );
+        // the theme of any appearance, as the application's runner makes it
+        let spec = cupertino_theme::Theme::from_dir(data).unwrap();
+        driver
+            .runtime_mut()
+            .set_theme_for(Box::new(move |appearance: &SystemAppearance| {
+                let preferences = ThemePreferences {
+                    appearance: if appearance.dark {
+                        Appearance::Dark
+                    } else {
+                        Appearance::Light
+                    },
+                    reduce_transparency: appearance.reduce_transparency,
+                    reduce_motion: appearance.reduce_motion,
+                };
+                Arc::new(ThemeTokens::cupertino(&spec, preferences).unwrap())
+            }));
         driver.run_until_idle(budget()).unwrap();
         let window = driver.runtime().windows()[0].1;
         let active = WindowStates {
@@ -1333,4 +1359,31 @@ fn a_typed_character_repaints_only_around_the_field() {
             frame.scratch_images.bytes
         );
     }
+}
+
+#[test]
+fn the_consent_alert_with_the_longest_request_fits_its_surface() {
+    let run = Run::new(Surface::DesktopControl(Asking::Longest));
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let bottom = snapshot
+        .nodes
+        .iter()
+        .map(|n| n.rect.max_y())
+        .fold(0.0_f64, f64::max);
+    let top = snapshot
+        .nodes
+        .iter()
+        .map(|n| n.rect.min_y())
+        .fold(f64::MAX, f64::min);
+    assert!(
+        top >= 0.0 && bottom <= CONTROL_HEIGHT,
+        "the alert reaches {bottom}, past its surface of {CONTROL_HEIGHT}"
+    );
+    let allow = run
+        .driver
+        .runtime()
+        .find(run.window, &Key::from("Allow"))
+        .unwrap();
+    let allow = snapshot.nodes.iter().find(|n| n.id == allow).unwrap().rect;
+    assert_eq!(allow.height(), 28.0, "capsule buttons 28 points high");
 }

@@ -362,10 +362,10 @@ impl SurfaceRoles for LoginRoles {
                     } else {
                         Anchor::Top | Anchor::Right
                     },
-                    (
-                        cupertino_login::interrupt::WIDTH as u32,
-                        cupertino_login::view::control_height(phase) as u32,
-                    ),
+                    {
+                        let size = cupertino_login::view::control_size(phase);
+                        (size.width as u32, size.height as u32)
+                    },
                 );
             }
             if let Some(surface) = self.control_surface.and_then(|s| conn.wl_surface(s).ok()) {

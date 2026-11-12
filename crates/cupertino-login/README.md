@@ -514,7 +514,7 @@ network users).
 | Time | size 0.12 S, first baseline 4 date sizes below the date's, `Jmm` as `%H:%M` |
 | User view | 20 pt below the time's bottom; avatar 70 pt with 7 pt above and below; name baseline 23 pt below the view, 15 pt, at most 150 pt wide |
 | Avatar halo and ring | shadow radius 15 opacity 0.25 (a radial fade), ring 1 pt white 0.1 |
-| Password field | 160 x 28 pt, fully rounded, system 13 Medium, placeholder white 0.5 |
+| Password field | 160 x 28 pt, fully rounded, system 13 Medium, placeholder white 0.5; a capsule of white 0.18 with no blurred backdrop (nothing under a lock surface may show) |
 | Wallpaper treatment | black 0.25, then black 0.3, then a radial black 0.2 to 0 from the middle to the corner with the darken blend |
 | Idle lock | after the display sleep plus the password delay, timed by the server |
 | Quit sequence | one application at a time, 45 s each, the next 0.1 s after one quits; interrupt panel 413 x 128 |
@@ -531,7 +531,8 @@ network users).
 | Item | Value | Where |
 |---|---|---|
 | Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `view::widgets::WALLPAPER_*` |
-| Password and name fields | Kit's `SecureField` and `TextField` in the pill's frame, with Kit's own fill, dots, caret and focus ring. | `view::screen` |
+| Password and name fields | Kit's chromeless `BareSecureField` and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret in the text colour, the placeholder in the secondary label colour (white 0.55, not 0.5). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
+| Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |

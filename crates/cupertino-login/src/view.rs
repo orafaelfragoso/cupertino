@@ -16,14 +16,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use cupertino_kit::controls::{
-    Button, ButtonRole, ButtonStyle, Canvas, CheckBox, Image, ImageFit, ImageSource,
-    Menu as KitMenu, MenuAnchor, MenuItem, SecureField, Text, TextChange, TextField, TextRole,
+    BareField, BareSecureField, Button, ButtonRole, ButtonStyle, Canvas, CheckBox, Image, ImageFit,
+    ImageSource, Menu as KitMenu, MenuAnchor, MenuItem, SecureField, Stack, Text, TextChange,
+    TextField, TextRole,
 };
 use cupertino_kit::core::{
     Checked, CommandRegistry, Element, Key, Live, Role, Window, WindowBackground, WindowKey,
 };
-use cupertino_kit::geometry::{Point, Rect, Size};
-use cupertino_kit::layout::Justify;
+use cupertino_kit::geometry::{Insets, Point, Rect, Size};
+use cupertino_kit::layout::{Align, Axis, Justify};
 use cupertino_kit::platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{
@@ -43,8 +44,8 @@ use crate::picker::{Direction, Grid, Picker, Tile};
 use crate::power::{self, Menu};
 use crate::user::{initials, User};
 use widgets::{
-    Adornment, Avatar, Backdrop, Fade, FieldFrame, Label, Look, NoticeCard, Place, Pressable, Slot,
-    ESCAPE, WHITE,
+    Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, Label, Look, NoticeCard, Place,
+    Pressable, Slot, ESCAPE, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -85,6 +86,8 @@ const WEIGHT_MEDIUM: FontWeight = FontWeight(500);
 const WEIGHT_SEMIBOLD: FontWeight = FontWeight::SEMIBOLD;
 /// Size of the field's notices and the help (the field's text size).
 const NOTICE_SIZE: f64 = 13.0;
+/// Size of the text typed in the field and of its placeholder.
+const FIELD_TEXT_SIZE: f64 = 13.0;
 /// Widest a notice draws, and how many lines it may take.
 const NOTICE_MAX_WIDTH: f64 = 544.0;
 const NOTICE_LINES: f64 = 3.0;
@@ -449,35 +452,42 @@ pub fn screen<M: Clone + 'static>(
             enabled,
             busy,
         } => (
-            Element::new(SecureField {
-                label: PASSWORD_LABEL.to_owned(),
-                placeholder: PASSWORD_PLACEHOLDER.to_owned(),
-                enabled: *enabled,
-                on_change: Some(Box::new(move |_| map(Input::Edited))),
-                on_submit: Some(Box::new(move |buffer| {
-                    map(Input::Submit(Typed::of(buffer)))
-                })),
-                busy: *busy,
-                // the outline shows it and the notice below says it, once
-                invalid: screen.denied,
-                // the field refuses what the authenticator would not take, so a submission is never cut
-                max_len: Some(MAX_PASSWORD_BYTES),
-                initial: false,
+            Element::new(BareSecureField {
+                field: SecureField {
+                    label: PASSWORD_LABEL.to_owned(),
+                    placeholder: PASSWORD_PLACEHOLDER.to_owned(),
+                    enabled: *enabled,
+                    on_change: Some(Box::new(move |_| map(Input::Edited))),
+                    on_submit: Some(Box::new(move |buffer| {
+                        map(Input::Submit(Typed::of(buffer)))
+                    })),
+                    busy: *busy,
+                    // the outline shows it and the notice below says it, once
+                    invalid: screen.denied,
+                    // the field refuses what the authenticator would not take, so a submission is never cut
+                    max_len: Some(MAX_PASSWORD_BYTES),
+                    initial: false,
+                },
+                size: FIELD_TEXT_SIZE,
+                weight: Some(WEIGHT_MEDIUM.0),
             }),
             format!("password-{generation}"),
         ),
         Field::Name { text, revision } => (
-            Element::new(TextField {
-                label: NAME_LABEL.to_owned(),
-                placeholder: NAME_PLACEHOLDER.to_owned(),
-                value: text.clone(),
-                revision: *revision,
-                purpose: ContentPurpose::Name,
-                enabled: true,
-                on_change: Some(Box::new(move |change| map(Input::Name(change)))),
-                on_submit: Some(map(Input::SubmitName)),
-                selection: None,
-                initial: true,
+            Element::new(BareField {
+                field: TextField {
+                    label: NAME_LABEL.to_owned(),
+                    placeholder: NAME_PLACEHOLDER.to_owned(),
+                    value: text.clone(),
+                    revision: *revision,
+                    purpose: ContentPurpose::Name,
+                    enabled: true,
+                    on_change: Some(Box::new(move |change| map(Input::Name(change)))),
+                    on_submit: Some(map(Input::SubmitName)),
+                    selection: None,
+                    initial: true,
+                },
+                size: FIELD_TEXT_SIZE,
             }),
             "name".to_owned(),
         ),
@@ -1005,14 +1015,34 @@ pub fn panel<M: Clone + 'static>(
 }
 
 pub const CONTROL_APP_ID: &str = "org.cupertino.login.desktop-control";
-/// Consent panel height, leaving room for the app, the requested rights and the stop shortcut.
-pub const CONTROL_HEIGHT: f64 = 228.0;
-/// Status keeps Stop in a stable position; a new consent request shows the full rights.
-pub fn control_height(phase: u32) -> f64 {
+/// The consent panel's surface: the alert's width, and a height that holds the alert with the longest name, path and
+/// list of rights, the alert centred in it and the rest clear.
+pub const CONTROL_WIDTH: f64 = 260.0;
+pub const CONTROL_HEIGHT: f64 = 520.0;
+/// The alert: its corner radius and its padding; the icon and the text sit further in than the buttons.
+const CONTROL_RADIUS: f64 = 26.0;
+const CONTROL_PADDING: Insets = Insets {
+    top: 22.0,
+    left: 16.0,
+    bottom: 16.0,
+    right: 16.0,
+};
+const CONTROL_TEXT_INSET: f64 = 6.0;
+/// The app's icon, and the room under it, under the title and above the buttons.
+const CONTROL_ICON: f64 = 64.0;
+const CONTROL_ICON_GAP: f64 = 14.0;
+const CONTROL_TITLE_GAP: f64 = 10.0;
+const CONTROL_BUTTONS_GAP: f64 = 16.0;
+/// The two capsule buttons side by side, this far apart, filling the alert's width between its insets.
+const CONTROL_BUTTON_GAP: f64 = 8.0;
+const CONTROL_BUTTON_HEIGHT: f64 = 28.0;
+const CONTROL_BUTTON_WIDTH: f64 = (CONTROL_WIDTH - 16.0 - 16.0 - CONTROL_BUTTON_GAP) / 2.0;
+/// The size of the surface: the consent alert while a request waits, the status panel with Stop while a run is on.
+pub fn control_size(phase: u32) -> Size {
     if phase == 1 {
-        CONTROL_HEIGHT
+        Size::new(CONTROL_WIDTH, CONTROL_HEIGHT)
     } else {
-        interrupt::HEIGHT
+        Size::new(interrupt::WIDTH, interrupt::HEIGHT)
     }
 }
 /// Characters of an app's name the panel shows; a longer name is cut with an ellipsis.
@@ -1153,88 +1183,112 @@ pub fn control_text(request: &ControlRequest) -> (String, String) {
     (title, info)
 }
 
-/// The native consent panel: the app asking, the rights and the display, Don't Allow and Allow. Neither has a
-/// default-key binding; Don't Allow initially has the focus, and Escape closes the panel without a choice.
+/// The native consent panel, an alert on glass: the app's icon, the question, the rights and the display, and Don't
+/// Allow beside Allow. Neither button has a default-key binding (Return does nothing); Don't Allow initially has the
+/// focus, and Escape closes the panel without a choice.
 pub fn desktop_control<M: Clone + 'static>(
     key: WindowKey,
     request: &ControlRequest,
     map: fn(Input) -> M,
 ) -> Window<M> {
-    // The information block expands above the ordinary interrupt-panel buttons.
-    const CONTROL_INFO_HEIGHT: f64 = 118.0;
-    // Button baseline leaves the same bottom margin as other session panels.
-    const CONTROL_BUTTON_TOP: f64 = 183.0;
-    let mut frames = interrupt::Frames::new();
-    frames.info = Rect::new(
-        frames.info.x(),
-        frames.info.y(),
-        frames.info.width(),
-        CONTROL_INFO_HEIGHT,
-    );
-    for button in &mut frames.buttons {
-        button.frame = Rect::new(
-            button.frame.x(),
-            CONTROL_BUTTON_TOP,
-            button.frame.width(),
-            button.frame.height(),
-        );
-    }
     let (title, info) = control_text(request);
+    let icon_rect = Rect::new(0.0, 0.0, CONTROL_ICON, CONTROL_ICON);
     let icon = match request.app.as_ref().filter(|a| !a.icon.is_empty()) {
         Some(app) => Element::new(Place::new(
-            frames.icon,
+            icon_rect,
             vec![Element::new(Image {
                 sources: app.icon.clone(),
-                size: frames.icon.size,
+                size: icon_rect.size,
                 fit: ImageFit::Contain,
                 radius: 0.0,
                 label: None,
             })],
         )),
-        None => icon_disc(frames.icon),
+        None => icon_disc(icon_rect),
     };
-    let mut children = vec![
-        icon,
-        Element::new(Place::text(
-            frames.title,
-            vec![panel_text(&title, TextRole::Body, FontWeight::BOLD, false)],
-        )),
-        Element::new(Place::text(
-            frames.info,
-            vec![panel_text(
-                &info,
-                TextRole::Caption,
-                FontWeight::REGULAR,
-                true,
-            )],
-        )),
-    ];
-    for (index, button) in frames.buttons.iter().enumerate() {
-        let (label, choice) = if index == 0 {
-            ("Don't Allow", ControlChoice::DontAllow)
-        } else {
-            ("Allow", ControlChoice::Allow)
-        };
-        children.push(
-            Element::new(Place {
-                initial: index == 0,
-                ..Place::filled(
-                    button.frame,
-                    vec![Element::new(Button {
-                        label: label.to_owned(),
-                        role: ButtonRole::Normal,
-                        style: ButtonStyle::Bordered,
-                        enabled: true,
-                        busy: false,
-                        on_press: Some(map(Input::DesktopControl(choice))),
-                    })],
-                )
-            })
-            .key(label),
-        );
-    }
+    let stack = |axis, spacing, align, padding, children| {
+        Element::new(Stack {
+            axis,
+            padding,
+            spacing,
+            align,
+            children,
+        })
+    };
+    let text = stack(
+        Axis::Vertical,
+        CONTROL_TITLE_GAP,
+        Align::Stretch,
+        Insets::ZERO,
+        vec![
+            panel_text(&title, TextRole::Body, FontWeight::BOLD, false),
+            panel_text(&info, TextRole::Body, FontWeight::REGULAR, false),
+        ],
+    );
+    let head = stack(
+        Axis::Vertical,
+        CONTROL_ICON_GAP,
+        Align::Stretch,
+        Insets {
+            top: 0.0,
+            left: CONTROL_TEXT_INSET,
+            bottom: 0.0,
+            right: CONTROL_TEXT_INSET,
+        },
+        vec![
+            stack(
+                Axis::Horizontal,
+                0.0,
+                Align::Start,
+                Insets::ZERO,
+                vec![icon],
+            ),
+            text,
+        ],
+    );
+    let buttons = [
+        ("Don't Allow", ControlChoice::DontAllow),
+        ("Allow", ControlChoice::Allow),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (label, choice))| {
+        Element::new(Place {
+            initial: index == 0,
+            ..Place::filled(
+                Rect::new(0.0, 0.0, CONTROL_BUTTON_WIDTH, CONTROL_BUTTON_HEIGHT),
+                vec![Element::new(Button {
+                    label: label.to_owned(),
+                    role: ButtonRole::Normal,
+                    style: ButtonStyle::Pill,
+                    enabled: true,
+                    busy: false,
+                    on_press: Some(map(Input::DesktopControl(choice))),
+                })],
+            )
+        })
+        .key(label)
+    })
+    .collect();
+    let body = stack(
+        Axis::Vertical,
+        CONTROL_BUTTONS_GAP,
+        Align::Stretch,
+        Insets::ZERO,
+        vec![
+            head,
+            stack(
+                Axis::Horizontal,
+                CONTROL_BUTTON_GAP,
+                Align::Center,
+                Insets::ZERO,
+                buttons,
+            ),
+        ],
+    );
     let cancel = map(Input::DesktopControl(ControlChoice::Dismiss));
     let close = cancel.clone();
+    let size = Size::new(CONTROL_WIDTH, CONTROL_HEIGHT);
     let content = Element::new(Backdrop {
         wallpaper: None,
         hidden: false,
@@ -1244,16 +1298,27 @@ pub fn desktop_control<M: Clone + 'static>(
         description: None,
         role: Role::AlertDialog,
         modal: true,
-        children,
+        children: vec![Element::new(Place::new(
+            Rect::new(0.0, 0.0, size.width, size.height),
+            vec![Element::new(AlertBody {
+                width: CONTROL_WIDTH,
+                radius: CONTROL_RADIUS,
+                padding: CONTROL_PADDING,
+                children: vec![body],
+            })],
+        ))],
     });
-    panel_window(
-        key,
-        CONTROL_APP_ID,
-        &title,
-        Size::new(interrupt::WIDTH, CONTROL_HEIGHT),
-        content,
-        close,
-    )
+    Window {
+        background: WindowBackground::None,
+        ..full_screen(
+            key,
+            CONTROL_APP_ID.to_owned(),
+            &title,
+            size,
+            content,
+            Some(close),
+        )
+    }
 }
 
 /// The interrupt panel for the application `app`: Cancel and Force Quit, Cancel focused. Neither is the default:

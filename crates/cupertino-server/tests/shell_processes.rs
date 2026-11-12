@@ -30,7 +30,7 @@ use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::{layer_map_for_output, PopupKind, PopupManager};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::wayland_server::Display;
+use smithay::reexports::wayland_server::{Display, Resource};
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::selection::data_device::request_data_device_client_selection;
 use smithay::wayland::shm::{with_buffer_contents, BufferData};
@@ -604,6 +604,19 @@ fn real_process_without_host_data(binary: &str, bus: &PrivateBus, empty: &Path) 
     process
 }
 
+/// [`real_process_without_host_data`] whose data directory `dir` holds a desktop entry, without an icon, for the
+/// application of [`spawn_toplevel`]: the dock counts only an application the desktop shows, so the window gets a tile.
+fn real_process_with_editor_entry(binary: &str, bus: &PrivateBus, dir: &Path) -> ShellProcess {
+    let applications = dir.join("applications");
+    std::fs::create_dir_all(&applications).unwrap();
+    std::fs::write(
+        applications.join("org.example.editor.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Editor\nExec=org.example.editor\n",
+    )
+    .unwrap();
+    real_process_without_host_data(binary, bus, dir)
+}
+
 /// A test application window: one 300x200 toplevel, kept alive by its thread until the server is gone.
 fn spawn_toplevel(socket: PathBuf) {
     spawn_toplevel_of(socket, "org.example.editor");
@@ -755,7 +768,6 @@ fn the_real_shell_processes_work_with_the_server() {
         return;
     };
     let mut procs = [
-        "cupertino-dock",
         "cupertino-menubar",
         "cupertino-notifications",
         "cupertino-osd",
@@ -763,6 +775,12 @@ fn the_real_shell_processes_work_with_the_server() {
     ]
     .map(|b| real_process(b, &bus))
     .to_vec();
+    // the dock knows the test application from its desktop entry
+    let dock_data = TempDir::new("dock-editor-entry");
+    procs.insert(
+        0,
+        real_process_with_editor_entry("cupertino-dock", &bus, &dock_data.0),
+    );
     // the launcher indexes no files and finds no host application
     let empty = TempDir::new("launcher-no-host-data");
     let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
@@ -1913,9 +1931,70 @@ fn the_dock_process_moves_between_displays_and_keeps_running() {
     assert_eq!(server.state.supervisor.pid_of("cupertino-dock"), pid);
 }
 
+/// An application a shell process starts (the launcher or the dock opening an application) is an application, not a
+/// part of the shell: its process connects to the public socket and its window gets a dock tile. The stand-in launcher
+/// drops its own connection from the child's environment as a shell binary's Wayland client does on connecting.
+#[test]
+fn an_application_a_shell_process_starts_gets_a_dock_tile() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let dir = TempDir::new("launched-application");
+    let data = TempDir::new("launched-editor-entry");
+    let client = common::fixtures::artifact("cupertino-testclient", "bin", "cupertino-testclient");
+    let script = format!(
+        r#"env -u WAYLAND_SOCKET '{}' --app-id org.example.editor --title Editor --output "$1" & wait"#,
+        client.display()
+    );
+    let Some(mut server) = Server::start(
+        vec![
+            real_process_with_editor_entry("cupertino-dock", &bus, &data.0),
+            stand_in("cupertino-launcher", &script, &dir.file("typed")),
+        ],
+        true,
+    ) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
+    server.wait_until("the dock to register", |s| s.dock_rect(output).is_some());
+    let bar_before = server.state.dock_rect(output).unwrap();
+    server.wait_until("the launched application to map", |s| {
+        s.wm.windows().count() == 1
+    });
+    let launcher = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the stand-in launcher runs");
+    let window = server.state.wm.windows().next().unwrap().id;
+    let pid = server
+        .state
+        .entry(window)
+        .and_then(|e| e.surface().client())
+        .and_then(|c| {
+            c.get_data::<cupertino_server::state::ClientState>()
+                .filter(|d| d.capabilities.is_empty())
+                .and_then(|d| d.process())
+                .map(|p| p.pid)
+        });
+    assert!(
+        pid.is_some_and(|pid| pid != launcher),
+        "the window is the child's, on a public connection holding nothing: {pid:?} (launcher {launcher})"
+    );
+    server.wait_until("the dock bar to grow by the application's tile", |s| {
+        s.dock_rect(output).is_some_and(|r| r.w > bar_before.w)
+    });
+}
+
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized
 /// buffer on its overlay surface centred on the output (whatever the dock bar and the menu bar reserve), and a
-/// commit removes the surface after the fade. The application has no desktop entry and no icon of its own, so its tile
+/// commit removes the surface after the fade. The application has a desktop entry but no icon of its own, so its tile
 /// is the asset directory's generic application icon, pixel for pixel.
 #[test]
 fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
@@ -1925,10 +2004,10 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let empty = TempDir::new("switcher-no-host-data");
+    let data = TempDir::new("switcher-editor-entry");
     let Some(mut server) = Server::start(
         vec![
-            real_process_without_host_data("cupertino-dock", &bus, &empty.0),
+            real_process_with_editor_entry("cupertino-dock", &bus, &data.0),
             real_process("cupertino-menubar", &bus),
         ],
         true,

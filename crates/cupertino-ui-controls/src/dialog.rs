@@ -50,7 +50,7 @@ const SHADOW_ALPHA: f32 = 0.3;
 /// and the light appearance (opaque under Reduce Transparency and Increase Contrast), and its rim one device pixel wide
 /// just inside the edge: a share of white in the dark appearance, of black in the light one.
 const ALERT_BODY_DARK: f32 = 0.2;
-const ALERT_BODY_LIGHT: f32 = 0.96;
+const ALERT_BODY_LIGHT: f32 = 0.99;
 const ALERT_BODY_ALPHA: f32 = 0.97;
 const ALERT_RIM_DARK: f32 = 0.12;
 const ALERT_RIM_LIGHT: f32 = 0.06;
@@ -69,9 +69,9 @@ const POP_PANEL_FADE: f64 = 0.1;
 const POP_CONTENT_DELAY: f64 = 0.06;
 const POP_CONTENT_FADE: f64 = 0.08;
 /// The alert's shadow: lower and fainter above than below.
-const ALERT_SHADOW_OFFSET: f64 = 5.0;
-const ALERT_SHADOW_BLUR: f64 = 20.0;
-const ALERT_SHADOW_ALPHA: f32 = 0.16;
+const ALERT_SHADOW_OFFSET: f64 = 9.0;
+const ALERT_SHADOW_BLUR: f64 = 34.0;
+const ALERT_SHADOW_ALPHA: f32 = 0.27;
 /// The alert: its width, corner radius and padding; the icon and the text sit further in than the buttons.
 const ALERT_WIDTH: f64 = 260.0;
 const ALERT_RADIUS: f64 = 26.0;

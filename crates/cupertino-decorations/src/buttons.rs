@@ -12,7 +12,10 @@
 use crate::metrics::{ButtonKind, DecorationMetrics};
 use crate::palette::{Palette, Rgba};
 use cupertino_geometry::Point;
-use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LineCap, LinearGradient, Paint, PathBuilder, Pixmap,
+    Point as SkPoint, SpreadMode, Stroke, Transform,
+};
 
 /// What the pointer and the window do to the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +55,9 @@ impl ButtonState {
         }
     }
 }
+
+/// How far towards white the lower edge of a coloured button's face is lightened: the face is a little deeper at the top.
+pub const FACE_LIGHTEN: f32 = 0.2;
 
 /// Darkening factor of the ring around a button (approximate).
 pub const RING_DARKEN: f32 = 0.84;
@@ -145,7 +151,26 @@ pub fn draw_button(
     let mut pb = PathBuilder::new();
     pb.push_circle(cx, cy, (r - ring_w).max(0.0));
     if let Some(inner) = pb.finish() {
-        paint.set_color(color(button_fill(palette, kind, v)));
+        let top = button_fill(palette, kind, v);
+        let bottom = [
+            top[0] + (1.0 - top[0]) * FACE_LIGHTEN,
+            top[1] + (1.0 - top[1]) * FACE_LIGHTEN,
+            top[2] + (1.0 - top[2]) * FACE_LIGHTEN,
+            top[3],
+        ];
+        match LinearGradient::new(
+            SkPoint::from_xy(cx, cy - r),
+            SkPoint::from_xy(cx, cy + r),
+            vec![
+                GradientStop::new(0.0, color(top)),
+                GradientStop::new(1.0, color(bottom)),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        ) {
+            Some(shader) => paint.shader = shader,
+            None => paint.set_color(color(top)),
+        }
         pm.fill_path(
             &inner,
             &paint,

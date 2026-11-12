@@ -290,6 +290,10 @@ impl DirectoryModel {
             let wsink = sink.clone();
             let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 // a send fails only once the model is gone, and then nobody is left to tell
+                // an open or a read changes no entry; the application need not wake for it
+                if res.as_ref().is_ok_and(|ev| ev.kind.is_access()) {
+                    return;
+                }
                 wsink.send(match res {
                     Ok(ev) => Msg::Fs(ev),
                     Err(e) => Msg::FsError(e.to_string()),
@@ -590,6 +594,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn reading_the_files_of_a_watched_folder_does_not_wake_the_application() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("notes.txt"), b"notes").unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = wakes.clone();
+        let mut m = DirectoryModel::open_notifying(
+            d.path(),
+            ModelOptions::default(),
+            Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
+        .unwrap();
+        m.wait_loaded();
+        wakes.store(0, Ordering::SeqCst);
+        for _ in 0..20 {
+            std::fs::read(d.path().join("notes.txt")).unwrap();
+        }
+        // the events of one folder arrive in order: once the new file is listed, the reads were heard before it
+        std::fs::write(d.path().join("marker"), b"").unwrap();
+        pump_until(&mut m, |m| names(m).contains(&"marker".to_string()));
+        let woken = wakes.load(Ordering::SeqCst);
+        assert!(
+            woken <= 3,
+            "20 reads and one new file woke the application {woken} times"
+        );
     }
 
     #[test]

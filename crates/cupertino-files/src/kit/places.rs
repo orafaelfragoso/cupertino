@@ -23,12 +23,14 @@ pub(super) struct PlacesWatch {
 }
 
 impl PlacesWatch {
-    /// Watch `folders` (each alone, not what it holds) and the trash at `trash`, or its parent until it exists.
+    /// Watch `folders` (each alone, not what it holds) and the trash at `trash`, or its parent until it exists. The
+    /// places were read before the watch began, so it starts woken: what changed in between is read too.
     pub fn start(folders: Vec<PathBuf>, trash: &Path) -> PlacesWatch {
         let (wake, woken) = async_channel::bounded(1);
         let wake = Arc::new(wake);
+        let first = Arc::clone(&wake);
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok() {
+            if wakes(&event) {
                 // a wake already waiting covers this change too
                 let _ = wake.try_send(());
             }
@@ -47,6 +49,7 @@ impl PlacesWatch {
             watch.add(parent);
         }
         watch.follow(trash);
+        let _ = first.try_send(());
         watch
     }
 
@@ -68,6 +71,12 @@ impl PlacesWatch {
             self.watched.push(folder.to_path_buf());
         }
     }
+}
+
+/// Whether a file event may have changed a place. An open or a read changes none, and reading the places again opens
+/// their files: waking on it would read them again without end.
+fn wakes(event: &notify::Result<notify::Event>) -> bool {
+    event.as_ref().is_ok_and(|e| !e.kind.is_access())
 }
 
 /// The standard places, `standard` first of `places`, read again: from `source` when there is one, else the same with
@@ -132,10 +141,40 @@ mod tests {
     }
 
     #[test]
+    fn reading_the_places_files_does_not_wake() {
+        use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind};
+        let event = |kind| {
+            Ok(notify::Event::new(kind).add_path(PathBuf::from("/home/.config/user-dirs.dirs")))
+        };
+        for kind in [
+            AccessKind::Open(AccessMode::Any),
+            AccessKind::Read,
+            AccessKind::Close(AccessMode::Read),
+        ] {
+            assert!(!wakes(&event(EventKind::Access(kind))), "{kind:?}");
+        }
+        assert!(wakes(&event(EventKind::Create(CreateKind::File))));
+        assert!(wakes(&event(EventKind::Modify(ModifyKind::Any))));
+        assert!(!wakes(&Err(notify::Error::generic("lost"))));
+    }
+
+    /// The places are read before the watch begins: a trash made in between (by another process at the session's start)
+    /// is read again at once, not only at the next change.
+    #[test]
+    fn a_new_watch_starts_woken_so_what_changed_before_it_is_read() {
+        let d = tempfile::tempdir().unwrap();
+        let trash = d.path().join("Trash");
+        std::fs::create_dir_all(trash.join("files")).unwrap();
+        let watch = PlacesWatch::start(Vec::new(), &trash);
+        assert_eq!(watch.woken.try_recv(), Ok(()));
+    }
+
+    #[test]
     fn a_change_in_a_watched_folder_wakes_and_the_trash_is_watched_once_it_exists() {
         let d = tempfile::tempdir().unwrap();
         let trash = d.path().join("Trash");
         let mut watch = PlacesWatch::start(Vec::new(), &trash);
+        assert_eq!(watch.woken.try_recv(), Ok(()), "the wake it starts with");
         std::fs::create_dir_all(trash.join("files")).unwrap();
         watch
             .woken

@@ -2418,6 +2418,110 @@
      }
     ]
    },
+   "ToolbarBand": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.25,
+       "sigma": 3.0,
+       "ops": []
+      },
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         0.3
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
+     }
+    ]
+   },
+   "ToolbarBand-Opaque": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
+     }
+    ]
+   },
    "TooltipLabel": {
     "variants": {
      "active.normal": 0,
@@ -5006,6 +5110,120 @@
      }
     ]
    },
+   "ToolbarBand": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": {
+       "scale": 0.25,
+       "sigma": 3.0,
+       "ops": []
+      },
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         0.3
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       },
+       {
+        "rgba": [
+         0.0,
+         0.0,
+         0.0,
+         0.1
+        ],
+        "blend": "normal",
+        "tint": true
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
+     }
+    ]
+   },
+   "ToolbarBand-Opaque": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
+     }
+    ]
+   },
    "TooltipLabel": {
     "variants": {
      "active.normal": 0,
@@ -5975,6 +6193,56 @@
       "variant": "inactive.rollover"
      }
     ]
+   },
+   "ToolbarBand-Opaque": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
+     }
+    ]
    }
   },
   "dark-high-contrast": {
@@ -6863,6 +7131,56 @@
       "corner_curve": "circular",
       "notes": [],
       "variant": "inactive.rollover"
+     }
+    ]
+   },
+   "ToolbarBand-Opaque": {
+    "variants": {
+     "active.normal": 0,
+     "active.rollover": 0,
+     "active.pressed": 0,
+     "inactive.normal": 1,
+     "inactive.rollover": 1,
+     "inactive.pressed": 1
+    },
+    "recipes": [
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "active.normal"
+     },
+     {
+      "backdrop": null,
+      "fills": [
+       {
+        "rgba": [
+         0.117599994,
+         0.117599994,
+         0.117599994,
+         1.0
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
+      "corner_radius": null,
+      "corner_curve": "circular",
+      "notes": [],
+      "variant": "inactive.normal"
      }
     ]
    }

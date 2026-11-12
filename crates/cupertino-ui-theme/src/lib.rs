@@ -451,7 +451,7 @@ impl ThemeTokens {
             ),
             Surface::WindowBackground => ("WindowBackground", true),
             Surface::TextBackground => ("TextBackground", true),
-            Surface::ToolbarBand => ("Header", false),
+            Surface::ToolbarBand => ("ToolbarBand", false),
         };
         let material = match surface {
             Surface::DockIndicator => kept.then_some(material),

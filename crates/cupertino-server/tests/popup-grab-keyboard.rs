@@ -66,6 +66,8 @@ struct Panel {
     upward: bool,
     /// Where the press goes; `None` for a window, pressed at its centre wherever it was placed.
     press: Option<(f64, f64)>,
+    /// A press opens the menu; without it a press is held as the dock holds one on a tile it drags.
+    opens_menu: bool,
 }
 
 /// The dock's bar: on the top layer at the bottom edge of the 1000 x 700 output, centred, without the keyboard.
@@ -80,6 +82,7 @@ const DOCK: Panel = Panel {
     opener: (300, 0),
     upward: true,
     press: Some((500.0, 660.0)),
+    opens_menu: true,
 };
 
 /// The menu bar: on the top layer along the top edge, without the keyboard.
@@ -94,6 +97,7 @@ const MENU_BAR: Panel = Panel {
     opener: (40, 24),
     upward: false,
     press: Some((40.0, 12.0)),
+    opens_menu: true,
 };
 
 /// The launcher's panel, whose View Options button opens a menu: on the overlay layer at the top, centred, holding the
@@ -109,6 +113,7 @@ const LAUNCHER: Panel = Panel {
     opener: (560, 40),
     upward: false,
     press: Some((760.0, 20.0)),
+    opens_menu: true,
 };
 
 /// A window of an application, whose menu opens below the press.
@@ -123,6 +128,7 @@ const APP_WINDOW: Panel = Panel {
     opener: (WINDOW.0 / 2, WINDOW.1 / 2),
     upward: false,
     press: None,
+    opens_menu: true,
 };
 
 /// What a panel's client saw: whether the menu and the submenu drew themselves, and how many `popup_done` each got.
@@ -134,6 +140,8 @@ struct Seen {
     submenu_done: usize,
     /// Each keyboard enter (`true`) and leave the client got, on the panel or window, the menu or the submenu.
     keys: Vec<(&'static str, bool)>,
+    /// The button releases the client got.
+    releases: usize,
 }
 
 struct State {
@@ -346,13 +354,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Button {
-            serial,
-            state: WEnum::Value(wl_pointer::ButtonState::Pressed),
-            ..
-        } = event
-        {
-            state.presses.push(serial);
+        match event {
+            wl_pointer::Event::Button {
+                serial,
+                state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+                ..
+            } => state.presses.push(serial),
+            wl_pointer::Event::Button {
+                state: WEnum::Value(wl_pointer::ButtonState::Released),
+                ..
+            } => state.seen.lock().unwrap().releases += 1,
+            _ => {}
         }
     }
 }
@@ -426,7 +438,9 @@ impl PanelClient {
                     return;
                 }
                 rounds2.tick();
-                if let (Some(&serial), None) = (state.presses.first(), &menu) {
+                if let (Some(&serial), None, true) =
+                    (state.presses.first(), &menu, panel.opens_menu)
+                {
                     let positioner = wm_base.create_positioner(&qh, ());
                     positioner.set_size(MENU.0, MENU.1);
                     positioner.set_anchor_rect(panel.opener.0, panel.opener.1, 1, 1);
@@ -497,6 +511,11 @@ impl PanelClient {
     /// The pointer rests on the menu's row of a submenu: the submenu opens with a grab on the press that opened the menu.
     fn rest_on_menu(&self) {
         self.rested.store(true, Ordering::SeqCst);
+    }
+
+    /// The button releases the client got.
+    fn releases(&self) -> usize {
+        self.seen.lock().unwrap().releases
     }
 
     /// The keyboard enters and leaves the client got, in order.
@@ -578,7 +597,11 @@ fn click(d: &mut Desktop, at: (f64, f64)) {
 
 /// A desktop with `panel` mapped and its menu open with a popup grab, after a press on the panel.
 fn menu_open(panel: &'static Panel) -> (Desktop, PanelClient) {
-    let mut d = Desktop::new(1.0);
+    menu_open_on(Desktop::new(1.0), panel)
+}
+
+/// [`menu_open`] on the desktop `d`, with what it already shows.
+fn menu_open_on(mut d: Desktop, panel: &'static Panel) -> (Desktop, PanelClient) {
     let stream = if panel.window {
         UnixStream::connect(d.socket()).unwrap()
     } else {
@@ -1078,4 +1101,105 @@ fn the_launchers_menu_and_its_submenu_close_once_when_the_session_locks() {
 #[test]
 fn a_window_menu_and_its_submenu_close_once_when_another_window_takes_the_keyboard() {
     nested_dismissed_once_when_taken(&APP_WINDOW, Taker::Window);
+}
+
+/// The dock's bar with the room its magnified tiles rise into: as [`DOCK`], 340 points tall, so its menu opens over the
+/// middle of the output, where a new window is placed.
+const TALL_DOCK: Panel = Panel {
+    size: (600, 340),
+    press: Some((500.0, 680.0)),
+    ..DOCK
+};
+
+/// A click on the dock's menu where the key window lies under it is the menu's: the window takes neither the click nor
+/// the keyboard, so the menu stays open with its grab and its keys, and the item clicked can act.
+#[test]
+fn a_click_on_the_dock_menu_over_the_key_window_keeps_the_menu_open() {
+    let mut d = Desktop::new(1.0);
+    let _window = common::Client::toplevel(d.socket());
+    wait_until(&mut d, "the window to map", |s| {
+        s.windows.iter().any(|w| w.mapped)
+    });
+    let window = d.state.windows.last().unwrap().id;
+    d.state.command(Command::FocusWindow { window });
+    d.pump();
+    let (mut d, menu) = menu_open_on(d, &TALL_DOCK);
+    // the menu hangs centred above the middle of the bar, which lies along the bottom of the 1000 x 700 output
+    let on_menu = (
+        500.0,
+        700.0 - f64::from(TALL_DOCK.size.1) - f64::from(MENU.1) / 2.0,
+    );
+    assert!(
+        d.state.window_surface_under(on_menu.into()).is_some(),
+        "the window lies under the menu"
+    );
+    assert_eq!(d.state.wm.key_window(), Some(window), "the window is key");
+    wait_until(&mut d, "the menu to show over the window", |s| {
+        s.surface_under(on_menu.into())
+            .is_some_and(|(surface, _)| s.popups.find_popup(&surface).is_some())
+    });
+    click(&mut d, on_menu);
+    for _ in 0..8 {
+        d.pump();
+    }
+    assert!(!menu.popup_done(), "the menu is still open");
+    assert!(d.state.popup_grab_root().is_some(), "the grab goes on");
+    let focus = keyboard_focus(&d.state).expect("the keyboard has a focus");
+    assert!(
+        d.state.popups.find_popup(&focus).is_some(),
+        "the menu keeps the keys"
+    );
+}
+
+/// The dock's bar as it holds a press on a tile it drags: it opens no menu.
+const DRAGGED_DOCK: Panel = Panel {
+    opens_menu: false,
+    ..TALL_DOCK
+};
+
+/// A tile dragged off the dock and let go over a window: the press on the bar, where the window also lies under it,
+/// neither focuses the window nor takes the keyboard from where it was, and the release reaches the dock, which drops
+/// the tile, never the window.
+#[test]
+fn a_drag_from_the_dock_let_go_over_a_window_ends_on_the_dock() {
+    let mut d = Desktop::new(1.0);
+    let _window = common::Client::toplevel(d.socket());
+    wait_until(&mut d, "the window to map", |s| {
+        s.windows.iter().any(|w| w.mapped)
+    });
+    let stream = shell_process_connection(&d.state.display_handle, DRAGGED_DOCK.roles).unwrap();
+    let dock = PanelClient::spawn(stream, &DRAGGED_DOCK);
+    wait_until(&mut d, "the bar to map", |s| {
+        mapped(s, DRAGGED_DOCK.namespace)
+    });
+    let window = d.state.windows.last().unwrap().id;
+    d.state.command(Command::FocusWindow { window });
+    d.pump();
+    let keys = keyboard_focus(&d.state);
+    // the bar's top edge lies over the window's lower part: the tile is pressed there
+    let on_tile = (500.0, 700.0 - f64::from(DRAGGED_DOCK.size.1) + 20.0);
+    let over_window = (500.0, 200.0);
+    assert!(
+        d.state.window_surface_under(on_tile.into()).is_some()
+            && d.state.window_surface_under(over_window.into()).is_some(),
+        "the window lies under the tile and where it is let go"
+    );
+    d.state.pointer_moved_to(on_tile.into(), 0, None);
+    d.pump();
+    d.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    d.pump();
+    assert_eq!(
+        keyboard_focus(&d.state),
+        keys,
+        "the press on the bar leaves the keyboard"
+    );
+    for step in 1..=10 {
+        let y = on_tile.1 + (over_window.1 - on_tile.1) * f64::from(step) / 10.0;
+        d.state.pointer_moved_to((500.0, y).into(), 0, None);
+        d.pump();
+    }
+    d.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    wait_until(&mut d, "the release to reach the dock", |_| {
+        dock.releases() == 1
+    });
 }

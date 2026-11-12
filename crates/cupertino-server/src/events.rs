@@ -1208,8 +1208,7 @@ impl Cupertino {
         // the content of a window a modal sheet or dialog blocks takes no clicks: the press goes
         // to the model, which brings the blocking window forward (the title bar still moves it)
         if let Some(id) = self
-            .window_surface_under(pos)
-            .map(|(id, ..)| id)
+            .window_surface_on_top(pos)
             .filter(|id| self.wm.is_blocked(*id) && !self.current_mods().logo)
         {
             self.command(Command::FocusWindow { window: id });
@@ -1400,10 +1399,20 @@ impl Cupertino {
         }
     }
 
+    /// The window whose own surface takes a press at `pos`: none when a surface drawn above the windows (a layer surface
+    /// such as the dock, or a popup of one, such as its menu) lies there, so a press on it never focuses the window
+    /// under it nor takes the keyboard from it.
+    fn window_surface_on_top(&self, pos: Point<f64, Logical>) -> Option<WindowId> {
+        match self.window_target_on_top(pos)? {
+            WindowTarget::Surface { id, .. } => Some(id),
+            WindowTarget::Decoration { .. } => None,
+        }
+    }
+
     /// Click-to-focus at `pos`. A modified click reaches the client unchanged: the design has no
     /// modifier drag that moves or resizes windows, so a primary-modifier click stays the client's.
     fn focus_at(&mut self, pos: Point<f64, Logical>) {
-        if let Some((id, _, _)) = self.window_surface_under(pos) {
+        if let Some(id) = self.window_surface_on_top(pos) {
             self.command(Command::FocusWindow { window: id });
             self.return_keyboard_to_key_window(id);
             return;

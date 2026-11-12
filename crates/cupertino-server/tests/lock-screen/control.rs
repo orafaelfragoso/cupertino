@@ -154,18 +154,22 @@ fn start_controller(session: &mut Session) {
             identity().is_some_and(|current| Some(current) != previous)
         });
 }
-fn click(server: &mut Server, x: f64, y: f64) {
-    server.state.process_input_event(common::absolute::motion(
-        x / f64::from(OUTPUT.0),
-        y / f64::from(OUTPUT.1),
-    ));
-    for pressed in [true, false] {
-        server
-            .state
-            .process_input_event(common::absolute::button(pressed));
-        server.step();
+/// The height of the consent panel's surface, which tells it from the shorter status panel on the same layer.
+const CONSENT_HEIGHT: f64 = 520.0;
+/// Answer the consent panel with Allow from the keyboard, as a person does: Tab from the initially focused Don't
+/// Allow to Allow, then Space presses it.
+fn allow(server: &mut Server) {
+    for code in [TAB, SPACE] {
+        for pressed in [true, false] {
+            server
+                .state
+                .process_input_event(common::absolute::key(code, pressed));
+            server.step();
+        }
     }
 }
+const TAB: u32 = 15;
+const SPACE: u32 = 57;
 /// The session's remembered answers: a file in the fixture's settings folder, which the server watches.
 struct Remembered {
     path: PathBuf,
@@ -297,10 +301,9 @@ fn native_controller_and_session_consent_remember_the_answer_and_share_the_deskt
         json!({"op":"request","output":"headless-1","capabilities":15}),
     );
     session.server.wait_until("consent asked again", |s| {
-        panel_rect(s).is_some_and(|(x, _, _, h)| x > 100.0 && x < 300.0 && h == 228.0)
+        panel_rect(s).is_some_and(|(x, _, _, h)| x > 100.0 && x < 300.0 && h == CONSENT_HEIGHT)
     });
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
+    allow(&mut session.server);
     local.ok(
         &mut session.server,
         json!({"op":"wait","phase":2,"timeout_ms":5000}),

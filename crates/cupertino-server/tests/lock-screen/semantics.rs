@@ -113,8 +113,7 @@ fn rust_mcp_remembers_the_answer_and_a_new_run_after_stopping_starts_at_once() {
     session
         .server
         .wait_until("initial consent", |s| panel_rect(s).is_some());
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
+    allow(&mut session.server);
     mcp.ok(
         &mut session.server,
         "wait",
@@ -188,14 +187,13 @@ fn rust_mcp_controls_real_kit_nodes_with_consent_stale_checks_and_protected_valu
         json!({"output":"headless-1","capabilities":["semantic","capture","pointer","keyboard"]}),
     );
     session.server.wait_until("native semantic consent", |s| {
-        panel_rect(s).is_some_and(|(_, _, _, h)| h == 228.0)
+        panel_rect(s).is_some_and(|(_, _, _, h)| h == CONSENT_HEIGHT)
     });
     assert_eq!(
         mcp.tool(&mut session.server, "observe", json!({"epoch":epoch}))["isError"],
         true
     );
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
+    allow(&mut session.server);
     mcp.ok(
         &mut session.server,
         "wait",

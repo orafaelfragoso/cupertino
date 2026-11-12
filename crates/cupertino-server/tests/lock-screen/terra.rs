@@ -30,7 +30,7 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
     let output = File::create(&evidence).unwrap();
     let errors = File::create(evidence.with_extension("stderr")).unwrap();
     let args = serde_json::to_string(&vec!["--mcp"]).unwrap();
-    let prompt="This is an isolated Cupertino integration fixture. Use only the cupertino MCP tools. Do not use shell, files, browser or other tools. Read status and request semantic and capture capabilities on output headless-1. The test harness will click the real native consent panel using genuine fixture backend input. Wait for active phase, observe Counter, find its + button, click it exactly once with its observed publication revision, and verify the new count is 1 in the tool observation. Capture the output and inspect its image to confirm Counter shows 1. Finally stop this epoch and report the observed count. Do not retry a mutation without inspecting state. Do not request user input; the fixture supplies consent.";
+    let prompt="This is an isolated Cupertino integration fixture. Use only the cupertino MCP tools. Do not use shell, files, browser or other tools. Read status and request semantic and capture capabilities on output headless-1. The test harness will answer the real native consent panel using genuine fixture backend input. Wait for active phase, observe Counter, find its + button, click it exactly once with its observed publication revision, and verify the new count is 1 in the tool observation. Capture the output and inspect its image to confirm Counter shows 1. Finally stop this epoch and report the observed count. Do not retry a mutation without inspecting state. Do not request user input; the fixture supplies consent.";
     let mut model = App(std::process::Command::new(codex)
         .args([
             "exec",
@@ -73,9 +73,9 @@ fn terra_controls_kit_through_the_native_rust_mcp_bridge() {
     let mut approved = false;
     loop {
         if !approved {
-            if let Some((x, y, _, h)) = panel_rect(&session.server.state) {
-                if h == 228.0 {
-                    click(&mut session.server, x + 345.0, y + 196.0);
+            if let Some((_, _, _, h)) = panel_rect(&session.server.state) {
+                if h == CONSENT_HEIGHT {
+                    allow(&mut session.server);
                     approved = true;
                 }
             }

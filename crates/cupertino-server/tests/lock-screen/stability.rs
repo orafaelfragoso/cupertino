@@ -28,8 +28,7 @@ fn readonly_control_survives_physical_input_and_capture_survives_semantic_churn(
     session
         .server
         .wait_until("read-only consent", |s| panel_rect(s).is_some());
-    let (x, y, _, _) = panel_rect(&session.server.state).unwrap();
-    click(&mut session.server, x + 345.0, y + 196.0);
+    allow(&mut session.server);
     local.ok(
         &mut session.server,
         json!({"op":"wait","phase":2,"timeout_ms":5000}),

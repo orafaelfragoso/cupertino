@@ -135,7 +135,106 @@ struct CachedBackdrop {
     key: BackdropKey,
     generation: u64,
     target: Target,
+    /// The part of the framebuffer the backdrop was captured and blurred from.
+    crop: Crop,
     last_used: u64,
+}
+
+/// A rectangle of the framebuffer, in its pixels (row 0 where the framebuffer has it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Crop {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+impl Crop {
+    fn whole(size: (i32, i32)) -> Self {
+        Crop {
+            x: 0,
+            y: 0,
+            w: size.0,
+            h: size.1,
+        }
+    }
+
+    fn contains(&self, other: &Crop) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.x + other.w <= self.x + self.w
+            && other.y + other.h <= self.y + self.h
+    }
+}
+
+/// The part of a `size` framebuffer a region drawing over `area` (output pixels, placed by `projection`) needs
+/// blurred: the area with a margin of `radius` texels of the blur's last level, and one more for the filtered lookup,
+/// at the `levels` halvings of the blur, so every pixel the region shows is blurred from the same pixels as in a blur
+/// of the whole framebuffer. Its edges lie on the grid of the last level, so each level halves it exactly; a
+/// framebuffer that does not halve exactly `levels` times is blurred whole.
+fn backdrop_crop(
+    size: (i32, i32),
+    levels: usize,
+    radius: usize,
+    area: Rectangle<i32, Physical>,
+    projection: &[f32; 9],
+) -> Crop {
+    let whole = Crop::whole(size);
+    let factor = 1i32 << levels.min(16);
+    if size.0 <= 0 || size.1 <= 0 || size.0 % factor != 0 || size.1 % factor != 0 {
+        return whole;
+    }
+    let margin = (radius as i32 + 2) * factor;
+    let (x0, y0) = (area.loc.x - margin, area.loc.y - margin);
+    let (x1, y1) = (
+        area.loc.x + area.size.w + margin,
+        area.loc.y + area.size.h + margin,
+    );
+    // the corners in framebuffer pixels, through the projection the composite draws with
+    let m = projection;
+    let corner = |x: i32, y: i32| {
+        let (x, y) = (x as f32, y as f32);
+        let cx = m[0] * x + m[3] * y + m[6];
+        let cy = m[1] * x + m[4] * y + m[7];
+        (
+            (cx * 0.5 + 0.5) * size.0 as f32,
+            (cy * 0.5 + 0.5) * size.1 as f32,
+        )
+    };
+    let corners = [
+        corner(x0, y0),
+        corner(x1, y0),
+        corner(x0, y1),
+        corner(x1, y1),
+    ];
+    let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    if !(min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite()) {
+        return whole;
+    }
+    let down = |v: f32, max: i32| ((v.floor() as i32).clamp(0, max) / factor) * factor;
+    let up = |v: f32, max: i32| {
+        (((v.ceil() as i32).clamp(0, max) + factor - 1) / factor * factor).min(max)
+    };
+    let (cx0, cy0) = (down(min_x, size.0), down(min_y, size.1));
+    let (cx1, cy1) = (up(max_x, size.0), up(max_y, size.1));
+    if cx1 <= cx0 || cy1 <= cy0 {
+        return whole;
+    }
+    Crop {
+        x: cx0,
+        y: cy0,
+        w: cx1 - cx0,
+        h: cy1 - cy0,
+    }
 }
 
 /// Counters for tests and diagnostics.
@@ -590,19 +689,55 @@ impl MaterialGl {
         self.stats.passes += 1;
     }
 
-    /// Process the backdrop for `recipe`: capture the bound framebuffer and filter it.
+    /// The blur of `p`'s recipe over its whole framebuffer.
+    fn plan(&self, p: &DrawParams<'_>) -> BlurPlan {
+        let (w, h) = p.output_px;
+        let (scale, sigma) = p
+            .recipe
+            .backdrop
+            .as_ref()
+            .map_or((1.0, 0.0), |b| (b.0, b.1));
+        plan_blur(w as u32, h as u32, scale, sigma, p.scale)
+    }
+
+    /// The part of the framebuffer `p` needs blurred: around its area for a region that blurs what is under it as it
+    /// draws, all of it for a backdrop captured below the windows, which another element composites.
+    fn crop(&self, p: &DrawParams<'_>) -> Crop {
+        if !matches!(p.stage, MaterialStage::Full) {
+            return Crop::whole(p.output_px);
+        }
+        let plan = self.plan(p);
+        let radius = plan.weights.len().saturating_sub(1);
+        backdrop_crop(
+            p.output_px,
+            plan.levels.len(),
+            radius,
+            p.area,
+            &p.projection,
+        )
+    }
+
+    /// Process the backdrop for `recipe`: capture the `crop` part of the bound framebuffer and filter it.
     unsafe fn process_backdrop(
         &mut self,
         gl: &ffi::Gles2,
         p: &DrawParams<'_>,
         src_fbo: GLuint,
+        crop: Crop,
     ) -> Option<Target> {
         let (w, h) = p.output_px;
-        let (scale, sigma, ops) = match &p.recipe.backdrop {
-            Some((s, sg, ops)) => (*s, *sg, ops.as_slice()),
-            None => (1.0, 0.0, &[][..]),
-        };
-        let plan: BlurPlan = plan_blur(w as u32, h as u32, scale, sigma, p.scale);
+        let ops = p
+            .recipe
+            .backdrop
+            .as_ref()
+            .map_or(&[][..], |b| b.2.as_slice());
+        let mut plan: BlurPlan = self.plan(p);
+        if crop != Crop::whole((w, h)) {
+            // the same halvings of the part: its edges lie on the grid of the last level
+            for (i, level) in plan.levels.iter_mut().enumerate() {
+                *level = ((crop.w >> (i + 1)) as u32, (crop.h >> (i + 1)) as u32);
+            }
+        }
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
         // capture: the first level is a linear blit (a 2x2 box average at half size)
@@ -610,7 +745,7 @@ impl MaterialGl {
             .levels
             .first()
             .map(|l| (l.0 as i32, l.1 as i32))
-            .unwrap_or((w, h));
+            .unwrap_or((crop.w, crop.h));
         let mut cur = self.take_target(gl, first)?;
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, cur.fbo);
@@ -620,10 +755,10 @@ impl MaterialGl {
             ffi::LINEAR
         };
         gl.BlitFramebuffer(
-            0,
-            0,
-            w,
-            h,
+            crop.x,
+            crop.y,
+            crop.x + crop.w,
+            crop.y + crop.h,
             0,
             0,
             first.0,
@@ -710,10 +845,11 @@ impl MaterialGl {
         let saved = SavedState::capture(gl);
         let src_fbo = saved.draw_fbo as GLuint;
         let key = backdrop_key(p.recipe.key, p.output_px, p.scale, p.stage, p.element);
+        let crop = self.crop(p);
         let hit = self
             .cache
             .iter()
-            .position(|c| c.key == key && c.generation == p.generation);
+            .position(|c| c.key == key && c.generation == p.generation && c.crop.contains(&crop));
         let idx = match hit {
             Some(i) => {
                 self.stats.backdrop_hits += 1;
@@ -733,7 +869,7 @@ impl MaterialGl {
                 }
                 let blurring = (self.timing && !self.gpu_timers).then(std::time::Instant::now);
                 self.timer_begin(gl, true);
-                let processed = self.process_backdrop(gl, p, src_fbo);
+                let processed = self.process_backdrop(gl, p, src_fbo, crop);
                 self.timer_end(gl);
                 if let Some(blurring) = blurring {
                     gl.Finish();
@@ -758,6 +894,7 @@ impl MaterialGl {
                     key,
                     generation: p.generation,
                     target,
+                    crop,
                     last_used: self.tick,
                 });
                 self.cache.len() - 1
@@ -769,6 +906,7 @@ impl MaterialGl {
             return Ok(());
         }
         let backdrop_tex = self.cache[idx].target.tex;
+        let held = self.cache[idx].crop;
         self.timer_begin(gl, false);
 
         let progs = self.progs.as_ref().unwrap();
@@ -780,12 +918,13 @@ impl MaterialGl {
             p.rect.size.h as f32,
         ];
         region.shape = [p.corner.0, p.corner.1, p.opacity, 1.0];
-        region.info = [0.0, 1.0, 0.0, 0.0];
+        // the backdrop covers the part of the framebuffer it was blurred from: its origin and size
+        region.info = [0.0, 1.0, held.x as f32, held.y as f32];
         region.sizes = [
             p.output_px.0 as f32,
             p.output_px.1 as f32,
-            p.output_px.0 as f32,
-            p.output_px.1 as f32,
+            held.w as f32,
+            held.h as f32,
         ];
         region.tint = [p.tint[0], p.tint[1], p.tint[2], 1.0];
         region.set_fills(&p.recipe.fills);
@@ -1154,6 +1293,182 @@ impl RenderElement<GlesRenderer> for MaterialElement {
 mod tests {
     use super::*;
     use cupertino_theme::{Appearance, MaterialOptions, Theme};
+
+    /// The projection of a `size` output onto its framebuffer, rows flipped (`flip`) or not.
+    fn ortho(size: (i32, i32), flip: bool) -> [f32; 9] {
+        let (w, h) = (size.0 as f32, size.1 as f32);
+        let sy = if flip { -2.0 / h } else { 2.0 / h };
+        let ty = if flip { 1.0 } else { -1.0 };
+        [2.0 / w, 0.0, 0.0, 0.0, sy, 0.0, -1.0, ty, 1.0]
+    }
+
+    /// The blur of the pipeline on the CPU: `levels` 2x2 box halvings, each texel read clamped to the image, then the
+    /// separable `weights` with reads clamped to the image too.
+    fn blur(
+        img: &[f32],
+        size: (usize, usize),
+        levels: usize,
+        weights: &[f32],
+    ) -> (Vec<f32>, (usize, usize)) {
+        let (mut cur, mut s) = (img.to_vec(), size);
+        for _ in 0..levels {
+            let n = (s.0 / 2, s.1 / 2);
+            let at = |v: &[f32], x: usize, y: usize| v[y.min(s.1 - 1) * s.0 + x.min(s.0 - 1)];
+            let mut next = vec![0.0; n.0 * n.1];
+            for y in 0..n.1 {
+                for x in 0..n.0 {
+                    let (px, py) = (2 * x, 2 * y);
+                    next[y * n.0 + x] = (at(&cur, px, py)
+                        + at(&cur, px + 1, py)
+                        + at(&cur, px, py + 1)
+                        + at(&cur, px + 1, py + 1))
+                        * 0.25;
+                }
+            }
+            (cur, s) = (next, n);
+        }
+        let r = weights.len() as i64 - 1;
+        for dir in [(1i64, 0i64), (0, 1)] {
+            let at = |v: &[f32], x: i64, y: i64| {
+                v[y.clamp(0, s.1 as i64 - 1) as usize * s.0 + x.clamp(0, s.0 as i64 - 1) as usize]
+            };
+            let mut out = vec![0.0; s.0 * s.1];
+            for y in 0..s.1 as i64 {
+                for x in 0..s.0 as i64 {
+                    let mut acc = at(&cur, x, y) * weights[0];
+                    for i in 1..=r {
+                        acc += (at(&cur, x + dir.0 * i, y + dir.1 * i)
+                            + at(&cur, x - dir.0 * i, y - dir.1 * i))
+                            * weights[i as usize];
+                    }
+                    out[y as usize * s.0 + x as usize] = acc;
+                }
+            }
+            cur = out;
+        }
+        (cur, s)
+    }
+
+    #[test]
+    fn a_region_blurs_only_the_part_of_the_framebuffer_it_shows_and_finds_the_same_blur_there() {
+        let size = (1024, 640);
+        let plan = plan_blur(size.0 as u32, size.1 as u32, 0.5, 20.0, 2.0);
+        let (levels, radius) = (plan.levels.len(), plan.weights.len() - 1);
+        assert!(
+            levels >= 2 && radius >= 2,
+            "a blur of several levels and a wide kernel"
+        );
+        let factor = 1 << levels;
+        // a framebuffer of noise
+        let mut seed = 0x9e37_79b9u32;
+        let img: Vec<f32> = (0..size.0 * size.1)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed % 1000) as f32 / 1000.0
+            })
+            .collect();
+        let (whole, ws) = blur(
+            &img,
+            (size.0 as usize, size.1 as usize),
+            levels,
+            &plan.weights,
+        );
+        for flip in [false, true] {
+            for area in [
+                Rectangle::new((300, 200).into(), (150, 260).into()),
+                Rectangle::new((0, 0).into(), (90, 60).into()),
+                Rectangle::new((900, 560).into(), (124, 80).into()),
+                Rectangle::new((501, 333).into(), (7, 9).into()),
+            ] {
+                let crop = backdrop_crop(size, levels, radius, area, &ortho(size, flip));
+                assert_eq!(
+                    (crop.x % factor, crop.y % factor),
+                    (0, 0),
+                    "{crop:?} starts on the last level's grid"
+                );
+                assert!(
+                    crop.w % factor == 0 || crop.x + crop.w == size.0,
+                    "{crop:?}"
+                );
+                assert!(
+                    crop.x >= 0
+                        && crop.y >= 0
+                        && crop.x + crop.w <= size.0
+                        && crop.y + crop.h <= size.1
+                );
+                assert!(
+                    crop.w * crop.h < size.0 * size.1,
+                    "{crop:?} is smaller than the framebuffer"
+                );
+                // the area in framebuffer rows
+                let (ay0, ay1) = if flip {
+                    (size.1 - area.loc.y - area.size.h, size.1 - area.loc.y)
+                } else {
+                    (area.loc.y, area.loc.y + area.size.h)
+                };
+                let (ax0, ax1) = (area.loc.x, area.loc.x + area.size.w);
+                let part: Vec<f32> = (crop.y..crop.y + crop.h)
+                    .flat_map(|y| (crop.x..crop.x + crop.w).map(move |x| (x, y)))
+                    .map(|(x, y)| img[(y * size.0 + x) as usize])
+                    .collect();
+                let (cut, cs) = blur(
+                    &part,
+                    (crop.w as usize, crop.h as usize),
+                    levels,
+                    &plan.weights,
+                );
+                // every last-level texel a lookup over the area reads, with its filtered neighbour
+                let (tx0, tx1) = (
+                    (ax0 / factor - 1).max(0),
+                    ((ax1 + factor - 1) / factor + 1).min(ws.0 as i32),
+                );
+                let (ty0, ty1) = (
+                    (ay0 / factor - 1).max(0),
+                    ((ay1 + factor - 1) / factor + 1).min(ws.1 as i32),
+                );
+                for ty in ty0..ty1 {
+                    for tx in tx0..tx1 {
+                        let (cx, cy) = (tx - crop.x / factor, ty - crop.y / factor);
+                        assert!(cx >= 0 && cy >= 0 && (cx as usize) < cs.0 && (cy as usize) < cs.1);
+                        let a = whole[ty as usize * ws.0 + tx as usize];
+                        let b = cut[cy as usize * cs.0 + cx as usize];
+                        assert!(
+                            (a - b).abs() < 1e-5,
+                            "texel {tx},{ty} of {area:?} (flip {flip}): {a} vs {b}"
+                        );
+                    }
+                }
+            }
+        }
+        // a framebuffer that does not halve exactly is blurred whole
+        let odd = (1022, 640);
+        let area = Rectangle::new((40, 30).into(), (50, 70).into());
+        assert_eq!(
+            backdrop_crop(odd, levels, radius, area, &ortho(odd, false)),
+            Crop::whole(odd)
+        );
+        // a backdrop blurred for a larger part serves a region inside it, not one reaching past it
+        let big = Crop {
+            x: 0,
+            y: 0,
+            w: 128,
+            h: 64,
+        };
+        assert!(big.contains(&Crop {
+            x: 32,
+            y: 16,
+            w: 64,
+            h: 32
+        }));
+        assert!(!big.contains(&Crop {
+            x: 96,
+            y: 16,
+            w: 64,
+            h: 32
+        }));
+    }
 
     #[test]
     fn regions_of_one_recipe_keep_a_backdrop_each_and_a_composite_finds_its_capture() {

@@ -9,7 +9,9 @@
 //
 // Texture orientation (compositor copy): v_px is y-down output pixels; the backdrop is sampled with
 // v_uv, the framebuffer-normalised coordinate computed by the vertex shader from the frame
-// projection, so no row flip is needed (Region.info.z is unused).
+// projection, so no row flip is needed. The backdrop may cover only part of the framebuffer, the
+// part around the region it was blurred for: Region.info.zw is its origin and Region.sizes.zw its
+// size, in framebuffer pixels.
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -74,8 +76,9 @@ void main() {
     float cov = clamp(0.5 - d / R.shape.w, 0.0, 1.0) * R.shape.z;
     if (cov <= 0.0) { discard; }
     // The backdrop is always bound: recipes without a backdrop filter use an unfiltered copy of
-    // the framebuffer. It shares the orientation of the framebuffer, so v_uv samples it directly.
-    vec3 base = texture(u_backdrop, v_uv).rgb;
+    // the framebuffer. It shares the orientation of the framebuffer.
+    vec2 uv = (v_uv * R.sizes.xy - R.info.zw) / R.sizes.zw;
+    vec3 base = texture(u_backdrop, uv).rgb;
     int n = int(R.info.x);
     for (int i = 0; i < n; i++) {
         vec4 a = R.fills[2 * i];

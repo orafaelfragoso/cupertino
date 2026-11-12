@@ -207,7 +207,7 @@ mod binary {
         assert_eq!(
             String::from_utf8_lossy(&out.stderr),
             "cupertino-powerd: --no-auth is only allowed with --session-bus\n\
-             usage: cupertino-powerd [--session-bus [--no-auth]] [--sysfs-root PATH]\n"
+             usage: cupertino-powerd [--session-bus [--no-auth]] [--sysfs-root PATH] [--history PATH]\n"
         );
         let event = journal.one("power.exit_error");
         event.check("power.exit_error", Severity::Error, &[]);

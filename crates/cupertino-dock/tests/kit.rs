@@ -344,6 +344,16 @@ impl Run {
         Self::on_desktop(theme, actions, app_effects, Vec::new())
     }
 
+    /// [`Run::start`] with the viewer's desktop entry besides, not pinned.
+    fn with_viewer() -> Self {
+        Self::on_desktop(
+            tokens(false),
+            ActionMap::default(),
+            true,
+            vec![entry_with(VIEWER, "Viewer", "")],
+        )
+    }
+
     /// [`Run::on`] with `more` desktop entries besides the editor's and the terminal's.
     fn on_desktop(
         theme: ThemeTokens,
@@ -1894,7 +1904,7 @@ fn icons_load_in_the_background_so_the_first_magnification_waits_for_none() {
 #[test]
 fn an_icon_the_background_leaves_out_loads_on_the_spot() {
     BACKGROUND.set(Some(vec![IconKey::App(EDITOR.to_owned())]));
-    let mut run = Run::start();
+    let mut run = Run::with_viewer();
     let large = DockConfig::default().large_size;
     let loads = run.record.borrow().icon_loads.clone();
     assert!(
@@ -2552,7 +2562,13 @@ fn every_focus_dock_starts_on_the_first_tile_with_the_ring_shown() {
 /// The focused tile going away hands the focus to a tile beside it, never to the bar itself.
 #[test]
 fn the_focus_moves_to_a_neighbour_when_its_tile_goes() {
-    let mut run = Run::start();
+    let mut run = Run::with_viewer();
+    // without recents the tile of the application that quit leaves the bar
+    run.record.borrow_mut().conf = Some(DockSettings {
+        recents: Some(false),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
     run.message(Message::Dock {
         output: 1,
         events: vec![DockEvent::Window {

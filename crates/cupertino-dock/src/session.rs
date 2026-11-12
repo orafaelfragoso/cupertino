@@ -111,10 +111,28 @@ impl Session {
         app_id.to_string()
     }
 
-    /// A window appeared or one of its properties changed.
+    /// Whether `app_id` is an application the dock shows: one with a tile pinned for it, or with a desktop entry the
+    /// desktop shows (not `NoDisplay`). A process without one (a portal's or helper's window, a background service,
+    /// a program with no entry) gets no tile and no running dot.
+    pub fn is_application(&self, app_id: &str) -> bool {
+        if app_id.is_empty() {
+            return false;
+        }
+        self.desktop.find(app_id).is_some_and(|e| !e.no_display)
+            || self
+                .dock
+                .app_tile(&self.key_of(app_id))
+                .is_some_and(|t| t.pinned || t.built_in)
+    }
+
+    /// A window appeared or one of its properties changed. A window of a process that is not an application
+    /// ([`Session::is_application`]) is not counted.
     pub fn window(&mut self, id: u32, app_id: &str, title: &str, minimized: bool, now: f64) {
         if self.windows.get(&id).is_some_and(|w| w.app_id != app_id) {
             self.window_closed(id, now);
+        }
+        if !self.is_application(app_id) {
+            return;
         }
         let key = self.key_of(app_id);
         if !self.windows.values().any(|w| w.key == key) {
@@ -164,14 +182,11 @@ impl Session {
 
     /// The server reported whether a process of `app_id` that showed a window is still connected. A resident
     /// application keeps (or, for one the dock had not seen, gets) its running dot without windows; one that stops
-    /// being resident with no window left has quit. Only an application the desktop shows is kept so: a process with
-    /// no desktop entry, or one whose entry is `NoDisplay` (a portal's dialogs, a helper), is in the dock while it
-    /// shows a window and no longer.
+    /// being resident with no window left has quit. Only an application ([`Session::is_application`]) is kept so.
     pub fn set_resident(&mut self, app_id: &str, resident: bool, now: f64) {
         let key = self.key_of(app_id);
         if resident {
-            let shown = self.desktop.find(app_id).is_some_and(|e| !e.no_display);
-            if shown
+            if self.is_application(app_id)
                 && self.resident.insert(app_id.to_owned())
                 && !self.windows.values().any(|w| w.key == key)
             {

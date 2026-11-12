@@ -56,7 +56,7 @@ fn an_application_runs_from_its_first_window_to_its_last() {
 
 #[test]
 fn an_unpinned_application_gets_a_tile_that_leaves_with_its_last_window() {
-    let mut s = session(&["foot"], vec![]);
+    let mut s = session(&["foot"], vec![entry("org.example.editor", "")]);
     s.window(7, "org.example.editor", "notes", false, 0.0);
     assert!(s.dock.app_tile("org.example.editor").is_some());
     s.window_closed(7, 1.0);
@@ -322,4 +322,66 @@ fn only_an_application_the_desktop_shows_stays_in_the_dock_without_windows() {
     assert!(s.dock.app_tile("org.example.Portal").is_none());
     s.set_resident("org.example.Notes", false, 6.0);
     assert!(s.dock.app_tile("org.example.Notes").is_none());
+}
+
+#[test]
+fn only_main_application_windows_make_tiles_one_per_application() {
+    let mut s = session(
+        &["org.example.Pinned"],
+        vec![
+            entry("org.example.Browser", "StartupWMClass=browser\n"),
+            entry("org.example.Editor", ""),
+            entry("xdg-desktop-portal-gtk", "NoDisplay=true\n"),
+            entry("org.example.Agent", "NoDisplay=true\n"),
+        ],
+    );
+    // the windows the server lists: two of the browser (one by its window class), one of the editor, a portal's
+    // chooser, an authentication agent, a program with no desktop entry, a window with no application id and one of
+    // a pinned program that has no entry
+    let windows = [
+        (1, "org.example.Browser"),
+        (2, "browser"),
+        (3, "org.example.Editor"),
+        (4, "xdg-desktop-portal-gtk"),
+        (5, "org.example.Agent"),
+        (6, "some-helper"),
+        (7, ""),
+        (8, "org.example.Pinned"),
+    ];
+    for (id, app) in windows {
+        s.window(id, app, "w", false, 0.0);
+        s.set_resident(app, true, 0.0);
+    }
+    s.set_resident("background-service", true, 0.0);
+    let running: Vec<String> = s
+        .dock
+        .tiles()
+        .into_iter()
+        .filter(|t| t.kind == TileKind::App && s.has_windows(&t.key))
+        .map(|t| t.key.clone())
+        .collect();
+    assert_eq!(
+        running,
+        [
+            "org.example.Pinned",
+            "org.example.Browser",
+            "org.example.Editor"
+        ]
+    );
+    assert_eq!(
+        s.window_ids(),
+        [1, 2, 3, 8],
+        "only application windows count"
+    );
+    for app in [
+        "xdg-desktop-portal-gtk",
+        "org.example.Agent",
+        "some-helper",
+        "background-service",
+    ] {
+        assert!(s.dock.app_tile(app).is_none(), "{app} has no tile");
+    }
+    // a window that changes to a helper's id leaves its application
+    s.window(3, "some-helper", "w", false, 1.0);
+    assert!(!s.has_windows("org.example.Editor"));
 }

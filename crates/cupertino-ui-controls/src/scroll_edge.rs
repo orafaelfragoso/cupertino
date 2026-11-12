@@ -32,6 +32,32 @@ const HAIRLINE: f64 = 0.5;
 const HAIRLINE_LIGHT: f32 = 0.11;
 const HAIRLINE_DARK: f32 = 0.06;
 
+thread_local! {
+    /// Whether the page under the window's toolbar row is scrolled, as the last paint of its scroll view found it.
+    static PAGE_SCROLLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the toolbar row's blurred band is on show, so the scroll view leaves its own veil out.
+    static BAND_SHOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The scroll view tells the toolbar row whether the page under it is scrolled.
+pub(crate) fn set_page_scrolled(scrolled: bool) {
+    PAGE_SCROLLED.with(|c| c.set(scrolled));
+}
+
+/// Whether the page under the toolbar row is scrolled.
+pub fn page_scrolled() -> bool {
+    PAGE_SCROLLED.with(std::cell::Cell::get)
+}
+
+/// The toolbar row tells the scroll view whether its blurred band is on show.
+pub fn set_band_shown(shown: bool) {
+    BAND_SHOWN.with(|c| c.set(shown));
+}
+
+fn band_shown() -> bool {
+    BAND_SHOWN.with(std::cell::Cell::get)
+}
+
 /// How a scroll view's content is set off where raised nodes cover it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollEdge {
@@ -98,6 +124,11 @@ pub(crate) struct EdgeLook {
 }
 
 impl EdgeLook {
+    /// Whether this is the soft edge, which shows only once the page is scrolled.
+    pub(crate) fn is_soft(&self) -> bool {
+        self.edge == ScrollEdge::Soft
+    }
+
     /// The edge of a node `band` points of whose top raised nodes cover; none where they draw in place, with nothing
     /// scrolled under them. A `firm` band, which holds text outside glass such as a table's pinned header, is solid in
     /// every appearance, without a separator of its own: what it holds draws the line along its bottom.
@@ -165,14 +196,17 @@ impl EdgeLook {
                 if !self.scrolled {
                     return;
                 }
-                cx.fill(
-                    rect,
-                    Paint::Linear {
-                        start: Point::new(0.0, 0.0),
-                        end: Point::new(0.0, band),
-                        stops: soft_edge_stops(self.background),
-                    },
-                );
+                // the toolbar row's own blurred band carries the veil when it is on show
+                if !band_shown() {
+                    cx.fill(
+                        rect,
+                        Paint::Linear {
+                            start: Point::new(0.0, 0.0),
+                            end: Point::new(0.0, band),
+                            stops: soft_edge_stops(self.background),
+                        },
+                    );
+                }
                 if let Some(hairline) = self.hairline {
                     cx.fill_pixels(
                         Rect::new(0.0, band - HAIRLINE, size.width, HAIRLINE),

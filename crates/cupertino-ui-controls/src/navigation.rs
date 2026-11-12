@@ -9,6 +9,7 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_platform::{Keysym, Mods};
+use cupertino_ui_theme::Surface;
 
 const BRACKET_LEFT: Keysym = Keysym(0x5b);
 const BRACKET_RIGHT: Keysym = Keysym(0x5d);
@@ -133,7 +134,15 @@ impl<M: 'static> Widget<M> for Slot<M> {
         }
     }
 
-    fn paint(&self, _: &DragState, _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &DragState, cx: &mut PaintCx<'_>) {
+        // over the page, the row lays a blurred band of the window's colour, there once the page is scrolled
+        if self.raised && cx.raised_layer() && self.role == Some(Role::Toolbar) {
+            let scrolled = crate::scroll_edge::page_scrolled();
+            let shown =
+                scrolled && cx.window_active() && cx.material(Surface::ToolbarBand, 0.0, 1.0);
+            crate::scroll_edge::set_band_shown(shown);
+        }
+    }
 
     fn semantics(&self, _: &DragState, cx: &mut SemanticsCx<'_>) {
         if let Some(role) = self.role {

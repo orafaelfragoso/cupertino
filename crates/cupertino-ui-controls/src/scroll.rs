@@ -314,6 +314,9 @@ impl<M: 'static> Widget<M> for Frame<M> {
             .then(|| crate::scroll_edge::EdgeLook::of(cx, top, self.firm, self.scrolled))
             .flatten();
         edge.set(look);
+        if look.is_some_and(|l| l.is_soft()) {
+            crate::scroll_edge::set_page_scrolled(self.scrolled);
+        }
         if look.is_some() {
             cx.overlay();
         }

@@ -136,6 +136,8 @@ pub fn ping_barrier(
 
 pub const TOPLEVEL_BLUE: [u8; 4] = [255, 0, 0, 255];
 pub const LOCK_GREEN: [u8; 4] = [0, 255, 0, 255];
+/// The colour [`Client::recolouring`] changes to, in the same byte order as [`TOPLEVEL_BLUE`].
+pub const TOPLEVEL_RED: [u8; 4] = [0, 0, 255, 255];
 
 /// Drain pings at the current model time before jumping to an absolute timestamp. Tests of
 /// deliberately unresponsive clients must move `fixed_time` directly instead.
@@ -819,6 +821,35 @@ impl Client {
                 objects: Box::new((wm_base, xdg, toplevel, surface)),
                 lock: None,
                 release: None,
+            }
+        })
+    }
+
+    /// A client with one mapped blue toplevel that, when [`Client::unlock`] asks, attaches a new red buffer of the same
+    /// size, with the whole buffer damaged when `damaged`, else with no damage at all.
+    pub fn recolouring(socket: PathBuf, damaged: bool) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id("org.example.recolouring".to_string());
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            let (shm, size, target) = (client.shm.clone(), client.toplevel_size, surface.clone());
+            let release: Box<dyn FnOnce()> = Box::new(move || {
+                target.attach(Some(&solid_buffer(&shm, size, TOPLEVEL_RED, &qh)), 0, 0);
+                if damaged {
+                    target.damage_buffer(0, 0, size.0, size.1);
+                }
+                target.commit();
+            });
+            Setup {
+                objects: Box::new((wm_base, xdg, toplevel, surface)),
+                lock: None,
+                release: Some(release),
             }
         })
     }

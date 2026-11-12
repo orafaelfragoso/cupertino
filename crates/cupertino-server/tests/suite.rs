@@ -140,6 +140,8 @@ mod shell_diagnostics;
 mod shell_processes;
 #[path = "shell_roles.rs"]
 mod shell_roles;
+#[path = "shm_damage.rs"]
+mod shm_damage;
 #[path = "shortcut_inhibit.rs"]
 mod shortcut_inhibit;
 #[path = "shortcut_inhibit_scene.rs"]

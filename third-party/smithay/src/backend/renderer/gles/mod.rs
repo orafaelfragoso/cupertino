@@ -862,7 +862,11 @@ impl ImportMemWl for GlesRenderer {
                 self.gl
                     .PixelStorei(ffi::UNPACK_ROW_LENGTH, stride / pixelsize as i32);
 
-                if upload_full || damage.is_empty() {
+                if !upload_full && damage.is_empty() {
+                    // nothing changed since the texture was last filled: the texture of this surface already holds
+                    // what the buffer shows, so a buffer committed without damage costs no upload
+                    trace!("Keeping shm texture, no damage");
+                } else if upload_full {
                     trace!("Uploading shm texture");
                     self.gl.TexImage2D(
                         ffi::TEXTURE_2D,

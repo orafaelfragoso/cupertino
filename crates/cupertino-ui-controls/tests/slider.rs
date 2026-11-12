@@ -256,7 +256,7 @@ fn knob_x(h: &Harness<Brightness>) -> f64 {
             } if rect.size == Size::new(22.0, 22.0) => Some(rect.center().x),
             _ => None,
         })
-        .last()
+        .next_back()
         .expect("a knob")
 }
 

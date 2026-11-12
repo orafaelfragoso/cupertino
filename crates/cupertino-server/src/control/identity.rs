@@ -127,17 +127,31 @@ mod tests {
 
     #[test]
     fn the_executable_of_a_live_process_is_its_program() {
+        use std::io::{Read, Write};
+        use std::process::Stdio;
         let mut child = Guard(
-            std::process::Command::new("sleep")
-                .arg("30")
+            std::process::Command::new("cat")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
                 .spawn()
                 .unwrap(),
         );
+        // `spawn` returns once the exec cannot fail any more, which can be before `/proc` names the new program; a
+        // byte echoed back comes from the program itself, so it runs by then
+        let mut echo = [0; 1];
+        child.0.stdin.as_mut().unwrap().write_all(b"x").unwrap();
+        child
+            .0
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut echo)
+            .unwrap();
         let pid = child.0.id();
         let (_, start) = crate::process::parent_and_start(pid).unwrap();
         let exe = executable(pid, start).expect("a running program");
         assert!(exe.is_absolute());
-        assert_eq!(exe.file_name().unwrap(), "sleep");
+        assert_eq!(exe.file_name().unwrap(), "cat");
         assert_eq!(
             executable(pid, start + 1),
             None,

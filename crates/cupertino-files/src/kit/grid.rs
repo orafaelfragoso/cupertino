@@ -1056,79 +1056,90 @@ struct Name {
 }
 
 impl Name {
-    /// The name in the view's text size (scaled with the body role) and the body weight, each line centred, laid out within `width`; `None` if the fonts
-    /// cannot shape it. A name that runs past `max_lines` keeps its first lines and has the rest cut in the middle to
-    /// what the last line holds, so its end (the extension) stays in view: "report with a…middle.xlsx".
+    /// The name laid out within `width` as [`laid_out_name`] lays it out.
     fn laid_out(&self, env: &Environment, width: f64) -> Option<ParagraphLayout> {
-        let role = env.theme.type_scale.body;
-        let mut content = self.text.content.clone();
-        for (_, style) in &mut content.runs {
-            // the view's text size, grown or shrunk as the body role is against its usual size
-            style.size *= role.size / USUAL_BODY_SIZE;
-            if style.weight == FontWeight::REGULAR {
-                style.weight = FontWeight(role.weight);
-            }
-        }
-        let wrap = |wrap| ParagraphStyle {
-            align: TextAlign::Center,
-            wrap,
-            ..ParagraphStyle::default()
-        };
-        let room = width.is_finite().then_some(width as f32);
-        let full = env
-            .text
-            .paragraph(&content, &wrap(Wrap::Word))
-            .ok()?
-            .layout(room);
-        let Some(max) = self.max_lines.map(|n| n.max(1) as usize) else {
-            return Some(full);
-        };
-        if full.lines().len() <= max || room.is_none() {
-            return Some(full);
-        }
-        let text = &content.text;
-        let cut = full.lines()[max - 1].range.0.start;
-        let (head, rest) = text.split_at(cut);
-        let style = content
-            .runs
-            .first()
-            .map(|(_, style)| style.clone())
-            .unwrap_or_else(|| TextStyle::new(role.size));
-        let fits = |candidate: &str| {
-            env.text
-                .paragraph(
-                    &AttributedText::plain(candidate, style.clone()),
-                    &wrap(Wrap::None),
-                )
-                .is_ok_and(|p| p.layout(None).size().width <= width)
-        };
-        let chars: Vec<char> = rest.trim_start().chars().collect();
-        let middle = |keep: usize| -> String {
-            let front = keep.div_ceil(2);
-            let back = keep - front;
-            chars[..front]
-                .iter()
-                .chain(std::iter::once(&'\u{2026}'))
-                .chain(&chars[chars.len() - back..])
-                .collect()
-        };
-        // the most characters that fit around the ellipsis on one line
-        let (mut lo, mut hi) = (0, chars.len());
-        while lo < hi {
-            let mid = (lo + hi).div_ceil(2);
-            if fits(&middle(mid)) {
-                lo = mid;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        let shown = format!("{}\n{}", head.trim_end(), middle(lo));
-        let paragraph = env
-            .text
-            .paragraph(&AttributedText::plain(shown, style), &wrap(Wrap::Word))
-            .ok()?;
-        Some(paragraph.layout(room))
+        laid_out_name(env, &self.text.content, self.max_lines, width)
     }
+}
+
+/// An item's name `content` in the view's text size (scaled with the body role) and the body weight, each line
+/// centred, laid out within `width`; `None` if the fonts cannot shape it. A name that runs past `max_lines` keeps its
+/// first lines and has the rest cut in the middle to what the last line holds, so its end (the extension) stays in
+/// view: "report with a…middle.xlsx".
+pub(super) fn laid_out_name(
+    env: &Environment,
+    content: &AttributedText,
+    max_lines: Option<u32>,
+    width: f64,
+) -> Option<ParagraphLayout> {
+    let role = env.theme.type_scale.body;
+    let mut content = content.clone();
+    for (_, style) in &mut content.runs {
+        // the view's text size, grown or shrunk as the body role is against its usual size
+        style.size *= role.size / USUAL_BODY_SIZE;
+        if style.weight == FontWeight::REGULAR {
+            style.weight = FontWeight(role.weight);
+        }
+    }
+    let wrap = |wrap| ParagraphStyle {
+        align: TextAlign::Center,
+        wrap,
+        ..ParagraphStyle::default()
+    };
+    let room = width.is_finite().then_some(width as f32);
+    let full = env
+        .text
+        .paragraph(&content, &wrap(Wrap::Word))
+        .ok()?
+        .layout(room);
+    let Some(max) = max_lines.map(|n| n.max(1) as usize) else {
+        return Some(full);
+    };
+    if full.lines().len() <= max || room.is_none() {
+        return Some(full);
+    }
+    let text = &content.text;
+    let cut = full.lines()[max - 1].range.0.start;
+    let (head, rest) = text.split_at(cut);
+    let style = content
+        .runs
+        .first()
+        .map(|(_, style)| style.clone())
+        .unwrap_or_else(|| TextStyle::new(role.size));
+    let fits = |candidate: &str| {
+        env.text
+            .paragraph(
+                &AttributedText::plain(candidate, style.clone()),
+                &wrap(Wrap::None),
+            )
+            .is_ok_and(|p| p.layout(None).size().width <= width)
+    };
+    let chars: Vec<char> = rest.trim_start().chars().collect();
+    let middle = |keep: usize| -> String {
+        let front = keep.div_ceil(2);
+        let back = keep - front;
+        chars[..front]
+            .iter()
+            .chain(std::iter::once(&'\u{2026}'))
+            .chain(&chars[chars.len() - back..])
+            .collect()
+    };
+    // the most characters that fit around the ellipsis on one line
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&middle(mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let shown = format!("{}\n{}", head.trim_end(), middle(lo));
+    let paragraph = env
+        .text
+        .paragraph(&AttributedText::plain(shown, style), &wrap(Wrap::Word))
+        .ok()?;
+    Some(paragraph.layout(room))
 }
 
 impl Widget<Message> for Name {

@@ -7,6 +7,7 @@ mod band;
 mod clicks;
 mod columns;
 mod context;
+pub mod desktop;
 mod dragged;
 mod drops;
 mod gallery;

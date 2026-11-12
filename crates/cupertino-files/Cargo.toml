@@ -9,10 +9,15 @@ description = "File-manager core without a toolkit: directory model with batched
 layer = "apps"
 
 [features]
-# the `cupertino-files` process: a browser window as a client of the server
+# the `cupertino-files` process: a browser window as a client of the server, and the desktop on a layer surface
 app = [
     "dep:async-channel",
     "dep:cupertino-kit",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr",
     "dep:zbus",
     "dep:zeroize",
 ]
@@ -28,6 +33,11 @@ cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-trash = { path = "../cupertino-trash" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 async-channel = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

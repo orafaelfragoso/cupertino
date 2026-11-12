@@ -21,7 +21,7 @@ use cupertino_files::window_prefs;
 use cupertino_kit::file_icons::FileIcons;
 
 const USAGE: &str =
-    "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]";
+    "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop";
 
 /// What the command line asks for.
 struct Options {
@@ -29,12 +29,15 @@ struct Options {
     target: Option<Target>,
     /// The argv prefix that runs applications with `Terminal=true` (`PROGRAM -e`), as the launcher's.
     terminal: Option<Vec<String>>,
+    /// Show the desktop folder's items on the desktop instead of a browser window.
+    desktop: bool,
 }
 
 /// `[--terminal PROGRAM] [FOLDER]`.
 fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut folder = None;
     let mut terminal = None;
+    let mut desktop = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--terminal" => {
@@ -43,6 +46,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "-e".to_string(),
                 ])
             }
+            "--desktop" => desktop = true,
             a if a.starts_with('-') => return Err(format!("unexpected argument {a}")),
             _ if folder.is_some() => return Err(format!("unexpected argument {arg}")),
             _ => folder = Some(arg),
@@ -55,7 +59,14 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                 .map_err(|e| format!("{arg}: {e}"))
         })
         .transpose()?;
-    Ok(Options { target, terminal })
+    if desktop && (target.is_some() || terminal.is_some()) {
+        return Err("--desktop takes no other argument".into());
+    }
+    Ok(Options {
+        target,
+        terminal,
+        desktop,
+    })
 }
 
 fn main() -> ExitCode {
@@ -68,6 +79,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if options.desktop {
+        // the desktop is a shell process: it serves no browser window, and a failure exit has the server start it again
+        return match kit::desktop::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                diag::exit_error(&e);
+                eprintln!("cupertino-files: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     // before any thread starts, so no program Files starts inherits the launch's spent token
     let token = instance::take_activation_token();
     let request = match &options.target {

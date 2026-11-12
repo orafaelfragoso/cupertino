@@ -154,8 +154,8 @@ pub const APPEARANCE_FADE_DURATION: f64 = 0.5;
 pub const WINDOW_CLOSE_SCALE: f64 = 0.983;
 /// Duration of the ordinary window close (0.15 s).
 pub const WINDOW_CLOSE_DURATION: f64 = 0.15;
-/// Rate of the window-close fade, in 1/duration (time constant about 39 ms).
-const WINDOW_CLOSE_FADE_RATE: f64 = 3.8;
+/// Rate of the window-close fade, in 1/duration (time constant about 35 ms).
+const WINDOW_CLOSE_FADE_RATE: f64 = 4.3;
 /// Rate of the window-close shrink, in 1/duration (settles within about 60 ms).
 const WINDOW_CLOSE_SHRINK_RATE: f64 = 7.5;
 

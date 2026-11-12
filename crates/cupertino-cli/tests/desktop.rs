@@ -43,6 +43,12 @@ case "$FAKE_MODE" in
         printf '{"pid": %s}\n' "$$" > "$XDG_RUNTIME_DIR/cupertino/server-wayland-fake.json"
         ready
         exec sleep infinity ;;
+    still)
+        mkdir -p "$XDG_RUNTIME_DIR/cupertino"
+        printf '{"pid": %s}\n' "$$" > "$XDG_RUNTIME_DIR/cupertino/server-wayland-fake.json"
+        ready
+        # a shell of its own holds no script descriptor; it stops itself once it has started, whole
+        exec bash -c 'kill -STOP $$' ;;
     stubborn) trap '' TERM; ready; exec sleep infinity ;;
     exit-0) ready; exit 0 ;;
     exit-3) ready; exit 3 ;;
@@ -829,14 +835,14 @@ fn a_killed_command_takes_the_compositor_with_it() {
 
 /// The compositor gets the standard streams and the ready descriptor alone, whatever the command inherited: a
 /// descriptor the command's parent left open (a build tool's lock, say) never reaches it, so a compositor that outlived
-/// everything could not hold it. The stand-in has closed the ready descriptor by the time it sleeps.
+/// everything could not hold it. The stand-in has closed the ready descriptor by the time it stops itself.
 #[test]
 fn the_compositor_inherits_no_descriptor_but_the_ready_one() {
     let b = Bench::new();
     let mut fds = [0; 2];
     // SAFETY: a pipe without close-on-exec, which the command started below inherits, as a build tool's lock is.
     assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-    let (job, rx) = start_job(&b, "wait");
+    let (job, rx) = start_job(&b, "still");
     // SAFETY: closing the pipe this test made; the command has its own copy.
     unsafe {
         libc::close(fds[0]);
@@ -848,10 +854,18 @@ fn the_compositor_inherits_no_descriptor_but_the_ready_one() {
     )
     .unwrap();
     let server = info["pid"].as_i64().unwrap();
-    // the stand-in writes the file as a script, then closes the ready descriptor and becomes `sleep`
+    // the stand-in writes the file as a script, closes the ready descriptor and becomes a shell that stops itself: a
+    // process that has just started a program still has the files its loader opens, but a stopped one holds what it
+    // inherited alone
+    let stopped = || {
+        let stat = std::fs::read_to_string(format!("/proc/{server}/stat")).unwrap_or_default();
+        stat.rfind(')')
+            .and_then(|end| stat[end + 1..].split_whitespace().next())
+            == Some("T")
+    };
     let since = std::time::Instant::now();
-    while std::fs::read_to_string(format!("/proc/{server}/comm")).unwrap_or_default() != "sleep\n" {
-        assert!(since.elapsed() < HANG_GUARD, "the stand-in never slept");
+    while !stopped() {
+        assert!(since.elapsed() < HANG_GUARD, "the stand-in never stopped");
         std::thread::sleep(Duration::from_millis(5));
     }
     let held = |pid: i64| -> Vec<i32> {

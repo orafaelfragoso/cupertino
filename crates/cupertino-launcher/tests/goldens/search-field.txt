@@ -37,7 +37,7 @@ display
     PopClip
   paint 5 parent=Some(4294967301) revision=1 bounds=[120,56 2x32] hit=[120,56 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     PushClip(Rect(Rect { origin: Point { x: 120.0, y: 55.0 }, size: Size { width: 494.0, height: 34.0 } }))
-    Fill { shape: Rect(Rect { origin: Point { x: 120.0, y: 56.0 }, size: Size { width: 2.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 120.0, y: 56.0 }, size: Size { width: 2.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopClip
   paint 4294967302 parent=Some(4294967296) revision=7 bounds=[644.5,44 56x56] hit=[645,44.5 55x55] clip=None transform=[1.0, 0.0, 0.0, 1.0, 645.0, 44.5]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 55.0, height: 55.0 } }, radius: 27.5 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }

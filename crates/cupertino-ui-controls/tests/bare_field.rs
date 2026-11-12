@@ -6,9 +6,10 @@ use cupertino_geometry::{Insets, Size};
 use cupertino_ui_controls::{BareField, Stack, TextChange, TextField};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_render::{PaintOp, Shape};
+use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::ContentPurpose;
-use support::{window, Harness};
+use cupertino_ui_theme::{ColorRole, InteractionVariant};
+use support::{color, window, Harness};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
@@ -119,4 +120,25 @@ fn a_bare_field_edits_and_reads_as_its_text_field() {
         (field.role, field.name.as_deref()),
         (Role::TextInput, Some("Search"))
     );
+}
+
+/// Standing alone in a larger surface, a bare field draws its caret in its text's colour, not the accent colour a
+/// field with chrome uses.
+#[test]
+fn a_bare_field_s_caret_is_its_text_s_colour() {
+    let mut h = harness();
+    h.type_text("dock");
+    let bars: Vec<_> = h
+        .ops("query")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(r),
+                paint: Paint::Solid(c),
+            } if r.width() <= 2.0 && r.height() > 4.0 => Some(c),
+            _ => None,
+        })
+        .collect();
+    let text = color(ColorRole::Text, InteractionVariant::Normal, false);
+    assert_eq!(bars, vec![text], "one caret, in the text's colour");
 }

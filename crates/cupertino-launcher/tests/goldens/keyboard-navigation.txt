@@ -98,7 +98,7 @@ display
     PopClip
   paint 5 parent=Some(4294967301) revision=6 bounds=[146,56 2x32] hit=[146,56 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
     PushClip(Rect(Rect { origin: Point { x: 120.0, y: 55.0 }, size: Size { width: 558.0, height: 34.0 } }))
-    Fill { shape: Rect(Rect { origin: Point { x: 146.0, y: 56.0 }, size: Size { width: 2.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.47843137, b: 1.0, a: 1.0 }) }
+    Fill { shape: Rect(Rect { origin: Point { x: 146.0, y: 56.0 }, size: Size { width: 2.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopClip
   paint 4294967306 parent=Some(4294967298) revision=15 bounds=[60,100 640x1] hit=[60,100 640x1] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 100.0]
     Fill { shape: Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 640.0, height: 1.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.101960786 }) }

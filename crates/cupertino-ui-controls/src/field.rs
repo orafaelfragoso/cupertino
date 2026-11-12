@@ -467,9 +467,15 @@ fn paint_text(
         );
     }
     if focused && look.window_active && shown.selection.is_empty() && shown.caret_drawn {
+        // a bare field's caret is drawn in its text's colour, as it stands alone in a larger surface; a field with
+        // chrome draws it in the accent colour
+        let ink = match field {
+            FieldLook::Bare(_) => ColorRole::Text,
+            FieldLook::Plain | FieldLook::Search(_) => ColorRole::DefaultButtonFill,
+        };
         marks.caret(
             caret_bar(caret.translate(origin.x, origin.y), env.scale),
-            color(ColorRole::DefaultButtonFill),
+            color(ink),
         );
     }
     marks.finish(cx);

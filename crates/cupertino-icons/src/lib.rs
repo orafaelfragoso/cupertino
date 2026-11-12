@@ -945,7 +945,7 @@ mod tests {
         };
 
         std::fs::write(pack.join("manifest.json"), manifest(true)).unwrap();
-        let assets = Assets::from_dirs(&[pack.clone()]);
+        let assets = Assets::from_dirs(std::slice::from_ref(&pack));
         assert_eq!(assets.application_icon_theme(), Some("Glossy"));
         let mut l = IconLookup::with_roots(&assets, vec![root.clone()]);
         assert_eq!(
@@ -966,7 +966,7 @@ mod tests {
         );
 
         std::fs::write(pack.join("manifest.json"), manifest(false)).unwrap();
-        let assets = Assets::from_dirs(&[pack.clone()]);
+        let assets = Assets::from_dirs(std::slice::from_ref(&pack));
         assert_eq!(assets.application_icon_theme(), None);
         let mut l = IconLookup::with_roots(&assets, vec![root.clone()]);
         assert!(

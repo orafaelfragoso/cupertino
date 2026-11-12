@@ -1,6 +1,6 @@
 # Desktop quality and open issues
 
-Updated 2026-11-11. This is the installed-session quality backlog for the desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
+Updated 2026-11-12. This is the installed-session quality backlog for the desktop experience Cupertino targets. These issues block calling the affected interactions finished, even where their implementation or automated tests already exist. See the [roadmap](roadmap.md#desktop-quality-acceptance) for the acceptance gate.
 
 ## Evidence and status
 
@@ -12,9 +12,50 @@ DQ-31 is a separate maintainer test on the same date: ChatGPT Desktop lacked Cup
 
 DQ-32 comes from a subsequent maintainer report and a live D-Bus trace: selecting Open ChatGPT in the menu-bar status icon sent an obsolete menu item ID. A second ChatGPT icon during the Wayland test belonged to its separate test instance and disappeared when that instance ended; duplicate icons are not established as a separate defect.
 
-The 32 entries in the tables below (DQ-01 to DQ-30, DQ-32 and DQ-33) are **open**; DQ-31 is closed under [Closed Electron titlebar policy](#closed-electron-titlebar-policy). **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
+The tables below keep the 32 entries as first recorded (DQ-01 to DQ-30, DQ-32 and DQ-33); DQ-31 is closed under [Closed Electron titlebar policy](#closed-electron-titlebar-policy). Their status at `b030dced` is in [Status at b030dced, 2026-11-12](#status-at-b030dced-2026-11-12): 31 remain open, 2 of them fixed in code and awaiting the installed-session check, and DQ-09 is resolved by design. **Observed** means a visible symptom was found in the recording; **reported** means the maintainer reported it and a focused reproduction remains necessary; **follow-up** means source or running-service inspection adds evidence. A cursor shape does not prove a click reached another window. Without physical input timestamps the video cannot establish repeat latency, right-button delivery or submenu latency. It also cannot establish search matching correctness, accessibility compliance or which material shader ran.
 
 **P1** affects task completion, input reliability, readable controls or core desktop behavior. **P2** affects presentation, consistency or discoverability. These priorities are the next-work recommendation, not a claim that other release criteria are satisfied. The original recording is compressed and downscaled relative to its captured 4K source; fine seams and physical cursor size need verification at native scale.
+
+## Status at b030dced, 2026-11-12
+
+Each item was checked again at `b030dced`, 263 commits after the recording's base: in headless sessions at scales 1 to 2 in light and dark, against the focused tests and by reading the source. **Fixed** means the fix is in code and passes headless; it stays open until the installed-session check this page requires. **Partial** means part of the acceptance is met. **Needs installed-session check** means the code and headless checks pass and only the installed session can settle the item. Each open item has a GitHub issue with its remaining acceptance criteria and live-check steps.
+
+| ID | Verdict at `b030dced` | Fixing commits | Issue |
+|---|---|---|---|
+| DQ-01 | Open. Dragging the divider past half the content's minimum width (Settings 320 pt, Files 316 pt) still collapses the content pane. | none | [#162](https://github.com/orafaelfragoso/cupertino/issues/162) |
+| DQ-02 | Fixed, awaiting installed-session check. No column of the desktop shows at 1.25, 1.5 or 1.75 in light or dark; in dark a 1–2 device-pixel divider strip stays untinted. | `2c6d4a03`, `311b70b9`, `14be165a` | [#163](https://github.com/orafaelfragoso/cupertino/issues/163) |
+| DQ-03 | Partial. Inside a menu the arrow stays and presses reach no window under it; the resize cursor still shows at a window edge just outside an open menu, and scroll routing is unverified. | `638505af`, `76769bc1`, `46a4898e` | [#164](https://github.com/orafaelfragoso/cupertino/issues/164) |
+| DQ-04 | Partial. Menus on desktop items and space, Files items, space and sidebar, Shift+F10 and dock tiles; none on text fields, the file manager's dock tile offers only Open, and the dock's menu is styled differently. | several | [#165](https://github.com/orafaelfragoso/cupertino/issues/165) |
+| DQ-05 | Needs installed-session check. The mapping is correct; a stored delay under 250 ms is shown at the Long end. | — | [#166](https://github.com/orafaelfragoso/cupertino/issues/166) |
+| DQ-06 | Open. A drag followed by a quick press maximizes server-decorated windows, native and X11; the double-click count ignores movement. Kit toolbars are not affected. | none | [#167](https://github.com/orafaelfragoso/cupertino/issues/167) |
+| DQ-07 | Needs installed-session check. The arrow is about 11 × 17 pt at scales 1, 1.5 and 2; the hardware cursor, the size setting and other toolkits are unchecked. | — | [#168](https://github.com/orafaelfragoso/cupertino/issues/168) |
+| DQ-08 | Open. One 0.35 s delay is in code and measures 0.32–0.40 s headless, but submenus are still reported slow on the installed session; the cause is under investigation. | `c8266bcd`, `51c98d0e` | [#169](https://github.com/orafaelfragoso/cupertino/issues/169) |
+| DQ-09 | Resolved by design. Menus may cover the dock; they stay within the display and flip or slide at its edges. | — | — |
+| DQ-10 | Partial. Glass on sidebars, one-panel windows, menus, popovers, the Control Center, Notification Center, the launcher, the dock and the system prompts, with solid fallbacks; no four-mode sweep, and the power dialog and input-source HUD are unchecked. | `1efc5cbc`, `836afbf0`, `f9e86462`, `eb7d50e6`, `14be165a`, `2e277422`, `1a60b3be`, `be1e18b0`, `aaf024e5`, `ae509ae0`, `e90223eb`, `b25e7d7b`, `9c792d46`, `fcd2015e` | [#170](https://github.com/orafaelfragoso/cupertino/issues/170) |
+| DQ-11 | Partial. Switches, sliders, segmented controls, glass buttons and popovers animate and respect Reduce Motion; no per-component feedback specification or frame-budget run. | `b419d423`, `7db00843` | [#171](https://github.com/orafaelfragoso/cupertino/issues/171) |
+| DQ-12 | Partial. Stack, labels and the dock's menu are glass with solid fallbacks; the settled stack overlaps the bar by about 3 pt and has no pointer. | `1a60b3be`, `aaf024e5`, `e8562e44` | [#172](https://github.com/orafaelfragoso/cupertino/issues/172) |
+| DQ-13 | Fixed, awaiting installed-session check. Overlay bars 6 pt at rest and 10 pt hovered or dragged; always-shown bars a 17 pt gutter with an 11 pt thumb, at scales 2 and 1.5. | `63839fc2`, `e0cce0c8`, `53a7858e`, `8b525c29` | [#173](https://github.com/orafaelfragoso/cupertino/issues/173) |
+| DQ-14 | Open. Sidebar rows are cut hard 12 pt under Search and slices stay visible. | none | [#174](https://github.com/orafaelfragoso/cupertino/issues/174) |
+| DQ-15 | Open. Labels about 1.6–2.2:1 and tracks about 1.1:1 over a bright wallpaper; Increase Contrast and Reduce Transparency are readable. | none | [#175](https://github.com/orafaelfragoso/cupertino/issues/175) |
+| DQ-16 | Open. The Control Center reads only Cupertino's network and Bluetooth daemons; the NetworkManager and BlueZ fallbacks exist only in Settings. | none | [#176](https://github.com/orafaelfragoso/cupertino/issues/176) |
+| DQ-17 | Partial. Edit Controls opens Settings' Control Panel pane, which switches four menu bar items; the Control Center's controls can't be edited. | none | [#177](https://github.com/orafaelfragoso/cupertino/issues/177) |
+| DQ-18 | Open. "Notification Centre" remains in the notifications view and in Settings. | none | [#178](https://github.com/orafaelfragoso/cupertino/issues/178) |
+| DQ-19 | Open. The centre has no outside-press catcher. | none | [#179](https://github.com/orafaelfragoso/cupertino/issues/179) |
+| DQ-20 | Partial. The dock stays shown with the pointer in the gap; the tile's label and click are lost there. | `bbbd25b3` | [#180](https://github.com/orafaelfragoso/cupertino/issues/180) |
+| DQ-21 | Partial. Width, focus, typing, results, No Results and Escape work; no scope indication or loading state, and the title collides. | `b0e1cc37`, `c204746d`, `b0ab3b8f` | [#181](https://github.com/orafaelfragoso/cupertino/issues/181) |
+| DQ-22 | Open. The toolbar title wraps; even "Documents" wraps in a small window. | none | [#182](https://github.com/orafaelfragoso/cupertino/issues/182) |
+| DQ-23 | Partial. Empties from Files and the dock with a confirmation and Cancel; volume trash folders are never emptied, dock failures are dropped, and the two alerts differ. | `c6344db7`, `e8562e44`, `bbbd25b3`, `b5149aad`, `93e73585`, `b0ab3b8f`, `c4931fc2` | [#183](https://github.com/orafaelfragoso/cupertino/issues/183) |
+| DQ-24 | Open. The preview sets no menus and has no parent window. The headless check is blocked by [#160](https://github.com/orafaelfragoso/cupertino/issues/160). | none | [#184](https://github.com/orafaelfragoso/cupertino/issues/184) |
+| DQ-25 | Open. No loading state; the fade is computed before the first buffer. Blocked headless by #160. | none | [#185](https://github.com/orafaelfragoso/cupertino/issues/185) |
+| DQ-26 | Open. The preview grows from its own centre with no source rectangle. Blocked headless by #160. | none | [#186](https://github.com/orafaelfragoso/cupertino/issues/186) |
+| DQ-27 | Open. Applications lists raw desktop entries and a configuration file with generic icons. | none | [#187](https://github.com/orafaelfragoso/cupertino/issues/187) |
+| DQ-28 | Open. An unnamed device shows only its address and rows have no connection state. | none | [#188](https://github.com/orafaelfragoso/cupertino/issues/188) |
+| DQ-29 | Partial. A grid of thumbnails with captions, a ring and Loading…; the Current row draws no picture and a failed thumbnail looks like one still loading. | `63839fc2`, `a33977af` | [#189](https://github.com/orafaelfragoso/cupertino/issues/189) |
+| DQ-30 | Open. The launcher still indexes once at start; an entry written mid-session is not found. | none | [#190](https://github.com/orafaelfragoso/cupertino/issues/190) |
+| DQ-32 | Open. Menu layout signals are not followed and no AboutToShow is sent; a replaced menu keeps stale rows and IDs. Removal on exit works. | none | [#191](https://github.com/orafaelfragoso/cupertino/issues/191) |
+| DQ-33 | Needs installed-session check. Not reproduced headless: an X11 window drawing its own titlebar and ChatGPT under X11 both move through the satellite. | none | [#192](https://github.com/orafaelfragoso/cupertino/issues/192) |
+
+Totals: 16 open (DQ-08 included), 10 partial, 3 needing the installed-session check, 2 fixed and awaiting that check, and 1 resolved by design (DQ-09). The same checks found two problems in the test tools: the Files preview never maps in a headless session ([#160](https://github.com/orafaelfragoso/cupertino/issues/160)), and the server's scripted `--scroll` moves no view ([#161](https://github.com/orafaelfragoso/cupertino/issues/161)).
 
 ## Window management, menus and input
 

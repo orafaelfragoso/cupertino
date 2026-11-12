@@ -6,7 +6,9 @@ use cupertino_ui_core::{
     Change, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_ui_layout::{Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured};
+use cupertino_ui_layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured,
+};
 use cupertino_ui_platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 use std::rc::Rc;
@@ -93,6 +95,12 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             insets: Insets::new(PADDING_TOP, PADDING, PADDING, PADDING),
+            // content taller than the window's bound gives way under the pointer row and scrolls inside the panel
+            flex: Flex {
+                grow: 0.0,
+                shrink: 1.0,
+                basis: None,
+            },
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
@@ -210,9 +218,8 @@ impl<M: Clone + 'static> Widget<M> for Callout<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
-        cx.hidden();
-    }
+    /// A plain container: the panel under it is the dialog, and its pointer row leaves itself out.
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// The row above the panel that holds its pointer in the middle.

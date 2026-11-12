@@ -969,7 +969,11 @@ impl<M: 'static> Bar<M> {
         }
         let start = from_time.0 + if to { HOVER_DELAY_NS } else { 0 };
         let progress = (now.0.saturating_sub(start) as f32 / HOVER_GROW_NS as f32).min(1.0);
-        (from + (target - from) * progress, progress < 1.0)
+        // a thumb already at the width it heads for has nothing to animate
+        (
+            from + (target - from) * progress,
+            progress < 1.0 && from != target,
+        )
     }
 
     /// The pointer came onto or left the thumb: the widening turns from where it is.
@@ -1074,9 +1078,13 @@ impl<M: 'static> Widget<M> for Bar<M> {
                 match self.shown(state, now, cx.env().theme.motion.reduce) {
                     Shown::Until(until) => {
                         cx.wake_at(until);
-                        if Self::widening(state, now, cx.env().theme.motion.reduce).1 {
-                            cx.request_animation_frame();
+                        let busy = Self::widening(state, now, cx.env().theme.motion.reduce).1;
+                        // a frame the widening asked for draws it, the step that ends it included
+                        if busy || matches!(event, Event::AnimationFrame(_)) {
                             cx.request_paint();
+                        }
+                        if busy {
+                            cx.request_animation_frame();
                         }
                     }
                     Shown::Fading(_) => {

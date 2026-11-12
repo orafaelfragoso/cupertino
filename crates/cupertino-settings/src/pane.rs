@@ -9,6 +9,9 @@
 /// One pane of the minimum set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PaneId {
+    Account,
+    General,
+    MenuBar,
     Wifi,
     Bluetooth,
     Network,
@@ -86,7 +89,64 @@ const fn pane(
 }
 
 /// Every pane of the minimum set.
-pub const PANES: [Pane; 18] = [
+pub const PANES: [Pane; 21] = [
+    pane(
+        PaneId::Account,
+        "Account",
+        "symbol.privacy.fill",
+        Enclosure::Gray,
+        Tier::File,
+        &["Account", "Login Options"],
+        &["user", "name", "picture", "password", "sign in", "login"],
+    ),
+    pane(
+        PaneId::General,
+        "General",
+        "symbol.computer.fill",
+        Enclosure::Gray,
+        Tier::File,
+        &[
+            "About",
+            "Software Update",
+            "Storage",
+            "Date & Time",
+            "Language & Region",
+            "Login Items",
+        ],
+        &[
+            "computer",
+            "version",
+            "disk",
+            "timezone",
+            "language",
+            "startup",
+            "autostart",
+        ],
+    ),
+    pane(
+        PaneId::MenuBar,
+        "Menu Bar",
+        "symbol.applications.fill",
+        Enclosure::Gray,
+        Tier::File,
+        &[
+            "Menu Bar",
+            "Clock Options",
+            "Recent Items",
+            "Menu Bar Icons",
+        ],
+        &[
+            "clock",
+            "date",
+            "time",
+            "seconds",
+            "24-hour",
+            "background",
+            "tray",
+            "status icons",
+            "recent",
+        ],
+    ),
     pane(
         PaneId::Wifi,
         "Wi-Fi",
@@ -158,8 +218,21 @@ pub const PANES: [Pane; 18] = [
         "symbol.appearance.fill",
         Enclosure::Black,
         Tier::Live,
-        &["Appearance"],
-        &["dark", "light", "mode", "theme"],
+        &["Appearance", "Accent", "Scroll Bars"],
+        &[
+            "dark",
+            "light",
+            "auto",
+            "mode",
+            "theme",
+            "accent",
+            "colour",
+            "highlight",
+            "sidebar icon size",
+            "scroll bar",
+            "click in the scroll bar",
+            "schedule",
+        ],
     ),
     pane(
         PaneId::ControlPanel,
@@ -167,8 +240,15 @@ pub const PANES: [Pane; 18] = [
         "symbol.control-panel.fill",
         Enclosure::Gray,
         Tier::Live,
-        &["Clock Options"],
-        &["clock", "date", "time", "seconds", "menu bar", "24-hour"],
+        &["Show in Menu Bar"],
+        &[
+            "wi-fi",
+            "bluetooth",
+            "battery",
+            "focus",
+            "menu bar",
+            "modules",
+        ],
     ),
     pane(
         PaneId::DesktopDock,
@@ -176,8 +256,13 @@ pub const PANES: [Pane; 18] = [
         "symbol.desktop.fill",
         Enclosure::Black,
         Tier::Live,
-        &["Dock", "Hot Corners"],
+        &["Dock", "Windows", "Default Browser", "Hot Corners"],
         &[
+            "double-click a window's title bar",
+            "minimize into application icon",
+            "animate opening applications",
+            "indicators",
+            "web browser",
             "size",
             "magnification",
             "position",
@@ -334,6 +419,9 @@ impl PaneId {
     /// The kebab-case id of the `--pane` argument.
     pub fn key(self) -> &'static str {
         match self {
+            PaneId::Account => "account",
+            PaneId::General => "general",
+            PaneId::MenuBar => "menu-bar",
             PaneId::Wifi => "wifi",
             PaneId::Bluetooth => "bluetooth",
             PaneId::Network => "network",
@@ -387,11 +475,7 @@ mod tests {
             );
             assert!(!p.sections.is_empty(), "{} has a findable section", p.title);
         }
-        assert_eq!(
-            PaneId::from_key("general"),
-            None,
-            "a reference pane with no backend is not a pane"
-        );
+        assert_eq!(PaneId::from_key("general"), Some(PaneId::General));
         assert_eq!(PaneId::Keyboard.pane().title, "Keyboard");
         assert_eq!(
             (

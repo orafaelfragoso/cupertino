@@ -3,6 +3,7 @@
 //! environment variable, so tests and fixtures never touch the user's files.
 
 pub mod accessibility;
+pub mod appearance;
 pub mod atomic;
 pub mod compositor;
 pub mod conf;

@@ -38,9 +38,11 @@ mod slider;
 mod split;
 mod stack;
 mod stepper;
+mod swatch;
 mod tabs;
 mod text;
 mod text_box;
+pub use swatch::{Swatch, SwatchFill, SwatchLook};
 mod thumbnail;
 mod tile_sidebar;
 mod toggle;
@@ -1311,6 +1313,18 @@ pub struct TileSidebarItem {
     /// A system symbol name, drawn in white on the tile.
     pub symbol: String,
     pub tile: TileColor,
+    /// A row of the person's own account: the picture or initials in a disc stand in the tile's place, and a second
+    /// line follows the label.
+    pub account: Option<AccountLook>,
+}
+
+/// What an account row of a [`TileSidebar`] shows besides its label: the person's picture, or their initials on a
+/// disc of the row's tile colour, and a second line in secondary text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccountLook {
+    pub subtitle: String,
+    pub initials: String,
+    pub picture: Option<ImageSource>,
 }
 
 /// A settings window's list of pages in its leading pane: rows with a coloured icon tile before the label, in groups

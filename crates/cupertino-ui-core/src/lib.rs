@@ -13,6 +13,7 @@ mod icons;
 pub mod kinetic;
 mod layout_view;
 mod paint;
+mod personal;
 mod pointer;
 mod route;
 mod runtime;
@@ -32,6 +33,7 @@ pub use accessibility::{
 };
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
+pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
 pub use cupertino_ui_platform::GlassStyle;
 pub use cx::{
     EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, OverlayCx, PaintCx, SemanticsCx,
@@ -41,9 +43,11 @@ pub use drop_target::{
 };
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::{overlay_id, MAX_MATERIALS};
+pub use personal::{personal, set_personal, Personal};
 pub use pointer::SCROLL_IDLE_NS;
 pub use runtime::{
-    RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance, WindowErrorHandler,
+    PersonalRefresh, RendererFactory, Runtime, RuntimeOptions, ThemeForAppearance,
+    WindowErrorHandler,
 };
 pub use scroll::session_scroll_bars;
 pub use scroll_timing::{ScrollLatency, ScrollTiming, ScrollTimingSink};

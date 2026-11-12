@@ -9,7 +9,8 @@ use std::cmp::Ordering;
 use crate::pane::PaneId;
 
 /// The sidebar groups of the minimum set, top to bottom. The second is the design's sortable group.
-pub const GROUPS: [&[PaneId]; 5] = [
+pub const GROUPS: [&[PaneId]; 6] = [
+    &[PaneId::Account],
     &[
         PaneId::Wifi,
         PaneId::Bluetooth,
@@ -22,6 +23,8 @@ pub const GROUPS: [&[PaneId]; 5] = [
         PaneId::ControlPanel,
         PaneId::DesktopDock,
         PaneId::Displays,
+        PaneId::General,
+        PaneId::MenuBar,
         PaneId::Wallpaper,
     ],
     &[PaneId::Notifications, PaneId::Sound, PaneId::Focus],
@@ -30,7 +33,7 @@ pub const GROUPS: [&[PaneId]; 5] = [
 ];
 
 /// Index into [`GROUPS`] of the group whose rows sort by title.
-pub const SORTED_GROUP: usize = 1;
+pub const SORTED_GROUP: usize = 2;
 
 /// The localized standard compare for titles: case- and width-insensitive, digit runs by value, then the raw text so
 /// that two titles never compare equal (the design's collation flags, this subset without locale tables

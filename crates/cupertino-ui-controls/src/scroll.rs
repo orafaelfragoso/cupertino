@@ -1113,6 +1113,23 @@ impl<M: 'static> Widget<M> for Bar<M> {
                     cx.capture_pointer();
                 } else if self.scroller == Scroller::Always && self.strip(size, rtl).contains(local)
                 {
+                    if cupertino_ui_core::personal().scroll_click
+                        == cupertino_ui_core::ScrollClick::JumpToSpot
+                    {
+                        // the knob's middle goes to the click, and goes on with the pointer while it is held
+                        let half = match self.axis {
+                            Axis::Horizontal => thumb.size.width,
+                            Axis::Vertical => thumb.size.height,
+                        } / 2.0;
+                        let at = match self.axis {
+                            Axis::Horizontal if rtl => size.width - local.x,
+                            _ => self.along(local),
+                        };
+                        state.grab = Some(half);
+                        cx.capture_pointer();
+                        self.scroll_to(self.offset_for(size, at - half), cx);
+                        return Propagation::Stop;
+                    }
                     let (viewport, _, offset) = self.lengths();
                     let page = (viewport - LINE).max(LINE);
                     let before = match self.axis {

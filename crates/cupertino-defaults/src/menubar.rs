@@ -9,6 +9,10 @@
 //! | `clock.show_am_pm` | `on`, `off` (12-hour cycle only) | `on` |
 //! | `clock.flash_separators` | `on`, `off` | `off` |
 //! | `clock.hour_cycle` | `12`, `24` | `12` |
+//! | `show.background` | `on`, `off`: the bar has a backdrop of its own over the wallpaper | `off` |
+//! | `show.clock`, `show.wifi`, `show.battery`, `show.bluetooth`, `show.focus` | `on`, `off`: whether the item shows | `on` |
+//! | `recent.documents`, `recent.apps` | how many recent items the system menu lists, 0 to 50 | `10` |
+//! | `tray.hidden` | comma-separated ids of tray items that may not show in the bar | none |
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -62,10 +66,45 @@ impl ClockSettings {
     };
 }
 
-/// Everything in `menubar.conf`.
+/// The most recent items of a kind the system menu can list.
+pub const RECENT_MAX: u32 = 50;
+
+/// Which of the bar's own items show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShownItems {
+    pub clock: bool,
+    pub wifi: bool,
+    pub battery: bool,
+    pub bluetooth: bool,
+    pub focus: bool,
+}
+
+/// Everything in `menubar.conf`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuBarSettings {
     pub clock: ClockSettings,
+    pub shown: ShownItems,
+    /// The bar has a backdrop of its own over the wallpaper.
+    pub background: bool,
+    /// How many recent documents and applications the system menu lists.
+    pub recent_documents: u32,
+    pub recent_apps: u32,
+    /// Ids of the tray items that may not show in the bar.
+    pub hidden_tray: Vec<String>,
+}
+
+impl Default for MenuBarSettings {
+    fn default() -> Self {
+        Self::UNSET
+    }
+}
+
+fn parse_count(value: &str) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n <= RECENT_MAX)
+        .ok_or_else(|| format!("must be a number from 0 to {RECENT_MAX}, not {value:?}"))
 }
 
 const KEYS: &[Key<MenuBarSettings>] = &[
@@ -141,11 +180,79 @@ const KEYS: &[Key<MenuBarSettings>] = &[
         },
         keep: |s, g| s.clock.hour_cycle = g.clock.hour_cycle,
     },
+    Key {
+        name: "show.background",
+        read: |s, v| parse_switch(v).map(|on| s.background = on),
+        write: |s| Some(switch_text(s.background)),
+        keep: |s, g| s.background = g.background,
+    },
+    Key {
+        name: "show.clock",
+        read: |s, v| parse_switch(v).map(|on| s.shown.clock = on),
+        write: |s| Some(switch_text(s.shown.clock)),
+        keep: |s, g| s.shown.clock = g.shown.clock,
+    },
+    Key {
+        name: "show.wifi",
+        read: |s, v| parse_switch(v).map(|on| s.shown.wifi = on),
+        write: |s| Some(switch_text(s.shown.wifi)),
+        keep: |s, g| s.shown.wifi = g.shown.wifi,
+    },
+    Key {
+        name: "show.battery",
+        read: |s, v| parse_switch(v).map(|on| s.shown.battery = on),
+        write: |s| Some(switch_text(s.shown.battery)),
+        keep: |s, g| s.shown.battery = g.shown.battery,
+    },
+    Key {
+        name: "show.bluetooth",
+        read: |s, v| parse_switch(v).map(|on| s.shown.bluetooth = on),
+        write: |s| Some(switch_text(s.shown.bluetooth)),
+        keep: |s, g| s.shown.bluetooth = g.shown.bluetooth,
+    },
+    Key {
+        name: "show.focus",
+        read: |s, v| parse_switch(v).map(|on| s.shown.focus = on),
+        write: |s| Some(switch_text(s.shown.focus)),
+        keep: |s, g| s.shown.focus = g.shown.focus,
+    },
+    Key {
+        name: "recent.documents",
+        read: |s, v| parse_count(v).map(|n| s.recent_documents = n),
+        write: |s| Some(s.recent_documents.to_string()),
+        keep: |s, g| s.recent_documents = g.recent_documents,
+    },
+    Key {
+        name: "recent.apps",
+        read: |s, v| parse_count(v).map(|n| s.recent_apps = n),
+        write: |s| Some(s.recent_apps.to_string()),
+        keep: |s, g| s.recent_apps = g.recent_apps,
+    },
+    Key {
+        name: "tray.hidden",
+        read: |s, v| {
+            s.hidden_tray = conf::parse_list(v);
+            Ok(())
+        },
+        write: |s| (!s.hidden_tray.is_empty()).then(|| s.hidden_tray.join(",")),
+        keep: |s, g| s.hidden_tray = g.hidden_tray.clone(),
+    },
 ];
 
 impl MenuBarSettings {
     pub const UNSET: Self = Self {
         clock: ClockSettings::UNSET,
+        shown: ShownItems {
+            clock: true,
+            wifi: true,
+            battery: true,
+            bluetooth: true,
+            focus: true,
+        },
+        background: false,
+        recent_documents: 10,
+        recent_apps: 10,
+        hidden_tray: Vec::new(),
     };
 
     /// Where the file is: `$CUPERTINO_MENUBAR_CONFIG`, else `menubar.conf` in the settings directory.
@@ -201,6 +308,7 @@ mod tests {
                 hour_cycle: HourCycle::H24,
                 ..ClockSettings::UNSET
             },
+            ..MenuBarSettings::UNSET
         };
         let (s, problems) = MenuBarSettings::parse("clock.hour_cycle = 25\n", Some(&good));
         assert_eq!(s.clock.hour_cycle, HourCycle::H24);

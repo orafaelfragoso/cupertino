@@ -7,6 +7,7 @@ use cupertino_apps::launch::{self, Launch, OPEN_COMMAND};
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::DisplayOptions;
+use cupertino_defaults::appearance::AppearanceSettings;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_icons::{SystemIcons, ThemeIcons};
@@ -83,11 +84,11 @@ struct BarSurface {
 impl BarSurface {
     /// Shows the backdrop over the whole bar while `display` makes the bar solid, and hides it (a shape with no area)
     /// otherwise, so the bar draws nothing of its own over the wallpaper.
-    fn shape_backdrop(&self, display: DisplayOptions) {
+    fn shape_backdrop(&self, display: DisplayOptions, background: bool) {
         let (Some(backdrop), Some((w, h))) = (&self.backdrop, self.size) else {
             return;
         };
-        let rect = if cupertino_menubar::tone::solid_bar(display) {
+        let rect = if cupertino_menubar::tone::solid_bar(display) || background {
             GRect::new(0.0, 0.0, f64::from(w), f64::from(h))
         } else {
             GRect::new(0.0, 0.0, 0.0, 0.0)
@@ -102,6 +103,8 @@ impl BarSurface {
 #[derive(Default)]
 struct Surfaces {
     bars: Vec<BarSurface>,
+    /// `menubar.conf` asks for a backdrop of the bar's own over the wallpaper.
+    background: bool,
     /// Every output the connection lists, as of the last batch the window system read: the model hears of a change
     /// only after the events of that batch, a bar's close among them.
     outputs: Vec<OutputId>,
@@ -241,8 +244,9 @@ impl SurfaceRoles for BarRoles {
     fn event(&mut self, event: &ExtensionEvent) -> Option<RoleEvent> {
         if let Some(change) = self.observed.apply(event) {
             if let SessionChange::DisplayOptions(display) = change {
-                for bar in &self.surfaces.borrow().bars {
-                    bar.shape_backdrop(display);
+                let surfaces = self.surfaces.borrow();
+                for bar in &surfaces.bars {
+                    bar.shape_backdrop(display, surfaces.background);
                 }
             }
             self.send(ShellMessage::Session(change));
@@ -252,6 +256,7 @@ impl SurfaceRoles for BarRoles {
         match event.downcast_ref::<ShellEvent>()? {
             &ShellEvent::Configure { surface, size } => {
                 let mut surfaces = self.surfaces.borrow_mut();
+                let background = surfaces.background;
                 let bar = surfaces
                     .bars
                     .iter_mut()
@@ -262,7 +267,7 @@ impl SurfaceRoles for BarRoles {
                     return Some(RoleEvent::Closed(surface));
                 };
                 bar.size = Some(size);
-                bar.shape_backdrop(self.observed.display);
+                bar.shape_backdrop(self.observed.display, background);
                 let message = ShellMessage::Configured {
                     bar: bar.bar,
                     width: size.0,
@@ -379,6 +384,10 @@ pub struct App {
     clock: ClockSettings,
     /// `menubar.conf` as last read, the last good values of the next read.
     conf: MenuBarSettings,
+    /// Whether the session's appearance is dark.
+    dark: bool,
+    /// The appearance the schedule asked for last and the session has not shown yet.
+    appearance_written: Option<bool>,
     /// Unix seconds at which the clock text is due again.
     next_clock: f64,
     /// The minute of the last reading of the extras' services.
@@ -433,7 +442,11 @@ fn watch_conf(wakes: async_channel::Sender<Wake>) -> (Option<ConfigWatcher>, Rec
     let Some(path) = MenuBarSettings::path() else {
         return (None, rx);
     };
-    let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
+    // the schedule of `appearance.conf` is applied by this process too
+    let files: Vec<PathBuf> = std::iter::once(path.clone())
+        .chain(AppearanceSettings::path())
+        .collect();
+    let watch = ConfigWatcher::new(files, move |event| {
         // the receivers are gone only while the process exits
         if tx.send(event).is_ok() {
             let _ = wakes.send_blocking(Wake::Conf);
@@ -449,6 +462,28 @@ fn watch_conf(wakes: async_channel::Sender<Wake>) -> (Option<ConfigWatcher>, Rec
             (None, rx)
         }
     }
+}
+
+/// Store the session's look in `compositor.json`, which the server follows while it runs: dark or light, keeping a
+/// high-contrast variant the file already holds.
+fn write_appearance(dark: bool) -> std::io::Result<()> {
+    use cupertino_defaults::compositor::{AppearanceName, CompositorSettings};
+    let Some(path) = CompositorSettings::path() else {
+        return Err(std::io::Error::other("there is no settings folder"));
+    };
+    let (mut file, _) = CompositorSettings::load(&path, None)?;
+    let contrast = matches!(
+        file.appearance,
+        Some(AppearanceName::LightHighContrast | AppearanceName::DarkHighContrast)
+    );
+    file.appearance = Some(match (dark, contrast) {
+        (false, false) => AppearanceName::Light,
+        (true, false) => AppearanceName::Dark,
+        (false, true) => AppearanceName::LightHighContrast,
+        (true, true) => AppearanceName::DarkHighContrast,
+    });
+    file.store(&path)?;
+    Ok(())
 }
 
 /// Connect, claim the bus names and serve until the connection or the bus fails.
@@ -509,6 +544,7 @@ pub fn run() -> Result<std::convert::Infallible> {
 
     let surfaces = Rc::new(RefCell::new(Surfaces {
         bars: Vec::new(),
+        background: conf.background,
         outputs: conn.outputs().into_iter().map(|o| o.id).collect(),
         names: conn
             .outputs()
@@ -541,7 +577,13 @@ pub fn run() -> Result<std::convert::Infallible> {
                 _conf_watch: conf_watch,
                 recent,
             },
-            shared: Shared::default(),
+            shared: {
+                let mut shared = Shared::default();
+                shared.conf = conf.clone();
+                shared
+            },
+            dark: observed.dark,
+            appearance_written: None,
             bars: Vec::new(),
             text: Arc::clone(&options.text),
             font,
@@ -789,12 +831,46 @@ impl App {
         }
     }
 
+    /// The display options the bar's text tone follows: with a backdrop of its own the bar is solid as far as its text
+    /// goes, whatever the wallpaper under it.
+    fn tone_display(&self) -> DisplayOptions {
+        DisplayOptions {
+            reduce_transparency: self.display.reduce_transparency || self.conf.background,
+            ..self.display
+        }
+    }
+
+    /// Switch the look when the schedule of `appearance.conf` says it is time: the session follows `compositor.json`.
+    fn follow_schedule(&mut self, unix: f64) {
+        let schedule = AppearanceSettings::current();
+        if !schedule.auto {
+            self.appearance_written = None;
+            return;
+        }
+        let now = local_time(unix.floor() as i64);
+        let dark = schedule.dark_at(u32::from(now.hour) * 60 + u32::from(now.minute));
+        if dark == self.dark {
+            self.appearance_written = None;
+            return;
+        }
+        if self.appearance_written == Some(dark) {
+            return;
+        }
+        if let Err(e) = write_appearance(dark) {
+            eprintln!("{PROCESS}: cannot switch the appearance: {e}");
+            return;
+        }
+        self.appearance_written = Some(dark);
+    }
+
     fn session(&mut self, change: SessionChange) -> Vec<Command<Message>> {
         match change {
             // the toolkit follows the appearance; the bar's tone is chosen afresh in it
-            SessionChange::Appearance { .. } => {
+            SessionChange::Appearance { dark } => {
+                self.dark = dark;
+                let display = self.tone_display();
                 for bar in &mut self.bars {
-                    bar.tone = BarTone::fresh(bar.backdrop_lightness, self.display);
+                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
                 }
                 Vec::new()
             }
@@ -802,6 +878,7 @@ impl App {
             // a solid bar keeps the appearance's text
             SessionChange::DisplayOptions(display) => {
                 self.display = display;
+                let display = self.tone_display();
                 for bar in &mut self.bars {
                     bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
                     bar.controller.cfg.flash_choice = !display.reduce_motion;
@@ -826,10 +903,11 @@ impl App {
         self.bars[i]
             .feed
             .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
+        let tone_display = self.tone_display();
         if let Some(lightness) = update.backdrop_lightness {
             let bar = &mut self.bars[i];
             bar.backdrop_lightness = Some(lightness);
-            bar.tone = bar.tone.next(Some(lightness), self.display);
+            bar.tone = bar.tone.next(Some(lightness), tone_display);
         }
         if let Some(spread) = &update.backdrop_spread {
             self.bars[i].backdrop_spread = spread.clone();
@@ -974,16 +1052,34 @@ impl App {
                 WatchEvent::Error(e) => {
                     eprintln!("{PROCESS}: watching menubar.conf failed: {e}")
                 }
-                WatchEvent::Changed(_) => match load_conf(Some(&self.conf)) {
-                    Ok(conf) => {
-                        self.conf = conf;
-                        if self.clock != conf.clock {
-                            self.clock = conf.clock;
-                            self.next_clock = f64::NEG_INFINITY;
+                WatchEvent::Changed(_) => {
+                    match load_conf(Some(&self.conf)) {
+                        Ok(conf) => {
+                            if self.clock != conf.clock || self.conf.shown.clock != conf.shown.clock
+                            {
+                                self.clock = conf.clock;
+                                self.next_clock = f64::NEG_INFINITY;
+                            }
+                            let background = conf.background != self.conf.background;
+                            self.shared.conf = conf.clone();
+                            self.conf = conf;
+                            if background {
+                                let mut surfaces = self.surfaces.borrow_mut();
+                                surfaces.background = self.conf.background;
+                                for bar in &surfaces.bars {
+                                    bar.shape_backdrop(self.display, self.conf.background);
+                                }
+                                drop(surfaces);
+                                let display = self.tone_display();
+                                for bar in &mut self.bars {
+                                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                                }
+                            }
                         }
+                        Err(e) => eprintln!("{PROCESS}: {e}; the clock keeps its settings"),
                     }
-                    Err(e) => eprintln!("{PROCESS}: {e}; the clock keeps its settings"),
-                },
+                    self.follow_schedule(unix_now());
+                }
             }
         }
     }
@@ -1098,6 +1194,7 @@ impl App {
         let minute = (unix / 60.0).floor() as i64;
         if self.extras_minute != Some(minute) {
             self.extras_minute = Some(minute);
+            self.follow_schedule(unix);
             if let Err(e) = self.services.extras.refresh() {
                 return fail(e);
             }
@@ -1200,7 +1297,12 @@ impl App {
     /// Read Recent Items for the system menu that is opening; the bars show it at their next refresh.
     fn read_recent_items(&mut self) {
         if let Some(sources) = &self.services.recent {
-            self.shared.recent = sources.read(unix_now());
+            let mut recent = sources.read(unix_now());
+            recent.apps.truncate(self.conf.recent_apps as usize);
+            recent
+                .documents
+                .truncate(self.conf.recent_documents as usize);
+            self.shared.recent = recent;
         }
     }
 
@@ -1396,7 +1498,7 @@ impl Application for App {
                         shared: &app.shared,
                         font: app.font,
                         tone: bar.tone,
-                        solid: cupertino_menubar::tone::solid_bar(app.display),
+                        solid: cupertino_menubar::tone::solid_bar(app.tone_display()),
                         spread: &bar.backdrop_spread,
                         size: Size::new(f64::from(bar.width), app.height),
                         open_panels: &open_panels,

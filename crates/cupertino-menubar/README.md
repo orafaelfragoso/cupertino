@@ -318,6 +318,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 
 **Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
 
+### Settings the bar follows
+
+`menubar.conf` also says which items the bar shows (clock, Wi-Fi, Bluetooth, battery, focus), whether the bar has a
+backdrop of its own over the wallpaper, how many recent documents and applications the system menu lists (0 to 50) and
+which status icons stay out of the bar (listed by the id the application gives the icon, else its bus name). All apply
+at once. The bar also keeps the automatic look: when `appearance.conf` turns it on, the bar writes the `appearance` key
+of `compositor.json` as the clock passes the two switch times (checked every minute and at each change of the file),
+which the server applies at once; a high-contrast variant stays high contrast. The bar's height is still reserved at the
+start (the server reads it then).
+
 ## Open issues
 
 Alt-click on the clock toggles do not disturb in the design. The bar has no reliable modifier state for a click:

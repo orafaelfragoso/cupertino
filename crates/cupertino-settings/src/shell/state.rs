@@ -61,12 +61,20 @@ pub(crate) enum Background {
 /// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
 const THUMBNAIL_EDGE: u32 = 256;
 
+/// The longest edge of the account picture kept for the sidebar's row, in pixels.
+const ACCOUNT_PICTURE_EDGE: u32 = 128;
+/// The largest account picture file read, in bytes.
+const ACCOUNT_PICTURE_BYTES: u64 = 8 * 1024 * 1024;
+
 /// The pixels of the thumbnail file `path`, as an image of its own for the window to draw; run on the thumbnail
 /// thread, never the window's.
-fn decode_thumbnail(path: &std::path::Path) -> Option<cupertino_kit::controls::ImageSource> {
+fn decode_thumbnail(
+    path: &std::path::Path,
+    edge: u32,
+) -> Option<cupertino_kit::controls::ImageSource> {
     use cupertino_kit::render::{ImageResource, PixelFormat};
     let data = std::fs::read(path).ok()?;
-    let icon = cupertino_icons::decode_png(&data, THUMBNAIL_EDGE)?;
+    let icon = cupertino_icons::decode_png(&data, edge)?;
     Some(cupertino_kit::controls::ImageSource {
         id: cupertino_kit::core::next_resource_id(),
         image: ImageResource {
@@ -163,6 +171,9 @@ pub struct State {
     pub(crate) thumbnails: HashMap<PathBuf, PathBuf>,
     /// Each thumbnail's decoded pixels, ready to draw.
     pub(crate) thumbnail_images: HashMap<PathBuf, cupertino_kit::controls::ImageSource>,
+    /// The signed-in person, for the sidebar's account row, and their picture when they have one.
+    pub(crate) account: crate::system::Account,
+    pub(crate) account_picture: Option<cupertino_kit::controls::ImageSource>,
     pub(crate) thumbnails_asked: std::collections::HashSet<PathBuf>,
     pub(crate) listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
     pub(crate) agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
@@ -205,6 +216,7 @@ impl State {
             &paths.keyboard,
             &paths.power,
             &paths.accessibility,
+            &paths.appearance,
         ]
         .into_iter()
         .flatten()
@@ -227,6 +239,7 @@ impl State {
                 })
                 .ok()
         });
+        let account = crate::system::Account::read();
         let display = settings.accessibility.display;
         let screen_reader_installed = paths.screen_reader.is_some();
         let mut state = State {
@@ -257,6 +270,14 @@ impl State {
             assets: Assets::discover(),
             thumbnails: HashMap::new(),
             thumbnail_images: HashMap::new(),
+            account_picture: account
+                .picture
+                .as_deref()
+                .filter(|path| {
+                    std::fs::metadata(path).is_ok_and(|m| m.len() <= ACCOUNT_PICTURE_BYTES)
+                })
+                .and_then(|path| decode_thumbnail(path, ACCOUNT_PICTURE_EDGE)),
+            account,
             thumbnails_asked: std::collections::HashSet::new(),
             listings: Reads::default(),
             agent_answer: None,
@@ -389,6 +410,18 @@ impl State {
         }
         if to == PaneId::Accessibility {
             self.ask_login_screen();
+        }
+        if matches!(to, PaneId::Account | PaneId::General) {
+            self.live.system = Some(Box::new(crate::system::SystemInfo::read()));
+        }
+        if to == PaneId::General {
+            self.live.login_items = crate::system::login_items();
+        }
+        if to == PaneId::DesktopDock {
+            self.live.browsers = crate::system::browsers();
+        }
+        if to == PaneId::MenuBar {
+            self.live.tray = self.services.tray_items();
         }
         if to == PaneId::Privacy {
             self.settings.reload_clipboard(&self.paths);
@@ -602,6 +635,29 @@ impl State {
                     stored
                 }
                 Effect::SetAppearance { dark } => self.set_appearance(dark),
+                Effect::SetTheme { dark } => {
+                    // the file first, so the menu bar's schedule sees the new switch before the look changes
+                    let stored = self
+                        .settings
+                        .store(&self.paths, File::Appearance)
+                        .map_err(|e| e.to_string());
+                    match (stored, dark) {
+                        (Ok(()), Some(dark)) => self.set_appearance(dark),
+                        (stored, _) => stored,
+                    }
+                }
+                Effect::SetLoginItem { id, enable } => {
+                    let done = crate::system::set_login_item(&id, enable)
+                        .map_err(|e| format!("The login item could not be changed: {e}"));
+                    self.live.login_items = crate::system::login_items();
+                    done
+                }
+                Effect::SetDefaultBrowser { id } => {
+                    let done = crate::system::set_default_browser(&id)
+                        .map_err(|e| format!("The default browser could not be changed: {e}"));
+                    self.live.browsers = crate::system::browsers();
+                    done
+                }
                 Effect::SetAccessibility { key, value } => self.set_accessibility(key, &value),
                 Effect::SetSystemAccessibility => self.save_login_screen(),
             };
@@ -836,7 +892,7 @@ impl State {
                 for image in wanted {
                     match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
                         Ok(thumbnail) => {
-                            let pixels = decode_thumbnail(&thumbnail);
+                            let pixels = decode_thumbnail(&thumbnail, THUMBNAIL_EDGE);
                             notify(Background::Thumbnail {
                                 image,
                                 thumbnail,

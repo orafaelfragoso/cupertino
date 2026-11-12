@@ -15,7 +15,7 @@ use cupertino_ui_layout::{
     SizeSpec,
 };
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
-use cupertino_ui_render::{PaintOp, Shape};
+use cupertino_ui_render::{PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
 use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::rc::Rc;
@@ -27,6 +27,29 @@ const END: Keysym = Keysym(0xff57);
 
 /// A row's height; rows of a group touch.
 pub const TILE_SIDEBAR_ROW_HEIGHT: f64 = 32.0;
+
+/// The height of a row and the side of its tile at the sidebar icon size the person chose: the medium size is
+/// [`TILE_SIDEBAR_ROW_HEIGHT`] and a 20 pt tile.
+/// The height of the account row, and the side of its picture.
+const ACCOUNT_ROW_HEIGHT: f64 = 64.0;
+const ACCOUNT_PICTURE: f64 = 38.0;
+/// The account picture's distance from the row's leading selection edge, and from the label.
+const ACCOUNT_PICTURE_X: f64 = 5.5;
+const ACCOUNT_LABEL_GAP: f64 = 9.0;
+/// The size of the account's second line, and of the initials in the disc.
+const ACCOUNT_SUBTITLE_SIZE: f32 = 11.0;
+const ACCOUNT_INITIALS_SIZE: f32 = 16.0;
+/// How much of the secondary label's strength the second line keeps on the selected row.
+const SELECTED_SUBTITLE_ALPHA: f32 = 0.75;
+
+fn row_metrics() -> (f64, f64) {
+    use cupertino_ui_core::SidebarIcons;
+    match cupertino_ui_core::personal().sidebar_icons {
+        SidebarIcons::Small => (28.0, 16.0),
+        SidebarIcons::Medium => (TILE_SIDEBAR_ROW_HEIGHT, 20.0),
+        SidebarIcons::Large => (36.0, 24.0),
+    }
+}
 /// Between two groups, and below the last.
 const GROUP_GAP: f64 = 13.0;
 /// Between the sidebar's leading and trailing edges and a row's selection.
@@ -41,10 +64,10 @@ const HEADER_GAP: f64 = 12.0;
 /// The selection's corner radius.
 const SELECTION_RADIUS: f64 = 7.5;
 /// The tile: its side and its leading edge from the selection's.
-const TILE: f64 = 20.0;
 const TILE_X: f64 = 9.0;
 /// The label's leading edge from the selection's, and the room kept after it.
-const LABEL_X: f64 = 36.0;
+/// The space between a row's tile and its label.
+const TILE_LABEL_GAP: f64 = 7.0;
 const LABEL_TRAILING: f64 = 6.0;
 /// The selected row's label weight.
 const SELECTED_WEIGHT: u16 = 700;
@@ -268,13 +291,144 @@ fn label(cx: &PaintCx<'_>, text: &str, selected: bool) -> Option<ParagraphLayout
     Some(paragraph.layout(None))
 }
 
+/// `text` set at `size` and `weight`, in one line.
+fn sized_label(cx: &PaintCx<'_>, text: &str, size: f32, weight: u16) -> Option<ParagraphLayout> {
+    let style = TextStyle {
+        weight: FontWeight(weight),
+        ..TextStyle::new(size)
+    };
+    let paragraph = cx
+        .env()
+        .text
+        .paragraph(
+            &AttributedText::plain(text, style),
+            &ParagraphStyle::default(),
+        )
+        .ok()?;
+    Some(paragraph.layout(None))
+}
+
+impl<M: 'static> TileRow<M> {
+    fn height(&self) -> f64 {
+        if self.item.account.is_some() {
+            ACCOUNT_ROW_HEIGHT
+        } else {
+            row_metrics().0
+        }
+    }
+
+    /// The account row's picture or initials disc, then the name over the second line.
+    fn paint_account(
+        &self,
+        cx: &mut PaintCx<'_>,
+        chrome: Rect,
+        rtl: bool,
+        color: cupertino_ui_theme::Color,
+    ) {
+        let Some(account) = &self.item.account else {
+            return;
+        };
+        let size = cx.size();
+        let x = if rtl {
+            chrome.max_x() - ACCOUNT_PICTURE_X - ACCOUNT_PICTURE
+        } else {
+            chrome.min_x() + ACCOUNT_PICTURE_X
+        };
+        let disc = Rect::new(
+            x,
+            (size.height - ACCOUNT_PICTURE) / 2.0,
+            ACCOUNT_PICTURE,
+            ACCOUNT_PICTURE,
+        );
+        let radius = ACCOUNT_PICTURE / 2.0;
+        match &account.picture {
+            Some(picture) => {
+                cx.push(PaintOp::PushClip(Shape::RoundedRect { rect: disc, radius }));
+                let (w, h) = (
+                    f64::from(picture.image.width),
+                    f64::from(picture.image.height),
+                );
+                if w > 0.0 && h > 0.0 {
+                    let scale = (disc.width() / w).max(disc.height() / h);
+                    let dst = Rect::new(
+                        disc.min_x() + (disc.width() - w * scale) / 2.0,
+                        disc.min_y() + (disc.height() - h * scale) / 2.0,
+                        w * scale,
+                        h * scale,
+                    );
+                    cx.image(picture.id, &picture.image, dst, Sampling::Linear);
+                }
+                cx.push(PaintOp::PopClip);
+            }
+            None => {
+                let (top, _) = crate::form::tile_shades(self.item.tile);
+                look::fill(cx, disc, radius, Some(crate::form::rgb(top)));
+                let white = cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, 1.0);
+                if let Some(layout) = sized_label(cx, &account.initials, ACCOUNT_INITIALS_SIZE, 600)
+                {
+                    let origin = Point::new(
+                        disc.min_x() + (disc.width() - layout.size().width) / 2.0,
+                        look::top(&layout, disc, cx.env()),
+                    );
+                    look::glyphs(cx, &layout, origin, Some(white));
+                }
+            }
+        }
+        let text_x = ACCOUNT_PICTURE_X + ACCOUNT_PICTURE + ACCOUNT_LABEL_GAP;
+        let room = (chrome.width() - text_x - LABEL_TRAILING).max(0.0);
+        let clip = Rect::new(
+            if rtl {
+                chrome.max_x() - text_x - room
+            } else {
+                chrome.min_x() + text_x
+            },
+            0.0,
+            room,
+            size.height,
+        );
+        let body = cx.env().theme.type_scale.body;
+        let name = sized_label(cx, &self.item.label, body.size, SELECTED_WEIGHT);
+        let line = sized_label(cx, &account.subtitle, ACCOUNT_SUBTITLE_SIZE, body.weight);
+        let heights = name.as_ref().map_or(0.0, |l| l.size().height)
+            + line.as_ref().map_or(0.0, |l| l.size().height);
+        let mut y = (size.height - heights) / 2.0;
+        cx.push(PaintOp::PushClip(Shape::Rect(clip)));
+        for (layout, shade) in [
+            (name, color),
+            (
+                line,
+                if self.selected {
+                    color.with_alpha(color.a * SELECTED_SUBTITLE_ALPHA)
+                } else {
+                    cx.env()
+                        .theme
+                        .colors
+                        .get(ColorRole::SecondaryText, StateVariant::NORMAL)
+                        .unwrap_or(color)
+                },
+            ),
+        ] {
+            let Some(layout) = layout else { continue };
+            let h = layout.size().height;
+            let x = if rtl {
+                clip.max_x() - layout.size().width
+            } else {
+                clip.min_x()
+            };
+            look::glyphs(cx, &layout, Point::new(x, y), Some(shade));
+            y += h;
+        }
+        cx.push(PaintOp::PopClip);
+    }
+}
+
 impl<M: 'static> Widget<M> for TileRow<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fill,
-            height: SizeSpec::Fixed(TILE_SIDEBAR_ROW_HEIGHT),
+            height: SizeSpec::Fixed(self.height()),
             ..LayoutSpec::new(ContainerKind::Leaf)
         }
     }
@@ -293,7 +447,7 @@ impl<M: 'static> Widget<M> for TileRow<M> {
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         Measured {
-            size: Size::new(0.0, TILE_SIDEBAR_ROW_HEIGHT),
+            size: Size::new(0.0, self.height()),
             baseline: None,
         }
     }
@@ -371,20 +525,7 @@ impl<M: 'static> Widget<M> for TileRow<M> {
                 chrome.min_x() + offset
             }
         };
-        let tile = IconTile {
-            symbol: self.item.symbol.clone(),
-            color: self.item.tile,
-            size: TILE,
-        };
-        let area = Rect::new(
-            leading(TILE_X, TILE),
-            (size.height - TILE) / 2.0,
-            TILE,
-            TILE,
-        );
-        paint_tile(cx, &tile, area);
-        // the label at full strength: the sidebar's labels stand out more than the window's text; in a window that is
-        // not active every label, the selected row's too, is the inactive sidebar text (the tiles keep their colours)
+        // the label's colour first: the account row draws its own picture and lines with it
         let color = if !active {
             theme
                 .colors
@@ -397,9 +538,32 @@ impl<M: 'static> Widget<M> for TileRow<M> {
                 .get(ColorRole::Text, StateVariant::NORMAL)
                 .map(|c| c.with_alpha(1.0))
         };
+        if self.item.account.is_some() {
+            if let Some(color) = color {
+                self.paint_account(cx, chrome, rtl, color);
+            }
+            if cx.is_focused() {
+                paint_focus_ring(cx, chrome, SELECTION_RADIUS);
+            }
+            return;
+        }
+        let tile_size = row_metrics().1;
+        let label_x = TILE_X + tile_size + TILE_LABEL_GAP;
+        let tile = IconTile {
+            symbol: self.item.symbol.clone(),
+            color: self.item.tile,
+            size: tile_size,
+        };
+        let area = Rect::new(
+            leading(TILE_X, tile_size),
+            (size.height - tile_size) / 2.0,
+            tile_size,
+            tile_size,
+        );
+        paint_tile(cx, &tile, area);
         if let Some(layout) = label(cx, &self.item.label, self.selected) {
-            let room = (chrome.width() - LABEL_X - LABEL_TRAILING).max(0.0);
-            let clip = Rect::new(leading(LABEL_X, room), 0.0, room, size.height);
+            let room = (chrome.width() - label_x - LABEL_TRAILING).max(0.0);
+            let clip = Rect::new(leading(label_x, room), 0.0, room, size.height);
             let x = if rtl {
                 clip.max_x() - layout.size().width
             } else {

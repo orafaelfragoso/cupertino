@@ -79,7 +79,7 @@ const HEADER_TITLE_SIZE: f32 = 22.0;
 const HEADER_TITLE_WEIGHT: u16 = 700;
 
 /// The top and bottom colours of each tile, in sRGB.
-fn tile_shades(color: TileColor) -> ([u8; 3], [u8; 3]) {
+pub(crate) fn tile_shades(color: TileColor) -> ([u8; 3], [u8; 3]) {
     match color {
         TileColor::Blue => ([74, 160, 250], [52, 122, 232]),
         TileColor::Gray => ([170, 171, 176], [130, 131, 136]),
@@ -95,7 +95,7 @@ fn tile_shades(color: TileColor) -> ([u8; 3], [u8; 3]) {
     }
 }
 
-fn rgb(c: [u8; 3]) -> Color {
+pub(crate) fn rgb(c: [u8; 3]) -> Color {
     Color::from_rgba8([c[0], c[1], c[2], 255])
 }
 

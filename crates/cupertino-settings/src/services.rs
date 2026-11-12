@@ -495,6 +495,54 @@ impl Services {
         )
     }
 
+    /// The status icons applications keep in the menu bar now, each with the id `menubar.conf` lists it by (the
+    /// item's own `Id`, else its bus name) and the title it shows; empty while no host is running.
+    pub fn tray_items(&mut self) -> Vec<crate::live::TrayItem> {
+        let registered: zbus::Result<Vec<String>> = self
+            .session
+            .proxy(
+                "org.kde.StatusNotifierWatcher",
+                "/StatusNotifierWatcher",
+                "org.kde.StatusNotifierWatcher",
+            )
+            .and_then(|p| p.get_property("RegisteredStatusNotifierItems"));
+        let registered = match self.session.checked(registered) {
+            Ok(items) => items,
+            Err(_) => return Vec::new(),
+        };
+        let Ok(connection) = self.session.connection().cloned() else {
+            return Vec::new();
+        };
+        let mut out: Vec<crate::live::TrayItem> = Vec::new();
+        for entry in registered {
+            if entry.is_empty() || entry.starts_with('/') {
+                continue;
+            }
+            let (service, path) = match entry.find('/') {
+                Some(i) => (entry[..i].to_owned(), entry[i..].to_owned()),
+                None => (entry.clone(), "/StatusNotifierItem".to_owned()),
+            };
+            let proxy: zbus::Result<Proxy<'static>> = (|| {
+                Builder::new(&connection)
+                    .destination(service.clone())?
+                    .path(path)?
+                    .interface("org.kde.StatusNotifierItem")?
+                    .cache_properties(CacheProperties::No)
+                    .build()
+            })();
+            let Ok(proxy) = proxy else { continue };
+            let app_id: String = proxy.get_property("Id").unwrap_or_default();
+            let title: String = proxy.get_property("Title").unwrap_or_default();
+            let id = if app_id.is_empty() { service } else { app_id };
+            let name = display_name(&if title.is_empty() { id.clone() } else { title });
+            if !out.iter().any(|t| t.id == id) {
+                out.push(crate::live::TrayItem { id, name });
+            }
+        }
+        out.sort_by(|a, b| crate::sidebar::standard_compare(&a.name, &b.name));
+        out
+    }
+
     /// The applications whose notifications the centre holds now, as (settings id, name); empty while it is not
     /// running or does not answer.
     pub fn notifying_apps(&mut self) -> Vec<(String, String)> {

@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cupertino_kit::controls::{
-    unobscured_insets, Modal, Navigation, NavigationStack, ScrollView, Scroller, SearchField,
-    SidebarWindow, SplitLayout, TileSidebar, TileSidebarItem, ToolbarTitle,
+    unobscured_insets, AccountLook, Modal, Navigation, NavigationStack, ScrollView, Scroller,
+    SearchField, SidebarWindow, SplitLayout, TileSidebar, TileSidebarItem, ToolbarTitle,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
 use cupertino_kit::geometry::{Insets, Point, Size};
@@ -507,11 +507,24 @@ impl Shell {
             .map(|group| {
                 group
                     .iter()
-                    .map(|pane| TileSidebarItem {
-                        key: Key::from(pane.key()),
-                        label: pane.title(has_battery).into(),
-                        symbol: pane.pane().symbol.into(),
-                        tile: form::tile_color(pane.pane().enclosure),
+                    .map(|pane| {
+                        let account = &self.state.account;
+                        let mine = *pane == PaneId::Account && !account.full_name.is_empty();
+                        TileSidebarItem {
+                            key: Key::from(pane.key()),
+                            label: if mine {
+                                account.full_name.clone()
+                            } else {
+                                pane.title(has_battery).into()
+                            },
+                            symbol: pane.pane().symbol.into(),
+                            tile: form::tile_color(pane.pane().enclosure),
+                            account: mine.then(|| AccountLook {
+                                subtitle: PaneId::Account.title(None).into(),
+                                initials: account.initials.clone(),
+                                picture: self.state.account_picture.clone(),
+                            }),
+                        }
                     })
                     .collect()
             })
@@ -561,20 +574,29 @@ impl Shell {
             let sections = self.state.sections();
             let has_battery = self.state.live.has_battery();
             let mut blocks = pages::blocks(page, sections.clone());
+            let has_card = page.sub.is_none() && pages::has_card(page.pane);
             let has_header = page.sub.is_none() && pages::has_header(page.pane);
             let master = if has_header {
                 form::take_master(page.pane, &mut blocks)
             } else {
                 None
             };
-            let header = has_header.then(|| {
-                form::pane_header(
+            let header = if has_card {
+                Some(form::pane_card(
                     page.pane,
                     page.pane.title(has_battery),
                     pages::description(page.pane, has_battery),
-                    master.as_ref(),
-                )
-            });
+                ))
+            } else {
+                has_header.then(|| {
+                    form::pane_header(
+                        page.pane,
+                        page.pane.title(has_battery),
+                        pages::description(page.pane, has_battery),
+                        master.as_ref(),
+                    )
+                })
+            };
             let icons = self.state.app_icons();
             let view = form::View {
                 open: self.open,

@@ -87,6 +87,9 @@ below 3:1. The dark switch track is a fifth of white so it stands apart (1.75:1 
 background and the control background behind it, and the switch thumb stands 3:1 against it (tested). Slider tracks
 are no exception (above).
 
+`ColorTokens::with_accent` re-derives the selected fill, its pressed shade, the disabled selected switch track and the selected-text background from an accent colour and an optional highlight colour, so one set of tokens serves every accent.
+
+
 ## Theme tokens
 
 `ThemeTokens::cupertino(theme, preferences)` is the Cupertino theme: the colours above for the preferred appearance;

@@ -71,6 +71,26 @@ pub enum Control {
         tiles: Vec<Tile>,
         selected: Option<usize>,
     },
+    /// A row of choices drawn as pictures (looks, or colours); a press commits the index of the one hit.
+    Swatches {
+        items: Vec<(String, SwatchKind)>,
+        selected: usize,
+    },
+}
+
+/// What a swatch of [`Control::Swatches`] draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwatchKind {
+    /// A mock of a window in the light look.
+    Light,
+    /// A mock of a window in the dark look.
+    Dark,
+    /// Light and dark side by side.
+    Auto,
+    /// A dot of this sRGB colour.
+    Color([u8; 3]),
+    /// A dot of every accent colour in turn.
+    Multicolor,
 }
 
 /// A picture of a [`Control::Tiles`] grid.

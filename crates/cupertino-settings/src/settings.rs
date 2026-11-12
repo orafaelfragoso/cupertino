@@ -9,13 +9,14 @@ use cupertino_defaults::accessibility::{
     AccessibilitySettings, PersonalAccessibility, SystemAccessibility, ACCESSIBILITY_ENV,
     ACCESSIBILITY_FILE, SYSTEM_ACCESSIBILITY,
 };
+use cupertino_defaults::appearance::AppearanceSettings;
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::conf::Problem;
 use cupertino_defaults::data_control::DataControlConf;
 use cupertino_defaults::desktop_control::{App, Decision, DesktopControlConf, Service};
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
 use cupertino_defaults::keyboard::KeyboardSettings;
-use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
+use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::notifications::NotificationSettings;
 use cupertino_defaults::power::PowerSettings;
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
@@ -45,10 +46,12 @@ pub enum File {
     /// `desktop-control.conf`, read and written by the window server: the apps that may operate the desktop or take
     /// images of the screen.
     DesktopControl,
+    /// `appearance.conf`, read by every program that draws with the toolkit and by the menu bar's schedule.
+    Appearance,
 }
 
 impl File {
-    pub const ALL: [File; 9] = [
+    pub const ALL: [File; 10] = [
         File::Dock,
         File::Compositor,
         File::MenuBar,
@@ -58,6 +61,7 @@ impl File {
         File::ScreenSharing,
         File::Notifications,
         File::DesktopControl,
+        File::Appearance,
     ];
 
     /// The process that applies the file.
@@ -70,6 +74,7 @@ impl File {
             | File::DataControl
             | File::DesktopControl => "the window server",
             File::MenuBar => "the menu bar",
+            File::Appearance => "each app",
             File::ScreenSharing => "the portal",
             File::Notifications => "the notification centre",
         }
@@ -100,6 +105,7 @@ pub struct Paths {
     pub screen_sharing: Option<PathBuf>,
     pub notifications: Option<PathBuf>,
     pub desktop_control: Option<PathBuf>,
+    pub appearance: Option<PathBuf>,
     /// The installed screen reader (`installed_screen_reader`), which the session's compositor runs; `None` without one.
     /// Settings only shows whether there is one: it never starts it.
     pub screen_reader: Option<PathBuf>,
@@ -119,6 +125,7 @@ impl Paths {
             screen_sharing: ScreenSharingConf::path(),
             notifications: NotificationSettings::path(),
             desktop_control: DesktopControlConf::path(),
+            appearance: AppearanceSettings::path(),
             screen_reader: cupertino_defaults::accessibility::installed_screen_reader(),
         }
     }
@@ -134,6 +141,7 @@ impl Paths {
             File::ScreenSharing => self.screen_sharing.as_ref(),
             File::Notifications => self.notifications.as_ref(),
             File::DesktopControl => self.desktop_control.as_ref(),
+            File::Appearance => self.appearance.as_ref(),
         }
     }
 }
@@ -144,6 +152,8 @@ pub struct Settings {
     pub dock: DockSettings,
     pub compositor: CompositorSettings,
     pub menubar: MenuBarSettings,
+    /// `appearance.conf`: the accent, the highlight, the schedule and how windows behave.
+    pub appearance: AppearanceSettings,
     pub keyboard: KeyboardSettings,
     pub power: PowerSettings,
     pub accessibility: AccessibilitySettings,
@@ -230,9 +240,16 @@ impl Settings {
                     s
                 })?
             }
-            None => MenuBarSettings {
-                clock: ClockSettings::UNSET,
-            },
+            None => MenuBarSettings::UNSET,
+        };
+        let appearance = match &paths.appearance {
+            Some(p) => AppearanceSettings::load(p, last_good.map(|l| &l.appearance)).map(
+                |(s, problems)| {
+                    lines("appearance.conf", problems);
+                    s
+                },
+            )?,
+            None => AppearanceSettings::UNSET,
         };
         let keyboard = match &paths.keyboard {
             Some(p) => {
@@ -294,6 +311,7 @@ impl Settings {
             dock,
             compositor,
             menubar,
+            appearance,
             keyboard,
             power,
             accessibility,
@@ -525,6 +543,7 @@ impl Settings {
             File::Dock => self.dock.store(path).map(drop),
             File::Compositor => self.compositor.store(path).map(drop),
             File::MenuBar => self.menubar.store(path).map(drop),
+            File::Appearance => self.appearance.store(path).map(drop),
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
             File::DataControl => self.clipboard.store(path),

@@ -5,9 +5,10 @@
 use std::collections::HashMap;
 
 use cupertino_kit::controls::{
-    AppIcon, AppIconRow, FormGroup, FormRow, FullWidthSegmentedControl, IconTile, ImageSource,
-    InlinePopUpButton, NavigationRow, PaneHeader, PopUpButton, ScrollView, Scroller,
-    SegmentedControl, Slider, SliderStyle, TextRole, ThumbnailTile, TileColor,
+    AppIcon, AppIconRow, FormGroup, FormHeader, FormRow, FullWidthSegmentedControl, IconTile,
+    ImageSource, InlinePopUpButton, NavigationRow, PaneHeader, PopUpButton, ScrollView, Scroller,
+    SegmentedControl, Slider, SliderStyle, Swatch, SwatchFill, SwatchLook, TextRole, ThumbnailTile,
+    TileColor,
 };
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
@@ -19,7 +20,7 @@ use cupertino_kit::prelude::*;
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 
 use super::{Message, UNSCROLLED};
-use crate::controls::{metrics, Control, Value};
+use crate::controls::{metrics, Control, SwatchKind, Value};
 use crate::pages::{Block, SubPage};
 use crate::pane::{Enclosure, PaneId};
 use crate::panes::{ControlId, Row, Section};
@@ -115,6 +116,24 @@ pub fn pane_header(
     })
     .key("header")
 }
+
+/// The large card of `pane`: its tile over its title and description.
+pub fn pane_card(pane: PaneId, title: &str, description: &str) -> Element<Message> {
+    let p = pane.pane();
+    Element::new(FormHeader {
+        tile: IconTile {
+            symbol: p.symbol.into(),
+            color: tile_color(p.enclosure),
+            size: CARD_TILE,
+        },
+        title: title.into(),
+        description: description.into(),
+    })
+    .key("header")
+}
+
+/// The tile of a pane's large card.
+const CARD_TILE: f64 = 48.0;
 
 /// The pane's master switch: its first block's only row, a switch that stands on its own, taken out of `blocks`.
 pub fn take_master(pane: PaneId, blocks: &mut Vec<Block>) -> Option<Row> {
@@ -319,6 +338,7 @@ fn control(row: &Row, name: &str, view: &View<'_>) -> Option<Element<Message>> {
             column(2.0, lines)
         }
         Control::Tiles { tiles, selected } => tile_strip(id, tiles, *selected, enabled, view),
+        Control::Swatches { items, selected } => swatch_row(id, items, *selected, enabled),
     };
     Some(control.key(control_key(id)))
 }
@@ -436,6 +456,66 @@ const STRIP_HEIGHT: f64 = THUMBNAIL.height + 2.0 * THUMBNAIL_RING_ROOM + 3.0 + 1
 
 /// One row of thumbnails, scrolling sideways: the pictures of `tiles` side by side, the chosen one ringed. The strip
 /// runs on past the page's inset to the window's edge.
+/// The choices of a swatch row side by side, centred under the row's label; a row of colour dots names the chosen one
+/// under it.
+fn swatch_row(
+    id: ControlId,
+    items: &[(String, SwatchKind)],
+    selected: usize,
+    enabled: bool,
+) -> Element<Message> {
+    let dots = items
+        .iter()
+        .all(|(_, k)| matches!(k, SwatchKind::Color(_) | SwatchKind::Multicolor));
+    let children: Vec<Element<Message>> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (label, kind))| {
+            let fill = match kind {
+                SwatchKind::Light => SwatchFill::Look(SwatchLook::Light),
+                SwatchKind::Dark => SwatchFill::Look(SwatchLook::Dark),
+                SwatchKind::Auto => SwatchFill::Look(SwatchLook::Auto),
+                SwatchKind::Color(c) => SwatchFill::Color(*c),
+                SwatchKind::Multicolor => SwatchFill::Multicolor,
+            };
+            Element::new(Swatch {
+                label: label.clone(),
+                fill,
+                selected: i == selected,
+                enabled,
+                on_press: Some(Message::Commit(id, Value::Index(i))),
+            })
+            .key(i as u64)
+        })
+        .collect();
+    let row = Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets::ZERO,
+        spacing: if dots { DOT_GAP } else { LOOK_GAP },
+        align: Align::Start,
+        children,
+    });
+    let mut parts = vec![row];
+    if dots {
+        parts.extend(
+            items
+                .get(selected)
+                .and_then(|(name, _)| text(name, TextRole::Caption)),
+        );
+    }
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets::ZERO,
+        spacing: SLIDER_LABEL_GAP,
+        align: Align::Center,
+        children: parts,
+    })
+}
+
+/// Between the dots of a row of colours, and between the mocks of a row of looks.
+const DOT_GAP: f64 = 6.0;
+const LOOK_GAP: f64 = 18.0;
+
 fn tile_strip(
     id: ControlId,
     tiles: &[crate::controls::Tile],
@@ -598,7 +678,10 @@ fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
         .collect();
     let name = names.get(row.id).unwrap_or(&row.label);
     // a segmented control takes the whole width of its row, under the row's label
-    let content = if matches!(row.control, Control::Segmented { .. }) {
+    let content = if matches!(
+        row.control,
+        Control::Segmented { .. } | Control::Swatches { .. }
+    ) {
         let mut children = Vec::new();
         if !label.is_empty() {
             children.push(Element::new(Label { lines: label }));
@@ -841,9 +924,8 @@ mod tests {
         crate::settings::Settings {
             dock: Default::default(),
             compositor: Default::default(),
-            menubar: cupertino_defaults::menubar::MenuBarSettings {
-                clock: cupertino_defaults::menubar::ClockSettings::UNSET,
-            },
+            menubar: cupertino_defaults::menubar::MenuBarSettings::UNSET,
+            appearance: cupertino_defaults::appearance::AppearanceSettings::UNSET,
             keyboard: Default::default(),
             power: Default::default(),
             accessibility: Default::default(),
@@ -925,9 +1007,8 @@ mod tests {
         let settings = crate::settings::Settings {
             dock: Default::default(),
             compositor: Default::default(),
-            menubar: cupertino_defaults::menubar::MenuBarSettings {
-                clock: cupertino_defaults::menubar::ClockSettings::UNSET,
-            },
+            menubar: cupertino_defaults::menubar::MenuBarSettings::UNSET,
+            appearance: cupertino_defaults::appearance::AppearanceSettings::UNSET,
             keyboard: Default::default(),
             power: Default::default(),
             accessibility: Default::default(),

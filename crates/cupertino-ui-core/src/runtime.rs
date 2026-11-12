@@ -56,6 +56,10 @@ pub type WindowErrorHandler = Box<dyn FnMut(WindowId, &UiError)>;
 /// Makes the theme for the session's appearance and display options.
 pub type ThemeForAppearance = Box<dyn FnMut(&SystemAppearance) -> Arc<ThemeTokens>>;
 
+/// Asked each time the window system wakes the loop: the theme to draw with when what a person chose changed since it
+/// was last asked, with [`crate::set_personal`] already told the other choices.
+pub type PersonalRefresh = Box<dyn FnMut() -> Option<Arc<ThemeTokens>>>;
+
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
     pub theme: Arc<ThemeTokens>,
@@ -289,6 +293,7 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     touch_opened: bool,
     exit: bool,
     theme_for: Option<ThemeForAppearance>,
+    personal_refresh: Option<PersonalRefresh>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
     scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
     /// What each activation token asked for and not yet given turns into.
@@ -349,6 +354,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             touch_opened: false,
             exit: false,
             theme_for: None,
+            personal_refresh: None,
             scroll_timing: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
@@ -377,6 +383,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
     pub fn with_theme_for(mut self, theme_for: ThemeForAppearance) -> Self {
         self.theme_for = Some(theme_for);
+        self
+    }
+
+    /// Follow what a person chose: `refresh` is asked each time the loop wakes.
+    pub fn with_personal_refresh(mut self, refresh: PersonalRefresh) -> Self {
+        self.personal_refresh = Some(refresh);
         self
     }
 
@@ -1001,7 +1013,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.drop_data(token, data);
                 return Ok(());
             }
-            PlatformEvent::ClipboardOffered { .. } | PlatformEvent::Wake => return Ok(()),
+            PlatformEvent::ClipboardOffered { .. } => return Ok(()),
+            PlatformEvent::Wake => {
+                if let Some(theme) = self.personal_refresh.as_mut().and_then(|refresh| refresh()) {
+                    self.set_theme(theme);
+                    // the views read the choices as they are built, and the controls draw them
+                    self.view_dirty = true;
+                    for w in &mut self.windows {
+                        w.invalidate();
+                        w.invalidate_damage();
+                    }
+                }
+                return Ok(());
+            }
             PlatformEvent::Appearance(appearance) => {
                 if let Some(theme_for) = &mut self.theme_for {
                     let theme = theme_for(&appearance);
@@ -1667,7 +1691,15 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         for gesture in effects.window.into_iter().filter(|_| !w.fullscreen) {
             let request = match gesture {
                 WindowGesture::Move => WindowRequest::Move,
-                WindowGesture::Zoom => WindowRequest::Maximize(!w.maximized),
+                WindowGesture::Zoom => match crate::personal().titlebar_double_click {
+                    cupertino_defaults::appearance::TitlebarAction::Zoom => {
+                        WindowRequest::Maximize(!w.maximized)
+                    }
+                    cupertino_defaults::appearance::TitlebarAction::Minimize => {
+                        WindowRequest::Minimize
+                    }
+                    cupertino_defaults::appearance::TitlebarAction::None => continue,
+                },
             };
             // a platform without the request, or a press the compositor no longer holds, leaves the window where it is
             let _ = self.system.request(w.id, request);

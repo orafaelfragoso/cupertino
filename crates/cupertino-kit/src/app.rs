@@ -2,6 +2,8 @@
 //! built-in Inter, the CPU renderer and the monotonic clock.
 
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
+use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
+use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_modifiers::Profile;
 use cupertino_theme::Theme;
 use cupertino_ui_atspi::AtspiAdapter;
@@ -16,10 +18,13 @@ use cupertino_ui_text::{
 };
 use cupertino_ui_theme::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
 use cupertino_ui_wayland::WaylandWindowSystem;
+use std::cell::Cell;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// The most nodes one application's tree holds.
@@ -74,10 +79,13 @@ pub fn run_on_with_appearance<A: Application>(
     let first = appearance(system.appearance().unwrap_or_default());
     let (mut options, theme) = options_and_theme(preferences(&first))?;
     keep_caret(Arc::make_mut(&mut options.theme), &first);
-    let follow = mapped(theme_for(theme, Arc::clone(&options.theme)), appearance);
+    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    options.theme = personal.theme();
+    let follow = mapped(personal.theme_for(), appearance);
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .with_personal_refresh(personal.refresh())
         .timed()
         .run()
         .map_err(AppError::Runtime)
@@ -91,15 +99,16 @@ pub fn run_on_with<A: Application>(
 ) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
-    keep_caret(
-        Arc::make_mut(&mut options.theme),
-        &system.appearance().unwrap_or_default(),
-    );
-    let follow = theme_for(theme, Arc::clone(&options.theme));
+    let first = system.appearance().unwrap_or_default();
+    keep_caret(Arc::make_mut(&mut options.theme), &first);
+    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    options.theme = personal.theme();
+    let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::muted(system.waker())));
     let start = start(&options);
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .with_personal_refresh(personal.refresh())
         .timed()
         .run()
         .map_err(AppError::Runtime)
@@ -112,15 +121,16 @@ pub fn run_lock_screen_on_with<A: Application>(
     start: impl FnOnce(&RuntimeOptions) -> (A::Model, Vec<Command<A::Message>>),
 ) -> Result<(), AppError> {
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
-    keep_caret(
-        Arc::make_mut(&mut options.theme),
-        &system.appearance().unwrap_or_default(),
-    );
-    let follow = theme_for(theme, Arc::clone(&options.theme));
+    let first = system.appearance().unwrap_or_default();
+    keep_caret(Arc::make_mut(&mut options.theme), &first);
+    let personal = Personal::follow(system.waker(), theme, &options.theme, first);
+    options.theme = personal.theme();
+    let follow = personal.theme_for();
     options.accessibility = Some(Box::new(AtspiAdapter::lock_screen(system.waker())));
     let start = start(&options);
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
+        .with_personal_refresh(personal.refresh())
         .timed()
         .run()
         .map_err(AppError::Runtime)
@@ -231,12 +241,31 @@ fn mapped(
     Box::new(move |session| follow(&appearance(*session)))
 }
 
-/// Makes the Cupertino theme for each appearance from `theme`. Without theme data, or where it lacks something the
-/// theme needs, the built-in neutral colours take the place of its colours, on `start`'s metrics and type.
-fn theme_for(theme: Option<Theme>, start: Arc<ThemeTokens>) -> ThemeForAppearance {
-    Box::new(move |appearance| {
+/// What the person chose in `appearance.conf`, followed while the application runs: the accent and highlight colours
+/// go into the theme, and the other choices are told to the toolkit ([`cupertino_ui_core::set_personal`]).
+struct Personal {
+    inner: Rc<PersonalInner>,
+    /// Keeps the watch on the file while the application runs.
+    _watch: Option<ConfigWatcher>,
+}
+
+struct PersonalInner {
+    theme: Option<Theme>,
+    start: Arc<ThemeTokens>,
+    settings: Cell<AppearanceSettings>,
+    /// The session's appearance the theme was last made for.
+    last: Cell<SystemAppearance>,
+    /// The file changed since it was last read.
+    changed: Arc<AtomicBool>,
+}
+
+impl PersonalInner {
+    /// The Cupertino theme for `appearance` from the theme data, else the neutral colours on `start`'s metrics and
+    /// type, with the accent and highlight laid over them.
+    fn make(&self, appearance: &SystemAppearance) -> Arc<ThemeTokens> {
+        self.last.set(*appearance);
         let preferences = preferences(appearance);
-        let followed = theme.as_ref().and_then(|theme| {
+        let followed = self.theme.as_ref().and_then(|theme| {
             ThemeTokens::cupertino(theme, preferences)
                 .map_err(|e| {
                     eprintln!("cupertino-kit: the theme cannot follow the session ({e}); using the neutral colours");
@@ -244,15 +273,94 @@ fn theme_for(theme: Option<Theme>, start: Arc<ThemeTokens>) -> ThemeForAppearanc
                 .ok()
         });
         let mut tokens = followed.unwrap_or_else(|| {
-            let mut tokens = (*start).clone();
+            let mut tokens = (*self.start).clone();
             tokens.preferences = preferences;
             tokens.colors = ColorTokens::neutral(preferences.appearance);
             tokens.motion.reduce = preferences.reduce_motion;
             tokens
         });
+        let settings = self.settings.get();
+        // a high contrast look keeps its own colours
+        if !preferences.appearance.is_high_contrast() {
+            let dark = preferences.appearance.is_dark();
+            let accent = settings.accent.rgb(dark);
+            let highlight = match settings.highlight {
+                Highlight::Automatic => accent,
+                Highlight::Color(color) => color.rgb(dark),
+            };
+            tokens.colors = tokens.colors.with_accent(accent, highlight, dark);
+        }
         keep_caret(&mut tokens, appearance);
         Arc::new(tokens)
-    })
+    }
+}
+
+fn apply_personal(settings: &AppearanceSettings) {
+    cupertino_ui_core::set_personal(cupertino_ui_core::Personal {
+        scroll_click: settings.scroll_click,
+        sidebar_icons: settings.sidebar_icons,
+        titlebar_double_click: settings.titlebar_double_click,
+    });
+}
+
+impl Personal {
+    /// Read the file, tell the toolkit what it holds and watch it: a change wakes the loop through `waker`. `theme` is
+    /// the installed theme data, `start` the theme the application starts with and `first` the session's appearance.
+    fn follow(
+        waker: std::task::Waker,
+        theme: Option<Theme>,
+        start: &Arc<ThemeTokens>,
+        first: SystemAppearance,
+    ) -> Self {
+        let settings = AppearanceSettings::current();
+        apply_personal(&settings);
+        let changed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&changed);
+        let watch = AppearanceSettings::path().and_then(|path| {
+            ConfigWatcher::new(vec![path], move |event| {
+                if matches!(event, WatchEvent::Changed(_)) {
+                    flag.store(true, Ordering::Release);
+                    waker.wake_by_ref();
+                }
+            })
+            .ok()
+        });
+        Personal {
+            inner: Rc::new(PersonalInner {
+                theme,
+                start: Arc::clone(start),
+                settings: Cell::new(settings),
+                last: Cell::new(first),
+                changed,
+            }),
+            _watch: watch,
+        }
+    }
+
+    /// The theme for the appearance the application starts in.
+    fn theme(&self) -> Arc<ThemeTokens> {
+        self.inner.make(&self.inner.last.get())
+    }
+
+    /// Makes the Cupertino theme for each appearance the session reports.
+    fn theme_for(&self) -> ThemeForAppearance {
+        let inner = Rc::clone(&self.inner);
+        Box::new(move |appearance| inner.make(appearance))
+    }
+
+    /// The theme again when `appearance.conf` changed since the last time.
+    fn refresh(&self) -> cupertino_ui_core::PersonalRefresh {
+        let inner = Rc::clone(&self.inner);
+        Box::new(move || {
+            if !inner.changed.swap(false, Ordering::AcqRel) {
+                return None;
+            }
+            let settings = AppearanceSettings::current();
+            inner.settings.set(settings);
+            apply_personal(&settings);
+            Some(inner.make(&inner.last.get()))
+        })
+    }
 }
 
 /// The Cupertino theme from the installed theme data, else the neutral one: an application starts without the

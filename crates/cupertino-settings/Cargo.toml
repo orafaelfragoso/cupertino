@@ -27,6 +27,7 @@ cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-assets = { path = "../cupertino-assets" }
+cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-displays = { path = "../cupertino-displays" }
@@ -41,6 +42,7 @@ cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+libc = "0.2"
 zeroize = "1"
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }

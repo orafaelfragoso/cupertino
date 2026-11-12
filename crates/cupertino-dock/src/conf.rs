@@ -63,6 +63,9 @@ pub fn dock_config(file: Option<&DockSettings>, display_height: f64) -> DockConf
         Position::Right => Orientation::Right,
     });
     cfg.show_recents = f.recents.unwrap_or(cfg.show_recents);
+    cfg.minimize_to_app = f.minimize_to_app.unwrap_or(cfg.minimize_to_app);
+    cfg.launch_animation = f.bounce.unwrap_or(cfg.launch_animation);
+    cfg.show_running_indicators = f.indicators.unwrap_or(cfg.show_running_indicators);
     cfg
 }
 

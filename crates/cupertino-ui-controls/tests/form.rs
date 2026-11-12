@@ -105,6 +105,7 @@ impl Application for Settings {
             label: name.to_string(),
             symbol: "symbol.gear".into(),
             tile: TileColor::Blue,
+            account: None,
         };
         let search = Element::new(SearchField {
             field: TextField {

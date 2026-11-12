@@ -28,6 +28,7 @@ pub mod nm;
 pub mod output_config;
 pub mod pages;
 pub mod pane;
+pub mod pane_extras;
 pub mod panes;
 pub mod screen_sharing;
 pub mod search;
@@ -38,6 +39,7 @@ pub mod sheet;
 #[cfg(feature = "app")]
 pub mod shell;
 pub mod sidebar;
+pub mod system;
 
 pub use geom::{Point, Rect, Size};
 pub use pane::PaneId;

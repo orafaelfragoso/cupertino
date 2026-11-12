@@ -1942,6 +1942,15 @@ impl Model {
             cfg.show_recents = target.show_recents;
             self.recents_basis = None;
         }
+        if before.minimize_to_app != after.minimize_to_app {
+            cfg.minimize_to_app = target.minimize_to_app;
+        }
+        if before.bounce != after.bounce {
+            cfg.launch_animation = target.launch_animation;
+        }
+        if before.indicators != after.indicators {
+            cfg.show_running_indicators = target.show_running_indicators;
+        }
         if before.autohide != after.autohide && cfg.autohide != target.autohide {
             self.session.dock.toggle_autohide(now);
         }

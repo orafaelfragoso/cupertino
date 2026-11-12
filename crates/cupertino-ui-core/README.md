@@ -190,6 +190,11 @@ all on one thread.
   takes the adapter's actions and gives each one to its target as `Event::Action`, in the window whose published tree
   holds it; one for a node that is gone is dropped.
 
+- **Personal choices.** `personal()` holds the choices the person made that the widgets read: what a click in a scroll
+  bar's track does, the sidebar icon size and what a title-area double click does. `with_personal_refresh` lets the
+  application hand the runtime a function that reads them again; the runtime calls it, and rebuilds its theme, when the
+  application wakes it after `appearance.conf` changed.
+
 ## Not yet
 
 An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving

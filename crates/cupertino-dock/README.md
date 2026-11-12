@@ -381,6 +381,8 @@ separator menu switches it; the corner and gesture actions take effect at the ne
 at the next start (the dock keeps the pins the user changes in `dock-pins`). A setting the user changed in the separator
 menu stays until its own key changes in the file.
 
+Minimising into the application's tile, the launch bounce and the running indicators are keys of `dock.conf` too and apply at once; the folder stack style is read from the file each time a stack opens.
+
 ## Protocols / D-Bus it speaks
 
 The process speaks the server's dock protocol (version 19) and `cupertino_session_v1`. On the session bus it only calls

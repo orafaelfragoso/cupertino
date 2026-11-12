@@ -327,6 +327,22 @@ pub struct Live {
     pub notifying_apps: Vec<(String, String)>,
     /// A screen reader is installed (`Paths::screen_reader`): without one the Screen reader switch is disabled.
     pub screen_reader_installed: bool,
+    /// What the General and Account panes show of the machine, read when one of them opens.
+    pub system: Option<Box<crate::system::SystemInfo>>,
+    /// The programs that start at login, read when the General pane opens.
+    pub login_items: Vec<crate::system::LoginItem>,
+    /// The installed web browsers and the index of the default one.
+    pub browsers: (Vec<crate::system::Browser>, Option<usize>),
+    /// The status icons applications have put in the menu bar, read when the Menu Bar pane opens.
+    pub tray: Vec<TrayItem>,
+}
+
+/// A status icon an application keeps in the menu bar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrayItem {
+    /// The id `menubar.conf` lists it by: the application's own id for the icon, else its bus name.
+    pub id: String,
+    pub name: String,
 }
 
 impl Default for Live {
@@ -347,6 +363,10 @@ impl Default for Live {
             apps: Vec::new(),
             notifying_apps: Vec::new(),
             screen_reader_installed: false,
+            system: None,
+            login_items: Vec::new(),
+            browsers: (Vec::new(), None),
+            tray: Vec::new(),
         }
     }
 }

@@ -11,12 +11,14 @@ pub use cupertino_theme::control_sizes::{
 pub use cupertino_theme::glass::FaceTone;
 pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
 
+mod accent;
 mod adapter;
 mod metrics;
 mod neutral;
 mod palette;
 mod vibrant;
 
+pub use accent::selection_tint;
 pub use vibrant::{
     glass_foreground, vibrant_level, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY, VIBRANT_SECONDARY,
 };

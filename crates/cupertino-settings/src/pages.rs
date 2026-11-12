@@ -44,10 +44,16 @@ pub enum SubPage {
     ScreenSharing,
     DesktopControl,
     ScreenCapture,
+    About,
+    SoftwareUpdate,
+    Storage,
+    DateTime,
+    LanguageRegion,
+    LoginItems,
 }
 
 impl SubPage {
-    pub const ALL: [SubPage; 10] = [
+    pub const ALL: [SubPage; 16] = [
         SubPage::Display,
         SubPage::LoginScreen,
         SubPage::ScreenReader,
@@ -58,6 +64,12 @@ impl SubPage {
         SubPage::ScreenSharing,
         SubPage::DesktopControl,
         SubPage::ScreenCapture,
+        SubPage::About,
+        SubPage::SoftwareUpdate,
+        SubPage::Storage,
+        SubPage::DateTime,
+        SubPage::LanguageRegion,
+        SubPage::LoginItems,
     ];
 
     /// The pane it opens from.
@@ -73,6 +85,12 @@ impl SubPage {
             | SubPage::ScreenSharing
             | SubPage::DesktopControl
             | SubPage::ScreenCapture => PaneId::Privacy,
+            SubPage::About
+            | SubPage::SoftwareUpdate
+            | SubPage::Storage
+            | SubPage::DateTime
+            | SubPage::LanguageRegion
+            | SubPage::LoginItems => PaneId::General,
         }
     }
 
@@ -89,6 +107,12 @@ impl SubPage {
             SubPage::ScreenSharing => "Screen Sharing",
             SubPage::DesktopControl => crate::desktop_control::title(Service::Control),
             SubPage::ScreenCapture => crate::desktop_control::title(Service::Capture),
+            SubPage::About => "About",
+            SubPage::SoftwareUpdate => "Software Update",
+            SubPage::Storage => "Storage",
+            SubPage::DateTime => "Date & Time",
+            SubPage::LanguageRegion => "Language & Region",
+            SubPage::LoginItems => "Login Items",
         }
     }
 
@@ -105,14 +129,33 @@ impl SubPage {
             SubPage::ScreenSharing => "symbol.screen-mirroring.fill",
             SubPage::DesktopControl => "symbol.desktop.fill",
             SubPage::ScreenCapture => "symbol.photo.fill",
+            SubPage::About => "symbol.computer.fill",
+            SubPage::SoftwareUpdate => "symbol.download.fill",
+            SubPage::Storage => "symbol.externaldrive.fill",
+            SubPage::DateTime => "symbol.recents.fill",
+            SubPage::LanguageRegion => "symbol.network.fill",
+            SubPage::LoginItems => "symbol.applications.fill",
         }
     }
 
     pub fn enclosure(self) -> Enclosure {
         match self {
             SubPage::HotCorners => Enclosure::Black,
-            SubPage::LoginScreen => Enclosure::Gray,
+            SubPage::LoginScreen | SubPage::About | SubPage::Storage | SubPage::LoginItems => {
+                Enclosure::Gray
+            }
+            SubPage::SoftwareUpdate => Enclosure::Red,
             _ => Enclosure::Blue,
+        }
+    }
+
+    /// The group of rows it stands in on its pane's page: the pages of one group sit together, set apart from the
+    /// next group.
+    pub fn group(self) -> u8 {
+        match self {
+            SubPage::About | SubPage::SoftwareUpdate | SubPage::Storage => 0,
+            SubPage::DateTime | SubPage::LanguageRegion | SubPage::LoginItems => 1,
+            _ => 0,
         }
     }
 
@@ -142,9 +185,21 @@ pub fn has_header(pane: PaneId) -> bool {
     )
 }
 
+/// Whether the pane's page starts with a large card: its icon over its title and description.
+pub fn has_card(pane: PaneId) -> bool {
+    matches!(pane, PaneId::General)
+}
+
 /// The pane's one-line description on its header card.
 pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
     match pane {
+        PaneId::Account => "Your name, picture and how you sign in.",
+        PaneId::General => {
+            "See what this computer is, and set its time, language and startup items."
+        }
+        PaneId::MenuBar => {
+            "Choose what the menu bar shows, and how the clock and recent items look."
+        }
         PaneId::Wifi => "Turn wireless networking on or off and join the networks around you.",
         PaneId::Bluetooth => "Pair and connect keyboards, headphones and other wireless devices.",
         PaneId::Network => "See this computer's network connections and how they are set up.",
@@ -155,8 +210,10 @@ pub fn description(pane: PaneId, has_battery: Option<bool>) -> &'static str {
         PaneId::Accessibility => {
             "Adjust the display, pointer, keyboard and screen reader to the way you work."
         }
-        PaneId::Appearance => "Choose a light or dark look for the desktop and its apps.",
-        PaneId::ControlPanel => "Choose what the clock in the menu bar shows.",
+        PaneId::Appearance => {
+            "Choose a light or dark look, an accent colour and how scroll bars behave."
+        }
+        PaneId::ControlPanel => "Choose which control panel items also show in the menu bar.",
         PaneId::DesktopDock => {
             "Set the Dock's size, position and behaviour, and what the screen corners do."
         }
@@ -216,13 +273,18 @@ pub fn blocks(page: Page, sections: Vec<Section>) -> Vec<Block> {
                 }
             }
             let mut out = Vec::new();
-            let mut linked = false;
+            let mut linked: Vec<u8> = Vec::new();
             for (section, owner) in sections.into_iter().zip(&owners) {
                 match owner {
                     None => out.push(Block::Section(section)),
-                    Some(_) if !linked => {
-                        linked = true;
-                        out.push(Block::Links(subs.clone()));
+                    Some(sub) if !linked.contains(&sub.group()) => {
+                        linked.push(sub.group());
+                        out.push(Block::Links(
+                            subs.iter()
+                                .copied()
+                                .filter(|s| s.group() == sub.group())
+                                .collect(),
+                        ));
                     }
                     Some(_) => {}
                 }

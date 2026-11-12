@@ -15,6 +15,7 @@ use crate::merge::{self, Export, Exporter};
 use crate::recent::RecentItems;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
+use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_icons::from_argb;
 use cupertino_kit::core::IconImage;
 use cupertino_shell_client::{
@@ -27,6 +28,26 @@ use tiny_skia::{IntSize, Pixmap};
 
 /// The status slot of the screen capture indicator.
 pub const SCREEN_CAPTURE_SLOT: &str = "indicator:screen-capture";
+
+/// Whether `menubar.conf` lets the bar's own item `kind` show.
+/// The id `menubar.conf` lists a status icon by: the application's own id for it, which stays the same from one run
+/// to the next, else the name of its bus service.
+fn tray_key(item: &crate::dbus::sni::StatusItem) -> &str {
+    if item.app_id.is_empty() {
+        &item.service
+    } else {
+        &item.app_id
+    }
+}
+
+fn kind_shown(conf: &MenuBarSettings, kind: ExtraKind) -> bool {
+    match kind {
+        ExtraKind::Wifi => conf.shown.wifi,
+        ExtraKind::Battery => conf.shown.battery,
+        ExtraKind::Bluetooth => conf.shown.bluetooth,
+        ExtraKind::Focus => conf.shown.focus,
+    }
+}
 
 /// A status item with its icon at the size the bars draw.
 #[derive(Clone, Debug)]
@@ -62,6 +83,8 @@ pub struct Shared {
     pub chords: Chords,
     /// The rows of Recent Items in the system menu, read when it last opened.
     pub recent: RecentItems,
+    /// `menubar.conf`: which items show, and how many recent items the system menu lists.
+    pub conf: MenuBarSettings,
     pub clock: String,
     /// Menu trees of the exporters in use. A source is present from the moment its tree is
     /// requested, with an empty tree until the exporter answers.
@@ -307,20 +330,32 @@ impl BarFeed {
             width: PRIVACY_DOT_PT,
             menu: None,
         });
-        let extras = shared.extras.shown().into_iter().map(|kind| StatusEntry {
-            id: kind.slot_id().to_owned(),
-            width: STATUS_ICON_PT,
-            menu: Some(shared.extras.status_menu(kind)),
-        });
-        let items = shared.status.iter().map(|s| StatusEntry {
-            id: s.item.id.clone(),
-            width: STATUS_ICON_PT,
-            menu: s.menu.clone().map(|m| MenuItem {
-                label: s.item.title.clone(),
-                has_submenu: true,
-                ..m
-            }),
-        });
+        let extras = shared
+            .extras
+            .shown()
+            .into_iter()
+            .filter(|kind| kind_shown(&shared.conf, *kind))
+            .map(|kind| StatusEntry {
+                id: kind.slot_id().to_owned(),
+                width: STATUS_ICON_PT,
+                menu: Some(shared.extras.status_menu(kind)),
+            });
+        let items = shared
+            .status
+            .iter()
+            .filter(|s| {
+                let key = tray_key(&s.item);
+                !shared.conf.hidden_tray.iter().any(|h| h == key)
+            })
+            .map(|s| StatusEntry {
+                id: s.item.id.clone(),
+                width: STATUS_ICON_PT,
+                menu: s.menu.clone().map(|m| MenuItem {
+                    label: s.item.title.clone(),
+                    has_submenu: true,
+                    ..m
+                }),
+            });
         let status = indicator.into_iter().chain(extras).chain(items).collect();
         let system_menu = shared
             .extras
@@ -332,7 +367,11 @@ impl BarFeed {
             app_menu,
             menus,
             status,
-            clock: shared.clock.clone(),
+            clock: if shared.conf.shown.clock {
+                shared.clock.clone()
+            } else {
+                String::new()
+            },
             control_panel: true,
         }
     }

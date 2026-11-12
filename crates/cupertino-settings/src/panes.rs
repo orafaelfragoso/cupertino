@@ -5,6 +5,7 @@
 use cupertino_defaults::accessibility::{
     AccessibilitySettings, ColorFilter, DisplayOption, DisplayOptions, SYSTEM_KEYS,
 };
+use cupertino_defaults::appearance::Accent;
 use cupertino_defaults::compositor::{MinimizeEffectName, ScrollBarsName};
 use cupertino_defaults::desktop_control::{App, Decision, Service};
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
@@ -27,6 +28,7 @@ use crate::live::{
 };
 use crate::mapping;
 use crate::pane::PaneId;
+use crate::pane_extras;
 use crate::screen_sharing;
 use crate::settings::{File, Settings};
 
@@ -37,6 +39,33 @@ pub enum ControlId {
     Reading,
     Appearance,
     ShowScrollBars,
+    /// What a click in a scroll bar's track off the knob does.
+    ScrollClick,
+    /// The time the dark look starts, and the time the light look starts, while the look follows the time of day.
+    AutoDarkFrom,
+    AutoLightFrom,
+    AccentColor,
+    HighlightColor,
+    SidebarIconSize,
+    /// What a double click on a window's title bar does.
+    DoubleClickTitle,
+    MinimizeIntoIcon,
+    LaunchBounce,
+    RunningIndicators,
+    StackStyle,
+    DefaultBrowser,
+    MenuBarBackground,
+    ShowClock,
+    ShowWifi,
+    ShowBluetooth,
+    ShowBattery,
+    ShowFocus,
+    RecentDocuments,
+    RecentApps,
+    /// A status icon of `pane_extras::tray_list`, by index: whether it shows in the bar.
+    TrayItem(usize),
+    /// A program of `Live::login_items`, by index: whether it opens at login.
+    LoginItem(usize),
     DockSize,
     Magnification,
     DockPosition,
@@ -180,6 +209,13 @@ pub enum Effect {
     Store(File),
     /// Ask the server for the appearance.
     SetAppearance { dark: bool },
+    /// Store `appearance.conf` (its automatic switch changed), then ask the server for the look `dark` when one is
+    /// due now.
+    SetTheme { dark: Option<bool> },
+    /// Turn the login item `id` on or off.
+    SetLoginItem { id: String, enable: bool },
+    /// Make the browser with desktop file `id` the default.
+    SetDefaultBrowser { id: String },
     /// Ask the server to set a key of `accessibility.conf` to a value as the file writes it.
     SetAccessibility { key: &'static str, value: String },
     /// Ask sessiond to make [`login_screen_options`] the machine's accessibility defaults.
@@ -337,7 +373,12 @@ const CURSOR_MAX: f64 = 4.0;
 /// The caps-lock delay: 75 ms or off (default).
 const CAPS_LOCK_DELAY_MS: u32 = 75;
 
-fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backend) -> Row {
+pub(crate) fn row(
+    id: ControlId,
+    label: impl Into<String>,
+    control: Control,
+    backend: Backend,
+) -> Row {
     Row {
         id,
         label: label.into(),
@@ -879,6 +920,20 @@ fn index_of<T: PartialEq + Copy>(table: &[(&str, T)], value: T) -> usize {
         .expect("every value the files hold is in its control's table")
 }
 
+/// The Show scroll bars row, shared by the Appearance pane.
+pub(crate) fn scroll_bars_row(settings: &Settings) -> Row {
+    // automatically: beside the content while a mouse is connected, else over it while it scrolls
+    row(
+        ControlId::ShowScrollBars,
+        "Show scroll bars",
+        popup(
+            SCROLL_BARS.iter().map(|(l, _)| *l),
+            index_of(&SCROLL_BARS, settings.show_scroll_bars()),
+        ),
+        Backend::Key(File::Compositor, "show_scroll_bars"),
+    )
+}
+
 /// The corner's action as a choice: its index, or `None` for an action the list does not offer (a command, a server
 /// action of its own), which is kept until the user picks another.
 fn corner_choice(action: &ActionTarget) -> Option<usize> {
@@ -901,31 +956,9 @@ pub fn restart_footer(file: File, reloads: bool) -> Option<String> {
 pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live) -> Vec<Section> {
     let file_footer = |file: File| restart_footer(file, file.reloads());
     match pane {
-        PaneId::Appearance => vec![Section {
-            header: None,
-            rows: vec![
-                row(
-                    ControlId::Appearance,
-                    "Appearance",
-                    Control::Segmented {
-                        segments: vec!["Light", "Dark"],
-                        selected: usize::from(session.dark),
-                    },
-                    Backend::SetAppearance,
-                ),
-                // automatically: beside the content while a mouse is connected, else over it while it scrolls
-                row(
-                    ControlId::ShowScrollBars,
-                    "Show scroll bars",
-                    popup(
-                        SCROLL_BARS.iter().map(|(l, _)| *l),
-                        index_of(&SCROLL_BARS, settings.show_scroll_bars()),
-                    ),
-                    Backend::Key(File::Compositor, "show_scroll_bars"),
-                ),
-            ],
-            footer: None,
-        }],
+        PaneId::Appearance => crate::pane_extras::appearance_sections(settings, session.dark),
+        PaneId::Account => crate::pane_extras::account_sections(live),
+        PaneId::General => crate::pane_extras::general_sections(live),
         PaneId::DesktopDock => {
             let dock = Backend::Key;
             let mut corners: Vec<Row> = Vec::new();
@@ -948,80 +981,85 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     dock(File::Dock, key),
                 ));
             }
-            vec![
-                Section {
-                    header: header("Dock"),
-                    rows: vec![
-                        row(
-                            ControlId::DockSize,
-                            "Size",
-                            Control::Slider {
-                                value: mapping::dock_value(settings.tile_size()),
-                                stops: None,
-                                marks: &mapping::DOCK_SIZE_MARKS,
-                                labels: ("Small", "Large"),
-                            },
-                            dock(File::Dock, "tile_size"),
-                        ),
-                        row(
-                            ControlId::Magnification,
-                            "Magnification",
-                            Control::Slider {
-                                value: mapping::magnification_value(
-                                    settings.magnification(),
-                                    settings.large_size(),
-                                    settings.tile_size(),
-                                ),
-                                stops: None,
-                                marks: &mapping::MAGNIFICATION_MARKS,
-                                labels: ("Off", "Large"),
-                            },
-                            dock(File::Dock, "large_size"),
-                        ),
-                        row(
-                            ControlId::DockPosition,
-                            "Position on screen",
-                            Control::Segmented {
-                                segments: POSITIONS.iter().map(|(l, _)| *l).collect(),
-                                selected: index_of(&POSITIONS, settings.position()),
-                            },
-                            dock(File::Dock, "position"),
-                        ),
-                        row(
-                            ControlId::MinimizeEffect,
-                            "Minimize windows using",
-                            popup(
-                                EFFECTS.iter().map(|(l, _)| *l),
-                                index_of(&EFFECTS, settings.minimize_effect()),
+            let mut sections = vec![Section {
+                header: header("Dock"),
+                rows: vec![
+                    row(
+                        ControlId::DockSize,
+                        "Size",
+                        Control::Slider {
+                            value: mapping::dock_value(settings.tile_size()),
+                            stops: None,
+                            marks: &mapping::DOCK_SIZE_MARKS,
+                            labels: ("Small", "Large"),
+                        },
+                        dock(File::Dock, "tile_size"),
+                    ),
+                    row(
+                        ControlId::Magnification,
+                        "Magnification",
+                        Control::Slider {
+                            value: mapping::magnification_value(
+                                settings.magnification(),
+                                settings.large_size(),
+                                settings.tile_size(),
                             ),
-                            dock(File::Compositor, "minimize_effect"),
+                            stops: None,
+                            marks: &mapping::MAGNIFICATION_MARKS,
+                            labels: ("Off", "Large"),
+                        },
+                        dock(File::Dock, "large_size"),
+                    ),
+                    row(
+                        ControlId::DockPosition,
+                        "Position on screen",
+                        Control::Segmented {
+                            segments: POSITIONS.iter().map(|(l, _)| *l).collect(),
+                            selected: index_of(&POSITIONS, settings.position()),
+                        },
+                        dock(File::Dock, "position"),
+                    ),
+                    row(
+                        ControlId::MinimizeEffect,
+                        "Minimize windows using",
+                        popup(
+                            EFFECTS.iter().map(|(l, _)| *l),
+                            index_of(&EFFECTS, settings.minimize_effect()),
                         ),
-                        row(
-                            ControlId::AutoHide,
-                            "Automatically hide and show the Dock",
-                            switch(settings.autohide()),
-                            dock(File::Dock, "autohide"),
-                        ),
-                        row(
-                            ControlId::Recents,
-                            "Show suggested and recent apps in Dock",
-                            switch(settings.recents()),
-                            dock(File::Dock, "recents"),
-                        ),
-                    ],
-                    footer: file_footer(File::Dock),
-                },
-                Section {
-                    header: header("Hot Corners"),
-                    rows: corners,
-                    footer: file_footer(File::Dock),
-                },
-            ]
+                        dock(File::Compositor, "minimize_effect"),
+                    ),
+                    row(
+                        ControlId::AutoHide,
+                        "Automatically hide and show the Dock",
+                        switch(settings.autohide()),
+                        dock(File::Dock, "autohide"),
+                    ),
+                    row(
+                        ControlId::Recents,
+                        "Show suggested and recent apps in Dock",
+                        switch(settings.recents()),
+                        dock(File::Dock, "recents"),
+                    ),
+                ]
+                .into_iter()
+                .chain(crate::pane_extras::dock_dock_rows(settings))
+                .collect(),
+                footer: file_footer(File::Dock),
+            }];
+            sections.push(crate::pane_extras::windows_section(settings));
+            sections.extend(crate::pane_extras::browser_section(live));
+            sections.push(Section {
+                header: header("Hot Corners"),
+                rows: corners,
+                footer: file_footer(File::Dock),
+            });
+            sections
         }
-        PaneId::ControlPanel => {
+        PaneId::ControlPanel => crate::pane_extras::control_panel_sections(settings),
+        PaneId::MenuBar => {
             let c = settings.menubar.clock;
             let key = |k| Backend::Key(File::MenuBar, k);
-            vec![Section {
+            let clock = Section {
                 header: header("Clock Options"),
                 rows: vec![
                     row(
@@ -1062,7 +1100,11 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     ),
                 ],
                 footer: file_footer(File::MenuBar),
-            }]
+            };
+            let mut sections = crate::pane_extras::menu_bar_head_sections(settings);
+            sections.push(clock);
+            sections.extend(crate::pane_extras::menu_bar_tail_sections(settings, live));
+            sections
         }
         PaneId::Keyboard => {
             let rate =
@@ -2332,9 +2374,146 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         other => panic!("{id:?} is a slider, not {other:?}"),
     };
     match id {
-        ControlId::Appearance => vec![Effect::SetAppearance {
-            dark: index_of(value) == 1,
-        }],
+        ControlId::Appearance => {
+            // Auto follows the schedule; Light and Dark turn it off and set the look at once
+            let choice = index_of(value);
+            settings.appearance.auto = choice == 0;
+            let dark = match choice {
+                0 => settings.appearance.dark_at(crate::system::local_minutes()),
+                other => other == 2,
+            };
+            vec![Effect::SetTheme { dark: Some(dark) }]
+        }
+        ControlId::AutoDarkFrom => {
+            settings.appearance.auto_dark_from =
+                pane_extras::time_of_choice(index_of(value), settings.appearance.auto_dark_from);
+            vec![Effect::SetTheme {
+                dark: Some(settings.appearance.dark_at(crate::system::local_minutes())),
+            }]
+        }
+        ControlId::AutoLightFrom => {
+            settings.appearance.auto_light_from =
+                pane_extras::time_of_choice(index_of(value), settings.appearance.auto_light_from);
+            vec![Effect::SetTheme {
+                dark: Some(settings.appearance.dark_at(crate::system::local_minutes())),
+            }]
+        }
+        ControlId::AccentColor => {
+            let Some(accent) = Accent::ALL.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.appearance.accent = *accent;
+            store(File::Appearance)
+        }
+        ControlId::HighlightColor => {
+            let Some(h) = pane_extras::highlight_choices()
+                .get(index_of(value))
+                .copied()
+            else {
+                return Vec::new();
+            };
+            settings.appearance.highlight = h;
+            store(File::Appearance)
+        }
+        ControlId::SidebarIconSize => {
+            let Some((_, size)) = pane_extras::SIDEBAR_ICON_CHOICES.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.appearance.sidebar_icons = *size;
+            store(File::Appearance)
+        }
+        ControlId::ScrollClick => {
+            let Some((_, click)) = pane_extras::SCROLL_CLICK_CHOICES.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.appearance.scroll_click = *click;
+            store(File::Appearance)
+        }
+        ControlId::DoubleClickTitle => {
+            let Some((_, action)) = pane_extras::TITLE_ACTION_CHOICES.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.appearance.titlebar_double_click = *action;
+            store(File::Appearance)
+        }
+        ControlId::MinimizeIntoIcon => {
+            settings.dock.minimize_to_app = Some(bool_of(value));
+            store(File::Dock)
+        }
+        ControlId::LaunchBounce => {
+            settings.dock.bounce = Some(bool_of(value));
+            store(File::Dock)
+        }
+        ControlId::RunningIndicators => {
+            settings.dock.indicators = Some(bool_of(value));
+            store(File::Dock)
+        }
+        ControlId::StackStyle => {
+            let Some((_, style)) = pane_extras::STACK_CHOICES.get(index_of(value)) else {
+                return Vec::new();
+            };
+            settings.dock.stack = Some(*style);
+            store(File::Dock)
+        }
+        ControlId::DefaultBrowser => match live.browsers.0.get(index_of(value)) {
+            Some(browser) => vec![Effect::SetDefaultBrowser {
+                id: browser.id.clone(),
+            }],
+            None => Vec::new(),
+        },
+        ControlId::LoginItem(i) => match live.login_items.get(i) {
+            Some(item) => vec![Effect::SetLoginItem {
+                id: item.id.clone(),
+                enable: bool_of(value),
+            }],
+            None => Vec::new(),
+        },
+        ControlId::MenuBarBackground => {
+            settings.menubar.background = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::ShowClock => {
+            settings.menubar.shown.clock = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::ShowWifi => {
+            settings.menubar.shown.wifi = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::ShowBluetooth => {
+            settings.menubar.shown.bluetooth = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::ShowBattery => {
+            settings.menubar.shown.battery = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::ShowFocus => {
+            settings.menubar.shown.focus = bool_of(value);
+            store(File::MenuBar)
+        }
+        ControlId::RecentDocuments => {
+            settings.menubar.recent_documents =
+                pane_extras::count_of_choice(index_of(value), settings.menubar.recent_documents);
+            store(File::MenuBar)
+        }
+        ControlId::RecentApps => {
+            settings.menubar.recent_apps =
+                pane_extras::count_of_choice(index_of(value), settings.menubar.recent_apps);
+            store(File::MenuBar)
+        }
+        ControlId::TrayItem(i) => {
+            let list = pane_extras::tray_list(settings, live);
+            let Some((id, _)) = list.get(i) else {
+                return Vec::new();
+            };
+            let hidden = &mut settings.menubar.hidden_tray;
+            hidden.retain(|h| h != id);
+            if !bool_of(value) {
+                hidden.push(id.clone());
+            }
+            store(File::MenuBar)
+        }
         ControlId::MouseResolution(i) => {
             let Some(mouse) = live.mice.ready().and_then(|m| m.get(i)) else {
                 return Vec::new();
@@ -2867,9 +3046,8 @@ mod tests {
         Settings {
             dock: DockSettings::default(),
             compositor: CompositorSettings::default(),
-            menubar: MenuBarSettings {
-                clock: ClockSettings::UNSET,
-            },
+            menubar: MenuBarSettings::UNSET,
+            appearance: cupertino_defaults::appearance::AppearanceSettings::UNSET,
             keyboard: KeyboardSettings::default(),
             power: cupertino_defaults::power::PowerSettings::default(),
             accessibility: cupertino_defaults::accessibility::AccessibilitySettings::default(),

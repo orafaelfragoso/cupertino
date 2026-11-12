@@ -10,6 +10,8 @@
 //! | `large_size` | points; valid `0 < v < 513`, rounded up ([`sanitize_large_size`]) | 128 |
 //! | `magnification`, `autohide`, `recents` | `on`, `off` | off, off, on |
 //! | `position` | `bottom`, `left`, `right` | `bottom` |
+//! | `stack` | `auto`, `fan`, `grid` | `auto` |
+//! | `minimize_to_app`, `bounce`, `indicators` | `on`, `off` | off, on, on |
 //! | `corner_top_left` … `spread` ([`TRIGGER_KEYS`]) | `none`, `app-grid`, `exec:<command line>`, a server action name | [`ActionMap::default`] |
 //!
 //! Size defaults and validation are the design's; out-of-range sizes fall back to the default as
@@ -216,6 +218,12 @@ pub struct DockSettings {
     pub position: Option<Position>,
     pub recents: Option<bool>,
     pub stack: Option<StackStyle>,
+    /// Windows minimise into their application's tile instead of getting tiles of their own.
+    pub minimize_to_app: Option<bool>,
+    /// A tile bounces while its application starts.
+    pub bounce: Option<bool>,
+    /// A dot under the tile of a running application.
+    pub indicators: Option<bool>,
     pub actions: ActionMap,
 }
 
@@ -298,6 +306,24 @@ const KEYS: &[Key<DockSettings>] = &[
         read: |s, v| parse_switch(v).map(|b| s.recents = Some(b)),
         write: |s| s.recents.map(switch_text),
         keep: |s, g| s.recents = g.recents,
+    },
+    Key {
+        name: "minimize_to_app",
+        read: |s, v| parse_switch(v).map(|b| s.minimize_to_app = Some(b)),
+        write: |s| s.minimize_to_app.map(switch_text),
+        keep: |s, g| s.minimize_to_app = g.minimize_to_app,
+    },
+    Key {
+        name: "bounce",
+        read: |s, v| parse_switch(v).map(|b| s.bounce = Some(b)),
+        write: |s| s.bounce.map(switch_text),
+        keep: |s, g| s.bounce = g.bounce,
+    },
+    Key {
+        name: "indicators",
+        read: |s, v| parse_switch(v).map(|b| s.indicators = Some(b)),
+        write: |s| s.indicators.map(switch_text),
+        keep: |s, g| s.indicators = g.indicators,
     },
     Key {
         name: "stack",

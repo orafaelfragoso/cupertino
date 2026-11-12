@@ -250,7 +250,12 @@ struct Run {
     reader: AssistiveTechnology,
     /// The windows are layer surfaces, active while they have the keyboard rather than by their configures' state.
     layers: bool,
+    /// The driver's clock: the runtime's time, which moves only while a window's transition runs.
+    clock: ManualClock,
 }
+
+/// A display frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 
 fn active() -> WindowStates {
     WindowStates {
@@ -305,13 +310,14 @@ impl Run {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
+        let clock = ManualClock::new(Timestamp(0));
         let driver = TestDriver::new(
             Capabilities {
                 app_effects,
                 ..Capabilities::default()
             },
             options,
-            ManualClock::new(Timestamp(0)),
+            clock.clone(),
         );
         let mut run = Run {
             driver,
@@ -320,6 +326,7 @@ impl Run {
             trace: String::new(),
             reader,
             layers,
+            clock,
         };
         run.settle();
         run
@@ -362,9 +369,14 @@ impl Run {
     }
 
     /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
-    /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again.
+    /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again. A
+    /// window still asking after 16 rounds at the same time is in a transition (its colours crossing as it becomes
+    /// active, a chosen menu row flashing): the clock then moves a display frame per round, for up to 2 seconds.
     fn settle_frames(&mut self) {
-        for _ in 0..16 {
+        for round in 0..16 + 120 {
+            if round >= 16 {
+                self.clock.advance_by(FRAME_NS);
+            }
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
             for (key, id) in self.driver.runtime().windows() {
@@ -396,7 +408,8 @@ impl Run {
             for (_, id) in self.driver.runtime().windows() {
                 let system = self.driver.window_system_mut();
                 if system.frame_requested(id).unwrap() {
-                    system.frame_ready(id, Timestamp(0)).unwrap();
+                    let now = cupertino_kit::core::Clock::now(&self.clock);
+                    system.frame_ready(id, now).unwrap();
                     busy = true;
                 }
             }
@@ -482,6 +495,13 @@ impl Run {
             panel.selected_item().map(|i| i.title.as_str()),
             panel.scroll_row()
         )
+    }
+
+    /// Moves the clock on by `ms` milliseconds and lets what was due run: a chosen menu row's flash, which sends the
+    /// choice when it ends.
+    fn wait(&mut self, ms: u64) {
+        self.clock.advance_by(ms * 1_000_000);
+        self.settle();
     }
 
     fn click(&mut self, window: WindowId, position: Point) {
@@ -1147,9 +1167,10 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
     panel.set_query("e", &launcher, now);
     assert!(visible_rows(&panel).len() <= MAX_ROWS);
     assert!(panel_height(&panel) >= MIN_EXPANDED_HEIGHT);
+    // centred, its top 203 / 982 of the way down
     assert_eq!(
         placement(OUTPUT, 430.0),
-        Rect::new(180.0, 140.0, WIDTH, 430.0)
+        Rect::new(180.0, (OUTPUT.height * TOP_FRACTION).round(), WIDTH, 430.0)
     );
     // the window keeps room for the shadow around the panel, which alone takes input
     let shape = PanelShape::new(WIDTH, 430.0, CORNER_RADIUS);
@@ -1170,7 +1191,7 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         (2.0 * SHADOW_SIDE, SHADOW_TOP + SHADOW_BOTTOM)
     );
     assert_eq!(panel.origin, Point::new(SHADOW_SIDE, SHADOW_TOP));
-    // scaled as it opens, about its top centre
+    // scaled as it opens, about its centre
     let opening = enclosure_rect(
         window,
         &Frame {
@@ -1178,8 +1199,7 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
             ..frame
         },
     );
-    assert_eq!(opening.min_y(), SHADOW_TOP);
-    assert_eq!(opening.center().x, panel.center().x);
+    assert_eq!(opening.center(), panel.center());
     assert_eq!(opening.width(), WIDTH / 2.0);
 }
 
@@ -1549,7 +1569,11 @@ fn typing_filters_the_applications_and_escape_folds_the_browser_before_it_closes
     run.key("Escape", ESCAPE_CODE, ESCAPE);
     assert_eq!(run.model().nav.view, View::Search);
     assert_eq!(run.field_name().as_deref(), Some("Search"));
-    assert!(run.names(Role::Button).is_empty());
+    assert_eq!(
+        run.names(Role::Button),
+        ["Applications"],
+        "no application, only the mode button beside the search field"
+    );
     assert_eq!(run.model().extent(), window_extent(compact_shape()));
     run.key("Escape", ESCAPE_CODE, ESCAPE);
     assert!(run.window("panel").is_none());
@@ -1971,6 +1995,8 @@ fn only_a_keyboard_choice_leaves_the_focus_ring_on_the_view_options_button() {
     let menu = run.options_menu().expect("the press opened the menu");
     let list = run.rect_in(menu, 1u64);
     run.click(menu, list.center());
+    // the chosen row flashes before the choice is sent
+    run.wait(150);
     assert!(run.options_menu().is_none(), "the click chose");
     assert_eq!(
         run.model().browser.as_ref().unwrap().arrangement(),
@@ -2315,7 +2341,11 @@ fn on_a_moving_clock_the_window_follows_the_browser_and_settles_at_the_search_fi
     // on a short output the browser leaves room at its foot
     kit::update(&mut model, Message::Output(Size::new(1000.0, 700.0)));
     run_for(&mut model, 1.0);
-    let short = BrowseLayout::height_on(700.0, 140.0, kit::BROWSE_BOTTOM_ROOM);
+    let short = BrowseLayout::height_on(
+        700.0,
+        (700.0 * TOP_FRACTION).round(),
+        kit::BROWSE_BOTTOM_ROOM,
+    );
     assert!(short < BrowseLayout::HEIGHT);
     assert_eq!(size.get(), window_extent(browse_shape(short)));
     kit::update(
@@ -2325,7 +2355,8 @@ fn on_a_moving_clock_the_window_follows_the_browser_and_settles_at_the_search_fi
     assert_eq!(model.nav.view, View::Search);
     // while the shape contracts the window still holds it
     assert_eq!(size.get(), window_extent(browse_shape(short)));
-    run_for(&mut model, 1.0);
+    // the field contracts, then the mode buttons bud out of it again
+    run_for(&mut model, 3.0);
     assert!(!model.motion.animating(clock.get()));
     assert_eq!(
         size.get(),

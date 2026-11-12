@@ -640,14 +640,15 @@ mod tests {
         );
         assert_eq!((f.alpha, f.scale, f.content), (0.0, ENTER_SCALE, 0.0));
         assert_eq!(f.header, Header::Browse);
-        // the enclosure is well on its way while the content has not started
+        // the enclosure is well on its way, shrinking towards its size, while the content has not started
         let f = m.frame(CONTENT_DELAY);
-        assert!(f.alpha > 0.5 && f.scale > ENTER_SCALE, "{f:?}");
+        assert!(f.alpha > 0.5 && f.scale < ENTER_SCALE, "{f:?}");
         assert_eq!(f.content, 0.0);
         let f = m.frame(CONTENT_DELAY + CONTENT_FADE / 2.0);
         assert!(f.content > 0.0 && f.content < 1.0, "{f:?}");
         let f = m.frame(settled(0.0));
-        assert_eq!((f.alpha, f.scale, f.content), (1.0, 1.0, 1.0));
+        assert_eq!((f.alpha, f.content), (1.0, 1.0));
+        assert!((f.scale - 1.0).abs() < 1e-9, "{f:?}");
         assert!(!m.animating(settled(0.0)));
     }
 
@@ -669,13 +670,15 @@ mod tests {
             "the search field's header once the content is gone"
         );
         assert_eq!(f.shape, OPEN, "the contraction starts after the fade");
-        // then the shape closes in, monotonically, and settles on the capsule
-        let mut last = OPEN;
+        // then the shape closes in, going past the capsule by a few points at most, and settles on it
         for i in 1..=40 {
             let s = m.frame(1.0 + FOLD_FADE + i as f64 * 0.01).shape;
-            assert!(s.width <= last.width + 1e-9 && s.height <= last.height + 1e-9);
+            assert!(s.width <= OPEN.width + 1e-9 && s.height <= OPEN.height + 1e-9);
+            assert!(
+                s.width >= COMPACT.width - 8.0 && s.height >= COMPACT.height - 8.0,
+                "{s:?}"
+            );
             assert!(s.radius <= s.height / 2.0 + 1e-9);
-            last = s;
         }
         let near = m.frame(1.0 + FOLD_FADE + 0.2).shape;
         assert!(
@@ -797,9 +800,13 @@ mod tests {
             .map(|i| f64::from(i) / 120.0)
             .find(|&t| !m.animating(t))
             .unwrap();
-        assert_ne!(m.frame(rest - 1.0 / 120.0).shape, RESULTS);
-        // the spring's value keeps a remainder long after, which no frame presents: each would reshape the glass
-        assert_ne!(Shape::of(m.shape.value(rest + 0.5)), RESULTS);
+        // a frame not yet at the target is never taken for the end of the motion
+        for i in 1..(rest * 120.0).round() as u32 {
+            let t = f64::from(i) / 120.0;
+            if m.frame(t).shape != RESULTS {
+                assert!(m.animating(t), "at {t}");
+            }
+        }
         for i in 0..120 {
             assert_eq!(m.frame(rest + f64::from(i) / 60.0).shape, RESULTS);
         }

@@ -638,8 +638,15 @@ fn the_settled_panel_s_glass_sits_on_whole_device_pixels() {
     for scale in SCALES {
         let mut m = Metered::new(scale, false);
         m.settle_on(Message::ReduceMotion(true));
+        // the enclosure's glass, on its shape grid; the mode buttons beside the search field are round glass of their
+        // own diameter, centred on the field
         let check = |m: &Metered, what: &str| {
-            for rect in m.glass() {
+            let button = crate::modes::BUTTON_SIZE;
+            for rect in m
+                .glass()
+                .into_iter()
+                .filter(|r| (r.width(), r.height()) != (button, button))
+            {
                 assert!(
                     on_device_pixels(rect, scale),
                     "{what}: the glass at {rect:?} falls between device pixels at {scale}x"

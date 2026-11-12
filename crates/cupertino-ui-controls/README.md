@@ -48,7 +48,8 @@ from the application's model and reports changes as messages.
 - **Sizes.** Each family takes its height, width, corners, label size and inset from `cupertino-theme`'s control
   size table (`control_geometry`) at the theme's `ControlMetrics::size` and `compact` setting: mini, small, regular,
   large and extra large. `ControlMetrics::at_size` gives the metrics at another size. At the regular size a button,
-  a pop-up button, a field and a segmented control are 24 pt tall, a check box 16 pt square and a switch 54 × 24 pt
+  a pop-up button, a field and a segmented control are 24 pt tall, a check box 16 pt square (a label longer than its
+  column wraps beside it, the box on its first line) and a switch 54 × 24 pt
   with a 32 × 20 pt capsule thumb (38 × 20 pt in the compact setting). A tab view's segments are a segmented
   control's height and a disclosure button is the table's `ControlFamily::Disclosure` square (20 pt at regular);
   no control reads another table of sizes.

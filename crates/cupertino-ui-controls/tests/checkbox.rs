@@ -131,3 +131,83 @@ fn a_disabled_box_ignores_activation() {
     assert!(h.model().toggled.is_empty());
     assert!(h.accessible("off").states.disabled);
 }
+
+/// A check box whose label is longer than the column it stands in.
+struct Narrow;
+
+const LONG: &str = "Reopen windows when logging back in";
+const COLUMN: f64 = 150.0;
+
+impl Application for Narrow {
+    type Model = ();
+    type Message = bool;
+
+    fn init() -> ((), Vec<Command<bool>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: bool) -> Vec<Command<bool>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<bool>> {
+        window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: 0.0,
+            align: Align::Start,
+            children: vec![Element::new(CheckBox {
+                label: LONG.into(),
+                checked: Checked::False,
+                enabled: true,
+                on_toggle: Some(Box::new(|on| on)),
+            })
+            .key("long")],
+        }))
+    }
+}
+
+#[test]
+fn a_label_longer_than_its_column_wraps_beside_the_box_on_its_first_line() {
+    let mut h = Harness::<Narrow>::new();
+    h.resize(Size::new(COLUMN, 200.0));
+    let line = label_size(LONG);
+    assert!(
+        16.0 + 6.0 + line.width > COLUMN,
+        "the label is too long for one line"
+    );
+    let rect = h.rect("long");
+    assert!(rect.width() <= COLUMN, "inside the column: {rect:?}");
+    assert!(
+        rect.height() >= 2.0 * line.height,
+        "two lines or more: {rect:?}"
+    );
+    let boxed = h
+        .ops("long")
+        .into_iter()
+        .find_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, .. },
+                ..
+            } => Some(rect),
+            _ => None,
+        })
+        .expect("the box");
+    assert_eq!(boxed.min_x(), 0.0);
+    assert!(
+        boxed.max_y() <= line.height + 1.0,
+        "the box stands on the first line, not in the middle: {boxed:?}"
+    );
+    assert_eq!(h.accessible("long").name.as_deref(), Some(LONG));
+}
+
+#[test]
+fn a_label_that_fits_stays_on_one_line_with_the_box_centred_beside_it() {
+    let mut h = Harness::<Narrow>::new();
+    h.resize(Size::new(400.0, 200.0));
+    let line = label_size(LONG);
+    assert_eq!(
+        h.rect("long").size,
+        Size::new(16.0 + 6.0 + line.width, line.height.max(16.0))
+    );
+}

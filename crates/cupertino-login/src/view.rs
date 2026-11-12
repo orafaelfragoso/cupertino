@@ -24,7 +24,7 @@ use cupertino_kit::core::{
     Checked, CommandRegistry, Element, Key, Live, Role, Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
-use cupertino_kit::layout::{Align, Axis, Justify};
+use cupertino_kit::layout::{Align, Axis};
 use cupertino_kit::platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{
@@ -107,6 +107,11 @@ const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
 const PANEL_RADIUS: f64 = 12.0;
 /// Text size the panels' title and lines are measured at; the roles set the size they draw at.
 const PANEL_TITLE_SIZE: f32 = 13.0;
+/// Corner radius of the confirmation panel's alert.
+const PANEL_ALERT_RADIUS: f64 = 26.0;
+/// The room a check box's box and the gap after it take before its label: where the label of the confirmation panel's
+/// checkbox wraps.
+const CHECKBOX_LABEL_INSET: f64 = 22.0;
 
 /// Ascent and descent of the interface font as fractions of the em: what places text by its baseline.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -820,23 +825,38 @@ fn lines(text_system: &TextSystem, text: &str, size: f32, weight: FontWeight, wi
     })
 }
 
-/// The confirmation panel's frames for `kind`, its title and info lines measured with `text_system`: the info line
-/// takes as many lines as its longest countdown message.
+/// The confirmation panel's frames for `kind`, its title, info line and checkbox label measured with `text_system`: the
+/// info line takes as many lines as its longest countdown message.
 pub fn panel_frames(kind: Kind, text_system: &TextSystem) -> Frames {
     let wrap = crate::panel::wrap_width(kind);
     let title = lines(
         text_system,
         kind.text().title,
         PANEL_TITLE_SIZE,
-        WEIGHT_SEMIBOLD,
+        FontWeight::BOLD,
         wrap,
     );
     let info = (0..=crate::panel::COUNTDOWN_SECONDS as u32)
         .filter_map(|seconds| kind.countdown_message(seconds))
-        .map(|message| lines(text_system, &message, 11.0, WEIGHT_MEDIUM, wrap))
+        .map(|message| {
+            lines(
+                text_system,
+                &message,
+                PANEL_TITLE_SIZE,
+                FontWeight::REGULAR,
+                wrap,
+            )
+        })
         .max()
         .unwrap_or(1);
-    kind.frames(title, info)
+    let checkbox = lines(
+        text_system,
+        crate::panel::REOPEN_LABEL,
+        PANEL_TITLE_SIZE,
+        FontWeight::REGULAR,
+        wrap - CHECKBOX_LABEL_INSET,
+    );
+    kind.frames(title, info, checkbox)
 }
 
 /// What the panels' keys mean: the model's keys, by keysym.
@@ -908,9 +928,9 @@ fn panel_window<M: Clone>(
     }
 }
 
-/// The confirmation panel: its title, the countdown line, the "Reopen windows" checkbox at `reopen` (log out, restart and
-/// shut down), and its buttons, the default one focused. Return does the default action, Escape cancels, Space flips the
-/// checkbox, and the power-button panel's letters choose.
+/// The confirmation panel, an alert on glass with no icon: its title, the countdown line, the "Reopen windows" checkbox
+/// at `reopen` (log out, restart and shut down), and its buttons as capsules, the default one focused. Return does the
+/// default action, Escape cancels, Space flips the checkbox, and the power-button panel's letters choose.
 pub fn panel<M: Clone + 'static>(
     key: WindowKey,
     kind: Kind,
@@ -920,14 +940,21 @@ pub fn panel<M: Clone + 'static>(
     map: fn(Input) -> M,
 ) -> Window<M> {
     let text = kind.text();
+    let size = Size::new(frames.width, frames.height);
     let mut children = vec![
-        icon_disc(frames.icon),
+        Element::new(AlertBody {
+            width: size.width,
+            height: Some(size.height),
+            radius: PANEL_ALERT_RADIUS,
+            padding: Insets::ZERO,
+            children: Vec::new(),
+        }),
         Element::new(Place::text(
             frames.title,
             vec![panel_text(
                 text.title,
                 TextRole::Body,
-                WEIGHT_SEMIBOLD,
+                FontWeight::BOLD,
                 false,
             )],
         )),
@@ -938,28 +965,30 @@ pub fn panel<M: Clone + 'static>(
     ) {
         children.push(Element::new(Place::text(
             frame,
-            vec![panel_text(&info, TextRole::Caption, WEIGHT_MEDIUM, true)],
+            vec![panel_text(
+                &info,
+                TextRole::Body,
+                FontWeight::REGULAR,
+                false,
+            )],
         )));
     }
     if let Some(checkbox) = frames.checkbox {
         children.push(
-            // against the text column's leading edge, centred in its row
-            Element::new(Place {
-                justify: Justify::Center,
-                ..Place::text(
-                    checkbox.frame,
-                    vec![Element::new(CheckBox {
-                        label: checkbox.label.to_owned(),
-                        checked: if reopen {
-                            Checked::True
-                        } else {
-                            Checked::False
-                        },
-                        enabled: true,
-                        on_toggle: Some(Box::new(move |on| map(Input::Reopen(on)))),
-                    })],
-                )
-            })
+            // against the text column's leading edge, its label wrapping in the column
+            Element::new(Place::text(
+                checkbox.frame,
+                vec![Element::new(CheckBox {
+                    label: checkbox.label.to_owned(),
+                    checked: if reopen {
+                        Checked::True
+                    } else {
+                        Checked::False
+                    },
+                    enabled: true,
+                    on_toggle: Some(Box::new(move |on| map(Input::Reopen(on)))),
+                })],
+            ))
             .key("reopen"),
         );
     }
@@ -977,7 +1006,7 @@ pub fn panel<M: Clone + 'static>(
                         } else {
                             ButtonRole::Normal
                         },
-                        style: ButtonStyle::Bordered,
+                        style: ButtonStyle::Pill,
                         enabled: true,
                         busy: false,
                         on_press: Some(map(Input::Decide(button.decision))),
@@ -1007,14 +1036,17 @@ pub fn panel<M: Clone + 'static>(
         modal: true,
         children,
     });
-    panel_window(
-        key,
-        PANEL_APP_ID,
-        text.title,
-        Size::new(frames.width, frames.height),
-        content,
-        map(Input::Decide(Decision::Cancel)),
-    )
+    Window {
+        background: WindowBackground::None,
+        ..full_screen(
+            key,
+            PANEL_APP_ID.to_owned(),
+            text.title,
+            size,
+            content,
+            Some(map(Input::Decide(Decision::Cancel))),
+        )
+    }
 }
 
 pub const CONTROL_APP_ID: &str = "org.cupertino.login.desktop-control";
@@ -1305,6 +1337,7 @@ pub fn desktop_control<M: Clone + 'static>(
             Rect::new(0.0, 0.0, size.width, size.height),
             vec![Element::new(AlertBody {
                 width: CONTROL_WIDTH,
+                height: None,
                 radius: CONTROL_RADIUS,
                 padding: CONTROL_PADDING,
                 children: vec![body],

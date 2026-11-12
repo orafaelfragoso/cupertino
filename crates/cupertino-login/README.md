@@ -271,15 +271,16 @@ happens. The properties stay readable by every caller.
 ### Confirmation panel
 
 A layer-shell surface on the overlay layer of the first output, without anchors so the server centres it, with exclusive
-keyboard. The width, the buttons' x and widths (32 pt high) and the 60 s countdown are. The height
-follows 's vertical chain: 20 pt, the title (bold 13 on 16 pt lines, wrapped at 305 pt), 8 pt, the info line (11 on 14 pt
-lines), 7 pt, the "Reopen windows when logging back in" checkbox (an 18 pt row: a 14 pt box at the text column and its
-label), 14 pt, the buttons, 13 pt. Each element sits at the previous one's bottom edge, using the line counts the theme's text
-system measures (`view::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put).
-With the design strings (two lines each) the log out, restart and shut down panels are 417 x 172 pt. The resize rule is.
-The panel is a Kit window (`view::panel`): a modal alert dialog on the popover surface, Kit buttons at the frames (the default
-one with the accent and the focus, except on the power-button panel, where Cancel has the focus so that Space, which presses
-the focused button, shuts nothing down), and Kit's `CheckBox` in the checkbox row.
+keyboard. The panel is an alert on glass, 260 pt wide on every kind, with 26 pt corners and no icon; the countdown is 60 s.
+The height follows the vertical chain: 22 pt, the title (bold 13 on 16 pt lines, wrapped at the 216 pt text column 22 pt
+from either edge), 10 pt, the info line (13 on 16 pt lines), 12 pt, the "Reopen windows when logging back in" checkbox (an
+18 pt row, or 16 pt per line when its label wraps in the column), 16 pt, the buttons, 16 pt. Each element sits at the
+previous one's bottom edge, using the line counts the theme's text system measures (`view::panel_frames`; the info line at
+the most lines it takes while counting down, so the size stays put). The buttons are 28 pt capsules 8 pt apart: Cancel and
+the confirming button side by side, 110 pt each between the 16 pt side padding. The panel is a Kit window (`view::panel`):
+a modal alert dialog on regular glass (the popover surface's fill where the desktop shows none), Kit capsule buttons at the
+frames (the default one with the accent and the focus, except on the power-button panel, where Cancel has the focus so that
+Space, which presses the focused button, shuts nothing down), and Kit's `CheckBox` in the checkbox row.
 
 - A second request replaces the open panel, and a lock closes it.
 - Return does the default action, Escape cancels, a button click does that button's, and the end of the countdown does the
@@ -295,13 +296,10 @@ the focused button, shuts nothing down), and Kit's `CheckBox` in the checkbox ro
 - The words are the design strings of, in `panel::Kind::text`. The countdown is `panel::format_countdown`:
   full units, at most two ("1 minute" at the start, "59 seconds" a second later).
 
-**Power-button panel.** `panel::Kind::PowerButton`, 466 pt wide (143 pt high with the two-line title), no checkbox (its
-restart and shut down follow the choice last confirmed on the other panels), four
-100 pt buttons at the x origins 59, 157, 255 and 353: Restart (`r`), Sleep (`s`), Cancel (Escape) and Shut Down
-(Return, the default button). The title is the Shut Down panel's. There is no info line and no countdown, so the panel waits for
-an answer. The register's origins are 98 pt apart for 100 pt buttons, so neighbours overlap by 2 pt and a click there goes to
-the left button. The title wraps at 354 pt and the buttons sit 21 pt below it (approximate), but never nearer than 14 pt to the
-icon's bottom edge: the title chain alone would put the buttons under the icon (bottom edge 84 against a 73 pt chain).
+**Power-button panel.** `panel::Kind::PowerButton`, the same alert, no checkbox (its restart and shut down follow the choice
+last confirmed on the other panels), four capsules stacked full width 8 pt apart, 16 pt under the title, the default on top:
+Shut Down (Return), Cancel (Escape), Sleep (`s`) and Restart (`r`). The title is the Shut Down panel's. There is no info line
+and no countdown, so the panel waits for an answer.
 
 ### Quit sequence
 
@@ -536,13 +534,12 @@ network users).
 | Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
 | Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
-| Panel body, icon, buttons | Kit's popover surface with 12 pt corners, a plain disc, Kit buttons (the default one in the accent). | `view::PANEL_RADIUS`, `view::PANEL_ICON_FILL`, `panel` |
+| Confirmation panels | An alert like the consent panel without an icon: 260 pt wide on regular glass with 26 pt corners, padding 22 pt above and 16 pt around, the text 6 pt further in, 28 pt capsule buttons 8 pt apart. | `panel`, `view::panel`, `view::widgets::AlertBody` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
-| Checkbox row | 7 pt below the info line, 18 pt high, Kit's `CheckBox` with its label at the text column, 14 pt above the buttons. The power-button panel has none, so its buttons sit 21 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_BUTTONS_GAP`, `panel::TITLE_BUTTONS_GAP` |
-| Icon to buttons gap | At least 14 pt below the icon, so the power-button panel's buttons (from x 59) clear it. | `panel::ICON_BUTTONS_GAP` |
+| Checkbox row | 12 pt below the info line, 18 pt high on one line and 16 pt per line when its label wraps in the text column, 16 pt above the buttons. The power-button panel has none, so its buttons sit 16 pt below its title. | `panel::INFO_CHECKBOX_GAP`, `panel::CHECKBOX_HEIGHT`, `panel::CHECKBOX_LINE`, `panel::TEXT_BUTTONS_GAP` |
 | Field placeholders and names | Plain English: "Enter Password", "Name"; the fields are named "Password" and "Name" for assistive technology. | `view::PASSWORD_PLACEHOLDER`, `view::NAME_PLACEHOLDER` |
 | Countdown formatter | A zero unit is dropped; two units join with ", ". The reference output was not captured. | `panel::format_countdown` |
-| Panel text | Kit text: the title as body text in Semibold, the info line as a caption in the secondary colour, wrapped at the text column. | `view::panel` |
+| Panel text | Kit text: the title as body text in Bold, the info line as body text, wrapped at the text column. | `view::panel` |
 | Caps lock glyph | The arrow-over-bar cut-out is ours; gives path constants but not their order. Named "Caps Lock is on" for assistive technology. | `view::widgets::CAPS_GLYPH` |
 | Spinner size and cap | 16 pt square in the 18 pt slot (intrinsic size not in the payload read); round caps at both ends, the design has a flat inner end. Named "Checking the password". | `view::widgets::SPINNER_SIZE` |
 | Notification cards | 344 pt wide at the top right (16 pt margin, 44 pt from the top), 8 pt apart, 16 pt corners, 12 pt padding, white 0.18 fill, application 12 pt, title and body 13 pt, two body lines. | `lock_notices`, `view::widgets::NOTICE_FILL_ALPHA` |

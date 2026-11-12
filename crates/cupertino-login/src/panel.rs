@@ -15,7 +15,7 @@ pub enum Kind {
     LogOut,
     Restart,
     ShutDown,
-    /// Shown by a held power button: Restart, Sleep, Cancel and Shut Down; no info line, no countdown.
+    /// Shown by a held power button: Shut Down, Cancel, Sleep and Restart; no info line, no countdown.
     PowerButton,
 }
 
@@ -153,70 +153,44 @@ pub fn format_countdown(seconds: u32) -> String {
     }
 }
 
-/// Content width in points. The height follows from the text, see [`Kind::frames`].
-const fn width(kind: Kind) -> f64 {
-    match kind {
-        Kind::LogOut | Kind::Restart | Kind::ShutDown => 417.0,
-        Kind::PowerButton => 466.0,
-    }
+/// The panel is an alert: this wide on every kind, its height following from the text, see [`Kind::frames`].
+pub const WIDTH: f64 = 260.0;
+/// The alert's padding above and around its content; the text sits [`TEXT_INSET`] further in than the buttons.
+const PADDING_TOP: f64 = 22.0;
+const PADDING_SIDE: f64 = 16.0;
+const PADDING_BOTTOM: f64 = 16.0;
+const TEXT_INSET: f64 = 6.0;
+/// The text column's leading edge.
+const TEXT_LEFT: f64 = PADDING_SIDE + TEXT_INSET;
+
+/// Width at which the title, the info line and the checkbox row wrap: the text column.
+pub const fn wrap_width(_kind: Kind) -> f64 {
+    WIDTH - 2.0 * TEXT_LEFT
 }
 
-/// Width at which the title and the info line wrap (the preferred layout width, the frame width minus 4).
-pub const fn wrap_width(kind: Kind) -> f64 {
-    match kind {
-        Kind::LogOut | Kind::Restart | Kind::ShutDown => 305.0,
-        Kind::PowerButton => 354.0,
-    }
-}
-
-/// The buttons' x origin and width, left to right. Neighbours overlap by 1 to 2 pt in the
-/// register's numbers; a click there goes to the left button.
-const fn button_columns(kind: Kind) -> &'static [(f64, f64)] {
-    match kind {
-        Kind::LogOut => &[(239.0, 83.0), (321.0, 83.0)],
-        Kind::Restart => &[(250.0, 78.0), (326.0, 78.0)],
-        Kind::ShutDown => &[(206.0, 100.0), (304.0, 100.0)],
-        Kind::PowerButton => &[
-            (59.0, 100.0),
-            (157.0, 100.0),
-            (255.0, 100.0),
-            (353.0, 100.0),
-        ],
-    }
-}
-
-/// What each button of the power-button panel does and says, left to right.
-const POWER_BUTTONS: [(Decision, &str); 4] = [
-    (Decision::Do(Action::Restart), "Restart"),
-    (Decision::Do(Action::Sleep), "Sleep"),
-    (Decision::Cancel, CANCEL_LABEL),
-    (Decision::Do(Action::ShutDown), "Shut Down"),
-];
-
-/// Icon edge and its inset from the left and top edges (64 x 64 at (20, 20) on all four panels).
-const ICON_SIZE: f64 = 64.0;
-const ICON_INSET: f64 = 20.0;
-/// The vertical chain (constraints): top margin 20, title on 16 pt lines, 8 pt, info on 14 pt lines,
-/// buttons 32 pt high, bottom margin 13. The text column starts at x 90.
-const TOP_MARGIN: f64 = 20.0;
-const TEXT_LEFT: f64 = 90.0;
+/// The vertical chain: the padding, the title (bold 13 pt on 16 pt lines), 10 pt, the info line (13 pt on 16 pt lines),
+/// 12 pt, the checkbox row, 16 pt, the buttons, the padding.
 pub const TITLE_LINE: f64 = 16.0;
-pub const INFO_LINE: f64 = 14.0;
-const TITLE_INFO_GAP: f64 = 8.0;
-const BUTTON_HEIGHT: f64 = 32.0;
-const BOTTOM_MARGIN: f64 = 13.0;
-/// The chain below the info line on the log out, restart and shut down panels: 7 pt, the checkbox row, 14 pt, the
-/// buttons.
-const INFO_CHECKBOX_GAP: f64 = 7.0;
-const CHECKBOX_BUTTONS_GAP: f64 = 14.0;
-/// Height of the checkbox row (the box and its one-line label), and the box's edge, centred in the row at the text column.
+pub const INFO_LINE: f64 = 16.0;
+const TITLE_INFO_GAP: f64 = 10.0;
+const INFO_CHECKBOX_GAP: f64 = 12.0;
+const TEXT_BUTTONS_GAP: f64 = 16.0;
+/// Height of a checkbox row whose label takes one line (the box and the line), and of each line of a label that wraps.
 const CHECKBOX_HEIGHT: f64 = 18.0;
-pub const CHECKBOX_BOX: f64 = 14.0;
-/// Gap from the power-button panel's title to its buttons; that panel has no checkbox.
-const TITLE_BUTTONS_GAP: f64 = 21.0;
-/// Least gap from the icon's bottom edge to the buttons, so the power-button panel's buttons (from x 59) stay clear of
-/// the icon.
-const ICON_BUTTONS_GAP: f64 = 14.0;
+pub const CHECKBOX_LINE: f64 = 16.0;
+/// The buttons: capsules this high, this far apart, side by side across the alert between its side padding, or
+/// stacked full width when there are more than two.
+pub const BUTTON_HEIGHT: f64 = 28.0;
+pub const BUTTON_GAP: f64 = 8.0;
+
+/// What each button of the power-button panel does and says, top to bottom: the default first, as an alert stacks its
+/// buttons.
+const POWER_BUTTONS: [(Decision, &str); 4] = [
+    (Decision::Do(Action::ShutDown), "Shut Down"),
+    (Decision::Cancel, CANCEL_LABEL),
+    (Decision::Do(Action::Sleep), "Sleep"),
+    (Decision::Do(Action::Restart), "Restart"),
+];
 
 /// One button of a panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -230,38 +204,34 @@ pub struct PanelButton {
 /// The "Reopen windows" checkbox of a panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelCheckbox {
-    /// The row: the box and its label; a click anywhere on it toggles.
+    /// The row: the box and its label, which wraps in the text column; a click anywhere on it toggles.
     pub frame: Rect,
-    /// The box at the row's left edge.
-    pub check: Rect,
     pub label: &'static str,
 }
 
-/// Where everything of a panel sits, in points from its top-left corner.
+/// Where everything of a panel sits, in points from its top-left corner. The panel has no icon.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frames {
     pub width: f64,
     pub height: f64,
-    pub icon: Rect,
     pub title: Rect,
     /// `None` on the power-button panel.
     pub info: Option<Rect>,
     /// `None` on the power-button panel.
     pub checkbox: Option<PanelCheckbox>,
-    /// Left to right: Cancel and the confirming button, or the four buttons of the power-button panel.
+    /// Cancel and the confirming button left to right, or the four buttons of the power-button panel top to bottom.
     pub buttons: Vec<PanelButton>,
 }
 
 impl Kind {
-    /// The panel laid out for a title wrapped to `title_lines` lines and an info line wrapped to `info_lines` (ignored by
-    /// the power-button panel, which has none). Each element sits at the previous one's bottom edge and the height is the
-    /// end of the chain; the width is fixed.: no code sets a size on the design windows, so their
-    /// height follows the constraint chain in the same way.
-    pub fn frames(self, title_lines: u32, info_lines: u32) -> Frames {
+    /// The panel laid out for a title wrapped to `title_lines` lines, an info line wrapped to `info_lines` and a checkbox
+    /// label wrapped to `checkbox_lines` (both ignored by the power-button panel, which has neither). Each element sits
+    /// at the previous one's bottom edge and the height is the end of the chain; the width is fixed.
+    pub fn frames(self, title_lines: u32, info_lines: u32, checkbox_lines: u32) -> Frames {
         let wrap = wrap_width(self);
         let title = Rect::new(
             TEXT_LEFT,
-            TOP_MARGIN,
+            PADDING_TOP,
             wrap,
             TITLE_LINE * f64::from(title_lines),
         );
@@ -273,59 +243,63 @@ impl Kind {
                 INFO_LINE * f64::from(info_lines),
             )
         });
-        let checkbox = info.filter(|_| self.has_checkbox()).map(|info| {
-            let frame = Rect::new(
-                TEXT_LEFT,
-                info.max_y() + INFO_CHECKBOX_GAP,
-                wrap,
-                CHECKBOX_HEIGHT,
-            );
-            PanelCheckbox {
-                frame,
-                check: Rect::new(
-                    frame.x(),
-                    frame.y() + (CHECKBOX_HEIGHT - CHECKBOX_BOX) / 2.0,
-                    CHECKBOX_BOX,
-                    CHECKBOX_BOX,
+        let checkbox = info
+            .filter(|_| self.has_checkbox())
+            .map(|info| PanelCheckbox {
+                frame: Rect::new(
+                    TEXT_LEFT,
+                    info.max_y() + INFO_CHECKBOX_GAP,
+                    wrap,
+                    CHECKBOX_HEIGHT.max(CHECKBOX_LINE * f64::from(checkbox_lines)),
                 ),
                 label: REOPEN_LABEL,
-            }
-        });
-        let after_text = match (checkbox, info) {
-            (Some(checkbox), _) => checkbox.frame.max_y() + CHECKBOX_BUTTONS_GAP,
-            (None, Some(info)) => info.max_y() + CHECKBOX_BUTTONS_GAP,
-            (None, None) => title.max_y() + TITLE_BUTTONS_GAP,
-        };
-        let buttons_top = after_text.max(ICON_INSET + ICON_SIZE + ICON_BUTTONS_GAP);
-        let frame = |&(x, width): &(f64, f64)| Rect::new(x, buttons_top, width, BUTTON_HEIGHT);
-        let columns = button_columns(self);
-        let buttons = match self {
-            Kind::PowerButton => columns
+            });
+        let text_bottom = checkbox
+            .map(|c| c.frame.max_y())
+            .or(info.map(|i| i.max_y()))
+            .unwrap_or(title.max_y());
+        let top = text_bottom + TEXT_BUTTONS_GAP;
+        let across = WIDTH - 2.0 * PADDING_SIDE;
+        let buttons: Vec<PanelButton> = match self {
+            Kind::PowerButton => POWER_BUTTONS
                 .iter()
-                .zip(POWER_BUTTONS)
-                .map(|(column, (decision, label))| PanelButton {
-                    frame: frame(column),
+                .enumerate()
+                .map(|(row, &(decision, label))| PanelButton {
+                    frame: Rect::new(
+                        PADDING_SIDE,
+                        top + row as f64 * (BUTTON_HEIGHT + BUTTON_GAP),
+                        across,
+                        BUTTON_HEIGHT,
+                    ),
                     label,
                     decision,
                 })
                 .collect(),
-            Kind::LogOut | Kind::Restart | Kind::ShutDown => vec![
-                PanelButton {
-                    frame: frame(&columns[0]),
-                    label: CANCEL_LABEL,
-                    decision: Decision::Cancel,
-                },
-                PanelButton {
-                    frame: frame(&columns[1]),
-                    label: self.text().confirm,
-                    decision: Decision::Do(self.default_action()),
-                },
-            ],
+            Kind::LogOut | Kind::Restart | Kind::ShutDown => {
+                let width = (across - BUTTON_GAP) / 2.0;
+                [
+                    (CANCEL_LABEL, Decision::Cancel),
+                    (self.text().confirm, Decision::Do(self.default_action())),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(column, (label, decision))| PanelButton {
+                    frame: Rect::new(
+                        PADDING_SIDE + column as f64 * (width + BUTTON_GAP),
+                        top,
+                        width,
+                        BUTTON_HEIGHT,
+                    ),
+                    label,
+                    decision,
+                })
+                .collect()
+            }
         };
+        let bottom = buttons.iter().map(|b| b.frame.max_y()).fold(top, f64::max);
         Frames {
-            width: width(self),
-            height: buttons_top + BUTTON_HEIGHT + BOTTOM_MARGIN,
-            icon: Rect::new(ICON_INSET, ICON_INSET, ICON_SIZE, ICON_SIZE),
+            width: WIDTH,
+            height: bottom + PADDING_BOTTOM,
             title,
             info,
             checkbox,
@@ -500,10 +474,10 @@ mod tests {
     ];
 
     #[test]
-    fn with_two_title_lines_and_two_info_lines_no_element_overlaps_another() {
+    fn with_two_lines_of_each_text_no_element_overlaps_another() {
         for kind in KINDS {
-            let frames = kind.frames(2, 2);
-            let mut elements = vec![("icon", frames.icon), ("title", frames.title)];
+            let frames = kind.frames(2, 2, 2);
+            let mut elements = vec![("title", frames.title)];
             elements.extend(frames.info.map(|info| ("info", info)));
             elements.extend(frames.checkbox.map(|c| ("checkbox", c.frame)));
             elements.extend(
@@ -513,88 +487,80 @@ mod tests {
                     .map(|button| (button.label, button.frame)),
             );
             for (i, (name, rect)) in elements.iter().enumerate() {
+                assert!(
+                    rect.min_x() >= 0.0
+                        && rect.max_x() <= frames.width
+                        && rect.min_y() >= 0.0
+                        && rect.max_y() <= frames.height,
+                    "{kind:?}: {name} leaves the panel"
+                );
                 for (other_name, other) in &elements[i + 1..] {
-                    match rect.intersection(other) {
-                        None => {}
-                        // the register's own 1 to 2 pt overlap of neighbouring buttons
-                        Some(shared) => assert!(
-                            frames.buttons.iter().any(|b| b.label == *name)
-                                && frames.buttons.iter().any(|b| b.label == *other_name)
-                                && shared.width() <= 2.0,
-                            "{kind:?}: {name} overlaps {other_name}"
-                        ),
-                    }
+                    assert_eq!(
+                        rect.intersection(other),
+                        None,
+                        "{kind:?}: {name} overlaps {other_name}"
+                    );
                 }
             }
         }
     }
 
     #[test]
-    fn the_buttons_have_the_registers_x_and_width_and_a_height_of_32() {
-        let shown = |kind: Kind| -> Vec<(&'static str, f64, f64, f64)> {
-            kind.frames(2, 2)
+    fn the_buttons_are_28_pt_capsules_8_pt_apart_across_the_alert() {
+        let shown = |kind: Kind| -> Vec<(&'static str, Rect)> {
+            kind.frames(2, 2, 2)
                 .buttons
                 .iter()
-                .map(|b| (b.label, b.frame.x(), b.frame.width(), b.frame.height()))
+                .map(|b| (b.label, b.frame))
                 .collect()
         };
-        assert_eq!(
-            shown(Kind::LogOut),
-            [
-                ("Cancel", 239.0, 83.0, 32.0),
-                ("Log Out", 321.0, 83.0, 32.0)
-            ]
-        );
-        assert_eq!(
-            shown(Kind::Restart),
-            [
-                ("Cancel", 250.0, 78.0, 32.0),
-                ("Restart", 326.0, 78.0, 32.0)
-            ]
-        );
-        assert_eq!(
-            shown(Kind::ShutDown),
-            [
-                ("Cancel", 206.0, 100.0, 32.0),
-                ("Shut Down", 304.0, 100.0, 32.0)
-            ]
-        );
-        assert_eq!(
-            shown(Kind::PowerButton),
-            [
-                ("Restart", 59.0, 100.0, 32.0),
-                ("Sleep", 157.0, 100.0, 32.0),
-                ("Cancel", 255.0, 100.0, 32.0),
-                ("Shut Down", 353.0, 100.0, 32.0)
-            ]
-        );
-        let decisions: Vec<Decision> = Kind::PowerButton
-            .frames(2, 0)
-            .buttons
-            .iter()
-            .map(|b| b.decision)
-            .collect();
-        assert_eq!(
-            decisions,
-            [
-                Decision::Do(Action::Restart),
-                Decision::Do(Action::Sleep),
-                Decision::Cancel,
-                Decision::Do(Action::ShutDown)
-            ]
-        );
+        // two side by side, the confirming one trailing, sharing the 228 pt between the 16 pt padding
+        for (kind, confirm) in [
+            (Kind::LogOut, "Log Out"),
+            (Kind::Restart, "Restart"),
+            (Kind::ShutDown, "Shut Down"),
+        ] {
+            let buttons = shown(kind);
+            let y = buttons[0].1.y();
+            assert_eq!(
+                buttons,
+                [
+                    ("Cancel", Rect::new(16.0, y, 110.0, 28.0)),
+                    (confirm, Rect::new(134.0, y, 110.0, 28.0))
+                ],
+                "{kind:?}"
+            );
+            assert_eq!(
+                buttons[1].1.min_x() - buttons[0].1.max_x(),
+                8.0,
+                "{kind:?}: a gap between the buttons"
+            );
+        }
+        // four stacked full width, the default on top
+        let power = shown(Kind::PowerButton);
+        let labels: Vec<&str> = power.iter().map(|(label, _)| *label).collect();
+        assert_eq!(labels, ["Shut Down", "Cancel", "Sleep", "Restart"]);
+        for pair in power.windows(2) {
+            assert_eq!(pair[1].1.min_y() - pair[0].1.max_y(), 8.0);
+        }
+        for (_, frame) in &power {
+            assert_eq!(
+                (frame.x(), frame.width(), frame.height()),
+                (16.0, 228.0, 28.0)
+            );
+        }
     }
 
     #[test]
     fn the_height_is_the_chain_of_the_wrapped_text() {
-        // top 20, title 2 x 16, gap 8, info 2 x 14, gap 7, checkbox 18, gap 14, buttons 32, bottom 13
+        // padding 22, title 2 x 16, gap 10, info 2 x 16, gap 12, checkbox 2 x 16, gap 16, buttons 28, padding 16
         for kind in [Kind::LogOut, Kind::Restart, Kind::ShutDown] {
-            let frames = kind.frames(2, 2);
+            let frames = kind.frames(2, 2, 2);
             assert_eq!(
                 (frames.width, frames.height),
                 (
-                    417.0,
-                    20.0 + 32.0 + 8.0 + 28.0 + 7.0 + 18.0 + 14.0 + 32.0 + 13.0
+                    260.0,
+                    22.0 + 32.0 + 10.0 + 32.0 + 12.0 + 32.0 + 16.0 + 28.0 + 16.0
                 )
             );
             let checkbox = frames.checkbox.unwrap();
@@ -603,20 +569,20 @@ mod tests {
                     frames.title,
                     frames.info.unwrap(),
                     checkbox.frame,
-                    checkbox.check,
                     frames.buttons[0].frame.y()
                 ),
                 (
-                    Rect::new(90.0, 20.0, 305.0, 32.0),
-                    Rect::new(90.0, 60.0, 305.0, 28.0),
-                    Rect::new(90.0, 95.0, 305.0, 18.0),
-                    Rect::new(90.0, 97.0, 14.0, 14.0),
-                    127.0
+                    Rect::new(22.0, 22.0, 216.0, 32.0),
+                    Rect::new(22.0, 64.0, 216.0, 32.0),
+                    Rect::new(22.0, 108.0, 216.0, 32.0),
+                    156.0
                 )
             );
+            // a label on one line keeps the box's row at 18 pt
+            assert_eq!(kind.frames(2, 2, 1).checkbox.unwrap().frame.height(), 18.0);
         }
-        // the icon (bottom edge 84) plus 14 holds the buttons at 98, below the title chain's 20 + 32 + 21 = 73
-        let power = Kind::PowerButton.frames(2, 0);
+        // no info line and no checkbox: the buttons 16 pt under the title, four rows of 28 pt 8 pt apart
+        let power = Kind::PowerButton.frames(2, 0, 0);
         assert_eq!(
             (
                 power.width,
@@ -626,11 +592,11 @@ mod tests {
                 power.buttons[0].frame.y()
             ),
             (
-                466.0,
-                98.0 + 32.0 + 13.0,
+                260.0,
+                22.0 + 32.0 + 16.0 + 4.0 * 28.0 + 3.0 * 8.0 + 16.0,
                 None,
-                Rect::new(90.0, 20.0, 354.0, 32.0),
-                98.0
+                Rect::new(22.0, 22.0, 216.0, 32.0),
+                70.0
             )
         );
         assert_eq!(
@@ -641,13 +607,13 @@ mod tests {
 
     #[test]
     fn the_checkbox_starts_at_the_saved_choice_and_a_click_or_space_flips_it() {
-        let frames = Kind::LogOut.frames(2, 2);
+        let frames = Kind::LogOut.frames(2, 2, 2);
         let checkbox = frames.checkbox.unwrap();
         assert_eq!(checkbox.label, "Reopen windows when logging back in");
-        assert!(
-            checkbox.frame.contains(checkbox.check.center())
-                && checkbox.frame.width() == wrap_width(Kind::LogOut),
-            "the row holds the box and spans the text column, so the label is part of the target"
+        assert_eq!(
+            checkbox.frame.width(),
+            wrap_width(Kind::LogOut),
+            "the row spans the text column, so the label is part of the target"
         );
         assert!(frames
             .buttons
@@ -672,40 +638,40 @@ mod tests {
         assert!(!panel.toggles(Key::Char(' ')));
         panel.toggle_reopen();
         assert!(panel.reopen());
-        assert_eq!(Kind::PowerButton.frames(2, 0).checkbox, None);
+        assert_eq!(Kind::PowerButton.frames(2, 0, 0).checkbox, None);
     }
 
     #[test]
     fn each_extra_text_line_moves_what_follows_down_by_its_line_height() {
-        let two = Kind::LogOut.frames(2, 2);
-        let more = Kind::LogOut.frames(3, 3);
+        let two = Kind::LogOut.frames(2, 2, 2);
+        let more = Kind::LogOut.frames(3, 3, 3);
         assert_eq!(
             (
                 more.info.unwrap().y() - two.info.unwrap().y(),
                 more.buttons[0].frame.y() - two.buttons[0].frame.y(),
                 more.height - two.height
             ),
-            (16.0, 30.0, 30.0)
+            (16.0, 48.0, 48.0)
         );
     }
 
     #[test]
     fn the_buttons_decide_cancel_then_the_action_and_the_power_panel_offers_four() {
-        let frames = Kind::ShutDown.frames(2, 2);
+        let frames = Kind::ShutDown.frames(2, 2, 2);
         let decisions: Vec<Decision> = frames.buttons.iter().map(|b| b.decision).collect();
         assert_eq!(
             decisions,
             [Decision::Cancel, Decision::Do(Action::ShutDown)]
         );
-        let power = Kind::PowerButton.frames(2, 0);
+        let power = Kind::PowerButton.frames(2, 0, 0);
         let decisions: Vec<Decision> = power.buttons.iter().map(|b| b.decision).collect();
         assert_eq!(
             decisions,
             [
-                Decision::Do(Action::Restart),
-                Decision::Do(Action::Sleep),
+                Decision::Do(Action::ShutDown),
                 Decision::Cancel,
-                Decision::Do(Action::ShutDown)
+                Decision::Do(Action::Sleep),
+                Decision::Do(Action::Restart)
             ]
         );
     }

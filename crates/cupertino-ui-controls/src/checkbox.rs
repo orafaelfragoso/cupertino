@@ -8,6 +8,7 @@ use cupertino_ui_core::{
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
+use cupertino_ui_text::ParagraphLayout;
 use cupertino_ui_theme::{choice_mark, ColorRole, ControlFamily};
 
 /// Between the box and its label.
@@ -17,6 +18,17 @@ const MARK_WIDTH: f64 = 2.0;
 const MIXED: Size = Size::new(8.0, 2.0);
 
 impl<M: 'static> CheckBox<M> {
+    /// The label for a check box `width` wide with a box `side` wide: on one line when it fits beside the box, else
+    /// wrapped at word breaks into the room beside it, so a long label in a narrow column stays inside it.
+    fn label_layout(&self, env: &Environment, width: f64, side: f64) -> Option<ParagraphLayout> {
+        let line = look::label(env, &self.label)?;
+        let room = width - side - LABEL_GAP;
+        if !room.is_finite() || room <= 0.0 || line.size().width <= room {
+            return Some(line);
+        }
+        look::wrapped(env, &self.label, room).or(Some(line))
+    }
+
     fn control_state(&self, press: &Press, cx: &PaintCx<'_>) -> ControlState {
         ControlState {
             enabled: self.enabled,
@@ -31,13 +43,17 @@ impl<M: 'static> CheckBox<M> {
     }
 }
 
-/// The box, centred in the node's height, at the leading edge.
-fn check_box(size: Size, side: f64, direction: LayoutDirection) -> Rect {
+/// The box at the leading edge, centred in the node's height, or on the first line of a label that wraps (`first`).
+fn check_box(size: Size, side: f64, direction: LayoutDirection, first: Option<Rect>) -> Rect {
     let x = match direction {
         LayoutDirection::Ltr => 0.0,
         LayoutDirection::Rtl => size.width - side,
     };
-    Rect::new(x, (size.height - side) / 2.0, side, side)
+    let y = match first {
+        Some(line) => (line.center().y - side / 2.0).max(0.0),
+        None => (size.height - side) / 2.0,
+    };
+    Rect::new(x, y, side, side)
 }
 
 /// A tick from the left of the box's middle down to its lower third and up to its upper right.
@@ -74,10 +90,12 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
         }
     }
 
-    fn measure(&self, _: &Press, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &Press, constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
         let theme = &cx.env().theme;
         let side = choice_mark(theme.metrics.size, theme.metrics.compact);
-        let label = look::label(cx.env(), &self.label).map(|l| l.size());
+        let label = self
+            .label_layout(cx.env(), constraints.width.max(), side)
+            .map(|l| l.size());
         let width = side + label.map_or(0.0, |l| LABEL_GAP + l.width);
         let height = label.map_or(side, |l| side.max(l.height));
         Measured {
@@ -116,7 +134,12 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
             .corners
             .radius(side);
         let size = cx.size();
-        let b = check_box(size, side, env.direction);
+        let label = self.label_layout(&env, size.width, side);
+        let first = label
+            .as_ref()
+            .filter(|l| l.lines().len() > 1)
+            .and_then(|l| l.lines().first().map(|line| line.rect));
+        let b = check_box(size, side, env.direction, first);
         // unchecked a quiet well, checked (or mixed) the accent, subdued in a window that is not active
         let fill = if self.checked == Checked::False {
             Some(look::quiet(theme, look::WELL, &state))
@@ -151,14 +174,20 @@ impl<M: 'static> Widget<M> for CheckBox<M> {
             }),
             _ => {}
         }
-        if let Some(label) = look::label(&env, &self.label) {
+        if let Some(label) = label {
             let width = label.size().width;
             let x = match env.direction {
                 LayoutDirection::Ltr => b.max_x() + LABEL_GAP,
                 LayoutDirection::Rtl => b.min_x() - LABEL_GAP - width,
             };
             let row = Rect::new(0.0, 0.0, size.width, size.height);
-            let origin = Point::new(x, look::top(&label, row, &env));
+            // a wrapped label hangs from the top, its first line beside the box
+            let top = if first.is_some() {
+                0.0
+            } else {
+                look::top(&label, row, &env)
+            };
+            let origin = Point::new(x, top);
             let text = ControlState {
                 selected: false,
                 ..state

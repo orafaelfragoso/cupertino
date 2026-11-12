@@ -323,10 +323,11 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 }
 
-/// An alert's body on glass, `width` wide and as tall as its content, which it pads by `padding`: its corners rounded
-/// by `radius`, and the popover surface's fill where the window cannot show glass.
+/// An alert's body on glass, `width` wide and `height` tall or, without one, as tall as its content, which it pads by
+/// `padding`: its corners rounded by `radius`, and the popover surface's fill where the window cannot show glass.
 pub(crate) struct AlertBody<M> {
     pub width: f64,
+    pub height: Option<f64>,
     pub radius: f64,
     pub padding: cupertino_kit::geometry::Insets,
     pub children: Vec<Element<M>>,
@@ -338,6 +339,7 @@ impl<M: 'static> Widget<M> for AlertBody<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             width: SizeSpec::Fixed(self.width),
+            height: self.height.map_or(SizeSpec::Fit, SizeSpec::Fixed),
             insets: self.padding,
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
@@ -355,7 +357,7 @@ impl<M: 'static> Widget<M> for AlertBody<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.width != old.width || self.padding != old.padding {
+        if self.width != old.width || self.height != old.height || self.padding != old.padding {
             Change::Layout
         } else if self.radius != old.radius {
             Change::Paint

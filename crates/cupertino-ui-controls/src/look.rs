@@ -6,6 +6,7 @@ use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{
     AttributedText, Direction, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle, TextStyle,
+    Wrap,
 };
 use cupertino_ui_theme::{
     Color, ColorRole, ControlFamily, ControlGeometry, FocusRing, InteractionVariant, StateVariant,
@@ -195,6 +196,26 @@ pub(crate) fn paragraph_weighted(
         )
         .ok()?;
     Some(paragraph.layout(None))
+}
+
+/// `text` in the theme's body type wrapped at word breaks into lines at most `width` points wide; `None` if the fonts
+/// cannot shape it.
+pub(crate) fn wrapped(env: &Environment, text: &str, width: f64) -> Option<ParagraphLayout> {
+    let style = TextStyle {
+        weight: FontWeight(env.theme.type_scale.body.weight),
+        ..TextStyle::new(env.theme.type_scale.body.size)
+    };
+    let paragraph = env
+        .text
+        .paragraph(
+            &AttributedText::plain(text, style),
+            &ParagraphStyle {
+                wrap: Wrap::Word,
+                ..ParagraphStyle::default()
+            },
+        )
+        .ok()?;
+    Some(paragraph.layout(Some(width as f32)))
 }
 
 /// The baseline's distance below the chrome's centre, as a share of the text size; the shell's fields use the same.

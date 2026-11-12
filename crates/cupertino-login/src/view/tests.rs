@@ -1387,3 +1387,85 @@ fn the_consent_alert_with_the_longest_request_fits_its_surface() {
     let allow = snapshot.nodes.iter().find(|n| n.id == allow).unwrap().rect;
     assert_eq!(allow.height(), 28.0, "capsule buttons 28 points high");
 }
+
+/// The window rectangle of the node keyed `key` in `run`'s window.
+fn keyed(run: &Run, key: &'static str) -> Rect {
+    let id = run
+        .driver
+        .runtime()
+        .find(run.window, &Key::from(key))
+        .unwrap();
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot.nodes.iter().find(|n| n.id == id).unwrap().rect
+}
+
+#[test]
+fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
+    for (kind, confirm) in [
+        (Kind::LogOut, "Log Out"),
+        (Kind::Restart, "Restart"),
+        (Kind::ShutDown, "Shut Down"),
+    ] {
+        let run = Run::new(Surface::Panel { kind, reopen: true });
+        let frames = &run.model().frames;
+        assert_eq!(frames.width, 260.0, "{kind:?}: an alert's width");
+        let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+        // no disc, no image: nothing round is painted but the capsules and the box
+        let discs: Vec<Rect> = snapshot
+            .display_list
+            .nodes
+            .iter()
+            .flat_map(|n| n.ops.iter())
+            .filter_map(|op| match op {
+                PaintOp::Fill {
+                    shape: Shape::RoundedRect { rect, radius },
+                    ..
+                } if rect.width() >= 32.0
+                    && rect.width() == rect.height()
+                    && *radius >= rect.width() / 2.0 =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            discs.is_empty(),
+            "{kind:?}: an icon disc is drawn: {discs:?}"
+        );
+        assert!(
+            !snapshot
+                .accessibility
+                .iter()
+                .any(|(_, n)| n.role == Role::Image),
+            "{kind:?}: an image is shown"
+        );
+        let (cancel, action) = (keyed(&run, "Cancel"), keyed(&run, confirm));
+        assert_eq!(
+            (cancel.height(), action.height()),
+            (28.0, 28.0),
+            "{kind:?}: capsule buttons 28 points high"
+        );
+        assert_eq!(cancel.min_y(), action.min_y(), "{kind:?}: side by side");
+        assert_eq!(
+            action.min_x() - cancel.max_x(),
+            8.0,
+            "{kind:?}: the buttons stand apart"
+        );
+        assert_eq!(
+            (cancel.min_x(), frames.width - action.max_x()),
+            (16.0, 16.0),
+            "{kind:?}: inside the alert's padding"
+        );
+        // the checkbox's label wraps in the text column instead of running past the alert
+        let reopen = run.node(is_reopen).unwrap().1.bounds;
+        assert!(
+            reopen.min_x() >= 22.0 && reopen.max_x() <= frames.width - 22.0,
+            "{kind:?}: the checkbox leaves the text column: {reopen:?}"
+        );
+        assert!(
+            reopen.max_y() <= cancel.min_y() - 16.0,
+            "{kind:?}: the checkbox runs into the buttons: {reopen:?}"
+        );
+    }
+}

@@ -651,7 +651,10 @@ mod tests {
             Driver::Spring(_) => panic!("timed expected"),
         };
         assert_eq!(d(TransformKind::ScaleUpAndIn, false), (0.2, Ease::Cosine));
-        assert_eq!(d(TransformKind::ScaleDownAndOut, false), (0.15, Ease::Cosine));
+        assert_eq!(
+            d(TransformKind::ScaleDownAndOut, false),
+            (0.15, Ease::Cosine)
+        );
         assert_eq!(d(TransformKind::FadeOut, false), (0.15, Ease::Cosine));
         assert_eq!(d(TransformKind::FadeOut, true), (0.6, Ease::Cosine));
         assert_eq!(d(TransformKind::AppearanceFade, false), (0.5, Ease::Cosine));

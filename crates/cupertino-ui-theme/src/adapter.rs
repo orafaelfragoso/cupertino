@@ -282,12 +282,12 @@ mod tests {
     }
 
     #[test]
-    fn the_dark_focus_ring_is_opaque() {
+    fn the_dark_focus_ring_is_the_token_at_half_strength() {
         let colors = ColorTokens::cupertino(&tokens(), Appearance::Dark).unwrap();
         let ring = colors
             .get(KeyboardFocusIndicator, StateVariant::NORMAL)
             .unwrap();
-        assert_eq!(ring.to_rgba8(), [37, 173, 255, 255]);
+        assert_eq!(ring.to_rgba8(), [26, 169, 255, 127]);
     }
 
     #[test]

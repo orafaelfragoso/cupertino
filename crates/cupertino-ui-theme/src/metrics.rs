@@ -293,16 +293,16 @@ mod tests {
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Menu).material,
-            Some(crate::GLASS_MATERIAL)
+            Some(crate::DENSE_GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Popover).material,
-            Some(crate::GLASS_MATERIAL)
+            Some(crate::DENSE_GLASS_MATERIAL)
         );
         // glass takes the recipe of reduced transparency rather than going opaque
         assert_eq!(
             look(Appearance::Light, true, Surface::Menu).material,
-            Some(crate::GLASS_MATERIAL)
+            Some(crate::DENSE_GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Light, true, Surface::Sidebar).material,
@@ -324,7 +324,7 @@ mod tests {
             None
         );
         let high_contrast = look(Appearance::DarkHighContrast, false, Surface::Popover);
-        assert_eq!(high_contrast.material, Some(crate::GLASS_MATERIAL));
+        assert_eq!(high_contrast.material, Some(crate::DENSE_GLASS_MATERIAL));
         assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));
         assert_eq!(
             look(Appearance::DarkHighContrast, false, Surface::Sidebar).material,

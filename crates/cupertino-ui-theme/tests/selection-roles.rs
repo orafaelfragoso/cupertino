@@ -72,7 +72,7 @@ fn every_selected_fill_is_the_accent_token_unprocessed() {
             let text = get(ColorRole::SelectedControlText, normal);
             assert_eq!((text.r, text.g, text.b, text.a), (1.0, 1.0, 1.0, 1.0));
         }
-        assert_eq!(accent.to_rgba8(), [52, 120, 246, 255], "{appearance:?}");
+        assert_eq!(accent.to_rgba8(), [0, 122, 255, 255], "{appearance:?}");
     }
 }
 

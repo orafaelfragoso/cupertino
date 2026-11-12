@@ -304,6 +304,38 @@ fn a_window_is_drawn_only_after_its_first_configure_which_the_frame_acknowledges
     assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
 }
 
+/// A window that opens active shows the active colours from its first frame, so no crossing follows and the next frame
+/// paints nothing. Made active again once it was drawn, its colours cross: the next frame paints it whole.
+#[test]
+fn a_window_opening_active_is_active_at_once_and_one_activated_later_crosses_its_colours() {
+    let (mut rt, window, damage) = start();
+    configure(&mut rt, window, 1);
+    let drawn = damage.borrow().len();
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        damage.borrow().len(),
+        drawn,
+        "no crossing after opening active"
+    );
+
+    rt.window_system_mut()
+        .send(window, WindowEvent::Focus(false));
+    rt.step(steps()).unwrap();
+    rt.window_system_mut()
+        .send(window, WindowEvent::Focus(true));
+    rt.step(steps()).unwrap();
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(2)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        damage.borrow().last(),
+        Some(&DamageRegion::Full),
+        "the colours cross"
+    );
+}
+
 /// A window of one colour (here a transparent one that only takes input) is shown by the window system without a frame:
 /// nothing is rendered or presented, its content still takes the pointer, and it is shown again only to answer a
 /// configure or to show another colour; a new scale or a change of its content shows nothing new. Back on the theme's

@@ -110,11 +110,13 @@ impl<M> WindowState<M> {
         self.layer.damage.invalidate();
     }
 
-    /// The window just became active or inactive: when it became active, its colours cross over [`ACTIVATION_NS`]
-    /// (at once with Reduce Motion).
+    /// The window just became active or inactive: when a window already drawn became active, its colours cross over
+    /// [`ACTIVATION_NS`] (at once with Reduce Motion). A window that opens active shows the active colours from its
+    /// first frame.
     fn begin_activation(&mut self, now: Timestamp) {
         self.activated_at =
-            (self.active && !self.env.theme.preferences.reduce_motion).then_some(now);
+            (self.active && self.committed && !self.env.theme.preferences.reduce_motion)
+                .then_some(now);
     }
 
     /// How far the colours of the window have crossed to the active ones at `now`, 0 to 1; ends the crossing when done.

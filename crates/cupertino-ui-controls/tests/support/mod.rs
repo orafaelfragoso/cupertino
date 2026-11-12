@@ -16,6 +16,9 @@ use cupertino_ui_platform::{
 };
 use cupertino_ui_render::{CpuConfig, CpuRenderer, PaintNodeId, PaintOp, Shape};
 use cupertino_ui_test::{HeadlessWindowSystem, ManualClock};
+
+/// One display frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 use cupertino_ui_text::{
     AttributedText, FontIndex, FontStyle, FontWeight, GlyphKey, GlyphRasterizer, ParagraphStyle,
     RasterGlyph, TextError, TextStyle, TextSystem,
@@ -425,9 +428,11 @@ impl<A: Application> Harness<A> {
         harness
     }
 
-    /// Steps until the window has drawn everything it asked to draw.
+    /// Steps until the window has drawn everything it asked to draw. A window still asking after 8 frames at the same
+    /// time is in a transition (the colours of a window made active): the clock then moves a display frame per frame
+    /// until the transition ends.
     pub fn settle(&mut self) {
-        let rounds = if self.animated { 2 } else { 8 };
+        let rounds = if self.animated { 2 } else { 24 };
         for round in 0..rounds {
             if self.animated && round + 1 == rounds {
                 self.rt.step(turns()).unwrap();
@@ -439,7 +444,14 @@ impl<A: Application> Harness<A> {
             if !system.frame_requested(self.window).unwrap_or(false) {
                 return;
             }
-            system.frame_ready(self.window, Timestamp(0)).unwrap();
+            if round >= 8 {
+                self.clock.advance_by(FRAME_NS);
+            }
+            let now = cupertino_ui_core::Clock::now(&*self.clock);
+            self.rt
+                .window_system_mut()
+                .frame_ready(self.window, now)
+                .unwrap();
         }
         panic!("the window keeps asking for frames");
     }

@@ -761,20 +761,34 @@ mod tests {
         let layout = d.layout(Size::new(400.0, 100.0));
         let c = |k: ButtonKind| layout.button(k).center;
         let px = |pm: &Pixmap, k: ButtonKind| rgba(pm, c(k).x as u32, c(k).y as u32);
+        // the face lightens from its top to its lower edge, so its centre is half way
+        let face = |fill: [f32; 4]| {
+            let half = crate::buttons::FACE_LIGHTEN / 2.0;
+            [
+                fill[0] + (1.0 - fill[0]) * half,
+                fill[1] + (1.0 - fill[1]) * half,
+                fill[2] + (1.0 - fill[2]) * half,
+                fill[3],
+            ]
+        };
 
         let normal = d.render_titlebar(400.0, 1.0, &DecorationState::default());
         assert!(
-            near(px(&normal, ButtonKind::Close), d.config.palette.close, 0.02),
+            near(
+                px(&normal, ButtonKind::Close),
+                face(d.config.palette.close),
+                0.02
+            ),
             "close fill at the centre"
         );
         assert!(near(
             px(&normal, ButtonKind::Minimize),
-            d.config.palette.minimize,
+            face(d.config.palette.minimize),
             0.02
         ));
         assert!(near(
             px(&normal, ButtonKind::Zoom),
-            d.config.palette.zoom,
+            face(d.config.palette.zoom),
             0.02
         ));
 
@@ -807,7 +821,11 @@ mod tests {
             pc[0] < px(&normal, ButtonKind::Close)[0] && pc[1] < px(&normal, ButtonKind::Close)[1]
         );
         assert!(
-            near(px(&pressed, ButtonKind::Zoom), d.config.palette.zoom, 0.02),
+            near(
+                px(&pressed, ButtonKind::Zoom),
+                face(d.config.palette.zoom),
+                0.02
+            ),
             "other buttons unaffected"
         );
 
@@ -848,7 +866,7 @@ mod tests {
         let close_c = c(ButtonKind::Close);
         let off_glyph = rgba(&disabled, close_c.x as u32, close_c.y as u32 + 4);
         assert!(
-            off_glyph[0] > 150 && off_glyph[1] < 120,
+            off_glyph[0] > 150 && off_glyph[1] < 135,
             "close stays red: {off_glyph:?}"
         );
     }

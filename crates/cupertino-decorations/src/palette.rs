@@ -137,7 +137,7 @@ impl Palette {
                 rim_1x: rgba8([0, 0, 0, 89]),
                 rim_2x: rgba8([0, 0, 0, 89]),
                 shadow: [0.0, 0.0, 0.0, 1.0],
-                window_background: rgba8([31, 32, 37, 255]),
+                window_background: rgba8([30, 30, 30, 255]),
             }
         } else {
             let titlebar_inactive = gray(1.0);

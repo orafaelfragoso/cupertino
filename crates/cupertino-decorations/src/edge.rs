@@ -256,12 +256,12 @@ mod tests {
     #[test]
     fn a_menu_is_outlined_along_its_sides_and_lit_along_its_top_and_bottom() {
         let d = edge(EdgeKind::Menu, true, true, false, RIM);
-        assert_eq!(d.outline.color[3], 0.65);
+        assert_eq!(d.outline.color[3], MENU_OUTLINE_DARK);
         assert_eq!(d.falloff, OutlineFalloff::Sides { power: 2.0 });
         assert_eq!(
             d.inner,
             Some(Hairline {
-                color: [1.0, 1.0, 1.0, 0.22],
+                color: [1.0, 1.0, 1.0, MENU_RIM_DARK],
                 width_pt: 0.5
             })
         );
@@ -269,15 +269,21 @@ mod tests {
         assert_eq!(rim.weight((0.0, -1.0)), 1.0, "full along the top");
         assert_eq!(rim.weight((0.0, 1.0)), 1.0, "and the bottom");
         assert!(
-            (rim.weight((1.0, 0.0)) - 0.45).abs() < 1e-6,
-            "fainter along the sides"
+            (rim.weight((1.0, 0.0)) - f64::from(MENU_RIM_SIDE_SHARE)).abs() < 1e-6,
+            "faint along the sides"
         );
+        let diagonal = rim.weight((1.0, 1.0));
+        assert!(diagonal > f64::from(MENU_RIM_SIDE_SHARE) && diagonal < 1.0);
         let light = edge(EdgeKind::Menu, false, true, false, RIM);
-        assert_eq!(light.inner.unwrap().color[3], 0.5);
         assert_eq!(
-            edge(EdgeKind::Menu, false, true, false, RIM).outline.color[3],
-            0.15
+            light.inner,
+            Some(Hairline {
+                color: [1.0, 1.0, 1.0, MENU_RIM_LIGHT],
+                width_pt: 1.0
+            }),
+            "a point wide in the light appearance"
         );
+        assert_eq!(light.outline.color[3], MENU_OUTLINE_LIGHT);
         assert_eq!(
             edge(EdgeKind::Menu, true, false, false, RIM),
             d,

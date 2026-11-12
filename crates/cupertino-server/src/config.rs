@@ -281,6 +281,17 @@ pub fn dev_folder_program(
         .map_err(|reason| format!("{}: {reason}", program.display()))?;
     rustix::fs::access(&program, rustix::fs::Access::EXEC_OK)
         .map_err(|e| format!("{}: not executable: {e}", program.display()))?;
+    // a build left in the folder never replaces a newer installed program: once a package built after it is in place,
+    // the package's program starts
+    let installed_at = std::fs::metadata(installed).and_then(|m| m.modified()).ok();
+    if let (Ok(dev_at), Some(installed_at)) = (file.modified(), installed_at) {
+        if dev_at < installed_at {
+            return Err(format!(
+                "{}: older than the installed {installed}",
+                program.display()
+            ));
+        }
+    }
     Ok(Some(program))
 }
 

@@ -42,9 +42,11 @@ const COMMANDS: &[Command] = &[
                       starts when it is there (null when the folder does not apply to it).\n\n\
                       dev_program_older_than_installed is true when that file is there and was last modified before \
                       the installed program (a package's files keep their build time): the folder holds a build \
-                      older than the installed package, which it keeps replacing at every start. SOURCE then says \
-                      `development folder (older than installed)`, or `(older build in development folder)` after \
-                      another source; `cupertino shell use-installed NAME` goes back to the installed program. It is \
+                      older than the installed package. The server no longer starts such a file: from the next start \
+                      of the process the installed program runs. SOURCE says `development folder (older than \
+                      installed)` while a process started before the package was installed still runs it, or \
+                      `(older build in development folder)` after another source; `cupertino shell use-installed NAME` \
+                      removes the file and restarts the process on the installed program. It is \
                       false when either file is missing, its times cannot be read or are equal, or the installed \
                       program is not an absolute path.\n\n\
                       Without a session bus the command fails with exit code 3 (no_session_bus), without a desktop \

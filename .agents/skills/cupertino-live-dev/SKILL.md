@@ -111,7 +111,7 @@ pid and program you are looking at.
 - **It fails:** roll back at once with `cupertino shell use-installed dock`. It removes the folder's file and restarts
   the component on its installed program.
 - **An installed package contains the change:** roll back the same way; from then on the package's program runs.
-  A build left behind keeps replacing newer packages: `cupertino shell list` marks it
+  A build left behind stops starting once a newer package is installed (the server compares the files' times): `cupertino shell list` marks it
   `development folder (older than installed)` (`dev_program_older_than_installed` in JSON) once a package built
   after it is installed, and `cupertino diagnose --area shell` warns with the command to run.
 

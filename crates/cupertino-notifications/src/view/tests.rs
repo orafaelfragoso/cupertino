@@ -81,13 +81,13 @@ fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
         (2.0 * PADDING + text + BUTTON_TOP_GAP + BUTTON_ROW).ceil()
     );
     assert_eq!(actions.actions, vec![("reply".into(), "Reply".into())]);
-    // a centre card shows its buttons only while it is revealed
+    // a folded centre card shows its first action as a pill over its corner, never a row of buttons
     let n = c.get(id).unwrap();
     assert!(m.card(n, WIDTH, Fold::Folded).actions.is_empty());
-    assert_eq!(
-        m.card_with(n, WIDTH, Fold::Folded, true).height,
-        actions.height
-    );
+    let folded = m.card_with(n, WIDTH, Fold::Folded, true);
+    assert!(folded.actions.is_empty());
+    assert_eq!(folded.pill, Some(("reply".into(), "Reply".into())));
+    assert_eq!(folded.height, body.height);
 }
 
 #[test]
@@ -298,23 +298,33 @@ fn action_labels_that_do_not_fit_share_the_row() {
 }
 
 #[test]
-fn the_close_button_sits_on_the_card_s_corner_clear_of_the_icon_and_the_banner_takes_input_there() {
+fn the_close_button_sits_on_the_card_s_corner_curve_over_the_icon_s_corner_and_the_banner_takes_input_there(
+) {
     let card = Rect::new(28.0, SHADOW_MARGIN, 344.0, 80.0);
     let close = close_rect(card);
     assert_eq!(
         close.center(),
-        card.origin,
-        "centred on the top-leading corner"
+        Point::new(
+            card.min_x() + CLOSE_DIAMETER / 2.0 - CLOSE_REACH_X,
+            card.min_y() + CLOSE_DIAMETER / 2.0 - CLOSE_REACH_Y
+        ),
+        "centred on the top-leading corner curve"
+    );
+    assert!(
+        card.contains(close.center())
+            && close.min_x() < card.min_x()
+            && close.min_y() < card.min_y(),
+        "{close:?} straddles the corner of {card:?}"
     );
     let icon = Rect::new(
-        card.min_x() + PADDING,
+        card.min_x() + LEADING,
         card.min_y() + PADDING,
         ICON_SIZE,
         ICON_SIZE,
     );
     assert!(
-        close.max_x() < icon.min_x() && close.max_y() < icon.min_y(),
-        "{close:?} reaches the icon at {icon:?}"
+        !icon.contains(close.center()),
+        "{close:?} covers only the corner of the icon at {icon:?}"
     );
 
     // the banner's window takes input over the whole button, the part past the card too

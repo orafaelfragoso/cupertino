@@ -101,11 +101,14 @@ impl Application for Scripted {
                         model.center.get_mut().notify(*input, model.now);
                     }
                     Step::At(t) => model.now = t,
-                    Step::OpenCentre => model.ui.centre_open = true,
+                    // the list is in place at once: these tests look at the open centre, not its slide
+                    Step::OpenCentre => model.ui.open_centre(model.now, true),
                     Step::Lock(locked) => {
                         model.center.get_mut().set_screen_locked(locked, model.now)
                     }
                 }
+                // cleared cards that have left go from the model, as the application's housekeeping does
+                model.ui.finish_removals(model.center.get_mut(), model.now);
                 model.center.get_mut().tick(model.now);
                 vec![next(&model.steps)]
             }
@@ -158,7 +161,12 @@ struct Run {
     reader: AssistiveTechnology,
     configured: Vec<WindowId>,
     size: Option<Size>,
+    /// The runtime's clock, moved only while a window animates.
+    clock: ManualClock,
 }
+
+/// One frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 
 /// How a run's window system and theme are set up.
 #[derive(Clone, Copy, Default)]
@@ -208,13 +216,14 @@ impl Run {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
+        let clock = ManualClock::new(Timestamp(0));
         let driver = TestDriver::new(
             Capabilities {
                 app_effects: setup.effects,
                 ..Capabilities::default()
             },
             options,
-            ManualClock::new(Timestamp(0)),
+            clock.clone(),
         );
         let mut run = Run {
             driver,
@@ -222,6 +231,7 @@ impl Run {
             reader,
             configured: Vec::new(),
             size: setup.size,
+            clock,
         };
         run.settle();
         run
@@ -234,8 +244,10 @@ impl Run {
     }
 
     /// Runs until nothing is left to do: new windows are configured and every frame asked for is given.
+    /// A window that asks again for a frame at the same time is animating: the clock then moves one 60 Hz frame.
     fn settle_frames(&mut self) {
-        for _ in 0..16 {
+        let mut framed: Vec<(WindowId, Timestamp)> = Vec::new();
+        for _ in 0..16 + 120 {
             self.driver.run_until_idle(budget()).unwrap();
             let mut busy = false;
             for (_, window) in self.driver.runtime().windows() {
@@ -247,7 +259,14 @@ impl Run {
                         .unwrap();
                     busy = true;
                 } else if system.frame_requested(window).unwrap() {
-                    system.frame_ready(window, Timestamp(0)).unwrap();
+                    let mut now = cupertino_kit::core::Clock::now(&self.clock);
+                    if framed.contains(&(window, now)) {
+                        self.clock.advance_by(FRAME_NS);
+                        now = cupertino_kit::core::Clock::now(&self.clock);
+                    }
+                    framed.push((window, now));
+                    let system = self.driver.window_system_mut();
+                    system.frame_ready(window, now).unwrap();
                     busy = true;
                 }
             }
@@ -296,6 +315,18 @@ impl Run {
                 mods: Mods::NONE,
             },
         );
+    }
+
+    /// Where a banner's card rests in its strip: its leading edge, and its top below the room for its shadow.
+    fn banner_rest(&self) -> Point {
+        let model = self.driver.runtime().model();
+        let center = model.center.borrow();
+        let layout = &center.config.layout;
+        let width = view::strip_width(layout, &center.config.swipe);
+        Point::new(
+            width - layout.right_margin - layout.width,
+            layout.top_inset.min(SHADOW_MARGIN),
+        )
     }
 
     fn model_x(&self) -> Vec<f64> {
@@ -390,7 +421,7 @@ fn a_new_banner_slides_in_and_is_announced() {
     run.only_window();
     assert_eq!(
         run.model_x(),
-        vec![388.0 - 16.0 - 344.0],
+        vec![run.banner_rest().x],
         "at rest inside its strip"
     );
     let rest = run.frame("at rest, t = 1");
@@ -506,7 +537,8 @@ fn a_banner_s_close_button_on_its_corner_stays_under_the_pointer_and_dismisses_i
     run.notify(mail("Lunch", "Are you free at noon?"));
     run.step(Step::At(1.0));
     let window = run.only_window();
-    let card = Point::new(run.model_x()[0], SHADOW_MARGIN);
+    let card = run.banner_rest();
+    assert_eq!(run.model_x(), [card.x]);
     run.pointer(
         window,
         PointerEvent::Enter {
@@ -517,7 +549,11 @@ fn a_banner_s_close_button_on_its_corner_stays_under_the_pointer_and_dismisses_i
     let close = keyed(&snapshot, "close")
         .expect("the pointer over the card shows its close button")
         .rect;
-    assert_eq!(close.center(), card, "centred on the card's corner");
+    assert_eq!(
+        close.center(),
+        view::close_rect(Rect::new(card.x, card.y, 0.0, 0.0)).center(),
+        "centred on the card's corner curve"
+    );
     // past the card, over the button's outer half, the banner is still hovered and the button still there
     let outer = Point::new(close.min_x() + 3.0, close.center().y);
     assert!(outer.x < card.x);
@@ -893,7 +929,7 @@ fn a_swipe_drags_the_banner_and_a_release_past_the_distance_dismisses_it() {
     run.step(Step::At(1.0));
     let window = run.only_window();
     let rest = run.model_x()[0];
-    let press = Point::new(rest + 100.0, SHADOW_MARGIN + 20.0);
+    let press = Point::new(rest + 100.0, run.banner_rest().y + 20.0);
     run.pointer(window, PointerEvent::Enter { position: press });
     run.button(window, press, true);
     run.pointer(
@@ -1071,7 +1107,7 @@ fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
         .clone();
     assert_eq!(
         spec.size.height,
-        card.rect.height() + 2.0 * SHADOW_MARGIN,
+        card.rect.max_y() + SHADOW_MARGIN,
         "the window is as tall as the card and its shadow"
     );
     let model = run.driver.runtime().model();
@@ -1086,7 +1122,7 @@ fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
         if node.key.as_ref().is_some_and(|k| *k == "close".into()) {
             continue;
         }
-        if node.widget.ends_with("::Place<kit_goldens::Message>") {
+        if node.widget.contains("::Place<") {
             continue;
         }
         assert!(
@@ -1117,8 +1153,10 @@ fn a_banner_s_long_body_wraps_inside_its_card_and_stops_at_its_line_limit() {
 
 #[test]
 fn the_centre_scrolls_with_the_wheel_the_touchpad_and_the_keyboard_and_keeps_its_hit_targets() {
+    let config = CenterConfig::default();
+    let width = view::strip_width(&config.layout, &config.swipe);
     let mut run = Run::with(Setup {
-        size: Some(Size::new(388.0, 480.0)),
+        size: Some(Size::new(width, 480.0)),
         ..Setup::default()
     });
     let ids = many(&mut run);
@@ -1150,7 +1188,7 @@ fn the_centre_scrolls_with_the_wheel_the_touchpad_and_the_keyboard_and_keeps_its
     );
     assert_eq!(scroll.offset.y, 0.0);
 
-    let at = Point::new(200.0, list.min_y() + 100.0);
+    let at = Point::new(list.center().x, list.min_y() + 100.0);
     run.scroll(
         window,
         at,
@@ -1231,7 +1269,7 @@ fn a_centre_card_unfolds_its_long_body_with_its_disclosure_button() {
     let snapshot = run.snapshot(window);
     let folded = rect(&snapshot, "card-1");
     let disclosure = rect(&snapshot, "disclosure");
-    assert!(inside(folded, disclosure));
+    assert!(inside(folded, disclosure), "{folded:?} {disclosure:?}");
     run.click(window, disclosure.center());
     assert!(run.ui().unfolded.contains(&1));
     assert!(
@@ -1316,7 +1354,9 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         vec![HostAction::Activate(4)],
         "Return activates it"
     );
+    // a cleared card leaves the model once it has slid away
     run.key(window, 0xffff);
+    run.step(Step::At(1.5));
     assert_eq!(history(&run), vec![3, 2, 1], "Delete clears it");
     assert_eq!(
         focused(&run),
@@ -1324,6 +1364,7 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         "the focus goes to the group's next card, which the view built after the update"
     );
     run.key(window, 0xffff);
+    run.step(Step::At(2.0));
     assert_eq!(history(&run), vec![2, 1]);
     assert_eq!(
         focused(&run),
@@ -1356,6 +1397,7 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         "the first card leaves its close button room under the header"
     );
     run.click(window, close.center());
+    run.step(Step::At(2.5));
     assert_eq!(history(&run), vec![2]);
     assert_eq!(
         focused(&run),
@@ -1374,6 +1416,7 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
 
     // the last card cleared, Escape still closes the empty centre
     run.key(window, 0xffff);
+    run.step(Step::At(3.0));
     assert!(history(&run).is_empty());
     // a press only: the centre's window closes on it
     run.send(
@@ -1411,18 +1454,18 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     assert_eq!(
         shown,
         vec![MaterialRegion {
-            material: "Glass".into(),
+            material: "DenseGlass".into(),
             rect: card,
             radius: view::CORNER_RADIUS,
             alpha: 1.0,
             glass: Some(cupertino_kit::platform::GlassRegion {
-                style: cupertino_kit::platform::GlassStyle::Regular,
+                style: cupertino_kit::platform::GlassStyle::Dense,
                 container: 0,
                 spacing: 0.0,
             }),
             raised: false,
         }],
-        "the popover's material under the banner's card and nowhere else in its strip"
+        "the dense glass under the banner's card and nowhere else in its strip"
     );
     run.notify(NotifyInput::new("Calendar", "Stand-up", "In 5 minutes"));
     run.notify(NotifyInput::new("Calendar", "Review", "In 10 minutes"));

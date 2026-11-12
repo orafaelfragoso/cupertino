@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 87 crates, 425 internal dependencies
+// 87 crates, 433 internal dependencies
 // per layer: foundation 23, models 9, platform 9, protocol 4, transport 3, render 3, ui 13, core 1, shell 12, services 4, apps 2, tools 4
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -174,6 +174,7 @@ digraph "layers" {
   "cupertino-decorations" -> "cupertino-theme";
   "cupertino-devices" -> "cupertino-evdev";
   "cupertino-diagnostic-events" -> "cupertino-build-info";
+  "cupertino-diagnostic-events" -> "cupertino-test-bus" [label="dev"];
   "cupertino-diagnostics" -> "cupertino-defaults";
   "cupertino-diagnostics" -> "cupertino-devices";
   "cupertino-diagnostics" -> "cupertino-diagnostic-events";
@@ -214,6 +215,8 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-ui-atspi" [label="dev"];
   "cupertino-files" -> "cupertino-ui-test" [label="dev"];
   "cupertino-files" -> "cupertino-ui-text";
+  "cupertino-files" -> "cupertino-ui-wayland";
+  "cupertino-files" -> "cupertino-wayland-client";
   "cupertino-glass" -> "cupertino-defaults";
   "cupertino-glass" -> "cupertino-geometry";
   "cupertino-glass" -> "cupertino-theme";
@@ -231,6 +234,7 @@ digraph "layers" {
   "cupertino-kit" -> "cupertino-apps";
   "cupertino-kit" -> "cupertino-assets";
   "cupertino-kit" -> "cupertino-capture" [label="dev"];
+  "cupertino-kit" -> "cupertino-defaults";
   "cupertino-kit" -> "cupertino-geometry";
   "cupertino-kit" -> "cupertino-icons";
   "cupertino-kit" -> "cupertino-modifiers";
@@ -316,6 +320,7 @@ digraph "layers" {
   "cupertino-netd" -> "cupertino-seat";
   "cupertino-netd" -> "cupertino-test-bus" [label="dev"];
   "cupertino-notifications" -> "cupertino-animation";
+  "cupertino-notifications" -> "cupertino-apps";
   "cupertino-notifications" -> "cupertino-assets" [label="dev"];
   "cupertino-notifications" -> "cupertino-defaults";
   "cupertino-notifications" -> "cupertino-diagnostic-events";
@@ -454,6 +459,7 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-alsa" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-apps";
   "cupertino-settings" -> "cupertino-assets";
+  "cupertino-settings" -> "cupertino-build-info";
   "cupertino-settings" -> "cupertino-defaults";
   "cupertino-settings" -> "cupertino-diagnostic-events";
   "cupertino-settings" -> "cupertino-displays";
@@ -498,6 +504,7 @@ digraph "layers" {
   "cupertino-ui-controls" -> "cupertino-ui-test" [label="dev"];
   "cupertino-ui-controls" -> "cupertino-ui-text";
   "cupertino-ui-controls" -> "cupertino-ui-theme";
+  "cupertino-ui-core" -> "cupertino-defaults";
   "cupertino-ui-core" -> "cupertino-geometry";
   "cupertino-ui-core" -> "cupertino-menu-model";
   "cupertino-ui-core" -> "cupertino-semantics";
@@ -548,6 +555,7 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-ui-text";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";
+  "cupertino-wayland-client" -> "cupertino-test-bus" [label="dev"];
   "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";
   "cupertino-windowmanager" -> "cupertino-diagnostic-events";

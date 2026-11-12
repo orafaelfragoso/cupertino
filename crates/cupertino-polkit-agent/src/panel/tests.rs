@@ -12,23 +12,54 @@ fn content() -> Content {
 }
 
 #[test]
-fn the_parts_stack_top_to_bottom_and_the_buttons_end_at_the_trailing_padding() {
+fn the_parts_stack_as_an_alert_with_the_buttons_side_by_side_in_equal_halves() {
     let f = Frames::new(&content());
-    assert_eq!(f.symbol, Rect::new(160.0, 24.0, 40.0, 40.0));
-    assert_eq!(f.title, Rect::new(24.0, 72.0, 312.0, 16.0));
+    assert_eq!(f.width, 260.0);
+    assert_eq!(RADIUS, 26.0);
+    assert_eq!(
+        f.symbol,
+        Rect::new(22.0, 22.0, 64.0, 64.0),
+        "at the text's edge"
+    );
+    assert_eq!(f.title, Rect::new(22.0, 100.0, 216.0, 16.0));
     assert_eq!(
         f.message,
         [
-            Rect::new(24.0, 92.0, 312.0, 16.0),
-            Rect::new(24.0, 108.0, 312.0, 16.0)
+            Rect::new(22.0, 126.0, 216.0, 16.0),
+            Rect::new(22.0, 142.0, 216.0, 16.0)
         ]
     );
     assert_eq!(f.user, None);
-    assert_eq!(f.field, Rect::new(24.0, 140.0, 312.0, 22.0));
-    assert_eq!(f.details, Rect::new(24.0, 170.0, 312.0, 14.0));
-    assert_eq!(f.authenticate, Rect::new(232.0, 204.0, 104.0, 20.0));
-    assert_eq!(f.cancel, Rect::new(144.0, 204.0, 80.0, 20.0));
-    assert_eq!(f.height, 248.0);
+    assert_eq!(f.field, Rect::new(16.0, 174.0, 228.0, 22.0));
+    assert_eq!(f.details, Rect::new(16.0, 204.0, 228.0, 14.0));
+    assert_eq!(f.cancel, Rect::new(16.0, 234.0, 110.0, 28.0));
+    assert_eq!(f.authenticate, Rect::new(134.0, 234.0, 110.0, 28.0));
+    assert_eq!(
+        f.authenticate.x() - f.cancel.max_x(),
+        8.0,
+        "8 pt between the buttons"
+    );
+    assert_eq!(
+        f.width - f.authenticate.max_x(),
+        16.0,
+        "16 pt in from the edge"
+    );
+    assert_eq!(f.height - f.authenticate.max_y(), 16.0);
+    assert_eq!(f.height, 278.0);
+}
+
+#[test]
+fn buttons_whose_titles_do_not_fit_a_half_stack_full_width_with_authenticate_on_top() {
+    assert!(side_by_side(&[86.0, 86.0]));
+    assert!(!side_by_side(&[40.0, 87.0]));
+    let side = Frames::new(&content());
+    let f = Frames::new(&Content {
+        authenticate_title: 120.0,
+        ..content()
+    });
+    assert_eq!(f.authenticate, Rect::new(16.0, 234.0, 228.0, 28.0));
+    assert_eq!(f.cancel, Rect::new(16.0, 270.0, 228.0, 28.0));
+    assert_eq!(f.height - side.height, 28.0 + 8.0);
 }
 
 #[test]

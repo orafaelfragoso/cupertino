@@ -19,9 +19,21 @@ use tiny_skia::{
 
 use crate::model::Phase;
 use crate::panel::{
-    field_label, Control, Status, View, AUTHENTICATE, BUTTON_INSET, CANCEL, DETAILS, LABEL_COLUMN,
-    MAX_MESSAGE_LINES, RADIUS, TITLE, USER,
+    field_label, Control, Status, View, AUTHENTICATE, BUTTON_HEIGHT, BUTTON_INSET, CANCEL, DETAILS,
+    LABEL_COLUMN, MAX_MESSAGE_LINES, RADIUS, TITLE, USER,
 };
+
+/// The compositor material under the panel: the glass of a panel window, as a sidebar's.
+pub const PANEL_MATERIAL: &str = "Sidebar";
+
+/// The material the panel asks the compositor for, `None` when it paints its own opaque body instead: with Reduce
+/// Transparency and in high contrast, as a panel window's glass is then the window colour.
+pub fn panel_material(reduce_transparency: bool, increase_contrast: bool) -> Option<&'static str> {
+    (!reduce_transparency && !increase_contrast).then_some(PANEL_MATERIAL)
+}
+
+/// A button's capsule corners.
+const BUTTON_RADIUS: f64 = BUTTON_HEIGHT / 2.0;
 
 /// The symbol at the top of the panel (approximate).
 pub const SYMBOL: &str = "symbol.lock";
@@ -161,6 +173,8 @@ pub fn scrim_opacity(elapsed: Duration, reduce_motion: bool) -> f64 {
 /// Draws the panel; it keeps the fonts and the symbol between frames.
 pub struct Painter {
     pub palette: Palette,
+    /// The compositor draws the panel's glass under it, so the body is left clear; else the body is painted opaque.
+    pub glass: bool,
     text: TextRenderer,
     icons: SystemIcons,
 }
@@ -169,6 +183,7 @@ impl Painter {
     pub fn new(palette: Palette, assets: &Assets) -> Result<Self, AssetError> {
         Ok(Painter {
             palette,
+            glass: false,
             text: TextRenderer::new(assets, FontRole::Ui)?,
             icons: SystemIcons::required(assets, &[], &[SYMBOL]),
         })
@@ -258,7 +273,9 @@ impl Painter {
         let s = scale;
         self.text.set_scale(s as f32);
         let body = Rect::new(0.0, 0.0, f.width, f.height);
-        self.rounded(pixmap, body, RADIUS, s, p.background);
+        if !self.glass {
+            self.rounded(pixmap, body, RADIUS, s, p.background);
+        }
         self.rounded_stroke(pixmap, body.outset(-0.5), RADIUS - 0.5, 1.0, s, p.separator);
         let px = (f.symbol.width() * s).round() as u32;
         let symbol = self.icons.symbol(SYMBOL, px, p.secondary);
@@ -270,9 +287,9 @@ impl Painter {
             Transform::identity(),
             None,
         );
-        self.centred(pixmap, TITLE, f.title, TEXT_SIZE, TITLE_WEIGHT, s, p.text);
+        self.weighted(pixmap, TITLE, f.title, TEXT_SIZE, TITLE_WEIGHT, s, p.text);
         for (text, frame) in view.message.iter().zip(&f.message) {
-            self.centred(pixmap, text, *frame, TEXT_SIZE, WEIGHT, s, p.secondary);
+            self.weighted(pixmap, text, *frame, TEXT_SIZE, WEIGHT, s, p.text);
         }
         let prompt = view.prompt;
         let checking = prompt.phase == Phase::Checking;
@@ -351,7 +368,7 @@ impl Painter {
                 self.leading(pixmap, &fitted, right, CAPTION_SIZE, s, p.text);
             }
         }
-        self.bordered(pixmap, f.cancel, s, p.control);
+        self.capsule(pixmap, f.cancel, s, p.control);
         self.centred(
             pixmap,
             CANCEL,
@@ -362,13 +379,13 @@ impl Painter {
             p.control_text,
         );
         if focus == Control::Cancel {
-            self.ring(pixmap, f.cancel, s);
+            self.capsule_ring(pixmap, f.cancel, s);
         }
         let enabled = prompt.can_answer();
         if enabled || checking {
-            self.rounded(pixmap, f.authenticate, CONTROL_RADIUS, s, p.accent);
+            self.rounded(pixmap, f.authenticate, BUTTON_RADIUS, s, p.accent);
         } else {
-            self.bordered(pixmap, f.authenticate, s, p.control);
+            self.capsule(pixmap, f.authenticate, s, p.control);
         }
         if checking {
             self.spinner(pixmap, f.authenticate.center(), s, elapsed);
@@ -389,7 +406,7 @@ impl Painter {
             );
         }
         if focus == Control::Authenticate {
-            self.ring(pixmap, f.authenticate, s);
+            self.capsule_ring(pixmap, f.authenticate, s);
         }
     }
 
@@ -495,6 +512,31 @@ impl Painter {
         );
     }
 
+    /// `text` at the leading edge of `frame` in `weight`.
+    #[allow(clippy::too_many_arguments)]
+    fn weighted(
+        &mut self,
+        pixmap: &mut Pixmap,
+        text: &str,
+        frame: Rect,
+        size: f64,
+        weight: u16,
+        s: f64,
+        color: Rgba,
+    ) {
+        self.text.set_scale(s as f32);
+        self.text.draw(
+            pixmap,
+            text,
+            (frame.x() * s) as f32,
+            (centred_baseline(&frame, size) * s) as f32,
+            (size * s) as f32,
+            weight,
+            0.0,
+            color,
+        );
+    }
+
     fn leading(
         &mut self,
         pixmap: &mut Pixmap,
@@ -559,6 +601,31 @@ impl Painter {
             1.0,
             s,
             self.palette.border,
+        );
+    }
+
+    /// A button's capsule: the control fill with its border.
+    fn capsule(&self, pixmap: &mut Pixmap, r: Rect, s: f64, fill: Rgba) {
+        self.rounded(pixmap, r, BUTTON_RADIUS, s, fill);
+        self.rounded_stroke(
+            pixmap,
+            r.outset(-0.5),
+            BUTTON_RADIUS - 0.5,
+            1.0,
+            s,
+            self.palette.border,
+        );
+    }
+
+    /// The keyboard focus ring around the capsule `r`.
+    fn capsule_ring(&self, pixmap: &mut Pixmap, r: Rect, s: f64) {
+        self.rounded_stroke(
+            pixmap,
+            r.outset(FOCUS_RING / 2.0),
+            BUTTON_RADIUS + FOCUS_RING / 2.0,
+            FOCUS_RING,
+            s,
+            self.palette.focus,
         );
     }
 

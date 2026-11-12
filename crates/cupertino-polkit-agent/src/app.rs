@@ -9,18 +9,21 @@ use std::task::{Wake, Waker};
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
+use cupertino_geometry::Rect;
 use cupertino_polkit_agent::access::{clicked, prompt_tree};
 use cupertino_polkit_agent::agent::{self, Event as Polkit, User};
 use cupertino_polkit_agent::conversation::Conversation;
 use cupertino_polkit_agent::helper::{HelperError, Line, Route};
 use cupertino_polkit_agent::model::{Agent, Effect, Key};
 use cupertino_polkit_agent::panel::{
-    Command, Content, Control, Frames, Panel, PanelKey, Status, View, PADDING, WIDTH,
+    Command, Content, Control, Frames, Panel, PanelKey, Status, View, RADIUS, TEXT_WIDTH,
 };
-use cupertino_polkit_agent::render::{scrim_color, scrim_opacity, Painter, Palette};
+use cupertino_polkit_agent::render::{
+    panel_material, scrim_color, scrim_opacity, Painter, Palette,
+};
 use cupertino_polkit_agent::surfaces;
 use cupertino_polkit_agent::users::{self, display_names};
-use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver};
+use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_shell_client::{Anchor, LayerShell, LayerSurface, ShellEvent};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_atspi::AtspiAdapter;
@@ -84,6 +87,8 @@ impl Wake for WakeLoop {
 struct Shown {
     cookie: String,
     scrims: Vec<(OutputId, LayerSurface, ShmPresenter)>,
+    /// The compositor's glass under the panel, in the panel's shape; dropped before the panel's surface.
+    backdrop: Backdrop,
     layer: LayerSurface,
     presenter: ShmPresenter,
     panel: Panel,
@@ -118,13 +123,14 @@ impl Shown {
 struct App {
     conn: Connection,
     layer_shell: LayerShell,
-    _effects: AppEffects,
+    effects: AppEffects,
     _appearance: AppearanceObserver,
     theme: Theme,
     painter: Painter,
     dark: bool,
     increase_contrast: bool,
     reduce_motion: bool,
+    reduce_transparency: bool,
     locked: bool,
     active: bool,
     conversation: Conversation,
@@ -182,13 +188,14 @@ pub fn run() -> Result<()> {
     let mut app = App {
         conn,
         layer_shell,
-        _effects: effects,
+        effects,
         _appearance: appearance,
         theme,
         painter,
         dark: false,
         increase_contrast: false,
         reduce_motion: false,
+        reduce_transparency: false,
         // until the server tells, which it does as soon as the observer is created
         locked: true,
         active,
@@ -335,6 +342,8 @@ impl App {
             AppEvent::DisplayOptions(options) => {
                 self.increase_contrast = options.increase_contrast;
                 self.reduce_motion = options.reduce_motion;
+                self.reduce_transparency = options.reduce_transparency;
+                self.dress()?;
                 self.repaint()?;
             }
             AppEvent::SessionLock { locked } => {
@@ -508,7 +517,7 @@ impl App {
             .prompt()
             .expect("a prompt to show");
         let request = &prompt.request;
-        let message = self.painter.wrap(&request.message, WIDTH - 2.0 * PADDING);
+        let message = self.painter.wrap(&request.message, TEXT_WIDTH);
         let users: Vec<(User, String)> = request
             .users
             .iter()
@@ -539,9 +548,11 @@ impl App {
             &mut self.conn,
             &surfaces::panel((frames.width as u32, frames.height as u32)),
         )?;
+        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         self.shown = Some(Shown {
             cookie,
             scrims,
+            backdrop,
             presenter: ShmPresenter::new(layer.surface()),
             layer,
             panel,
@@ -552,6 +563,7 @@ impl App {
             since: Instant::now(),
             checking: None,
         });
+        self.dress()?;
         self.relayout();
         Ok(())
     }
@@ -641,6 +653,9 @@ impl App {
             shown
                 .layer
                 .set_placement(Anchor::empty(), (frames.width as u32, frames.height as u32));
+            if let Err(e) = shown.backdrop.set_shape(&panel_shape(&frames), RADIUS) {
+                eprintln!("cupertino-polkit-agent: the panel's glass keeps its shape: {e}");
+            }
         }
         shown.frames = frames;
         shown.checking = match (checking, shown.checking) {
@@ -649,6 +664,29 @@ impl App {
             (false, _) => None,
         };
         shown.presenter.request_redraw();
+    }
+
+    /// Give the panel the compositor's glass in its shape, or none where the session draws materials opaque; the
+    /// painter leaves the body clear over the glass and paints it otherwise.
+    fn dress(&mut self) -> Result<()> {
+        let material = panel_material(self.reduce_transparency, self.increase_contrast);
+        self.painter.glass = material.is_some();
+        if let Some(shown) = &mut self.shown {
+            match material {
+                Some(name) => {
+                    shown.backdrop.set_material(name);
+                    shown
+                        .backdrop
+                        .set_shape(&panel_shape(&shown.frames), RADIUS)?;
+                }
+                // a zero size hides the backdrop
+                None => shown
+                    .backdrop
+                    .set_shape(&Rect::new(0.0, 0.0, 0.0, 0.0), 0.0)?,
+            }
+            shown.presenter.request_redraw();
+        }
+        Ok(())
     }
 
     /// The appearance changed: new colours everywhere.
@@ -762,4 +800,9 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// The whole panel, in its own points.
+fn panel_shape(frames: &Frames) -> Rect {
+    Rect::new(0.0, 0.0, frames.width, frames.height)
 }

@@ -38,7 +38,7 @@ fn draw(painter: &mut Painter, agent: &Agent) -> (Pixmap, Frames) {
     let prompt = agent.prompt().unwrap();
     let status = Status::of(prompt, false);
     let (cancel_title, authenticate_title) = painter.button_titles();
-    let message = painter.wrap(MESSAGE, 312.0);
+    let message = painter.wrap(MESSAGE, crate::panel::TEXT_WIDTH);
     let frames = Frames::new(&Content {
         message_lines: message.len(),
         users: false,
@@ -185,4 +185,28 @@ fn a_failed_attempt_outlines_the_field_in_red_and_authenticate_waits_for_typing(
     let (failed, frames) = draw(&mut p, &agent);
     let outline = Point::new(frames.field.x() - 1.0, frames.field.center().y);
     assert_eq!(rgba(&failed, outline), red);
+}
+
+/// The panel asks for a panel window's glass, except where the session draws materials opaque; over the glass its body
+/// is left clear inside its rim, and without it the body is the window colour.
+#[test]
+fn the_panel_is_glass_unless_materials_are_opaque_and_paints_its_body_only_without_it() {
+    assert_eq!(panel_material(false, false), Some(PANEL_MATERIAL));
+    assert_eq!(panel_material(true, false), None);
+    assert_eq!(panel_material(false, true), None);
+    let agent = asking();
+    let mut glass = painter();
+    glass.glass = true;
+    let (pixmap, frames) = draw(&mut glass, &agent);
+    let inside = Point::new(frames.width - 30.0, frames.symbol.center().y);
+    assert_eq!(rgba(&pixmap, inside)[3], 0, "clear over the glass");
+    assert_eq!(
+        rgba(&pixmap, Point::new(1.0, 1.0))[3],
+        0,
+        "outside the corner"
+    );
+
+    let mut opaque = painter();
+    let (pixmap, _) = draw(&mut opaque, &agent);
+    assert_eq!(rgba(&pixmap, inside), byte(opaque.palette.background));
 }

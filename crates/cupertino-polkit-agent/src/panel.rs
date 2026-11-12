@@ -5,29 +5,40 @@ use cupertino_geometry::{Point, Rect};
 
 use crate::model::{Key, Prompt};
 
-pub const WIDTH: f64 = 360.0;
-pub const PADDING: f64 = 24.0;
-pub const RADIUS: f64 = 12.0;
-pub const SYMBOL: f64 = 40.0;
+/// The panel is an alert: this wide, with these corners.
+pub const WIDTH: f64 = 260.0;
+pub const RADIUS: f64 = 26.0;
+/// From the panel's top edge to the symbol, and from its sides and bottom edge to the controls and buttons.
+pub const TOP: f64 = 22.0;
+pub const EDGE: f64 = 16.0;
+/// The text lies this much further in than the controls.
+pub const TEXT_INSET: f64 = 6.0;
+/// The width the title and the message are set in.
+pub const TEXT_WIDTH: f64 = WIDTH - 2.0 * (EDGE + TEXT_INSET);
+/// The lock symbol, at the text's leading edge.
+pub const SYMBOL: f64 = 64.0;
 pub const TITLE_LINE: f64 = 16.0;
 pub const BODY_LINE: f64 = 16.0;
 pub const CAPTION_LINE: f64 = 14.0;
 /// The message wraps to at most this many lines; the last one ends in an ellipsis when it is cut.
 pub const MAX_MESSAGE_LINES: usize = 6;
+/// The user pop-up's height.
 pub const CONTROL_HEIGHT: f64 = 20.0;
 pub const FIELD_HEIGHT: f64 = 22.0;
-/// Below the symbol, and between the title and the message (approximate).
-const SYMBOL_GAP: f64 = 8.0;
-const TITLE_GAP: f64 = 4.0;
+/// Cancel and Authenticate: capsules this tall, side by side in equal halves when both titles fit, else stacked full
+/// width with Authenticate on top; [`BUTTON_GAP`] between them either way.
+pub const BUTTON_HEIGHT: f64 = 28.0;
+pub const BUTTON_GAP: f64 = 8.0;
+/// Below the symbol, and between the title and the message.
+const SYMBOL_GAP: f64 = 14.0;
+const TITLE_GAP: f64 = 10.0;
 const MESSAGE_GAP: f64 = 16.0;
 const USER_GAP: f64 = 8.0;
 const STATUS_GAP: f64 = 6.0;
 const DETAILS_GAP: f64 = 8.0;
-const BUTTONS_GAP: f64 = 20.0;
-const BUTTON_SPACING: f64 = 8.0;
-/// A push button is its title plus this on each side, and never narrower than [`BUTTON_MIN_WIDTH`] (approximate).
+const BUTTONS_GAP: f64 = 16.0;
+/// A button's title keeps at least this much room on each side.
 pub const BUTTON_INSET: f64 = 12.0;
-const BUTTON_MIN_WIDTH: f64 = 80.0;
 /// The width of the label column of the user row and of the details (approximate).
 pub const LABEL_COLUMN: f64 = 64.0;
 
@@ -73,58 +84,58 @@ pub struct Frames {
     pub authenticate: Rect,
 }
 
-fn button_width(title: f64) -> f64 {
-    (title + 2.0 * BUTTON_INSET).max(BUTTON_MIN_WIDTH).ceil()
+/// Whether buttons with titles `widths` points wide fit side by side in equal halves of the panel's inner width.
+pub fn side_by_side(widths: &[f64]) -> bool {
+    let half = (WIDTH - 2.0 * EDGE - BUTTON_GAP) / 2.0;
+    widths.iter().all(|w| w + 2.0 * BUTTON_INSET <= half)
 }
 
 impl Frames {
     pub fn new(content: &Content) -> Frames {
-        let inner = WIDTH - 2.0 * PADDING;
-        let row = |y: f64, height: f64| Rect::new(PADDING, y, inner, height);
-        let mut y = PADDING;
-        let symbol = Rect::new((WIDTH - SYMBOL) / 2.0, y, SYMBOL, SYMBOL);
+        let control = |y: f64, height: f64| Rect::new(EDGE, y, WIDTH - 2.0 * EDGE, height);
+        let text = |y: f64, height: f64| Rect::new(EDGE + TEXT_INSET, y, TEXT_WIDTH, height);
+        let mut y = TOP;
+        let symbol = Rect::new(EDGE + TEXT_INSET, y, SYMBOL, SYMBOL);
         y += SYMBOL + SYMBOL_GAP;
-        let title = row(y, TITLE_LINE);
+        let title = text(y, TITLE_LINE);
         y += TITLE_LINE + TITLE_GAP;
         let message = (0..content.message_lines.min(MAX_MESSAGE_LINES))
-            .map(|i| row(y + i as f64 * BODY_LINE, BODY_LINE))
+            .map(|i| text(y + i as f64 * BODY_LINE, BODY_LINE))
             .collect::<Vec<_>>();
         y += message.len() as f64 * BODY_LINE + MESSAGE_GAP;
         let user = content.users.then(|| {
-            let user = row(y, CONTROL_HEIGHT);
+            let user = control(y, CONTROL_HEIGHT);
             y += CONTROL_HEIGHT + USER_GAP;
             user
         });
-        let field = row(y, FIELD_HEIGHT);
+        let field = control(y, FIELD_HEIGHT);
         y += FIELD_HEIGHT;
         if content.status_lines > 0 {
             y += STATUS_GAP;
         }
         let status = (0..content.status_lines)
-            .map(|i| row(y + i as f64 * CAPTION_LINE, CAPTION_LINE))
+            .map(|i| control(y + i as f64 * CAPTION_LINE, CAPTION_LINE))
             .collect::<Vec<_>>();
         y += status.len() as f64 * CAPTION_LINE + DETAILS_GAP;
-        let details = row(y, CAPTION_LINE);
+        let details = control(y, CAPTION_LINE);
         y += CAPTION_LINE;
         let detail_rows = (0..content.details.unwrap_or(0))
-            .map(|i| row(y + i as f64 * CAPTION_LINE, CAPTION_LINE))
+            .map(|i| control(y + i as f64 * CAPTION_LINE, CAPTION_LINE))
             .collect::<Vec<_>>();
         y += detail_rows.len() as f64 * CAPTION_LINE + BUTTONS_GAP;
-        let authenticate_width = button_width(content.authenticate_title);
-        let authenticate = Rect::new(
-            WIDTH - PADDING - authenticate_width,
-            y,
-            authenticate_width,
-            CONTROL_HEIGHT,
-        );
-        let cancel_width = button_width(content.cancel_title);
-        let cancel = Rect::new(
-            authenticate.x() - BUTTON_SPACING - cancel_width,
-            y,
-            cancel_width,
-            CONTROL_HEIGHT,
-        );
-        y += CONTROL_HEIGHT + PADDING;
+        let (cancel, authenticate) =
+            if side_by_side(&[content.cancel_title, content.authenticate_title]) {
+                let half = (WIDTH - 2.0 * EDGE - BUTTON_GAP) / 2.0;
+                (
+                    Rect::new(EDGE, y, half, BUTTON_HEIGHT),
+                    Rect::new(EDGE + half + BUTTON_GAP, y, half, BUTTON_HEIGHT),
+                )
+            } else {
+                let authenticate = control(y, BUTTON_HEIGHT);
+                y += BUTTON_HEIGHT + BUTTON_GAP;
+                (control(y, BUTTON_HEIGHT), authenticate)
+            };
+        y += BUTTON_HEIGHT + EDGE;
         Frames {
             width: WIDTH,
             height: y.ceil(),

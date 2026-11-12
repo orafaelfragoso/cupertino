@@ -169,7 +169,12 @@ struct Run {
     driver: TestDriver<Tool>,
     at: Assistive,
     configured: Vec<WindowId>,
+    /// The runtime's clock, moved only while a window animates.
+    clock: ManualClock,
 }
+
+/// One frame at 60 Hz, in nanoseconds.
+const FRAME_NS: u64 = 16_666_667;
 
 impl Run {
     fn start(style: Option<Style>, settings: Settings) -> Self {
@@ -213,11 +218,13 @@ impl Run {
             app_effects: true,
             ..Capabilities::default()
         };
-        let driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
+        let clock = ManualClock::new(Timestamp(0));
+        let driver = TestDriver::new(capabilities, options, clock.clone());
         let mut run = Self {
             driver,
             at,
             configured: Vec::new(),
+            clock,
         };
         run.settle();
         run
@@ -230,9 +237,11 @@ impl Run {
     }
 
     /// Run until idle, configuring each new window at its size (an overlay at its output's), and hand out the frames
-    /// asked for, a bounded number of times.
+    /// asked for, a bounded number of times. A window that asks again for a frame at the same time is animating: the
+    /// clock then moves one 60 Hz frame.
     fn settle_frames(&mut self) {
-        for _ in 0..16 {
+        let mut framed: Vec<(WindowId, Timestamp)> = Vec::new();
+        for _ in 0..16 + 120 {
             self.driver.run_until_idle(budget()).unwrap();
             let system = self.driver.window_system_mut();
             let mut busy = false;
@@ -254,7 +263,13 @@ impl Run {
                     self.configured.push(window);
                     busy = true;
                 } else if system.frame_requested(window).unwrap() {
-                    system.frame_ready(window, Timestamp(0)).unwrap();
+                    let mut now = cupertino_kit::core::Clock::now(&self.clock);
+                    if framed.contains(&(window, now)) {
+                        self.clock.advance_by(FRAME_NS);
+                        now = cupertino_kit::core::Clock::now(&self.clock);
+                    }
+                    framed.push((window, now));
+                    system.frame_ready(window, now).unwrap();
                     busy = true;
                 }
             }

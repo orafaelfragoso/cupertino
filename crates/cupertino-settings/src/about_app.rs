@@ -67,7 +67,9 @@ pub fn run(activation: String) -> Result<()> {
     else {
         return Ok(());
     };
-    let mut about = About::read(Path::new("/"));
+    // the one graphics reading that runs a program, given a short time to answer before the window shows
+    let video_memory = crate::about::nvidia_video_memory(crate::about::VIDEO_MEMORY_TIMEOUT);
+    let mut about = About::read_with(Path::new("/"), &video_memory);
     let screen = about
         .read_displays()
         .map_err(|e| format!("cannot list the displays: {e}"))?;

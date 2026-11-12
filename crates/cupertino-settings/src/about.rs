@@ -286,8 +286,15 @@ pub struct About {
 }
 
 impl About {
-    /// `root` is `/` in production; tests supply a fixture tree. No commands or privileged APIs are used.
+    /// `root` is `/` in production; tests supply a fixture tree. No commands or privileged APIs are used, so a
+    /// graphics device whose memory only its driver's tool reports shows without it ([`About::read_with`]).
     pub fn read(root: &Path) -> Self {
+        Self::read_with(root, &[])
+    }
+
+    /// As [`About::read`], with the memory of graphics devices that sysfs does not report, by PCI address, as
+    /// [`nvidia_video_memory`] reads it.
+    pub fn read_with(root: &Path, video_memory: &[(PciAddress, u64)]) -> Self {
         let read = |path: &str| read_text(&root.join(path));
         let computer = read("etc/machine-info")
             .and_then(|s| assignment(&s, "PRETTY_HOSTNAME"))
@@ -296,14 +303,20 @@ impl About {
         let processor = processor.or_else(|| {
             read("proc/device-tree/model").and_then(|s| single_line(s.trim_end_matches('\0')))
         });
-        let memory = read("proc/meminfo").and_then(|s| memory(&s));
+        let memory = installed_memory(&root.join("sys/devices/system/memory"))
+            .or_else(|| read("proc/meminfo").and_then(|s| memory(&s)))
+            .map(memory_text);
         let kernel = read("proc/sys/kernel/osrelease").and_then(|s| single_line(&s));
         let os = read("etc/os-release").and_then(|s| assignment(&s, "PRETTY_NAME"));
+        let disk = read("proc/self/mountinfo")
+            .and_then(|s| startup_disk(root, &s))
+            .and_then(|disk| disk.value());
         let mut rows = Vec::new();
         for (label, value) in [
             ("Computer", computer),
             ("Processor", processor),
             ("Memory", memory),
+            ("Startup disk", disk),
         ] {
             if let Some(value) = value {
                 rows.push(Row { label, value });
@@ -329,29 +342,24 @@ impl About {
                     let vendor = read_text(&device.join("vendor")).and_then(|s| pci_id(&s));
                     let product = read_text(&device.join("device")).and_then(|s| pci_id(&s));
                     if let Some((vendor, product)) = vendor.zip(product) {
-                        let mut value = ids
+                        let name = ids
                             .as_deref()
                             .and_then(|s| pci_name(s, vendor, product))
+                            .map(|name| product_name(&name))
                             .unwrap_or_else(|| format!("PCI {vendor:04x}:{product:04x}"));
-                        match std::fs::read_link(device.join("driver")) {
-                            Ok(path) => {
-                                if let Some(driver) = path
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .and_then(single_line)
-                                {
-                                    value.push_str(&format!(" ({driver})"));
-                                }
-                            }
-                            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                            Err(e) => eprintln!(
-                                "cupertino-settings: {}: {e}",
-                                device.join("driver").display()
-                            ),
-                        }
+                        let memory = read_text(&device.join("mem_info_vram_total"))
+                            .and_then(|s| s.trim().parse::<u64>().ok())
+                            .or_else(|| {
+                                let address = std::fs::canonicalize(&device).ok()?;
+                                let address = pci_address(address.file_name()?.to_str()?)?;
+                                video_memory
+                                    .iter()
+                                    .find(|(a, _)| *a == address)
+                                    .map(|(_, bytes)| *bytes)
+                            });
                         rows.push(Row {
                             label: "Graphics",
-                            value,
+                            value: graphics_value(&name, memory),
                         });
                     }
                 }
@@ -501,15 +509,337 @@ fn processor(text: &str) -> Option<String> {
     })
 }
 
-fn memory(text: &str) -> Option<String> {
+/// Bytes in a binary gigabyte, as memory sizes are written.
+const GIB: u64 = 1 << 30;
+const MIB: u64 = 1 << 20;
+
+/// The memory the kernel may use, from `MemTotal`, in bytes rounded up to the common module total
+/// ([`common_memory_total`]): firmware and reserved regions keep it a little below what is installed.
+fn memory(text: &str) -> Option<u64> {
     let value = text.lines().find_map(|s| s.strip_prefix("MemTotal:"))?;
     let mut fields = value.split_whitespace();
     let kb = fields.next()?.parse::<u64>().ok()?;
     if fields.next()? != "kB" || fields.next().is_some() || kb == 0 {
         return None;
     }
-    let gb = kb.checked_add(512 * 1024)? / (1024 * 1024);
-    Some(format!("{gb} GB"))
+    let bytes = kb.checked_mul(1024)?;
+    common_memory_total(bytes, true)
+}
+
+/// The installed memory in bytes: the memory blocks the kernel has online, each `block_size_bytes` (hexadecimal)
+/// long, under `memory` (`/sys/devices/system/memory`). A whole number of gigabytes is shown as it is; else it is
+/// taken to the nearest common module total. `None` without blocks.
+fn installed_memory(memory: &Path) -> Option<u64> {
+    let block = read_text(&memory.join("block_size_bytes"))
+        .and_then(|s| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok())
+        .filter(|&b| b > 0)?;
+    let entries = std::fs::read_dir(memory).ok()?;
+    let online = entries
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("memory")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        })
+        .filter(|e| {
+            read_text(&e.path().join("online")).is_some_and(|s| s.trim() == "1")
+                || read_text(&e.path().join("state")).is_some_and(|s| s.trim() == "online")
+        })
+        .count() as u64;
+    let bytes = block.checked_mul(online).filter(|&b| b > 0)?;
+    if bytes % GIB == 0 {
+        Some(bytes)
+    } else {
+        common_memory_total(bytes, false)
+    }
+}
+
+/// The memory totals modules are sold in: 1, 2, 3, 4, 6, 8, 12, 16, 24 … gigabytes, a power of two or three times
+/// one. `bytes` taken up to the next of them when `up`, else to the nearest by ratio.
+fn common_memory_total(bytes: u64, up: bool) -> Option<u64> {
+    let totals = (0..40u32).flat_map(|n| {
+        let power = 1u64.checked_shl(n).unwrap_or(0);
+        [power, power / 2 * 3].into_iter().filter(|&t| t > 0)
+    });
+    let gib = bytes as f64 / GIB as f64;
+    let mut below = 0;
+    for total in totals {
+        if total as f64 >= gib {
+            let nearest = if up || below == 0 || total as f64 / gib < gib / below as f64 {
+                total
+            } else {
+                below
+            };
+            return nearest.checked_mul(GIB);
+        }
+        below = total;
+    }
+    None
+}
+
+/// "32 GB", "512 MB": memory in binary units, whole gigabytes from one up.
+fn memory_text(bytes: u64) -> String {
+    if bytes >= GIB {
+        format!("{} GB", (bytes + GIB / 2) / GIB)
+    } else {
+        format!("{} MB", (bytes + MIB / 2) / MIB)
+    }
+}
+
+/// A graphics device's product name and, when known, its memory: "GeForce RTX 3060 Lite 12 GB", the size joined
+/// by a no-break space.
+fn graphics_value(name: &str, memory: Option<u64>) -> String {
+    match memory.filter(|&b| b > 0) {
+        Some(bytes) => format!("{name} {}", memory_text(bytes).replace(' ', "\u{a0}")),
+        None => name.to_owned(),
+    }
+}
+
+/// The product name of a PCI database entry: the bracketed marketing name when it has one ("GA106 [GeForce RTX
+/// 3060]" is "GeForce RTX 3060"), "Lite Hash Rate" shortened to "Lite".
+fn product_name(entry: &str) -> String {
+    let name = entry
+        .find('[')
+        .zip(entry.rfind(']'))
+        .filter(|(open, close)| open < close)
+        .map(|(open, close)| entry[open + 1..close].trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(entry.trim());
+    match name.strip_suffix("Lite Hash Rate") {
+        Some(start) => format!("{start}Lite"),
+        None => name.to_owned(),
+    }
+}
+
+/// A PCI address, domain and "bus:device.function" in lower case; the kernel writes the domain in four digits,
+/// the driver's tool in eight.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PciAddress {
+    domain: u32,
+    function: String,
+}
+
+fn pci_address(text: &str) -> Option<PciAddress> {
+    let (domain, function) = text.trim().split_once(':')?;
+    let domain = u32::from_str_radix(domain, 16).ok()?;
+    let function = function.to_ascii_lowercase();
+    let valid = function.len() == 7
+        && function.bytes().enumerate().all(|(i, c)| match i {
+            2 => c == b':',
+            5 => c == b'.',
+            _ => c.is_ascii_hexdigit(),
+        });
+    valid.then_some(PciAddress { domain, function })
+}
+
+/// The longest the NVIDIA driver's tool may take to answer before its graphics memory is left off.
+pub const VIDEO_MEMORY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// The memory of each NVIDIA device, which its driver reports only through its own tool: run once, given
+/// `timeout` to answer, killed past it. Empty when the tool is missing, fails or is late.
+pub fn nvidia_video_memory(timeout: std::time::Duration) -> Vec<(PciAddress, u64)> {
+    use std::process::{Command, Stdio};
+    let child = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=pci.bus_id,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!("cupertino-settings: nvidia-smi: {e}");
+            return Vec::new();
+        }
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        return Vec::new();
+    };
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let read = (&mut stdout).take(MAX_FILE_BYTES).read_to_string(&mut text);
+        let _ = send.send(read.map(|_| text));
+    });
+    let text = receive.recv_timeout(timeout);
+    if text.is_err() {
+        eprintln!("cupertino-settings: nvidia-smi did not answer in {timeout:?}");
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    match (text, status) {
+        (Ok(Ok(text)), Ok(status)) if status.success() => nvidia_memory_list(&text),
+        _ => Vec::new(),
+    }
+}
+
+/// "00000000:05:00.0, 12288" lines, the size in mebibytes, as bytes by address; malformed lines are skipped.
+fn nvidia_memory_list(text: &str) -> Vec<(PciAddress, u64)> {
+    text.lines()
+        .filter_map(|line| {
+            let (address, mib) = line.split_once(',')?;
+            let mib = mib.trim().parse::<u64>().ok().filter(|&m| m > 0)?;
+            Some((pci_address(address)?, mib.checked_mul(MIB)?))
+        })
+        .collect()
+}
+
+/// The disk holding the root file system, as sysfs describes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StartupDisk {
+    /// The file system's label, when it has one.
+    label: Option<String>,
+    /// The disk's model.
+    model: Option<String>,
+    bytes: u64,
+}
+
+impl StartupDisk {
+    /// "<label or model> 1 TB", the size joined by a no-break space; `None` without a size.
+    fn value(&self) -> Option<String> {
+        let size = disk_size_text(self.bytes)?;
+        Some(match self.label.as_ref().or(self.model.as_ref()) {
+            Some(name) => format!("{name} {size}"),
+            None => size,
+        })
+    }
+}
+
+/// Decimal units, as disks are sold: "1 TB", "1.92 TB", "512 GB", at most two decimals from a terabyte up and
+/// whole units below. `None` for an empty disk.
+fn disk_size_text(bytes: u64) -> Option<String> {
+    const UNITS: [(f64, &str); 4] = [(1e15, "PB"), (1e12, "TB"), (1e9, "GB"), (1e6, "MB")];
+    if bytes == 0 {
+        return None;
+    }
+    let bytes = bytes as f64;
+    let (scale, unit) = UNITS
+        .iter()
+        .find(|(scale, _)| bytes >= scale * 0.9995)
+        .copied()
+        .unwrap_or((1e6, "MB"));
+    let places = if scale >= 1e12 { 2 } else { 0 };
+    // a disk under a megabyte still shows as one
+    let value = decimals((bytes / scale).max(1.0), places);
+    Some(format!("{value}{NO_BREAK_SPACE}{unit}"))
+}
+
+/// The deepest a mapped device may stack (encryption on logical volumes on RAID …) before the walk gives up.
+const MAX_STACK: usize = 16;
+
+/// The disk under the file system mounted at `/` in `mountinfo`: its device by number, else by the name its source
+/// gives, then through mapped devices (`slaves`) and partitions to the whole disk, in `root`'s sysfs.
+fn startup_disk(root: &Path, mountinfo: &str) -> Option<StartupDisk> {
+    let (number, source) = mountinfo.lines().rev().find_map(|line| {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let dash = fields.iter().position(|f| *f == "-")?;
+        (fields.get(4) == Some(&"/")).then_some((*fields.get(2)?, *fields.get(dash + 2)?))
+    })?;
+    let sys = root.join("sys");
+    let block = sys.join("class/block");
+    let device = std::fs::canonicalize(sys.join("dev/block").join(number))
+        .ok()
+        .or_else(|| {
+            let name = source_device_name(root, &block, source)?;
+            std::fs::canonicalize(block.join(name)).ok()
+        })?;
+    let label = btrfs_label(&sys, &device).or_else(|| by_label(root, &device));
+    let mut device = device;
+    for _ in 0..MAX_STACK {
+        let mut slaves: Vec<_> = std::fs::read_dir(device.join("slaves"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.file_name())
+                    .collect()
+            })
+            .unwrap_or_default();
+        slaves.sort();
+        if let Some(slave) = slaves.first() {
+            device = std::fs::canonicalize(block.join(slave)).ok()?;
+        } else if device.join("partition").exists() {
+            device = device.parent()?.to_path_buf();
+        } else {
+            let bytes = read_text(&device.join("size"))?
+                .trim()
+                .parse::<u64>()
+                .ok()?
+                .checked_mul(512)?;
+            let model = ["device/model", "device/name"]
+                .iter()
+                .find_map(|f| read_text(&device.join(f)).and_then(|s| single_line(&s)));
+            return Some(StartupDisk {
+                label,
+                model,
+                bytes,
+            });
+        }
+    }
+    None
+}
+
+/// The block device a mount source names: "/dev/mapper/NAME" by the mapped device's name, else the device file
+/// (through its link, as "/dev/disk/by-uuid/…" are).
+fn source_device_name(root: &Path, block: &Path, source: &str) -> Option<String> {
+    let path = source.strip_prefix('/')?;
+    if let Some(mapped) = path.strip_prefix("dev/mapper/") {
+        return std::fs::read_dir(block)
+            .ok()?
+            .filter_map(Result::ok)
+            .find_map(|e| {
+                let name = read_text(&e.path().join("dm/name"))?;
+                (name.trim() == mapped).then(|| e.file_name().to_string_lossy().into_owned())
+            });
+    }
+    let file = root.join(path);
+    let target = std::fs::read_link(&file).unwrap_or(file);
+    Some(target.file_name()?.to_str()?.to_owned())
+}
+
+/// The label of the btrfs file system `device` belongs to.
+fn btrfs_label(sys: &Path, device: &Path) -> Option<String> {
+    let name = device.file_name()?;
+    std::fs::read_dir(sys.join("fs/btrfs"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().join("devices").join(name).exists())
+        .find_map(|e| read_text(&e.path().join("label")).and_then(|s| single_line(&s)))
+}
+
+/// The label udev links to `device` under `/dev/disk/by-label`, its escapes ("\x20") undone.
+fn by_label(root: &Path, device: &Path) -> Option<String> {
+    let name = device.file_name()?;
+    std::fs::read_dir(root.join("dev/disk/by-label"))
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|e| std::fs::read_link(e.path()).is_ok_and(|target| target.file_name() == Some(name)))
+        .and_then(|e| single_line(&unescape_label(&e.file_name().to_string_lossy())))
+}
+
+fn unescape_label(text: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut rest = text.as_bytes();
+    while let Some((&first, tail)) = rest.split_first() {
+        if first == b'\\' && tail.first() == Some(&b'x') {
+            if let Some(byte) = tail
+                .get(1..3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            {
+                bytes.push(byte);
+                rest = &tail[3..];
+                continue;
+            }
+        }
+        bytes.push(first);
+        rest = tail;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn card_name(name: &str) -> bool {
@@ -879,7 +1209,7 @@ mod tests {
 
     #[test]
     fn memory_parser_requires_positive_kibibytes() {
-        assert_eq!(memory("MemTotal: 33554432 kB"), Some("32 GB".into()));
+        assert_eq!(memory("MemTotal: 33554432 kB"), Some(32 * GIB));
         for text in [
             "",
             "MemTotal: no kB",
@@ -917,6 +1247,278 @@ mod tests {
         );
         assert!(card_name("card10"));
         assert!(!card_name("card0-DP-1"));
+    }
+
+    fn write(root: &Path, path: &str, value: &str) {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value).unwrap();
+    }
+
+    /// A link at `path` to `target`, both within `root`.
+    fn link(root: &Path, path: &str, target: &str) {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(root.join(target), path).unwrap();
+    }
+
+    #[test]
+    fn online_memory_blocks_give_the_installed_memory() {
+        let root = tempfile::tempdir().unwrap();
+        let memory = root.path().join("sys/devices/system/memory");
+        // 128 MiB blocks, written in hexadecimal as the kernel does
+        write(&memory, "block_size_bytes", "8000000\n");
+        for i in 0..256 {
+            write(&memory, &format!("memory{i}/online"), "1\n");
+        }
+        write(&memory, "memory300/online", "0\n");
+        assert_eq!(installed_memory(&memory), Some(32 * GIB));
+        write(root.path(), "proc/meminfo", "MemTotal: 32759760 kB");
+        let about = About::read(root.path());
+        assert_eq!(about.rows[0].label, "Memory");
+        assert_eq!(about.rows[0].value, "32 GB");
+
+        // blocks that are not a whole number of gigabytes go to the nearest common total
+        for i in 256..260 {
+            write(&memory, &format!("memory{i}/online"), "1\n");
+        }
+        assert_eq!(installed_memory(&memory), Some(32 * GIB));
+        // a whole number of gigabytes shows as it is, as a machine given 5 GB does
+        let five = tempfile::tempdir().unwrap();
+        write(five.path(), "block_size_bytes", "40000000");
+        for i in 0..5 {
+            write(five.path(), &format!("memory{i}/state"), "online");
+        }
+        assert_eq!(installed_memory(five.path()), Some(5 * GIB));
+        assert_eq!(installed_memory(&root.path().join("absent")), None);
+    }
+
+    #[test]
+    fn without_memory_blocks_the_kernels_total_rounds_up_to_a_common_module_total() {
+        // 31.2 GiB usable of 32 GB installed
+        assert_eq!(memory("MemTotal: 32759760 kB"), Some(32 * GIB));
+        assert_eq!(memory("MemTotal: 33554432 kB"), Some(32 * GIB));
+        // a graphics carve-out leaves 13.9 GiB of 16
+        assert_eq!(memory("MemTotal: 14575000 kB"), Some(16 * GIB));
+        assert_eq!(memory("MemTotal: 24000000 kB"), Some(24 * GIB));
+        assert_eq!(memory("MemTotal: 7900000 kB"), Some(8 * GIB));
+        assert_eq!(memory("MemTotal: 1000000 kB"), Some(GIB));
+        assert_eq!(memory_text(32 * GIB), "32 GB");
+        assert_eq!(memory_text(512 * MIB), "512 MB");
+        assert_eq!(common_memory_total(33 * GIB, false), Some(32 * GIB));
+        assert_eq!(common_memory_total(44 * GIB, false), Some(48 * GIB));
+        assert_eq!(common_memory_total(33 * GIB, true), Some(48 * GIB));
+    }
+
+    #[test]
+    fn a_pci_database_entry_gives_the_bracketed_product_name_with_lite_hash_rate_shortened() {
+        let ids = "10de  NVIDIA Corporation\n\t2504  GA106 [GeForce RTX 3060 Lite Hash Rate]\n\t2503  GA106 [GeForce RTX 3060]\n";
+        let name = pci_name(ids, 0x10de, 0x2504).unwrap();
+        assert_eq!(product_name(&name), "GeForce RTX 3060 Lite");
+        assert_eq!(
+            product_name(&pci_name(ids, 0x10de, 0x2503).unwrap()),
+            "GeForce RTX 3060"
+        );
+        assert_eq!(
+            product_name("Alder Lake-P GT2 [Iris Xe Graphics]"),
+            "Iris Xe Graphics"
+        );
+        assert_eq!(product_name("Virtio 1.0 GPU"), "Virtio 1.0 GPU");
+        assert_eq!(product_name("Odd ] [ name"), "Odd ] [ name");
+        assert_eq!(product_name("Empty []"), "Empty []");
+    }
+
+    #[test]
+    fn video_memory_is_written_in_gigabytes_after_the_name() {
+        assert_eq!(
+            graphics_value("GeForce RTX 3060 Lite", Some(12288 * MIB)),
+            "GeForce RTX 3060 Lite 12\u{a0}GB"
+        );
+        // a driver that keeps a little back still reads as the size sold
+        assert_eq!(graphics_value("Card", Some(24564 * MIB)), "Card 24\u{a0}GB");
+        assert_eq!(graphics_value("Card", Some(512 * MIB)), "Card 512\u{a0}MB");
+        assert_eq!(graphics_value("Card", Some(0)), "Card");
+        assert_eq!(graphics_value("Card", None), "Card");
+    }
+
+    #[test]
+    fn the_driver_tools_memory_list_is_matched_by_pci_address() {
+        let list = nvidia_memory_list(
+            "00000000:05:00.0, 12288\n00000000:0A:00.0, 8192\nbad line\n00000000:06:00.0, none\n",
+        );
+        assert_eq!(
+            list,
+            vec![
+                (pci_address("0000:05:00.0").unwrap(), 12288 * MIB),
+                (pci_address("0000:0a:00.0").unwrap(), 8192 * MIB),
+            ]
+        );
+        for text in ["", "05:00.0", "0000:05:00", "zz:05:00.0", "0000:05-00.0"] {
+            assert_eq!(pci_address(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn graphics_rows_show_the_product_and_its_memory_from_sysfs_or_the_drivers_tool() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        write(
+            r,
+            "usr/share/hwdata/pci.ids",
+            "1002  AMD\n\t73df  Navi 22 [Radeon RX 6700 XT]\n10de  NVIDIA Corporation\n\t2504  GA106 [GeForce RTX 3060 Lite Hash Rate]\n",
+        );
+        let nvidia = "sys/devices/pci0000:00/0000:05:00.0";
+        write(r, &format!("{nvidia}/vendor"), "0x10de\n");
+        write(r, &format!("{nvidia}/device"), "0x2504\n");
+        link(r, "sys/class/drm/card1/device", nvidia);
+        let amd = "sys/devices/pci0000:00/0000:0a:00.0";
+        write(r, &format!("{amd}/vendor"), "0x1002\n");
+        write(r, &format!("{amd}/device"), "0x73df\n");
+        write(r, &format!("{amd}/mem_info_vram_total"), "12868124672\n");
+        link(r, "sys/class/drm/card2/device", amd);
+        let graphics = |about: About| {
+            about
+                .rows
+                .into_iter()
+                .filter(|row| row.label == "Graphics")
+                .map(|row| row.value)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            graphics(About::read(r)),
+            ["GeForce RTX 3060 Lite", "Radeon RX 6700 XT 12\u{a0}GB"]
+        );
+        let tool = nvidia_memory_list("00000000:05:00.0, 12288\n");
+        assert_eq!(
+            graphics(About::read_with(r, &tool)),
+            [
+                "GeForce RTX 3060 Lite 12\u{a0}GB",
+                "Radeon RX 6700 XT 12\u{a0}GB"
+            ]
+        );
+    }
+
+    #[test]
+    fn disk_sizes_are_written_in_decimal_units_as_disks_are_sold() {
+        for (bytes, text) in [
+            (1_000_204_886_016, "1\u{a0}TB"),
+            (2_000_398_934_016, "2\u{a0}TB"),
+            (1_920_383_410_176, "1.92\u{a0}TB"),
+            (500_107_862_016, "500\u{a0}GB"),
+            (256_060_514_304, "256\u{a0}GB"),
+            (999_600_000_000, "1\u{a0}TB"),
+            (31_914_983_424, "32\u{a0}GB"),
+            (4_000_000, "4\u{a0}MB"),
+            (1000, "1\u{a0}MB"),
+        ] {
+            assert_eq!(disk_size_text(bytes).as_deref(), Some(text), "{bytes}");
+        }
+        assert_eq!(disk_size_text(0), None);
+    }
+
+    /// A disk with a partition, encryption on it and a logical volume on that, laid out as sysfs does: devices under
+    /// `devices/`, linked from `class/block/` and `dev/block/`.
+    fn stacked_disk(r: &Path) {
+        let disk = "sys/devices/pci0000:00/0000:04:00.0/nvme/nvme0/nvme0n1";
+        write(r, &format!("{disk}/size"), "1953525168\n");
+        write(
+            r,
+            &format!("{disk}/device/model"),
+            "EXAMPLE NVME 1000G   \n",
+        );
+        write(r, &format!("{disk}/nvme0n1p1/partition"), "1\n");
+        write(r, &format!("{disk}/nvme0n1p2/partition"), "2\n");
+        write(r, &format!("{disk}/nvme0n1p2/size"), "1951000000\n");
+        write(r, &format!("{disk}/nvme0n1p2/holders/dm-0"), "");
+        let crypt = "sys/devices/virtual/block/dm-0";
+        write(r, &format!("{crypt}/dm/name"), "cryptroot\n");
+        write(r, &format!("{crypt}/slaves/nvme0n1p2"), "");
+        write(r, &format!("{crypt}/size"), "1950000000\n");
+        let volume = "sys/devices/virtual/block/dm-1";
+        write(r, &format!("{volume}/dm/name"), "vg-root\n");
+        write(r, &format!("{volume}/slaves/dm-0"), "");
+        write(r, &format!("{volume}/size"), "900000000\n");
+        for (name, path) in [
+            ("nvme0n1", disk.to_owned()),
+            ("nvme0n1p1", format!("{disk}/nvme0n1p1")),
+            ("nvme0n1p2", format!("{disk}/nvme0n1p2")),
+            ("dm-0", crypt.to_owned()),
+            ("dm-1", volume.to_owned()),
+        ] {
+            link(r, &format!("sys/class/block/{name}"), &path);
+        }
+        link(r, "sys/dev/block/254:1", volume);
+    }
+
+    #[test]
+    fn the_startup_disk_is_found_through_mapped_devices_and_partitions() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        stacked_disk(r);
+        let disk = |mountinfo: &str| startup_disk(r, mountinfo);
+        let expected = StartupDisk {
+            label: None,
+            model: Some("EXAMPLE NVME 1000G".into()),
+            bytes: 1_000_204_886_016,
+        };
+        // by device number, as ext4 or xfs on a logical volume are mounted
+        let by_number = "22 1 254:1 / / rw - ext4 /dev/mapper/vg-root rw\n";
+        assert_eq!(disk(by_number), Some(expected.clone()));
+        // btrfs gives an anonymous number, so the source names the device: a mapped name or a partition
+        let mapped = "31 2 0:28 /@ / rw - btrfs /dev/mapper/vg-root rw,subvol=/@\n";
+        assert_eq!(disk(mapped), Some(expected.clone()));
+        let plain = "31 2 0:28 /@ / rw - btrfs /dev/nvme0n1p2 rw,subvol=/@\n";
+        assert_eq!(disk(plain), Some(expected.clone()));
+        // a link to the device, as by-uuid sources are
+        link(r, "dev/disk/by-uuid/1234", "dev/dm-0");
+        let linked = "31 2 0:28 / / rw - ext4 /dev/disk/by-uuid/1234 rw\n";
+        assert_eq!(disk(linked), Some(expected.clone()));
+        // the last mount at / is the one in use; other mounts are not
+        let over = format!(
+            "1 0 0:2 / / rw - rootfs rootfs rw\n{plain}22 1 0:40 / /home rw - ext4 /dev/sdz1 rw\n"
+        );
+        assert_eq!(disk(&over), Some(expected.clone()));
+        assert_eq!(disk("1 0 0:2 / / rw - tmpfs tmpfs rw\n"), None);
+        assert_eq!(disk(""), None);
+        assert_eq!(
+            expected.value().as_deref(),
+            Some("EXAMPLE NVME 1000G 1\u{a0}TB")
+        );
+
+        // a file system label names the disk before its model
+        write(r, "sys/fs/btrfs/abcd/devices/nvme0n1p2", "");
+        write(r, "sys/fs/btrfs/abcd/label", "Computer HD\n");
+        assert_eq!(
+            disk(plain).and_then(|d| d.value()).as_deref(),
+            Some("Computer HD 1\u{a0}TB")
+        );
+        link(r, "dev/disk/by-label/Main\\x20Disk", "dev/dm-1");
+        assert_eq!(
+            disk(by_number).and_then(|d| d.value()).as_deref(),
+            Some("Main Disk 1\u{a0}TB")
+        );
+
+        write(r, "proc/self/mountinfo", plain);
+        let about = About::read(r);
+        assert_eq!(
+            about.rows,
+            vec![Row {
+                label: "Startup disk",
+                value: "Computer HD 1\u{a0}TB".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_device_stacked_on_itself_ends_the_walk() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        write(r, "sys/devices/virtual/block/dm-0/slaves/dm-0", "");
+        link(r, "sys/class/block/dm-0", "sys/devices/virtual/block/dm-0");
+        assert_eq!(
+            startup_disk(r, "1 0 0:28 / / rw - btrfs /dev/dm-0 rw\n"),
+            None
+        );
     }
 
     #[test]

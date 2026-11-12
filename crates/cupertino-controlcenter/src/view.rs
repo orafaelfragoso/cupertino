@@ -24,15 +24,15 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
-use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
+use cupertino_kit::render::{FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
 use crate::layout::{
-    self, detail as rows, Outline, GRID_ORIGIN, GRID_WIDTH, INSET, LARGE_RADIUS, SHADOW_REACH,
-    SURFACE, WINDOW, WINDOW_ORIGIN,
+    self, detail as rows, Outline, BAR_MARGIN, GRID_ORIGIN, GRID_WIDTH, INSET, LARGE_RADIUS,
+    SHADOW_REACH, SHADOW_TOP, SURFACE, WINDOW, WINDOW_ORIGIN,
 };
 use crate::model::{Controls, Detail, MediaCommand, Module, Reading, Slider, TileState};
 use crate::motion::{visibility, Visibility};
@@ -824,11 +824,17 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
                 .iter()
                 .map(|(rect, radius)| (rect.translate(GRID_ORIGIN.x, GRID_ORIGIN.y), *radius))
                 .collect();
+            // the menu bar lies over the panel's shadow: none of it darkens the bar
+            let bar_edge = SHADOW_TOP - f64::from(BAR_MARGIN);
+            cx.push(PaintOp::PushClip(Shape::Rect(Rect::new(
+                -1.0e4, bar_edge, 2.0e4, 2.0e4,
+            ))));
             shadow(
                 cx,
                 self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y),
                 &holes,
             );
+            cx.push(PaintOp::PopClip);
         }
     }
 

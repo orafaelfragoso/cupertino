@@ -381,11 +381,13 @@ mod tests {
                 id: "viewer.desktop".into(),
                 name: "Viewer".into(),
                 is_default: true,
+                icon: None,
             },
             AppChoice {
                 id: "editor.desktop".into(),
                 name: "Editor".into(),
                 is_default: false,
+                icon: None,
             },
         ]
     }

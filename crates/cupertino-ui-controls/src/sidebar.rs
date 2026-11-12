@@ -65,7 +65,7 @@ const ACCENT: Metrics = Metrics {
 const NEUTRAL: Metrics = Metrics {
     row: 32.0,
     heading: 17.0,
-    top: 10.0,
+    top: 2.5,
     section_gap: 15.0,
     selection_radius: 8.0,
     icon_x: 7.75,

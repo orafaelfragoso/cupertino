@@ -214,6 +214,8 @@ pub struct AppChoice {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    /// The entry's `Icon=` value, for the application's icon.
+    pub icon: Option<String>,
 }
 
 /// The applications every list offers, in the order of the first list. An empty slice of lists offers none.
@@ -237,6 +239,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             is_default: false,
+            icon: None,
         }
     }
 

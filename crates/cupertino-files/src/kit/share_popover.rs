@@ -5,7 +5,7 @@
 //! once and closes the popover.
 
 use cupertino_kit::controls::{
-    Icon, IconDirection, Image, ImageFit, ImageSource, Popover, Separator, Text, TextRole,
+    AppIcon, Icon, IconDirection, Image, ImageFit, ImageSource, Popover, Separator, Text, TextRole,
 };
 use cupertino_kit::core::{
     Action, Change, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
@@ -43,19 +43,26 @@ const HEADER_ICON: f64 = 36.0;
 const HEADER_GAP: f64 = 10.0;
 const NAME_SIZE: f32 = 13.0;
 const KIND_SIZE: f32 = 11.0;
-/// Most applications listed.
+/// Most applications listed before the row that lists them all.
 const MAX_APPS: usize = 8;
+/// The side of an application's icon in its row.
+const APP_ICON: f64 = 18.0;
 const RETURN: Keysym = Keysym(0xff0d);
 const SPACE: Keysym = Keysym(0x20);
 
 /// The popover while it is open.
 pub(super) struct ShareState {
     pub scroll: ScrollState,
+    /// Every application is listed, not the first few.
+    pub all: bool,
 }
 
 impl ShareState {
     pub fn new() -> ShareState {
-        ShareState { scroll: NO_SCROLL }
+        ShareState {
+            scroll: NO_SCROLL,
+            all: false,
+        }
     }
 }
 
@@ -66,6 +73,8 @@ pub enum ShareEvent {
     Open(String),
     /// Copy the selection.
     Copy,
+    /// List every application.
+    ShowAll,
     Close,
     Scroll(ScrollState),
 }
@@ -137,22 +146,25 @@ pub(super) fn window(
             }),
         ],
     });
-    let row = |key: String, symbol: &str, label: &str, on_press: Message| {
+    let row = |key: String, icon: Element<Message>, label: &str, on_press: Message| {
         Element::new(ShareRow {
             label: label.to_owned(),
             on_press,
             children: vec![
-                Element::new(Icon {
-                    name: symbol.into(),
-                    size: SYMBOL,
-                    direction: IconDirection::Fixed,
-                    label: None,
-                    tint: Some(ColorRole::SecondaryText),
-                }),
+                icon,
                 text(label.to_owned(), NAME_SIZE, FontWeight::REGULAR, false),
             ],
         })
         .key(Key::from(key))
+    };
+    let symbol = |name: &str| {
+        Element::new(Icon {
+            name: name.into(),
+            size: SYMBOL,
+            direction: IconDirection::Fixed,
+            label: None,
+            tint: Some(ColorRole::SecondaryText),
+        })
     };
     let group = |rows: Vec<Element<Message>>| {
         // the rows of a group follow one another without gaps
@@ -172,24 +184,36 @@ pub(super) fn window(
     let mut children = vec![header];
     if !apps.is_empty() {
         children.push(separator());
-        children.push(group(
-            apps.iter()
-                .take(MAX_APPS)
-                .map(|app| {
-                    row(
-                        format!("share/app/{}", app.id),
-                        "symbol.applications",
-                        &app.name,
-                        send(id, ShareEvent::Open(app.id.clone())),
-                    )
-                })
-                .collect(),
-        ));
+        let shown = if state.all { apps.len() } else { MAX_APPS };
+        let mut rows: Vec<Element<Message>> = apps
+            .iter()
+            .take(shown)
+            .map(|app| {
+                row(
+                    format!("share/app/{}", app.id),
+                    Element::new(AppIcon {
+                        name: app.icon.clone().unwrap_or_default(),
+                        size: APP_ICON,
+                    }),
+                    &app.name,
+                    send(id, ShareEvent::Open(app.id.clone())),
+                )
+            })
+            .collect();
+        if apps.len() > shown {
+            rows.push(row(
+                "share/all".into(),
+                symbol("symbol.chevron.down"),
+                "Show all",
+                send(id, ShareEvent::ShowAll),
+            ));
+        }
+        children.push(group(rows));
     }
     children.push(separator());
     children.push(group(vec![row(
         "share/copy".into(),
-        "symbol.document",
+        symbol("symbol.document"),
         "Copy",
         send(id, ShareEvent::Copy),
     )]));

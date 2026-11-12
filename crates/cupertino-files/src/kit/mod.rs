@@ -1409,6 +1409,11 @@ impl Model {
                     share.scroll = scroll;
                 }
             }
+            Event::Share(ShareEvent::ShowAll) => {
+                if let Some(share) = window.share.as_mut() {
+                    share.all = true;
+                }
+            }
             Event::Share(ShareEvent::Copy) => {
                 window.share = None;
                 return self.menu(id, MenuAction::Copy);
@@ -2634,6 +2639,7 @@ impl BrowserWindow {
                         id: item.entry.id.clone(),
                         name: item.entry.name.clone(),
                         is_default: item.is_default,
+                        icon: item.entry.icon.clone(),
                     })
                     .collect()
             })

@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cupertino_kit::controls::{Popover, Text, TextField, TextRole};
+use cupertino_kit::controls::{BareField, Popover, Text, TextField, TextRole};
 use cupertino_kit::core::{
     AccessibleValue, Action, Change, Checked, Element, Event, EventCx, Key, MeasureCx, PaintCx,
     Phase, Propagation, Role, SemanticsCx, Widget, Window, WindowKey,
@@ -35,6 +35,13 @@ const WIDTH: f64 = 217.0;
 const ROW_HEIGHT: f64 = 19.0;
 /// Between the title and the field, and from the field to the first row.
 const TITLE_GAP: f64 = 6.0;
+/// The height of the field that filters the tags.
+const FIELD_HEIGHT: f64 = 26.0;
+/// The room between the field's frame and its text, and the frame's corner radius.
+const FIELD_INSET: f64 = 8.0;
+const FIELD_RADIUS: f64 = 7.0;
+/// How much of the theme's field border shows on the frame.
+const FIELD_EDGE_ALPHA: f32 = 0.5;
 const ROWS_GAP: f64 = 11.0;
 const DOT: f64 = 10.0;
 const DOT_GAP: f64 = 4.5;
@@ -152,7 +159,7 @@ pub(super) fn window(
         secondary: true,
         selected: false,
     });
-    let field = Element::new(TextField {
+    let input = TextField {
         label: "Tag".into(),
         placeholder: String::new(),
         value: editor.filter.clone(),
@@ -163,8 +170,15 @@ pub(super) fn window(
         on_submit: Some(send(id, TagEvent::Submit)),
         selection: None,
         initial: true,
-    })
-    .key("tag-field");
+    };
+    // the field's own chrome is shorter than this popover's, so the popover draws the frame and the text stands bare
+    let field = Element::new(FieldFrame {
+        children: vec![Element::new(BareField {
+            field: input,
+            size: f64::from(TITLE_SIZE),
+        })
+        .key("tag-field")],
+    });
     let rows = tags.into_iter().map(|(name, color, checked)| {
         let dot = color.and_then(|c| colors.get(&c).copied());
         Element::new(TagRow {
@@ -221,6 +235,93 @@ pub(super) fn window(
         on_close: send(id, TagEvent::Close),
     }
     .window(WindowKey(Key::from(format!("tags/{id}"))))
+}
+
+/// The frame of the filter field: a well of the text background, `FIELD_HEIGHT` high, with the bare field inside.
+struct FieldFrame {
+    children: Vec<Element<Message>>,
+}
+
+impl Widget<Message> for FieldFrame {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            insets: Insets {
+                top: 0.0,
+                left: FIELD_INSET,
+                bottom: 0.0,
+                right: FIELD_INSET,
+            },
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fixed(FIELD_HEIGHT),
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Center,
+                justify: Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Message>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let theme = cx.env().theme.clone();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        if let Some(fill) = theme
+            .colors
+            .get(ColorRole::TextBackground, StateVariant::NORMAL)
+        {
+            cx.push(PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect,
+                    radius: FIELD_RADIUS,
+                },
+                paint: Paint::Solid(fill),
+            });
+        }
+        if let Some(edge) = theme
+            .colors
+            .get(ColorRole::TextFieldBorder, StateVariant::NORMAL)
+        {
+            cx.push(PaintOp::Stroke {
+                shape: Shape::RoundedRect {
+                    rect: rect.inset(Insets::uniform(0.5)),
+                    radius: FIELD_RADIUS - 0.5,
+                },
+                paint: Paint::Solid(Color {
+                    a: edge.a * FIELD_EDGE_ALPHA,
+                    ..edge
+                }),
+                width: 1.0,
+            });
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
 }
 
 /// A tag of the list: its colour's dot, its name, and a check mark when every selected item carries it.

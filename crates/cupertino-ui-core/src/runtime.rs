@@ -307,6 +307,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     view_dirty: bool,
     /// Parents whose popups wait for their first layout to find the anchor.
     awaiting_layout: Vec<WindowKey>,
+    /// Parents that got an anchor node in the same view as the popup that stands on it, with whether the view has been
+    /// asked again since: the anchor has no place until the parent lays out, so the popup is declared once more then.
+    awaiting_anchor: Vec<(WindowKey, bool)>,
     /// Whether the last press was a key or an action assistive technology or desktop control asked for: a popup opened
     /// by it shows its focus.
     keyboard: bool,
@@ -375,6 +378,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             events: Vec::new(),
             view_dirty: true,
             awaiting_layout: Vec::new(),
+            awaiting_anchor: Vec::new(),
             keyboard: false,
             press: None,
             touch: None,
@@ -1012,7 +1016,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let Some(placed) = place(&self.tree, parent, &popup.anchor, grab, size) else {
             // a parent laid out without the anchor waits for the next view; retrying at once would never settle
             if parent.geometry.is_empty() && !self.awaiting_layout.contains(&popup.parent) {
-                self.awaiting_layout.push(popup.parent);
+                self.awaiting_layout.push(popup.parent.clone());
+            }
+            // an anchor node that came with this view has no place before the parent lays out: ask once more after it
+            if anchor_declared(&self.tree, parent, &popup.anchor)
+                && !self.awaiting_anchor.iter().any(|(k, _)| *k == popup.parent)
+            {
+                self.awaiting_anchor.push((popup.parent.clone(), false));
             }
             self.tree.unmount(root);
             return Ok(None);
@@ -1947,6 +1957,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         self.follow_anchors();
+        if !self.awaiting_anchor.is_empty() {
+            self.awaiting_anchor.retain(|(_, asked)| !asked);
+            for (_, asked) in &mut self.awaiting_anchor {
+                *asked = true;
+                self.view_dirty = true;
+            }
+        }
         if !self.awaiting_layout.is_empty() {
             let before = self.awaiting_layout.len();
             let windows = &self.windows;
@@ -2510,6 +2527,29 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .is_some_and(|n| n.key.as_ref() == Some(key))
         })
     }
+}
+
+/// Whether the anchor's node is in the parent's tree but has no place yet.
+fn anchor_declared<M: 'static>(
+    tree: &Tree<M>,
+    parent: &WindowState<M>,
+    anchor: &PopupAnchor,
+) -> bool {
+    let (PopupAnchor::Below { key, .. }
+    | PopupAnchor::Beside { key, .. }
+    | PopupAnchor::Over { key, .. }
+    | PopupAnchor::Above { key, .. }
+    | PopupAnchor::CentredAbove { key, .. }) = anchor
+    else {
+        return false;
+    };
+    let Some(root) = parent.root else {
+        return false;
+    };
+    tree.preorder(root)
+        .into_iter()
+        .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))
+        .is_some_and(|node| parent.geometry.get(&node).is_none())
 }
 
 /// Where a popup of `parent` opens, in the parent's coordinates; `None` while its anchor is not laid out.

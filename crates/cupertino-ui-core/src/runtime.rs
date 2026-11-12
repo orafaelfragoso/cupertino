@@ -184,6 +184,10 @@ struct WindowState<M> {
     /// where the keyboard went: the window still draws as active, as a menu takes the keyboard while the window it
     /// opened from stays the one in use. A popup that loses the keyboard while still open clears it.
     keyboard_in_popup: bool,
+    /// Whether the window's pixels were last painted active (`active || keyboard_in_popup`); `None` before its first
+    /// paint. The keyboard moving between the window and its popups paints the window again only when this differs
+    /// as it is drawn: a menu or a submenu that takes the keyboard while the window stays active repaints nothing.
+    painted_active: Option<bool>,
     /// The last configure said the window is maximized; a zoom asks for the other state.
     maximized: bool,
     /// The last configure said the window is fullscreen; a drag region neither moves nor zooms it.
@@ -958,6 +962,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             ack: None,
             active: false,
             keyboard_in_popup: false,
+            painted_active: None,
             maximized: false,
             fullscreen: false,
             frame_ready: false,
@@ -1378,12 +1383,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     adapter.window_focus(w.id, focused);
                 }
                 self.keyboard_moved(i, focused);
-                // what the window shows changes with its active state alone (a popup's opener repaints in
-                // `keyboard_moved`)
-                let w = &self.windows[i];
-                if changed || shown != (w.active || w.keyboard_in_popup) {
-                    self.invalidate_window(i);
-                }
+                // what the window shows changes with its active state alone (a popup's opener in `keyboard_moved`)
+                self.activity_moved(i);
             }
             WindowEvent::Ime(ime) => {
                 if let Some(node) = w.text_input.or(w.focus.node()) {
@@ -1518,9 +1519,20 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         if let Some(opener) = self.windows.iter().position(|w| w.key == key) {
-            if std::mem::replace(&mut self.windows[opener].keyboard_in_popup, focused) != focused {
-                self.invalidate_window(opener);
-            }
+            self.windows[opener].keyboard_in_popup = focused;
+            self.activity_moved(opener);
+        }
+    }
+
+    /// Window `i` may show another active state than it was painted in: its next frame compares the two and paints
+    /// the window again only when they differ. The keyboard going from a popup to the next of its chain passes
+    /// through the window it opens from as inactive within one dispatch, which leaves its pixels as they are.
+    fn activity_moved(&mut self, i: usize) {
+        let w = &mut self.windows[i];
+        if w.painted_active
+            .is_some_and(|p| p != (w.active || w.keyboard_in_popup))
+        {
+            w.dirty = true;
         }
     }
 
@@ -2205,6 +2217,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         } else if paint_dirty.iter().any(|n| w.geometry.contains_key(n)) {
             w.repaint();
         }
+        // every control may show the window's active state: one painted in the other state paints whole
+        let active = w.active || w.keyboard_in_popup;
+        if w.painted_active.is_some_and(|p| p != active) {
+            w.invalidate();
+            w.invalidate_damage();
+        }
         if !w.dirty {
             return Ok(());
         }
@@ -2464,6 +2482,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             painting
         };
         let mut painting = paint(w, &self.tree, &self.pinned);
+        w.painted_active = Some(w.active || w.keyboard_in_popup);
         if painting.pins && !self.pins_seen {
             // the first subtree pinned to an appearance: make the themes it draws with and paint it in them at once
             self.pins_seen = true;

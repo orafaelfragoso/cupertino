@@ -4161,6 +4161,75 @@ mod popup_release {
         }
     }
 
+    impl Desk {
+        /// How many frames window `key` presented so far.
+        fn presents(&self, key: &str) -> usize {
+            let id = self.id(key);
+            let system = self.rt.window_system();
+            system.presented.iter().filter(|(w, _)| *w == id).count()
+        }
+
+        /// The keyboard leaves window `from` for window `to`, both heard in one dispatch, as the compositor sends them.
+        fn keyboard(&mut self, from: &str, to: &str) {
+            let (from, to) = (self.id(from), self.id(to));
+            let system = self.rt.window_system_mut();
+            system.send(from, WindowEvent::Focus(false));
+            system.send(to, WindowEvent::Focus(true));
+            self.rt.step(steps()).unwrap();
+        }
+
+        /// Answers the frame callbacks of every window, as the compositor does after showing them.
+        fn frames(&mut self) {
+            let now = Timestamp(self.clock.now().0);
+            for (_, id) in self.rt.windows() {
+                self.rt
+                    .window_system_mut()
+                    .send(id, WindowEvent::Frame(now));
+            }
+            self.rt.step(steps()).unwrap();
+        }
+    }
+
+    /// The window a menu opens from stays drawn active while its menu and then the menu's submenu take the keyboard,
+    /// so it presents no frame for either: its pixels are as they were, and the menus' first frames wait for no
+    /// repaint of it.
+    #[test]
+    fn a_menu_and_its_submenu_taking_the_keyboard_repaint_nothing_of_the_window_they_open_from() {
+        let mut desk = Desk::new();
+        desk.focus("main", true);
+        desk.frames();
+        desk.press_opener();
+        desk.frames();
+        let before = desk.presents("main");
+        desk.keyboard("main", "menu");
+        desk.frames();
+        assert_eq!(desk.presents("main"), before, "the menu took the keyboard");
+        desk.open_submenu();
+        desk.keyboard("menu", "submenu");
+        desk.frames();
+        assert_eq!(
+            desk.presents("main"),
+            before,
+            "the submenu took the keyboard"
+        );
+    }
+
+    /// A window that the keyboard really leaves is painted again in its inactive colours, and once more as it comes
+    /// back.
+    #[test]
+    fn the_keyboard_leaving_for_another_window_repaints_the_window_it_left() {
+        let mut desk = Desk::new();
+        desk.focus("main", true);
+        desk.frames();
+        let before = desk.presents("main");
+        desk.keyboard("main", "second");
+        desk.frames();
+        assert_eq!(desk.presents("main"), before + 1, "drawn inactive");
+        desk.keyboard("second", "main");
+        desk.frames();
+        assert!(desk.presents("main") > before + 1, "drawn active again");
+    }
+
     /// A window whose menu has the keyboard is drawn active all along, so when the menu closes and the keyboard comes
     /// back its colours do not cross again; a window that was drawn inactive crosses them as the keyboard comes back.
     #[test]

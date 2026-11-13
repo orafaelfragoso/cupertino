@@ -17,10 +17,10 @@
 //!   selection, the maximum subdivision depth (8), a floor of one time unit (50 ms virtual) for
 //!   degenerate phases, and evaluating the chord error at the quarter points as well as the
 //!   midpoint (the midpoint error of the full S-curve is zero by symmetry).
-//! * extension, [`Landing::IconRect`] (default): the formulas collapse the window
+//! * landing, [`Landing::IconRect`] (default): the phases above collapse the window
 //!   onto an edge of the slot at `p = 1`; the extension lets the near end continue to the far edge
 //!   of the slot and blends the side offset from `e2` at the far end to `e1` at the near end, so the
-//!   mesh at `p = 1` is exactly the slot rectangle. [`Landing::IconEdge`] is the literal version.
+//!   mesh at `p = 1` is exactly the slot rectangle. [`Landing::IconEdge`] stops on the slot's edge.
 
 use crate::ease::cosine;
 use crate::mesh::{Mesh, Vertex};

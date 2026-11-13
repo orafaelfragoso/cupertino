@@ -1,22 +1,15 @@
 //! Window shadow parameter table and window corner radii as typed data.
 //!
-//! the table is as designed (the window shadow spec table under
-//! ):
-//! the design UI toolkit holds one default entry per window class (option) × active/inactive ×
-//! light/dark × contrast variant and pushes the numbers to the design window server, which only
-//! applies them. `sigma` is the Gaussian standard deviation in points; the design window server
-//! converts it to a pixel radius with `ceil(sigma · 2.8)` and asserts `sigma ≤ 128`.
-//! The corner radii are as designed.
+//! One entry per window class × active/inactive × light/dark × contrast variant. `sigma` is the
+//! Gaussian standard deviation in points; the renderer turns it into a pixel radius of
+//! `ceil(sigma · 2.8)` and never takes a `sigma` above 128.
 //!
-//! Which window gets which option at runtime is unknown. The documented selection is:
-//! [`ShadowOption::Standard`] regular windows, [`ShadowOption::Panel`] panels, menus, popovers,
-//! combo lists and drawers, [`ShadowOption::Tooltip`] tooltips; [`ShadowOption::Other`] is a third
-//! window class whose predicate was not resolved (sheets / modal documents).
-//! The `increased_contrast` axis is the table half the toolkit selects with Increase Contrast on (the
-//! spec is indexed at offset 0x500 of 0xa00 when the option is on): a set with uniform
-//! 0.7 clip and inner-rim density.
+//! [`ShadowOption::Standard`] is for regular windows, [`ShadowOption::Panel`] for panels, menus,
+//! popovers, combo lists and drawers, [`ShadowOption::Tooltip`] for tooltips and
+//! [`ShadowOption::Other`] for sheets and modal documents. The `increased_contrast` half of the
+//! table is used while Increase Contrast is on: a uniform 0.7 clip and inner-rim density.
 
-/// Window class selecting a row of the table. Discriminants are the option bits of the source.
+/// Window class selecting a row of the table. Discriminants are the class's bit in the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShadowOption {
     Standard = 1,
@@ -52,7 +45,7 @@ pub struct WindowShadowEntry {
     pub sigma: f64,
     /// Distance the shadow is shifted below the window, in points.
     pub vertical_offset: f64,
-    /// Raw flag of the source entry: 0 for the light set, 1 for the dark and increased-contrast sets.
+    /// Flag of the entry: 0 for the light set, 1 for the dark and increased-contrast sets.
     pub appearance_flag: bool,
     /// Fraction of the shadow clipped away at the top edge of the window (0…1).
     pub clip_top: f64,
@@ -138,7 +131,7 @@ const fn e(
     }
 }
 
-/// The complete table, 32 rows in source order (contrast variant, active, dark, option 1/2/4/8)..
+/// The complete table, 32 rows in table order (contrast variant, active, dark, option 1/2/4/8)..
 pub const WINDOW_SHADOW_TABLE: [WindowShadowEntry; 32] = [
     e(
         ShadowOption::Standard,

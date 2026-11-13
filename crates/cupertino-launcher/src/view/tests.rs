@@ -22,8 +22,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    semantics, Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
-    WindowEvent, WindowId, WindowStates,
+    semantics, Capabilities, DragProgress, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent,
+    PointerEvent, Timestamp, WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -310,6 +310,7 @@ impl Run {
         let driver = TestDriver::new(
             Capabilities {
                 app_effects,
+                drag_and_drop: true,
                 ..Capabilities::default()
             },
             options,
@@ -367,9 +368,10 @@ impl Run {
     /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
     /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again. A
     /// window still asking after 16 rounds at the same time is in a transition (its colours crossing as it becomes
-    /// active, a chosen menu row flashing): the clock then moves a display frame per round, for up to 2 seconds.
+    /// active, a chosen menu row flashing, the mode buttons budding out a while after a fold): the clock then moves a
+    /// display frame per round, for up to 3 seconds.
     fn settle_frames(&mut self) {
-        for round in 0..16 + 120 {
+        for round in 0..16 + 180 {
             if round >= 16 {
                 self.clock.advance_by(FRAME_NS);
             }
@@ -932,6 +934,109 @@ fn escape_clears_the_query_and_then_closes() {
     assert!(run.hidden().is_some());
 }
 
+/// The first application of the browser's list, by its key, and the centre of its icon.
+fn first_listed(run: &Run) -> Point {
+    let model = run.model();
+    let browser = model.browser.as_ref().unwrap();
+    let index = browser.recents_shown();
+    let app = browser.item(index).unwrap();
+    run.centre(format!("item-{index}-{}", app.id))
+}
+
+#[test]
+fn a_press_on_an_application_that_moves_drags_its_desktop_file_out_and_a_drop_closes_the_panel() {
+    let mut run = Run::new();
+    run.deliver(Message::Browse);
+    run.settle_frames();
+    let at = first_listed(&run);
+    let panel = run.panel();
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    let button = |position, pressed| PointerEvent::Button {
+        position,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Mods::NONE,
+    };
+    run.send(panel, pointer(PointerEvent::Motion { position: at }));
+    run.send(panel, pointer(button(at, true)));
+    // a small slip still opens on release; past it, the press drags
+    let away = Point::new(at.x + 12.0, at.y + 6.0);
+    run.send(panel, pointer(PointerEvent::Motion { position: away }));
+    let drags = run.driver.runtime().window_system().drags().to_vec();
+    assert_eq!(drags.len(), 1, "{drags:?}");
+    let request = &drags[0].request;
+    assert_eq!(request.data[0].mime, "text/uri-list");
+    let uri = String::from_utf8(request.data[0].bytes.clone()).unwrap();
+    assert!(
+        uri.starts_with("file:///usr/share/applications/") && uri.ends_with(".desktop\r\n"),
+        "{uri}"
+    );
+    assert!(request.image.is_some());
+    run.send(panel, pointer(button(away, false)));
+    assert!(launches().is_empty(), "a drag opens nothing");
+    // while it is dragged nothing covers the dock and the desktop
+    assert!(run.model().dragging);
+    assert!(run.window("catcher").is_none());
+    let token = drags[0].token;
+    for progress in [DragProgress::Dropped, DragProgress::Finished] {
+        run.driver
+            .window_system_mut()
+            .enqueue(PlatformEvent::Drag { token, progress })
+            .unwrap();
+        run.settle();
+    }
+    assert!(!run.model().panel.is_visible(), "a drop closes the panel");
+}
+
+#[test]
+fn a_press_on_an_application_released_without_moving_opens_it_and_a_cancelled_drag_keeps_the_panel()
+{
+    let mut run = Run::new();
+    run.deliver(Message::Browse);
+    run.settle_frames();
+    let at = first_listed(&run);
+    let panel = run.panel();
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    let button = |position, pressed| PointerEvent::Button {
+        position,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Mods::NONE,
+    };
+    // pressed and dragged, then given up: the panel stays and the catcher comes back
+    run.send(panel, pointer(button(at, true)));
+    let away = Point::new(at.x, at.y + 30.0);
+    run.send(panel, pointer(PointerEvent::Motion { position: away }));
+    run.send(panel, pointer(button(away, false)));
+    let token = run.driver.runtime().window_system().drags()[0].token;
+    run.driver
+        .window_system_mut()
+        .enqueue(PlatformEvent::Drag {
+            token,
+            progress: DragProgress::Cancelled,
+        })
+        .unwrap();
+    run.settle();
+    assert!(run.model().panel.is_visible() || run.model().nav.view == View::Browse);
+    assert!(!run.model().dragging);
+    assert!(run.window("catcher").is_some());
+    assert!(launches().is_empty());
+    // a press let go where it was opens the application
+    let at = first_listed(&run);
+    run.send(panel, pointer(PointerEvent::Motion { position: at }));
+    run.send(panel, pointer(button(at, true)));
+    run.send(
+        panel,
+        pointer(PointerEvent::Motion {
+            position: Point::new(at.x + 1.0, at.y),
+        }),
+    );
+    run.send(panel, pointer(button(at, false)));
+    assert_eq!(launches().len(), 1, "{:?}", launches());
+}
+
 #[test]
 fn hover_selects_a_row_and_a_click_activates_it() {
     let mut run = Run::new();
@@ -1176,6 +1281,7 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         anchor: WIDTH,
         alpha: 1.0,
         scale: 1.0,
+        scale_y: 1.0,
         content: 0.0,
         blur: 0.0,
         header: Header::Search,
@@ -1192,11 +1298,21 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         window,
         &Frame {
             scale: 0.5,
+            scale_y: 0.5,
             ..frame
         },
     );
     assert_eq!(opening.center(), panel.center());
     assert_eq!(opening.width(), WIDTH / 2.0);
+    // the search field widens as it opens, its height kept and its ends still round
+    let widening = Frame {
+        scale: 1.1,
+        ..frame
+    };
+    let wide = enclosure_rect(window, &widening);
+    assert_eq!(wide.center(), panel.center());
+    assert_eq!((wide.width(), wide.height()), (WIDTH * 1.1, panel.height()));
+    assert_eq!(enclosure_radius(&widening), CORNER_RADIUS);
 }
 
 /// A file index of a folder holding `notes.txt`, and the folder.
@@ -1237,6 +1353,76 @@ impl Run {
         named.sort();
         named.into_iter().map(|(_, name)| name).collect()
     }
+}
+
+/// Every category filter, all ten in one row, is wide enough for its name in the built-in face: none is cut.
+#[test]
+fn all_ten_category_filters_hold_their_names_uncut() {
+    use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
+    let mut fonts = FontIndex::new();
+    fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+    let text = TextSystem::new(fonts, "Inter Variable");
+    let layout = crate::browse::BrowseLayout::new(crate::browse::BrowseLayout::HEIGHT);
+    let rects = layout.filter_rects(&Category::ALL);
+    for (category, rect) in Category::ALL.iter().zip(&rects) {
+        let style = TextStyle {
+            weight: FontWeight(crate::browse::BrowseLayout::FILTER_WEIGHT),
+            ..TextStyle::new(crate::browse::BrowseLayout::FILTER_FONT_PT as f32)
+        };
+        let width = text
+            .paragraph(
+                &AttributedText::plain(category.name(), style),
+                &ParagraphStyle::default(),
+            )
+            .unwrap()
+            .layout(None)
+            .size()
+            .width;
+        let room = rect.width() - 2.0 * crate::browse::BrowseLayout::FILTER_MIN_PAD;
+        assert!(
+            width <= room,
+            "{category:?}: {width} pt of text in {room} pt"
+        );
+    }
+}
+
+#[test]
+fn holding_the_primary_modifier_shows_where_the_selected_file_is() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.type_text("notes");
+    let Some(crate::engine::Action::OpenPath(path)) =
+        run.model().panel.selected_item().map(|i| i.action.clone())
+    else {
+        panic!("a file is selected");
+    };
+    let location = crate::engine::home_relative(&path);
+    assert!(!run.names(Role::StaticText).contains(&location));
+    let super_key = |pressed| {
+        WindowEvent::Key(
+            KeyEvent {
+                code: 125,
+                keysym: Keysym(0xffeb),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: if pressed { Mods::PRIMARY } else { Mods::NONE },
+            },
+            Timestamp(0),
+        )
+    };
+    let window = run.panel();
+    run.send(window, super_key(true));
+    run.settle();
+    assert!(
+        run.names(Role::StaticText).contains(&location),
+        "{:?}",
+        run.names(Role::StaticText)
+    );
+    run.send(window, super_key(false));
+    run.settle();
+    assert!(!run.names(Role::StaticText).contains(&location));
 }
 
 #[test]

@@ -627,3 +627,55 @@ fn takes_key_names_exactly_the_keys_handle_key_does_not_hand_to_the_field() {
         }
     }
 }
+
+#[test]
+fn up_in_an_empty_field_recalls_the_searches_that_opened_something_latest_first() {
+    let (mut p, mut l) = open();
+    for query in ["fire", "calc"] {
+        type_str(&mut p, &mut l, query);
+        assert!(matches!(
+            press(&mut p, &mut l, Key::Enter, Mods::NONE),
+            PanelEvent::Activate(_)
+        ));
+        p.show(&l, now(0.0));
+        p.set_query("", &l, now(0.0));
+    }
+    assert_eq!(p.history(), ["calc", "fire"]);
+    assert_eq!(
+        press(&mut p, &mut l, Key::Up, Mods::NONE),
+        PanelEvent::Changed
+    );
+    assert_eq!(p.query(), "calc");
+    assert!(!p.results().is_empty(), "the recalled search runs");
+    assert_eq!(
+        p.field().selection(),
+        0..4,
+        "shown selected, so typing replaces it"
+    );
+    press(&mut p, &mut l, Key::Up, Mods::NONE);
+    assert_eq!(p.query(), "fire");
+    // nothing older: Up goes on as it would
+    press(&mut p, &mut l, Key::Up, Mods::NONE);
+    assert_eq!(p.query(), "fire");
+    // a typed query is not replaced
+    p.set_query("ter", &l, now(0.0));
+    press(&mut p, &mut l, Key::Up, Mods::NONE);
+    assert_eq!(p.query(), "ter");
+}
+
+#[test]
+fn tab_after_a_kind_s_name_scopes_the_search_to_it() {
+    let (mut p, mut l) = open();
+    type_str(&mut p, &mut l, "apps");
+    assert_eq!(
+        press(&mut p, &mut l, Key::Tab, Mods::NONE),
+        PanelEvent::Changed
+    );
+    assert_eq!(p.query(), "/apps ");
+    type_str(&mut p, &mut l, "fire");
+    assert!(!p.results().is_empty());
+    assert!(p.results().iter().all(|i| matches!(
+        i.kind,
+        crate::ItemKind::Application | crate::ItemKind::ApplicationAction
+    )));
+}

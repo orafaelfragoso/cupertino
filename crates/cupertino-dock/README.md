@@ -30,7 +30,7 @@ When `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` is set, `capture.sh` builds a s
 | Setting | Effect |
 |---|---|
 | `~/.config/cupertino/dock.conf` | The configuration file, read and written by `cupertino_defaults::dock` (with the triggers and actions, the size defaults and their validation) and applied by `src/conf.rs`. `$CUPERTINO_DOCK_CONFIG` overrides the path. The dock never rewrites it (the settings application does). A line that is not understood is reported on stderr with its number and leaves that key's default. |
-| `~/.config/cupertino/dock-pins` | The pins as the user left them in the dock, one key per line, written atomically after a drag-reorder, a drag-out removal, Keep in Dock and Remove from Dock. When it exists it replaces the pins of `dock.conf` (an empty file is no pins). `$CUPERTINO_DOCK_PINS` overrides the path. |
+| `~/.config/cupertino/dock-pins` | The pins as the user left them in the dock, one key per line, written atomically after a drag-reorder, a drag-out removal, an application dropped on the bar, Keep in Dock and Remove from Dock. When it exists it replaces the pins of `dock.conf` (an empty file is no pins). `$CUPERTINO_DOCK_PINS` overrides the path. |
 | bare lines, `pin = ...`, `pinned = ... | Pinned applications, named by desktop file ID, `app_id` or command. Without pins the dock pins up to four installed applications after the file manager: the terminal, then a candidate list (approximate). |
 | `tile_size`, `large_size` | Tile and magnified tile size (defaults below). |
 | `magnification`, `autohide`, `recents` | Flags. |
@@ -53,6 +53,7 @@ Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
 | Hit-testing | `Dock::hit_test(pointer, screen, now) on the magnified layout. |
 | Minimize target | `Dock::minimize_target(window, app, screen) returns the rectangle a minimizing window flies to. It matches the tile rectangle once the tile has appeared. The process reports the next minimized-window slot, since the protocol has one target. |
 | Drag-reorder | `begin_drag` / `drag_move` / `end_drag` with a gap placeholder, section limits, removal when dragged out or dropped on the trash. `Dock::pinned_keys` lists the pins in order for storing. |
+| Application drops | the bar takes a `text/uri-list` from another application: the first desktop file in it that names an installed application is pinned before the first application tile past the drop point (`kit::dropped_app`, `Dock::pin`) and the pins are stored; anything else is refused, so its source keeps it. |
 | Auto-hide | `AutoHide` state machine and `reveal_zone`. The tile's name fades as the bar hides (its opacity is one less the hidden share), and the name that showed as the pointer left stays over its tile, riding the bar down, until the bar is hidden or the pointer comes back. |
 
 **Magnification.** The default profile is the half-sine fisheye, `FisheyeProfile`.

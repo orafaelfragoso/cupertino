@@ -1,0 +1,5 @@
+title = "Launcher: the applications browser, with recent launches"
+programs = ["cupertino-launcher"]
+after = 5.5
+fixture = "fixtures/launcher-history"
+args = ["--action", "3:app-grid"]

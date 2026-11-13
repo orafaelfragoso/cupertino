@@ -18,6 +18,7 @@ use crate::exec::{self, CommandSpec};
 use crate::files::FileIndex;
 use crate::frecency::Frecency;
 use crate::matcher::{self, Candidate, CandidateField, Query, Weights};
+use crate::refine;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -373,7 +374,8 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-fn home_relative(p: &std::path::Path) -> String {
+/// `p` as the launcher shows a place: under the home folder from `~`.
+pub fn home_relative(p: &std::path::Path) -> String {
     match std::env::var_os("HOME").map(PathBuf::from) {
         Some(h) if p.starts_with(&h) => {
             let rel = p.strip_prefix(&h).unwrap_or(p);
@@ -397,7 +399,12 @@ pub fn file_sections(
     config: &LauncherConfig,
     cancel: Option<&crate::providers::Cancel>,
 ) -> Vec<Section> {
-    let q = Query::new(text);
+    // a kind token scopes the search: the files are searched without it, and not at all for another kind
+    let refined = refine::refine(text);
+    if !refined.keeps(SectionKind::Files) && !refined.keeps(SectionKind::Folders) {
+        return Vec::new();
+    }
+    let q = Query::new(&refined.text);
     if q.is_empty() || cancel.is_some_and(|c| c.is_cancelled()) {
         return Vec::new();
     }
@@ -563,11 +570,18 @@ impl Launcher {
     /// ranked together with `provided`, the sections the slower providers gave (the file search,
     /// [`file_sections`]), which take their usage bonus and their section limits here.
     pub fn compose(&self, text: &str, now: f64, provided: Vec<Section>) -> Results {
-        let q = Query::new(text);
         let mut results = Results {
             query: text.to_string(),
             sections: Vec::new(),
         };
+        // a kind token keeps the sections of its kind; the rest of the query is what is searched
+        let refined = refine::refine(text);
+        let text = refined.text.as_str();
+        let q = Query::new(text);
+        // an empty field lists nothing (the panel stays the bare field); a kind token alone lists that kind's most used
+        if q.is_empty() && refined.kinds.is_empty() {
+            return results;
+        }
         if q.is_empty() {
             let items: Vec<ResultItem> = self
                 .frecency
@@ -580,7 +594,7 @@ impl Launcher {
                 })
                 .take(self.config.suggestions)
                 .collect();
-            if !items.is_empty() {
+            if !items.is_empty() && refined.keeps(SectionKind::Suggestions) {
                 results.sections.push(Section {
                     kind: SectionKind::Suggestions,
                     title: SectionKind::Suggestions.title().into(),
@@ -705,6 +719,8 @@ impl Launcher {
             });
         }
 
+        results.sections.retain(|s| refined.keeps(s.kind));
+        sections.retain(|s| refined.keeps(s.kind));
         let rank = |s: &Section| {
             (
                 s.kind != SectionKind::Web,

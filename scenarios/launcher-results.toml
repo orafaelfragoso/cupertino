@@ -1,0 +1,5 @@
+title = "Launcher: results for a typed query"
+programs = ["cupertino-launcher"]
+after = 6
+fixture = "fixtures/launcher-history"
+args = ["--action", "3:launcher", "--type", "4:te"]

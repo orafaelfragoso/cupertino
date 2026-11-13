@@ -12,6 +12,8 @@
 //!   selection, Escape clears it.
 //! * A folder opens in a browser window of the running Files (which this process hands it to); a file with its default
 //!   application.
+//! * Files another application drags here (an application's desktop file from the launcher, say) and drops on the main
+//!   display's desktop are copied into the desktop folder.
 //!
 //! The process runs apart from the browser windows' process: the desktop stays up while no window is open.
 
@@ -138,6 +140,8 @@ pub enum Message {
     Command(DeskCommand),
     /// The selection is dragged this far, or the drag stopped.
     Drag(Option<Point>),
+    /// Files another application dragged here were dropped on the desktop.
+    DroppedIn(cupertino_kit::core::Dropped),
     /// The selection was let go this far from where it was, on this folder.
     Drop {
         delta: Point,
@@ -694,6 +698,30 @@ impl Model {
         self.save();
     }
 
+    /// Files dropped from another application: copied into the desktop folder, an application's desktop file
+    /// among them, as a paste does. The desktop's own items, and a list that is not of local files, are refused.
+    fn dropped_in(&mut self, dropped: cupertino_kit::core::Dropped) -> Vec<Command<Message>> {
+        let sources = super::drops::uri_paths(&dropped.data.bytes)
+            .filter(|paths| !paths.is_empty())
+            .filter(|paths| {
+                paths
+                    .iter()
+                    .all(|p| p.parent() != Some(self.folder.as_path()))
+            });
+        let Some(sources) = sources else {
+            return vec![Command::FinishDrop(dropped.token, None)];
+        };
+        let dest = self.folder.clone();
+        self.in_background(Action::Paste, move || {
+            let done = operations::drop_into(&sources, &dest, DropAction::Copy);
+            sources.into_iter().zip(done).collect()
+        });
+        vec![Command::FinishDrop(
+            dropped.token,
+            Some(cupertino_kit::platform::DropAction::Copy),
+        )]
+    }
+
     fn drop_items(&mut self, delta: Point, onto: Option<PathBuf>) {
         self.dragged = None;
         let moving: Vec<PathBuf> = self.selected();
@@ -968,6 +996,7 @@ impl Application for Desktop {
                 return commands;
             }
             Message::Unheard => {}
+            Message::DroppedIn(dropped) => return model.dropped_in(dropped),
             Message::Pressed => {
                 model.menu = None;
                 model.end_rename();
@@ -1078,7 +1107,12 @@ impl Application for Desktop {
                 shortcuts: model.shortcuts(),
                 on_close: Some(Message::Unheard),
                 background: WindowBackground::None,
-                content: Element::new(desk).fill(),
+                // files dragged from another application land on the main display's desktop
+                content: if on_main {
+                    takes_drops(Element::new(desk).fill())
+                } else {
+                    Element::new(desk).fill()
+                },
                 popup: None,
                 menus: None,
             });
@@ -1166,4 +1200,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     model.poll();
     cupertino_kit::app::run_on::<Desktop>(system, (model, commands))?;
     Ok(())
+}
+
+/// The desktop's `content` taking a `text/uri-list` dropped from another application ([`Message::DroppedIn`]).
+fn takes_drops(content: Element<Message>) -> Element<Message> {
+    use cupertino_kit::core::{DropPlace, DropTarget};
+    use cupertino_kit::platform::DropAction as Offered;
+    Element::from(DropTarget {
+        content,
+        mimes: vec![super::drops::URI_LIST.into()],
+        actions: [Offered::Copy].into(),
+        place: Box::new(|over| {
+            over.actions.contains(&Offered::Copy).then_some(DropPlace {
+                key: None,
+                action: Offered::Copy,
+            })
+        }),
+        on_hover: None,
+        on_drop: Box::new(Message::DroppedIn),
+        on_leave: None,
+    })
 }

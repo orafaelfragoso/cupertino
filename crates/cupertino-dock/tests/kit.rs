@@ -29,8 +29,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    semantics, Capabilities, KeyEvent, Keysym, MaterialRegion, Mods, MouseButton, PointerEvent,
-    Timestamp, WindowEvent, WindowId, WindowRequest, WindowStates,
+    semantics, Capabilities, ClipboardData, DropAction, KeyEvent, Keysym, MaterialRegion, Mods,
+    MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -418,6 +418,7 @@ impl Run {
         };
         let capabilities = Capabilities {
             app_effects,
+            drag_and_drop: true,
             ..Capabilities::default()
         };
         let driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
@@ -706,6 +707,109 @@ fn dragging_a_pinned_tile_off_the_bar_removes_it_and_stores_the_pins() {
         .map(|n| n.1)
         .collect();
     assert_eq!(names, ["Terminal", kit::TRASH_NAME]);
+}
+
+/// Drags a `text/uri-list` of `uris` from another application onto the bar at `at` and lets go there: whether the
+/// bar took it, and what it answered the drag's source.
+fn drop_on_bar(
+    run: &mut Run,
+    bar: WindowId,
+    uris: &str,
+    at: Point,
+) -> (bool, Option<Option<DropAction>>) {
+    let system = run.driver.window_system_mut();
+    let data = vec![ClipboardData {
+        mime: "text/uri-list".into(),
+        bytes: uris.as_bytes().to_vec(),
+    }];
+    let token = system
+        .drag_enter(
+            bar,
+            at,
+            data,
+            [DropAction::Copy, DropAction::Move].into(),
+            Mods::NONE,
+        )
+        .unwrap();
+    system.drag_move(bar, at, Mods::NONE).unwrap();
+    run.settle();
+    let dropped = run.driver.window_system_mut().drag_drop(bar).unwrap();
+    run.settle();
+    let finished = run
+        .driver
+        .runtime()
+        .window_system()
+        .incoming_drag(token)
+        .and_then(|d| d.finished);
+    (dropped, finished)
+}
+
+#[test]
+fn an_application_dropped_on_the_bar_is_kept_in_the_dock_where_it_landed() {
+    let mut run = Run::with_viewer();
+    let bar = run.bar();
+    // on the leading half of the terminal's tile: it lands before the terminal
+    let terminal = run.bounds(bar, Role::Button, "Terminal");
+    let between = Point::new(
+        terminal.min_x() + terminal.width() / 4.0,
+        centre(terminal).y,
+    );
+    let uri = format!("file:///usr/share/applications/{VIEWER}.desktop\r\n");
+    let (dropped, finished) = drop_on_bar(&mut run, bar, &uri, between);
+    assert!(dropped);
+    assert_eq!(finished, Some(Some(DropAction::Copy)));
+    let pins = run.record.borrow().pins.clone();
+    assert_eq!(
+        pins.last().cloned(),
+        Some(vec![
+            EDITOR.to_owned(),
+            VIEWER.to_owned(),
+            TERMINAL.to_owned()
+        ]),
+        "{pins:?}"
+    );
+    for _ in 0..10 {
+        run.advance(0.1);
+    }
+    // the new tile stands between the two, along the bar
+    let x = |name: &str| run.bounds(bar, Role::Button, name).min_x();
+    assert!(
+        x("Editor") < x("Viewer") && x("Viewer") < x("Terminal"),
+        "{} {} {}",
+        x("Editor"),
+        x("Viewer"),
+        x("Terminal")
+    );
+}
+
+#[test]
+fn a_file_or_an_unknown_application_dropped_on_the_bar_is_refused() {
+    let mut run = Run::with_viewer();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    for uris in [
+        "file:///home/user/Notes.txt\r\n",
+        "file:///usr/share/applications/org.example.Missing.desktop\r\n",
+    ] {
+        let (dropped, finished) = drop_on_bar(&mut run, bar, uris, editor);
+        assert!(dropped, "the bar takes any list of files: {uris}");
+        assert_eq!(finished, Some(None), "{uris}");
+    }
+    assert!(run.record.borrow().pins.is_empty());
+    assert_eq!(applications(&run, bar), ["Editor", "Terminal"]);
+}
+
+#[test]
+fn the_application_of_a_dropped_uri_list_is_its_first_desktop_file_decoded() {
+    assert_eq!(
+        kit::dropped_app(
+            "# from a browser\r\nfile:///tmp/a.txt\r\nfile:///opt/My%20App/my%2Dapp.desktop\r\n"
+        )
+        .as_deref(),
+        Some("my-app")
+    );
+    assert_eq!(kit::dropped_app("file:///tmp/a.txt\r\n"), None);
+    assert_eq!(kit::dropped_app("https://example.org/x.desktop"), None);
 }
 
 /// The names of the bar's tiles, in order.

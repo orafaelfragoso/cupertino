@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=System Settings
+Comment=Configure the desktop
+Exec=true
+Icon=preferences-system
+Categories=Settings;

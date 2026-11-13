@@ -876,7 +876,9 @@ fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
 
 /// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
 /// 53), while strong colours keep much of their brightness, as their luma is compressed less; the saturation is a
-/// little under the regular glass's. Light: the regular light face.
+/// little under the regular glass's. Light: a bright sheet that keeps the scene's colour: every channel comes out at
+/// about `0.61 · c + 124` of 255 after a strong saturation, so black comes through as a light grey near 124, a dark warm
+/// scene as a light tint of its own hue, and anything from a mid tone up is near white.
 fn large_panel_face(dark: bool) -> GlassFace {
     let regular = regular_face(dark);
     if dark {
@@ -888,9 +890,34 @@ fn large_panel_face(dark: bool) -> GlassFace {
             ..regular
         }
     } else {
-        regular
+        GlassFace {
+            saturation: LARGE_PANEL_SATURATION_LIGHT,
+            white: LARGE_PANEL_WHITE_LIGHT,
+            black: LARGE_PANEL_BLACK_LIGHT,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [1.0, 1.0, 1.0, LARGE_PANEL_FILL_LIGHT],
+        }
     }
 }
+
+/// The light large panel's face: saturation, white and black levels (no luma compression) and the white veil over it.
+/// A grey `x` comes out at `(1 − fill) · (b + (w − b) · x) + fill`: 0.61 per unit of the scene above 0.486.
+pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.8;
+pub const LARGE_PANEL_WHITE_LIGHT: f32 = 1.118;
+pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.37;
+pub const LARGE_PANEL_FILL_LIGHT: f32 = 0.184;
+/// The dark large panel's saturation with Reduce Transparency: the near-black sheet keeps a tenth or so of the
+/// backdrop's colour (its departure from grey), so a strong colour behind shows only as a faint tint.
+pub const LARGE_PANEL_REDUCED_SATURATION_DARK: f32 = 0.3;
+/// The large panel's refraction band: at most this many points inside its edge bend, so a launcher-sized sheet shows
+/// no wide lens along its sides.
+pub const LARGE_PANEL_REFRACTION_HEIGHT_MAX: f32 = 6.0;
+/// The light large panel's bright inner line: a narrow band of light just inside the dark edge, strongest along the
+/// top and still showing along the bottom: its strength, half-width and depth in points.
+pub const LARGE_PANEL_INNER_LINE_LIGHT: f32 = 0.6;
+pub const LARGE_PANEL_INNER_LINE_WIDTH: f32 = 0.35;
+pub const LARGE_PANEL_INNER_LINE_DEPTH: f32 = -0.6;
 
 /// The dark large panel's tone compression: saturation, white and black levels and luma compression. A bright spot in
 /// the scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the
@@ -997,6 +1024,10 @@ impl GlassParams {
                 .then(|| increased_contrast_face(dark, mode.style))
                 .flatten();
             p.face = contrast.unwrap_or_else(|| reduced_transparency_face(dark, mode.style));
+            if contrast.is_none() && dark && mode.style == GlassStyle::LargePanel {
+                // a launcher-sized sheet is near black with only a faint trace of the colours behind it
+                p.face.saturation = LARGE_PANEL_REDUCED_SATURATION_DARK;
+            }
         } else if mode.density > 0 {
             p.face.fill = denser_fill(p.face.fill, dark, f32::from(mode.density.min(100)) / 100.0);
         }
@@ -1073,13 +1104,21 @@ impl GlassParams {
         }
     }
 
-    /// The large panel's recipe: the regular one of its size with the face compressed towards the middle (see
-    /// [`large_panel_face`]) and the panel's drop shadow shown.
+    /// The large panel's recipe: the regular one of its size with its own face (see [`large_panel_face`]), a
+    /// refraction band no deeper than [`LARGE_PANEL_REFRACTION_HEIGHT_MAX`], in the light appearance a bright inner line,
+    /// and the panel's drop shadow shown.
     fn large_panel(dark: bool, s: f32) -> Self {
         let mut p = Self::regular(dark, s);
         p.blur.radius *= LARGE_PANEL_BLUR_SCALE;
         p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;
         p.face = large_panel_face(dark);
+        p.refraction.height = p.refraction.height.min(LARGE_PANEL_REFRACTION_HEIGHT_MAX);
+        if !dark {
+            let h = &mut p.highlight;
+            h.glow_amount = LARGE_PANEL_INNER_LINE_LIGHT;
+            h.glow_height = LARGE_PANEL_INNER_LINE_WIDTH;
+            h.glow_offset = LARGE_PANEL_INNER_LINE_DEPTH;
+        }
         p.shadow.offset = [0.0, LARGE_PANEL_SHADOW_OFFSET];
         p.shadow.amount = 100.0;
         p.shadow.height = LARGE_PANEL_SHADOW_BLUR;
@@ -1857,11 +1896,27 @@ mod tests {
         for dark in [true, false] {
             let regular = with(dark, GlassStyle::Regular, false, false, false);
             let panel = with(dark, GlassStyle::LargePanel, false, false, false);
-            // the optics are the regular glass's, with the blur twice as wide
+            // the optics are the regular glass's, with the blur twice as wide, the bending band narrow and, in the
+            // light appearance, a bright line just inside the edge
             assert_eq!(
-                (panel.refraction, panel.bleed, panel.highlight),
-                (regular.refraction, regular.bleed, regular.highlight)
+                panel.refraction,
+                GlassRefraction {
+                    height: LARGE_PANEL_REFRACTION_HEIGHT_MAX,
+                    ..regular.refraction
+                }
             );
+            assert_eq!(panel.bleed, regular.bleed);
+            let line = if dark {
+                regular.highlight
+            } else {
+                GlassHighlight {
+                    glow_amount: LARGE_PANEL_INNER_LINE_LIGHT,
+                    glow_height: LARGE_PANEL_INNER_LINE_WIDTH,
+                    glow_offset: LARGE_PANEL_INNER_LINE_DEPTH,
+                    ..regular.highlight
+                }
+            };
+            assert_eq!(panel.highlight, line, "{dark}");
             assert_eq!(
                 (panel.blur.radius, panel.blur.fill_radius),
                 (10.0, 16.0),
@@ -1881,17 +1936,18 @@ mod tests {
                     regular.blur.fill_lighten
                 )
             );
-            assert_eq!(
-                (panel.face.clamp, panel.face.fill),
-                (regular.face.clamp, regular.face.fill)
-            );
-            // dark: a lower white level, a lifted black and a little less saturation; light: the regular face
+            assert_eq!(panel.face.fill, regular.face.fill);
+            // dark: a lower white level, a lifted black and a little less saturation; light: a brighter, more
+            // colourful sheet without luma compression
             if dark {
+                assert_eq!(panel.face.clamp, regular.face.clamp);
                 assert!(panel.face.white < regular.face.white);
                 assert!(panel.face.black > regular.face.black);
                 assert!(panel.face.saturation < regular.face.saturation);
             } else {
-                assert_eq!(panel.face, regular.face);
+                assert!(panel.face.white > regular.face.white);
+                assert!(panel.face.saturation > regular.face.saturation);
+                assert_eq!(panel.face.max_luma, 1.0);
             }
             // the shadow shows, below the panel; regular glass casts none at rest
             assert_eq!(regular.shadow_reach(), 0.0);
@@ -1945,8 +2001,26 @@ mod tests {
                         "{what}"
                     );
                 }
-                assert_eq!(panel.refraction, regular.refraction, "{what}");
-                if rt || ic {
+                assert_eq!(
+                    panel.refraction.height,
+                    regular
+                        .refraction
+                        .height
+                        .min(LARGE_PANEL_REFRACTION_HEIGHT_MAX),
+                    "{what}"
+                );
+                assert_eq!(panel.refraction.amount, regular.refraction.amount, "{what}");
+                if rt && !ic && dark {
+                    // dark with Reduce Transparency alone: the shared face with less of the colour behind
+                    assert_eq!(
+                        GlassFace {
+                            saturation: regular.face.saturation,
+                            ..panel.face
+                        },
+                        regular.face,
+                        "{what}"
+                    );
+                } else if rt || ic {
                     // the accessibility recipes replace the face whole, the large panel's included
                     assert_eq!(panel.face, regular.face, "{what}");
                 } else {
@@ -1981,6 +2055,32 @@ mod tests {
         let clear = with(true, GlassStyle::Clear, true, false, false);
         assert_eq!(clear.blur.radius, 200.0);
         assert_eq!(clear.face.fill, [0.0, 0.0, 0.0, 0.25]);
+    }
+
+    #[test]
+    fn the_dark_large_panel_with_reduce_transparency_is_the_regular_recipe_with_less_colour() {
+        let panel = with(true, GlassStyle::LargePanel, true, false, false);
+        let regular = with(true, GlassStyle::Regular, true, false, false);
+        assert_eq!(panel.blur, regular.blur);
+        assert_eq!(panel.face.saturation, LARGE_PANEL_REDUCED_SATURATION_DARK);
+        assert_eq!(
+            GlassFace {
+                saturation: regular.face.saturation,
+                ..panel.face
+            },
+            regular.face
+        );
+        // light, and with Increase Contrast too, it keeps the shared faces
+        let light = with(false, GlassStyle::LargePanel, true, false, false);
+        assert_eq!(
+            light.face,
+            with(false, GlassStyle::Regular, true, false, false).face
+        );
+        let both = with(true, GlassStyle::LargePanel, true, true, false);
+        assert_eq!(
+            both.face,
+            with(true, GlassStyle::Regular, true, true, false).face
+        );
     }
 
     #[test]

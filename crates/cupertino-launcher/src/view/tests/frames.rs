@@ -637,6 +637,22 @@ fn the_settled_panel_s_glass_sits_on_whole_device_pixels() {
                 .into_iter()
                 .filter(|r| (r.width(), r.height()) != (button, button))
             {
+                // the search field's capsule and the browser keep their design heights off the grid: only their
+                // bottom edges may fall between device pixels
+                let design = [
+                    crate::view::COLLAPSED_HEIGHT,
+                    crate::browse::BrowseLayout::HEIGHT,
+                ];
+                let rect = if design.contains(&rect.height()) {
+                    Rect::new(
+                        rect.x(),
+                        rect.y(),
+                        rect.width(),
+                        crate::view::on_shape_grid(rect.height()),
+                    )
+                } else {
+                    rect
+                };
                 assert!(
                     on_device_pixels(rect, scale),
                     "{what}: the glass at {rect:?} falls between device pixels at {scale}x"

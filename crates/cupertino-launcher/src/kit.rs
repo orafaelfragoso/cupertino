@@ -187,6 +187,8 @@ pub trait Host {
 #[derive(Clone, Debug)]
 pub enum Message {
     Input(Input),
+    /// How the drag of an application out of the browser goes.
+    Dragged(cupertino_kit::platform::DragProgress),
     /// `org.cupertino.Launcher1.Toggle`: the search field opens, or whatever is up closes.
     Toggle,
     /// `org.cupertino.Launcher1.ToggleApplications` (the dock's app-browser request): the browser opens, the search
@@ -272,6 +274,9 @@ pub struct Model {
     pub app_icons: HashMap<String, Vec<ImageSource>>,
     /// The applications whose icons are being loaded, at most [`MAX_APP_ICON_LOADS`].
     app_icons_loading: HashSet<String>,
+    /// An application is being dragged out of the browser: the catcher steps aside so the dock and the desktop under
+    /// the pointer take the drag.
+    pub dragging: bool,
     /// Where the file index is built from; `None` without file results.
     pub files: Option<FileSearchConfig>,
     /// Put every transition at its end at once (the server's settled test clock).
@@ -344,6 +349,8 @@ pub struct Model {
     select_query: bool,
     /// The panel just opened: its buttons bud out at once.
     just_shown: bool,
+    /// The primary modifier is held while the panel has the keyboard.
+    pub primary_held: bool,
 }
 
 impl Model {
@@ -360,6 +367,7 @@ impl Model {
             icons: HashMap::new(),
             app_icons: HashMap::new(),
             app_icons_loading: HashSet::new(),
+            dragging: false,
             files: None,
             settled: false,
             host,
@@ -398,6 +406,7 @@ impl Model {
             held: false,
             select_query: false,
             just_shown: false,
+            primary_held: false,
         }
     }
 
@@ -548,6 +557,10 @@ impl Model {
             Browser::from_entries(self.launcher.entries(), &recent, self.browse_height());
         browser.set_arrangement(self.arrangement);
         browser.set_query(&self.filter_text());
+        // the scroll indicator shows as the browser comes into view; on the settled clock it has already faded
+        if !self.settled {
+            browser.reveal_scroller(now.mono);
+        }
         self.browser = Some(browser);
     }
 
@@ -622,6 +635,9 @@ impl Model {
                         browser.set_height(height);
                         browser.set_query(&query);
                         browser.deselect();
+                        if !self.settled {
+                            browser.reveal_scroller(now.mono);
+                        }
                     }
                     None => self.open_browser(),
                 }
@@ -692,11 +708,13 @@ impl Model {
     /// Close: the window fades out (at once when `now_gone`, for a session lock); the launch history is written.
     fn hide(&mut self, now_gone: bool) {
         let now = self.now();
+        self.dragging = false;
         if self.nav.is_visible() {
             self.nav = Nav::HIDDEN;
         }
         self.mode_hover = None;
         self.mode_focus = modes::Focus::default();
+        self.primary_held = false;
         self.panel.hide(now.mono);
         self.tracker.cancel();
         self.searched = None;
@@ -1236,6 +1254,72 @@ impl Model {
     }
 
     /// Open the browser's application `id` as the search would.
+    /// The application at `index` of the browser dragged out as its desktop file, for the dock to keep or the desktop
+    /// to hold; its icon follows the pointer, held at `grab`.
+    fn drag_app(
+        &mut self,
+        index: usize,
+        grab: cupertino_kit::geometry::Point,
+    ) -> Vec<Command<Message>> {
+        use cupertino_kit::controls::{Image, ImageFit};
+        use cupertino_kit::core::{Drag, DragPreview};
+        use cupertino_kit::platform::{ClipboardData, DropAction};
+        let Some(id) = self
+            .browser
+            .as_ref()
+            .and_then(|b| b.item(index))
+            .map(|a| a.id.clone())
+        else {
+            return Vec::new();
+        };
+        let Some(path) = self.launcher.entry(&id).and_then(|e| e.source.clone()) else {
+            return Vec::new();
+        };
+        let icon = BrowseLayout::ICON;
+        let image = DragPreview {
+            content: Element::new(Image {
+                sources: self.app_icons.get(&id).cloned().unwrap_or_default(),
+                size: Size::new(icon, icon),
+                fit: ImageFit::Contain,
+                radius: 0.0,
+                label: None,
+            }),
+            size: Size::new(icon, icon),
+            hotspot: grab,
+        };
+        self.dragging = true;
+        vec![Command::StartDrag(Drag {
+            window: view::panel_window_key(),
+            data: vec![ClipboardData {
+                mime: "text/uri-list".into(),
+                bytes: format!("{}\r\n", file_uri(&path)).into_bytes(),
+            }],
+            actions: [DropAction::Copy].into(),
+            image: Some(image),
+            on_progress: Box::new(Message::Dragged),
+        })]
+    }
+
+    /// The drag of an application went on: once it ends the catcher comes back, and a drop something took closes
+    /// the panel, as a launch does.
+    fn dragged(
+        &mut self,
+        progress: cupertino_kit::platform::DragProgress,
+    ) -> Vec<Command<Message>> {
+        use cupertino_kit::platform::DragProgress;
+        match progress {
+            DragProgress::Finished => {
+                self.dragging = false;
+                self.intent(Intent::Dismiss)
+            }
+            DragProgress::Cancelled => {
+                self.dragging = false;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn launch_app(&mut self, id: &str) -> Vec<Command<Message>> {
         let now = self.now();
         match self.launcher.app_result(id) {
@@ -1353,7 +1437,14 @@ impl Model {
         if self.nav.view == View::Files {
             return self.scope_key(key, mods);
         }
+        let before = self.panel.query().to_owned();
         let outcome = self.panel.handle_key(key, mods, &mut self.launcher, now);
+        if self.panel.query() != before {
+            // a recalled search shows selected, so typing replaces it; a kind's token goes in with the caret after it
+            self.held = false;
+            self.select_query = key == PanelKey::Up;
+            self.revision += 1;
+        }
         let mut commands = self.outcome(outcome);
         // a shortcut that closes the panel (settings, help)
         if !self.panel.is_visible() && self.nav.is_visible() {
@@ -1580,6 +1671,7 @@ impl Model {
                     None => Vec::new(),
                 }
             }
+            Input::BrowseDrag(index, grab) => self.drag_app(index, grab),
             Input::BrowseCategory(category) => {
                 if let Some(b) = self.browser.as_mut() {
                     b.set_zone(Zone::Categories);
@@ -1621,6 +1713,10 @@ impl Model {
                     Some(path) => self.open_file(&path),
                     None => Vec::new(),
                 }
+            }
+            Input::Primary(held) => {
+                self.primary_held = held;
+                Vec::new()
             }
             Input::ScopeFilter(filter) => {
                 if let Some(files) = self.scope.as_mut() {
@@ -1716,6 +1812,7 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
         Message::Frame(frame) if frame == model.frame => model.animate(),
         Message::Frame(_) => Vec::new(),
+        Message::Dragged(progress) => model.dragged(progress),
         Message::IndexFailed => {
             model.indexing = false;
             eprintln!("cupertino-launcher: the file index was not built");
@@ -1857,6 +1954,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         scope: files,
         file_images: &model.file_images,
         select_query: model.select_query,
+        show_location: model.primary_held,
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own
@@ -1865,7 +1963,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         on_frame: model.frame_waiting.then_some(Message::Frame(model.frame)),
     });
     let mut windows = vec![window];
-    if model.nav.is_visible() {
+    if model.nav.is_visible() && !model.dragging {
         windows.push(view::catcher_window());
     }
     if model.nav.nested == Some(Nested::ViewOptions) && browser.is_some() {
@@ -1885,4 +1983,18 @@ fn header_of(view: View) -> Header {
         View::Files => Header::Files,
         View::Search | View::Hidden => Header::Search,
     }
+}
+
+/// A `file://` URI of `path`: every byte but the unreserved ones and `/` percent-encoded.
+pub fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut uri = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
+            uri.push(char::from(b));
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
 }

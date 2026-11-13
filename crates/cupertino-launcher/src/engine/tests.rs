@@ -17,7 +17,7 @@ pub fn app(id: &str, name: &str, generic: &str, exec: &str) -> DesktopEntry {
         path: None,
         startup_wm_class: None,
         actions: vec![],
-        source: None,
+        source: Some(format!("/usr/share/applications/{id}.desktop").into()),
     }
 }
 
@@ -207,15 +207,20 @@ fn frecency_does_not_outrank_a_better_text_tier() {
 }
 
 #[test]
-fn empty_query_lists_frecent_applications() {
+fn an_empty_query_lists_nothing_and_the_applications_token_alone_lists_the_frecent_ones() {
     let mut l = launcher();
     assert!(l.query("", NOW).is_empty());
+    assert!(l.query("/apps", NOW).is_empty());
     let htop = l.query("htop", NOW).get(0).unwrap().clone();
     let gimp = l.query("gimp", NOW).get(0).unwrap().clone();
     l.activate(&htop, "htop", NOW);
     l.activate(&gimp, "gimp", NOW);
     l.activate(&gimp, "gimp", NOW + 5.0);
-    let r = l.query("", NOW + 10.0);
+    assert!(
+        l.query("", NOW + 10.0).is_empty(),
+        "the bare field shows no results"
+    );
+    let r = l.query("/apps ", NOW + 10.0);
     assert_eq!(r.sections[0].kind, SectionKind::Suggestions);
     assert_eq!(titles(&r), vec!["GIMP", "Htop"]);
 }
@@ -312,6 +317,40 @@ fn unusable_exec_activates_nothing() {
     let item = l.query("broken", NOW).get(0).unwrap().clone();
     assert_eq!(l.activate(&item, "broken", NOW), Activation::Nothing);
     assert!(l.frecency.is_empty());
+}
+
+#[test]
+fn a_kind_token_keeps_the_results_of_its_kind() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("Calculations")).unwrap();
+    std::fs::write(d.path().join("calculator-notes.txt"), "x").unwrap();
+    let mut l = launcher();
+    l.set_file_index(Some(Arc::new(FileIndex::build(FileSearchConfig::new(
+        d.path(),
+    )))));
+    let kinds = |r: &Results| -> Vec<SectionKind> { r.sections.iter().map(|s| s.kind).collect() };
+    let all = l.query("calc", NOW);
+    assert!(all.iter().any(|i| i.kind == ItemKind::Application));
+    assert!(all.iter().any(|i| i.kind == ItemKind::File));
+    // only the files, wherever the token stands, the top hit taken from them
+    for query in ["/files calc", "calc /files"] {
+        let r = l.query(query, NOW);
+        assert!(!r.is_empty(), "{query}");
+        assert!(
+            r.iter().all(|i| i.kind == ItemKind::File),
+            "{query}: {:?}",
+            kinds(&r)
+        );
+    }
+    let r = l.query("/apps calc", NOW);
+    assert!(
+        r.iter().all(|i| i.kind == ItemKind::Application),
+        "{:?}",
+        kinds(&r)
+    );
+    assert!(!kinds(&r).contains(&SectionKind::Web));
+    let r = l.query("/folders calc", NOW);
+    assert!(r.iter().all(|i| i.kind == ItemKind::Folder) && !r.is_empty());
 }
 
 #[test]

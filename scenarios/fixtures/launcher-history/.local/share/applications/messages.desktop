@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Text Messages
+GenericName=Messaging
+Comment=Send and receive messages
+Exec=true
+Icon=mail-message-new
+Categories=Network;InstantMessaging;

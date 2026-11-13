@@ -292,7 +292,11 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PillNode {
                 ),
             )
         } else {
-            (share(text, FILTER_FILL_SHARE), text)
+            // a pill lighter than the panel, its name in the field's placeholder tone
+            (
+                super::lift_color(cx).unwrap_or(share(text, FILTER_FILL_SHARE)),
+                role(cx, ColorRole::SecondaryText, share(text, 0.6)),
+            )
         };
         fill(cx, rect, radius, back);
         if let Some(l) = line(

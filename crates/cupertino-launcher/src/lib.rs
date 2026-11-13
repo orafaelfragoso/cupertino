@@ -32,6 +32,7 @@ pub mod nav;
 pub mod panel;
 pub mod preview;
 pub mod providers;
+pub mod refine;
 pub mod scope;
 pub mod view;
 

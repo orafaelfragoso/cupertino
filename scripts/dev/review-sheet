@@ -1,0 +1,45 @@
+#!/bin/sh
+# Headless shots of the surfaces whose edges break most easily, for review by eye before a package is made: windows
+# overlapping one another (their corners and sidebars), the dock's tile name and menu (their pointers), a desktop
+# context menu and the control panel, in both appearances, with enlarged crops of the corners and pointers.
+#   scripts/dev/review-sheet [OUT_DIR]
+# OUT_DIR defaults to target/review/<time>. BIN_DIR (default target/release, built first unless NO_BUILD is set) and
+# WALLPAPER (an image path) as for scripts/dev/shot. Needs ffmpeg for the crops.
+set -eu
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+OUT=${1:-$ROOT/target/review/$(date +%Y%m%d-%H%M%S)}
+mkdir -p "$OUT"
+if [ -z "${BIN_DIR:-}" ]; then
+    [ -n "${NO_BUILD:-}" ] || "$ROOT/scripts/dev/build" >&2
+    BIN_DIR="$ROOT/target/release"
+fi
+export BIN_DIR SIZE=1920x1080
+[ -n "${WALLPAPER:-}" ] && export CONFIG_JSON="{\"wallpaper\": \"$WALLPAPER\"}"
+SESSION="$ROOT/crates/cupertino-server/scripts/session.sh"
+
+# the output is 960 x 540 points at scale 2: the dock's middle tile is near (480, 515), the control panel's item near
+# (870, 16)
+crop() { # SRC DST W H X Y: a region of the shot, enlarged four times without smoothing
+    ffmpeg -loglevel error -y -i "$1" -vf "crop=$3:$4:$5:$6,scale=iw*4:ih*4:flags=neighbor" "$2"
+}
+for look in dark light; do
+    timeout 60 "$SESSION" --scale 2 --appearance "$look" --pointer 0:959,539 \
+        --spawn cupertino-files --spawn cupertino-settings --shot "8:$OUT/$look-windows.png" \
+        --pointer 8:480,515 --shot "10:$OUT/$look-dock-name.png" \
+        --right-click 11:480,515 --shot "13:$OUT/$look-dock-menu.png" \
+        --key 14:Escape --right-click 15:120,300 --shot "17:$OUT/$look-context-menu.png" \
+        --key 18:Escape --click 19:870,16 --shot "21:$OUT/$look-control-panel.png" \
+        --run-for 22 >"$OUT/$look-session.log" 2>&1 || true
+    for shot in windows dock-name dock-menu context-menu control-panel; do
+        [ -s "$OUT/$look-$shot.png" ] || echo "review-sheet: no $look $shot shot (see $OUT/$look-session.log)" >&2
+    done
+    if command -v ffmpeg >/dev/null; then
+        [ -s "$OUT/$look-windows.png" ] && {
+            crop "$OUT/$look-windows.png" "$OUT/$look-windows-top-left.png" 480 270 0 60
+            crop "$OUT/$look-windows.png" "$OUT/$look-windows-bottom-left.png" 480 270 0 810
+        }
+        [ -s "$OUT/$look-dock-name.png" ] && crop "$OUT/$look-dock-name.png" "$OUT/$look-dock-name-pointer.png" 300 120 810 840
+        [ -s "$OUT/$look-dock-menu.png" ] && crop "$OUT/$look-dock-menu.png" "$OUT/$look-dock-menu-pointer.png" 400 300 760 640
+    fi
+done
+echo "$OUT"

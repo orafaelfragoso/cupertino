@@ -27,6 +27,7 @@ scripts/test --all       # the fast tier of the workspace: 5 minutes at most, 2 
 scripts/test --slow      # the slow tier (whole programs, buses, displays, measurements); CI runs it too
 scripts/dev/build        # the release build of every program, one feature set, into target/release
 scripts/dev/shot OUT.png [server flags]   # one headless screenshot of the current checkout (builds first)
+scripts/dev/review-sheet [OUT_DIR]       # windows overlapping, dock name and menu, menus, control panel, both appearances, with crops of corners and pointers; look at it before packaging
 scripts/preview          # every scenario in scenarios/, this checkout beside the installed release, changed pixels marked
 scripts/done             # everything a change must pass before it is called done
 ```

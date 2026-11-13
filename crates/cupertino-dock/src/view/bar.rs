@@ -48,8 +48,9 @@ pub(crate) const INDICATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.6];
 /// Separator line: light and dark; with Increase Contrast it is drawn at twice the alpha.
 const SEPARATOR_LIGHT: paint::Rgba = [0.0, 0.0, 0.0, 0.9];
 const SEPARATOR_DARK: paint::Rgba = [1.0, 1.0, 1.0, 0.28];
-/// The share of its opacity the running dot of an application that has no windows keeps.
-pub const DIM_INDICATOR: f64 = 0.3;
+/// The share of its opacity the running dot of an application that has no windows keeps: a quarter, so the dark
+/// appearance's dot goes from 0.6 to 0.15 white.
+pub const DIM_INDICATOR: f64 = 0.25;
 
 /// The bar's fine edge where the bar is not glass: a hairline just inside its outline, darker than what is around it,
 /// light and dark, and its width in points (one device pixel at 2x); Increase Contrast doubles it.
@@ -761,5 +762,11 @@ mod tests {
         assert!((reach - 30.0).abs() < 0.1, "{reach}");
         // the two corners of an end leave 24 points of it straight, so the end is no half circle
         assert!(depth - 2.0 * reach > 23.0);
+    }
+
+    #[test]
+    fn the_dot_of_an_application_without_windows_keeps_a_quarter_of_its_opacity() {
+        let dim = f64::from(INDICATOR_DARK[3]) * DIM_INDICATOR;
+        assert!((dim - 0.15).abs() < 1e-6, "{dim}");
     }
 }

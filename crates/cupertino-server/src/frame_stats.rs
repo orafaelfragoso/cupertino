@@ -4,7 +4,8 @@
 //! took (the GPU waited for, so the time covers the GPU's work too), how much of that the glass passes and their
 //! backdrop blurs took on the GPU, how many glass backdrops were blurred again or reused, how late it came after the
 //! output owed it and how many refreshes passed meanwhile, and the input-to-present latency of the frame when it is the
-//! first shown after an input.
+//! first shown after an input; then how many render targets the material and glass passes created and how many passes
+//! they ran.
 //!
 //! An output owes a frame from the time it is due ([`crate::state::Cupertino::frame_deadline`]): a change is due at the
 //! next refresh, an animation frame at its grid point. A frame shown more than a refresh after it was owed missed the
@@ -101,6 +102,9 @@ pub struct FrameRecord {
     pub late: Duration,
     pub missed: u64,
     pub latency: (Option<Duration>, Option<Duration>),
+    /// Render targets the material and glass passes created, and the passes they ran.
+    pub allocated: u64,
+    pub passes: u64,
 }
 
 impl FrameRecord {
@@ -109,7 +113,7 @@ impl FrameRecord {
         let us = |d: Duration| d.as_micros().to_string();
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -121,6 +125,8 @@ impl FrameRecord {
             self.missed,
             opt(self.latency.0),
             opt(self.latency.1),
+            self.allocated,
+            self.passes,
         )
     }
 }
@@ -139,7 +145,7 @@ pub struct FrameStats {
 
 /// The first line of the file: the column names.
 pub const HEADER: &str =
-    "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us";
+    "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us allocated passes";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -264,6 +270,8 @@ pub fn frame_rendered(
         late,
         missed: missed_refreshes(late, stats.refresh),
         latency: stats.latency.presented(now),
+        allocated: counts.allocations - stats.before.allocations,
+        passes: counts.passes - stats.before.passes,
     };
     stats.write(&record);
 }
@@ -358,12 +366,14 @@ mod tests {
         let r = FrameRecord {
             shown: ms(1),
             latency: (Some(ms(3)), None),
+            allocated: 4,
+            passes: 9,
             ..Default::default()
         };
         assert_eq!(
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 -"));
+        assert!(r.line().ends_with("3000 - 4 9"));
     }
 }

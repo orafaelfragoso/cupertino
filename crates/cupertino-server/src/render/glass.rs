@@ -48,8 +48,6 @@ const MAX_PER_OWNER: usize = 2;
 const STALE_AFTER: u64 = 2048;
 /// Lost containers remembered until their element is built again; older ones are forgotten.
 const MAX_LOST: usize = 4 * MAX_CACHED;
-/// Released textures kept for reuse after a glass draw; the rest are deleted.
-const FREE_KEPT: usize = 12;
 
 /// A glass container of a frame: its shapes (output-local points), blend width and mode.
 #[derive(Clone, Debug)]
@@ -365,6 +363,8 @@ pub(super) struct GlassGl {
     readings: Vec<ToneReading>,
     /// Glass backdrops that were drawn too large to follow what lies behind them since the server last took them.
     unadapted: Vec<u64>,
+    /// The small targets readbacks shrink a blur level into, kept for the next readbacks.
+    grids: Vec<Target>,
 }
 
 /// One readback of the widest blur level of a container, at most [`TONE_GRID`] texels on a side, into a pixel buffer
@@ -540,18 +540,23 @@ impl<T> GlassCache<T> {
         Some(&e.payload)
     }
 
-    /// Keep `payload` for `owner`, made for `state` and captured as `sig`, and give back what that drops: the oldest
-    /// textures of the same container past [`MAX_PER_OWNER`], and past [`MAX_CACHED`] the least recently drawn of
-    /// containers this build does not show.
-    pub fn insert(&mut self, owner: u64, state: u64, sig: u64, payload: T) -> Vec<T> {
+    /// Before `owner` makes new textures: give back those of it that [`GlassCache::insert`] would drop for them, the
+    /// oldest past [`MAX_PER_OWNER`] - 1, so the new ones are made in them rather than in textures created anew.
+    pub fn make_room(&mut self, owner: u64) -> Vec<T> {
         let mut dropped = Vec::new();
+        self.drop_oldest_of(owner, MAX_PER_OWNER - 1, &mut dropped);
+        dropped
+    }
+
+    /// Drop the least recently used textures of `owner` into `dropped` until it keeps no more than `limit`.
+    fn drop_oldest_of(&mut self, owner: u64, limit: usize, dropped: &mut Vec<T>) {
         loop {
             let same = self
                 .entries
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| e.owner == owner);
-            if same.clone().count() < MAX_PER_OWNER {
+            if same.clone().count() <= limit {
                 break;
             }
             let oldest = same
@@ -560,6 +565,14 @@ impl<T> GlassCache<T> {
                 .unwrap();
             dropped.push(self.entries.swap_remove(oldest).payload);
         }
+    }
+
+    /// Keep `payload` for `owner`, made for `state` and captured as `sig`, and give back what that drops: the oldest
+    /// textures of the same container past [`MAX_PER_OWNER`], and past [`MAX_CACHED`] the least recently drawn of
+    /// containers this build does not show.
+    pub fn insert(&mut self, owner: u64, state: u64, sig: u64, payload: T) -> Vec<T> {
+        let mut dropped = Vec::new();
+        self.drop_oldest_of(owner, MAX_PER_OWNER - 1, &mut dropped);
         while self.entries.len() >= MAX_CACHED {
             let build = self.build;
             let Some(oldest) = (0..self.entries.len())
@@ -682,6 +695,7 @@ impl GlassGl {
             .drain()
             .into_iter()
             .flat_map(|c| c.targets)
+            .chain(std::mem::take(&mut self.grids))
             .collect()
     }
 
@@ -904,6 +918,10 @@ impl MaterialGl {
             }
             None => {
                 self.stats.backdrop_misses += 1;
+                // the textures this draw replaces take the new backdrop, rather than textures created anew
+                let replaced = self.glass.cache.make_room(p.owner);
+                self.free
+                    .extend(replaced.into_iter().flat_map(|c| c.targets));
                 let blurring = (self.timing && !self.gpu_timers).then(std::time::Instant::now);
                 self.timer_begin(gl, true);
                 let within = p.glass.within.and_then(|w| {
@@ -990,11 +1008,8 @@ impl MaterialGl {
             gl.ActiveTexture(ffi::TEXTURE0 + unit as u32);
             gl.BindTexture(ffi::TEXTURE_2D, 0);
         }
-        // what dropped textures released goes back to the driver beyond a few for reuse
-        while self.free.len() > FREE_KEPT {
-            let t = self.free.remove(0);
-            self.destroy_target(gl, t);
-        }
+        // what dropped textures released goes back to the driver beyond what is kept for reuse
+        self.trim_free(gl);
         self.timer_end(gl);
         saved.restore(gl);
         Ok(())
@@ -1025,7 +1040,11 @@ impl MaterialGl {
             level.size.0.clamp(1, TONE_GRID),
             level.size.1.clamp(1, TONE_GRID),
         );
-        let Some(small) = self.alloc_target(gl, grid, false) else {
+        let kept = self.glass.grids.iter().position(|t| t.size == grid);
+        let Some(small) = kept
+            .map(|i| self.glass.grids.swap_remove(i))
+            .or_else(|| self.alloc_target(gl, grid, false))
+        else {
             return;
         };
         gl.Disable(ffi::SCISSOR_TEST);
@@ -1064,8 +1083,12 @@ impl MaterialGl {
         );
         gl.BindBuffer(ffi::PIXEL_PACK_BUFFER, 0);
         let fence = gl.FenceSync(ffi::SYNC_GPU_COMMANDS_COMPLETE, 0);
-        // the copy into the buffer was queued; the small target can go
-        self.destroy_target(gl, small);
+        // the copy into the buffer was queued; the small target serves the next readback
+        if self.glass.grids.len() < MAX_TONE_READS {
+            self.glass.grids.push(small);
+        } else {
+            self.destroy_target(gl, small);
+        }
         let uv = capture_uv(&p.projection, viewport, fb);
         let probes = p
             .glass
@@ -1705,6 +1728,33 @@ mod tests {
         assert_eq!(whole, vec![false, true]);
         let (whole, _) = frame(&mut cache, &[(0, 7, 70)]);
         assert_eq!(whole, vec![true]);
+    }
+
+    #[test]
+    fn a_moving_container_hands_back_the_textures_it_replaces_before_it_makes_new_ones() {
+        let mut cache = GlassCache::default();
+        // a window dragged: its glass shows a new backdrop every frame
+        for i in 0..8u64 {
+            assert!(cache.check(1, 10 + i));
+            cache.begin_draw();
+            assert!(cache.get(1, 100 + i).is_none());
+            let replaced = cache.make_room(1);
+            // from the third frame on, the textures of two frames ago come back before the new ones are made, so the
+            // pass makes the new backdrop in them and creates none
+            let expected: Vec<u64> = if i >= MAX_PER_OWNER as u64 {
+                vec![i - MAX_PER_OWNER as u64]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(replaced, expected, "frame {i}");
+            assert!(
+                cache.insert(1, 10 + i, 100 + i, i).is_empty(),
+                "inserting drops nothing more"
+            );
+            assert!(cache.len() <= MAX_PER_OWNER);
+        }
+        // the textures kept are those of the last two frames: the window at rest is drawn from the last
+        assert!(cache.get(1, 107).is_some() && cache.get(1, 106).is_some());
     }
 
     #[test]

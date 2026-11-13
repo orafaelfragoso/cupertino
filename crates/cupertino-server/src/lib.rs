@@ -50,6 +50,7 @@ pub mod owner_check;
 pub mod pointer_constraints;
 pub mod policy;
 pub mod popup_grab;
+pub mod popup_linger;
 pub mod power;
 pub mod process;
 pub mod protocols;

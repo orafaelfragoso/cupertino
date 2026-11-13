@@ -426,6 +426,82 @@ fn a_press_on_a_popup_subsurface_keeps_the_grab_and_an_outside_press_ends_it() {
     assert!(h.state.popup_grab.is_none());
 }
 
+/// A popup a press outside dismissed leaves the popup tree at once but stays drawn where it was, so its client can fade
+/// it out: it takes no press meanwhile, and it goes when the client destroys it or after `LINGER_LIMIT`.
+#[test]
+fn a_dismissed_popup_stays_drawn_without_input_until_its_limit() {
+    use cupertino_server::popup_linger::{shown, LINGER_LIMIT};
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn(h.socket_path());
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
+    h.state.tick();
+    let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
+    let frame = h.state.wm.window(window.id).unwrap().geometry();
+    h.sync(&client);
+    h.click(&client, (frame.x + 300.0, frame.y + 220.0));
+    h.wait_until("a drawn popup", |s| {
+        let window = s.windows.iter().find(|w| w.mapped).unwrap();
+        client.log.lock().unwrap().popup_ready
+            && PopupManager::popups_for_surface(window.surface()).count() == 1
+    });
+    h.sync(&client);
+
+    h.click(&client, (frame.x + 350.0, frame.y + 250.0));
+    let done = client.log.clone();
+    h.wait_until("the popup to be dismissed", move |_| {
+        done.lock().unwrap().popup_done
+    });
+    let root = h
+        .state
+        .windows
+        .iter()
+        .find(|w| w.mapped)
+        .unwrap()
+        .surface()
+        .clone();
+    assert_eq!(
+        PopupManager::popups_for_surface(&root).count(),
+        0,
+        "out of the tree"
+    );
+    let now = h.state.now();
+    assert_eq!(
+        shown(&root, now).len(),
+        1,
+        "still drawn while its client fades it"
+    );
+
+    // a press where its content lies reaches the window under it, not the popup
+    let before = client.log.lock().unwrap().buttons.len();
+    let (px, py, ..) = POPUP;
+    let (sx, sy, sw, sh) = SUBSURFACE;
+    h.click(
+        &client,
+        (
+            frame.x + f64::from(px + sx + sw / 2),
+            frame.y + f64::from(py + sy + sh / 2),
+        ),
+    );
+    {
+        let log = client.log.lock().unwrap();
+        let sub = log.subsurface.clone().unwrap();
+        assert!(
+            log.buttons[before..].iter().all(|(s, _)| *s != sub),
+            "the dismissed popup takes no press: {:?}",
+            &log.buttons[before..]
+        );
+    }
+
+    let now = h.state.now();
+    assert_eq!(shown(&root, now + LINGER_LIMIT - 0.01).len(), 1);
+    assert!(
+        shown(&root, now + LINGER_LIMIT + 0.01).is_empty(),
+        "a client that never destroys it does not keep it on screen"
+    );
+}
+
 #[test]
 fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surface() {
     let Some(mut h) = Harness::new() else { return };

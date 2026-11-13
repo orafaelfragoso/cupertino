@@ -56,8 +56,13 @@ impl ButtonState {
     }
 }
 
-/// How far towards white the lower edge of a coloured button's face is lightened: the face is a little deeper at the top.
+/// How far towards white the lower edge of a pressed button's face is lightened: the face is a little deeper at the top.
 pub const FACE_LIGHTEN: f32 = 0.2;
+
+/// Where down a button's face, as a share of its diameter, its upper colour, its centre colour and its lower colour
+/// sit: the face keeps its upper colour over the top quarter, lightens through the middle and keeps its lower colour
+/// over the bottom quarter.
+pub const FACE_STOPS: [f32; 3] = [0.28, 0.5, 0.72];
 
 /// How wide each of a button's two edge rings is, in points: the outer one in the deepest edge colour, the inner one
 /// in the ring colour.
@@ -81,6 +86,24 @@ pub fn button_fill(palette: &Palette, kind: ButtonKind, v: ButtonVisual) -> Rgba
         (true, false) => palette.button_color(kind),
         (false, _) => palette.button_inactive,
     }
+}
+
+/// The face of a coloured button from top to bottom (upper, centre, lower colour); a pressed button lightens its
+/// pressed fill towards the bottom.
+pub fn button_face(palette: &Palette, kind: ButtonKind, v: ButtonVisual) -> [Rgba; 3] {
+    if v.colored && !v.pressed {
+        return palette.face_of(kind);
+    }
+    let top = button_fill(palette, kind, v);
+    let lighten = |k: f32| {
+        [
+            top[0] + (1.0 - top[0]) * k,
+            top[1] + (1.0 - top[1]) * k,
+            top[2] + (1.0 - top[2]) * k,
+            top[3],
+        ]
+    };
+    [top, lighten(FACE_LIGHTEN / 2.0), lighten(FACE_LIGHTEN)]
 }
 
 /// The colour of a coloured button's glyph: brighter while the button is pressed.
@@ -152,25 +175,20 @@ pub fn draw_button(
     }
     // the face, a little deeper at the top
     {
-        let top = button_fill(palette, kind, v);
-        let bottom = [
-            top[0] + (1.0 - top[0]) * FACE_LIGHTEN,
-            top[1] + (1.0 - top[1]) * FACE_LIGHTEN,
-            top[2] + (1.0 - top[2]) * FACE_LIGHTEN,
-            top[3],
-        ];
+        let face = button_face(palette, kind, v);
         match LinearGradient::new(
             SkPoint::from_xy(cx, cy - r),
             SkPoint::from_xy(cx, cy + r),
-            vec![
-                GradientStop::new(0.0, color(top)),
-                GradientStop::new(1.0, color(bottom)),
-            ],
+            FACE_STOPS
+                .iter()
+                .zip(face)
+                .map(|(&at, c)| GradientStop::new(at, color(c)))
+                .collect(),
             SpreadMode::Pad,
             Transform::identity(),
         ) {
             Some(shader) => paint.shader = shader,
-            None => paint.set_color(color(top)),
+            None => paint.set_color(color(face[1])),
         }
         pm.fill_path(
             &disc,
@@ -180,7 +198,7 @@ pub fn draw_button(
             None,
         );
     }
-    // two rings at the edge, deepest at the two sides and gone at the top and the bottom
+    // two rings at the edge, strongest at the two sides (or at the top and the bottom) and gone half way round
     let width = (EDGE_RING_WIDTH * scale).max(0.5) as f32;
     let rings = [
         (r - width / 2.0, palette.edge_of(kind), 1.0),
@@ -207,8 +225,16 @@ pub fn draw_button(
         let (Some(ring), Some(shader)) = (
             pb.finish(),
             LinearGradient::new(
-                SkPoint::from_xy(cx - r, cy),
-                SkPoint::from_xy(cx + r, cy),
+                if palette.edge_at_poles {
+                    SkPoint::from_xy(cx, cy - r)
+                } else {
+                    SkPoint::from_xy(cx - r, cy)
+                },
+                if palette.edge_at_poles {
+                    SkPoint::from_xy(cx, cy + r)
+                } else {
+                    SkPoint::from_xy(cx + r, cy)
+                },
                 stops,
                 SpreadMode::Pad,
                 Transform::identity(),

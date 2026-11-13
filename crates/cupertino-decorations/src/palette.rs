@@ -7,8 +7,8 @@
 //! * title text: the window frame text colour (active) and the tertiary label colour (inactive), so the title of a
 //!   window that is not active recedes as its toolbar's does;
 //! * rim: the window rim colour token and its 2× variant;
-//! * button colours: the fill, the ring just inside the edge, the fill while pressed and the glyph shown while the
-//!   group is hovered, each its own value per button; inactive and disabled buttons are one translucent disc,
+//! * button colours: the face (its upper, centre and lower colours, per appearance), the ring just inside the
+//!   edge, the fill while pressed and the glyph shown while the group is hovered, each its own value per button; inactive and disabled buttons are one translucent disc,
 //!   white at 17 % (dark) or black at 10 % (light), laid over whatever the window draws under them, so a tinted
 //!   sidebar shows through them; Increase Contrast deepens them to 30 % and 18 %;
 //! * separator: the grid colour (approximate).
@@ -32,14 +32,21 @@ pub struct Palette {
     pub separator: Rgba,
     pub title_active: Rgba,
     pub title_inactive: Rgba,
+    /// The colour at the centre of each button's face (close, minimise, zoom).
     pub close: Rgba,
     pub minimize: Rgba,
     pub zoom: Rgba,
+    /// Each button's face from top to bottom: its upper colour, its centre and its lower colour, in the order close,
+    /// minimise, zoom. The centre is the button's colour above.
+    pub button_face: [[Rgba; 3]; 3],
     pub button_inactive: Rgba,
     /// The ring of each button just inside its edge, in the order close, minimise, zoom.
     pub button_rim: [Rgba; 3],
-    /// The colour each button's edge takes at its two sides, where the ring is deepest.
+    /// The colour each button's edge takes where its ring is strongest.
     pub button_edge: [Rgba; 3],
+    /// Whether the edge rings are strongest at the top and the bottom of each button (a light ring, in the dark
+    /// appearance) rather than at its two sides (a deep ring, in the light one).
+    pub edge_at_poles: bool,
     /// The fill of each button while it is pressed.
     pub button_pressed: [Rgba; 3],
     /// The glyph each button shows while the group is hovered.
@@ -50,10 +57,45 @@ pub struct Palette {
     pub window_background: Rgba,
 }
 
-/// The fills of the close, minimise and zoom buttons in both appearances, and the glyphs of the last two.
-const CLOSE: [u8; 4] = [0xFF, 0x5F, 0x57, 255];
-const MINIMIZE: [u8; 4] = [0xFE, 0xBC, 0x2E, 255];
-const ZOOM: [u8; 4] = [0x28, 0xC8, 0x40, 255];
+/// Each button's face in the light appearance, its upper, centre and lower colour (close, minimise, zoom): a slightly
+/// deeper upper part that lightens towards the bottom, the zoom button a yellowish green.
+const FACE_LIGHT: [[[u8; 4]; 3]; 3] = [
+    [
+        [252, 110, 101, 255],
+        [248, 122, 114, 255],
+        [246, 136, 129, 255],
+    ],
+    [
+        [252, 188, 43, 255],
+        [253, 198, 56, 255],
+        [253, 209, 71, 255],
+    ],
+    [
+        [104, 208, 56, 255],
+        [127, 212, 88, 255],
+        [150, 217, 119, 255],
+    ],
+];
+/// The same in the dark appearance: deeper, more saturated discs, whose minimise and zoom faces hold no blue above
+/// their centre.
+const FACE_DARK: [[[u8; 4]; 3]; 3] = [
+    [[246, 85, 72, 255], [243, 90, 80, 255], [240, 103, 95, 255]],
+    [[251, 178, 0, 255], [253, 190, 0, 255], [253, 204, 43, 255]],
+    [[13, 191, 0, 255], [35, 192, 0, 255], [79, 195, 55, 255]],
+];
+/// In the dark appearance a button's edge is a light ring, brightest at its top and bottom: the outer ring and the
+/// one just inside it (close, minimise, zoom).
+const EDGE_DARK: [[u8; 4]; 3] = [
+    [255, 196, 186, 255],
+    [246, 246, 118, 255],
+    [171, 248, 142, 255],
+];
+const RIM_DARK: [[u8; 4]; 3] = [
+    [255, 153, 145, 255],
+    [255, 231, 76, 255],
+    [123, 238, 100, 255],
+];
+/// The glyphs of the minimise and zoom buttons.
 const MINIMIZE_GLYPH: [u8; 4] = [199, 56, 0, 255];
 const ZOOM_GLYPH: [u8; 4] = [0, 118, 0, 255];
 /// The close glyph of the light appearance.
@@ -61,9 +103,8 @@ const CLOSE_GLYPH_LIGHT: [u8; 4] = [165, 0, 0, 255];
 /// The deepest colour of each button's edge, at its two sides (close, minimise, zoom).
 const EDGE: [[u8; 4]; 3] = [[175, 3, 0, 255], [118, 20, 0, 255], [0, 78, 0, 255]];
 
-/// A ring a little darker than the fill it goes round, for the appearance with no ring colours of its own.
-fn darkened(c: Rgba) -> Rgba {
-    [c[0] * 0.84, c[1] * 0.84, c[2] * 0.84, c[3]]
+fn faces(table: [[[u8; 4]; 3]; 3]) -> [[Rgba; 3]; 3] {
+    table.map(|face| face.map(rgba8))
 }
 
 fn rgba8(c: [u8; 4]) -> Rgba {
@@ -105,6 +146,7 @@ impl Palette {
         if dark {
             // an inactive window's title bar is the active one's: only its title and buttons change
             let titlebar_inactive = gray(0.149);
+            let face = faces(FACE_DARK);
             Self {
                 dark,
                 titlebar_active: gray(0.149),
@@ -114,16 +156,14 @@ impl Palette {
                 separator: rgba8([0x1A, 0x1A, 0x1A, 255]),
                 title_active: rgba8([255, 255, 255, 216]),
                 title_inactive: rgba8([255, 255, 255, 63]),
-                close: rgba8(CLOSE),
-                minimize: rgba8(MINIMIZE),
-                zoom: rgba8(ZOOM),
+                close: face[0][1],
+                minimize: face[1][1],
+                zoom: face[2][1],
+                button_face: face,
                 button_inactive: INACTIVE_BUTTON_DARK,
-                button_rim: [
-                    darkened(rgba8(CLOSE)),
-                    darkened(rgba8(MINIMIZE)),
-                    darkened(rgba8(ZOOM)),
-                ],
-                button_edge: EDGE.map(rgba8),
+                button_rim: RIM_DARK.map(rgba8),
+                button_edge: EDGE_DARK.map(rgba8),
+                edge_at_poles: true,
                 button_pressed: [
                     rgba8([255, 141, 133, 255]),
                     rgba8([255, 234, 92, 255]),
@@ -141,6 +181,7 @@ impl Palette {
             }
         } else {
             let titlebar_inactive = gray(1.0);
+            let face = faces(FACE_LIGHT);
             Self {
                 dark,
                 titlebar_active: gray(1.0),
@@ -150,9 +191,10 @@ impl Palette {
                 separator: rgba8([0xE6, 0xE6, 0xE6, 255]),
                 title_active: rgba8([0, 0, 0, 216]),
                 title_inactive: rgba8([0, 0, 0, 66]),
-                close: rgba8(CLOSE),
-                minimize: rgba8(MINIMIZE),
-                zoom: rgba8(ZOOM),
+                close: face[0][1],
+                minimize: face[1][1],
+                zoom: face[2][1],
+                button_face: face,
                 button_inactive: INACTIVE_BUTTON_LIGHT,
                 button_rim: [
                     rgba8([243, 76, 68, 255]),
@@ -160,6 +202,7 @@ impl Palette {
                     rgba8([19, 185, 44, 255]),
                 ],
                 button_edge: EDGE.map(rgba8),
+                edge_at_poles: false,
                 button_pressed: [
                     rgba8([252, 148, 142, 255]),
                     rgba8([254, 210, 115, 255]),
@@ -252,6 +295,11 @@ impl Palette {
             crate::metrics::ButtonKind::Minimize => 1,
             crate::metrics::ButtonKind::Zoom => 2,
         }
+    }
+
+    /// A button's face from top to bottom: upper colour, centre, lower colour.
+    pub fn face_of(&self, kind: crate::metrics::ButtonKind) -> [Rgba; 3] {
+        self.button_face[Self::index(kind)]
     }
 
     /// The ring of a button just inside its edge.

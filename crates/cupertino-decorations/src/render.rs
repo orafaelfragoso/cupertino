@@ -524,10 +524,11 @@ mod tests {
             for x in x0..(x0 + side).min(pm.width()) {
                 let [r, g, b, _] = rgba(pm, x, y);
                 let chroma = f64::from(r.max(g).max(b) - r.min(g).min(b));
+                // every strongly coloured pixel counts once: a face is less saturated at its bottom than its top
                 if chroma > 60.0 {
-                    sx += (f64::from(x) + 0.5) * chroma;
-                    sy += (f64::from(y) + 0.5) * chroma;
-                    sw += chroma;
+                    sx += f64::from(x) + 0.5;
+                    sy += f64::from(y) + 0.5;
+                    sw += 1.0;
                 }
             }
         }
@@ -755,41 +756,78 @@ mod tests {
         assert_eq!(e.outline.width_pt, 1.0);
     }
 
+    /// Each coloured button's face, sampled down its centre line at 2x: its upper colour over the top, its own colour
+    /// at the centre and its lower colour near the bottom, in each appearance; the dark discs are deeper and hold no
+    /// blue in their upper half.
+    #[test]
+    fn button_faces_follow_the_appearance() {
+        let want: [(Appearance, [[[u8; 3]; 3]; 3]); 2] = [
+            (
+                Appearance::Light,
+                [
+                    [[252, 110, 101], [248, 122, 114], [246, 136, 129]],
+                    [[252, 188, 43], [253, 198, 56], [253, 209, 71]],
+                    [[104, 208, 56], [127, 212, 88], [150, 217, 119]],
+                ],
+            ),
+            (
+                Appearance::Dark,
+                [
+                    [[246, 85, 72], [243, 90, 80], [240, 103, 95]],
+                    [[251, 178, 0], [253, 190, 0], [253, 204, 43]],
+                    [[13, 191, 0], [35, 192, 0], [79, 195, 55]],
+                ],
+            ),
+        ];
+        for (appearance, faces) in want {
+            let mut d = decorations(TitlebarStyle::Standard, appearance);
+            let layout = d.layout(Size::new(400.0, 100.0));
+            let r = d.config.metrics.button_diameter / 2.0;
+            let pm = d.render_titlebar(400.0, 2.0, &DecorationState::default());
+            for (k, face) in ButtonKind::ALL.into_iter().zip(faces) {
+                let b = layout.button(k);
+                for (at, want) in [(-0.7, face[0]), (0.0, face[1]), (0.7, face[2])] {
+                    let (x, y) = (b.center.x * 2.0, (b.center.y + at * r) * 2.0);
+                    let got = rgba(&pm, x as u32, y as u32);
+                    assert!(
+                        (0..3).all(|i| (got[i] as i32 - want[i] as i32).abs() <= 6),
+                        "{appearance:?} {k:?} at {at}: {got:?} against {want:?}"
+                    );
+                }
+            }
+        }
+        let (light, dark) = (Palette::builtin(false), Palette::builtin(true));
+        assert!(dark.zoom[2] < light.zoom[2] && dark.minimize[2] < light.minimize[2]);
+    }
+
     #[test]
     fn button_centre_colours_per_state() {
         let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);
         let layout = d.layout(Size::new(400.0, 100.0));
         let c = |k: ButtonKind| layout.button(k).center;
         let px = |pm: &Pixmap, k: ButtonKind| rgba(pm, c(k).x as u32, c(k).y as u32);
-        // the face lightens from its top to its lower edge, so its centre is half way
-        let face = |fill: [f32; 4]| {
-            let half = crate::buttons::FACE_LIGHTEN / 2.0;
-            [
-                fill[0] + (1.0 - fill[0]) * half,
-                fill[1] + (1.0 - fill[1]) * half,
-                fill[2] + (1.0 - fill[2]) * half,
-                fill[3],
-            ]
-        };
+        // the face's centre is the button's colour; the sampled pixel lies half a point below it, where the face
+        // already lightens
+        let face = |fill: [f32; 4]| fill;
 
         let normal = d.render_titlebar(400.0, 1.0, &DecorationState::default());
         assert!(
             near(
                 px(&normal, ButtonKind::Close),
                 face(d.config.palette.close),
-                0.02
+                0.03
             ),
             "close fill at the centre"
         );
         assert!(near(
             px(&normal, ButtonKind::Minimize),
             face(d.config.palette.minimize),
-            0.02
+            0.03
         ));
         assert!(near(
             px(&normal, ButtonKind::Zoom),
             face(d.config.palette.zoom),
-            0.02
+            0.03
         ));
 
         let hover = d.render_titlebar(
@@ -824,7 +862,7 @@ mod tests {
             near(
                 px(&pressed, ButtonKind::Zoom),
                 face(d.config.palette.zoom),
-                0.02
+                0.03
             ),
             "other buttons unaffected"
         );
@@ -866,7 +904,7 @@ mod tests {
         let close_c = c(ButtonKind::Close);
         let off_glyph = rgba(&disabled, close_c.x as u32, close_c.y as u32 + 4);
         assert!(
-            off_glyph[0] > 150 && off_glyph[1] < 135,
+            off_glyph[0] > 150 && off_glyph[1] < 150,
             "close stays red: {off_glyph:?}"
         );
     }

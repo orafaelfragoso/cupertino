@@ -5,7 +5,14 @@
 
 use cupertino_animation::{AnimatedValue, Curve};
 use cupertino_overview::{OverviewConfig, OverviewMode, OverviewWindow, Transition};
-use cupertino_wm::{OutputId, Point, Rect, WindowId, Wm};
+use cupertino_wm::{OutputId, Point, Rect, WindowId, Wm, WorkspaceId};
+
+/// The menu bar gives way to an opening overview over this many seconds, about three frames at 60 Hz, and comes back
+/// at once when it closes.
+pub const MENU_BAR_FADE: f64 = 0.05;
+
+/// Under Reduce Motion the overview crossfades in and out over this many seconds instead of moving the windows.
+pub const REDUCED_CROSSFADE: f64 = 0.25;
 
 /// A window of the open overview: it flies from `from` (its desktop frame, or the dock tile of a
 /// minimized window) to `target`, which the dock sets and which starts at the desktop frame.
@@ -36,6 +43,16 @@ pub struct OverviewSession {
     /// Closing: removed once the transition came to rest.
     pub closing: bool,
     reflow: Curve,
+    /// When it opened, for the menu bar's fade.
+    pub opened_at: f64,
+    /// When it started to close.
+    pub closed_at: Option<f64>,
+    /// Under Reduce Motion the windows do not move: the desktop and the overview crossfade.
+    pub reduce_motion: bool,
+    /// The window the person drags: drawn at its target at once, above the dock's overview surface.
+    pub dragged: Option<WindowId>,
+    /// Where the dock wants each workspace's live picture (global logical coordinates).
+    pub pictures: Vec<(WorkspaceId, Rect)>,
 }
 
 /// Whether `mode` shows `w` (the all mode skips minimized windows, the app mode keeps one application).
@@ -62,6 +79,11 @@ impl OverviewSession {
             windows: Vec::new(),
             closing: false,
             reflow: cfg.reflow,
+            opened_at: 0.0,
+            closed_at: None,
+            reduce_motion: false,
+            dragged: None,
+            pictures: Vec::new(),
         };
         session.windows = windows
             .into_iter()
@@ -110,7 +132,59 @@ impl OverviewSession {
             return false;
         };
         w.target.animate_to(rect.to_array(), self.reflow, now);
+        if self.dragged == Some(id) {
+            self.dragged = None;
+        }
         true
+    }
+
+    /// The person drags window `id`: it is drawn at `rect` at once, above the overview's chrome, until a new target
+    /// takes it back. False for a window that is not in the overview.
+    pub fn set_drag(&mut self, id: WindowId, rect: Rect) -> bool {
+        let Some(w) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return false;
+        };
+        w.target.set_immediately(rect.to_array());
+        self.dragged = Some(id);
+        true
+    }
+
+    /// Where the live picture of `workspace` is drawn; an empty `rect` removes it.
+    pub fn set_picture(&mut self, workspace: WorkspaceId, rect: Rect) {
+        self.pictures.retain(|p| p.0 != workspace);
+        if rect.w > 0.0 && rect.h > 0.0 {
+            self.pictures.push((workspace, rect));
+        }
+    }
+
+    /// Start closing at `now`: the windows go back, the pictures and a drag end.
+    pub fn close(&mut self, now: f64) {
+        self.transition.toggle(false, now);
+        self.closing = true;
+        self.closed_at = Some(now);
+        self.pictures.clear();
+        self.dragged = None;
+    }
+
+    /// Opacity of the menu bar of the overview's output at `now`: it fades out over [`MENU_BAR_FADE`] as the overview
+    /// opens and is back whole as soon as it starts to close.
+    pub fn menu_bar_alpha(&self, now: f64) -> f64 {
+        if self.closing {
+            return 1.0;
+        }
+        (1.0 - (now - self.opened_at) / MENU_BAR_FADE).clamp(0.0, 1.0)
+    }
+
+    /// Under Reduce Motion, how far the overview has faded in at `now`: from 0 to 1 over [`REDUCED_CROSSFADE`] after
+    /// it opened, back to 0 over the same time once it closes.
+    pub fn crossfade(&self, now: f64) -> f64 {
+        match self.closed_at {
+            Some(t) => {
+                let shown = ((t - self.opened_at) / REDUCED_CROSSFADE).clamp(0.0, 1.0);
+                (shown - (now - t) / REDUCED_CROSSFADE).clamp(0.0, 1.0)
+            }
+            None => ((now - self.opened_at) / REDUCED_CROSSFADE).clamp(0.0, 1.0),
+        }
     }
 
     /// The frames the windows are heading for (the dock's layout; the desktop frame until it answers).
@@ -147,7 +221,26 @@ impl OverviewSession {
     }
 
     pub fn is_animating(&self, now: f64) -> bool {
+        if self.reduce_motion {
+            let c = self.crossfade(now);
+            if (self.closing && c > 0.0) || (!self.closing && c < 1.0) {
+                return true;
+            }
+        }
+        if !self.closing && self.menu_bar_alpha(now) > 0.0 {
+            return true;
+        }
         self.transition.is_animating(now) || self.windows.iter().any(|w| w.target.is_animating(now))
+    }
+
+    /// Whether a closing overview has come to rest and goes.
+    pub fn is_finished(&self, now: f64) -> bool {
+        self.closing
+            && if self.reduce_motion {
+                self.crossfade(now) <= 0.0
+            } else {
+                !self.transition.is_animating(now)
+            }
     }
 }
 
@@ -189,6 +282,17 @@ pub fn usable_area(output: Rect, menu_bar: f64, layer_usable: Option<Rect>) -> R
         Some(l) => base.intersection(&l).unwrap_or(base),
         None => base,
     }
+}
+
+/// The area the overview lays its windows out in: the output from its top (the menu bar gives way to the overview's
+/// desktops band) down to the bottom of the `usable` area (clear of the dock), across the usable width.
+pub fn overview_area(output: Rect, usable: Rect) -> Rect {
+    Rect::new(
+        usable.x,
+        output.y,
+        usable.w,
+        (usable.bottom() - output.y).max(1.0),
+    )
 }
 
 /// Overview entries for the windows of `output`: visible ones with their desktop frames, minimized
@@ -249,6 +353,16 @@ mod tests {
         let l = usable_area(out, 24.0, Some(Rect::new(40.0, 0.0, 1880.0, 1080.0)));
         assert_eq!((l.x, l.w), (40.0, 1880.0));
         assert_eq!(l.y, 24.0);
+    }
+
+    #[test]
+    fn the_overview_lays_out_from_the_top_of_the_output_down_to_the_dock() {
+        let out = Rect::new(100.0, 0.0, 1512.0, 982.0);
+        let usable = Rect::new(100.0, 24.0, 1512.0, 868.0);
+        assert_eq!(
+            overview_area(out, usable),
+            Rect::new(100.0, 0.0, 1512.0, 892.0)
+        );
     }
 
     #[test]
@@ -341,6 +455,74 @@ mod tests {
         assert_eq!(s.frames(20.0)[0].frame, target);
         s.transition.toggle(false, 20.0);
         assert_eq!(s.frames(30.0)[0].frame, a, "closing puts the window back");
+    }
+
+    #[test]
+    fn the_menu_bar_gives_way_over_three_frames_and_is_back_at_once_on_close() {
+        let mut s = OverviewSession::new(
+            &OverviewConfig::default(),
+            OutputId(1),
+            AREA,
+            OverviewMode::Overview,
+            vec![win(1, Rect::new(0.0, 24.0, 300.0, 200.0))],
+        );
+        s.opened_at = 2.0;
+        assert_eq!(s.menu_bar_alpha(2.0), 1.0);
+        let frame = 1.0 / 60.0;
+        assert!(s.menu_bar_alpha(2.0 + frame) < 0.7);
+        assert!(
+            s.menu_bar_alpha(2.0 + 3.0 * frame) < 1e-9,
+            "gone in three frames"
+        );
+        assert!(s.is_animating(2.0 + frame), "the fade needs frames");
+        s.close(3.0);
+        assert_eq!(s.menu_bar_alpha(3.0), 1.0, "back at once");
+    }
+
+    #[test]
+    fn a_dragged_window_follows_at_once_and_a_new_target_takes_it_back() {
+        let a = Rect::new(0.0, 24.0, 300.0, 200.0);
+        let mut s = OverviewSession::new(
+            &OverviewConfig::default(),
+            OutputId(1),
+            AREA,
+            OverviewMode::Overview,
+            vec![win(1, a)],
+        );
+        s.transition.toggle(true, 0.0);
+        let at = Rect::new(500.0, 40.0, 150.0, 100.0);
+        assert!(s.set_drag(WindowId(1), at));
+        assert!(!s.set_drag(WindowId(4), at));
+        assert_eq!(s.dragged, Some(WindowId(1)));
+        assert_eq!(s.frames(10.0)[0].frame, at, "no glide");
+        s.set_target(WindowId(1), Rect::new(20.0, 120.0, 200.0, 150.0), 10.0);
+        assert_eq!(s.dragged, None);
+        s.set_picture(WorkspaceId(3), Rect::new(10.0, 20.0, 146.0, 95.0));
+        s.set_picture(WorkspaceId(4), Rect::new(200.0, 20.0, 146.0, 95.0));
+        s.set_picture(WorkspaceId(3), Rect::default());
+        assert_eq!(s.pictures.len(), 1, "an empty frame removes a picture");
+        s.close(11.0);
+        assert!(s.pictures.is_empty(), "closing drops the pictures");
+    }
+
+    #[test]
+    fn under_reduce_motion_the_overview_crossfades_in_a_quarter_second() {
+        let mut s = OverviewSession::new(
+            &OverviewConfig::default(),
+            OutputId(1),
+            AREA,
+            OverviewMode::Overview,
+            vec![win(1, Rect::new(0.0, 24.0, 300.0, 200.0))],
+        );
+        s.reduce_motion = true;
+        s.opened_at = 1.0;
+        assert_eq!(s.crossfade(1.0), 0.0);
+        assert!((s.crossfade(1.125) - 0.5).abs() < 1e-9);
+        assert_eq!(s.crossfade(1.25), 1.0);
+        s.close(2.0);
+        assert!((s.crossfade(2.125) - 0.5).abs() < 1e-9);
+        assert!(!s.is_finished(2.2));
+        assert!(s.is_finished(2.25));
     }
 
     #[test]

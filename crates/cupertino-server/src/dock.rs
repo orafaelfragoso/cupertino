@@ -100,6 +100,9 @@ const WINDOW_THUMBNAIL_SINCE: u32 = 22;
 /// anywhere else cancels the switch.
 pub const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
 
+/// Layer-shell namespace of the dock's overview surface: the workspaces' live pictures lie on its material.
+pub const OVERVIEW_NAMESPACE: &str = "cupertino-dock-overview";
+
 /// The open application switcher: what the panel's dock is shown, and the output it is drawn on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SwitcherState {
@@ -1061,6 +1064,55 @@ impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
                         f64::from(height),
                     ),
                 );
+            }
+            cupertino_dock_v1::Request::OverviewDrag {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
+                    return;
+                };
+                if width <= 0 || height <= 0 {
+                    return;
+                }
+                state.dock_overview_drag(
+                    output,
+                    id,
+                    Rect::new(
+                        origin.x + f64::from(x),
+                        origin.y + f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    ),
+                );
+            }
+            cupertino_dock_v1::Request::OverviewMoveWindow { id, workspace } => {
+                state.dock_overview_move_window(output, id, workspace)
+            }
+            cupertino_dock_v1::Request::OverviewWorkspaceFrame {
+                workspace,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
+                    return;
+                };
+                let rect = if width <= 0 || height <= 0 {
+                    Rect::default()
+                } else {
+                    Rect::new(
+                        origin.x + f64::from(x),
+                        origin.y + f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    )
+                };
+                state.dock_overview_picture(output, workspace, rect);
             }
             cupertino_dock_v1::Request::OverviewSelect { id } => {
                 state.overview_select(WindowId(u64::from(id)));

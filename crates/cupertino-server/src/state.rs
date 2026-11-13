@@ -603,6 +603,8 @@ pub struct Cupertino {
     pub gesture_output: Option<OutputId>,
     pub hot_corners: cupertino_input::HotCorners,
     pub bar_edge: cupertino_input::EdgeReveal,
+    /// A window dragged up into the top of the screen opens the overview.
+    pub top_zone: cupertino_input::TopZone,
     pub desktop: DesktopIndex,
     pub menu_bars: MenuBars,
     /// Checks of who owns a bus name a client handed the server (`crate::owner_check`).
@@ -936,6 +938,7 @@ impl Cupertino {
             gesture_output: None,
             hot_corners: cupertino_input::HotCorners::new(hot_corner_config),
             bar_edge: cupertino_input::EdgeReveal::new(cupertino_input::EdgeConfig::menu_bar()),
+            top_zone: cupertino_input::TopZone::default(),
             desktop: DesktopIndex::load(),
             menu_bars,
             owner_checks,

@@ -38,11 +38,15 @@ impl Cupertino {
             return;
         };
         let now = self.now();
-        // the dock lays the windows out in the usable area (below the menu bar, clear of the dock)
-        let area = self.wm.output(output).map(|o| o.usable).unwrap_or(rect);
+        // the dock lays the windows out from the output's top (the menu bar gives way) down to the usable area's
+        // bottom (clear of the dock)
+        let usable = self.wm.output(output).map(|o| o.usable).unwrap_or(rect);
+        let area = shell::overview_area(rect, usable);
         let windows = shell::overview_windows(&self.wm, output, now, self.dock_rect(output));
         let mut session =
             OverviewSession::new(&OverviewConfig::default(), output, area, mode, windows);
+        session.opened_at = now;
+        session.reduce_motion = self.display_options().reduce_motion;
         session.transition.toggle(true, now);
         tracing::info!(
             output = output.0,
@@ -62,8 +66,7 @@ impl Cupertino {
     pub fn close_overview(&mut self) {
         let now = self.now();
         if let Some(s) = self.shell.overview.as_mut().filter(|s| !s.closing) {
-            s.transition.toggle(false, now);
-            s.closing = true;
+            s.close(now);
             let output = s.output;
             tracing::info!(output = output.0, "overview closed");
             self.docks.overview_closed(output);
@@ -134,6 +137,71 @@ impl Cupertino {
                 height = rect.h,
                 "overview frame"
             );
+            self.request_redraw();
+        }
+    }
+
+    /// `overview_drag`: the person drags a window of the overview; it is drawn where the pointer took it at once.
+    pub fn dock_overview_drag(&mut self, output: OutputId, id: u32, rect: cupertino_wm::Rect) {
+        let Some(s) = self
+            .shell
+            .overview
+            .as_mut()
+            .filter(|s| !s.closing && s.output == output)
+        else {
+            return;
+        };
+        if s.set_drag(WindowId(u64::from(id)), rect) {
+            self.request_redraw();
+        }
+    }
+
+    /// `overview_move_window`: a window of the overview was dropped on another regular workspace of its output; it
+    /// moves there and leaves the overview (the window set is sent again).
+    pub fn dock_overview_move_window(&mut self, output: OutputId, id: u32, workspace: u32) {
+        let window = WindowId(u64::from(id));
+        let workspace = WorkspaceId(u64::from(workspace));
+        let in_overview = self
+            .shell
+            .overview_on(output)
+            .is_some_and(|s| s.contains(window));
+        let target = self
+            .wm
+            .workspaces(output)
+            .iter()
+            .find(|w| w.id == workspace);
+        let regular = target.is_some_and(|w| w.kind == cupertino_wm::WorkspaceKind::Regular);
+        if !in_overview || !regular || self.wm.current_workspace(output) == Some(workspace) {
+            return;
+        }
+        tracing::info!(
+            id,
+            workspace = workspace.0,
+            "overview window moved to a workspace"
+        );
+        self.command(Command::MoveWindowToWorkspace { window, workspace });
+        self.request_redraw();
+    }
+
+    /// `overview_workspace_frame`: where the live picture of a workspace of `output` is drawn while its overview is
+    /// open; an empty rectangle removes it.
+    pub fn dock_overview_picture(
+        &mut self,
+        output: OutputId,
+        workspace: u32,
+        rect: cupertino_wm::Rect,
+    ) {
+        let workspace = WorkspaceId(u64::from(workspace));
+        if !self.wm.workspaces(output).iter().any(|w| w.id == workspace) {
+            return;
+        }
+        if let Some(s) = self
+            .shell
+            .overview
+            .as_mut()
+            .filter(|s| !s.closing && s.output == output)
+        {
+            s.set_picture(workspace, rect);
             self.request_redraw();
         }
     }

@@ -474,6 +474,7 @@ impl Default for WindowStyle {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellConfig {
     pub menu_bar_height: f64,
+    /// How dark the desktop is behind the overview's windows, from 0 (not at all, the default) to 1.
     pub overview_dim: f64,
     /// Reserve the menu bar's height in the usable area (off: windows use the whole output).
     pub show_menu_bar: bool,
@@ -485,7 +486,7 @@ impl Default for ShellConfig {
     fn default() -> Self {
         Self {
             menu_bar_height: cupertino_theme::ShapeTokens::default().menu_bar_height,
-            overview_dim: 0.35,
+            overview_dim: 0.0,
             show_menu_bar: true,
             menu_bar_auto_hide: false,
         }

@@ -563,6 +563,9 @@ enum Cmd {
     OverviewFrame(u32, (i32, i32, i32, i32)),
     OverviewSelect(u32),
     OverviewClose,
+    OverviewDrag(u32, (i32, i32, i32, i32)),
+    OverviewMoveWindow(u32, u32),
+    OverviewWorkspaceFrame(u32, (i32, i32, i32, i32)),
     SwitchWorkspace(u32),
     AddWorkspace,
     RemoveWorkspace(u32),
@@ -729,6 +732,11 @@ impl DockClient {
                 Cmd::OverviewFrame(id, (x, y, w, h)) => dock.overview_frame(id, x, y, w, h),
                 Cmd::OverviewSelect(id) => dock.overview_select(id),
                 Cmd::OverviewClose => dock.overview_close(),
+                Cmd::OverviewDrag(id, (x, y, w, h)) => dock.overview_drag(id, x, y, w, h),
+                Cmd::OverviewMoveWindow(id, ws) => dock.overview_move_window(id, ws),
+                Cmd::OverviewWorkspaceFrame(ws, (x, y, w, h)) => {
+                    dock.overview_workspace_frame(ws, x, y, w, h)
+                }
                 Cmd::SwitchWorkspace(id) => dock.switch_workspace(id),
                 Cmd::AddWorkspace => dock.add_workspace(),
                 Cmd::RemoveWorkspace(id) => dock.remove_workspace(id),
@@ -3119,4 +3127,100 @@ fn a_panel_outside_click_catcher_still_takes_the_click_over_a_full_screen_window
         s.surface_under(outside)
             .is_some_and(|(s, _)| window.as_ref() != Some(&s))
     });
+}
+
+#[test]
+fn the_overview_area_starts_at_the_outputs_top_and_a_dragged_window_follows_at_once() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 23);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let a = h.mapped_window(1);
+    h.wait_for_groups(&dock, 1);
+    h.toggle_overview(false);
+    h.wait_until("the overview group", |_| overview_group(&dock).is_some());
+    let area = overview_group(&dock)
+        .unwrap()
+        .into_iter()
+        .find_map(|e| match e {
+            DockEvent::OverviewChanged { area, .. } => Some(area),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(area.1, 0, "the layout runs from the output's top");
+    h.advance(5.0);
+
+    dock.send(Cmd::OverviewDrag(a.0 as u32, (40, 30, 200, 150)));
+    let dragged = Rect::new(40.0, 30.0, 200.0, 150.0);
+    h.wait_until("the drag to arrive", |s| {
+        s.shell
+            .overview
+            .as_ref()
+            .is_some_and(|o| o.dragged == Some(a))
+    });
+    let now = h.state.now();
+    let frames = h.state.shell.overview.as_ref().unwrap().frames(now);
+    assert_eq!(
+        frames.iter().find(|f| f.id == a).map(|f| f.frame),
+        Some(dragged),
+        "a dragged window is drawn under the pointer with no glide"
+    );
+    assert_eq!(dock.error(), None);
+}
+
+#[test]
+fn a_window_dropped_on_another_desktop_moves_there_and_pictures_are_kept_per_desktop() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 23);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let a = h.mapped_window(1);
+    h.wait_for_groups(&dock, 1);
+    let out = h.state.outputs[0].id;
+    let first = h.state.wm.current_workspace(out).unwrap();
+    h.toggle_overview(false);
+    h.wait_until("the overview group", |_| overview_group(&dock).is_some());
+    dock.send(Cmd::AddWorkspace);
+    h.wait_until("a second workspace", |s| s.wm.workspaces(out).len() == 2);
+    let second = h.state.wm.workspaces(out)[1].id;
+
+    dock.send(Cmd::OverviewWorkspaceFrame(
+        second.0 as u32,
+        (300, 20, 146, 95),
+    ));
+    dock.send(Cmd::OverviewWorkspaceFrame(9999, (0, 0, 10, 10)));
+    h.wait_until("the picture to arrive", |s| {
+        s.shell
+            .overview
+            .as_ref()
+            .is_some_and(|o| !o.pictures.is_empty())
+    });
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(
+        h.state.shell.overview.as_ref().unwrap().pictures,
+        vec![(second, Rect::new(300.0, 20.0, 146.0, 95.0))],
+        "an unknown workspace gets no picture"
+    );
+    dock.send(Cmd::OverviewWorkspaceFrame(second.0 as u32, (0, 0, 0, 0)));
+    h.wait_until("the picture to go", |s| {
+        s.shell
+            .overview
+            .as_ref()
+            .is_some_and(|o| o.pictures.is_empty())
+    });
+
+    dock.send(Cmd::OverviewMoveWindow(a.0 as u32, first.0 as u32));
+    for _ in 0..5 {
+        h.step();
+    }
+    assert_eq!(
+        h.state.wm.window(a).unwrap().workspace,
+        first,
+        "a drop on the current desktop moves nothing"
+    );
+    dock.send(Cmd::OverviewMoveWindow(a.0 as u32, second.0 as u32));
+    h.wait_until("the window to move", |s| {
+        s.wm.window(a).is_some_and(|w| w.workspace == second)
+    });
+    assert_eq!(dock.error(), None);
 }

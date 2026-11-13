@@ -2138,7 +2138,11 @@ mod tests {
             (GlassStyle::Module, 0.0, 0.0),
             (GlassStyle::Bar, 0.0, 0.0),
         ] {
-            assert_eq!((line(false, style), line(true, style)), (light, dark), "{style:?}");
+            assert_eq!(
+                (line(false, style), line(true, style)),
+                (light, dark),
+                "{style:?}"
+            );
         }
         // the glass is drawn far enough past its outline for the line, even with nothing else outside it
         let mut p = GlassParams::new(mode(false, GlassStyle::Track), 24.0);

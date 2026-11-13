@@ -1059,7 +1059,11 @@ mod tests {
                 // half a pixel out: no glass, only the edge line, and the drop shadow starts past it
                 assert_eq!(c.field(outside).0, 0.5, "{corner:?} {outside:?}");
                 let (col, a) = c.shade(outside, &grey);
-                assert_eq!((col, a), ([0.0; 3], c.params.shadow.edge_line), "{corner:?} {outside:?}");
+                assert_eq!(
+                    (col, a),
+                    ([0.0; 3], c.params.shadow.edge_line),
+                    "{corner:?} {outside:?}"
+                );
             }
         }
     }
@@ -1710,14 +1714,7 @@ mod tests {
         );
         assert_eq!(clear.shade([100.0, 100.5], &flat(1.0)).1, 0.0);
         // the uniform carries it to the shaders
-        let u = GlassUniform::new(
-            &c,
-            2.0,
-            [[0.0; 3]; 2],
-            [0.0; 4],
-            [400.0, 200.0],
-            1.0,
-        );
+        let u = GlassUniform::new(&c, 2.0, [[0.0; 3]; 2], [0.0; 4], [400.0, 200.0], 1.0);
         assert_eq!(u.levels[0], k);
     }
 

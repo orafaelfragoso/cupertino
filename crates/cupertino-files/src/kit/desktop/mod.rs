@@ -12,6 +12,8 @@
 //!   selection, Escape clears it.
 //! * A folder opens in a browser window of the running Files (which this process hands it to); a file with its default
 //!   application.
+//! * Files another application drags here (an application's desktop file from the launcher, say) and drops on the main
+//!   display's desktop are copied into the desktop folder.
 //!
 //! The process runs apart from the browser windows' process: the desktop stays up while no window is open.
 

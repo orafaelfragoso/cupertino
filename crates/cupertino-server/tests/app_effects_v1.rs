@@ -672,6 +672,43 @@ fn popover_glass_is_a_style_from_version_16() {
     assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
 }
 
+/// A backdrop of version 17 asks for switcher glass; one of version 16, which the style is not defined for, gets
+/// `invalid_glass` for it.
+#[test]
+fn switcher_glass_is_a_style_from_version_17() {
+    let style = cupertino_backdrop_v1::GlassStyle::Switcher;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 17);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(
+        h.backdrops()[0].glass.unwrap().style,
+        cupertino_theme::GlassStyle::Switcher
+    );
+    assert_eq!(client.backdrop_error(), None);
+    drop(h);
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 16);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    let end = Instant::now() + common::HANG_GUARD;
+    while client.backdrop_error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
+}
+
 /// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.
 #[test]
 fn the_last_of_set_glass_and_set_material_decides_the_look() {

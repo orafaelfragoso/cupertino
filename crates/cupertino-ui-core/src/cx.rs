@@ -738,6 +738,15 @@ impl Glass {
         }
     }
 
+    /// The glass of a wide floating panel of large icons (the application switcher) with square corners, on its own,
+    /// opaque: a blur of about a point, a strong bending edge and no shadow.
+    pub fn switcher() -> Self {
+        Self {
+            style: GlassStyle::Switcher,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

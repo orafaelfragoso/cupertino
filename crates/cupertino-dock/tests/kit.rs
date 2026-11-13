@@ -3218,6 +3218,21 @@ fn the_switcher_opens_on_the_named_output_and_a_click_switches() {
         names.iter().any(|n| n == "org.example.Unknown"),
         "an application without a desktop entry goes by its id: {names:?}"
     );
+    // the panel lies on the compositor's switcher glass
+    let backdrop = run
+        .driver
+        .window_system_mut()
+        .requests(panel)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Backdrop(b) => Some(b.clone()),
+            _ => None,
+        })
+        .flatten()
+        .expect("a backdrop under the panel");
+    assert_eq!(backdrop.material, "SwitcherGlass");
     let editor = run
         .nodes(panel)
         .into_iter()

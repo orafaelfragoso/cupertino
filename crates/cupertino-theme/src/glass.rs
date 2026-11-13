@@ -75,6 +75,10 @@ pub enum GlassStyle {
     /// blur fill only, a strong bending edge and a thin line of light along its top and bottom edges, the same at every
     /// size.
     Popover,
+    /// The glass of a wide floating panel of large icons (the application switcher): a blur of about a point, a strong
+    /// bending edge, a face that lifts black and brightens in the light appearance and dims to a smoky pane with less
+    /// colour in the dark one, and no shadow.
+    Switcher,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -495,6 +499,51 @@ fn popover_face(dark: bool) -> GlassFace {
     }
 }
 
+/// The face of switcher glass. Light: black lifted by a quarter, white a little past 1, more colour and the luma
+/// compressed to 0.85, clamped a little past 1. Dark: black 0.05, white dimmed to 0.3 and less colour.
+fn switcher_face(dark: bool) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: SWITCHER_SATURATION_DARK,
+            white: SWITCHER_WHITE_DARK,
+            black: SWITCHER_BLACK_DARK,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [0.0; 4],
+        }
+    } else {
+        GlassFace {
+            saturation: SWITCHER_SATURATION_LIGHT,
+            white: SWITCHER_WHITE_LIGHT,
+            black: SWITCHER_BLACK_LIGHT,
+            clamp: SWITCHER_CLAMP_LIGHT,
+            max_luma: SWITCHER_MAX_LUMA_LIGHT,
+            fill: [0.0; 4],
+        }
+    }
+}
+
+/// The switcher's blur radius in points, every level at full opacity, with no blur fill.
+const SWITCHER_BLUR: f32 = 0.96;
+/// The switcher's face values (see [`switcher_face`]).
+const SWITCHER_SATURATION_LIGHT: f32 = 1.2;
+const SWITCHER_BLACK_LIGHT: f32 = 0.25;
+const SWITCHER_WHITE_LIGHT: f32 = 1.06;
+const SWITCHER_MAX_LUMA_LIGHT: f32 = 0.85;
+const SWITCHER_CLAMP_LIGHT: f32 = 1.142;
+const SWITCHER_SATURATION_DARK: f32 = 0.8;
+const SWITCHER_BLACK_DARK: f32 = 0.05;
+const SWITCHER_WHITE_DARK: f32 = 0.3;
+/// The switcher's bending edge: its strength and the depth of its band, in points, the same at every size.
+const SWITCHER_REFRACTION: f32 = -41.6;
+const SWITCHER_REFRACTION_HEIGHT: f32 = 9.6;
+/// The switcher's rim: its strength and the colour shift per unit of it.
+const SWITCHER_RIM: f32 = 0.4;
+const SWITCHER_RIM_BIAS: f32 = -0.5;
+/// The opacity of the dark line just outside the switcher's outline in the dark appearance (the light one keeps
+/// regular glass's).
+const SWITCHER_EDGE_LINE_DARK: f32 = 0.32;
+
 /// The side the popover's regular glass is worked out at before its own values replace what follows the size.
 const POPOVER_SIDE: f32 = 26.0;
 /// The popover's blur: its radius, and the opacity of each level, the first 0, so only the blur fill softens it.
@@ -788,6 +837,7 @@ impl GlassParams {
             GlassStyle::Card => Self::card(dark, s),
             GlassStyle::Track => Self::track(dark, s),
             GlassStyle::Popover => Self::popover(dark),
+            GlassStyle::Switcher => Self::switcher(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -813,7 +863,8 @@ impl GlassParams {
                 | GlassStyle::Module
                 | GlassStyle::Card
                 | GlassStyle::Track
-                | GlassStyle::Popover => {
+                | GlassStyle::Popover
+                | GlassStyle::Switcher => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -1095,6 +1146,35 @@ impl GlassParams {
         };
         p.shadow.ring_opacity = POPOVER_RING_OPACITY;
         p.shadow.edge_line = if dark { 0.0 } else { POPOVER_EDGE_LINE_LIGHT };
+        p
+    }
+
+    /// The switcher glass: regular glass of its size with a blur of about a point at full opacity and no blur fill, the
+    /// switcher's face, a strong bending edge of a fixed depth, its rim, no ring shadow, and the dark line just outside
+    /// its outline.
+    fn switcher(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        p.blur = GlassBlur {
+            radius: SWITCHER_BLUR,
+            level_opacity: [1.0; BLUR_LEVELS],
+            fill_radius: 0.0,
+            fill_darken: 0.0,
+            fill_normal: 0.0,
+            fill_lighten: 0.0,
+        };
+        p.face = switcher_face(dark);
+        p.refraction = GlassRefraction {
+            amount: SWITCHER_REFRACTION,
+            height: SWITCHER_REFRACTION_HEIGHT,
+            outer_amount: 0.0,
+        };
+        p.highlight.amount = SWITCHER_RIM;
+        p.highlight.color_bias = SWITCHER_RIM_BIAS;
+        p.highlight.glow_amount = 0.0;
+        p.shadow.ring_opacity = 0.0;
+        if dark {
+            p.shadow.edge_line = SWITCHER_EDGE_LINE_DARK;
+        }
         p
     }
 
@@ -1921,6 +2001,39 @@ mod tests {
                 assert_eq!(p.shadow_reach(), 0.0, "no drop shadow");
                 assert_eq!(p.bleed.opacity, 0.0);
                 assert_eq!(p.capture_scale, 0.25);
+            }
+        }
+    }
+
+    #[test]
+    fn switcher_glass_blurs_by_a_point_and_bends_strongly_over_a_face_of_its_own() {
+        for dark in [false, true] {
+            for side in [120.0, 150.0, 300.0] {
+                let p = GlassParams::new(mode(dark, GlassStyle::Switcher), side);
+                assert!(close(p.blur_sigma(), 1.92), "{}", p.blur_sigma());
+                assert!(!p.fill_shows(), "no blur fill");
+                assert_eq!(
+                    (p.refraction.amount, p.refraction.height),
+                    (-41.6, 9.6),
+                    "the same bending edge at every size"
+                );
+                assert_eq!((p.highlight.amount, p.highlight.color_bias), (0.4, -0.5));
+                assert_eq!(p.highlight.glow_amount, 0.0);
+                assert_eq!(p.shadow.ring_opacity, 0.0);
+                assert_eq!(p.shadow_reach(), 0.0, "no drop shadow");
+                assert_eq!(p.shadow.edge_line, if dark { 0.32 } else { 0.2 });
+                assert_eq!(p.capture_scale, GLASS_BACKDROP_SCALE);
+                let f = p.face;
+                let expected = if dark {
+                    (0.8, 0.05, 0.3, 1.0, 1.0)
+                } else {
+                    (1.2, 0.25, 1.06, 0.85, 1.142)
+                };
+                assert_eq!(
+                    (f.saturation, f.black, f.white, f.max_luma, f.clamp),
+                    expected
+                );
+                assert_eq!(f.fill[3], 0.0);
             }
         }
     }

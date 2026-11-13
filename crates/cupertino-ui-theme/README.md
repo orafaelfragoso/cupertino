@@ -71,7 +71,7 @@ opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Te
 
 `ThemeTokens::surface` gives each surface the material to ask the compositor for (`Sidebar`, `Glass` for menus,
 popovers and the Dock, `LoginWindowControl` for a heads-up display, `AppGrid` for the application grid's panel,
-`Switcher` for the application switcher's panel, `RunningIndicator` for the Dock's running dot, `WindowBackground`
+`SwitcherGlass` for the application switcher's panel, `RunningIndicator` for the Dock's running dot, `WindowBackground`
 for a window's background and `TextBackground` for the colour behind a form's groups) and the opaque fill to paint
 where there is none (the text background colour for `TextBackground`, the window background for the others). With reduced transparency or
 in high contrast it asks for no material, except for the surfaces above that keep theirs.

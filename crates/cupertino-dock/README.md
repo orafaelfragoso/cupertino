@@ -277,7 +277,7 @@ them) are the server's.
 
 The dock draws the panel on an overlay layer surface (namespace `cupertino-dock-switcher`) on that output. That is the output
 under the pointer when the switch opened, not necessarily the dock's. The panel is centred whatever the dock bar and the menu
-bar reserve (exclusive zone -1) and uses the `Switcher` material as a server-rendered backdrop.
+bar reserve (exclusive zone -1) and lies on the compositor's switcher glass (`SwitcherGlass`).
 
 - The panel appears 150 ms after the switch opens, so a quick tap never shows it. It fades out in 0.25 s
   ease-in-out when it closes. A stepping change after the fade began cancels the fade.
@@ -290,7 +290,7 @@ bar reserve (exclusive zone -1) and uses the `Switcher` material as a server-ren
 - The label is drawn without the plus-darker blend of the real panel, so it is faint over a dark backdrop (approximate).
 
 **On Kit.** `src/switcher_kit.rs` is the same panel as a Kit window (`SwitcherSurface`, app id `cupertino-dock-switcher`):
-the model above, the `Switcher` surface material as the window background, one list item per application and the label,
+the model above, the `Switcher` surface (the compositor's `SwitcherGlass`) as the window background, one list item per application and the label,
 with the delay, the fade and the pointer rules unchanged. The panel is a list named "Application Switcher". Each entry is a
 list item that a screen reader can press (`switcher_activate`), and the label is a polite live region, so the selection is
 read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency and Increase Contrast the

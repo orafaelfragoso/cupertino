@@ -317,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             look(Appearance::Light, false, Surface::Switcher).material,
-            Some("Switcher")
+            Some(crate::SWITCHER_GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Light, true, Surface::Switcher).material,

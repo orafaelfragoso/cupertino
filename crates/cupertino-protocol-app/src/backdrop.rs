@@ -59,6 +59,9 @@ pub enum GlassStyle {
     /// The glass of a small popover over a floating bar: a wide soft blur fill, a strong bending edge and a thin line
     /// of light along its top and bottom edges.
     Popover,
+    /// The glass of a wide floating panel of large icons (the application switcher): a blur of about a point, a strong
+    /// bending edge and no shadow.
+    Switcher,
 }
 
 impl GlassStyle {
@@ -155,7 +158,8 @@ impl Backdrop {
     /// material of [`GlassStyle::fallback_material`] instead, one before version 10 draws
     /// [`GlassStyle::LargePanel`] as regular glass, and one before version 15 draws [`GlassStyle::Card`] as dense glass
     /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass, and one before version 16 draws
-    /// [`GlassStyle::Popover`] as regular glass.
+    /// [`GlassStyle::Popover`] as regular glass, and one before version 17 draws [`GlassStyle::Switcher`] as regular
+    /// glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -188,6 +192,7 @@ impl Backdrop {
             GlassStyle::Card => WireStyle::Card,
             GlassStyle::Track => WireStyle::Track,
             GlassStyle::Popover => popover_style(self.proxy.version()),
+            GlassStyle::Switcher => switcher_style(self.proxy.version()),
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -220,6 +225,8 @@ const FRACTIONAL_SHAPE_VERSION: u32 = 14;
 const CARD_VERSION: u32 = 15;
 /// The version of `cupertino_backdrop_v1` that has the popover glass style.
 const POPOVER_VERSION: u32 = 16;
+/// The version of `cupertino_backdrop_v1` that has the switcher glass style.
+const SWITCHER_VERSION: u32 = 17;
 
 /// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
 /// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.
@@ -237,6 +244,15 @@ fn popover_style(version: u32) -> WireStyle {
         WireStyle::Regular
     } else {
         WireStyle::Popover
+    }
+}
+
+/// The wire style of the switcher on a server of `version`: one before [`SWITCHER_VERSION`] draws it as regular glass.
+fn switcher_style(version: u32) -> WireStyle {
+    if version < SWITCHER_VERSION {
+        WireStyle::Regular
+    } else {
+        WireStyle::Switcher
     }
 }
 
@@ -300,6 +316,12 @@ mod tests {
     fn an_older_server_draws_the_popover_as_regular_glass() {
         assert_eq!(popover_style(15), WireStyle::Regular);
         assert_eq!(popover_style(16), WireStyle::Popover);
+    }
+
+    #[test]
+    fn an_older_server_draws_the_switcher_as_regular_glass() {
+        assert_eq!(switcher_style(16), WireStyle::Regular);
+        assert_eq!(switcher_style(17), WireStyle::Switcher);
     }
 
     #[test]

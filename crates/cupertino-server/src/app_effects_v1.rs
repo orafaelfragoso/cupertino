@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 16;
+const VERSION: u32 = 17;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -67,6 +67,8 @@ const DENSE_VERSION: u32 = 13;
 const CARD_VERSION: u32 = 15;
 /// The version of `cupertino_backdrop_v1` that has the popover glass style.
 const POPOVER_VERSION: u32 = 16;
+/// The version of `cupertino_backdrop_v1` that has the switcher glass style.
+const SWITCHER_VERSION: u32 = 17;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,7 +188,7 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 9] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 10] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
     ("LargePanelGlass", GlassStyle::LargePanel),
@@ -196,6 +198,7 @@ pub const GLASS_MATERIALS: [(&str, GlassStyle); 9] = [
     ("CardGlass", GlassStyle::Card),
     ("TrackGlass", GlassStyle::Track),
     ("PopoverGlass", GlassStyle::Popover),
+    ("SwitcherGlass", GlassStyle::Switcher),
 ];
 
 /// The glass style a material name stands for.
@@ -916,6 +919,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         if resource.version() >= POPOVER_VERSION =>
                     {
                         Some(GlassStyle::Popover)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Switcher)
+                        if resource.version() >= SWITCHER_VERSION =>
+                    {
+                        Some(GlassStyle::Switcher)
                     }
                     _ => None,
                 };

@@ -232,6 +232,9 @@ pub enum GlassStyle {
     /// The glass of a small popover over a floating bar (a name, a menu): a wide soft blur fill, a strong bending edge
     /// and a thin line of light along its top and bottom edges.
     Popover,
+    /// The glass of a wide floating panel of large icons (the application switcher): a blur of about a point, a strong
+    /// bending edge and no shadow.
+    Switcher,
 }
 
 impl GlassStyle {
@@ -248,6 +251,7 @@ impl GlassStyle {
             Self::Card => "CardGlass",
             Self::Track => "TrackGlass",
             Self::Popover => "PopoverGlass",
+            Self::Switcher => "SwitcherGlass",
         }
     }
 
@@ -263,6 +267,7 @@ impl GlassStyle {
             Self::Card,
             Self::Track,
             Self::Popover,
+            Self::Switcher,
         ]
         .into_iter()
         .find(|s| s.material() == name)
@@ -835,12 +840,14 @@ mod glass_style_tests {
             GlassStyle::Card,
             GlassStyle::Track,
             GlassStyle::Popover,
+            GlassStyle::Switcher,
         ] {
             assert_eq!(GlassStyle::of_material(style.material()), Some(style));
         }
         assert_eq!(GlassStyle::Card.material(), "CardGlass");
         assert_eq!(GlassStyle::Track.material(), "TrackGlass");
         assert_eq!(GlassStyle::Popover.material(), "PopoverGlass");
+        assert_eq!(GlassStyle::Switcher.material(), "SwitcherGlass");
         assert_eq!(GlassStyle::of_material("Sidebar"), None);
     }
 }

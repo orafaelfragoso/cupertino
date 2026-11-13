@@ -18,8 +18,8 @@ pub const HIDE_DURATION: f64 = 0.25;
 /// the panel appeared.
 pub const HOVER_BOX: f64 = 3.0;
 
-/// Material of the panel: the switcher's own recipe in the server's design tokens.
-pub const MATERIAL: &str = "Switcher";
+/// Material of the panel: the compositor's switcher glass.
+pub const MATERIAL: &str = "SwitcherGlass";
 
 /// One switch as the dock shows it: the server's list (application ids, most recently used first),
 /// the selected index, when the panel was asked for and, once a commit started the fade-out, when.

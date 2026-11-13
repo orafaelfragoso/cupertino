@@ -9,6 +9,7 @@ mod cx;
 mod damage;
 mod drop_target;
 mod focus;
+mod frame_timing;
 mod icons;
 pub mod kinetic;
 mod layout_view;
@@ -41,6 +42,7 @@ pub use cx::{
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
 };
+pub use frame_timing::{FrameTiming, FrameTimingSink};
 pub use icons::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 pub use paint::{overlay_id, MAX_MATERIALS};
 pub use personal::{personal, set_personal, Personal};

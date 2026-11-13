@@ -288,6 +288,8 @@ impl Wake for WakeHandle {
 /// The Wayland window system. Physical modifier keys become logical ones through `profile`.
 pub struct WaylandWindowSystem {
     conn: Connection,
+    /// The time copying frames into buffers took since the runtime last asked, while it times frames.
+    copy_time: Option<Duration>,
     semantics: Option<cupertino_protocol_app::Semantics>,
     semantic_surfaces: HashMap<WindowId, cupertino_protocol_app::SemanticSurface>,
     /// The desktop-control actions that came with a grab serial, while a popup of their window may still grab with it.
@@ -418,6 +420,7 @@ impl WaylandWindowSystem {
         let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
         let mut system = WaylandWindowSystem {
             conn,
+            copy_time: None,
             semantics,
             semantic_surfaces: HashMap::new(),
             action_grabs: ActionGrabs::default(),
@@ -1606,6 +1609,16 @@ impl WindowSystem for WaylandWindowSystem {
         self.window(window).ok().and_then(|w| w.activated)
     }
 
+    fn time_copies(&mut self, on: bool) {
+        self.copy_time = on.then_some(Duration::ZERO);
+    }
+
+    fn take_copy_time(&mut self) -> Duration {
+        self.copy_time
+            .as_mut()
+            .map_or(Duration::ZERO, std::mem::take)
+    }
+
     fn request_frame(&mut self, window: WindowId) {
         let now = self.now();
         let Ok(w) = self.window_mut(window) else {
@@ -1651,7 +1664,16 @@ impl WindowSystem for WaylandWindowSystem {
                 .set_input_region(surface, region.as_deref())
                 .map_err(platform_error)?;
         }
-        match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
+        let copy_time = self.copy_time.as_mut();
+        match copy_and_present(
+            &mut self.conn,
+            surface,
+            size,
+            frame,
+            &damage,
+            resized,
+            copy_time,
+        )? {
             Ok(()) => {
                 let feedback = self.conn.capabilities().contains(Capability::Presentation);
                 let w = self.window_mut(window)?;
@@ -1704,7 +1726,16 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
+        let copy_time = self.copy_time.as_mut();
+        match copy_and_present(
+            &mut self.conn,
+            surface,
+            size,
+            frame,
+            &damage,
+            resized,
+            copy_time,
+        )? {
             Ok(()) => {
                 let state = self.window_mut(window)?.layer.as_mut().expect("made above");
                 state.shown = Some((frame.width, frame.height));
@@ -1856,6 +1887,7 @@ fn copy_and_present(
     frame: &CpuFrame,
     damage: &[PixelRect],
     resized: bool,
+    copy_time: Option<&mut Duration>,
 ) -> Result<Result<(), Option<Stall>>, PlatformError> {
     let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
         Ok(lease) => lease,
@@ -1882,6 +1914,7 @@ fn copy_and_present(
         width: frame.width,
         height: frame.height,
     }];
+    let copying = copy_time.is_some().then(Instant::now);
     convert_rects(
         &frame.pixels,
         frame.stride as usize,
@@ -1889,6 +1922,9 @@ fn copy_and_present(
         layout.stride(),
         copy.as_deref().unwrap_or(&whole),
     );
+    if let (Some(total), Some(since)) = (copy_time, copying) {
+        *total += since.elapsed();
+    }
     lease
         .present_damage((!resized).then_some(&changed[..]))
         .map_err(platform_error)?;

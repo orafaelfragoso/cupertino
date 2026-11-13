@@ -62,6 +62,9 @@ all on one thread.
   (`WindowEvent::Presented`; `None` for a `Discarded` one). The sink gets each `ScrollTiming` once its frame is shown
   or dropped; `ScrollTiming::latency` gives the stages from the input. Without a sink the runtime keeps nothing; at
   most 256 events wait at each stage.
+- **Frame timing.** `Runtime::with_frame_timing(sink)` times every turn that presents a frame phase by phase: update,
+  view, layout, paint, raster, the window system's copy into its buffer (`WindowSystem::time_copies`) and the commit.
+  The sink gets one `FrameTiming` a turn that presented; without a sink no clock is read.
 - **Scroll motion.** `kinetic::ScrollMotion` is a pure model of a scroll view's content over the time it is given:
   a finger's drag, the kinetic motion its lift leaves (exponential decay), the stretch past an edge (a resistance
   curve that never passes the viewport's length) and the return to the edge (a critically damped spring). Its offset

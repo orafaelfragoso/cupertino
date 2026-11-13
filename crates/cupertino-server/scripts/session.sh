@@ -25,6 +25,8 @@
 # The volume is a stand-in `wpctl` at a fixed level (no sound device or PipeWire of the caller's is read).
 # CUPERTINO_ACCESSIBILITY_CONF: an accessibility.conf the server reads its display options from (increase_contrast = on,
 # say); without it the run has the defaults.
+# CUPERTINO_FRAME_TIMING: a file every toolkit process of the session appends the phases of its frames to
+# (`scripts/dev/bench` reads it); without it no process times its frames.
 # Needs: dbus-run-session, python3.
 set -eu
 
@@ -148,6 +150,7 @@ env -i \
     CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
     ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
     ${CUPERTINO_ACCESSIBILITY_CONF:+CUPERTINO_ACCESSIBILITY_CONF="$CUPERTINO_ACCESSIBILITY_CONF"} \
+    ${CUPERTINO_FRAME_TIMING:+CUPERTINO_FRAME_TIMING="$CUPERTINO_FRAME_TIMING"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --dev-shell "$@"

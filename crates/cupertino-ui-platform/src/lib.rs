@@ -794,6 +794,15 @@ pub trait WindowSystem {
     }
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
+    /// Times the copies of frames into buffers from now on (`on`), or stops; off at first, and a window system that
+    /// copies nothing ignores it.
+    fn time_copies(&mut self, on: bool) {
+        let _ = on;
+    }
+    /// The time spent copying frames into buffers since the last call, while copies are timed; zero otherwise.
+    fn take_copy_time(&mut self) -> Duration {
+        Duration::ZERO
+    }
     /// Whether the compositor's latest configure of `window` states it activated, where its protocol states that (a
     /// toplevel); `None` where only the keyboard tells. A toplevel the compositor keeps activated while a surface of
     /// the desktop holds the keyboard stays the window in use.

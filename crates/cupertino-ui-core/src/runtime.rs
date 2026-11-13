@@ -7,6 +7,7 @@ use crate::command::CommandRegistry;
 use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
+use crate::frame_timing::{handed_over, lap, mark, Phase};
 use crate::layout_view::{placements, TreeView};
 use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
@@ -351,6 +352,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     personal_refresh: Option<PersonalRefresh>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
     scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
+    /// Times every frame phase by phase, when asked ([`Runtime::with_frame_timing`]).
+    frame_timing: Option<crate::frame_timing::FrameTimings>,
     /// What each activation token asked for and not yet given turns into.
     tokens: HashMap<ActivationRequest, TokenHandler<A::Message>>,
     /// What each step of a running drag turns into.
@@ -415,6 +418,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             pins_seen: false,
             personal_refresh: None,
             scroll_timing: None,
+            frame_timing: None,
             tokens: HashMap::new(),
             drags: HashMap::new(),
             landed: HashMap::new(),
@@ -437,6 +441,20 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     pub fn with_scroll_timing(mut self, sink: crate::ScrollTimingSink) -> Self {
         self.scroll_timing = Some(crate::scroll_timing::ScrollTimings::new(sink));
         self
+    }
+
+    /// Time every turn that presents a frame, phase by phase, and give `sink` the timings
+    /// ([`FrameTiming`](crate::FrameTiming)); the window system times its copies into buffers from then on. Without it
+    /// the runtime reads no clock for it.
+    pub fn with_frame_timing(mut self, sink: crate::FrameTimingSink) -> Self {
+        self.system.time_copies(true);
+        self.frame_timing = Some(crate::frame_timing::FrameTimings::new(sink));
+        self
+    }
+
+    /// Whether the runtime times its frames ([`Runtime::with_frame_timing`]).
+    pub fn times_frames(&self) -> bool {
+        self.frame_timing.is_some()
     }
 
     /// Follow the session's appearance: `theme_for` makes the theme each time the window system reports it.
@@ -598,6 +616,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     fn turn(&mut self) -> Result<(), UiError> {
+        let began = self
+            .frame_timing
+            .as_mut()
+            .map(|t| t.begin(self.options.clock.now()));
         self.wake_due();
         self.advance_fades();
         self.advance_grows();
@@ -614,11 +636,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.view_dirty = true;
         }
         self.finish_drops();
+        lap(&mut self.frame_timing, Phase::Update, began);
         if self.view_dirty && !self.exit {
             self.view_dirty = false;
+            let viewing = mark(&self.frame_timing);
             self.view()?;
+            lap(&mut self.frame_timing, Phase::View, viewing);
         }
-        self.frame()
+        let framed = self.frame();
+        if let Some(t) = &mut self.frame_timing {
+            t.end();
+        }
+        framed
     }
 
     /// Gives the focus to the node keyed `key` in the first window that has one: with its ring showing when `ring`, else
@@ -2232,6 +2261,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let mut focus_effects = Effects::default();
         let mut hold = false;
         let laid_out = !w.prepared;
+        let laying_out = mark(&self.frame_timing);
         if !w.prepared {
             let result = match w.laid_out.take() {
                 Some(result) => result,
@@ -2393,6 +2423,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             hold = !scroll_effects.messages.is_empty() && w.held_paints < HELD_PAINTS;
             focus_effects.absorb(scroll_effects);
         }
+        lap(&mut self.frame_timing, Phase::Layout, laying_out);
         self.apply(i, focus_effects);
         // what lies under a drag that stood still may have moved
         if laid_out {
@@ -2434,8 +2465,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.layer.shown = None;
                 w.layer.damage.invalidate();
             }
-            match self.system.present_solid(w.id, color, w.ack) {
+            let committing = mark(&self.frame_timing);
+            let solid = self.system.present_solid(w.id, color, w.ack);
+            lap(&mut self.frame_timing, Phase::Commit, committing);
+            match solid {
                 Ok(PresentOutcome::Presented) => {
+                    if let Some(t) = &mut self.frame_timing {
+                        t.presented();
+                    }
                     w.failed = None;
                     w.solid_shown = Some((w.size, color));
                     w.ack = None;
@@ -2511,6 +2548,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             painting
         };
+        let painting_since = mark(&self.frame_timing);
         let mut painting = paint(w, &self.tree, &self.pinned);
         w.painted_active = Some(w.active || w.keyboard_in_popup);
         if painting.pins && !self.pins_seen {
@@ -2566,6 +2604,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .as_ref()
                 .is_some_and(|d| !matches!(d, DamageRegion::Rects(r) if r.is_empty()))
             || (painting.layer.is_some() && w.layer.damage.repainted());
+        lap(&mut self.frame_timing, Phase::Paint, painting_since);
         // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
         // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
@@ -2584,6 +2623,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let shown = match (painting.layer, layer_height, layer_damage) {
                 (Some(layer), Some(height), Some(damage)) => {
                     w.layer.list = layer.list;
+                    let rastering = mark(&self.frame_timing);
                     let renderer = w
                         .layer
                         .renderer
@@ -2599,9 +2639,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         })
                         .map_err(UiError::Render)?;
                     let frame = renderer.frame(id).map_err(UiError::Render)?;
-                    self.system
+                    lap(&mut self.frame_timing, Phase::Raster, rastering);
+                    let committing = mark(&self.frame_timing);
+                    let shown = self
+                        .system
                         .present_layer(w.id, Some(RaisedLayer { frame, height }))
-                        .map_err(UiError::Platform)?
+                        .map_err(UiError::Platform)?;
+                    handed_over(&mut self.frame_timing, &mut self.system, committing);
+                    shown
                 }
                 _ => self
                     .system
@@ -2618,6 +2663,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             w.layer.shown = layer_height;
         }
+        let rastering = mark(&self.frame_timing);
         let id = w
             .renderer
             .render(&RenderRequest {
@@ -2630,13 +2676,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             })
             .map_err(UiError::Render)?;
         let frame = w.renderer.frame(id).map_err(UiError::Render)?;
+        lap(&mut self.frame_timing, Phase::Raster, rastering);
+        let committing = mark(&self.frame_timing);
         let outcome = self
             .system
             .present(w.id, frame, w.ack)
             .map_err(UiError::Platform)?;
+        handed_over(&mut self.frame_timing, &mut self.system, committing);
         w.failed = None;
         match outcome {
             PresentOutcome::Presented => {
+                if let Some(t) = &mut self.frame_timing {
+                    t.presented();
+                }
                 w.ack = None;
                 w.owed = false;
                 w.frame_ready = false;

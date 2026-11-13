@@ -139,42 +139,88 @@ pub fn run_lock_screen_on_with<A: Application>(
 /// Names the file that [`Timed::timed`] appends the timing of each scroll to.
 pub const SCROLL_TIMING_ENV: &str = "CUPERTINO_SCROLL_TIMING";
 
+/// Names the file that [`Timed::timed`] appends the phases of each frame to; every process of a session may share it.
+pub const FRAME_TIMING_ENV: &str = "CUPERTINO_FRAME_TIMING";
+
 /// A runtime that reports how long scrolls take to reach the screen when [`SCROLL_TIMING_ENV`] names an absolute path:
 /// one JSON object a line per scroll event, its stages in nanoseconds (`input`, `handled`, `updated`, `submitted`,
-/// `presented`; `null` for a stage that did not happen). Without the variable the runtime keeps no timing.
+/// `presented`; `null` for a stage that did not happen). When [`FRAME_TIMING_ENV`] names an absolute path it appends
+/// the phases of every frame there ([`frame_timing_json`]), one line per frame written whole, so the processes of a
+/// session can share the file. Without the variables the runtime keeps no timing.
 pub trait Timed {
     fn timed(self) -> Self;
 }
 
+/// The file an absolute path in `var` names, opened to append; `None` (said on standard error) otherwise.
+fn timing_file(var: &str) -> Option<std::fs::File> {
+    let path = std::env::var_os(var).map(std::path::PathBuf::from)?;
+    if !path.is_absolute() {
+        eprintln!("{var}: {} is not an absolute path", path.display());
+        return None;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .inspect_err(|error| eprintln!("{var}: {}: {error}", path.display()))
+        .ok()
+}
+
 impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
     fn timed(self) -> Self {
-        let Some(path) = std::env::var_os(SCROLL_TIMING_ENV).map(std::path::PathBuf::from) else {
-            return self;
-        };
-        if !path.is_absolute() {
-            eprintln!(
-                "{SCROLL_TIMING_ENV}: {} is not an absolute path",
-                path.display()
-            );
-            return self;
+        let mut runtime = self;
+        if let Some(file) = timing_file(SCROLL_TIMING_ENV) {
+            let mut out = std::io::LineWriter::new(file);
+            runtime = runtime.with_scroll_timing(Box::new(move |t| {
+                use std::io::Write;
+                let _ = writeln!(out, "{}", scroll_timing_json(&t));
+            }));
         }
-        let file = match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(error) => {
-                eprintln!("{SCROLL_TIMING_ENV}: {}: {error}", path.display());
-                return self;
-            }
-        };
-        let mut out = std::io::LineWriter::new(file);
-        self.with_scroll_timing(Box::new(move |t| {
-            use std::io::Write;
-            let _ = writeln!(out, "{}", scroll_timing_json(&t));
-        }))
+        if let Some(mut file) = timing_file(FRAME_TIMING_ENV) {
+            let program = program_name();
+            let pid = std::process::id();
+            runtime = runtime.with_frame_timing(Box::new(move |t| {
+                use std::io::Write;
+                // one write per line: lines of other processes appending to the same file never land inside it
+                let line = format!("{}\n", frame_timing_json(t, pid, &program));
+                let _ = file.write_all(line.as_bytes());
+            }));
+        }
+        runtime
     }
+}
+
+/// This program's file name and the options it was started with (`cupertino-files --desktop`), as the frame timing
+/// names it.
+fn program_name() -> String {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "unknown".into());
+    std::iter::once(exe)
+        .chain(std::env::args().skip(1).filter(|a| a.starts_with("--")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One line of the frame timing report: the process, the turn's start on the monotonic clock and each phase, in
+/// nanoseconds, then the frames the turn presented.
+pub fn frame_timing_json(t: &cupertino_ui_core::FrameTiming, pid: u32, program: &str) -> String {
+    let ns = |d: std::time::Duration| d.as_nanos();
+    format!(
+        r#"{{"pid":{pid},"program":"{}","start":{},"update":{},"view":{},"layout":{},"paint":{},"raster":{},"copy":{},"commit":{},"total":{},"frames":{}}}"#,
+        program.replace(['"', '\\'], "_"),
+        t.start.0,
+        ns(t.update),
+        ns(t.view),
+        ns(t.layout),
+        ns(t.paint),
+        ns(t.raster),
+        ns(t.copy),
+        ns(t.commit),
+        ns(t.total),
+        t.frames
+    )
 }
 
 /// One line of the scroll timing report.
@@ -511,6 +557,27 @@ mod tests {
             changed: Arc::new(AtomicBool::new(false)),
         });
         Box::new(move |appearance| inner.make(appearance))
+    }
+
+    #[test]
+    fn a_frame_timing_line_names_the_process_and_every_phase_in_nanoseconds() {
+        use std::time::Duration;
+        let t = cupertino_ui_core::FrameTiming {
+            start: cupertino_ui_platform::Timestamp(1_000),
+            update: Duration::from_nanos(1),
+            view: Duration::from_nanos(2),
+            layout: Duration::from_nanos(3),
+            paint: Duration::from_nanos(4),
+            raster: Duration::from_nanos(5),
+            copy: Duration::from_nanos(6),
+            commit: Duration::from_nanos(7),
+            total: Duration::from_nanos(30),
+            frames: 2,
+        };
+        assert_eq!(
+            frame_timing_json(&t, 42, "cupertino-dock"),
+            r#"{"pid":42,"program":"cupertino-dock","start":1000,"update":1,"view":2,"layout":3,"paint":4,"raster":5,"copy":6,"commit":7,"total":30,"frames":2}"#
+        );
     }
 
     #[test]

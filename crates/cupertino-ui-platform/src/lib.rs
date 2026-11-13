@@ -850,4 +850,12 @@ mod glass_style_tests {
         assert_eq!(GlassStyle::Switcher.material(), "SwitcherGlass");
         assert_eq!(GlassStyle::of_material("Sidebar"), None);
     }
+
+    #[test]
+    fn the_switcher_glass_goes_by_its_material_name() {
+        assert_eq!(
+            GlassStyle::of_material("SwitcherGlass"),
+            Some(GlassStyle::Switcher)
+        );
+    }
 }

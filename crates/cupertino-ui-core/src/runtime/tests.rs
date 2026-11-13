@@ -4978,6 +4978,8 @@ mod popup_release {
 thread_local! {
     /// What the last paint of a [`Marked`] node read of [`PaintCx::obscured`].
     static OBSCURED_SEEN: Cell<Option<cupertino_geometry::Insets>> = const { Cell::new(None) };
+    /// What the last paint of a [`RaisedRow`] read of [`PaintCx::in_raised_layer`].
+    static IN_LAYER_SEEN: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 /// A row in the window's raised layer, 30 pt tall: glass under it where the window system draws it, else a fill of
@@ -5017,6 +5019,7 @@ impl Widget<String> for RaisedRow {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        IN_LAYER_SEEN.set(Some(cx.in_raised_layer()));
         let size = cx.size();
         if !cx.glass(crate::Glass::regular()) {
             cx.push(PaintOp::Fill {
@@ -5225,6 +5228,25 @@ fn last_materials(rt: &Under) -> Vec<MaterialRegion> {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+#[test]
+fn a_raised_node_knows_it_draws_in_the_layer_and_the_runtime_shows_what_the_layer_drew() {
+    for layers in [true, false] {
+        IN_LAYER_SEEN.set(None);
+        let (rt, window) = under_row(layers);
+        assert_eq!(IN_LAYER_SEEN.get(), Some(layers), "layers {layers}");
+        let list = rt.layer_display_list(window).unwrap();
+        let marked = list.nodes.iter().any(|n| {
+            n.ops.iter().any(
+                |op| matches!(op, PaintOp::Fill { paint: Paint::Solid(c), .. } if *c == ROW_MARK),
+            )
+        });
+        assert_eq!(
+            marked, layers,
+            "the row's mark in the layer's list (layers {layers})"
+        );
+    }
 }
 
 #[test]

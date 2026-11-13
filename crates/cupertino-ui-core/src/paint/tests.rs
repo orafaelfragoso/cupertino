@@ -1951,3 +1951,15 @@ fn a_popover_glass_is_regular_glass_of_the_popover_style() {
         (regular.alpha, regular.container, regular.spacing)
     );
 }
+
+#[test]
+fn a_switcher_glass_is_regular_glass_of_the_switcher_style() {
+    let switcher = crate::cx::Glass::switcher();
+    let regular = crate::cx::Glass::regular();
+    assert_eq!(switcher.style, cupertino_ui_platform::GlassStyle::Switcher);
+    assert_eq!(switcher.style.material(), "SwitcherGlass");
+    assert_eq!(
+        (switcher.alpha, switcher.container, switcher.spacing),
+        (regular.alpha, regular.container, regular.spacing)
+    );
+}

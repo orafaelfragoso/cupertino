@@ -1936,6 +1936,13 @@ mod tests {
     }
 
     #[test]
+    fn the_switcher_s_material_name_asks_for_switcher_glass() {
+        use cupertino_protocol_app::GlassStyle as Wire;
+        let style = GlassStyle::of_material("SwitcherGlass").unwrap();
+        assert_eq!(protocol_style(style), Wire::Switcher);
+    }
+
+    #[test]
     fn the_session_appearance_and_display_options_make_one_system_appearance() {
         use cupertino_defaults::accessibility::DisplayOptions;
         let mut appearance = SystemAppearance::default();

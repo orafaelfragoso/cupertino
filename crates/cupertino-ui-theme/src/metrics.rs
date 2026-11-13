@@ -264,6 +264,31 @@ mod tests {
     }
 
     #[test]
+    fn the_switcher_lies_on_switcher_glass_in_every_appearance_until_it_goes_opaque() {
+        use crate::Surface;
+        let theme = Theme::load().unwrap();
+        for appearance in Appearance::ALL {
+            for reduce_transparency in [false, true] {
+                let look = ThemeTokens::cupertino(
+                    &theme,
+                    ThemePreferences {
+                        reduce_transparency,
+                        ..preferences(appearance)
+                    },
+                )
+                .unwrap()
+                .surface(Surface::Switcher);
+                let opaque = reduce_transparency || appearance.is_high_contrast();
+                assert_eq!(
+                    look.material,
+                    (!opaque).then_some(crate::SWITCHER_GLASS_MATERIAL),
+                    "{appearance:?} {reduce_transparency}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn surfaces_ask_for_their_material_and_glass_keeps_its_own_with_reduced_transparency_or_high_contrast(
     ) {
         use crate::{Surface, SurfaceLook};

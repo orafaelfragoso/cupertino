@@ -74,6 +74,9 @@ pub enum GlassStyle {
     /// The glass of a window's toolbar controls: regular glass with a face lifted a little further and a thin line of
     /// light along its top and bottom edges.
     Toolbar,
+    /// The glass of a menu: a wide blur under a face that tones the backdrop into a narrow band, with a thin line of light
+    /// along its top and bottom edges.
+    Menu,
 }
 
 impl GlassStyle {
@@ -173,7 +176,8 @@ impl Backdrop {
     /// [`GlassStyle::Popover`] as regular glass, and one before version 17 draws [`GlassStyle::Switcher`] as regular
     /// glass; one before version 18 draws [`GlassStyle::SubduedModule`] as module glass, [`GlassStyle::Veiled`] as clear
     /// glass and [`GlassStyle::Sidebar`] and [`GlassStyle::Snippet`] as regular glass; one before version 19 draws
-    /// [`GlassStyle::Toolbar`] as regular glass.
+    /// [`GlassStyle::Toolbar`] as regular glass; one before version 20 draws [`GlassStyle::Menu`] as dense glass (regular
+    /// glass before version 13).
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -212,6 +216,7 @@ impl Backdrop {
             | GlassStyle::Snippet
             | GlassStyle::Veiled => sidebar_style(style, self.proxy.version()),
             GlassStyle::Toolbar => toolbar_style(self.proxy.version()),
+            GlassStyle::Menu => menu_style(self.proxy.version()),
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -250,6 +255,20 @@ const SWITCHER_VERSION: u32 = 17;
 const SIDEBAR_VERSION: u32 = 18;
 /// The version of `cupertino_backdrop_v1` that has the toolbar glass style.
 const TOOLBAR_VERSION: u32 = 19;
+/// The version of `cupertino_backdrop_v1` that has the menu glass style.
+const MENU_VERSION: u32 = 20;
+
+/// The wire style of the menu on a server of `version`: one before [`MENU_VERSION`] draws it as dense glass (regular
+/// glass before [`DENSE_VERSION`]).
+fn menu_style(version: u32) -> WireStyle {
+    if version >= MENU_VERSION {
+        WireStyle::Menu
+    } else if version >= DENSE_VERSION {
+        WireStyle::Dense
+    } else {
+        WireStyle::Regular
+    }
+}
 
 /// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
 /// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.
@@ -401,6 +420,14 @@ mod tests {
         assert_eq!(toolbar_style(19), WireStyle::Toolbar);
         assert_eq!(toolbar_style(18), WireStyle::Regular);
         assert_eq!(toolbar_style(6), WireStyle::Regular);
+    }
+
+    #[test]
+    fn an_older_server_draws_the_menu_as_dense_glass() {
+        assert_eq!(menu_style(20), WireStyle::Menu);
+        assert_eq!(menu_style(19), WireStyle::Dense);
+        assert_eq!(menu_style(13), WireStyle::Dense);
+        assert_eq!(menu_style(12), WireStyle::Regular);
     }
 
     #[test]

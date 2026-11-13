@@ -247,6 +247,9 @@ pub enum GlassStyle {
     /// The glass of a window's toolbar controls: regular glass with a face lifted a little further and a thin line of
     /// light along its top and bottom edges.
     Toolbar,
+    /// The glass of a menu: a wide blur under a face that tones the backdrop into a narrow band, with a thin line of light
+    /// along its top and bottom edges.
+    Menu,
 }
 
 impl GlassStyle {
@@ -269,6 +272,7 @@ impl GlassStyle {
             Self::Snippet => "SnippetGlass",
             Self::Veiled => "VeiledGlass",
             Self::Toolbar => "ToolbarGlass",
+            Self::Menu => "MenuGlass",
         }
     }
 
@@ -290,6 +294,7 @@ impl GlassStyle {
             Self::Snippet,
             Self::Veiled,
             Self::Toolbar,
+            Self::Menu,
         ]
         .into_iter()
         .find(|s| s.material() == name)
@@ -868,6 +873,7 @@ mod glass_style_tests {
             GlassStyle::Snippet,
             GlassStyle::Veiled,
             GlassStyle::Toolbar,
+            GlassStyle::Menu,
         ] {
             assert_eq!(GlassStyle::of_material(style.material()), Some(style));
         }
@@ -880,6 +886,7 @@ mod glass_style_tests {
         assert_eq!(GlassStyle::Snippet.material(), "SnippetGlass");
         assert_eq!(GlassStyle::Veiled.material(), "VeiledGlass");
         assert_eq!(GlassStyle::Toolbar.material(), "ToolbarGlass");
+        assert_eq!(GlassStyle::Menu.material(), "MenuGlass");
         assert_eq!(GlassStyle::of_material("Sidebar"), None);
     }
 

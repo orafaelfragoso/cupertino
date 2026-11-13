@@ -791,6 +791,15 @@ impl Glass {
         }
     }
 
+    /// The glass of a menu with square corners, on its own, opaque: a wide blur under a face that tones the backdrop
+    /// into a narrow band, with a thin line of light along its top and bottom edges.
+    pub fn menu() -> Self {
+        Self {
+            style: GlassStyle::Menu,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

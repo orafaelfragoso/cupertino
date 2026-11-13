@@ -2210,7 +2210,7 @@ fn a_menu_window_shows_its_glass_where_the_desktop_draws_it_and_the_opaque_fill_
         "the compositor draws the material"
     );
     let menu = Backdrop {
-        material: cupertino_ui_theme::DENSE_GLASS_MATERIAL.into(),
+        material: cupertino_ui_theme::MENU_GLASS_MATERIAL.into(),
         radius: 8.0,
         alpha: 1.0,
     };

@@ -467,10 +467,14 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for FilterNode {
                 ),
             )
         } else {
-            (share(text, FILTER_FILL_SHARE), text)
+            // a pill lighter than the panel, its name in the field's placeholder tone
+            (
+                super::lift_color(cx).unwrap_or(share(text, FILTER_FILL_SHARE)),
+                role(cx, ColorRole::SecondaryText, share(text, 0.6)),
+            )
         };
         fill(cx, rect, radius, back);
-        let max = size.width - 2.0 * BrowseLayout::FILTER_PAD;
+        let max = size.width - 2.0 * BrowseLayout::FILTER_MIN_PAD;
         if let Some(l) = line(
             cx,
             self.category.name(),

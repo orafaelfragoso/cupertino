@@ -32,7 +32,7 @@ pub const OPEN_FADE: f64 = 0.10;
 /// its response in seconds and its damping ratio (under 1: it undershoots a little).
 pub const ENTER_SCALE: f64 = 1.1;
 pub const OPEN_RESPONSE: f64 = 0.30;
-pub const OPEN_DAMPING: f64 = 0.7;
+pub const OPEN_DAMPING: f64 = 0.74;
 /// The content fading out when a scope folds; the enclosure starts contracting after it.
 pub const FOLD_FADE: f64 = 0.05;
 /// The enclosure's spring between shapes: its response and damping ratio when it grows and when it shrinks. Both
@@ -53,6 +53,9 @@ pub const UNFOLD_CONTENT_DELAY: f64 = 0.06;
 pub const UNFOLD_CONTENT_FADE: f64 = 0.12;
 pub const FILES_CONTENT_DELAY: f64 = 0.16;
 pub const FILES_CONTENT_FADE: f64 = 0.10;
+/// Into the files scope from the search field, the header switches and the enclosure starts growing this long after
+/// the buttons merged into the field and the width began its dip.
+pub const FILES_GROW_DELAY: f64 = 0.09;
 /// Closing: how long it takes, how much the enclosure grows, and how far the content blurs, in points.
 pub const CLOSE_DURATION: f64 = 0.10;
 pub const CLOSE_SCALE: f64 = 1.02;
@@ -64,12 +67,13 @@ pub const FIELD_DAMPING: f64 = 0.68;
 pub const SPLIT_RESPONSE: f64 = 0.575;
 pub const SPLIT_DAMPING: f64 = 0.69;
 /// The buttons' symbols sharpening after they bud: their delay and duration.
-pub const GLYPH_DELAY: f64 = 0.1;
+pub const GLYPH_DELAY: f64 = 0.25;
 pub const GLYPH_SHARPEN: f64 = 0.2;
 /// The buttons merging back into the field when a scope opens.
 pub const MERGE_DURATION: f64 = 0.05;
-/// How long the folded field waits before the buttons bud out of it again.
-pub const RESPLIT_DELAY: f64 = 0.3;
+/// How long the buttons wait after a scope folds before they bud out of the field again: the field settles into its
+/// capsule and rests a while first.
+pub const RESPLIT_DELAY: f64 = 1.1;
 /// The width the enclosure dips by while the files scope opens, how long the dip takes to reach its depth, and the
 /// response of the spring that brings the width back.
 pub const DIP_DEPTH: f64 = 123.0;
@@ -205,9 +209,11 @@ pub struct Frame {
     /// The width the enclosure and the buttons together are placed by: the left edge of the group is half of it left
     /// of the middle. It is the shape's own width, or the search field's whatever the buttons make of the shape.
     pub anchor: f64,
-    /// The enclosure's opacity (shadow and content included) and its scale about its centre.
+    /// The enclosure's opacity (shadow and content included) and its scale about its centre: `scale` across, and
+    /// `scale_y` down, which stays 1 while the search field opens (it widens, it does not grow taller).
     pub alpha: f64,
     pub scale: f64,
+    pub scale_y: f64,
     /// The scope's content opacity (filters, items, separators).
     pub content: f64,
     /// How blurred the content is while the panel closes, from 0 to 1.
@@ -239,6 +245,8 @@ pub struct Motion {
     sharp: Fade,
     /// When the width's dip began, while the files scope opens.
     dip: Option<f64>,
+    /// The enclosure scales across only: the search field opening.
+    widen_only: bool,
 }
 
 impl Motion {
@@ -259,6 +267,7 @@ impl Motion {
             field: AnimatedValue::new(0.0),
             sharp: Fade::at(0.0),
             dip: None,
+            widen_only: false,
         }
     }
 
@@ -351,6 +360,10 @@ impl Motion {
         }
         self.header = (header, header);
         self.dip = None;
+        // the search field opens wider than it settles, never taller; a scope panel grows both ways
+        if !closing {
+            self.widen_only = header == Header::Search;
+        }
         if header.is_scope() {
             // the content fades in with the enclosure, not after it: shown at once, the enclosure's fade carries it;
             // reopened while closing, it comes back alongside the enclosure
@@ -411,8 +424,14 @@ impl Motion {
     /// The search field, or another scope, unfolds into the shape `open` of the scope of `header` at `now`.
     pub fn unfold_to(&mut self, open: Shape, header: Header, now: f64) {
         let from_field = self.header_at(now) == Header::Search;
-        self.switch_header(header, now, now);
-        self.shape_to(open, now, 0.0);
+        // into the files scope the width dips at once while the header and the growth wait a moment
+        let grow = if header == Header::Files && from_field && !self.reduce {
+            FILES_GROW_DELAY
+        } else {
+            0.0
+        };
+        self.switch_header(header, now, now + grow);
+        self.shape_to(open, now, grow);
         let (delay, fade) = if self.reduce {
             (0.0, UNFOLD_CONTENT_FADE)
         } else if header == Header::Files {
@@ -582,6 +601,11 @@ impl Motion {
             anchor,
             alpha: self.alpha.value(now).clamp(0.0, 1.0),
             scale: if self.reduce {
+                1.0
+            } else {
+                self.scale.value(now)
+            },
+            scale_y: if self.reduce || self.widen_only {
                 1.0
             } else {
                 self.scale.value(now)
@@ -827,5 +851,57 @@ mod tests {
         m.settle(1.05);
         assert_eq!(m.frame(1.05).shape, RESULTS);
         assert!(!m.animating(1.05));
+    }
+
+    #[test]
+    fn the_search_field_opens_wider_but_never_taller() {
+        let mut m = Motion::new(COMPACT);
+        m.show(COMPACT, false, 0.0);
+        let f = m.frame(0.0);
+        assert_eq!((f.scale, f.scale_y), (ENTER_SCALE, 1.0));
+        for i in 1..40 {
+            let f = m.frame(f64::from(i) / 120.0);
+            assert_eq!(f.scale_y, 1.0, "{f:?}");
+        }
+        // a scope panel grows both ways
+        let mut m = Motion::new(COMPACT);
+        m.show(OPEN, true, 0.0);
+        let f = m.frame(0.0);
+        assert_eq!((f.scale, f.scale_y), (ENTER_SCALE, ENTER_SCALE));
+    }
+
+    #[test]
+    fn the_opening_spring_undershoots_by_about_half_a_percent() {
+        let mut m = Motion::new(COMPACT);
+        m.show(OPEN, true, 0.0);
+        let least = (1..120)
+            .map(|i| m.frame(f64::from(i) / 240.0).scale)
+            .fold(f64::INFINITY, f64::min);
+        assert!(least < 1.0 && least > 0.99, "{least}");
+    }
+
+    #[test]
+    fn into_the_files_scope_the_width_dips_before_the_header_switches_and_the_panel_grows() {
+        let files = Shape::new(640.0, 547.0, 28.5);
+        let mut m = Motion::new(COMPACT);
+        m.show(COMPACT, false, 0.0);
+        m.settle(0.0);
+        m.unfold_to(files, Header::Files, 1.0);
+        let early = m.frame(1.0 + FILES_GROW_DELAY / 2.0);
+        assert_eq!(early.header, Header::Search);
+        assert_eq!(early.shape.height, COMPACT.height);
+        assert!(
+            early.shape.width < COMPACT.width,
+            "the dip has begun: {early:?}"
+        );
+        let later = m.frame(1.0 + FILES_GROW_DELAY + 0.05);
+        assert_eq!(later.header, Header::Files);
+        assert!(later.shape.height > COMPACT.height, "{later:?}");
+        // out of the browser the files scope switches at once
+        let mut m = Motion::new(COMPACT);
+        m.show(OPEN, true, 0.0);
+        m.settle(0.0);
+        m.unfold_to(files, Header::Files, 1.0);
+        assert_eq!(m.frame(1.0).header, Header::Files);
     }
 }

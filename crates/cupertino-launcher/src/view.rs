@@ -61,16 +61,20 @@ pub const HIDDEN_APP_ID: &str = "cupertino-launcher.hidden";
 
 /// Panel width: the search capsule's.
 pub const WIDTH: f64 = 640.0;
-/// The query row, which is the whole panel, a capsule, while there are no results.
-pub const COLLAPSED_HEIGHT: f64 = 56.0;
+/// The query row, which is the whole panel, a capsule, while there are no results. The one panel height off the
+/// shape grid ([`SHAPE_GRID`]): the capsule is drawn at its design height.
+pub const COLLAPSED_HEIGHT: f64 = 57.0;
 /// The least height of the panel while it shows results.
 pub const MIN_EXPANDED_HEIGHT: f64 = 430.0;
 /// Corner radius of the panel: half the capsule's height, kept as it grows to show results.
 pub const CORNER_RADIUS: f64 = COLLAPSED_HEIGHT / 2.0;
-/// Between the panel's leading edge and the search symbol, and between the query and the trailing edge.
+/// Between the query and the trailing edge, and the status text's inset.
 pub const SIDE_PADDING: f64 = 22.0;
-/// Between the search symbol and the query.
-pub const QUERY_GAP: f64 = 16.0;
+/// Where the query's text starts, from the panel's leading edge, behind every header's symbol.
+pub const QUERY_INSET: f64 = 63.0;
+/// Between the panel's leading edge and the search field's magnifier, and between a scope's edge and its symbol.
+pub const SEARCH_ICON_INSET: f64 = 23.0;
+pub const SCOPE_ICON_INSET: f64 = 21.5;
 /// The query's text size.
 pub const QUERY_SIZE: f64 = 26.0;
 /// Above the first row and below the last.
@@ -85,8 +89,9 @@ pub const ROW_HEIGHT: f64 = 40.0;
 pub const CALCULATOR_ROW_HEIGHT: f64 = 64.0;
 /// Result icons.
 pub const ICON_SIZE: f64 = 32.0;
-/// The search symbol before the query.
-pub const SEARCH_ICON_SIZE: f64 = 22.0;
+/// The search symbol before the query, and a scope's symbol (the applications', the files') in its place.
+pub const SEARCH_ICON_SIZE: f64 = 23.0;
+pub const SCOPE_ICON_SIZE: f64 = 25.0;
 /// Between a row's selection and the list's edges.
 pub const SELECTION_INSET: f64 = 8.0;
 /// Between the selection's edge and the icon.
@@ -141,6 +146,10 @@ pub const GLASS_SELECTION_LIGHT: f32 = 0.1;
 /// An action button that is not the chosen one, over the glass: the same thin fill, fainter.
 pub const GLASS_CONTROL_DARK: f32 = 0.12;
 pub const GLASS_CONTROL_LIGHT: f32 = 0.06;
+/// A category filter that is off, over the glass: white at this opacity in each appearance, a pill lighter than the
+/// panel around it.
+pub const GLASS_LIFT_DARK: f32 = 0.085;
+pub const GLASS_LIFT_LIGHT: f32 = 0.3;
 /// The preview pane: its padding, the largest picture or icon it shows, the text excerpt's size and lines, and the
 /// action buttons' height and gap.
 pub const PREVIEW_PADDING: f64 = 16.0;
@@ -187,6 +196,8 @@ const DOWN: u32 = 0xff54;
 const PAGE_UP: u32 = 0xff55;
 const PAGE_DOWN: u32 = 0xff56;
 const END: u32 = 0xff57;
+const SUPER_L: u32 = 0xffeb;
+const SUPER_R: u32 = 0xffec;
 
 /// What the windows report to the model.
 #[derive(Clone, Debug, PartialEq)]
@@ -233,6 +244,8 @@ pub enum Input {
     ScopeActivate(usize),
     /// A files filter was pressed.
     ScopeFilter(Filter),
+    /// The primary modifier went down (`true`) or up.
+    Primary(bool),
 }
 
 /// Which keys the panel takes from the query field now.
@@ -433,7 +446,13 @@ pub fn search_shape(panel: &Panel, status: &Status, nested: Option<Nested>) -> P
     } else {
         panel_height(panel)
     };
-    PanelShape::new(WIDTH, on_shape_grid(height), CORNER_RADIUS)
+    // the capsule keeps its design height; a panel with something below the field ends on the grid
+    let height = if height <= COLLAPSED_HEIGHT {
+        COLLAPSED_HEIGHT
+    } else {
+        on_shape_grid(height)
+    };
+    PanelShape::new(WIDTH, height, CORNER_RADIUS)
 }
 
 /// The browsing panel's shape, `height` points tall.
@@ -465,10 +484,18 @@ pub const MAX_SCALE: f64 = 1.25;
 /// left of the middle. The group is the enclosure alone, or the search field and its buttons.
 pub fn enclosure_rect(extent: Size, frame: &Frame) -> Rect {
     let scale = frame.scale.clamp(0.0, MAX_SCALE);
-    let (w, h) = (frame.shape.width * scale, frame.shape.height * scale);
+    let (w, h) = (
+        frame.shape.width * scale,
+        frame.shape.height * frame.scale_y.clamp(0.0, MAX_SCALE),
+    );
     let middle = extent.width / 2.0;
     let top = SHADOW_TOP + (frame.shape.height - h) / 2.0;
     Rect::new(middle - frame.anchor * scale / 2.0, top, w, h)
+}
+
+/// The enclosure's corner radius as the frame presents it: scaled with its shorter scale, so a capsule stays one.
+pub fn enclosure_radius(frame: &Frame) -> f64 {
+    frame.shape.radius * frame.scale.min(frame.scale_y).clamp(0.0, MAX_SCALE)
 }
 
 /// Where the panel goes on an output `output` points large: horizontally centred, its top edge at [`TOP_FRACTION`]
@@ -539,6 +566,8 @@ pub struct PanelView<'a> {
     pub file_images: &'a HashMap<PathBuf, Vec<ImageSource>>,
     /// The query is shown selected, as the last opening left it.
     pub select_query: bool,
+    /// The primary modifier is held: the selected file's or folder's location shows in its preview.
+    pub show_location: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -624,10 +653,7 @@ where
     let frame = &view.frame;
     let rects = mode_rects(view, enclosure);
     let active = view.open && frame.modes.spread > 0.5;
-    let field = (
-        *enclosure,
-        frame.shape.radius * frame.scale.clamp(0.0, MAX_SCALE),
-    );
+    let field = (*enclosure, enclosure_radius(frame));
     rects
         .iter()
         .enumerate()
@@ -669,7 +695,7 @@ fn mode_rects(view: &PanelView<'_>, enclosure: &Rect) -> Vec<Rect> {
     (0..count)
         .map(|index| {
             let place = mode_model::button_rect(index, count, frame.modes.spread, COLLAPSED_HEIGHT);
-            let side = place.width() * scale;
+            let side = place.width() * frame.scale_y.clamp(0.0, MAX_SCALE);
             Rect::new(
                 middle + (place.x() - frame.anchor / 2.0) * scale,
                 centre_y - side / 2.0,
@@ -798,6 +824,11 @@ where
     })
     .key("query")
     .fill();
+    // the magnifier sits a little further in than a scope's wider symbol; the text starts at the same place behind both
+    let (icon_inset, icon_size) = match frame.header {
+        Header::Search => (SEARCH_ICON_INSET, SEARCH_ICON_SIZE),
+        Header::Browse | Header::Files => (SCOPE_ICON_INSET, SCOPE_ICON_SIZE),
+    };
     let mut row = vec![
         Element::new(Icon {
             name: match frame.header {
@@ -806,7 +837,7 @@ where
                 Header::Files => FILES_SYMBOL,
             }
             .to_owned(),
-            size: SEARCH_ICON_SIZE,
+            size: icon_size,
             direction: IconDirection::Fixed,
             label: None,
             tint: Some(ColorRole::SecondaryText),
@@ -845,7 +876,8 @@ where
     let split = showing_browser.is_some() || showing_scope.is_some();
     let query_row = Element::new(Bar {
         height: COLLAPSED_HEIGHT,
-        spacing: QUERY_GAP,
+        leading: icon_inset,
+        spacing: QUERY_INSET - icon_inset - icon_size,
         alpha: if split { frame.alpha } else { 1.0 },
         children: row,
     })
@@ -886,7 +918,7 @@ where
     });
     Element::new(Enclosure {
         rect,
-        radius: frame.shape.radius * frame.scale.clamp(0.0, MAX_SCALE),
+        radius: enclosure_radius(frame),
         alpha: frame.alpha,
         blur: frame.blur,
         joins: frame.modes.count > 0,
@@ -1087,6 +1119,17 @@ where
                     .key("description"),
             );
         }
+    }
+    // holding the primary modifier shows where a file or folder is
+    if let (true, crate::engine::Action::OpenPath(path)) = (view.show_location, &item.action) {
+        children.push(
+            Element::new(
+                Label::new(&crate::engine::home_relative(path), 11.0, 400)
+                    .secondary()
+                    .centred(2),
+            )
+            .key("location"),
+        );
     }
     children.push(Element::new(Plain::spacer()));
     children.push(action_list(view).key("actions"));
@@ -1438,6 +1481,14 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            // the primary modifier alone, held and let go: the preview shows a file's location meanwhile
+            Event::Key(key, _)
+                if matches!(key.keysym.0, SUPER_L | SUPER_R)
+                    && (cx.phase() == Phase::Capture || cx.node() == cx.target()) =>
+            {
+                cx.emit(M::from(Input::Primary(key.pressed)));
+                Propagation::Continue
+            }
             Event::Key(key, _) if cx.phase() == Phase::Capture || cx.node() == cx.target() => {
                 match panel_key(key) {
                     Some((k, mods)) if self.keys.takes(k, mods) => {
@@ -1484,6 +1535,20 @@ pub(crate) fn selection_color(cx: &PaintCx<'_>) -> Option<Color> {
         GLASS_SELECTION_LIGHT,
         ColorRole::SecondarySelectedControlFill,
     )
+}
+
+/// The fill of a category filter that is off where `cx` paints: over the panel's glass a white lift, lighter than the
+/// panel around it in either appearance; over the opaque fill and with Increase Contrast none (the caller's own).
+pub(crate) fn lift_color(cx: &PaintCx<'_>) -> Option<Color> {
+    let appearance = cx.env().theme.preferences.appearance;
+    (cx.on_glass() && !appearance.is_high_contrast()).then(|| {
+        let a = if appearance.is_dark() {
+            GLASS_LIFT_DARK
+        } else {
+            GLASS_LIFT_LIGHT
+        };
+        Color::new(1.0, 1.0, 1.0, a)
+    })
 }
 
 /// Over the glass (and without Increase Contrast), white at `dark` opacity in the dark appearance and black at `light`
@@ -1744,9 +1809,11 @@ fn rounded_path(rect: Rect, radius: f64) -> Vec<PathVerb> {
     ]
 }
 
-/// A row of its children across the panel, centred vertically, the side padding at both ends.
+/// A row of its children across the panel, centred vertically, `leading` points in from the leading edge and the
+/// side padding in from the trailing one.
 struct Bar<M> {
     height: f64,
+    leading: f64,
     spacing: f64,
     /// The opacity it is drawn at, as one layer when under 1.
     alpha: f64,
@@ -1762,7 +1829,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
             height: SizeSpec::Fixed(self.height),
             insets: Insets {
                 top: 0.0,
-                left: SIDE_PADDING,
+                left: self.leading,
                 bottom: 0.0,
                 right: SIDE_PADDING,
             },
@@ -1782,7 +1849,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.height, self.spacing) != (old.height, old.spacing) {
+        if (self.height, self.leading, self.spacing) != (old.height, old.leading, old.spacing) {
             Change::Layout
         } else if self.alpha != old.alpha {
             Change::Paint

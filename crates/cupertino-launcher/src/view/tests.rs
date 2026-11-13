@@ -367,9 +367,10 @@ impl Run {
     /// Runs until no window waits for a configure or a frame. New windows are configured as the server would: the
     /// panel at the height the model gave it, the catcher over the output; a new height configures the panel again. A
     /// window still asking after 16 rounds at the same time is in a transition (its colours crossing as it becomes
-    /// active, a chosen menu row flashing): the clock then moves a display frame per round, for up to 2 seconds.
+    /// active, a chosen menu row flashing, the mode buttons budding out a while after a fold): the clock then moves a
+    /// display frame per round, for up to 3 seconds.
     fn settle_frames(&mut self) {
-        for round in 0..16 + 120 {
+        for round in 0..16 + 180 {
             if round >= 16 {
                 self.clock.advance_by(FRAME_NS);
             }
@@ -1176,6 +1177,7 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         anchor: WIDTH,
         alpha: 1.0,
         scale: 1.0,
+        scale_y: 1.0,
         content: 0.0,
         blur: 0.0,
         header: Header::Search,
@@ -1192,11 +1194,21 @@ fn the_panel_is_collapsed_without_results_and_expanded_with_them() {
         window,
         &Frame {
             scale: 0.5,
+            scale_y: 0.5,
             ..frame
         },
     );
     assert_eq!(opening.center(), panel.center());
     assert_eq!(opening.width(), WIDTH / 2.0);
+    // the search field widens as it opens, its height kept and its ends still round
+    let widening = Frame {
+        scale: 1.1,
+        ..frame
+    };
+    let wide = enclosure_rect(window, &widening);
+    assert_eq!(wide.center(), panel.center());
+    assert_eq!((wide.width(), wide.height()), (WIDTH * 1.1, panel.height()));
+    assert_eq!(enclosure_radius(&widening), CORNER_RADIUS);
 }
 
 /// A file index of a folder holding `notes.txt`, and the folder.
@@ -1237,6 +1249,76 @@ impl Run {
         named.sort();
         named.into_iter().map(|(_, name)| name).collect()
     }
+}
+
+/// Every category filter, all ten in one row, is wide enough for its name in the built-in face: none is cut.
+#[test]
+fn all_ten_category_filters_hold_their_names_uncut() {
+    use cupertino_kit::text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
+    let mut fonts = FontIndex::new();
+    fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
+    let text = TextSystem::new(fonts, "Inter Variable");
+    let layout = crate::browse::BrowseLayout::new(crate::browse::BrowseLayout::HEIGHT);
+    let rects = layout.filter_rects(&Category::ALL);
+    for (category, rect) in Category::ALL.iter().zip(&rects) {
+        let style = TextStyle {
+            weight: FontWeight(crate::browse::BrowseLayout::FILTER_WEIGHT),
+            ..TextStyle::new(crate::browse::BrowseLayout::FILTER_FONT_PT as f32)
+        };
+        let width = text
+            .paragraph(
+                &AttributedText::plain(category.name(), style),
+                &ParagraphStyle::default(),
+            )
+            .unwrap()
+            .layout(None)
+            .size()
+            .width;
+        let room = rect.width() - 2.0 * crate::browse::BrowseLayout::FILTER_MIN_PAD;
+        assert!(
+            width <= room,
+            "{category:?}: {width} pt of text in {room} pt"
+        );
+    }
+}
+
+#[test]
+fn holding_the_primary_modifier_shows_where_the_selected_file_is() {
+    let (_dir, index) = notes_index();
+    let mut run = Run::new();
+    run.deliver(Message::Indexed(index));
+    run.type_text("notes");
+    let Some(crate::engine::Action::OpenPath(path)) =
+        run.model().panel.selected_item().map(|i| i.action.clone())
+    else {
+        panic!("a file is selected");
+    };
+    let location = crate::engine::home_relative(&path);
+    assert!(!run.names(Role::StaticText).contains(&location));
+    let super_key = |pressed| {
+        WindowEvent::Key(
+            KeyEvent {
+                code: 125,
+                keysym: Keysym(0xffeb),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: if pressed { Mods::PRIMARY } else { Mods::NONE },
+            },
+            Timestamp(0),
+        )
+    };
+    let window = run.panel();
+    run.send(window, super_key(true));
+    run.settle();
+    assert!(
+        run.names(Role::StaticText).contains(&location),
+        "{:?}",
+        run.names(Role::StaticText)
+    );
+    run.send(window, super_key(false));
+    run.settle();
+    assert!(!run.names(Role::StaticText).contains(&location));
 }
 
 #[test]

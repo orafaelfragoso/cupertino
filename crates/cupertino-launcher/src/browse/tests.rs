@@ -326,6 +326,20 @@ fn the_scroll_indicator_shows_while_scrolling_then_fades() {
 }
 
 #[test]
+fn the_scroll_indicator_shows_when_the_browser_comes_into_view_then_fades() {
+    let mut b = Browser::new(apps(100), &[], BrowseLayout::HEIGHT);
+    b.reveal_scroller(10.0);
+    assert_eq!(b.scroll(), 0.0, "nothing scrolls");
+    assert_eq!(b.scroller_alpha(10.0), 1.0);
+    assert!(b.scroller_thumb().is_some());
+    assert!(b.animating(10.0 + SCROLLER_LINGER));
+    assert_eq!(
+        b.scroller_alpha(10.0 + SCROLLER_LINGER + SCROLLER_FADE),
+        0.0
+    );
+}
+
+#[test]
 fn clicks_open_items_and_toggle_filters() {
     let mut b = sample();
     let (c, r) = b.filter_rects()[1];
@@ -343,14 +357,36 @@ fn clicks_open_items_and_toggle_filters() {
 #[test]
 fn the_filters_fill_their_row_and_narrow_when_they_do_not_fit() {
     let l = BrowseLayout::new(BrowseLayout::HEIGHT);
+    // the row: 22 pt in from each side, 67 pt below the panel's top, 26 pt tall
+    assert_eq!(l.categories, Rect::new(22.0, 67.0, 800.0, 26.0));
+    let fills = |rects: &[Rect]| {
+        assert!((rects[0].x() - l.categories.x()).abs() < 1e-9);
+        let right = rects.last().unwrap().max_x();
+        assert!((right - l.categories.max_x()).abs() < 1e-6, "{right}");
+    };
+    // all ten: every name keeps room for its text, the gaps closing in before anything is cut
     let rects = l.filter_rects(&Category::ALL);
     assert_eq!(rects.len(), 10);
-    let right = rects.last().unwrap().max_x();
-    assert!(right <= l.categories.max_x() + 0.5, "{right}");
+    fills(&rects);
+    for (c, r) in Category::ALL.iter().zip(&rects) {
+        assert!(
+            r.width() >= BrowseLayout::filter_text_width(*c) + 2.0 * BrowseLayout::FILTER_MIN_PAD,
+            "{c:?} {r:?}"
+        );
+    }
+    let gap = rects[1].x() - rects[0].max_x();
+    assert!((BrowseLayout::FILTER_MIN_GAP..=BrowseLayout::FILTER_GAP).contains(&gap));
+    // seven: 12 pt apart, the row filled by sharing the width left over evenly, however much there is
+    let seven = &Category::ALL[..7];
+    let rects = l.filter_rects(seven);
+    fills(&rects);
+    let gap = rects[1].x() - rects[0].max_x();
+    assert!((gap - BrowseLayout::FILTER_GAP).abs() < 1e-9);
+    // two short names: each its least width, grown by half the row's leftover, uncapped
     let two = l.filter_rects(&[Category::Media, Category::Games]);
-    let natural = (5.0 * BrowseLayout::FILTER_CHAR_EM * BrowseLayout::FILTER_FONT_PT).ceil()
-        + 2.0 * BrowseLayout::FILTER_PAD;
-    assert_eq!(two[0].width(), natural + BrowseLayout::FILTER_GROW);
+    fills(&two);
+    assert!((two[0].width() - two[1].width()).abs() < 1e-9);
+    assert!(two[0].width() > 300.0, "{two:?}");
 }
 
 #[test]

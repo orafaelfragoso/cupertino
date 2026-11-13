@@ -4,46 +4,46 @@ focus Some(NodeId(6v1))
 pointer_capture None
 text_input Some(NodeId(6v1))
 layout
-  NodeId(0v1) cupertino_ui_controls::frame_clock::Clock<cupertino_launcher::kit::Message> key=None parent=None children=[NodeId(1v1)] rect=[0,0 760x176] clip=[none]
-  NodeId(1v1) cupertino_launcher::view::Plain<cupertino_launcher::kit::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(2v1), NodeId(7v1)] rect=[0,0 760x176] clip=[none]
-  NodeId(2v1) cupertino_launcher::view::Enclosure<cupertino_launcher::kit::Message> key=Some(Str("panel")) parent=Some(NodeId(1v1)) children=[NodeId(3v1)] rect=[60,44 576x56] clip=[none]
-  NodeId(3v1) cupertino_launcher::view::PanelRoot<cupertino_launcher::kit::Message> key=Some(Str("content")) parent=Some(NodeId(2v1)) children=[NodeId(4v1)] rect=[60,44 576x56] clip=[60,44 576x56]
-  NodeId(4v1) cupertino_launcher::view::Bar<cupertino_launcher::kit::Message> key=Some(Str("query-row")) parent=Some(NodeId(3v1)) children=[NodeId(5v1), NodeId(6v1)] rect=[60,44 576x56] clip=[60,44 576x56]
-  NodeId(5v1) cupertino_ui_controls::Icon key=Some(Str("search-symbol")) parent=Some(NodeId(4v1)) children=[] rect=[82,61 22x22] clip=[60,44 576x56]
-  NodeId(6v1) cupertino_ui_controls::BareField<cupertino_launcher::kit::Message> key=Some(Str("query")) parent=Some(NodeId(4v1)) children=[] rect=[120,44 494x56] clip=[60,44 576x56]
-  NodeId(7v1) cupertino_launcher::view::modes::ModeButton<cupertino_launcher::kit::Message> key=Some(Str("mode-0")) parent=Some(NodeId(1v1)) children=[NodeId(8v1)] rect=[645,44.5 55x55] clip=[none]
-  NodeId(8v1) cupertino_launcher::view::modes::GlyphBox<cupertino_launcher::kit::Message> key=None parent=Some(NodeId(7v1)) children=[NodeId(9v1)] rect=[645,44.5 55x55] clip=[none]
-  NodeId(9v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(8v1)) children=[] rect=[660.5,60 24x24] clip=[none]
+  NodeId(0v1) cupertino_ui_controls::frame_clock::Clock<cupertino_launcher::kit::Message> key=None parent=None children=[NodeId(1v1)] rect=[0,0 760x177] clip=[none]
+  NodeId(1v1) cupertino_launcher::view::Plain<cupertino_launcher::kit::Message> key=None parent=Some(NodeId(0v1)) children=[NodeId(2v1), NodeId(7v1)] rect=[0,0 760x177] clip=[none]
+  NodeId(2v1) cupertino_launcher::view::Enclosure<cupertino_launcher::kit::Message> key=Some(Str("panel")) parent=Some(NodeId(1v1)) children=[NodeId(3v1)] rect=[60,44 576x57] clip=[none]
+  NodeId(3v1) cupertino_launcher::view::PanelRoot<cupertino_launcher::kit::Message> key=Some(Str("content")) parent=Some(NodeId(2v1)) children=[NodeId(4v1)] rect=[60,44 576x57] clip=[60,44 576x57]
+  NodeId(4v1) cupertino_launcher::view::Bar<cupertino_launcher::kit::Message> key=Some(Str("query-row")) parent=Some(NodeId(3v1)) children=[NodeId(5v1), NodeId(6v1)] rect=[60,44 576x57] clip=[60,44 576x57]
+  NodeId(5v1) cupertino_ui_controls::Icon key=Some(Str("search-symbol")) parent=Some(NodeId(4v1)) children=[] rect=[83,61 23x23] clip=[60,44 576x57]
+  NodeId(6v1) cupertino_ui_controls::BareField<cupertino_launcher::kit::Message> key=Some(Str("query")) parent=Some(NodeId(4v1)) children=[] rect=[123,44 491x57] clip=[60,44 576x57]
+  NodeId(7v1) cupertino_launcher::view::modes::ModeButton<cupertino_launcher::kit::Message> key=Some(Str("mode-0")) parent=Some(NodeId(1v1)) children=[NodeId(8v1)] rect=[645,45 55x55] clip=[none]
+  NodeId(8v1) cupertino_launcher::view::modes::GlyphBox<cupertino_launcher::kit::Message> key=None parent=Some(NodeId(7v1)) children=[NodeId(9v1)] rect=[645,45 55x55] clip=[none]
+  NodeId(9v1) cupertino_ui_controls::Icon key=None parent=Some(NodeId(8v1)) children=[] rect=[660.5,60.5 24x24] clip=[none]
 semantics
-  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 760x176] actions=[] relations=[] children=[NodeId(6v1), NodeId(7v1)]
-  NodeId(6v1) role=TextInput name=Some("Search") description=None value=Text { value: "", editing: Some(TextSemantics { caret: 0, selection: 0..0 }) } states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[120,44 494x56] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
-  NodeId(7v1) role=Button name=Some("Applications") description=Some("Super+1") value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[645,44.5 55x55] actions=[Click] relations=[] children=[]
+  NodeId(0v1) role=Window name=None description=None value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[0,0 760x177] actions=[] relations=[] children=[NodeId(6v1), NodeId(7v1)]
+  NodeId(6v1) role=TextInput name=Some("Search") description=None value=Text { value: "", editing: Some(TextSemantics { caret: 0, selection: 0..0 }) } states=AccessibleStates { disabled: false, focusable: true, focused: true, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[123,44 491x57] actions=[Focus, SetValue, SetSelection] relations=[] children=[]
+  NodeId(7v1) role=Button name=Some("Applications") description=Some("Super+1") value=none states=AccessibleStates { disabled: false, focusable: false, focused: false, selected: false, expanded: None, busy: false, read_only: false, required: false, invalid: false, modal: false, multiselectable: false } bounds=[645,45 55x55] actions=[Click] relations=[] children=[]
 display
-  paint 4294967296 parent=None revision=1 bounds=[-60,-60 820x296] hit=[0,0 760x176] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[-60,-60 820x296] hit=[0,0 760x176] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-  paint 4294967298 parent=Some(4294967297) revision=3 bounds=[-60,-60 816x296] hit=[60,44 576x56] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 56.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
-    PushClip(Path { verbs: [MoveTo(Point { x: -120.0, y: -120.0 }), LineTo(Point { x: 696.0, y: -120.0 }), CubicTo(Point { x: 696.0, y: -120.0 }, Point { x: 696.0, y: -120.0 }, Point { x: 696.0, y: -120.0 }), LineTo(Point { x: 696.0, y: 176.0 }), CubicTo(Point { x: 696.0, y: 176.0 }, Point { x: 696.0, y: 176.0 }, Point { x: 696.0, y: 176.0 }), LineTo(Point { x: -120.0, y: 176.0 }), CubicTo(Point { x: -120.0, y: 176.0 }, Point { x: -120.0, y: 176.0 }, Point { x: -120.0, y: 176.0 }), LineTo(Point { x: -120.0, y: -120.0 }), CubicTo(Point { x: -120.0, y: -120.0 }, Point { x: -120.0, y: -120.0 }, Point { x: -120.0, y: -120.0 }), Close, MoveTo(Point { x: 28.0, y: 0.0 }), LineTo(Point { x: 548.0, y: 0.0 }), CubicTo(Point { x: 563.463973, y: 0.0 }, Point { x: 576.0, y: 12.536027 }, Point { x: 576.0, y: 28.0 }), LineTo(Point { x: 576.0, y: 28.0 }), CubicTo(Point { x: 576.0, y: 43.463972999999996 }, Point { x: 563.463973, y: 56.0 }, Point { x: 548.0, y: 56.0 }), LineTo(Point { x: 28.0, y: 56.0 }), CubicTo(Point { x: 12.536027, y: 56.0 }, Point { x: 0.0, y: 43.463972999999996 }, Point { x: 0.0, y: 28.0 }), LineTo(Point { x: 0.0, y: 28.0 }), CubicTo(Point { x: 0.0, y: 12.536027 }, Point { x: 12.536027, y: 0.0 }, Point { x: 28.0, y: 0.0 }), Close], fill_rule: EvenOdd })
+  paint 4294967296 parent=None revision=1 bounds=[-60,-60 820x297] hit=[0,0 760x177] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  paint 4294967297 parent=Some(4294967296) revision=2 bounds=[-60,-60 820x297] hit=[0,0 760x177] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+  paint 4294967298 parent=Some(4294967297) revision=3 bounds=[-60,-60 816x297] hit=[60,44 576x57] clip=Some(Rect(Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 57.0 } })) transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
+    PushClip(Path { verbs: [MoveTo(Point { x: -120.0, y: -120.0 }), LineTo(Point { x: 696.0, y: -120.0 }), CubicTo(Point { x: 696.0, y: -120.0 }, Point { x: 696.0, y: -120.0 }, Point { x: 696.0, y: -120.0 }), LineTo(Point { x: 696.0, y: 177.0 }), CubicTo(Point { x: 696.0, y: 177.0 }, Point { x: 696.0, y: 177.0 }, Point { x: 696.0, y: 177.0 }), LineTo(Point { x: -120.0, y: 177.0 }), CubicTo(Point { x: -120.0, y: 177.0 }, Point { x: -120.0, y: 177.0 }, Point { x: -120.0, y: 177.0 }), LineTo(Point { x: -120.0, y: -120.0 }), CubicTo(Point { x: -120.0, y: -120.0 }, Point { x: -120.0, y: -120.0 }, Point { x: -120.0, y: -120.0 }), Close, MoveTo(Point { x: 28.5, y: 0.0 }), LineTo(Point { x: 547.5, y: 0.0 }), CubicTo(Point { x: 563.240115375, y: 0.0 }, Point { x: 576.0, y: 12.759884625 }, Point { x: 576.0, y: 28.5 }), LineTo(Point { x: 576.0, y: 28.5 }), CubicTo(Point { x: 576.0, y: 44.240115375 }, Point { x: 563.240115375, y: 57.0 }, Point { x: 547.5, y: 57.0 }), LineTo(Point { x: 28.5, y: 57.0 }), CubicTo(Point { x: 12.759884625, y: 57.0 }, Point { x: 0.0, y: 44.240115375 }, Point { x: 0.0, y: 28.5 }), LineTo(Point { x: 0.0, y: 28.5 }), CubicTo(Point { x: 0.0, y: 12.759884625 }, Point { x: 12.759884625, y: 0.0 }, Point { x: 28.5, y: 0.0 }), Close], fill_rule: EvenOdd })
     PushLayer { opacity: 1.0, effects: [DropShadow { offset: Point { x: 0.0, y: 16.0 }, blur: 40.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.22 } }] }
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 56.0 } }, radius: 28.0 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 57.0 } }, radius: 28.5 }, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopLayer
     PopClip
-    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 56.0 } }, radius: 28.0 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
-    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -0.25, y: -0.25 }, size: Size { width: 576.5, height: 56.5 } }, radius: 28.25 }, width: 0.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.27 }) }
-  paint 4294967299 parent=Some(4294967298) revision=4 bounds=[60,43 576x58] hit=[60,44 576x56] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
-  paint 4294967300 parent=Some(4294967299) revision=5 bounds=[60,43 576x58] hit=[60,44 576x56] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
-  paint 4294967301 parent=Some(4294967300) revision=6 bounds=[82,61 22x22] hit=[82,61 22x22] clip=None transform=[1.0, 0.0, 0.0, 1.0, 82.0, 61.0]
-    Image { image: ResourceRef { id: ResourceId(#0), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 22.0, height: 22.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 22.0, height: 22.0 } }, sampling: Linear }
-  paint 4294967302 parent=Some(4294967300) revision=7 bounds=[94,43 520x58] hit=[120,44 494x56] clip=None transform=[1.0, 0.0, 0.0, 1.0, 120.0, 44.0]
-    PushClip(Rect(Rect { origin: Point { x: 0.0, y: 11.0 }, size: Size { width: 494.0, height: 34.0 } }))
-    Glyphs origin=0,37.36 font=FontId(0) size=26 count=6 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
+    Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 576.0, height: 57.0 } }, radius: 28.5 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
+    Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -0.25, y: -0.25 }, size: Size { width: 576.5, height: 57.5 } }, radius: 28.75 }, width: 0.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.27 }) }
+  paint 4294967299 parent=Some(4294967298) revision=4 bounds=[60,43 576x59] hit=[60,44 576x57] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
+  paint 4294967300 parent=Some(4294967299) revision=5 bounds=[60,43 576x59] hit=[60,44 576x57] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
+  paint 4294967301 parent=Some(4294967300) revision=6 bounds=[83,61 23x23] hit=[83,61 23x23] clip=None transform=[1.0, 0.0, 0.0, 1.0, 83.0, 61.0]
+    Image { image: ResourceRef { id: ResourceId(#0), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 23.0, height: 23.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 23.0, height: 23.0 } }, sampling: Linear }
+  paint 4294967302 parent=Some(4294967300) revision=7 bounds=[97,43 517x59] hit=[123,44 491x57] clip=None transform=[1.0, 0.0, 0.0, 1.0, 123.0, 44.0]
+    PushClip(Rect(Rect { origin: Point { x: 0.0, y: 11.0 }, size: Size { width: 491.0, height: 35.0 } }))
+    Glyphs origin=0,37.86 font=FontId(0) size=26 count=6 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 0.49803922 }
     PopClip
-  paint 6 parent=Some(4294967302) revision=1 bounds=[120,56 2x32] hit=[120,56 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    PushClip(Rect(Rect { origin: Point { x: 120.0, y: 55.0 }, size: Size { width: 494.0, height: 34.0 } }))
-    Fill { shape: Rect(Rect { origin: Point { x: 120.0, y: 56.0 }, size: Size { width: 2.0, height: 32.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
+  paint 6 parent=Some(4294967302) revision=1 bounds=[123,57 2x31] hit=[123,57 0x0] clip=None transform=[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    PushClip(Rect(Rect { origin: Point { x: 123.0, y: 55.0 }, size: Size { width: 491.0, height: 35.0 } }))
+    Fill { shape: Rect(Rect { origin: Point { x: 123.0, y: 57.0 }, size: Size { width: 2.0, height: 31.0 } }), paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }) }
     PopClip
-  paint 4294967303 parent=Some(4294967297) revision=8 bounds=[644.5,44 56x56] hit=[645,44.5 55x55] clip=None transform=[1.0, 0.0, 0.0, 1.0, 645.0, 44.5]
+  paint 4294967303 parent=Some(4294967297) revision=8 bounds=[644.5,44.5 56x56] hit=[645,45 55x55] clip=None transform=[1.0, 0.0, 0.0, 1.0, 645.0, 45.0]
     Fill { shape: RoundedRect { rect: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 55.0, height: 55.0 } }, radius: 27.5 }, paint: Solid(Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }) }
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -0.25, y: -0.25 }, size: Size { width: 55.5, height: 55.5 } }, radius: 27.75 }, width: 0.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.27 }) }
-  paint 4294967304 parent=Some(4294967303) revision=9 bounds=[645,44.5 55x55] hit=[645,44.5 55x55] clip=None transform=[1.0, 0.0, 0.0, 1.0, 645.0, 44.5]
-  paint 4294967305 parent=Some(4294967304) revision=10 bounds=[660.5,60 24x24] hit=[660.5,60 24x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 660.5, 60.0]
+  paint 4294967304 parent=Some(4294967303) revision=9 bounds=[645,45 55x55] hit=[645,45 55x55] clip=None transform=[1.0, 0.0, 0.0, 1.0, 645.0, 45.0]
+  paint 4294967305 parent=Some(4294967304) revision=10 bounds=[660.5,60.5 24x24] hit=[660.5,60.5 24x24] clip=None transform=[1.0, 0.0, 0.0, 1.0, 660.5, 60.5]
     Image { image: ResourceRef { id: ResourceId(#1), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 24.0, height: 24.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 24.0, height: 24.0 } }, sampling: Linear }

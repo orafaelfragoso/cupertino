@@ -209,7 +209,7 @@ impl ScopeLayout {
     /// share the row's width equally.
     pub const FILTERS_TOP: f64 = 67.0;
     pub const FILTER_HEIGHT: f64 = 25.0;
-    pub const FILTER_RADIUS: f64 = 7.0;
+    pub const FILTER_RADIUS: f64 = 8.5;
     pub const FILTER_FONT_PT: f64 = 15.0;
     pub const FILTER_WEIGHT: u16 = 400;
     pub const FILTER_GAP: f64 = 11.0;

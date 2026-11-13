@@ -344,6 +344,8 @@ pub struct Model {
     select_query: bool,
     /// The panel just opened: its buttons bud out at once.
     just_shown: bool,
+    /// The primary modifier is held while the panel has the keyboard.
+    pub primary_held: bool,
 }
 
 impl Model {
@@ -398,6 +400,7 @@ impl Model {
             held: false,
             select_query: false,
             just_shown: false,
+            primary_held: false,
         }
     }
 
@@ -548,6 +551,10 @@ impl Model {
             Browser::from_entries(self.launcher.entries(), &recent, self.browse_height());
         browser.set_arrangement(self.arrangement);
         browser.set_query(&self.filter_text());
+        // the scroll indicator shows as the browser comes into view; on the settled clock it has already faded
+        if !self.settled {
+            browser.reveal_scroller(now.mono);
+        }
         self.browser = Some(browser);
     }
 
@@ -622,6 +629,9 @@ impl Model {
                         browser.set_height(height);
                         browser.set_query(&query);
                         browser.deselect();
+                        if !self.settled {
+                            browser.reveal_scroller(now.mono);
+                        }
                     }
                     None => self.open_browser(),
                 }
@@ -697,6 +707,7 @@ impl Model {
         }
         self.mode_hover = None;
         self.mode_focus = modes::Focus::default();
+        self.primary_held = false;
         self.panel.hide(now.mono);
         self.tracker.cancel();
         self.searched = None;
@@ -1353,7 +1364,14 @@ impl Model {
         if self.nav.view == View::Files {
             return self.scope_key(key, mods);
         }
+        let before = self.panel.query().to_owned();
         let outcome = self.panel.handle_key(key, mods, &mut self.launcher, now);
+        if self.panel.query() != before {
+            // a recalled search shows selected, so typing replaces it; a kind's token goes in with the caret after it
+            self.held = false;
+            self.select_query = key == PanelKey::Up;
+            self.revision += 1;
+        }
         let mut commands = self.outcome(outcome);
         // a shortcut that closes the panel (settings, help)
         if !self.panel.is_visible() && self.nav.is_visible() {
@@ -1622,6 +1640,10 @@ impl Model {
                     None => Vec::new(),
                 }
             }
+            Input::Primary(held) => {
+                self.primary_held = held;
+                Vec::new()
+            }
             Input::ScopeFilter(filter) => {
                 if let Some(files) = self.scope.as_mut() {
                     files.set_zone(scope::Zone::Filters);
@@ -1857,6 +1879,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         scope: files,
         file_images: &model.file_images,
         select_query: model.select_query,
+        show_location: model.primary_held,
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

@@ -222,41 +222,50 @@ pub struct BrowseLayout {
 }
 
 impl BrowseLayout {
-    /// The panel's size, its corner radius, and the least height it shrinks to on a short output.
+    /// The panel's size, its corner radius, and the least height it shrinks to on a short output. Its design height
+    /// is kept off the shape grid ([`crate::view::SHAPE_GRID`]); a panel shrunk to fit an output ends on it.
     pub const WIDTH: f64 = 844.0;
-    pub const HEIGHT: f64 = 576.0;
+    pub const HEIGHT: f64 = 577.0;
     pub const MIN_HEIGHT: f64 = 300.0;
     pub const RADIUS: f64 = 28.5;
-    /// The side inset of the category row and the separators.
+    /// The side inset of the separators and the scrolled area.
     pub const INSET: f64 = 20.0;
-    /// The columns' insets from the panel's left and right edges: the right one leaves the scroll indicator its lane.
-    pub const COLUMNS_LEFT: f64 = 24.0;
-    pub const COLUMNS_RIGHT: f64 = 18.0;
+    /// The columns' insets from the panel's left and right edges: the scroll indicator runs in the right one.
+    pub const COLUMNS_LEFT: f64 = 20.5;
+    pub const COLUMNS_RIGHT: f64 = 20.5;
     /// The header row (the query field's) and the separator under it.
     pub const HEADER: f64 = 56.0;
-    /// The category filters: the row's top, the filters' height, corner radius, text size and weight, the padding at
-    /// each end, the gap between filters and the most a filter grows to fill the row; the average advance of a
-    /// character of their text in ems, which a filter's width is reckoned from.
-    pub const CATEGORIES_TOP: f64 = 68.0;
+    /// The category filters: the row's top and its inset from the panel's sides, the filters' height, corner radius,
+    /// text size and weight, the padding at each end of their text, the least width of a filter with a short name and
+    /// the gap between filters; the advance of a character of their text in ems (a narrow one, a wide one, any other),
+    /// which a filter's width is reckoned from, a little over the face's own. The filters always fill their row.
+    pub const CATEGORIES_TOP: f64 = 67.0;
+    pub const CATEGORIES_INSET: f64 = 22.0;
     pub const FILTER_HEIGHT: f64 = 26.0;
-    pub const FILTER_RADIUS: f64 = 7.0;
-    pub const FILTER_FONT_PT: f64 = 14.0;
+    pub const FILTER_RADIUS: f64 = 8.5;
+    pub const FILTER_FONT_PT: f64 = 15.0;
     pub const FILTER_WEIGHT: u16 = 400;
-    pub const FILTER_PAD: f64 = 10.0;
-    pub const FILTER_GAP: f64 = 10.0;
-    pub const FILTER_GROW: f64 = 24.0;
-    pub const FILTER_CHAR_EM: f64 = 0.58;
+    pub const FILTER_PAD: f64 = 6.5;
+    pub const FILTER_MIN: f64 = 70.0;
+    pub const FILTER_GAP: f64 = 12.0;
+    pub const FILTER_CHAR_EM: f64 = 0.62;
+    pub const FILTER_NARROW_EM: f64 = 0.3;
+    pub const FILTER_WIDE_EM: f64 = 0.85;
+    /// How far a row too full for its filters may close the gaps and the padding before the names are cut.
+    pub const FILTER_MIN_GAP: f64 = 6.0;
+    pub const FILTER_MIN_PAD: f64 = 3.0;
     /// The scrolled area's top.
     pub const CONTENT_TOP: f64 = 104.0;
     /// Room under the scrolled content's last row, also kept under a row the keys scroll into view: the side inset,
     /// so a selection never runs into the panel's bottom edge.
     pub const CONTENT_BOTTOM: f64 = Self::INSET;
     /// A grid row: its height, the icon's top in it and size, the label's centre line, size and weight, and its inset
-    /// from its cell's sides.
+    /// from its cell's sides. The icon's box is larger than the picture it shows: an application icon keeps a margin
+    /// inside its image, and the picture itself is about 59.5 pt, its top 123 pt below the panel's.
     pub const ROW_HEIGHT: f64 = 102.0;
-    pub const ICON_TOP: f64 = 10.0;
-    pub const ICON: f64 = 60.0;
-    pub const LABEL_CY: f64 = 84.0;
+    pub const ICON_TOP: f64 = 15.25;
+    pub const ICON: f64 = 67.0;
+    pub const LABEL_CY: f64 = 94.25;
     pub const LABEL_FONT_PT: f64 = 13.0;
     pub const LABEL_WEIGHT: u16 = 400;
     pub const LABEL_INSET: f64 = 6.0;
@@ -285,14 +294,14 @@ impl BrowseLayout {
         Self {
             panel: Rect::new(0.0, 0.0, w, h),
             categories: Rect::new(
-                Self::INSET,
+                Self::CATEGORIES_INSET,
                 Self::CATEGORIES_TOP,
-                inner,
+                w - 2.0 * Self::CATEGORIES_INSET,
                 Self::FILTER_HEIGHT,
             ),
             content: Rect::new(Self::INSET, Self::CONTENT_TOP, inner, h - Self::CONTENT_TOP),
             columns_x: Self::COLUMNS_LEFT,
-            column: ((w - Self::COLUMNS_LEFT - Self::COLUMNS_RIGHT) / COLUMNS as f64).floor(),
+            column: (w - Self::COLUMNS_LEFT - Self::COLUMNS_RIGHT) / COLUMNS as f64,
         }
     }
 
@@ -315,40 +324,67 @@ impl BrowseLayout {
         )
     }
 
-    /// The filters' rectangles. Each is as wide as its text is reckoned to be plus its padding; a row with room to
-    /// spare widens them evenly, by at most [`Self::FILTER_GROW`] each, and a row too narrow narrows them all in
-    /// proportion.
+    /// The width the text of `category`'s filter is reckoned to take.
+    pub fn filter_text_width(category: Category) -> f64 {
+        let ems: f64 = category
+            .name()
+            .chars()
+            .map(|c| match c {
+                'i' | 'j' | 'l' | 't' | 'f' | 'r' | 'I' | ' ' => Self::FILTER_NARROW_EM,
+                'm' | 'w' | 'M' | 'W' | 'G' | 'O' | 'D' | 'C' | 'Q' => Self::FILTER_WIDE_EM,
+                _ => Self::FILTER_CHAR_EM,
+            })
+            .sum();
+        (ems * Self::FILTER_FONT_PT).ceil()
+    }
+
+    /// The filters' rectangles, which always fill the row. Each is its text and its padding, at least
+    /// [`Self::FILTER_MIN`] wide, and the width left over is shared evenly among them. A row too full for that lets go
+    /// of the least width first, then closes the gaps and the padding down to [`Self::FILTER_MIN_GAP`] and
+    /// [`Self::FILTER_MIN_PAD`], and only then narrows the filters in proportion.
     pub fn filter_rects(&self, categories: &[Category]) -> Vec<Rect> {
-        if categories.is_empty() {
+        let n = categories.len();
+        if n == 0 {
             return Vec::new();
         }
-        let natural: Vec<f64> = categories
-            .iter()
-            .map(|c| {
-                (c.name().chars().count() as f64 * Self::FILTER_CHAR_EM * Self::FILTER_FONT_PT)
-                    .ceil()
-                    + 2.0 * Self::FILTER_PAD
-            })
-            .collect();
-        let gaps = Self::FILTER_GAP * (categories.len() - 1) as f64;
-        let sum: f64 = natural.iter().sum();
         let room = self.categories.width();
-        let spare = room - gaps - sum;
+        let text: Vec<f64> = categories
+            .iter()
+            .map(|&c| Self::filter_text_width(c))
+            .collect();
+        let spaces = (n - 1) as f64;
+        let natural = |pad: f64, least: f64| -> Vec<f64> {
+            text.iter().map(|t| (t + 2.0 * pad).max(least)).collect()
+        };
+        let fits = |widths: &[f64], gap: f64| widths.iter().sum::<f64>() + gap * spaces <= room;
+        let mut gap = Self::FILTER_GAP;
+        let mut widths = natural(Self::FILTER_PAD, Self::FILTER_MIN);
+        if !fits(&widths, gap) {
+            widths = natural(Self::FILTER_PAD, 0.0);
+        }
+        if !fits(&widths, gap) {
+            let sum: f64 = widths.iter().sum();
+            gap = ((room - sum) / spaces.max(1.0)).max(Self::FILTER_MIN_GAP);
+        }
+        if !fits(&widths, gap) {
+            let texts: f64 = text.iter().sum();
+            let pad = ((room - gap * spaces - texts) / (2.0 * n as f64)).max(Self::FILTER_MIN_PAD);
+            widths = natural(pad, 0.0);
+        }
+        let sum: f64 = widths.iter().sum();
+        let spare = room - gap * spaces - sum;
         let widths: Vec<f64> = if spare >= 0.0 {
-            let grow = (spare / categories.len() as f64)
-                .min(Self::FILTER_GROW)
-                .floor();
-            natural.iter().map(|w| w + grow).collect()
+            widths.iter().map(|w| w + spare / n as f64).collect()
         } else {
-            let k = ((room - gaps) / sum).max(0.0);
-            natural.iter().map(|w| (w * k).floor()).collect()
+            let k = ((room - gap * spaces) / sum).max(0.0);
+            widths.iter().map(|w| w * k).collect()
         };
         let mut x = self.categories.x();
         widths
             .into_iter()
             .map(|w| {
                 let r = Rect::new(x, self.categories.y(), w, self.categories.height());
-                x += w + Self::FILTER_GAP;
+                x += w + gap;
                 r
             })
             .collect()
@@ -875,6 +911,13 @@ impl Browser {
         let recent = index < self.recents_shown();
         self.selected = self.item(index).map(|a| (a.id.clone(), recent));
         self.reveal(index);
+    }
+
+    /// The browser comes into view at `now`: the scroll indicator shows, as it does while the content scrolls, then
+    /// fades, so the length of the list reads at a glance.
+    pub fn reveal_scroller(&mut self, now: f64) {
+        self.clock = now;
+        self.scrolled_at = Some(now);
     }
 
     /// Scroll by `dy` points at `now`, within the content.

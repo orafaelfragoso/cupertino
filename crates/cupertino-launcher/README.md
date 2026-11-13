@@ -50,8 +50,11 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   When the shape changes the model asks the host to resize the surface (`LayerSurface::set_placement`), and the server's
   configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
   ends on whole device pixels at 1, 1.25, 1.5, 1.75 and 2. The window is transparent: the enclosure is large-panel glass
-  (`Glass::large_panel`, the regular recipe with its tones pressed together: a lower white, a lifted black and a little less
-  saturation, so the panel reads as one calm sheet over any wallpaper) with the panel's corner radius and a thin dark edge;
+  (`Glass::large_panel`, the regular recipe blurred twice as wide with a refraction band at most 6 pt deep and a face of its
+  own: in the dark appearance its tones pressed together, a lower white, a lifted black and a little less saturation; in the
+  light one a bright, more saturated sheet, black behind coming through as a light grey and a dark scene as a light tint of
+  its own hue, with a bright line just inside the edge; so the panel reads as one calm sheet over any wallpaper) with the
+  panel's corner radius and a thin dark edge;
   the compositor draws the glass's soft shadow outside its shape. Without the desktop's effects it paints `Surface::Menu`'s
   fill and a shadow of its own instead. While the browser shows, the panel fades by giving the glass, the search bar and
   the browser's body each their opacity rather than compositing the whole window as one group, which keeps every frame of
@@ -76,7 +79,10 @@ a category filter is cleared; the browser folds into the search field; the searc
 while it is up. A dismissal closes whatever is up, nested states included.
 
 **Application browser.** Under the field, which filters it, sit a row of category filters (each application in the first
-category its desktop entry's `Categories` maps to, `browse::Category::of`, or Other) and the applications in 7 columns: a row of
+category its desktop entry's `Categories` maps to, `browse::Category::of`, or Other): 26 pt pills with 8.5 pt corners, a light lift over the
+glass with their names in the secondary text colour, as wide as their names and spread so the row always spans the browser,
+narrowing their gaps and padding before a name would be cut (`BrowseLayout::filter_rects`). The applications sit in 7 columns
+with 67 pt icons: a row of
 the recently used ones (from the launch history), a separator, then every application by name. View Options at the header's end
 switches between the grid and a list, which the process remembers while it runs. Its menu is a Kit `Menu` in a grabbing popup of
 the panel's window, below the button and free of the panel's bounds, on the menu material every menu of the shell uses; it holds
@@ -85,9 +91,9 @@ system reports it, so one that follows the menu's dismissal (something else took
 no focus ring; one made after Tab reached the button leaves the ring on it. The keyboard stays in the field: the arrows,
 Page Up/Down, Home and End move the selection, Return opens it, Tab and Shift+Tab move between the applications, the filters and
 View Options, and the selection is spoken through a polite live region. The content scrolls under a scroll indicator that shows
-while it moves (`browse::SCROLLER_LINGER`, `SCROLLER_FADE`), and keeps the side inset (`BrowseLayout::CONTENT_BOTTOM`) under its
+while it moves and for a moment after the browser opens (`browse::SCROLLER_LINGER`, `SCROLLER_FADE`), and keeps the side inset (`BrowseLayout::CONTENT_BOTTOM`) under its
 last row and under a row the keys scroll to. A filter starts the selection and the scroll over; clearing it puts
-back the scroll the unfiltered view had. The browser reopens at the top with nothing selected. It is 844 × 576 pt, and on a short
+back the scroll the unfiltered view had. The browser reopens at the top with nothing selected. It is 844 × 577 pt, and on a short
 output it leaves 96 pt free below (`kit::BROWSE_BOTTOM_ROOM`, at least 300 pt tall). Icons load at 32, 60, 120 and 180 px,
 the generic application icon standing in for a missing one. They are looked up, read and decoded off the loop, on a
 thread of the host's with its own icon lookup (`Host::app_icon`, answered as `Message::AppIcon`), nearest the view
@@ -110,10 +116,12 @@ and searches nothing until it is edited.
 
 **Motion.** `motion` presents the panel at a time passed in: its shape, opacity, scale about its centre, the scope
 content's opacity, how blurred it is, which header shows and the mode buttons. Opening starts the enclosure at 1.1 times
-its size and settles it to 1 on an underdamped spring (0.30 s response, damping 0.7) while it fades in over 0.1 s (a
-scope's content following 0.08 s later over 0.10 s); unfolding opens the shape along a spring (0.27 s, damping 0.83 growing;
+its size and settles it to 1 on an underdamped spring (0.30 s response, damping 0.74) while it fades in over 0.1 s (a
+scope's content following 0.08 s later over 0.10 s); the plain search bar only widens from that scale, its height staying
+57 pt. The mode buttons bud out on their own spring and their symbols sharpen 0.25 s later; after a scope folds back into
+the bar they wait 1.1 s before budding again (`motion::RESPLIT_DELAY`). Unfolding opens the shape along a spring (0.27 s, damping 0.83 growing;
 0.295 s, 0.86 shrinking) with the content fading in 0.06 s later over 0.12 s, and into the files scope the width also dips
-by 123 pt and comes back; folding fades the content out over 0.05 s, then contracts the shape along the spring; closing takes
+by 123 pt and comes back, the header switching and the growth starting 0.09 s after the dip (`motion::FILES_GROW_DELAY`); folding fades the content out over 0.05 s, then contracts the shape along the spring; closing takes
 0.1 s: the enclosure grows 2 %, its content blurs and everything fades. A transition under way turns from where it is with its
 velocity. Only the enclosure's rect scales; the content keeps its layout and is centred in it. Once the spring is past its
 settling time, or within 1/64 pt of its target for a frame, the target itself is presented, so a later repaint never reshapes the
@@ -135,8 +143,12 @@ then is that some results could not be searched, which is what the row shows too
 result enlarges its preview (Escape returns to the list); a preview that has not arrived 1.5 s later (`kit::PREVIEW_TIMEOUT`)
 says there is none, and one that arrives late still shows.
 
-**Input and dismissal.** The query is Kit's `BareField`, a text field without chrome set at 26 pt, which has the keyboard while
-the panel is open. The panel's own keys never
+**Input and dismissal.** The query is Kit's `BareField`, a text field without chrome set at 26 pt in a 57 pt bar, its
+text starting 63 pt in, after a 23 pt search symbol, which has the keyboard while the panel is open. An empty field lists
+nothing. A kind token anywhere in the query (`/apps`, `/files`, `/folders`, `/calc`, `/web`; `refine`) keeps only the results
+of its kind, and Tab after a kind's name alone turns it into the token. Up in an empty field recalls the last searches that
+opened something (newest first, at most 20, shown selected). Holding the Primary modifier shows the selected file's location
+in the preview pane. The panel's own keys never
 reach it: the panel's root widget takes them in the capture phase (`panel::takes_key`, with Kit's key event translated by
 `view::panel_key`: named keys by keysym, typing by the layout's character, command chords by the lower-case letter) and the model
 runs them through `Panel::handle_key`. Every other key edits the field, which reports the query back. Hover selects a row, a click on
@@ -221,21 +233,21 @@ calculator and conversion rows have no icon. Missing assets are reported once at
 | Corner radius | 28 pt (a capsule while collapsed), kept as the panel grows |
 | Material | large-panel glass (the compositor's shadow: 28 pt blur, 16 pt below, black at 0.5 dark or 0.22 light); a 0.5 pt edge, black at 0.55 or 0.12; without effects the menu fill and a 40 pt shadow, 16 pt below |
 | Position | horizontally centred, the panel's top edge at 1/5 of the output height |
-| Input | a 22 pt search symbol, 16 pt gap, the query at 26 pt without chrome, 22 pt side margins |
+| Input | a 57 pt bar, a 23 pt search symbol 23 pt in, the query at 26 pt without chrome starting 63 pt in; an empty field lists nothing |
 | Results list / preview | 288 pt list, a separator, the preview in the rest with 16 pt padding |
 | Separators | over the glass a 1 pt line of white at 0.175 (dark) or black at 0.1 (light); the theme's separator colour over the opaque fill and with Increase Contrast |
 | Preview | picture at most 300 × 136 pt (6 pt corners), icon 64 pt, name 15 pt semibold, details 11 pt with labels ending at the pane's middle, value 28 pt; the pane takes the width the list leaves |
 | Action buttons | 26 pt capsules, 4 pt apart, at most 4 shown around the chosen one |
 | Result icon, selection radius, cell inset | 32 pt, 12 pt continuous, 12 pt |
 | Selected-row fill | the theme's secondary selected-control fill, text keeps its label colours, no animation |
-| Keyboard | no wrap, Up on the first result leaves the list, Primary+Up/Down jump sections, Backspace/Delete/Esc in the list return to the field, Esc clears then closes, Tab/Shift+Tab cycle the actions, Left/Right step them in the list, Primary+Return/R/B/I/Y/K/L/D/,/H commands |
+| Keyboard | no wrap, Up on the first result leaves the list, Primary+Up/Down jump sections, Backspace/Delete/Esc in the list return to the field, Esc clears then closes, Tab/Shift+Tab cycle the actions, Left/Right step them in the list, Primary+Return/R/B/I/Y/K/L/D/,/H commands; Up in an empty field recalls searches that opened something, Tab after a kind's name scopes to it, `/apps` `/files` `/folders` `/calc` `/web` tokens keep one kind, Primary held shows a file's location |
 | Top hit | one item, moved out of its section; a calculation or conversion leads instead |
 | Conversions | length, mass, US customary volume, area, time (a Julian year), data (decimal and binary), speed, temperature, angle; no currencies; 6 significant digits |
 | Section limits for hosts | 3 rows per section, 5 sections before "show more", 3 suggestions |
 | Category defaults | `engine::DEFAULT_CATEGORY_ORDER` (enablement list; runtime order is relevance driven) |
-| Motion | open from 1.1 scale about the centre, spring 0.30 s damping 0.7, fade 0.10 s; content 0.08 s later over 0.10 s; shape spring 0.27 s / 0.83 growing and 0.295 s / 0.86 shrinking; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.10 s (grows 2 %, blurs, fades); mode buttons bud on springs of 0.305 s / 0.68 (field) and 0.575 s / 0.69 (buttons); Reduce Motion: fades only |
+| Motion | open from 1.1 scale about the centre, spring 0.30 s damping 0.74 (the plain bar widens only), fade 0.10 s; content 0.08 s later over 0.10 s; shape spring 0.27 s / 0.83 growing and 0.295 s / 0.86 shrinking; unfolding content 0.06 s later over 0.12 s; fold fade 0.05 s; close 0.10 s (grows 2 %, blurs, fades); mode buttons bud on springs of 0.305 s / 0.68 (field) and 0.575 s / 0.69 (buttons), symbols sharpening 0.25 s later and budding again 1.1 s after a fold; into the files scope the growth 0.09 s after the width's dip; Reduce Motion: fades only |
 | Shape grid | settled widths and heights on multiples of 4 pt |
-| Browser | 844 × 576 pt, 28.5 pt corners, 7 columns of 102 pt rows (60 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters (14 pt regular), 96 pt kept free below on a short output |
+| Browser | 844 × 577 pt, 28.5 pt corners, 7 columns of 102 pt rows (67 pt icons, 13 pt labels), 44 pt list rows (32 pt icons), 26 pt category filters (15 pt regular, 8.5 pt corners, the row always filled), 96 pt kept free below on a short output |
 | Deadlines | file search 0.5 s, enlarged preview 1.5 s |
 | Row height 40, header 32, calculator row 64 | authored |
 

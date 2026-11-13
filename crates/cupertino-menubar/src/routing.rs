@@ -808,8 +808,8 @@ mod tests {
             }),
             Some(Action::Request(Request::TogglePanel))
         );
-        // 1000 wide bar: clock 51 and control panel 32 from the right inset of 6, then the 36 wide
-        // status slot at 875 with its middle at 893, on the output at x = 1920
+        // 1000 wide bar: clock 51 and control panel 32 from the right inset of 6, then the 32 wide
+        // status slot at 879 with its middle at 895, on the output at x = 1920
         assert_eq!(
             f.resolve(Effect::SlotActivated {
                 slot: SlotKey::Status(":1.9/StatusNotifierItem".into())
@@ -817,7 +817,7 @@ mod tests {
             Some(Action::Request(Request::ActivateStatus {
                 service: ":1.9".into(),
                 path: "/StatusNotifierItem".into(),
-                x: 2813,
+                x: 2815,
                 y: 12
             }))
         );

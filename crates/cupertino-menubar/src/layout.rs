@@ -38,6 +38,8 @@ impl TextMeasure for MonoMeasure {
 pub const STATUS_ICON_PT: f64 = 16.0;
 /// Edge of the system menu's mark in points: the grid it is drawn on, so its strokes fall on whole pixels.
 pub const SYSTEM_MARK_PT: f64 = 16.0;
+/// Room on each side of the system menu's mark in its slot.
+pub const SYSTEM_MARK_PADDING: f64 = 10.875;
 /// Diameter of the privacy indicator dot attached to a menu-bar item (6 pt).
 pub const PRIVACY_DOT_PT: f64 = 6.0;
 
@@ -48,19 +50,21 @@ pub struct BarMetrics {
     pub height: f64,
     /// Space between the output edge and the first / last slot.
     pub edge_inset: f64,
-    /// Horizontal padding inside a title slot (each side): half the space between two titles.
+    /// Horizontal padding inside a title slot (each side): half the space between two titles' text.
     pub title_padding: f64,
-    /// Horizontal padding around a status item icon (each side): half the space between two icons.
-    pub status_padding: f64,
+    /// Room on each side of a status item's content inside its frame, the shape its highlight fills.
+    pub status_frame_padding: f64,
+    /// Space between the frames of two items of the status area (status items, the control panel, the clock). Each
+    /// slot reaches half of it past its frame, so the slots meet and two contents are `2 * status_frame_padding +
+    /// status_spacing` apart.
+    pub status_spacing: f64,
     /// How far the highlight of a title or the system mark reaches past its slot on each side.
     pub title_highlight_overhang: f64,
-    /// How far the highlight of a status item reaches past its slot on each side.
-    pub status_highlight_overhang: f64,
     /// Width of the system menu slot.
     pub system_width: f64,
-    /// Width of the control panel slot.
+    /// Width of the control panel slot: its glyph, the frame's padding and the spacing.
     pub control_panel_width: f64,
-    /// Padding of the clock text (each side).
+    /// Padding of the clock text (each side): the frame's padding and half the spacing.
     pub clock_padding: f64,
     /// Smallest gap kept between the menus and the status area before items are dropped.
     pub min_gap: f64,
@@ -75,16 +79,34 @@ impl Default for BarMetrics {
         Self {
             height: 24.0,
             edge_inset: 6.0,
-            title_padding: 10.875,
-            status_padding: 10.0,
+            title_padding: 10.0,
+            status_frame_padding: 5.0,
+            status_spacing: 6.0,
             title_highlight_overhang: 3.875,
-            status_highlight_overhang: 2.5,
-            system_width: SYSTEM_MARK_PT + 2.0 * 10.875,
+            system_width: SYSTEM_MARK_PT + 2.0 * SYSTEM_MARK_PADDING,
             control_panel_width: 32.0,
             clock_padding: 8.0,
             min_gap: 24.0,
             selection_corner_radius: 11.0,
             selection_inset_y: 1.0,
+        }
+    }
+}
+
+impl BarMetrics {
+    /// Where the highlight of the slot of `key`, `width` points wide, lies along it: its left edge from the slot's and
+    /// its width. A title's and the system mark's reach [`BarMetrics::title_highlight_overhang`] past the slot on each
+    /// side; an item of the status area's fills its frame, the slot less half the spacing on each side.
+    pub fn highlight_span(&self, key: &SlotKey, width: f64) -> (f64, f64) {
+        match key {
+            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => (
+                -self.title_highlight_overhang,
+                width + 2.0 * self.title_highlight_overhang,
+            ),
+            SlotKey::Status(_) | SlotKey::ControlPanel | SlotKey::Clock => {
+                let inset = self.status_spacing / 2.0;
+                (inset, (width - 2.0 * inset).max(0.0))
+            }
         }
     }
 }
@@ -219,7 +241,7 @@ pub fn layout_bar(
     let fixed_right = right;
     let mut status_slots: Vec<Slot> = Vec::new();
     for s in &content.status {
-        let w = s.width + 2.0 * metrics.status_padding;
+        let w = s.width + 2.0 * metrics.status_frame_padding + metrics.status_spacing;
         right -= w;
         status_slots.push(Slot {
             key: SlotKey::Status(s.id.clone()),
@@ -712,6 +734,54 @@ mod tests {
         let clock = l.slot(&SlotKey::Clock).unwrap();
         assert!((clock.rect.right() - (1920.0 - 6.0)).abs() < 1e-9);
         assert!(l.hidden_menus.is_empty() && l.hidden_status.is_empty());
+    }
+
+    /// A title is its text and 10 points on each side; the items of the status area are 16 points apart from content to
+    /// content, each highlight is its frame (the content and 5 points on each side) with no overhang, and two frames
+    /// are 6 points apart.
+    #[test]
+    fn titles_and_status_items_are_spaced_by_their_frames() {
+        let metrics = BarMetrics::default();
+        let measure = MonoMeasure::default();
+        let l = layout_bar(OUT, &content(), &metrics, &measure);
+        let file = l.slot(&SlotKey::Menu(ItemId(1))).unwrap().rect;
+        assert!((file.w - (measure.width("File", false) + 10.0 + 10.0)).abs() < 1e-9);
+        let rect = |key: SlotKey| l.slot(&key).unwrap().rect;
+        let (vol, net) = (
+            rect(SlotKey::Status("vol".into())),
+            rect(SlotKey::Status("net".into())),
+        );
+        let content_x = |r: Rect| r.x + (r.w - 16.0) / 2.0;
+        assert!((content_x(net) - content_x(vol) - (16.0 + 16.0)).abs() < 1e-9);
+        let frame = |key: SlotKey, r: Rect| {
+            let (dx, w) = metrics.highlight_span(&key, r.w);
+            (r.x + dx, w)
+        };
+        let (vol_x, vol_w) = frame(SlotKey::Status("vol".into()), vol);
+        let (net_x, net_w) = frame(SlotKey::Status("net".into()), net);
+        assert!((vol_w - (16.0 + 10.0)).abs() < 1e-9 && (net_w - 26.0).abs() < 1e-9);
+        assert!(
+            (net_x - (vol_x + vol_w) - 6.0).abs() < 1e-9,
+            "frames 6 apart"
+        );
+        let cp = rect(SlotKey::ControlPanel);
+        let clock = rect(SlotKey::Clock);
+        let (cp_x, cp_w) = frame(SlotKey::ControlPanel, cp);
+        let (clock_x, clock_w) = frame(SlotKey::Clock, clock);
+        assert!((cp_x - (net_x + net_w) - 6.0).abs() < 1e-9);
+        assert!((clock_x - (cp_x + cp_w) - 6.0).abs() < 1e-9);
+        assert!((clock_w - (measure.width("Tue 10:42", false) + 10.0)).abs() < 1e-9);
+        // the highlight lies inside the item's own slot: no overhang
+        for (key, r) in [
+            (SlotKey::Status("vol".into()), vol),
+            (SlotKey::ControlPanel, cp),
+            (SlotKey::Clock, clock),
+        ] {
+            let (dx, w) = metrics.highlight_span(&key, r.w);
+            assert!(dx >= 0.0 && dx + w <= r.w, "{key:?}");
+        }
+        // a title's highlight still reaches past its slot
+        assert!(metrics.highlight_span(&SlotKey::Menu(ItemId(1)), file.w).0 < 0.0);
     }
 
     #[test]

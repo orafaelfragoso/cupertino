@@ -763,11 +763,12 @@ fn differ_only_in(a: &Pixmap, b: &Pixmap, inside: Rect) -> (bool, bool) {
 fn the_item_of_an_open_panel_is_highlighted_and_expanded() {
     let run = Run::start();
     let layout = run.model().controller.layout();
-    // an item's highlight reaches a little past its slot on each side, and its edge touches the pixels it crosses
-    let reach = BarMetrics::default().status_highlight_overhang;
+    // an item's highlight fills its frame inside its slot, and its edge touches the pixels it crosses
+    let metrics = BarMetrics::default();
     let slot = |key: &SlotKey| {
         let r = layout.slot(key).unwrap().rect;
-        let (left, right) = ((r.x - reach).floor(), (r.right() + reach).ceil());
+        let (dx, w) = metrics.highlight_span(key, r.w);
+        let (left, right) = ((r.x + dx).floor(), (r.x + dx + w).ceil());
         Rect::new(left, r.y, right - left, r.h)
     };
     let (panel, clock) = (slot(&SlotKey::ControlPanel), slot(&SlotKey::Clock));

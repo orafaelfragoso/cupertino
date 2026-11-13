@@ -1198,18 +1198,11 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
         let size = cx.size();
         let m = &self.metrics;
         if self.highlighted {
-            // a capsule that reaches past the slot's padding, over the room between two slots
-            let overhang = match self.slot.key {
-                SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => m.title_highlight_overhang,
-                _ => m.status_highlight_overhang,
-            };
+            // a capsule: a title's reaches past the slot's padding, over the room between two titles; a status item's
+            // fills its frame
+            let (x, width) = m.highlight_span(&self.slot.key, size.width);
             let height = size.height - 2.0 * m.selection_inset_y;
-            let rect = Rect::new(
-                -overhang,
-                m.selection_inset_y,
-                size.width + 2.0 * overhang,
-                height,
-            );
+            let rect = Rect::new(x, m.selection_inset_y, width, height);
             let radius = m.selection_corner_radius.min(height / 2.0);
             fill(cx, rect, radius, palette.bar_highlight);
         }

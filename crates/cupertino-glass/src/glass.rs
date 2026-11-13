@@ -14,9 +14,10 @@
 //!    `c − (1 − max_luma) · L · (0.75 c + 0.25 L)` (a grey `x` becomes `x − (1 − max_luma) · x²`); the levels, one shift
 //!    `black · (1 − L) − (1 − white) · L` added to every channel, `L` the luma after the compression; a limit at
 //!    `clamp`; then the fill colour over it.
-//! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read further out along the field's
-//!    normal, by `−amount · REFRACTION_REACH_PER_AMOUNT · (1 − t)²` points where `t` runs from 0 at the edge to 1 at the
-//!    band's inner side: what lies past the edge bends into the rim.
+//! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read `amount · g(t)` points along
+//!    the field's outward normal, where `t` runs from 0 at the edge to 1 at the band's inner side and
+//!    `g(t) = 0.9 · e^(−4.2 t) · (1 − t⁴)` ([`refraction_profile`]): a negative strength reads it further inside, so the
+//!    edge magnifies what lies just inside it.
 //! 4. **Bleed.** The blur fill, mapped to the encoded range `[black, white]` after its own saturation, blends
 //!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass. It
 //!    shows at the bleed's opacity, which is 0 at rest.
@@ -36,8 +37,8 @@
 //! Colours are straight sRGB-encoded `f32` unless a function says otherwise.
 
 use cupertino_theme::glass::{
-    apply_matrix, rim_brightness, rim_direction, ColorMatrix, GlassParams, BLUR_LEVELS,
-    REFRACTION_REACH_PER_AMOUNT, RIM_DEPTH_PER_HEIGHT,
+    apply_matrix, refraction_profile, rim_brightness, rim_direction, ColorMatrix, GlassParams,
+    BLUR_LEVELS, RIM_DEPTH_PER_HEIGHT,
 };
 
 /// Deviations closer than this, in points, are blurred once.
@@ -57,17 +58,67 @@ const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 pub type Rgb = [f32; 3];
 
-/// One shape of a container: a rectangle `[x, y, w, h]` with circular corners of `radius` (clamped to half the short
-/// side; a capsule has exactly that).
+/// How a glass shape's corners curve.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GlassCorner {
+    /// A quarter circle of the radius.
+    Circular,
+    /// A superellipse quadrant over [`CONTINUOUS_EXTENT`] times the radius of each side, of exponent
+    /// [`CONTINUOUS_EXPONENT`]: the curve leaves the straight edge without a kink in its curvature.
+    #[default]
+    Continuous,
+}
+
+/// How far a continuous corner reaches along each side, per point of its radius.
+pub const CONTINUOUS_EXTENT: f32 = 1.53;
+/// The exponent of a continuous corner's superellipse (2 is a circle).
+pub const CONTINUOUS_EXPONENT: f32 = 3.33;
+
+/// One shape of a container: a rectangle `[x, y, w, h]` with corners of `radius` (clamped to half the short side; a
+/// capsule has exactly that), continuous unless set otherwise.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassShape {
     pub rect: [f32; 4],
     pub radius: f32,
+    pub corner: GlassCorner,
 }
 
 impl GlassShape {
     pub fn new(rect: [f32; 4], radius: f32) -> Self {
-        Self { rect, radius }
+        Self {
+            rect,
+            radius,
+            corner: GlassCorner::Continuous,
+        }
+    }
+
+    /// The shape with corners curving as `corner` says.
+    pub fn with_corner(self, corner: GlassCorner) -> Self {
+        Self { corner, ..self }
+    }
+
+    /// How far each corner reaches along the sides, in points, and the exponent of its superellipse. A continuous
+    /// corner reaches [`CONTINUOUS_EXTENT`] times the radius; once that would pass half the short side it stays there,
+    /// and its exponent eases from [`CONTINUOUS_EXPONENT`] to 2 as the radius grows to half the short side, so a
+    /// capsule has round ends.
+    pub fn corner_shape(&self) -> (f32, f32) {
+        let r = self.fitted_radius();
+        let half = self.short_side() * 0.5;
+        if r <= 0.0 {
+            return (0.0, 2.0);
+        }
+        match self.corner {
+            GlassCorner::Circular => (r, 2.0),
+            GlassCorner::Continuous => {
+                let extent = CONTINUOUS_EXTENT * r;
+                if extent <= half {
+                    return (extent, CONTINUOUS_EXPONENT);
+                }
+                let from = half / CONTINUOUS_EXTENT;
+                let t = ((r - from) / (half - from).max(1e-6)).clamp(0.0, 1.0);
+                (half, CONTINUOUS_EXPONENT + (2.0 - CONTINUOUS_EXPONENT) * t)
+            }
+        }
     }
 
     /// A capsule: the corners are half the short side.
@@ -84,17 +135,40 @@ impl GlassShape {
         self.radius.clamp(0.0, self.short_side() * 0.5)
     }
 
-    /// Signed distance from `p` to the shape's outline, negative inside.
+    /// Signed distance from `p` to the shape's outline, negative inside: exact along the straight edges and for
+    /// circular corners, to first order in a continuous corner (the superellipse norm's excess over its slope).
     pub fn sdf(&self, p: [f32; 2]) -> f32 {
         let [x, y, w, h] = self.rect;
-        let r = self.fitted_radius();
-        let q = [
-            (p[0] - (x + w * 0.5)).abs() - (w * 0.5 - r),
-            (p[1] - (y + h * 0.5)).abs() - (h * 0.5 - r),
-        ];
-        let outside = (q[0].max(0.0).powi(2) + q[1].max(0.0).powi(2)).sqrt();
-        outside + q[0].max(q[1]).min(0.0) - r
+        let (e, n) = self.corner_shape();
+        rounded_box_sdf(
+            [p[0] - (x + w * 0.5), p[1] - (y + h * 0.5)],
+            [w * 0.5, h * 0.5],
+            e,
+            n,
+        )
     }
+}
+
+/// Signed distance from `p` (relative to the centre) to a box of half size `half` whose corners reach `e` along each
+/// side with a superellipse of exponent `n` (2 is a circle).
+pub fn rounded_box_sdf(p: [f32; 2], half: [f32; 2], e: f32, n: f32) -> f32 {
+    let e = e.clamp(0.0, half[0].min(half[1]));
+    let q = [p[0].abs() - (half[0] - e), p[1].abs() - (half[1] - e)];
+    if q[0] <= 0.0 || q[1] <= 0.0 || e <= 0.0 {
+        let outside = (q[0].max(0.0).powi(2) + q[1].max(0.0).powi(2)).sqrt();
+        return outside + q[0].max(q[1]).min(0.0) - e;
+    }
+    if n <= 2.0 {
+        return (q[0] * q[0] + q[1] * q[1]).sqrt() - e;
+    }
+    let u = [(q[0] / e).max(1e-6), (q[1] / e).max(1e-6)];
+    let un = [u[0].powf(n), u[1].powf(n)];
+    let g = (un[0] + un[1]).powf(1.0 / n);
+    // the norm's gradient: u^(n − 1) / g^(n − 1) on each axis
+    let gn = g.powf(n - 1.0);
+    let slope = ((un[0] / u[0] / gn).powi(2) + (un[1] / u[1] / gn).powi(2)).sqrt();
+    // never nearer than the corner's square, which holds the curve
+    ((g - 1.0) * e / slope.max(1e-6)).max(q[0].max(q[1]) - e)
 }
 
 /// A smooth union of two distances with blend width `k` (0 is a hard union), and the weight of `a` in the blend, for
@@ -270,13 +344,13 @@ pub fn face_color(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
 }
 
 /// Stage 3: where the face is read for a pixel `d` from the edge (negative inside) with outward `normal`, as an
-/// offset in points. Zero outside the band and without refraction.
+/// offset in points: `amount · g(−d / height)` along the normal ([`refraction_profile`]), further inside for a negative
+/// strength. Zero outside the shape, past the band and without refraction.
 pub fn refraction_offset(d: f32, normal: [f32; 2], amount: f32, height: f32) -> [f32; 2] {
     if height <= 0.0 || amount == 0.0 || d > 0.0 {
         return [0.0, 0.0];
     }
-    let t = (-d / height).clamp(0.0, 1.0);
-    let reach = -amount * REFRACTION_REACH_PER_AMOUNT * (1.0 - t) * (1.0 - t);
+    let reach = amount * refraction_profile(-d / height);
     [normal[0] * reach, normal[1] * reach]
 }
 
@@ -663,9 +737,10 @@ pub struct GlassUniform {
     pub ring: [f32; 4],
     /// Each shape: x, y, w, h.
     pub shapes: [[f32; 4]; MAX_SHAPES],
-    /// Each shape: corner radius, refraction offset at the edge, refraction band, bleed fraction.
+    /// Each shape: how far its corners reach along the sides, refraction strength, refraction band, bleed fraction.
     pub shape_a: [[f32; 4]; MAX_SHAPES],
-    /// Each shape: bleed band, largest luminance, where its blur lies among the blurred copies, 0.
+    /// Each shape: bleed band, largest luminance, where its blur lies among the blurred copies, the exponent of its
+    /// corners' superellipse.
     pub shape_b: [[f32; 4]; MAX_SHAPES],
 }
 
@@ -741,13 +816,14 @@ impl GlassUniform {
         ];
         for (i, (shape, v)) in container.shapes.iter().zip(&container.values).enumerate() {
             u.shapes[i] = shape.rect.map(|x| x * scale);
+            let (extent, exponent) = shape.corner_shape();
             u.shape_a[i] = [
-                shape.fitted_radius() * scale,
-                -v.refraction_amount * REFRACTION_REACH_PER_AMOUNT * scale,
+                extent * scale,
+                v.refraction_amount * scale,
                 v.refraction_height * scale,
                 (v.bleed_amount / 100.0).clamp(0.0, 1.0) * p.bleed.opacity.clamp(0.0, 1.0),
             ];
-            u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, 0.0];
+            u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, exponent];
         }
         u
     }
@@ -802,8 +878,182 @@ mod tests {
     }
 
     #[test]
+    fn a_continuous_corner_reaches_further_than_its_radius_and_rounds_a_capsule() {
+        // 12 on a 40 pt side: the curve starts 1.53 · 12 from the corner, exponent 3.33
+        let s = GlassShape::new([0.0, 0.0, 100.0, 40.0], 12.0);
+        let (e, n) = s.corner_shape();
+        assert!(close(e, 18.36, 1e-4) && n == CONTINUOUS_EXPONENT, "{e} {n}");
+        // once 1.53 · r passes half the short side the reach stays there and the exponent eases to 2
+        let (e, n) = GlassShape::new([0.0, 0.0, 100.0, 40.0], 16.0).corner_shape();
+        let t = (16.0 - 20.0 / CONTINUOUS_EXTENT) / (20.0 - 20.0 / CONTINUOUS_EXTENT);
+        assert!(
+            close(e, 20.0, 1e-5) && close(n, 3.33 - 1.33 * t, 1e-4),
+            "{e} {n}"
+        );
+        // and a capsule's ends are half circles: the same distances as with circular corners
+        let capsule = GlassShape::new([0.0, 0.0, 100.0, 40.0], 20.0);
+        assert_eq!(capsule.corner_shape(), (20.0, 2.0));
+        let round = capsule.with_corner(GlassCorner::Circular);
+        for p in [
+            [3.0, 4.0],
+            [10.0, -2.0],
+            [96.0, 37.0],
+            [50.0, 20.0],
+            [1.0, 20.0],
+        ] {
+            assert!(close(capsule.sdf(p), round.sdf(p), 1e-4), "{p:?}");
+        }
+        // the reach grows without a jump as the radius passes the point where it is capped
+        let at = |r: f32| GlassShape::new([0.0, 0.0, 100.0, 40.0], r).corner_shape();
+        let edge = 20.0 / CONTINUOUS_EXTENT;
+        let (below, above) = (at(edge - 1e-3), at(edge + 1e-3));
+        assert!(close(below.0, above.0, 1e-2) && close(below.1, above.1, 1e-2));
+        assert_eq!(GlassShape::new([0.0; 4], 0.0).corner_shape(), (0.0, 2.0));
+    }
+
+    #[test]
+    fn the_continuous_outline_runs_through_its_superellipse() {
+        let s = GlassShape::new([10.0, 20.0, 120.0, 60.0], 14.0);
+        let (e, n) = s.corner_shape();
+        // the bottom right corner's centre: the curve is (cos θ)^(2/n), (sin θ)^(2/n) of its reach from there
+        let centre = [130.0 - e, 80.0 - e];
+        for i in 0..=16 {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / 16.0;
+            let (u, v) = (a.cos().powf(2.0 / n), a.sin().powf(2.0 / n));
+            let p = [centre[0] + e * u, centre[1] + e * v];
+            assert!(s.sdf(p).abs() < 1e-3, "θ {a}: {}", s.sdf(p));
+        }
+        // it lies outside the circle of the radius at the diagonal: the corner is fuller where it meets the straight
+        // edge, and still cut well inside the square
+        let circle = s.with_corner(GlassCorner::Circular);
+        let diagonal = [130.0 - 1.5, 80.0 - 1.5];
+        assert!(s.sdf(diagonal) > 0.0 && circle.sdf(diagonal) > 0.0);
+        let near_edge = [130.0 - 0.4, 80.0 - e + 4.0];
+        assert!(s.sdf(near_edge) < 0.0 && circle.sdf(near_edge) < 0.0);
+        // on the straight edge's line, 16 from the corner, the circle has not started bending and the continuous corner
+        // has
+        let curve_start = [130.0, 80.0 - 16.0];
+        assert!(
+            s.sdf(curve_start) > 0.03 && circle.sdf(curve_start).abs() < 1e-5,
+            "a continuous corner starts bending before the radius does: {}",
+            s.sdf(curve_start)
+        );
+    }
+
+    #[test]
+    fn the_corner_distance_is_close_to_the_exact_distance_near_the_outline() {
+        let s = GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0);
+        let (e, n) = s.corner_shape();
+        let mut worst = 0.0f32;
+        for i in 0..=40 {
+            for j in 0..=40 {
+                // around the top left corner, in the square the curve lies in and a band outside it
+                let p = [
+                    -4.0 + (e + 4.0) * i as f32 / 40.0,
+                    -4.0 + (e + 4.0) * j as f32 / 40.0,
+                ];
+                let q = [e - p[0], e - p[1]];
+                if q[0] <= 0.0 || q[1] <= 0.0 {
+                    continue;
+                }
+                let exact = cupertino_geometry::rounded::corner_sdf_exact(
+                    q[0] as f64,
+                    q[1] as f64,
+                    e as f64,
+                    n as f64,
+                ) as f32;
+                let ours = s.sdf(p);
+                if exact.abs() < 2.0 {
+                    worst = worst.max((ours - exact).abs());
+                }
+                assert_eq!(ours > 0.0, exact > 0.0, "{p:?}: {ours} {exact}");
+            }
+        }
+        assert!(
+            worst < 0.1,
+            "within a tenth of a point of the outline's two points: {worst}"
+        );
+    }
+
+    #[test]
+    fn straight_pixel_aligned_edges_cover_whole_pixels() {
+        for corner in [GlassCorner::Continuous, GlassCorner::Circular] {
+            let c = Container::new(
+                vec![GlassShape::new([10.0, 10.0, 100.0, 50.0], 12.0).with_corner(corner)],
+                0.0,
+                GlassMode::default(),
+            );
+            let grey = |_: usize, _: [f32; 2]| [0.5; 3];
+            // pixel centres just inside and just outside each straight edge, away from the corners
+            for (inside, outside) in [
+                ([10.5, 35.5], [9.5, 35.5]),
+                ([109.5, 35.5], [110.5, 35.5]),
+                ([60.5, 10.5], [60.5, 9.5]),
+                ([60.5, 59.5], [60.5, 60.5]),
+            ] {
+                assert_eq!(c.shade(inside, &grey).1, 1.0, "{corner:?} {inside:?}");
+                // half a pixel out: no glass, and the drop shadow starts past it
+                assert_eq!(c.field(outside).0, 0.5, "{corner:?} {outside:?}");
+                assert_eq!(c.shade(outside, &grey).1, 0.0, "{corner:?} {outside:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_shaded_face_reads_the_backdrop_its_profile_deep_inside_the_edge() {
+        let mut c = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 120.0], 10.0)],
+            0.0,
+            GlassMode::default(),
+        );
+        // an identity face over a backdrop whose red and green channels are its coordinates
+        let p = &mut c.params;
+        p.blur.fill_darken = 0.0;
+        p.blur.fill_lighten = 0.0;
+        p.blur.fill_normal = 0.0;
+        p.face.saturation = 1.0;
+        p.face.white = 1.0;
+        p.face.black = 0.0;
+        p.face.clamp = 1.0;
+        p.face.fill[3] = 0.0;
+        p.bleed.opacity = 0.0;
+        p.highlight.amount = 0.0;
+        p.highlight.glow_amount = 0.0;
+        p.shadow.ring_opacity = 0.0;
+        for (amount, height) in [(-20.0, 40.0), (-10.0, 10.0), (-40.0, 20.0)] {
+            c.values[0].max_luma = 1.0;
+            c.values[0].refraction_amount = amount;
+            c.values[0].refraction_height = height;
+            let coords = |_: usize, q: [f32; 2]| [q[0] / 256.0, q[1] / 256.0, 0.5];
+            for i in 0..80 {
+                let x = 0.5 + i as f32 * 0.5;
+                let (rgb, _) = c.shade([x, 60.0], &coords);
+                let read = [rgb[0] * 256.0, rgb[1] * 256.0];
+                // the left edge's normal points to −x: a negative strength reads further right, inside
+                let expected = -amount * refraction_profile(x / height);
+                assert!(
+                    (read[0] - x - expected).abs() < 1e-3 && (read[1] - 60.0).abs() < 1e-3,
+                    "{amount} over {height} at {x}: read {read:?}, {expected} in"
+                );
+            }
+        }
+        // at the edge nine tenths of the strength; a quarter of the band in, the share e^(−1.05) · (1 − 1/256) of that
+        c.values[0].refraction_amount = -20.0;
+        c.values[0].refraction_height = 40.0;
+        let at = |x: f32| {
+            c.shade([x, 60.0], &|_, q| [q[0] / 256.0, q[1] / 256.0, 0.5])
+                .0[0]
+                * 256.0
+                - x
+        };
+        assert!((at(1e-3) - 18.0).abs() < 1e-2, "{}", at(1e-3));
+        assert!((at(10.0) - 18.0 * (-1.05f32).exp() * (1.0 - 1.0 / 256.0)).abs() < 1e-3);
+        assert!(at(40.5).abs() < 1e-4, "nothing past the band");
+    }
+
+    #[test]
     fn shape_distance_is_exact_for_rounded_rectangles() {
-        let s = GlassShape::new([0.0, 0.0, 100.0, 40.0], 10.0);
+        let s = GlassShape::new([0.0, 0.0, 100.0, 40.0], 10.0).with_corner(GlassCorner::Circular);
         assert!(
             close(s.sdf([50.0, 20.0]), -20.0, 1e-5),
             "centre: half the short side inside"
@@ -1184,12 +1434,16 @@ mod tests {
     }
 
     #[test]
-    fn refraction_pulls_from_past_the_edge_and_fades_inward() {
+    fn refraction_reads_further_inside_by_its_profile_across_the_band() {
         let n = [1.0, 0.0];
+        // at the edge nine tenths of the strength, against the outward normal for a negative strength
         let at_edge = refraction_offset(0.0, n, -50.0, 20.0);
-        assert!(close(at_edge[0], 50.0 * REFRACTION_REACH_PER_AMOUNT, 1e-5) && at_edge[1] == 0.0);
+        assert!(close(at_edge[0], -45.0, 1e-4) && at_edge[1] == 0.0);
         let mid = refraction_offset(-10.0, n, -50.0, 20.0);
-        assert!(close(mid[0], at_edge[0] * 0.25, 1e-5));
+        assert!(close(mid[0], -50.0 * refraction_profile(0.5), 1e-4));
+        // linear in the strength
+        let half = refraction_offset(-10.0, n, -25.0, 20.0);
+        assert!(close(half[0] * 2.0, mid[0], 1e-4));
         assert_eq!(
             refraction_offset(-25.0, n, -50.0, 20.0),
             [0.0, 0.0],
@@ -1487,20 +1741,20 @@ mod tests {
         assert_eq!(cov, 1.0);
         let expect = face_color([0.2; 3], &c.params, c.values[0].max_luma);
         assert!(close(centre[0], expect[0], 1e-5));
-        // a stripe just outside the left edge shows up inside the rim through refraction
+        // a stripe inside the left edge is drawn out to the edge through refraction (−50 over a 20 point band here)
         let stripe = |_: usize, q: [f32; 2]| {
-            if q[0] < 0.0 {
+            if (30.0..45.0).contains(&q[0]) {
                 [1.0, 0.0, 0.0]
             } else {
                 [0.2; 3]
             }
         };
-        let (rim, _) = c.shade([2.0, 50.0], &stripe);
+        let (rim, _) = c.shade([1.0, 50.0], &stripe);
         assert!(
             rim[0] > rim[1] + 0.1,
-            "the stripe bends into the rim: {rim:?}"
+            "the stripe is drawn out to the rim: {rim:?}"
         );
-        let (inner, _) = c.shade([30.0, 50.0], &stripe);
+        let (inner, _) = c.shade([50.0, 50.0], &stripe);
         assert!(close(inner[0], expect[0], 1e-4), "{inner:?}");
     }
 
@@ -1525,12 +1779,13 @@ mod tests {
         );
         assert_eq!(u.shapes[0], [20.0, 40.0, 200.0, 80.0]);
         assert_eq!(
-            u.shape_a[0][0], 40.0,
-            "a capsule's radius is half the short side"
+            (u.shape_a[0][0], u.shape_b[0][3]),
+            (40.0, 2.0),
+            "a capsule's corners reach half the short side, round"
         );
         assert_eq!(u.info[..2], [1.0, 16.0]);
-        // regular, short side 40: refraction −20 → 20 · 0.25 points at the edge, band 10 points
-        assert_eq!(u.shape_a[0][1], 20.0 * REFRACTION_REACH_PER_AMOUNT * 2.0);
+        // regular, short side 40: refraction −20 at scale 2, band 10 points
+        assert_eq!(u.shape_a[0][1], -40.0);
         assert_eq!(u.shape_a[0][2], 20.0);
         assert_eq!(u.highlight_matrix[0][3], 0.1471);
         // one shape, one blur: 4 points for a 40 point control

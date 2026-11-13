@@ -82,8 +82,9 @@ flag and its Increase Contrast option.
 - **Glass** (`glass.rs`, code). `GlassParams` holds every value of the glass background pass in stage order: the
   blur (`GlassBlur`: four levels of radius `radius·2^i`, widest first, each narrower one laid over at its opacity, and
   a blur fill that darkens, lightens or covers), the face colour (`GlassFace`: a saturation about the luma of the encoded
-  colour, then a white gain and per-channel limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: offset and band
-  along the edge), the bleed of the widest level (`GlassBleed`), the key and fill rim lights (`GlassHighlight`) and the
+  colour, then a white gain and per-channel limit on linear light, a luminance cap, a black lift and a fill), the refraction (`GlassRefraction`: strength in points
+  and band along the edge; a pixel `t` of the band deep reads the face `amount · refraction_profile(t)` along the outward
+  normal, 0.9·e^(−4.2t)·(1 − t⁴)), the bleed of the widest level (`GlassBleed`), the key and fill rim lights (`GlassHighlight`) and the
   drop and ring shadows (`GlassShadow`, at opacity 0 at rest). Some values follow the shape's size: for regular glass
   the refraction offset (−min(s/2, 60)) and band (min(s/4, 20)), the bleed band (0.35·min(s, 140)), the opacity of the
   two narrowest levels (0.4 + clamp(s − 64, 0, 76)/240) and, in the dark appearance, the luminance cap (0.6 at 60 pt

@@ -19,8 +19,8 @@ struct Glass {
   shadow_color: vec4<f32>,// rgb, ring darkening
   ring: vec4<f32>,        // ring inside the shape: moved up by, stroke, deviation; outline width
   shapes: array<vec4<f32>, 16>,
-  shape_a: array<vec4<f32>, 16>, // radius, refraction offset at the edge, refraction band, bleed fraction
-  shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies
+  shape_a: array<vec4<f32>, 16>, // corner extent, refraction strength, refraction band, bleed fraction
+  shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -49,11 +49,29 @@ fn vs_glass(@builtin(vertex_index) vi: u32) -> VsOut {
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 const PI = 3.14159265;
 
-fn rect_sdf(p: vec2<f32>, r: vec4<f32>, radius: f32) -> f32 {
+// Distance to a rectangle whose corners reach e along each side with a superellipse of exponent n (2: a circle);
+// to first order in a corner of n over 2: the norm's excess over its slope.
+fn rect_sdf(p: vec2<f32>, r: vec4<f32>, e: f32, n: f32) -> f32 {
   let hs = r.zw * 0.5;
-  let rad = clamp(radius, 0.0, min(hs.x, hs.y));
-  let q = abs(p - (r.xy + hs)) - (hs - vec2<f32>(rad));
-  return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - rad;
+  let ext = clamp(e, 0.0, min(hs.x, hs.y));
+  let q = abs(p - (r.xy + hs)) - (hs - vec2<f32>(ext));
+  if (q.x <= 0.0 || q.y <= 0.0 || ext <= 0.0) {
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - ext;
+  }
+  if (n <= 2.0) { return length(q) - ext; }
+  let u = max(q / ext, vec2<f32>(1e-6));
+  let un = pow(u, vec2<f32>(n));
+  let g = pow(un.x + un.y, 1.0 / n);
+  let slope = un / u / pow(g, n - 1.0);
+  // never nearer than the corner's square, which holds the curve
+  return max((g - 1.0) * ext / max(length(slope), 1e-6), max(q.x, q.y) - ext);
+}
+
+// the refraction's offset t of its band deep as a share of its strength: 0.9·e^(−4.2t)·(1 − t⁴), none past the band
+fn refraction_profile(t: f32) -> f32 {
+  if (t >= 1.0) { return 0.0; }
+  let t2 = t * t;
+  return 0.9 * exp(-4.2 * t) * (1.0 - t2 * t2);
 }
 
 struct Field { d: f32, a: vec4<f32>, b: vec4<f32> };
@@ -63,11 +81,11 @@ fn field(p: vec2<f32>) -> Field {
   let n = i32(G.info.x);
   let k = G.info.y;
   var f: Field;
-  f.d = rect_sdf(p, G.shapes[0], G.shape_a[0].x);
+  f.d = rect_sdf(p, G.shapes[0], G.shape_a[0].x, G.shape_b[0].w);
   f.a = G.shape_a[0];
   f.b = G.shape_b[0];
   for (var i = 1; i < n; i++) {
-    let di = rect_sdf(p, G.shapes[i], G.shape_a[i].x);
+    let di = rect_sdf(p, G.shapes[i], G.shape_a[i].x, G.shape_b[i].w);
     var h: f32;
     var d: f32;
     if (k <= 0.0) {
@@ -203,8 +221,7 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   // stage 3: refraction inside the band along the edge
   var off = vec2<f32>(0.0);
   if (f.a.z > 0.0 && d <= 0.0) {
-    let t = clamp(-d / f.a.z, 0.0, 1.0);
-    off = n * f.a.y * (1.0 - t) * (1.0 - t);
+    off = n * f.a.y * refraction_profile(max(-d / f.a.z, 0.0));
   }
   var c = face_at(p + off, f.b.z, f.b.y);
   // stage 4: bleed of the blur fill

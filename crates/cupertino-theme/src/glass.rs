@@ -126,7 +126,8 @@ pub struct GlassFace {
 /// Refraction at the inner edge of the shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassRefraction {
-    /// Strength; negative values pull the image of what lies past the edge inward, as a convex rim does.
+    /// Strength in points: a pixel at the edge reads the face [`REFRACTION_EDGE_SHARE`] of it along the outward normal,
+    /// less deeper in the band ([`refraction_profile`]); negative values read it further inside, as a convex rim does.
     pub amount: f32,
     /// Width in points of the band inside the edge that bends.
     pub height: f32,
@@ -1009,16 +1010,16 @@ impl GlassParams {
     }
 
     /// How far past the shape the backdrop is read, in points: three deviations of the widest blur it reads (the
-    /// backdrop's, or the blur fill's when it shows) and the refraction.
+    /// backdrop's, or the blur fill's when it shows), or the reach of a shown drop shadow.
     pub fn reach(&self) -> f32 {
         let fill = if self.fill_shows() {
             self.fill_sigma()
         } else {
             0.0
         };
-        // a Gaussian is read three deviations out; refraction pulls in from up to its band past the edge
-        let read = 3.0 * self.blur_sigma().max(fill)
-            + self.refraction.amount.abs() * REFRACTION_REACH_PER_AMOUNT;
+        // a Gaussian is read three deviations out; the refraction reads the face further inside the shape, never past
+        // its edge
+        let read = 3.0 * self.blur_sigma().max(fill);
         read.max(self.shadow_reach())
     }
 
@@ -1033,8 +1034,22 @@ impl GlassParams {
     }
 }
 
-/// How far past the edge, in points per unit of refraction strength, the refraction reads the backdrop.
-pub const REFRACTION_REACH_PER_AMOUNT: f32 = 0.25;
+/// The refraction's offset at the edge, as a share of its strength.
+pub const REFRACTION_EDGE_SHARE: f32 = 0.9;
+/// How fast the refraction's offset decays across its band: `e^(−REFRACTION_DECAY · t)`.
+pub const REFRACTION_DECAY: f32 = 4.2;
+
+/// The refraction's offset `t` of its band deep (0 at the edge, 1 at the band's inner side), as a share of its strength:
+/// `REFRACTION_EDGE_SHARE · e^(−REFRACTION_DECAY · t) · (1 − t⁴)`, nothing from the band's inner side on. A pixel reads
+/// the face `strength · refraction_profile(t)` points along the edge's outward normal: a negative strength reads it
+/// further inside, so the edge magnifies what lies just inside it.
+pub fn refraction_profile(t: f32) -> f32 {
+    if !(0.0..1.0).contains(&t) {
+        return if t < 0.0 { REFRACTION_EDGE_SHARE } else { 0.0 };
+    }
+    let t2 = t * t;
+    REFRACTION_EDGE_SHARE * (-REFRACTION_DECAY * t).exp() * (1.0 - t2 * t2)
+}
 
 /// The foreground colour matrix of text and symbols on glass of `dark` appearance. It is applied to the face colour
 /// under the glyph, and the glyph's coverage and alpha mix the result over that face.
@@ -1529,8 +1544,8 @@ mod tests {
         let p = GlassParams::new(mode(true, GlassStyle::Regular), 100.0);
         // the blur fill: twice its radius of 8 points
         assert!(close(p.fill_sigma(), 16.0));
-        // reach: three deviations of the widest blur read (the fill's 16) plus the refraction's pull
-        assert!(close(p.reach(), 48.0 + 50.0 * REFRACTION_REACH_PER_AMOUNT));
+        // reach: three deviations of the widest blur read (the fill's 16); the refraction reads inside the shape
+        assert!(close(p.reach(), 48.0));
         // a deviation no wider than the cap however large the recipe's radius
         let rt_clear = with(true, GlassStyle::Clear, true, false, false);
         assert_eq!(rt_clear.blur_sigma(), BLUR_SIGMA_MAX);
@@ -1835,6 +1850,34 @@ mod tests {
             GlassParams::new(mode(true, GlassStyle::Track), 24.0).capture_scale,
             TRACK_CAPTURE_SCALE
         );
+    }
+
+    #[test]
+    fn the_refraction_decays_from_nine_tenths_at_the_edge_to_nothing_at_the_band_s_inner_side() {
+        assert!(close(refraction_profile(0.0), 0.9));
+        // e^(−4.2 t) · (1 − t⁴) at a quarter, a half and three quarters of the band
+        assert!(close(
+            refraction_profile(0.25),
+            0.9 * (-1.05f32).exp() * (1.0 - 0.003_906_25)
+        ));
+        assert!(close(
+            refraction_profile(0.5),
+            0.9 * (-2.1f32).exp() * 0.9375
+        ));
+        assert!(close(
+            refraction_profile(0.75),
+            0.9 * (-3.15f32).exp() * (1.0 - 0.316_406_25)
+        ));
+        assert_eq!(refraction_profile(1.0), 0.0);
+        assert_eq!(refraction_profile(3.0), 0.0);
+        // it falls all the way across the band, and is continuous where it ends
+        let mut last = refraction_profile(0.0);
+        for i in 1..=100 {
+            let v = refraction_profile(i as f32 / 100.0);
+            assert!(v < last, "{i}");
+            last = v;
+        }
+        assert!(refraction_profile(0.999) < 1e-3);
     }
 
     #[test]

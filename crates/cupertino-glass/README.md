@@ -85,15 +85,20 @@ table) with the design's `Normalize`. Channel gains, fade, post offsets and redu
 ### Glass
 
 `src/glass.rs` is the model of the glass background pass and `shaders/glass.wgsl` / `gles/glass.vert`, `gles/glass.frag`
-draw it, one draw per container over its sampled area (the shapes grown by the reach of the blur and refraction,
-`Container::sample_area`). The backdrop is read at half scale into up to four blurred copies and a blur fill; the
+draw it, one draw per container over its sampled area (the shapes grown by the reach of the blur,
+`Container::sample_area`). The backdrop is read at the recipe's capture scale (half for most styles) into up to four blurred copies and a blur fill; the
 composite then, per pixel:
 
-1. evaluates the field: the smooth union of the shapes' rounded-rectangle distances, polynomial blend of width
+1. evaluates the field: the smooth union of the shapes' rounded-rectangle distances (`GlassShape::corner`: continuous
+   corners by default, a superellipse quadrant of exponent 3.33 reaching 1.53 times the radius along each side, its
+   distance to first order; past half the short side the reach stays there and the exponent eases to 2, so a capsule
+   has round ends; `Circular` keeps quarter circles; straight edges stay exact, so a pixel-aligned edge covers whole
+   pixels), polynomial blend of width
    `spacing` (0 is a hard union, at most `MAX_SPACING`, 64 points), with each shape's size-dependent values mixed by
    the same weights; the union bulges up to a quarter of the spacing past the shapes, which the sampled area includes;
-2. refraction: inside the band along the edge, the sample point moves along the outward normal by the offset times
-   (1 − t)², t the depth into the band;
+2. refraction: inside the band along the edge, the sample point moves `amount · g(t)` points along the outward normal,
+   t the depth into the band and g(t) = 0.9·e^(−4.2t)·(1 − t⁴) (`refraction_profile`), nothing from t = 1 on: the
+   negative strengths of the recipes read the face further inside, so the edge magnifies what lies just inside it;
 3. blur and blur fill: each shape's backdrop is one Gaussian, its deviation twice the recipe's radius scaled by the first
    level's opacity (4 points for a small regular control, 8 for a regular panel 160 points high, 20 for clear glass of
    radius 10); the container blurs once per distinct deviation of its shapes (at most four copies, a shape between two

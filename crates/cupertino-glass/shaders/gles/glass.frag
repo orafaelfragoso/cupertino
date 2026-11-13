@@ -25,8 +25,8 @@ layout(std140) uniform Glass {
     vec4 shadow_color;// rgb, ring darkening
     vec4 ring;        // ring inside the shape: moved up by, stroke, deviation; outline width
     vec4 shapes[16];
-    vec4 shape_a[16]; // radius, refraction offset at the edge, refraction band, bleed fraction
-    vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies
+    vec4 shape_a[16]; // corner extent, refraction strength, refraction band, bleed fraction
+    vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
 } G;
 
 uniform sampler2D u_level0;
@@ -41,22 +41,33 @@ layout(location = 0) out vec4 frag_color;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float PI = 3.14159265;
 
-float rect_sdf(vec2 p, vec4 r, float radius) {
+// Distance to a rectangle whose corners reach e along each side with a superellipse of exponent n (2: a circle);
+// to first order in a corner of n over 2: the norm's excess over its slope.
+float rect_sdf(vec2 p, vec4 r, float e, float n) {
     vec2 hs = r.zw * 0.5;
-    float rad = clamp(radius, 0.0, min(hs.x, hs.y));
-    vec2 q = abs(p - (r.xy + hs)) - (hs - vec2(rad));
-    return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - rad;
+    float ext = clamp(e, 0.0, min(hs.x, hs.y));
+    vec2 q = abs(p - (r.xy + hs)) - (hs - vec2(ext));
+    if (q.x <= 0.0 || q.y <= 0.0 || ext <= 0.0) {
+        return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - ext;
+    }
+    if (n <= 2.0) { return length(q) - ext; }
+    vec2 u = max(q / ext, vec2(1e-6));
+    vec2 un = pow(u, vec2(n));
+    float g = pow(un.x + un.y, 1.0 / n);
+    vec2 slope = un / u / pow(g, n - 1.0);
+    // never nearer than the corner's square, which holds the curve
+    return max((g - 1.0) * ext / max(length(slope), 1e-6), max(q.x, q.y) - ext);
 }
 
 // Smooth union of every shape; the per-shape values are mixed with the same weights.
 float field(vec2 p, out vec4 a, out vec4 b) {
     int n = int(G.info.x);
     float k = G.info.y;
-    float d = rect_sdf(p, G.shapes[0], G.shape_a[0].x);
+    float d = rect_sdf(p, G.shapes[0], G.shape_a[0].x, G.shape_b[0].w);
     a = G.shape_a[0];
     b = G.shape_b[0];
     for (int i = 1; i < n; i++) {
-        float di = rect_sdf(p, G.shapes[i], G.shape_a[i].x);
+        float di = rect_sdf(p, G.shapes[i], G.shape_a[i].x, G.shape_b[i].w);
         float h;
         if (k <= 0.0) {
             h = di <= d ? 1.0 : 0.0;
@@ -122,6 +133,13 @@ float angle_between(float a, float b) {
     float t = 2.0 * PI;
     float d = a - b - floor((a - b) / t) * t;
     return min(d, t - d);
+}
+
+// the refraction's offset t of its band deep as a share of its strength: 0.9·e^(−4.2t)·(1 − t⁴), none past the band
+float refraction_profile(float t) {
+    if (t >= 1.0) { return 0.0; }
+    float t2 = t * t;
+    return 0.9 * exp(-4.2 * t) * (1.0 - t2 * t2);
 }
 
 // a raised cosine of the angle from the light, nothing past LOBE_REACH of the spread
@@ -193,8 +211,7 @@ void main() {
     // stage 3: refraction inside the band along the edge
     vec2 off = vec2(0.0);
     if (fa.z > 0.0 && d <= 0.0) {
-        float t = clamp(-d / fa.z, 0.0, 1.0);
-        off = n * fa.y * (1.0 - t) * (1.0 - t);
+        off = n * fa.y * refraction_profile(max(-d / fa.z, 0.0));
     }
     vec3 c = face_at(p + off, fb.z, fb.y);
     // stage 4: bleed of the blur fill

@@ -23,6 +23,7 @@ A scenario file:
     args = ["--right-click", "2:512,612"]    # server flags: --spawn, --pointer, --click, --key, --type, --action ..
     scales = [1, 2]                          # optional, default [1, 1.5, 2]
     appearances = ["light", "dark"]          # optional, default both
+    fixture = "fixtures/launcher-history"    # optional: a folder beside the scenarios copied into the home first
 
 Points are logical, on a 1024 x 640 point display at every scale. `@ROOT@` in an argument stands for the checkout;
 --spawn splits its command on spaces, so a command whose arguments hold spaces goes in a script beside the scenarios.
@@ -92,6 +93,8 @@ def shot(bin_dir: pathlib.Path, out: pathlib.Path, scenario: dict, scale: float,
         "AFTER": str(scenario.get("after", 3)),
         "SYSTEM_DATA_DIRS": f"{pathlib.Path.home()}/.local/share:/usr/local/share:/usr/share",
     })
+    if "fixture" in scenario:
+        env["FIXTURE_DIR"] = str(ROOT / "scenarios" / scenario["fixture"])
     if before:
         user = pathlib.Path.home() / ".local/share/cupertino/assets"
         env["CUPERTINO_ASSET_DIR"] = ":".join(str(p) for p in (user, pathlib.Path("/usr/share/cupertino/assets/cupertino"))

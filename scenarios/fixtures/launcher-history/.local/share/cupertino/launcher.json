@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "items": {
+    "app:files.desktop": {"score": 9.0, "last_used": 1794500000.0, "launches": 9},
+    "app:settings.desktop": {"score": 7.0, "last_used": 1794500000.0, "launches": 7},
+    "app:terminal.desktop": {"score": 6.0, "last_used": 1794500000.0, "launches": 6},
+    "app:web-browser.desktop": {"score": 5.0, "last_used": 1794500000.0, "launches": 5},
+    "app:text-editor.desktop": {"score": 4.0, "last_used": 1794500000.0, "launches": 4},
+    "app:music-player.desktop": {"score": 3.0, "last_used": 1794500000.0, "launches": 3},
+    "app:messages.desktop": {"score": 2.0, "last_used": 1794500000.0, "launches": 2}
+  },
+  "queries": {}
+}

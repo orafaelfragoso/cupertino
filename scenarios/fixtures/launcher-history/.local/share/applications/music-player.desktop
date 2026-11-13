@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Music Player
+GenericName=Audio Player
+Comment=Play music
+Exec=true
+Icon=multimedia-audio-player
+Categories=AudioVideo;Player;

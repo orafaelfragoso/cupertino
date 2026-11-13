@@ -1,0 +1,5 @@
+title = "Launcher: the files scope"
+programs = ["cupertino-launcher"]
+after = 6
+fixture = "fixtures/launcher-history"
+args = ["--action", "3:launcher", "--key", "4:Super+2"]

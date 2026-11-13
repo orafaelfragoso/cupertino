@@ -44,6 +44,26 @@ type GLenum = ffi::types::GLenum;
 const BIND_PASS: GLuint = 0;
 const BIND_REGION: GLuint = 1;
 
+/// Released render targets always kept for reuse, the most recently released first.
+const FREE_KEPT: usize = 12;
+/// Bytes of released render targets kept for reuse past [`FREE_KEPT`]: glass that moves blurs again each frame at a
+/// size that can differ by a pixel from one frame to the next, and keeps its targets of every such size instead of
+/// creating new ones.
+const FREE_BYTES: usize = 48 << 20;
+
+/// How many of the released targets (`sizes` in texels, oldest first, `texel_bytes` each texel) to delete so that what
+/// is kept is the [`FREE_KEPT`] most recent and, past them, the most recent that fit in [`FREE_BYTES`] altogether.
+fn free_excess(sizes: &[(i32, i32)], texel_bytes: usize) -> usize {
+    let mut bytes = 0usize;
+    for (i, size) in sizes.iter().rev().enumerate() {
+        bytes += size.0.max(0) as usize * size.1.max(0) as usize * texel_bytes;
+        if i >= FREE_KEPT && bytes > FREE_BYTES {
+            return sizes.len() - i;
+        }
+    }
+    0
+}
+
 /// A recipe flattened for the GPU, shared by every element using the same material.
 #[derive(Clone, Debug)]
 pub struct GpuRecipe {
@@ -244,6 +264,8 @@ pub struct MaterialStats {
     pub backdrop_misses: u64,
     pub passes: u64,
     pub composites: u64,
+    /// Render targets (texture and framebuffer) created: a pass that keeps reusing its targets creates none.
+    pub allocations: u64,
 }
 
 /// GL objects of the material pipeline. Created through [`MaterialGl::new`] on a renderer.
@@ -637,6 +659,7 @@ impl MaterialGl {
             gl.DeleteTextures(1, &tex);
             return None;
         }
+        self.stats.allocations += 1;
         Some(Target { tex, fbo, size })
     }
 
@@ -646,15 +669,22 @@ impl MaterialGl {
     }
 
     unsafe fn take_target(&mut self, gl: &ffi::Gles2, size: (i32, i32)) -> Option<Target> {
-        if let Some(i) = self.free.iter().position(|t| t.size == size) {
-            return Some(self.free.swap_remove(i));
+        if let Some(i) = self.free.iter().rposition(|t| t.size == size) {
+            return Some(self.free.remove(i));
         }
-        if self.free.len() > 12 {
-            let t = self.free.remove(0);
-            self.destroy_target(gl, t);
-        }
+        self.trim_free(gl);
         let float = self.float_targets;
         self.alloc_target(gl, size, float)
+    }
+
+    /// Delete the released targets past what [`free_excess`] keeps, the oldest first.
+    unsafe fn trim_free(&mut self, gl: &ffi::Gles2) {
+        let texel_bytes = if self.float_targets { 8 } else { 4 };
+        let sizes: Vec<(i32, i32)> = self.free.iter().map(|t| t.size).collect();
+        let excess = free_excess(&sizes, texel_bytes);
+        for t in self.free.drain(..excess).collect::<Vec<_>>() {
+            self.destroy_target(gl, t);
+        }
     }
 
     unsafe fn upload_ubo(gl: &ffi::Gles2, buf: GLuint, binding: GLuint, data: &[u8]) {
@@ -1633,6 +1663,24 @@ mod tests {
             g.key,
             GpuRecipe::new(&recipe(Appearance::Light, "MenuBar")).key
         );
+    }
+
+    #[test]
+    fn released_targets_are_kept_for_reuse_up_to_a_count_and_past_it_up_to_a_size() {
+        // a few full-output targets: the most recent are kept, however large
+        let whole = vec![(3840, 2160); FREE_KEPT + 3];
+        assert_eq!(free_excess(&whole, 8), 3, "past the count, the oldest go");
+        assert_eq!(free_excess(&whole[..FREE_KEPT], 8), 0);
+        // the targets of glass blurred again as it moves, at sizes a pixel apart: all of them stay, so none is made anew
+        let sizes: Vec<(i32, i32)> = (0..48).map(|i| (172 + i % 2, 337 + i / 2 % 2)).collect();
+        assert_eq!(free_excess(&sizes, 8), 0);
+        // past the count, what does not fit in the budget goes, the oldest first
+        let side = ((FREE_BYTES / 4 / (FREE_KEPT + 4)) as f64).sqrt() as i32 + 1;
+        let many = vec![(side, side); 2 * FREE_KEPT];
+        let excess = free_excess(&many, 4);
+        assert!(excess > 0 && excess <= FREE_KEPT, "{excess}");
+        let kept = (many.len() - excess) * (side * side) as usize * 4;
+        assert!(kept <= FREE_BYTES && kept + (side * side) as usize * 4 > FREE_BYTES);
     }
 
     #[test]

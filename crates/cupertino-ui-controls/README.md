@@ -251,7 +251,7 @@ from the application's model and reports changes as messages.
   surfaces (the sidebar panel). Glass is never laid on glass: a node on glass the window shows
   (`PaintCx::on_glass`) draws none of its own, so a glass button on a toolbar group shows its label alone.
 - **Menus.** `Menu` levels follow the pointer as the menu bar's do (`cupertino-menu-model`'s `tracking`): the row
-  under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.35 s on its row and
+  under the pointer takes the focus and the highlight, a submenu opens once the pointer rests 0.2 s on its row and
   closes once it rests 0.3 s on another, and while the pointer heads from a row into its open submenu (each move inside
   the triangle between the last point and the submenu's near edge, without a 0.3 s rest) the rows it crosses wait. A
   press that opened the menu (a secondary press, a press on a `PopUpButton`, which opens its menu on the press) and is

@@ -17,13 +17,13 @@ layout(std140) uniform Glass {
     vec4 face;        // saturation, white, black, clamp
     vec4 face_fill;
     vec4 bleed;       // white, black, saturation, darken
-    vec4 highlight;   // amount, angle, spread, half-width
+    vec4 highlight;   // rim strength, light angle, spread, rim depth
     vec4 highlight2;  // offset, colour bias, curvature
     vec4 glow;        // soft band: amount, half-width, offset
     vec4 hm[3];
     vec4 shadow;      // offset x, offset y, alpha, blur
-    vec4 shadow_color;// rgb, ring alpha
-    vec4 ring;        // offset, stroke, blur
+    vec4 shadow_color;// rgb, ring darkening
+    vec4 ring;        // ring inside the shape: moved up by, stroke, deviation; outline width
     vec4 shapes[16];
     vec4 shape_a[16]; // radius, refraction offset at the edge, refraction band, bleed fraction
     vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies
@@ -148,21 +148,40 @@ float coverage(float d, float r) {
     return t * t * (3.0 - 2.0 * t);
 }
 
+// the rim's response to the luma of the face under it, linear between (0, 0), (0.25, 0.63), (0.5, 1), (0.75, 1.13)
+// and (1, 1)
+float rim_brightness(float l0) {
+    float l = clamp(l0, 0.0, 1.0);
+    if (l < 0.25) { return l * 4.0 * 0.63; }
+    if (l < 0.5) { return mix(0.63, 1.0, (l - 0.25) * 4.0); }
+    if (l < 0.75) { return mix(1.0, 1.13, (l - 0.5) * 4.0); }
+    return mix(1.13, 1.0, (l - 0.75) * 4.0);
+}
+
+// the rim's response to the edge's direction: 0.15 on straight edges, all of it on diagonal ones
+float rim_direction(vec2 n) {
+    float s = 2.0 * n.x * n.y;
+    return 0.15 + 0.85 * s * s;
+}
+
+// the share of a Gaussian of deviation 1 below x
+float normal_cdf(float x) {
+    return 1.0 / (1.0 + exp(-1.702 * x));
+}
+
 void main() {
     vec2 p = v_px;
     vec4 fa;
     vec4 fb;
     float d = field(p, fa, fb);
     if (d > 0.5) {
-        // stage 6: shadows outside the shape, drawn at their opacity (none at rest)
+        // stage 7: the drop shadow outside the shape, drawn at its opacity (none at rest)
         bool outlined = G.glow.w > 0.0 && G.ring.w > 0.0;
-        if (G.shadow.z <= 0.0 && G.shadow_color.w <= 0.0 && !outlined) { discard; }
+        if (G.shadow.z <= 0.0 && !outlined) { discard; }
         float drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w);
-        float dr = field_d(p - vec2(0.0, G.ring.x));
-        float ring = G.shadow_color.w * max(coverage(dr, G.ring.z) - coverage(dr + G.ring.y, G.ring.z), 0.0);
         // a hairline of the shadow's colour along the outside of the shape
         float line = outlined ? G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0) : 0.0;
-        float a = min(drop + ring + line, 1.0) * G.info.w;
+        float a = min(drop + line, 1.0) * G.info.w;
         if (a <= 0.0) { discard; }
         frag_color = vec4(G.shadow_color.rgb, a);
         return;
@@ -187,25 +206,35 @@ void main() {
         vec3 b = G.bleed.w > 0.5 ? min(c, tone) : max(c, tone);
         c = mix(c, b, w);
     }
-    // stage 5: key and fill rim lights, added along the light's axis
-    bool rim_on = G.highlight.x > 0.0 && G.highlight.w > 0.0;
+    // stage 5: the soft band of light along the light's axis, then the rim
+    bool rim_on = G.highlight.x * G.highlight2.y != 0.0 && G.highlight.w > 0.0;
     bool glow_on = G.glow.x > 0.0 && G.glow.y > 0.0;
     if ((rim_on || glow_on) && gl > 1e-6) {
-        float na = atan(-n.y, n.x);
-        float ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
         // the distance to the edge the field's slope gives: far inside along a seam between joined shapes
         float de = d / max(gl, MIN_FIELD_SLOPE);
-        float strength = 0.0;
-        if (rim_on) {
-            float x = (de - G.highlight2.x) / G.highlight.w;
-            strength = G.highlight.x * exp(-x * x);
-        }
-        // a soft band wider than the rim, lighting the same ends of the axis
         if (glow_on) {
+            float na = atan(-n.y, n.x);
+            float ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
             float xg = (de - G.glow.z) / G.glow.y;
-            strength += G.glow.x * exp(-xg * xg);
+            c = min(c + key_color(c) * (G.glow.x * exp(-xg * xg) * ends), vec3(1.0));
         }
-        c = min(c + key_color(c) * (strength * ends), vec3(1.0));
+        // the rim: one shift of every channel, by the face's brightness and the edge's direction, in a band along it
+        if (rim_on) {
+            float band = clamp(G.highlight.w + 0.5 - max(-de, 0.0), 0.0, 1.0);
+            float shift = G.highlight.x * G.highlight2.y * rim_brightness(dot(c, LUMA)) * rim_direction(n) * band;
+            c = clamp(c + vec3(shift), vec3(0.0), vec3(1.0));
+        }
+    }
+    // stage 6: the ring shadow, a blurred stroke along the inside of the outline moved up, darkening the face
+    if (G.shadow_color.w > 0.0 && G.ring.y > 0.0) {
+        float dr = field_d(p + vec2(0.0, G.ring.x));
+        float m;
+        if (G.ring.z > 0.0) {
+            m = normal_cdf(-dr / G.ring.z) - normal_cdf((-G.ring.y - dr) / G.ring.z);
+        } else {
+            m = (dr <= 0.0 && dr >= -G.ring.y) ? 1.0 : 0.0;
+        }
+        c = c * (1.0 - min(G.shadow_color.w, 1.0) * max(m, 0.0));
     }
     float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
     frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), cov);

@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cupertino_kit::controls::{paint_glass_edge, GlassEdge, Icon, IconDirection};
+use cupertino_kit::controls::{Icon, IconDirection};
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
@@ -69,9 +69,6 @@ const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
-/// The fine dark outline a tile draws along its sides: `OUTLINE` black at its strongest.
-const OUTLINE: f32 = 0.55;
-const OUTLINE_WIDTH: f64 = 0.5;
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
 /// A switch badge that is off: a light veil.
@@ -581,24 +578,6 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, holes: &[(Rect, f64)]) {
     }
 }
 
-/// A tile's edge on its glass: the fine dark outline down its sides. The compositor lights the rim itself, in the colour
-/// of what lies behind the tile, so the tile reads as a raised piece of glass on any wallpaper.
-fn lift(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
-    paint_glass_edge(
-        cx,
-        rect,
-        radius,
-        GlassEdge {
-            outline: OUTLINE,
-            outline_width: OUTLINE_WIDTH,
-            rim: 0.0,
-            rim_bottom: 0.0,
-            rim_side: 0.0,
-            rim_width: 0.0,
-        },
-    );
-}
-
 fn reduce_transparency(cx: &PaintCx<'_>) -> bool {
     cx.env().theme.preferences.reduce_transparency
 }
@@ -949,9 +928,7 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             .alpha(finite_alpha(self.panel) * alpha);
         if !cx.glass(glass) {
             fill(cx, rect, radius, FALLBACK);
-            return;
         }
-        lift(cx, rect, radius);
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

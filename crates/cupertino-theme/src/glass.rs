@@ -138,36 +138,71 @@ pub struct GlassBleed {
     pub saturation: f32,
     /// Darken blending (light glass) instead of lighten blending (dark glass).
     pub darken: bool,
+    /// How much of the bleed shows: none at rest.
+    pub opacity: f32,
 }
 
-/// The rim light along the axis of the light: the key along the edge facing the light and the fill, the same light a
-/// little weaker, along the opposite edge.
+/// The rim along the edge, and the soft band of light some surfaces lay under their top and bottom edges.
+///
+/// The rim shifts every channel of the face by `amount · color_bias` (a negative bias darkens), scaled by the face's
+/// brightness and by the direction of the edge, strongest where the edge runs diagonally, in a band
+/// [`RIM_DEPTH_PER_HEIGHT`] times `height` deep.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassHighlight {
-    /// Strength of the rim light.
+    /// Strength of the rim.
     pub amount: f32,
-    /// Direction the light comes from, in radians, counter-clockwise from the right with y up (π/2 is the top).
+    /// Direction the soft band's light comes from, in radians, counter-clockwise from the right with y up (π/2 is the
+    /// top).
     pub angle: f32,
-    /// Angular width of each lit arc in radians; an arc fades to nothing three quarters of it from its end of the axis.
+    /// Angular width of each arc the soft band lights, in radians; an arc fades to nothing three quarters of it from its
+    /// end of the axis.
     pub spread: f32,
-    /// Half-width of the rim band in points.
+    /// The rim's depth in points, as a share of [`RIM_DEPTH_PER_HEIGHT`].
     pub height: f32,
-    /// Where the band's centre lies relative to the edge, in points (negative is inside).
+    /// Unused by the rim; kept with the recipe.
     pub offset: f32,
-    /// Strength of the fill side: the key light is scaled by `1 + color_bias` there.
+    /// The colour shift of the rim per unit of strength: negative darkens. The soft band's far end of the axis is lit at
+    /// `1 + color_bias` of its near end.
     pub color_bias: f32,
-    /// Exponent on the lit arc's falloff.
+    /// Exponent on the soft band's arc falloff.
     pub curvature: f32,
-    /// A second, soft band of the same light along the same arcs: its strength (0 for none), its half-width and where
-    /// its middle lies relative to the edge, in points.
+    /// A soft band of light along the arcs: its strength (0 for none), its half-width and where its middle lies
+    /// relative to the edge, in points.
     pub glow_amount: f32,
     pub glow_height: f32,
     pub glow_offset: f32,
-    /// Colour of the light added to the rim, from the face colour under it.
+    /// Colour of the soft band's light, from the face colour under it.
     pub matrix: ColorMatrix,
 }
 
-/// The drop shadow and the ring shadow around the shape. Both are drawn at their opacity, which is 0 at rest.
+/// How deep the rim reaches into the shape, per point of its `height`.
+pub const RIM_DEPTH_PER_HEIGHT: f32 = 1.7;
+/// How strongly the rim shows by the luma of the face under it `(luma, response)`; linear between: nothing on black,
+/// most a little above the middle.
+pub const RIM_BRIGHTNESS_RESPONSE: [(f32, f32); 5] = [
+    (0.0, 0.0),
+    (0.25, 0.63),
+    (0.5, 1.0),
+    (0.75, 1.13),
+    (1.0, 1.0),
+];
+/// The share of the rim along straight edges (horizontal and vertical); the rest grows with `sin²(2φ)` to the full rim
+/// where the edge runs diagonally.
+pub const RIM_STRAIGHT_SHARE: f32 = 0.15;
+
+/// The rim's response to a face of luma `luma` ([`RIM_BRIGHTNESS_RESPONSE`]).
+pub fn rim_brightness(luma: f32) -> f32 {
+    by_side(&RIM_BRIGHTNESS_RESPONSE, luma.clamp(0.0, 1.0))
+}
+
+/// The rim's response to an edge whose outward normal points at `angle` radians: [`RIM_STRAIGHT_SHARE`] on straight
+/// edges, all of it on diagonal ones.
+pub fn rim_direction(angle: f32) -> f32 {
+    let s = (2.0 * angle).sin();
+    RIM_STRAIGHT_SHARE + (1.0 - RIM_STRAIGHT_SHARE) * s * s
+}
+
+/// The drop shadow around the shape and the ring shadow inside it. Both are drawn at their opacity, which is 0 at rest.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassShadow {
     /// Offset in points (y down).
@@ -180,12 +215,13 @@ pub struct GlassShadow {
     pub fill: [f32; 4],
     pub saturation: f32,
     pub opacity: f32,
-    /// Blur radius in points of the ring shadow.
+    /// Gaussian deviation in points of the ring shadow: a stroke along the inside of the outline that darkens the face.
     pub ring_blur: f32,
     /// Width in points of the ring.
     pub ring_stroke: f32,
-    /// Offset in points of the ring below the shape.
+    /// How far up the ring is moved, in points.
     pub ring_offset: f32,
+    /// How much the ring darkens the face: none at rest.
     pub ring_opacity: f32,
     /// A hairline just outside the shape, in the drop shadow's colour: its opacity (0 for none) and its width in points.
     pub outline_opacity: f32,
@@ -625,6 +661,7 @@ impl GlassParams {
                 black: if dark { 0.125 } else { 0.9 },
                 saturation: if dark { 1.0 } else { 1.2 },
                 darken: !dark,
+                opacity: 0.0,
             },
             highlight: GlassHighlight {
                 amount: 0.5,
@@ -727,6 +764,7 @@ impl GlassParams {
                 black: 0.75,
                 saturation: 1.2,
                 darken: true,
+                opacity: 0.0,
             },
             highlight: GlassHighlight {
                 amount: 0.4,

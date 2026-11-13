@@ -2817,28 +2817,31 @@ impl<M: 'static> Widget<M> for Card<M> {
             });
         }
         if glass {
-            let dark = theme.preferences.appearance.is_dark();
-            paint_glass_edge(
-                cx,
-                rect,
-                radius,
-                GlassEdge {
-                    outline: if dark {
-                        CARD_OUTLINE_DARK
-                    } else {
-                        CARD_OUTLINE_LIGHT
+            // the compositor's glass marks its own edge at rest; with Increase Contrast the card adds its rim
+            if theme.preferences.appearance.is_high_contrast() {
+                let dark = theme.preferences.appearance.is_dark();
+                paint_glass_edge(
+                    cx,
+                    rect,
+                    radius,
+                    GlassEdge {
+                        outline: if dark {
+                            CARD_OUTLINE_DARK
+                        } else {
+                            CARD_OUTLINE_LIGHT
+                        },
+                        outline_width: OUTLINE_WIDTH,
+                        rim: if dark { CARD_RIM_DARK } else { CARD_RIM_LIGHT },
+                        rim_bottom: 1.0,
+                        rim_side: CARD_RIM_SIDE,
+                        rim_width: if dark {
+                            OUTLINE_WIDTH
+                        } else {
+                            CARD_RIM_WIDTH_LIGHT
+                        },
                     },
-                    outline_width: OUTLINE_WIDTH,
-                    rim: if dark { CARD_RIM_DARK } else { CARD_RIM_LIGHT },
-                    rim_bottom: 1.0,
-                    rim_side: CARD_RIM_SIDE,
-                    rim_width: if dark {
-                        OUTLINE_WIDTH
-                    } else {
-                        CARD_RIM_WIDTH_LIGHT
-                    },
-                },
-            );
+                );
+            }
         } else if let Some(outline) = color(cx, ColorRole::Separator) {
             cx.push(PaintOp::Stroke {
                 shape,

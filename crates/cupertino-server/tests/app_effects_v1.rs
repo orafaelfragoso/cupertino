@@ -851,26 +851,32 @@ fn glass_pass_matches_the_cpu_model() {
         if large {
             continue;
         }
-        // the rim light lies along the light's axis: the top and the bottom edge lit, the sides not (measured on dark
-        // glass at rest, where the light shows most)
+        // the rim darkens the edge of a mid face most where the edge runs diagonally, at the corners, and only a
+        // little along the straight sides (measured on dark glass at rest)
         if !dark || display.reduce_transparency || display.increase_contrast {
             continue;
         }
-        let (cx, cy) = (x0 as u32 + 200, y0 as u32 + 80);
         let lum = |x: u32, y: u32| {
             let p = gpu.get_pixel(x, y);
             p[0] as i32 + p[1] as i32 + p[2] as i32
         };
-        let (top, bottom) = (y0 as u32, y0 as u32 + 159);
-        let top_lift = lum(cx, top) - lum(cx, top + 3);
-        let bottom_lift = lum(cx, bottom) - lum(cx, bottom - 3);
-        let side_lift = lum(x0 as u32, cy) - lum(x0 as u32 + 3, cy);
-        assert!(top_lift > 12, "the top rim is lit: {top_lift}");
-        assert!(
-            bottom_lift > top_lift / 2,
-            "the bottom rim is lit too: {bottom_lift} of {top_lift}"
-        );
-        assert!(side_lift < top_lift / 3, "the sides are not: {side_lift}");
+        let (left, top, bottom) = (x0 as u32, y0 as u32, y0 as u32 + 159);
+        let mid = left + 200;
+        let straight = [
+            lum(mid, top) - lum(mid, top + 4),
+            lum(mid, bottom) - lum(mid, bottom - 4),
+            lum(left, top + 80) - lum(left + 4, top + 80),
+        ];
+        // the pixel on the corner's diagonal just inside the arc of radius 24, and one further in along it
+        let corner = lum(left + 7, top + 7) - lum(left + 11, top + 11);
+        eprintln!("rim: straight {straight:?}, corner {corner}");
+        assert!(corner < -6, "the corner's rim darkens it: {corner}");
+        for edge in straight {
+            assert!(
+                edge > corner / 2,
+                "a straight edge darkens less than a corner: {edge} vs {corner}"
+            );
+        }
     }
 }
 

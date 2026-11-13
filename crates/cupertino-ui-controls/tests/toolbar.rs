@@ -305,13 +305,24 @@ fn glass_edges(h: &Harness<Browser>) -> (Vec<Vec<cupertino_ui_theme::Color>>, us
 /// rim on each floating control's glass, stronger at its sides than at its top and bottom where the light falls, and
 /// a faint shade below it that never dims the glass; the dark appearance's glass marks its own edge.
 #[test]
-fn the_light_toolbar_glass_has_a_fine_dark_rim_and_a_shade_outside_it() {
+fn the_toolbar_glass_marks_its_own_edge_and_increase_contrast_adds_a_fine_dark_rim() {
     use cupertino_ui_theme::Appearance;
     let mut theme = support::theme();
-    theme.preferences.appearance = Appearance::Light;
-    let mut h = Harness::<Browser>::with_effects(theme.clone());
-    h.settle();
-    let (rims, shades) = glass_edges(&h);
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        theme.preferences.appearance = appearance;
+        let mut h = Harness::<Browser>::with_effects(theme.clone());
+        h.settle();
+        assert_eq!(
+            glass_edges(&h),
+            (Vec::new(), 0),
+            "the glass marks its own edge at rest ({appearance:?})"
+        );
+    }
+
+    theme.preferences.appearance = Appearance::LightHighContrast;
+    let mut contrast = Harness::<Browser>::with_effects(theme);
+    contrast.settle();
+    let (rims, shades) = glass_edges(&contrast);
     // the choice, the menu button, the action group, the round button, and the resting search with the field under it
     assert_eq!(rims.len(), 6, "{rims:?}");
     assert_eq!(
@@ -331,22 +342,4 @@ fn the_light_toolbar_glass_has_a_fine_dark_rim_and_a_shade_outside_it() {
             "{stops:?}"
         );
     }
-
-    theme.preferences.appearance = Appearance::LightHighContrast;
-    let mut contrast = Harness::<Browser>::with_effects(theme.clone());
-    contrast.settle();
-    let (strong, _) = glass_edges(&contrast);
-    assert!(
-        strong[0][1].a > rims[0][1].a && strong[0][0].a > rims[0][0].a,
-        "Increase Contrast strengthens it"
-    );
-
-    theme.preferences.appearance = Appearance::Dark;
-    let mut dark = Harness::<Browser>::with_effects(theme);
-    dark.settle();
-    assert_eq!(
-        glass_edges(&dark),
-        (Vec::new(), 0),
-        "the dark glass marks its own edge"
-    );
 }

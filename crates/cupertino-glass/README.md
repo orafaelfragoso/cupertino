@@ -104,12 +104,16 @@ composite then, per pixel:
    `black·(1 − L) − (1 − white)·L` added to every channel (L the luma after the compression), then the fill over it,
    all on encoded values;
 5. bleed: the blur fill (made whenever a shape bleeds, even when the fill does not show), saturated (encoded) and mapped
-   between black and white, lightens (dark) or darkens (light) the face in the bleed band;
-6. key and fill rim lights: a Gaussian band about the edge where light is added along the axis of the light angle,
-   the highlight matrix applied to the face; a raised-cosine lobe around each end of the axis falls to nothing three
-   quarters of the spread away, so the top and the bottom edge are lit and the sides are not, and the fill end gets
-   the light scaled by one plus the colour bias;
-7. outside the shape, the drop shadow and the ring shadow at their opacity.
+   between black and white, lightens (dark) or darkens (light) the face in the bleed band, at the bleed's opacity (none
+   at rest);
+6. soft band and rim: the soft band, a Gaussian about the edge where the highlight matrix is applied to the face, lit
+   by a raised-cosine lobe around each end of the light's axis (the top and the bottom edge, not the sides), drawn for
+   interaction states and for the surfaces that ask for it; then the rim, one shift added to every channel,
+   `amount × colour bias × g(L) × w(φ)` in a band 1.7 × the highlight height deep, g the response to the face's luma
+   (0, 0.63, 1, 1.13, 1 at 0, ¼, ½, ¾, 1) and w = 0.15 + 0.85·sin²(2φ) of the edge's direction (darkening most on the
+   diagonal corners when the bias is negative);
+7. the ring shadow, a stroke inside the outline moved up by its offset and blurred by a Gaussian of its radius,
+   darkens the face by its opacity; outside the shape, the drop shadow at its opacity.
 
 Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its

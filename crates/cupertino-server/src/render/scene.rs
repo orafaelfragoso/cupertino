@@ -2008,17 +2008,20 @@ fn popup_backdrop_elements(
             continue;
         }
         if b.glass.is_some() {
-            // the light rim inside the glass, in front of it
-            out.extend(inner_rim_item(
-                SceneKind::PopupRim,
-                b.key,
-                b.area,
-                b.radius,
-                true,
-                &edge,
-                p.scale,
-                alpha,
-            ));
+            // the glass draws its own rim at rest; with Reduce Transparency or Increase Contrast the light rim inside the
+            // glass, in front of it, marks the edge instead
+            if p.display.reduce_transparency || p.display.increase_contrast {
+                out.extend(inner_rim_item(
+                    SceneKind::PopupRim,
+                    b.key,
+                    b.area,
+                    b.radius,
+                    true,
+                    &edge,
+                    p.scale,
+                    alpha,
+                ));
+            }
             glass.add(b, out.len());
         } else {
             out.extend(material_layer(
@@ -2046,9 +2049,6 @@ fn popup_backdrop_elements(
     glass.finish_popup(p, out, opacity)
 }
 
-/// How much brighter a small callout's rim is than the glass's, in the dark and the light appearance.
-const SMALL_CALLOUT_RIM_GAIN_DARK: f32 = 1.6;
-const SMALL_CALLOUT_RIM_GAIN_LIGHT: f32 = 0.55;
 /// The white lifted over the face of a small dark callout.
 const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 
@@ -2261,8 +2261,7 @@ fn glass_pieces(
     if !callout {
         use cupertino_theme::GlassStyle;
         match spec.style {
-            // dense glass has a soft glow under its top and bottom edges; its rim is drawn apart (`inner_rim_item` for a
-            // popup, by the client for a card)
+            // dense glass has a soft glow under its top and bottom edges
             GlassStyle::Dense => {
                 let h = &mut container.params.highlight;
                 let (amount, height, offset) = if mode.dark {
@@ -2270,9 +2269,12 @@ fn glass_pieces(
                 } else {
                     DENSE_GLOW_LIGHT
                 };
-                h.amount = amount;
-                h.height = height;
-                h.offset = offset;
+                h.glow_amount = amount;
+                h.glow_height = height;
+                h.glow_offset = offset;
+                if popup && (mode.reduce_transparency || mode.increase_contrast) {
+                    h.amount = 0.0;
+                }
             }
             GlassStyle::LargePanel => {
                 let h = &mut container.params.highlight;
@@ -2285,9 +2287,11 @@ fn glass_pieces(
                 h.glow_height = height;
                 h.glow_offset = offset;
             }
-            // the popup's rim is drawn apart (`inner_rim_item`), lit all round: the glass's own would light its top and
-            // bottom twice
-            _ if popup => container.params.highlight.amount = 0.0,
+            // with Reduce Transparency or Increase Contrast the popup's rim is drawn apart (`inner_rim_item`), lit all
+            // round, in place of the glass's own
+            _ if popup && (mode.reduce_transparency || mode.increase_contrast) => {
+                container.params.highlight.amount = 0.0
+            }
             _ => {}
         }
     }
@@ -2305,17 +2309,9 @@ fn glass_pieces(
         let small = container
             .bounds()
             .is_some_and(|b| b[2].min(b[3]) < CALLOUT_SHADOW_MIN_SIDE as f32);
-        if callout && small && !mode.reduce_transparency && !mode.increase_contrast {
-            // a small callout (a label) is a veil a little lighter than the plain glass, with a rim that reads clearly
-            // over a dark backdrop and gently over a light one
-            container.params.highlight.amount *= if mode.dark {
-                SMALL_CALLOUT_RIM_GAIN_DARK
-            } else {
-                SMALL_CALLOUT_RIM_GAIN_LIGHT
-            };
-            if mode.dark {
-                container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
-            }
+        if callout && small && !mode.reduce_transparency && !mode.increase_contrast && mode.dark {
+            // a small dark callout (a label) is a veil a little lighter than the plain glass
+            container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
         }
     }
     let alpha = members.iter().map(|b| b.alpha).fold(0.0, f64::max) as f32 * opacity;

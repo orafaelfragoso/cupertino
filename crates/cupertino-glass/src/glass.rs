@@ -18,15 +18,17 @@
 //!    normal, by `−amount · REFRACTION_REACH_PER_AMOUNT · (1 − t)²` points where `t` runs from 0 at the edge to 1 at the
 //!    band's inner side: what lies past the edge bends into the rim.
 //! 4. **Bleed.** The blur fill, mapped to the encoded range `[black, white]` after its own saturation, blends
-//!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass.
-//! 5. **Key/fill highlight.** A thin rim band (half-width `height`, centred `offset` from the edge) adds light along
-//!    the axis through `angle`: the key colour `matrix · face` at `amount` on the arc of edge facing `angle`, and the
-//!    same light at `amount · (1 + color_bias)` on the arc facing the opposite way, so the rim reads lit at both ends
-//!    of the axis. Each arc fades with the angle from its end of the axis ([`highlight_lobe`]: width `spread`,
-//!    exponent `curvature`) to nothing towards the sides.
-//! 6. **Shadow and ring shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at
-//!    `amount` percent of its fill's alpha, and a ring `stroke` wide, offset by `ring_offset` and blurred by
-//!    `ring_blur`. Each is drawn at its opacity, which is 0 at rest.
+//!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass. It
+//!    shows at the bleed's opacity, which is 0 at rest.
+//! 5. **Soft band and rim.** Where a surface asks for it, a soft band of the light `matrix · face` along the arcs of
+//!    edge facing either end of the axis through `angle` ([`highlight_lobe`]). Then the rim ([`rim_shift`]): every
+//!    channel shifted by `amount · color_bias` (darker for a negative bias), scaled by the face's brightness
+//!    ([`rim_brightness`]) and by the edge's direction ([`rim_direction`], strongest on diagonals), in a band
+//!    `RIM_DEPTH_PER_HEIGHT · height` deep.
+//! 6. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved up by
+//!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]).
+//! 7. **Drop shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at `amount` percent
+//!    of its fill's alpha. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
 //!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
@@ -34,7 +36,8 @@
 //! Colours are straight sRGB-encoded `f32` unless a function says otherwise.
 
 use cupertino_theme::glass::{
-    apply_matrix, ColorMatrix, GlassParams, BLUR_LEVELS, REFRACTION_REACH_PER_AMOUNT,
+    apply_matrix, rim_brightness, rim_direction, ColorMatrix, GlassParams, BLUR_LEVELS,
+    REFRACTION_REACH_PER_AMOUNT, RIM_DEPTH_PER_HEIGHT,
 };
 
 /// Deviations closer than this, in points, are blurred once.
@@ -277,14 +280,15 @@ pub fn refraction_offset(d: f32, normal: [f32; 2], amount: f32, height: f32) -> 
     [normal[0] * reach, normal[1] * reach]
 }
 
-/// Stage 4: the bleed of the backdrop colour `wide` (the widest blur level) into the face `c`, `d` from the edge.
+/// Stage 4: the bleed of the backdrop colour `wide` (the blur fill) into the face `c`, `d` from the edge, at the
+/// bleed's opacity (none at rest).
 pub fn bleed(c: Rgb, wide: Rgb, d: f32, p: &GlassParams, amount: f32, height: f32) -> Rgb {
     let b = &p.bleed;
-    if amount <= 0.0 || height <= 0.0 {
+    if amount <= 0.0 || height <= 0.0 || b.opacity <= 0.0 {
         return c;
     }
     let t = (-d / height).clamp(0.0, 1.0);
-    let w = (amount / 100.0).clamp(0.0, 1.0) * (1.0 - t) * (1.0 - t);
+    let w = (amount / 100.0).clamp(0.0, 1.0) * b.opacity.min(1.0) * (1.0 - t) * (1.0 - t);
     let tone =
         saturate_encoded(wide, b.saturation).map(|v| b.black + (b.white - b.black) * v.min(1.0));
     let blended: Rgb = std::array::from_fn(|i| {
@@ -322,25 +326,17 @@ pub fn highlight_lobe(normal_angle: f32, light: f32, spread: f32, curvature: f32
 /// How far from its end of the axis a highlight arc reaches, as a share of the spread.
 pub const LOBE_REACH: f32 = 0.75;
 
-/// Stage 5: the key and fill rim lights on the face `c` at distance `d` (negative inside, points) from the edge, with
-/// outward `normal` in y-down coordinates: the key colour added at the end of the axis the light comes from, and at
-/// the other end the same light weakened by the colour bias.
-pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
+/// Stage 5, first part: the soft band of light on the face `c` at distance `d` (negative inside, points) from the edge,
+/// with outward `normal` in y-down coordinates: the colour `matrix · face` added along the arcs facing either end of the
+/// axis through the light's angle, the far end at `1 + color_bias` of the near one. Nothing where the recipe has no
+/// band.
+pub fn glow(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
-    let rim = h.amount > 0.0 && h.height > 0.0;
-    let glow = h.glow_amount > 0.0 && h.glow_height > 0.0;
-    if !(rim || glow) || (normal[0] == 0.0 && normal[1] == 0.0) {
+    if h.glow_amount <= 0.0 || h.glow_height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
         return c;
     }
-    let mut band = 0.0;
-    if rim {
-        let x = (d - h.offset) / h.height;
-        band += h.amount * (-x * x).exp();
-    }
-    if glow {
-        let x = (d - h.glow_offset) / h.glow_height;
-        band += h.glow_amount * (-x * x).exp();
-    }
+    let x = (d - h.glow_offset) / h.glow_height;
+    let band = h.glow_amount * (-x * x).exp();
     // y up for the angle
     let normal_angle = (-normal[1]).atan2(normal[0]);
     let key = highlight_lobe(normal_angle, h.angle, h.spread, h.curvature);
@@ -353,6 +349,35 @@ pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let w = band * (key + fill * (1.0 + h.color_bias).max(0.0));
     let light = matrix_rgb(&h.matrix, c);
     std::array::from_fn(|i| (c[i] + light[i] * w).min(1.0))
+}
+
+/// How much of the rim a pixel whose centre lies `depth` units inside the edge gets (the antialiased edge counts as on
+/// it), for a rim `reach` units deep: all of it up to half a unit short of the reach, fading over the unit across it.
+pub fn rim_band(depth: f32, reach: f32) -> f32 {
+    (reach + 0.5 - depth.max(0.0)).clamp(0.0, 1.0)
+}
+
+/// Stage 5, second part: the shift the rim adds to every channel of the face `c` at distance `d` (negative inside,
+/// points) from the edge, with outward `normal`: `amount · color_bias`, times the face's brightness response and the
+/// edge's direction response, inside the rim's depth.
+pub fn rim_shift(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> f32 {
+    let h = &p.highlight;
+    if h.amount == 0.0 || h.height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
+        return 0.0;
+    }
+    let band = rim_band(-d, RIM_DEPTH_PER_HEIGHT * h.height);
+    if band <= 0.0 {
+        return 0.0;
+    }
+    let angle = normal[1].atan2(normal[0]);
+    h.amount * h.color_bias * rim_brightness(luma(c)) * rim_direction(angle) * band
+}
+
+/// Stage 5: the soft band, then the rim, on the face `c`.
+pub fn highlight(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
+    let c = glow(c, d, normal, p);
+    let shift = rim_shift(c, d, normal, p);
+    c.map(|v| (v + shift).clamp(0.0, 1.0))
 }
 
 fn matrix_rgb(m: &ColorMatrix, c: Rgb) -> Rgb {
@@ -369,23 +394,38 @@ fn blurred_coverage(d: f32, r: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Stage 6: the alpha of the drop shadow and of the ring shadow at a pixel outside the shape. `d_shadow` is the field
-/// at the pixel minus the drop shadow's offset, `d_ring` the field minus the ring's offset.
-pub fn shadow_alpha(d_shadow: f32, d_ring: f32, p: &GlassParams) -> (f32, f32) {
+/// The share of a Gaussian of deviation 1 below `x` (a logistic fit of the normal distribution, within 0.01).
+pub fn normal_cdf(x: f32) -> f32 {
+    1.0 / (1.0 + (-1.702 * x).exp())
+}
+
+/// Stage 6: how much the ring shadow darkens the face at a pixel whose field, with the ring moved up by its offset, is
+/// `d_ring` (negative inside): the stroke from the outline to `stroke` inside it, blurred with a Gaussian of
+/// `ring_blur`, at the ring's opacity. The face is multiplied by one minus it.
+pub fn ring_shadow(d_ring: f32, p: &GlassParams) -> f32 {
     let s = &p.shadow;
-    let drop = s.opacity
-        * (s.amount / 100.0).clamp(0.0, 1.0)
-        * s.fill[3]
-        * blurred_coverage(d_shadow, s.height);
-    let ring = if s.ring_stroke > 0.0 {
-        // the band between the outline and `stroke` inside it, blurred
-        let inner = blurred_coverage(d_ring + s.ring_stroke, s.ring_blur);
-        let outer = blurred_coverage(d_ring, s.ring_blur);
-        s.ring_opacity * (outer - inner).max(0.0)
+    if s.ring_opacity <= 0.0 || s.ring_stroke <= 0.0 {
+        return 0.0;
+    }
+    // the share of the blurred stroke [-stroke, 0] at the pixel's depth
+    let mask = if s.ring_blur > 0.0 {
+        normal_cdf(-d_ring / s.ring_blur) - normal_cdf((-s.ring_stroke - d_ring) / s.ring_blur)
+    } else if (-s.ring_stroke..=0.0).contains(&d_ring) {
+        1.0
     } else {
         0.0
     };
-    (drop, ring)
+    s.ring_opacity.min(1.0) * mask.max(0.0)
+}
+
+/// Stage 7: the alpha of the drop shadow at a pixel outside the shape, whose field minus the drop shadow's offset is
+/// `d_shadow`.
+pub fn shadow_alpha(d_shadow: f32, p: &GlassParams) -> f32 {
+    let s = &p.shadow;
+    s.opacity
+        * (s.amount / 100.0).clamp(0.0, 1.0)
+        * s.fill[3]
+        * blurred_coverage(d_shadow, s.height)
 }
 
 /// The alpha of the outline hairline at a pixel `d` points outside the shape: full within its width, fading over the
@@ -550,9 +590,7 @@ impl Container {
         if d > 0.5 {
             let s = &params.shadow;
             let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
-            let d_ring = self.field([p[0], p[1] - s.ring_offset]).0;
-            let (drop, ring) = shadow_alpha(d_shadow, d_ring, params);
-            let a = (drop + ring + outline_alpha(d, params)).min(1.0);
+            let a = (shadow_alpha(d_shadow, params) + outline_alpha(d, params)).min(1.0);
             return ([s.fill[0], s.fill[1], s.fill[2]], a);
         }
         let face_at = |q: [f32; 2]| {
@@ -575,6 +613,12 @@ impl Container {
             v.bleed_height,
         );
         c = highlight(c, edge_distance(d, slope), normal, params);
+        // the ring is moved up: at p it is what the shape's field is a ring offset below p
+        let ring = ring_shadow(
+            self.field([p[0], p[1] + params.shadow.ring_offset]).0,
+            params,
+        );
+        c = c.map(|v| v * (1.0 - ring));
         (c, (0.5 - d).clamp(0.0, 1.0))
     }
 }
@@ -602,7 +646,7 @@ pub struct GlassUniform {
     pub face_fill: [f32; 4],
     /// Bleed: white, black, saturation, darken (0/1).
     pub bleed: [f32; 4],
-    /// Highlight: amount, angle, spread, half-width.
+    /// Rim strength, the soft band's light angle and spread, the rim's depth.
     pub highlight: [f32; 4],
     /// Highlight: offset, colour bias, curvature, 0.
     pub highlight2: [f32; 4],
@@ -612,9 +656,10 @@ pub struct GlassUniform {
     pub highlight_matrix: [[f32; 4]; 3],
     /// Drop shadow: offset x, offset y, alpha, blur radius.
     pub shadow: [f32; 4],
-    /// Shadow colour (rgb) and the ring's alpha.
+    /// Shadow colour (rgb) and how much the ring darkens the face.
     pub shadow_color: [f32; 4],
-    /// Ring: offset, stroke, blur, and the width of the outline outside the shape.
+    /// Ring inside the shape: how far up it is moved, its stroke, its Gaussian deviation, and the width of the outline
+    /// outside the shape.
     pub ring: [f32; 4],
     /// Each shape: x, y, w, h.
     pub shapes: [[f32; 4]; MAX_SHAPES],
@@ -663,7 +708,12 @@ impl GlassUniform {
             if p.bleed.darken { 1.0 } else { 0.0 },
         ];
         let h = &p.highlight;
-        u.highlight = [h.amount, h.angle, h.spread, h.height * scale];
+        u.highlight = [
+            h.amount,
+            h.angle,
+            h.spread,
+            RIM_DEPTH_PER_HEIGHT * h.height * scale,
+        ];
         u.highlight2 = [h.offset * scale, h.color_bias, h.curvature, 0.0];
         u.glow = [
             h.glow_amount,
@@ -695,7 +745,7 @@ impl GlassUniform {
                 shape.fitted_radius() * scale,
                 -v.refraction_amount * REFRACTION_REACH_PER_AMOUNT * scale,
                 v.refraction_height * scale,
-                (v.bleed_amount / 100.0).clamp(0.0, 1.0),
+                (v.bleed_amount / 100.0).clamp(0.0, 1.0) * p.bleed.opacity.clamp(0.0, 1.0),
             ];
             u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, 0.0];
         }
@@ -718,9 +768,11 @@ impl Container {
 
     /// Whether a shape bleeds the backdrop into its edge.
     fn bleeds(&self) -> bool {
-        self.values
-            .iter()
-            .any(|v| v.bleed_amount > 0.0 && v.bleed_height > 0.0)
+        self.params.bleed.opacity > 0.0
+            && self
+                .values
+                .iter()
+                .any(|v| v.bleed_amount > 0.0 && v.bleed_height > 0.0)
     }
 
     /// The deviation in points of the blur fill, if it shows or the bleed reads it.
@@ -1152,15 +1204,42 @@ mod tests {
     }
 
     #[test]
+    fn bleed_shows_nowhere_at_rest() {
+        for dark in [true, false] {
+            let p = params(dark);
+            assert_eq!(p.bleed.opacity, 0.0);
+            assert!(
+                p.bleed.amount > 0.0,
+                "the plumbing keeps its strength and band"
+            );
+            let face = [0.3, 0.4, 0.5];
+            assert_eq!(bleed(face, [0.9, 0.1, 0.1], 0.0, &p, 35.0, 35.0), face);
+            // and the container neither blurs for it nor tells the shader to draw it
+            let c = Container::new(
+                vec![GlassShape::new([0.0, 0.0, 150.0, 100.0], 18.0)],
+                0.0,
+                GlassMode {
+                    dark,
+                    ..GlassMode::default()
+                },
+            );
+            let u = GlassUniform::new(&c, 2.0, [[0.0; 3]; 2], [0.0; 4], [1.0; 2], 1.0);
+            assert_eq!(u.shape_a[0][3], 0.0);
+        }
+    }
+
+    #[test]
     fn bleed_lightens_dark_glass_edges_with_the_backdrop_colour() {
-        let p = params(true);
+        let mut p = params(true);
+        p.bleed.opacity = 1.0;
         let red = [0.9, 0.1, 0.1];
         let face = [0.1; 3];
         let edge = bleed(face, red, 0.0, &p, 35.0, 35.0);
         assert!(edge[0] > face[0] && edge[1] >= face[1], "{edge:?}");
         let inside = bleed(face, red, -40.0, &p, 35.0, 35.0);
         assert_eq!(inside, face, "past the band");
-        let light = params(false);
+        let mut light = params(false);
+        light.bleed.opacity = 1.0;
         let darker = bleed([0.98; 3], [0.0, 0.0, 0.5], 0.0, &light, 35.0, 35.0);
         assert!(darker[0] < 0.98, "light glass darkens: {darker:?}");
     }
@@ -1190,82 +1269,178 @@ mod tests {
         let d_edge = union_field(&shapes, k, edge).0;
         assert!(close(edge_distance(d_edge, slope(edge)), d_edge, 1e-3));
         let p = params(true);
-        let face = [0.2, 0.15, 0.6];
-        let lit = highlight(face, edge_distance(d_edge, slope(edge)), [0.0, 1.0], &p);
-        let across = highlight(face, edge_distance(d, slope(seam)), [0.0, 1.0], &p);
-        assert!(lit[0] > face[0] + 0.01, "{lit:?}");
+        let face = [0.5, 0.45, 0.6];
+        let rim = |d: f32| highlight(face, d, [std::f32::consts::FRAC_1_SQRT_2; 2], &p);
+        let on_edge = rim(edge_distance(d_edge, slope(edge)));
+        let across = rim(edge_distance(d, slope(seam)));
+        assert!(on_edge[0] < face[0] - 0.01, "{on_edge:?}");
         assert!(
-            close(across[0], face[0], 1e-3),
+            close(across[0], face[0], 1e-6),
             "no rim across the join: {across:?}"
-        );
-    }
-
-    #[test]
-    fn highlight_lights_the_top_and_the_bottom_edge_and_not_the_sides() {
-        let p = params(true);
-        let face = [0.2, 0.15, 0.6];
-        let top = highlight(face, -0.5, [0.0, -1.0], &p);
-        let bottom = highlight(face, -0.5, [0.0, 1.0], &p);
-        let side = highlight(face, -0.5, [1.0, 0.0], &p);
-        for i in 0..3 {
-            assert!(
-                top[i] > face[i],
-                "the key light lifts every channel: {top:?}"
-            );
-            assert!(
-                bottom[i] > face[i],
-                "the fill end of the axis is lit too: {bottom:?}"
-            );
-        }
-        assert!(
-            bottom[0] < top[0],
-            "a little less than the key: {bottom:?} {top:?}"
-        );
-        assert!(
-            bottom[0] - face[0] > 0.6 * (top[0] - face[0]),
-            "but nearly as bright: {bottom:?} {top:?}"
-        );
-        assert_eq!(side, face, "nothing at the sides");
-        // around a corner the light fades gradually rather than ending early
-        let corner = highlight(
-            face,
-            -0.5,
-            [
-                std::f32::consts::FRAC_1_SQRT_2,
-                -std::f32::consts::FRAC_1_SQRT_2,
-            ],
-            &p,
-        );
-        let (lift, full) = (corner[0] - face[0], top[0] - face[0]);
-        assert!(lift > 0.4 * full && lift < full, "{lift} of {full} at 45°");
-        let deep = highlight(face, -6.0, [0.0, -1.0], &p);
-        assert!(close(deep[0], face[0], 1e-3), "the rim is thin");
-        assert_eq!(highlight_lobe(0.0, 0.0, 1.0, 0.75), 1.0);
-        let spread = p.highlight.spread;
-        assert_eq!(highlight_lobe(spread * LOBE_REACH, 0.0, spread, 0.75), 0.0);
-        let mut lobe = [0.0f32; 6];
-        for (i, l) in lobe.iter_mut().enumerate() {
-            *l = highlight_lobe(i as f32 * 0.25, 0.0, spread, 0.75);
-        }
-        assert!(
-            lobe.windows(2).all(|w| w[1] < w[0]),
-            "falls steadily: {lobe:?}"
         );
     }
 
     #[test]
     fn shadows_are_invisible_at_rest_and_follow_their_values_when_shown() {
         let mut p = params(true);
-        assert_eq!(shadow_alpha(0.0, 0.0, &p), (0.0, 0.0));
+        assert_eq!(shadow_alpha(0.0, &p), 0.0);
+        assert_eq!(ring_shadow(-1.0, &p), 0.0);
         p.shadow.opacity = 1.0;
         p.shadow.amount = 50.0;
         p.shadow.height = 10.0;
-        p.shadow.ring_opacity = 1.0;
-        let (near, ring) = shadow_alpha(0.0, 0.0, &p);
-        assert!(close(near, 0.5 * 0.3 * 0.5, 1e-4), "{near}");
-        assert!(ring > 0.0);
-        let (far, _) = shadow_alpha(40.0, 40.0, &p);
-        assert_eq!(far, 0.0);
+        assert!(close(shadow_alpha(0.0, &p), 0.5 * 0.3 * 0.5, 1e-4));
+        assert_eq!(shadow_alpha(40.0, &p), 0.0);
+    }
+
+    /// The ring shadow is a stroke of its width inside the outline, moved up by its offset and blurred with a
+    /// Gaussian of its deviation, darkening the face by its opacity; nothing outside the shape.
+    #[test]
+    fn the_ring_shadow_darkens_a_blurred_stroke_inside_the_outline_moved_up() {
+        let mut p = params(true);
+        // stroke 4, offset 8, deviation 5 at rest, with no opacity
+        assert_eq!(
+            (
+                p.shadow.ring_stroke,
+                p.shadow.ring_offset,
+                p.shadow.ring_blur
+            ),
+            (4.0, 8.0, 5.0)
+        );
+        p.shadow.ring_opacity = 0.4;
+        // unblurred: the stroke covers depths 0 to 4 and nothing else
+        p.shadow.ring_blur = 0.0;
+        assert_eq!(ring_shadow(-2.0, &p), 0.4);
+        assert_eq!(ring_shadow(-5.0, &p), 0.0);
+        assert_eq!(ring_shadow(1.0, &p), 0.0);
+        // blurred: strongest in the middle of the stroke, the share of a Gaussian of 5 over its 4 points
+        p.shadow.ring_blur = 5.0;
+        let mid = ring_shadow(-2.0, &p);
+        let expect = 0.4 * (normal_cdf(0.4) - normal_cdf(-0.4));
+        assert!(close(mid, expect, 1e-6), "{mid} vs {expect}");
+        assert!(ring_shadow(-12.0, &p) < 0.25 * mid && ring_shadow(-12.0, &p) > 0.0);
+        // the logistic stands for the normal distribution within 0.01
+        for (x, phi) in [
+            (0.0, 0.5),
+            (1.0, 0.841_344_7),
+            (-2.0, 0.022_750_1),
+            (0.5, 0.691_462_5),
+        ] {
+            assert!(close(normal_cdf(x), phi, 0.01), "{x}");
+        }
+        // on a shape, the ring is moved up: the face is darkened most a ring offset below the top edge, and only
+        // faintly just inside the bottom edge
+        p.shadow.ring_blur = 0.0;
+        let mut c = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode {
+                dark: true,
+                ..GlassMode::default()
+            },
+        );
+        c.params.shadow = p.shadow;
+        let grey = |_: usize, _: [f32; 2]| [0.5f32; 3];
+        let at = |y: f32| c.shade([100.0, y], &grey).0[0];
+        let plain = face_color([0.5; 3], &c.params, c.values[0].max_luma)[0];
+        // under the top edge the ring sits 8 points higher, outside the shape: nothing
+        assert!(close(at(2.0), plain, 1e-5), "{} vs {plain}", at(2.0));
+        // the ring along the bottom edge, moved up 8: depths 8 to 12 above the bottom
+        assert!(close(at(100.0 - 10.0), plain * 0.6, 1e-4), "{}", at(90.0));
+        assert!(close(at(100.0 - 2.0), plain, 1e-5));
+        // and nothing at rest
+        let rest = Container::new(c.shapes.clone(), 0.0, c.mode);
+        assert!(close(rest.shade([100.0, 90.0], &grey).0[0], plain, 1e-5));
+    }
+
+    /// The rim adds `amount · color_bias` (darker for a negative bias) to every channel, scaled by the face's
+    /// brightness (0, 0.63, 1, 1.13, 1 at luma 0, ¼, ½, ¾, 1) and the edge's direction (0.15 + 0.85·sin²(2φ)), in a band
+    /// 1.7 times its height deep.
+    #[test]
+    fn the_rim_darkens_most_on_diagonal_edges_of_a_mid_face() {
+        let p = params(true);
+        assert_eq!((p.highlight.amount, p.highlight.color_bias), (0.5, -0.1875));
+        // a mid grey: on a straight edge −0.5·0.1875·1·0.15 of a level, on a diagonal all of it
+        let mid = [0.5f32; 3];
+        let straight = rim_shift(mid, -0.1, [0.0, -1.0], &p);
+        assert!(
+            close(straight * 255.0, -0.5 * 0.1875 * 0.15 * 255.0, 1e-3),
+            "{straight}"
+        );
+        assert!(close(straight * 255.0, -3.6, 0.05));
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        let diagonal = rim_shift(mid, -0.1, [d, d], &p);
+        assert!(close(diagonal * 255.0, -23.9, 0.05), "{}", diagonal * 255.0);
+        // the four diagonals and the four sides alike
+        for n in [[d, -d], [-d, d], [-d, -d]] {
+            assert!(close(rim_shift(mid, -0.1, n, &p), diagonal, 1e-6));
+        }
+        for n in [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]] {
+            assert!(close(rim_shift(mid, -0.1, n, &p), straight, 1e-6));
+        }
+        // 22.5° off a side: half way in sin²(2φ)
+        let (s, c) = std::f32::consts::FRAC_PI_8.sin_cos();
+        let between = rim_shift(mid, -0.1, [c, s], &p);
+        assert!(close(between / diagonal, 0.15 + 0.85 * 0.5, 1e-5));
+        // by brightness: nothing on black, 0.63 at a quarter, 1.13 at three quarters, 1 at white
+        let shift = |l: f32| rim_shift([l; 3], -0.1, [d, d], &p) / diagonal;
+        assert_eq!(shift(0.0), 0.0);
+        for (l, g) in [
+            (0.25, 0.63),
+            (0.5, 1.0),
+            (0.75, 1.13),
+            (1.0, 1.0),
+            (0.375, 0.815),
+        ] {
+            assert!(close(shift(l), g, 1e-4), "{l}: {}", shift(l));
+        }
+        // the band: 1.7 · 0.5 = 0.85 points deep, all of it on the edge, half at its depth, none a half point past it
+        assert_eq!(rim_shift(mid, 0.0, [d, d], &p), diagonal);
+        assert!(close(
+            rim_shift(mid, -0.85, [d, d], &p),
+            0.5 * diagonal,
+            1e-6
+        ));
+        assert_eq!(rim_shift(mid, -1.35, [d, d], &p), 0.0);
+        // at twice the scale the band is 1.7 pixels deep: the first pixel all of it, the second 0.7, the third none
+        assert_eq!(rim_band(0.5, 1.7), 1.0);
+        assert!(close(rim_band(1.5, 1.7), 0.7, 1e-6));
+        assert_eq!(rim_band(2.5, 1.7), 0.0);
+        // a positive bias lightens, as an interaction state may ask
+        let mut lit = p;
+        lit.highlight.color_bias = 0.25;
+        assert!(rim_shift(mid, -0.1, [d, d], &lit) > 0.0);
+        // applied to the face, clamped
+        let dark = highlight(mid, -0.1, [d, d], &p);
+        assert!(close(dark[0], 0.5 + diagonal, 1e-6) && close(dark[2], 0.5 + diagonal, 1e-6));
+    }
+
+    #[test]
+    fn the_soft_band_lights_the_top_and_the_bottom_edge_and_not_the_sides() {
+        let mut p = params(true);
+        p.highlight.amount = 0.0;
+        assert_eq!(
+            glow([0.2; 3], -0.5, [0.0, -1.0], &p),
+            [0.2; 3],
+            "none at rest"
+        );
+        p.highlight.glow_amount = 0.1;
+        p.highlight.glow_height = 4.0;
+        let face = [0.2, 0.15, 0.6];
+        let top = highlight(face, -1.0, [0.0, -1.0], &p);
+        let bottom = highlight(face, -1.0, [0.0, 1.0], &p);
+        let side = highlight(face, -1.0, [1.0, 0.0], &p);
+        for i in 0..3 {
+            assert!(top[i] > face[i], "{top:?}");
+            assert!(bottom[i] > face[i], "{bottom:?}");
+        }
+        assert!(
+            bottom[0] < top[0],
+            "a little less at the far end: {bottom:?} {top:?}"
+        );
+        assert_eq!(side, face, "nothing at the sides");
+        assert_eq!(highlight_lobe(0.0, 0.0, 1.0, 0.75), 1.0);
+        let spread = p.highlight.spread;
+        assert_eq!(highlight_lobe(spread * LOBE_REACH, 0.0, spread, 0.75), 0.0);
     }
 
     #[test]

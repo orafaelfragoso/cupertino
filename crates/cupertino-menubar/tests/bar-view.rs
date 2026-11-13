@@ -85,6 +85,7 @@ fn content() -> BarContent {
             ),
         ],
         status: vec![],
+        indicator: None,
         clock: "Tue 10:42".into(),
         control_panel: true,
     }

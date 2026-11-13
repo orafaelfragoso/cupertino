@@ -75,6 +75,7 @@ fn content() -> BarContent {
                 menu: None,
             },
         ],
+        indicator: None,
         clock: "Tue 10:42".into(),
         control_panel: true,
     }

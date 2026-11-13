@@ -359,7 +359,7 @@ impl BarFeed {
                     ..m
                 }),
             });
-        let status = indicator.into_iter().chain(extras).chain(items).collect();
+        let status = extras.chain(items).collect();
         let system_menu = shared
             .extras
             .system_menu(&shared.chords, &shared.recent, self.front_app())
@@ -370,6 +370,7 @@ impl BarFeed {
             app_menu,
             menus,
             status,
+            indicator,
             clock: if shared.conf.shown.clock {
                 shared.clock.clone()
             } else {
@@ -1027,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn the_screen_capture_indicator_sits_nearest_the_control_panel_while_a_capture_runs() {
+    fn the_screen_capture_indicator_is_shown_apart_from_the_status_items_while_a_capture_runs() {
         let (mut feed, mut shared) = ready(Some(WindowMenu::None));
         shared.extras.battery = Some(BatteryState {
             percent: 90,
@@ -1046,10 +1047,16 @@ mod tests {
                 .map(|s| s.id.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(&feed, &shared), [SCREEN_CAPTURE_SLOT, "extra:battery"]);
-        assert_eq!(feed.content(&shared).status[0].menu, None);
+        assert_eq!(ids(&feed, &shared), ["extra:battery"]);
+        let dot = feed.content(&shared).indicator.unwrap();
+        assert_eq!(
+            (dot.id.as_str(), dot.width),
+            (SCREEN_CAPTURE_SLOT, PRIVACY_DOT_PT)
+        );
+        assert_eq!(dot.menu, None);
         feed.apply(&capture(false), &mut shared, |_| editor());
         assert_eq!(ids(&feed, &shared), ["extra:battery"]);
+        assert_eq!(feed.content(&shared).indicator, None);
     }
 
     #[test]

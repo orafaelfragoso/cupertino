@@ -18,8 +18,9 @@
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use cupertino_geometry::CornerStyle;
 use cupertino_glass::blur::plan_blur;
-use cupertino_glass::glass::{face_color, Container, GlassUniform};
+use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
 use cupertino_glass::ops::PassParams;
 use cupertino_theme::glass::{
     relative_luminance, GlassMode, GlassParams, BLUR_LEVELS, GLASS_BACKDROP_SCALE,
@@ -30,7 +31,8 @@ use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size};
 
 use super::{
-    bind_block, link, uniform_loc, GLint, GLuint, MaterialGl, SavedState, SharedMaterial, Target,
+    bind_block, link, uniform_loc, GLint, GLuint, MaterialGl, MaterialMask, SavedState,
+    SharedMaterial, Target,
 };
 use crate::render::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 
@@ -137,6 +139,34 @@ impl GlassContainer {
             .f(within.size.h)
             .finish();
         self.within = Some(within);
+        self
+    }
+
+    /// The container cut to `mask` (output-local points), the rounded outline of the window it is in, as well as to its
+    /// shapes: a square shape that reaches the window's corners follows them, as the window's content does, and a shape
+    /// rounded inside the outline is left as it is.
+    pub fn masked(mut self, mask: MaterialMask) -> Self {
+        let style = if mask.continuous {
+            CornerStyle::continuous()
+        } else {
+            CornerStyle::Circular
+        };
+        let cut = Cut {
+            rect: [
+                mask.rect.loc.x as f32,
+                mask.rect.loc.y as f32,
+                mask.rect.size.w as f32,
+                mask.rect.size.h as f32,
+            ],
+            extent: (mask.radius_pt * style.expansion()) as f32,
+            exponent: style.exponent() as f32,
+        };
+        let mut sig = Sig::new().u(self.key);
+        for v in cut.rect.iter().chain([&cut.extent, &cut.exponent]) {
+            sig = sig.u(u64::from(v.to_bits()));
+        }
+        self.key = sig.finish();
+        self.container = self.container.cut_to(cut);
         self
     }
 
@@ -950,6 +980,12 @@ impl MaterialGl {
         ];
         let target = [viewport[2] as f32, viewport[3] as f32];
         let uniform = GlassUniform::new(&p.glass.container, p.scale, uv, quad, target, p.opacity);
+        // the glass of a window meets the window's other backdrops and content on whole pixels, as they are drawn
+        let uniform = if p.glass.within.is_some() {
+            uniform.on_pixels()
+        } else {
+            uniform
+        };
 
         self.timer_begin(gl, false);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, saved.draw_fbo as GLuint);

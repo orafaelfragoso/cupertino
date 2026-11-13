@@ -1060,8 +1060,8 @@ impl MaterialGl {
     }
 }
 
-/// The outline a material region is cut to besides its own rectangle: the rounded outline of the window whose backdrop
-/// it is, so a backdrop that reaches the window's corners follows them.
+/// The outline a material region or glass container is cut to besides its own shape: the rounded outline of the window
+/// whose backdrop it is, so a backdrop that reaches the window's corners follows them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MaterialMask {
     pub rect: Rectangle<f64, Logical>,

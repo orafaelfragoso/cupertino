@@ -596,7 +596,9 @@ impl<M: 'static> Widget<M> for Divider<M> {
                     } else {
                         cupertino_ui_theme::Color::new(0.0, 0.0, 0.0, SIDEBAR_RIM_LIGHT)
                     };
-                    look::fill(cx, rim, 0.0, Some(color));
+                    // one whole device pixel: at a fractional scale a rim between two pixels would show as a soft line two
+                    // pixels wide, half over the sidebar's glass
+                    cx.fill_pixels(rim, color);
                 }
             }
         }

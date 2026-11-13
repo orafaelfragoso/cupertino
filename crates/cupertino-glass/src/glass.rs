@@ -583,7 +583,36 @@ impl ShapeValues {
     }
 }
 
-/// A container ready to shade: its shapes (points), blend width, the mode and each shape's recipe.
+/// An outline a container is cut to besides its own shapes: a rectangle `[x, y, w, h]` in points whose corners reach
+/// `extent` along each side with a superellipse of exponent `exponent` (2 is a circle). Nothing the container draws
+/// shows outside it, its shadow and edge line included; a shape inside it is left as it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cut {
+    pub rect: [f32; 4],
+    pub extent: f32,
+    pub exponent: f32,
+}
+
+impl Cut {
+    /// Signed distance from `p` to the outline, negative inside.
+    pub fn sdf(&self, p: [f32; 2]) -> f32 {
+        let [x, y, w, h] = self.rect;
+        rounded_box_sdf(
+            [p[0] - (x + w * 0.5), p[1] - (y + h * 0.5)],
+            [w * 0.5, h * 0.5],
+            self.extent,
+            self.exponent,
+        )
+    }
+
+    /// The share of the pixel at `p` inside the outline, over an antialiased edge one pixel wide.
+    pub fn coverage(&self, p: [f32; 2]) -> f32 {
+        (0.5 - self.sdf(p)).clamp(0.0, 1.0)
+    }
+}
+
+/// A container ready to shade: its shapes (points), blend width, the mode, each shape's recipe and the outline it is
+/// cut to, if any.
 #[derive(Clone, Debug)]
 pub struct Container {
     pub shapes: Vec<GlassShape>,
@@ -594,6 +623,8 @@ pub struct Container {
     pub values: Vec<ShapeValues>,
     /// The deviations in points the backdrop is blurred with, ascending ([`blur_levels`]).
     pub sigmas: Vec<f32>,
+    /// The outline the container is cut to besides its shapes ([`Cut`]).
+    pub cut: Option<Cut>,
 }
 
 impl Container {
@@ -625,7 +656,14 @@ impl Container {
             params: GlassParams::new(mode, largest),
             values,
             sigmas,
+            cut: None,
         }
+    }
+
+    /// The container cut to `cut` as well as to its shapes.
+    pub fn cut_to(mut self, cut: Cut) -> Self {
+        self.cut = Some(cut);
+        self
     }
 
     /// The bounds of every shape, gaps included.
@@ -674,8 +712,15 @@ impl Container {
     }
 
     /// Shade the pixel at `p` (points): `sample(level, q)` reads blur level `level` (0..4, and 4 for the blur fill) of
-    /// the backdrop at `q`. Returns the colour and its coverage (glass inside, shadow outside).
+    /// the backdrop at `q`. Returns the colour and its coverage (glass inside, shadow outside), none outside the
+    /// outline the container is cut to.
     pub fn shade(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
+        let (c, a) = self.shade_shapes(p, sample);
+        (c, a * self.cut.map_or(1.0, |cut| cut.coverage(p)))
+    }
+
+    /// The colour and coverage of the shapes at `p`, before the cut.
+    fn shade_shapes(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
         let params = &self.params;
         let (d, v) = self.field(p);
         let gradient = field_gradient(&self.shapes, self.spacing, p);
@@ -815,6 +860,11 @@ pub struct GlassUniform {
     /// Each shape: bleed band, largest luminance, where its blur lies among the blurred copies, the exponent of its
     /// corners' superellipse.
     pub shape_b: [[f32; 4]; MAX_SHAPES],
+    /// The outline the container is cut to: x, y, w, h.
+    pub cut: [f32; 4],
+    /// How far its corners reach along the sides, the exponent of their superellipse, 1 when the container is cut and
+    /// 0 when not, 0.
+    pub cut_shape: [f32; 4],
 }
 
 impl GlassUniform {
@@ -904,8 +954,34 @@ impl GlassUniform {
             ];
             u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, exponent];
         }
+        if let Some(cut) = container.cut {
+            u.cut = cut.rect.map(|x| x * scale);
+            u.cut_shape = [cut.extent * scale, cut.exponent, 1.0, 0.0];
+        }
         u
     }
+
+    /// The uniform with the edges of its square shapes and of its cut on the nearest whole pixel: a square edge is then
+    /// hard and meets what is drawn beside it on the same pixel, with no column of partial coverage between them.
+    /// Rounded shapes keep their edges where they are.
+    pub fn on_pixels(mut self) -> Self {
+        let n = (self.info[0].max(0.0) as usize).min(MAX_SHAPES);
+        for i in 0..n {
+            if self.shape_a[i][0] <= 0.0 {
+                self.shapes[i] = whole_pixels(self.shapes[i]);
+            }
+        }
+        if self.cut_shape[2] > 0.0 {
+            self.cut = whole_pixels(self.cut);
+        }
+        self
+    }
+}
+
+/// `[x, y, w, h]` with each edge on the nearest whole pixel.
+fn whole_pixels([x, y, w, h]: [f32; 4]) -> [f32; 4] {
+    let (x0, y0) = (x.round(), y.round());
+    [x0, y0, (x + w).round() - x0, (y + h).round() - y0]
 }
 
 impl Container {
@@ -1081,6 +1157,117 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_square_shape_cut_to_a_window_s_rounded_outline_is_clear_past_its_corners_and_unchanged_inside(
+    ) {
+        // a square sidebar over the left of a window of 400 × 300 points with continuous corners of radius 16
+        let window = [20.0, 20.0, 400.0, 300.0];
+        let outline = Cut {
+            rect: window,
+            extent: 16.0 * CONTINUOUS_EXTENT,
+            exponent: CONTINUOUS_EXPONENT,
+        };
+        let sidebar = || {
+            Container::new(
+                vec![GlassShape::new([20.0, 20.0, 160.0, 300.0], 0.0)],
+                0.0,
+                GlassMode::default(),
+            )
+        };
+        let (plain, cut) = (sidebar(), sidebar().cut_to(outline));
+        let wall = |_: usize, q: [f32; 2]| [q[0] / 500.0, q[1] / 400.0, 0.5];
+        // the window's top-left and bottom-left corner pixels, and a few points in along the diagonal
+        for p in [[20.5, 20.5], [22.5, 22.5], [20.5, 319.5], [22.5, 317.5]] {
+            assert_eq!(
+                plain.shade(p, &wall).1,
+                1.0,
+                "the square shape covers {p:?}"
+            );
+            assert_eq!(
+                cut.shade(p, &wall).1,
+                0.0,
+                "past the rounded corner {p:?} is clear"
+            );
+        }
+        // inside the outline, along the edges, past the corners and in the middle, it is the shape as it was
+        for y in (0..300).step_by(7) {
+            for x in (0..170).step_by(7) {
+                let p = [20.5 + x as f32, 20.5 + y as f32];
+                if outline.sdf(p) > -0.5 {
+                    continue;
+                }
+                assert_eq!(cut.shade(p, &wall), plain.shade(p, &wall), "{p:?}");
+            }
+        }
+        // a shape rounded inside the outline is left as it is
+        let button = || {
+            Container::new(
+                vec![GlassShape::capsule([40.0, 40.0, 80.0, 28.0])],
+                0.0,
+                GlassMode::default(),
+            )
+        };
+        let (plain, cut) = (button(), button().cut_to(outline));
+        for y in 30..80 {
+            for x in 30..130 {
+                let p = [x as f32 + 0.5, y as f32 + 0.5];
+                assert_eq!(cut.shade(p, &wall), plain.shade(p, &wall), "{p:?}");
+            }
+        }
+        // the uniform carries the outline in pixels, and an uncut container leaves it off
+        let u = |c: &Container| GlassUniform::new(c, 2.0, [[0.0; 3]; 2], [0.0; 4], [1.0; 2], 1.0);
+        assert_eq!(u(&cut).cut, window.map(|v| v * 2.0));
+        assert_eq!(
+            u(&cut).cut_shape,
+            [
+                16.0 * CONTINUOUS_EXTENT * 2.0,
+                CONTINUOUS_EXPONENT,
+                1.0,
+                0.0
+            ]
+        );
+        assert_eq!(u(&plain).cut_shape[2], 0.0);
+    }
+
+    #[test]
+    fn on_pixels_puts_square_edges_and_the_cut_on_whole_pixels_and_leaves_rounded_shapes() {
+        // at 1.5 a sidebar 161 points wide ends half way across a pixel
+        let c = Container::new(
+            vec![
+                GlassShape::new([0.0, 0.0, 161.0, 301.0], 0.0),
+                GlassShape::new([200.0, 10.0, 81.0, 29.0], 8.0),
+            ],
+            0.0,
+            GlassMode::default(),
+        )
+        .cut_to(Cut {
+            rect: [0.0, 0.0, 401.0, 301.0],
+            extent: 16.0,
+            exponent: 2.0,
+        });
+        let u = GlassUniform::new(&c, 1.5, [[0.0; 3]; 2], [0.0; 4], [1.0; 2], 1.0);
+        let snapped = u.on_pixels();
+        assert_eq!(u.shapes[0], [0.0, 0.0, 241.5, 451.5]);
+        assert_eq!(snapped.shapes[0], [0.0, 0.0, 242.0, 452.0]);
+        assert_eq!(
+            snapped.shapes[1], u.shapes[1],
+            "a rounded shape stays where it is"
+        );
+        assert_eq!(snapped.cut, [0.0, 0.0, 602.0, 452.0]);
+        // its right edge is hard: the pixel left of it is all glass and the one right of it none
+        let field = |p: [f32; 2]| {
+            let [x, y, w, h] = snapped.shapes[0];
+            rounded_box_sdf(
+                [p[0] - (x + w * 0.5), p[1] - (y + h * 0.5)],
+                [w * 0.5, h * 0.5],
+                0.0,
+                2.0,
+            )
+        };
+        assert_eq!((0.5 - field([241.5, 200.5])).clamp(0.0, 1.0), 1.0);
+        assert_eq!((0.5 - field([242.5, 200.5])).clamp(0.0, 1.0), 0.0);
     }
 
     #[test]
@@ -2078,7 +2265,7 @@ mod tests {
     fn uniform_layout_and_scaling() {
         assert_eq!(
             std::mem::size_of::<GlassUniform>(),
-            (19 + 3 * MAX_SHAPES) * 16
+            (21 + 3 * MAX_SHAPES) * 16
         );
         let c = Container::new(
             vec![GlassShape::capsule([10.0, 20.0, 100.0, 40.0])],

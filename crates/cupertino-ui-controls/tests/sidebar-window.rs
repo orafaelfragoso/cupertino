@@ -159,6 +159,45 @@ fn where_the_sidebar_meets_the_content_a_rim_is_drawn_not_a_separator_line() {
 }
 
 #[test]
+fn the_rim_covers_one_whole_device_pixel_at_every_scale() {
+    use cupertino_ui_render::{Paint, PaintOp, Shape};
+    // at 4/3 the sidebar's edge falls a third of the way into a device pixel
+    for scale in [1.0, 1.25, 4.0 / 3.0, 1.5, 1.75, 2.0] {
+        let mut h = harness();
+        h.send(WindowEvent::Scale(scale));
+        h.settle();
+        let rims: Vec<_> = h
+            .snapshot()
+            .display_list
+            .nodes
+            .into_iter()
+            .flat_map(|n| n.ops)
+            .filter_map(|op| match op {
+                PaintOp::Fill {
+                    shape: Shape::RoundedRect { rect: r, .. } | Shape::Rect(r),
+                    paint: Paint::Solid(c),
+                } if (r.min_x() - SIDEBAR).abs() < 1.0
+                    && r.width() <= 2.0
+                    && (r.height() - 400.0).abs() < 1.0
+                    && c.a < 0.2 =>
+                {
+                    Some(r)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rims.len(), 1, "at {scale}x: {rims:?}");
+        let (left, right) = (rims[0].min_x() * scale, rims[0].max_x() * scale);
+        assert!(
+            (left - left.round()).abs() < 1e-6 && (right - left - 1.0).abs() < 1e-6,
+            "at {scale}x the rim covers device pixels {left}..{right}"
+        );
+        // on the pixel the content begins on, which the sidebar's glass leaves to it
+        assert_eq!(left, (SIDEBAR * scale).round(), "at {scale}x");
+    }
+}
+
+#[test]
 fn the_divider_strip_shows_the_contents_own_background_in_light_and_dark() {
     use cupertino_ui_render::{Paint, PaintOp, Shape};
     use cupertino_ui_theme::Appearance;

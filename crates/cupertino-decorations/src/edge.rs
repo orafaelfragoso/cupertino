@@ -26,7 +26,7 @@ pub const WINDOW_OUTLINE_LIGHT: f32 = 0.22;
 /// Share of the active outline's opacity an inactive window keeps.
 pub const INACTIVE_OUTLINE_SHARE: f32 = 0.62;
 /// Opacity of the black outline along the sides of a menu in the dark appearance.
-pub const MENU_OUTLINE_DARK: f32 = 0.65;
+pub const MENU_OUTLINE_DARK: f32 = 0.6;
 /// Opacity of the black outline along the sides of a menu in the light appearance.
 pub const MENU_OUTLINE_LIGHT: f32 = 0.5;
 /// Share of the shadow table's inner-rim density the white inner rim of a window shows.

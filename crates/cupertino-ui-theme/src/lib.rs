@@ -419,8 +419,10 @@ pub struct ThemeTokens {
 pub const BAR_GLASS_MATERIAL: &str = "BarGlass";
 /// The material name of regular glass: the compositor draws glass rather than a recipe of the design tokens.
 pub const GLASS_MATERIAL: &str = "Glass";
-/// The material name of dense glass, the glass of menus, popovers and cards.
+/// The material name of dense glass, the glass of popovers and cards.
 pub const DENSE_GLASS_MATERIAL: &str = "DenseGlass";
+/// The material name of the glass of menus.
+pub const MENU_GLASS_MATERIAL: &str = "MenuGlass";
 /// The material name of the glass of the tiles of a panel of modules.
 pub const MODULE_GLASS_MATERIAL: &str = "ModuleGlass";
 /// The material name of the glass of a window's sidebar.
@@ -440,7 +442,8 @@ impl ThemeTokens {
         let opaque = prefs.reduce_transparency || prefs.appearance.is_high_contrast();
         let (material, kept) = match surface {
             Surface::Sidebar => (SIDEBAR_GLASS_MATERIAL, false),
-            Surface::Menu | Surface::Popover => (DENSE_GLASS_MATERIAL, true),
+            Surface::Menu => (MENU_GLASS_MATERIAL, true),
+            Surface::Popover => (DENSE_GLASS_MATERIAL, true),
             Surface::Hud => ("LoginWindowControl", false),
             Surface::AppGrid => ("AppGrid", true),
             Surface::Switcher => (SWITCHER_GLASS_MATERIAL, false),

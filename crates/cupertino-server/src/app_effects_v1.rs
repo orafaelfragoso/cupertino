@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 19;
+const VERSION: u32 = 20;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -73,6 +73,8 @@ const SWITCHER_VERSION: u32 = 17;
 const SIDEBAR_VERSION: u32 = 18;
 /// The version of `cupertino_backdrop_v1` that has the toolbar glass style.
 const TOOLBAR_VERSION: u32 = 19;
+/// The version of `cupertino_backdrop_v1` that has the menu glass style.
+const MENU_VERSION: u32 = 20;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +194,7 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 15] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 16] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
     ("LargePanelGlass", GlassStyle::LargePanel),
@@ -208,6 +210,7 @@ pub const GLASS_MATERIALS: [(&str, GlassStyle); 15] = [
     ("SnippetGlass", GlassStyle::Snippet),
     ("VeiledGlass", GlassStyle::Veiled),
     ("ToolbarGlass", GlassStyle::Toolbar),
+    ("MenuGlass", GlassStyle::Menu),
 ];
 
 /// The glass style a material name stands for.
@@ -958,6 +961,11 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         if resource.version() >= TOOLBAR_VERSION =>
                     {
                         Some(GlassStyle::Toolbar)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Menu)
+                        if resource.version() >= MENU_VERSION =>
+                    {
+                        Some(GlassStyle::Menu)
                     }
                     _ => None,
                 };

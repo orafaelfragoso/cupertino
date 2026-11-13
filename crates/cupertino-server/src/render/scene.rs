@@ -2306,7 +2306,13 @@ fn glass_pieces(
         }
     }
     // a popover's outline, which a callout's one piece of glass draws itself
-    if popup && callout && spec.style == cupertino_theme::GlassStyle::Dense {
+    if popup
+        && callout
+        && matches!(
+            spec.style,
+            cupertino_theme::GlassStyle::Dense | cupertino_theme::GlassStyle::Menu
+        )
+    {
         let (opacity, width) = if mode.dark {
             POPOVER_OUTLINE_DARK
         } else {

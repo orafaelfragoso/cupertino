@@ -615,7 +615,9 @@ impl<A: Application> Harness<A> {
         let node = self.rt.find(self.window, &Key::from(key)).unwrap();
         let (id, over) = (PaintNodeId::from(node), overlay_id(node));
         let origin = self.rect(key).origin;
-        let nodes = self.snapshot().display_list.nodes;
+        // a raised node draws in the window's layer where the window system shows one
+        let mut nodes = self.rt.layer_display_list(self.window).unwrap().nodes;
+        nodes.extend(self.snapshot().display_list.nodes);
         let mut ops = nodes.iter().find(|n| n.id == id).unwrap().ops.clone();
         if let Some(overlay) = nodes.iter().find(|n| n.id == over) {
             ops.extend(overlay.ops.iter().filter_map(|op| match op {

@@ -593,27 +593,57 @@ fn a_glass_button_on_a_material_is_the_compositor_s_regular_glass_and_paints_no_
 }
 
 #[test]
-fn a_glass_button_paints_its_body_over_content_with_reduce_transparency_and_without_the_desktop_s_glass(
-) {
-    // over the window's own background, which would hide glass under it
-    let over_content = Harness::<GlassButtonWindow<false>>::with_effects(support::theme());
-    assert!(glass_regions(&over_content).is_empty());
-    assert!(paints_body(&over_content));
-    // with Reduce Transparency, on a material
-    let mut reduced = support::theme();
-    reduced.preferences.reduce_transparency = true;
-    let reduced = Harness::<GlassButtonWindow<true>>::with_effects(reduced);
-    let rect = reduced.rect("glass");
-    assert!(glass_regions(&reduced).iter().all(|r| r.rect != rect));
-    assert!(paints_body(&reduced));
-    // on a desktop that shows no glass
-    let plain = Harness::<GlassButtonWindow<true>>::with_theme(support::theme());
-    assert!(glass_regions(&plain).is_empty());
-    assert!(paints_body(&plain));
+fn a_glass_button_over_content_rises_into_the_window_s_layer_as_glass_of_its_own() {
+    for dark in [false, true] {
+        let mut theme = support::theme();
+        if dark {
+            theme.preferences.appearance = cupertino_ui_theme::Appearance::Dark;
+        }
+        let h = Harness::<GlassButtonWindow<false>>::with_layer(theme);
+        let rect = h.rect("glass");
+        let regions = glass_regions(&h);
+        let button = regions
+            .iter()
+            .find(|r| r.rect == rect)
+            .unwrap_or_else(|| panic!("glass under the button (dark {dark}): {regions:?}"));
+        assert!(button.raised, "laid in the layer over the content");
+        assert_eq!(
+            button.glass.unwrap().style,
+            GlassStyle::Regular,
+            "regular glass"
+        );
+        assert!(!paints_body(&h), "the glass is its body (dark {dark})");
+    }
 }
 
 #[test]
-fn a_glass_button_on_glass_lays_its_rim_over_the_glass_in_the_light_appearance() {
+fn a_glass_button_paints_its_body_without_a_layer_with_reduce_transparency_and_without_the_desktop_s_glass(
+) {
+    // over the window's own background, with no layer to lift it over the content
+    let over_content = Harness::<GlassButtonWindow<false>>::with_effects(support::theme());
+    assert!(glass_regions(&over_content).is_empty());
+    assert!(paints_body(&over_content));
+    // with Reduce Transparency, on a material and in the layer
+    let mut reduced = support::theme();
+    reduced.preferences.reduce_transparency = true;
+    let on_material = Harness::<GlassButtonWindow<true>>::with_effects(reduced.clone());
+    let rect = on_material.rect("glass");
+    assert!(glass_regions(&on_material).iter().all(|r| r.rect != rect));
+    assert!(paints_body(&on_material));
+    let layered = Harness::<GlassButtonWindow<false>>::with_layer(reduced);
+    assert!(glass_regions(&layered).is_empty());
+    assert!(paints_body(&layered));
+    // on a desktop that shows no glass, with or without the layer
+    let plain = Harness::<GlassButtonWindow<true>>::with_theme(support::theme());
+    assert!(glass_regions(&plain).is_empty());
+    assert!(paints_body(&plain));
+    let layer_only = Harness::<GlassButtonWindow<false>>::with_layer_only(support::theme());
+    assert!(glass_regions(&layer_only).is_empty());
+    assert!(paints_body(&layer_only));
+}
+
+#[test]
+fn a_glass_button_on_glass_lays_a_rim_over_the_glass_only_with_increase_contrast() {
     use cupertino_ui_theme::Appearance;
     for appearance in [
         Appearance::Light,
@@ -634,8 +664,8 @@ fn a_glass_button_on_glass_lays_its_rim_over_the_glass_in_the_light_appearance()
             .any(|op| matches!(op, PaintOp::Stroke { .. }));
         assert_eq!(
             rim,
-            !appearance.is_dark(),
-            "a fine rim over the light glass, none over the dark ({appearance:?})"
+            appearance == Appearance::LightHighContrast,
+            "the compositor draws the glass's edge; the toolkit adds a rim only with Increase Contrast ({appearance:?})"
         );
         assert!(!paints_body(&h));
     }

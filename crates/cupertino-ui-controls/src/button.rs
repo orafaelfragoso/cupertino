@@ -370,6 +370,12 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         env.theme.metrics.min_target
     }
 
+    /// A glass button draws in the window's raised layer, its glass between that layer and the window's content, so
+    /// over content its glass shows what lies under it.
+    fn raised(&self, _: &ButtonState) -> bool {
+        self.style == ButtonStyle::Glass
+    }
+
     fn event(
         &self,
         state: &mut ButtonState,

@@ -12,10 +12,12 @@
 //! draw that pane's background too ([`Surface::WindowBackground`]): the glass then reads the window, not the desktop
 //! behind it.
 //!
-//! A glass button is glass only where the compositor's glass can show: on a material the window shows (a sidebar, a
-//! translucent window background), filling its node, and without Reduce Transparency. Over the window's own content,
-//! which would hide glass under it, and with Reduce Transparency it paints its body, as it does where the desktop shows
-//! no glass.
+//! A glass button is glass wherever the compositor's glass can show, filling its node, without Reduce Transparency: on a
+//! material the window shows (a sidebar, a translucent window background), and over the window's own content, where
+//! the button draws in the window's raised layer ([`Widget::raised`](cupertino_ui_core::Widget::raised)) with its glass
+//! between that layer and the content, so the glass shows the content under it. Where the window system has no such
+//! layer, over content that would hide glass under it, and with Reduce Transparency it paints its body, as it does
+//! where the desktop shows no glass.
 //!
 //! Roles are either content surfaces, which hold a window's content (the sidebar panel), or floating controls over
 //! that content (a toolbar group, a translucent button, a held thumb's lens); see [`GlassRole::floating`]. Glass is
@@ -139,7 +141,7 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
                     .radius(radius)
                     .container(container, spacing),
             ) {
-                // the toolkit lays the fine edge and the shade of a floating control over the compositor's glass
+                // with Increase Contrast the toolkit lays a firmer rim over the compositor's glass
                 paint_edge(cx, rect, radius);
                 return true;
             }
@@ -160,65 +162,38 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
     }
 }
 
-/// Whether a glass button's own glass would show: it lies on a material the window shows rather than on the window's
-/// content, which the window paints over glass under it; Reduce Transparency is off, which keeps the painted body; and
-/// its body fills the node, the shape the compositor draws the glass in.
+/// Whether a glass button's own glass would show: it lies on a material the window shows, or it draws in the window's
+/// raised layer, over the window's content, which then shows through the glass rather than covering it; Reduce
+/// Transparency is off, which keeps the painted body; and its body fills the node, the shape the compositor draws the
+/// glass in.
 fn shows_button_glass(cx: &PaintCx<'_>, rect: Rect) -> bool {
     let size = cx.size();
     let fills = rect.min_x().abs() < 1e-6
         && rect.min_y().abs() < 1e-6
         && (rect.width() - size.width).abs() < 1e-6
         && (rect.height() - size.height).abs() < 1e-6;
-    cx.on_material() && !cx.env().theme.preferences.reduce_transparency && fills
+    (cx.on_material() || cx.in_raised_layer())
+        && !cx.env().theme.preferences.reduce_transparency
+        && fills
 }
 
-/// The edge of a floating control's glass in the light appearance, at its sides and at its top and bottom: a fine dark
-/// rim on the outermost device pixel of the shape, strongest across the middle of the sides, so a light face over light
-/// content keeps its outline (a white face of 240 has its sides at 190 and its top and bottom at 218).
-const EDGE_RIM_SIDES: f32 = 0.21;
-const EDGE_RIM_ENDS: f32 = 0.09;
-/// The rim with Increase Contrast, sides and ends.
+/// The rim the toolkit lays over a floating control's glass with Increase Contrast in the light appearance, at its sides
+/// and at its top and bottom: a dark line on the outermost device pixel of the shape, strongest across the middle of the
+/// sides. At rest the compositor's glass draws its own outline, which follows the brightness of the face and of what
+/// lies around it.
 const EDGE_RIM_CONTRAST_SIDES: f32 = 0.5;
 const EDGE_RIM_CONTRAST_ENDS: f32 = 0.3;
-/// The faint shade a floating control casts just below itself in the light appearance, in points and as a share of
-/// black.
-const EDGE_SHADE: f32 = 0.022;
-const EDGE_SHADE_OFFSET: f64 = 4.0;
-const EDGE_SHADE_BLUR: f64 = 4.5;
-/// How far past the shape the shade may reach, in points.
-const EDGE_SHADE_REACH: f64 = EDGE_SHADE_OFFSET + 3.0 * EDGE_SHADE_BLUR;
 
-/// The rim and the shade the toolkit lays over the compositor's glass of a floating control in the light appearance
-/// ([`EDGE_RIM_SIDES`], [`EDGE_SHADE`]); the dark appearance's glass stands out by its face, lifted above the content
-/// under it. The shade is cut out of the shape, so it never dims the glass.
+/// The firmer rim the toolkit lays over the compositor's glass of a floating control with Increase Contrast in the
+/// light appearance ([`EDGE_RIM_CONTRAST_SIDES`]); the dark appearance's glass stands out by its face, and at rest the
+/// glass's own outline serves.
 fn paint_edge(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
     let theme = &cx.env().theme;
-    if theme.preferences.appearance.is_dark() {
+    if theme.preferences.appearance.is_dark() || !theme.preferences.appearance.is_high_contrast() {
         return;
     }
-    let (sides, ends) = edge_rim(theme);
+    let (sides, ends) = (EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS);
     let scale = cx.env().scale.max(1.0);
-    let shape = Shape::RoundedRect { rect, radius };
-    let mut outside = crate::tabs::rounded(rect.inset(Insets::uniform(-EDGE_SHADE_REACH)), 0.0);
-    outside.extend(crate::tabs::rounded(rect, radius));
-    cx.push(PaintOp::PushClip(Shape::Path {
-        verbs: outside,
-        fill_rule: cupertino_ui_render::FillRule::EvenOdd,
-    }));
-    cx.push(PaintOp::PushLayer {
-        opacity: 1.0,
-        effects: vec![cupertino_ui_render::Effect::DropShadow {
-            offset: cupertino_geometry::Point::new(0.0, EDGE_SHADE_OFFSET),
-            blur: EDGE_SHADE_BLUR,
-            color: Color::new(0.0, 0.0, 0.0, EDGE_SHADE),
-        }],
-    });
-    cx.push(PaintOp::Fill {
-        shape,
-        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
-    });
-    cx.push(PaintOp::PopLayer);
-    cx.push(PaintOp::PopClip);
     let px = 1.0 / scale;
     let black = |a| Color::new(0.0, 0.0, 0.0, a);
     let stop = |offset, color| cupertino_ui_render::GradientStop { offset, color };
@@ -238,16 +213,6 @@ fn paint_edge(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
             ],
         },
     });
-}
-
-/// The opacity of black of the rim over a floating control's glass, `(sides, ends)`: the middle of its sides and its
-/// top and bottom, stronger with Increase Contrast.
-fn edge_rim(theme: &cupertino_ui_theme::ThemeTokens) -> (f32, f32) {
-    if theme.preferences.appearance.is_high_contrast() {
-        (EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS)
-    } else {
-        (EDGE_RIM_SIDES, EDGE_RIM_ENDS)
-    }
 }
 
 /// The painted glass: in the light appearance a soft shade first, then the body and its rim.

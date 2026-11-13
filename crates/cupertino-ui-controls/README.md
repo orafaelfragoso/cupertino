@@ -209,9 +209,8 @@ from the application's model and reports changes as messages.
   buttons, a segment with a menu as a pop-up button that opens on the press; a group with an empty label adds no
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
-  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. In the light appearance each control's glass
-  gets a fine dark rim on its outermost device pixel (black at 21 % across the middle of its sides, 9 % at its top and
-  bottom) and a faint shade below it, cut out of its shape; the dark appearance's glass stands out by its face. `NavigationStack` puts its back and
+  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. Each control's glass marks
+  its own edge (the compositor's rim and edge line, which follow the brightness of the face and of what lies around it). `NavigationStack` puts its back and
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
   row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
   chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a
@@ -238,11 +237,12 @@ from the application's model and reports changes as messages.
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
   soft shade in the light appearance). At rest the compositor's glass marks its own edge; with Increase Contrast in the
   light appearance the toolkit lays its own over it: a dark rim on the outermost device pixel, 50 % black at the sides
-  and 30 % at the top and bottom, and a faint shade below, cut out of the shape so it never dims the glass. A glass
-  button is regular glass of its own (container 0) where that glass can show: on a material the window shows (a
-  sidebar, a translucent window background), its body filling its node, without Reduce Transparency; its label then
-  takes the colours of text on glass. Over the window's own content, which would hide glass under it, with Reduce
-  Transparency and where the desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
+  and 30 % at the top and bottom. A glass button is regular glass of its own (container 0) where that glass can show,
+  its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
+  window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
+  lies between the window's raised layer and its content, so the content shows through it; its label then takes the
+  colours of text on glass. Where the window system has no raised layer, with Reduce Transparency and where the
+  desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
   track the window paints, so it stays painted. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.

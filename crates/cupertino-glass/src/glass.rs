@@ -2449,33 +2449,143 @@ mod tests {
         assert!(black.iter().all(|v| (15.0..=30.0).contains(v)), "{black:?}");
     }
 
-    #[test]
-    fn module_tiles_keep_the_backdrop_light_in_the_light_appearance_and_dark_in_the_dark_one() {
-        let light = flat_face(false, GlassStyle::Module, 170.0, [255.0; 3]);
-        assert!(light.iter().all(|v| (v - 244.0).abs() <= 1.0), "{light:?}");
-        let dark = flat_face(true, GlassStyle::Module, 170.0, [255.0; 3]);
-        assert!(dark.iter().all(|v| (v - 207.0).abs() <= 1.0), "{dark:?}");
-        // a strong colour keeps its hue in both
-        for dark in [false, true] {
-            let red = flat_face(dark, GlassStyle::Module, 80.0, [255.0, 51.0, 51.0]);
-            assert!(
-                red[0] > 2.5 * red[1] && (red[1] - red[2]).abs() < 1.0,
-                "{red:?}"
-            );
-        }
-    }
+    /// Flat backdrops and the face module glass gives each, in 8-bit levels, the same in both appearances: about
+    /// `0.59 · c + 27` per channel, so a sunlit backdrop comes through as a mid tone of its own colour.
+    const MODULE_TONES: [([f32; 3], [f32; 3]); 6] = [
+        ([229.0, 216.0, 182.0], [170.0, 155.0, 114.0]),
+        ([239.0, 229.0, 201.0], [173.0, 163.0, 134.0]),
+        ([236.0, 225.0, 195.0], [172.0, 159.0, 126.0]),
+        ([204.0, 172.0, 105.0], [162.0, 127.0, 59.0]),
+        ([168.0, 119.0, 64.0], [146.0, 96.0, 39.0]),
+        ([118.0, 75.0, 44.0], [111.0, 68.0, 36.0]),
+    ];
 
     #[test]
-    fn a_dark_card_keeps_the_backdrops_colour() {
-        let white = flat_face(true, GlassStyle::Card, 56.0, [255.0; 3]);
-        assert!(white.iter().all(|v| (v - 207.0).abs() <= 1.0), "{white:?}");
-        let red = flat_face(true, GlassStyle::Card, 56.0, [255.0, 51.0, 51.0]);
-        for (got, want) in red.iter().zip([245.0, 51.0, 51.0]) {
-            assert!((got - want).abs() <= 1.0, "{red:?}");
+    fn module_tiles_tone_the_backdrop_into_a_mid_tone_of_its_colour_in_both_appearances() {
+        for (backdrop, tile) in MODULE_TONES {
+            for side in [80.0, 170.0] {
+                let light = flat_face(false, GlassStyle::Module, side, backdrop);
+                let dark = flat_face(true, GlassStyle::Module, side, backdrop);
+                assert_eq!(light, dark, "{backdrop:?}: the appearance changes nothing");
+                for c in 0..3 {
+                    assert!(
+                        (dark[c] - tile[c]).abs() <= 6.0,
+                        "{backdrop:?} gave {dark:?}, not {tile:?}"
+                    );
+                }
+            }
         }
+        // white comes out a mid grey and black a dark one
+        let white = flat_face(true, GlassStyle::Module, 170.0, [255.0; 3]);
+        assert!(white.iter().all(|v| (v - 178.0).abs() <= 1.0), "{white:?}");
+        let black = flat_face(true, GlassStyle::Module, 170.0, [0.0; 3]);
+        assert!(black.iter().all(|v| (v - 27.0).abs() <= 1.0), "{black:?}");
+        // a strong colour keeps its hue
+        let red = flat_face(true, GlassStyle::Module, 80.0, [255.0, 51.0, 51.0]);
+        assert!(
+            red[0] > 2.5 * red[1] && (red[1] - red[2]).abs() < 1.0,
+            "{red:?}"
+        );
+    }
+
+    /// Flat backdrops and the face dark card glass gives each, in 8-bit levels: about `0.42 · c + 26` per channel over
+    /// the bright half, a bright neutral held near 115, below a bright warm colour.
+    const CARD_TONES_DARK: [([f32; 3], [f32; 3]); 4] = [
+        ([231.0, 214.0, 164.0], [123.0, 114.0, 85.0]),
+        ([249.0, 249.0, 249.0], [115.0, 115.0, 113.0]),
+        ([229.0, 208.0, 134.0], [126.0, 114.0, 70.0]),
+        ([83.0, 52.0, 32.0], [61.0, 39.0, 27.0]),
+    ];
+
+    #[test]
+    fn a_dark_card_is_a_mid_dark_pane_that_keeps_a_little_of_the_backdrops_colour() {
+        for (backdrop, card) in CARD_TONES_DARK {
+            for side in [56.0, 120.0] {
+                let face = flat_face(true, GlassStyle::Card, side, backdrop);
+                for c in 0..3 {
+                    assert!(
+                        (face[c] - card[c]).abs() <= 4.0,
+                        "{backdrop:?} gave {face:?}, not {card:?}"
+                    );
+                }
+            }
+        }
+        // light text reads on it over any backdrop: even white behind stays a mid-dark grey
+        for grey in [0.0, 128.0, 192.0, 255.0] {
+            let face = flat_face(true, GlassStyle::Card, 56.0, [grey; 3]);
+            assert!(face[1] < 120.0, "{grey}: {face:?}");
+        }
+        // a strong red stays red, darker
+        let red = flat_face(true, GlassStyle::Card, 56.0, [255.0, 51.0, 51.0]);
+        assert!(red[0] > 2.0 * red[1] && red[0] < 190.0, "{red:?}");
         // the dense glass of menus dims the same red and deepens it, its weaker channels pressed towards black
         let dense = flat_face(true, GlassStyle::Dense, 56.0, [255.0, 51.0, 51.0]);
         assert!(dense[0] < 240.0 && dense[1] < 10.0, "{dense:?}");
+    }
+
+    #[test]
+    fn the_sidebar_is_a_dense_pane_that_takes_only_a_faint_tint_of_the_backdrop() {
+        // (appearance, green of the face over black, over mid grey, over white): about 0.034 · x + 34 dark, 0.02 · x + 229
+        // light, which is a little warm
+        for (dark, at) in [(true, [34.0, 38.0, 42.5]), (false, [229.1, 231.6, 234.2])] {
+            for (grey, want) in [0.0, 128.0, 255.0].into_iter().zip(at) {
+                let face = flat_face(dark, GlassStyle::Sidebar, 300.0, [grey; 3]);
+                assert!((face[1] - want).abs() <= 1.0, "{dark} {grey}: {face:?}");
+                assert!(face[0] >= face[1] && face[1] >= face[2], "{face:?}");
+                assert!(face[0] - face[2] < 4.0, "{face:?}");
+            }
+            // a saturated backdrop moves the pane only a few levels from the grey of the same backdrop level
+            let grey = flat_face(dark, GlassStyle::Sidebar, 300.0, [128.0; 3]);
+            let blue = flat_face(dark, GlassStyle::Sidebar, 300.0, [40.0, 90.0, 250.0]);
+            for c in 0..3 {
+                assert!((blue[c] - grey[c]).abs() < 18.0, "{dark}: {blue:?}");
+            }
+            // Increase Contrast keeps the dense face
+            let with = |increase_contrast| {
+                GlassParams::new(
+                    GlassMode {
+                        dark,
+                        style: GlassStyle::Sidebar,
+                        increase_contrast,
+                        ..GlassMode::default()
+                    },
+                    300.0,
+                )
+                .face
+            };
+            assert_eq!(with(true), with(false));
+        }
+    }
+
+    /// Flat backdrops and the face the light large panel gives each, in 8-bit levels: a cream sheet that keeps the
+    /// backdrop's warmth without turning it orange.
+    const LARGE_PANEL_TONES_LIGHT: [([f32; 3], [f32; 3]); 9] = [
+        ([55.0, 38.0, 29.0], [166.0, 146.0, 135.0]),
+        ([65.0, 43.0, 35.0], [176.0, 147.0, 138.0]),
+        ([89.0, 62.0, 43.0], [192.0, 160.0, 138.0]),
+        ([129.0, 87.0, 55.0], [221.0, 175.0, 139.0]),
+        ([141.0, 96.0, 57.0], [229.0, 180.0, 138.0]),
+        ([170.0, 126.0, 74.0], [244.0, 196.0, 141.0]),
+        ([195.0, 155.0, 90.0], [253.0, 213.0, 147.0]),
+        ([209.0, 181.0, 114.0], [254.0, 227.0, 159.0]),
+        ([195.0, 182.0, 139.0], [253.0, 239.0, 184.0]),
+    ];
+
+    #[test]
+    fn the_light_large_panel_keeps_a_warm_backdrops_tint_as_cream() {
+        let mut square = 0.0;
+        for (backdrop, panel) in LARGE_PANEL_TONES_LIGHT {
+            let face = flat_face(false, GlassStyle::LargePanel, 400.0, backdrop);
+            for c in 0..3 {
+                assert!(
+                    (face[c] - panel[c]).abs() <= 8.0,
+                    "{backdrop:?} gave {face:?}, not {panel:?}"
+                );
+                square += (face[c] - panel[c]).powi(2);
+            }
+        }
+        let rms = (square / 27.0).sqrt();
+        assert!(rms < 4.0, "{rms}");
     }
 
     #[test]

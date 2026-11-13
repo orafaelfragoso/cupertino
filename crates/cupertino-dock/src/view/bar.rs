@@ -31,8 +31,9 @@ pub const BAR_SURFACE: Surface = Surface::DockBar;
 pub const INDICATOR: f64 = 4.0;
 /// Gap between the bottom of a resting tile and the top of its running indicator, in points.
 pub const INDICATOR_GAP: f64 = 2.0;
-/// Corner radius of the bar as a fraction of the tile size (28 pt at 64).
-pub const BAR_RADIUS: f64 = 28.0 / 64.0;
+/// Corner radius of the bar as a fraction of the tile size: 19.6 pt at 64, a continuous corner that reaches 30 pt along
+/// each side, so the 84 pt deep bar keeps a straight stretch at each end.
+pub const BAR_RADIUS: f64 = 19.6 / 64.0;
 /// Side of an icon's artwork as a fraction of its tile: a 64 pt tile shows a 52 pt icon, centred.
 pub const ICON_ARTWORK: f64 = 52.0 / 64.0;
 /// Length of a separator's line as a fraction of the tile size (62 pt at 64), and its width in points.
@@ -740,5 +741,25 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         });
         cx.action(Action::Click);
         cx.action(Action::ShowMenu);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BAR_EDGE_PADDING_RATIO, BAR_PADDING_RATIO};
+
+    /// How far a continuous corner reaches along each side, per point of its radius.
+    const CORNER_REACH: f64 = 1.53;
+
+    #[test]
+    fn the_bar_corners_reach_30_points_and_leave_a_straight_stretch_at_each_end() {
+        let tile = 64.0;
+        let depth = tile * (1.0 + BAR_PADDING_RATIO + BAR_EDGE_PADDING_RATIO);
+        assert_eq!(depth, 84.0);
+        let reach = tile * BAR_RADIUS * CORNER_REACH;
+        assert!((reach - 30.0).abs() < 0.1, "{reach}");
+        // the two corners of an end leave 24 points of it straight, so the end is no half circle
+        assert!(depth - 2.0 * reach > 23.0);
     }
 }

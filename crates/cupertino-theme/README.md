@@ -94,16 +94,19 @@ flag and its Increase Contrast option.
   and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
   reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
   narrowest blur. `GlassParams::capture_scale` is the scale the backdrop is read at: `GLASS_BACKDROP_SCALE` (0.5),
-  `CARD_CAPTURE_SCALE` (0.25) for cards and `TRACK_CAPTURE_SCALE` (1) for tracks. Content on glass is coloured by a
+  `CARD_CAPTURE_SCALE` (0.25) for cards, `TRACK_CAPTURE_SCALE` (1) for tracks and 0.25 (0.125 once its blur is widest)
+  for dense glass. Content on glass is coloured by a
   4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The bar
-  (`GlassStyle::Bar`, the dock) blurs with a radius of 2.761 pt, bends 8.64 over a 3.84 pt band, and its face takes
+  (`GlassStyle::Bar`, the dock) blurs with a radius of 1 pt, bends 8.64 over a 3.84 pt band, and its face takes
   saturation 1.25, black 0.15 and white 0.9 (light) or black 0.05, white 0.92, a luma cap of 0.75 and a faint black veil
-  (dark), with a thin line of light along its top and bottom edges over a wide faint glow and a dark hairline outside
-  its ends. Popover glass (`GlassStyle::Popover`, a floating bar's names and menus) has no blur of its own, only a
-  16 pt blur fill, bends 24 over a 5 pt band and lights its top and bottom as the bar does. Dense glass (`GlassStyle::Dense`, menus and popovers) is
-  the regular recipe of its size over a face pressed to a mid grey veil (a bright backdrop comes out near 125 in the
-  dark appearance, a pastel of the backdrop in the light one). Module glass (`GlassStyle::Module`, the control panel's
-  tiles) is clear glass of its size bending by 80 over a band of 0.225 of its short side (at most 18 pt) with a rim
+  (dark), with a thin line of light along its top and bottom edges over a wide faint glow. Popover glass (`GlassStyle::Popover`, a floating bar's names and menus) has no blur of its own, only an
+  8 pt blur fill, bends 24 over a 5 pt band and lights its top and bottom as the bar does. Dense glass (`GlassStyle::Dense`, menus and popovers) is
+  the regular recipe of its size with its own blur (radius 6 pt up to a short side of 60, 12 pt from 120, the first
+  level at full opacity), bending by 0.4 of its short side over 0.2 of it (at most 60 and 20) and a ring shadow of 0.06,
+  over a face that washes the backdrop out: black lifted by 0.8 under a faint light grey veil (light), saturation 1.3,
+  black 0.15 and white 0.3 with the regular glass's luma cap (dark). Module glass (`GlassStyle::Module`, the control panel's
+  tiles) is clear glass of its size blurring with a radius of 5 pt up to a short side of 60 and 10 pt from 140, bending by 80 over a band of 0.18 of
+  its short side (at most 25 pt) with a rim
   bias of −0.3: white comes out at 244 in the light appearance and 207 in the dark one. Card glass
   (`GlassStyle::Card`, notification cards) is the clear face over a blur of radius 10 and the regular blur fill,
   bending by 60 over 20 pt, with a ring shadow of 0.06 at rest, read at a quarter scale. Track glass

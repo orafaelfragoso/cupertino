@@ -2027,9 +2027,9 @@ mod tests {
         for (got, want) in red.iter().zip([245.0, 51.0, 51.0]) {
             assert!((got - want).abs() <= 1.0, "{red:?}");
         }
-        // the dense glass of menus presses the same red to a mid grey veil
+        // the dense glass of menus dims the same red and deepens it, its weaker channels pressed towards black
         let dense = flat_face(true, GlassStyle::Dense, 56.0, [255.0, 51.0, 51.0]);
-        assert!(dense[0] < 200.0, "{dense:?}");
+        assert!(dense[0] < 240.0 && dense[1] < 10.0, "{dense:?}");
     }
 
     #[test]

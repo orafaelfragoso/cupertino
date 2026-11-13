@@ -59,8 +59,8 @@ pub enum GlassStyle {
     /// The glass of a floating bar of icons (the dock): a narrow blur, a little more colour, a thin bending edge and a
     /// thin line of light along its top and bottom edges, over a face that lifts black a little and dims white a little.
     Bar,
-    /// The glass of a dense floating surface with text on it (a menu, a popover): regular glass over a face pressed to
-    /// a mid grey veil, so any backdrop reads as a quiet smoky pane under light text.
+    /// The glass of a dense floating surface with text on it (a menu, a popover): regular glass with a wider blur over a
+    /// face that washes the backdrop out, to a pale pane in the light appearance and a dark smoky one in the dark.
     Dense,
     /// The glass of the tiles of a panel of modules (the control panel): the clear face, which keeps the scene's colour,
     /// a wide blur and a strong bending edge, light in the light appearance and dark in the dark one.
@@ -494,7 +494,7 @@ const POPOVER_SIDE: f32 = 26.0;
 const POPOVER_BLUR: f32 = 10.0;
 const POPOVER_LEVELS: [f32; BLUR_LEVELS] = [0.0, 0.0, 0.5, 1.0];
 /// The popover's blur fill: its radius, its opacity in darken (dark) or lighten (light) mode, and in normal mode.
-const POPOVER_FILL_RADIUS: f32 = 16.0;
+const POPOVER_FILL_RADIUS: f32 = 8.0;
 const POPOVER_FILL_OVER: f32 = 0.882;
 const POPOVER_FILL_NORMAL: f32 = 0.46;
 /// The popover's refraction: strength and band width in points.
@@ -514,7 +514,7 @@ const BAR_SATURATION: f32 = 1.25;
 /// The black veil over the dark bar's face.
 const BAR_VEIL_DARK: f32 = 0.02;
 /// The bar's blur radius in points, at full opacity of the first level.
-const BAR_BLUR: f32 = 2.761;
+const BAR_BLUR: f32 = 1.0;
 /// The bar's refraction: strength and band width in points, the same at every size.
 const BAR_REFRACTION: f32 = -8.64;
 const BAR_REFRACTION_HEIGHT: f32 = 3.84;
@@ -538,9 +538,6 @@ const BAR_GLOW_DIFFUSE: GlowDiffuse = GlowDiffuse {
     spread_scale: 0.65,
     amount_scale: 0.15,
 };
-/// The dark hairline just outside the bar's outline, which shows at its ends: its opacity and width in points.
-const BAR_OUTLINE_OPACITY: f32 = 0.45;
-const BAR_OUTLINE_WIDTH: f32 = 0.5;
 /// The bar's drop shadow (shown at no opacity at rest): strength in percent and blur in points.
 const BAR_SHADOW_AMOUNT: f32 = 30.0;
 const BAR_SHADOW_HEIGHT: f32 = 19.2;
@@ -559,37 +556,58 @@ const BAR_GLOW_MATRIX_DARK: ColorMatrix = [
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
 
-/// The face of dense glass. Dark: a bright backdrop comes out near a mid grey (about 125 of 255) and a dark one is
-/// lifted a little, with the colours kept, under a faint grey veil. Light: the regular light face.
+/// The face of dense glass, before its size sets the dark face's luma compression. Dark: a little more colour, black
+/// lifted by 0.15 and white dimmed to 0.3, so any backdrop comes through as a dark smoky grey of it. Light: black lifted
+/// by 0.8 and white dimmed a little under a faint light grey veil, so any backdrop comes through as a pale wash of it.
 fn dense_face(dark: bool) -> GlassFace {
     if dark {
         GlassFace {
             saturation: DENSE_SATURATION_DARK,
             white: DENSE_WHITE_DARK,
             black: DENSE_BLACK_DARK,
-            clamp: 1.308_310_9,
-            max_luma: DENSE_MAX_LUMA_DARK,
-            fill: DENSE_FILL_DARK,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [0.0; 4],
         }
     } else {
-        regular_face(false)
+        GlassFace {
+            black: DENSE_BLACK_LIGHT,
+            clamp: 1.0,
+            fill: DENSE_FILL_LIGHT,
+            ..regular_face(false)
+        }
     }
 }
 
-/// Saturation, white and black levels and luma compression of the dark dense face, and the straight sRGB veil laid over
-/// it: white comes out at 114 of 255, black at 37, a mid grey at 105, and a strong red keeps its colour.
-const DENSE_SATURATION_DARK: f32 = 2.04;
-const DENSE_WHITE_DARK: f32 = 1.5;
-const DENSE_BLACK_DARK: f32 = 0.039;
-const DENSE_MAX_LUMA_DARK: f32 = 0.395;
-const DENSE_FILL_DARK: [f32; 4] = [0.261, 0.261, 0.261, 0.482];
+/// Saturation and white and black levels of the dark dense face; its luma compression follows the size as regular
+/// glass's does.
+const DENSE_SATURATION_DARK: f32 = 1.3;
+const DENSE_WHITE_DARK: f32 = 0.3;
+const DENSE_BLACK_DARK: f32 = 0.15;
+/// The light dense face's black level and the straight sRGB veil over it.
+const DENSE_BLACK_LIGHT: f32 = 0.8;
+const DENSE_FILL_LIGHT: [f32; 4] = [0.96, 0.96, 0.96, 0.04];
+/// The dense glass's blur radius by short side `(side, radius)`, at full opacity of the first level; linear between,
+/// flat outside.
+const DENSE_BLUR_BY_SIDE: [(f32, f32); 2] = [(60.0, 6.0), (120.0, 12.0)];
+/// The dense glass's refraction strength and band width per point of short side, at most the regular glass's.
+const DENSE_REFRACTION_PER_POINT: f32 = 0.4;
+const DENSE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.2;
+/// The faint ring shadow inside the dense glass's outline.
+const DENSE_RING_OPACITY: f32 = 0.06;
+/// The scale the dense glass's backdrop is captured at: a quarter of the output's, an eighth once its blur is as wide as
+/// it grows.
+const DENSE_CAPTURE_SCALE: f32 = 0.25;
+const DENSE_CAPTURE_SCALE_WIDE: f32 = 0.125;
 
 /// Module glass: the clear glass of its size with a strong bending edge and a darker rim. The strength is the same at
 /// every size; the band is [`MODULE_REFRACTION_HEIGHT_PER_POINT`] of the short side, at most
 /// [`MODULE_REFRACTION_HEIGHT_MAX`] points.
 const MODULE_REFRACTION: f32 = -80.0;
-const MODULE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.225;
-const MODULE_REFRACTION_HEIGHT_MAX: f32 = 18.0;
+const MODULE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.18;
+const MODULE_REFRACTION_HEIGHT_MAX: f32 = 25.0;
+/// The module's blur radius by short side `(side, radius)`; linear between, flat outside.
+const MODULE_BLUR_BY_SIDE: [(f32, f32); 2] = [(60.0, 5.0), (140.0, 10.0)];
 const MODULE_RIM_BIAS: f32 = -0.3;
 
 /// Card glass: the blur radius at full opacity of the first level, the blur fill's radius and opacities (lighten in the
@@ -886,16 +904,33 @@ impl GlassParams {
         p
     }
 
-    /// The dense glass: the regular recipe of its size over the dense face ([`dense_face`]).
+    /// The dense glass: the regular recipe of its size with a blur that grows with the size at full opacity, a bending
+    /// edge of its own, the dense face ([`dense_face`]) and a faint ring shadow inside its outline, captured coarsely.
     fn dense(dark: bool, s: f32) -> Self {
         let mut p = Self::regular(dark, s);
+        let max_luma = p.face.max_luma;
         p.face = dense_face(dark);
+        if dark {
+            p.face.max_luma = max_luma;
+        }
+        p.blur.radius = by_side(&DENSE_BLUR_BY_SIDE, s);
+        p.blur.level_opacity = [1.0; BLUR_LEVELS];
+        p.refraction.amount = -(DENSE_REFRACTION_PER_POINT * s).min(REFRACTION_AMOUNT_MAX);
+        p.refraction.height = (DENSE_REFRACTION_HEIGHT_PER_POINT * s).min(REFRACTION_HEIGHT_MAX);
+        p.shadow.ring_opacity = DENSE_RING_OPACITY;
+        let widest = DENSE_BLUR_BY_SIDE[DENSE_BLUR_BY_SIDE.len() - 1].1;
+        p.capture_scale = if p.blur.radius >= widest {
+            DENSE_CAPTURE_SCALE_WIDE
+        } else {
+            DENSE_CAPTURE_SCALE
+        };
         p
     }
 
     /// The module glass: the clear glass of its size with the module's refraction and rim.
     fn module(dark: bool, s: f32) -> Self {
         let mut p = Self::clear(dark, s);
+        p.blur.radius = by_side(&MODULE_BLUR_BY_SIDE, s);
         p.refraction.amount = MODULE_REFRACTION;
         p.refraction.height =
             (MODULE_REFRACTION_HEIGHT_PER_POINT * s).min(MODULE_REFRACTION_HEIGHT_MAX);
@@ -1056,8 +1091,6 @@ impl GlassParams {
         };
         p.shadow.amount = BAR_SHADOW_AMOUNT;
         p.shadow.height = BAR_SHADOW_HEIGHT;
-        p.shadow.outline_opacity = BAR_OUTLINE_OPACITY;
-        p.shadow.outline_width = BAR_OUTLINE_WIDTH;
         p
     }
 
@@ -1779,11 +1812,14 @@ mod tests {
 
     #[test]
     fn module_tiles_are_clear_glass_with_a_strong_bending_edge() {
-        // (short side, blur radius, refraction band): the clear blur rule and 0.225 of the side, at most 18 points
+        // (short side, blur radius, refraction band): 5 points of blur up to a side of 60 and 10 from 140, linear between,
+        // and a band 0.18 of the side, at most 25 points
         for (side, blur, band) in [
-            (170.0, 10.0, 18.0),
-            (69.0, 6.458_333, 15.525),
-            (40.0, 5.0, 9.0),
+            (170.0, 10.0, 25.0),
+            (140.0, 10.0, 25.0),
+            (100.0, 7.5, 18.0),
+            (69.0, 5.5625, 12.42),
+            (40.0, 5.0, 7.2),
         ] {
             for dark in [false, true] {
                 let p = GlassParams::new(mode(dark, GlassStyle::Module), side);
@@ -1901,7 +1937,7 @@ mod tests {
             assert_eq!(small, large, "the same at every size");
             let p = small;
             assert_eq!(p.blur_sigma(), 0.0, "no blur of its own");
-            assert_eq!(p.blur.fill_radius, 16.0);
+            assert_eq!(p.blur.fill_radius, 8.0);
             let over = if dark {
                 p.blur.fill_darken
             } else {
@@ -1932,11 +1968,60 @@ mod tests {
     }
 
     #[test]
+    fn dense_glass_blurs_with_its_size_and_washes_the_backdrop_out_pale_or_smoky() {
+        // (short side, blur radius, refraction strength and band, capture scale)
+        for (side, blur, amount, band, capture) in [
+            (40.0, 6.0, -16.0, 8.0, 0.25),
+            (60.0, 6.0, -24.0, 12.0, 0.25),
+            (90.0, 9.0, -36.0, 18.0, 0.25),
+            (200.0, 12.0, -60.0, 20.0, 0.125),
+        ] {
+            for dark in [false, true] {
+                let p = GlassParams::new(mode(dark, GlassStyle::Dense), side);
+                let regular = GlassParams::new(mode(dark, GlassStyle::Regular), side);
+                assert!(close(p.blur.radius, blur), "{side}: {}", p.blur.radius);
+                assert_eq!(p.blur.level_opacity, [1.0; BLUR_LEVELS]);
+                assert!(close(p.blur_sigma(), 2.0 * blur));
+                assert!(close(p.refraction.amount, amount), "{side}");
+                assert!(close(p.refraction.height, band), "{side}");
+                assert_eq!(p.capture_scale, capture, "{side}");
+                assert_eq!(p.shadow.ring_opacity, 0.06);
+                // the regular glass's blur fill and rim
+                assert_eq!(p.blur.fill_radius, regular.blur.fill_radius);
+                assert_eq!(p.highlight, regular.highlight);
+                // the dark face compresses its luma as regular glass of the size does
+                if dark {
+                    assert_eq!(p.face.max_luma, regular.face.max_luma);
+                }
+            }
+        }
+        let light = GlassParams::new(mode(false, GlassStyle::Dense), 200.0).face;
+        assert_eq!(
+            (light.saturation, light.black, light.white, light.max_luma),
+            (1.2, 0.8, 0.96, 0.94)
+        );
+        assert_eq!(light.fill, [0.96, 0.96, 0.96, 0.04]);
+        let dark = GlassParams::new(mode(true, GlassStyle::Dense), 200.0).face;
+        assert_eq!(
+            (dark.saturation, dark.black, dark.white, dark.fill[3]),
+            (1.3, 0.15, 0.3, 0.0)
+        );
+        // black comes out a pale grey on the light glass and white a dark grey on the dark one
+        let tone = |p: &GlassFace, v: f32| {
+            let l = v - (1.0 - p.max_luma) * v * v;
+            let shifted = l + p.black * (1.0 - l) - (1.0 - p.white) * l;
+            shifted * (1.0 - p.fill[3]) + p.fill[0] * p.fill[3]
+        };
+        assert!(tone(&light, 0.0) > 0.75, "{}", tone(&light, 0.0));
+        assert!(tone(&dark, 1.0) < 0.4, "{}", tone(&dark, 1.0));
+    }
+
+    #[test]
     fn the_bar_blurs_narrowly_lifts_its_colour_and_lights_its_top_and_bottom_edges() {
         let light = GlassParams::new(mode(false, GlassStyle::Bar), 70.0);
         let dark = GlassParams::new(mode(true, GlassStyle::Bar), 70.0);
         for p in [light, dark] {
-            assert!(close(p.blur_sigma(), 2.0 * 2.761));
+            assert!(close(p.blur_sigma(), 2.0));
             assert!(!p.fill_shows());
             assert_eq!((p.refraction.amount, p.refraction.height), (-8.64, 3.84));
             let h = p.highlight;
@@ -1946,11 +2031,8 @@ mod tests {
                 (h.angle, h.glow_amount, h.glow_height, h.glow_fill),
                 (std::f32::consts::FRAC_PI_2, 0.5, 0.6, 1.0)
             );
-            // a dark hairline just outside the outline
-            assert_eq!(
-                (p.shadow.outline_opacity, p.shadow.outline_width),
-                (0.45, 0.5)
-            );
+            // no line outside the outline
+            assert_eq!(p.shadow.outline_opacity, 0.0);
             assert_eq!(
                 (
                     h.diffuse.height_scale,
@@ -2026,13 +2108,12 @@ mod tests {
     }
 
     #[test]
-    fn every_style_but_the_card_and_the_track_is_captured_at_half_scale() {
+    fn every_style_but_the_card_the_track_and_dense_glass_is_captured_at_half_scale() {
         for style in [
             GlassStyle::Regular,
             GlassStyle::Clear,
             GlassStyle::LargePanel,
             GlassStyle::Bar,
-            GlassStyle::Dense,
             GlassStyle::Module,
         ] {
             assert_eq!(
@@ -2040,6 +2121,10 @@ mod tests {
                 GLASS_BACKDROP_SCALE
             );
         }
+        assert_eq!(
+            GlassParams::new(mode(false, GlassStyle::Dense), 60.0).capture_scale,
+            DENSE_CAPTURE_SCALE
+        );
         assert_eq!(
             GlassParams::new(mode(true, GlassStyle::Card), 56.0).capture_scale,
             CARD_CAPTURE_SCALE

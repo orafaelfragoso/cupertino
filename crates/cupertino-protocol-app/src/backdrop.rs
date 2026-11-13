@@ -48,7 +48,7 @@ pub enum GlassStyle {
     LargePanel,
     /// The glass of a floating bar of icons: a narrow blur, a thin bending edge and a thin line of light along its top and bottom.
     Bar,
-    /// The glass of a dense floating surface with text on it, regular glass over a mid grey veil.
+    /// The glass of a dense floating surface with text on it, regular glass with a wider blur over a washed-out face.
     Dense,
     /// The glass of the tiles of a panel of modules: the clear face under a wide blur and a strong bending edge.
     Module,

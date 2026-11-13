@@ -684,8 +684,8 @@ impl Glass {
         }
     }
 
-    /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass over a mid grey
-    /// veil.
+    /// The glass of a dense floating surface with square corners, on its own, opaque: regular glass with a wider blur
+    /// over a washed-out face.
     pub fn dense() -> Self {
         Self {
             style: GlassStyle::Dense,

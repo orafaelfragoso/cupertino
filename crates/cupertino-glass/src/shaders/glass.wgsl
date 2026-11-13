@@ -14,7 +14,8 @@ struct Glass {
   highlight: vec4<f32>,   // rim strength, light angle, spread, rim depth
   highlight2: vec4<f32>,  // offset, colour bias, curvature, the soft band's far end
   glow: vec4<f32>,        // soft band: amount, half-width, offset
-  diffuse: vec4<f32>,     // diffuse band: half-width, arcs' width, strength, per unit of the soft band's
+  diffuse: vec4<f32>,     // diffuse band: half-width, arcs' width, strength, per unit of the soft band's; the edge
+                          // line's side arcs' width
   hm: array<vec4<f32>, 3>,
   shadow: vec4<f32>,      // offset x, offset y, alpha, blur
   shadow_color: vec4<f32>,// rgb, ring darkening
@@ -23,7 +24,7 @@ struct Glass {
   shape_a: array<vec4<f32>, 16>, // corner extent, refraction strength, refraction band, bleed fraction
   shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
   cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
-  cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut, 0
+  cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -209,20 +210,45 @@ fn outside_alpha(p: vec2<f32>, d: f32) -> f32 {
   return min(drop + line, 1.0);
 }
 
-// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
-// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over black
-fn edge_line(p: vec2<f32>, d: f32, pos: f32) -> f32 {
-  let band = clamp(1.5 - d, 0.0, 1.0);
-  if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
-  let b = blurred(uv_of(p), pos);
-  return min(G.levels.x, 1.0) * rim_brightness(dot(b, LUMA)) * band;
+// the outward normal of the field at p, (0, 0) where it has none
+fn field_normal(p: vec2<f32>) -> vec2<f32> {
+  let g = vec2<f32>(field_d(p + vec2<f32>(0.5, 0.0)) - field_d(p - vec2<f32>(0.5, 0.0)),
+                    field_d(p + vec2<f32>(0.0, 0.5)) - field_d(p - vec2<f32>(0.0, 0.5)));
+  let gl = length(g);
+  if (gl > 1e-6) { return g / gl; }
+  return vec2<f32>(0.0);
 }
 
-// stage 7: what the shape draws outside itself, the drop shadow and the outline in the shadow's colour with the edge
-// line over them in black: its colour and alpha
-fn outside(p: vec2<f32>, d: f32, pos: f32) -> vec4<f32> {
+// how much of the edge line shows where the outward normal is n: with arcs facing left and right (their width in
+// diffuse.w), a raised cosine of the normal's angle from the horizontal, nothing LOBE_REACH of the width away; all of it
+// without arcs or without a normal
+fn edge_line_side_share(n: vec2<f32>) -> f32 {
+  let reach = G.diffuse.w * LOBE_REACH;
+  if (reach <= 0.0 || dot(n, n) < 1e-12) { return 1.0; }
+  let a = acos(clamp(abs(n.x) / length(n), 0.0, 1.0));
+  if (a >= reach) { return 0.0; }
+  return 0.5 + 0.5 * cos(a / reach * PI);
+}
+
+// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
+// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over
+// black (an even line skips that response), and times the share the outline's direction n keeps
+fn edge_line(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>) -> f32 {
+  let band = clamp(1.5 - d, 0.0, 1.0);
+  if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
+  let share = edge_line_side_share(n);
+  if (share <= 0.0) { return 0.0; }
+  // an even line keeps its strength over any backdrop
+  var response = 1.0;
+  if (G.cut_shape.w <= 0.5) { response = rim_brightness(dot(blurred(uv_of(p), pos), LUMA)); }
+  return min(G.levels.x, 1.0) * response * band * share;
+}
+
+// stage 7: what the shape draws outside itself where its outward normal is n, the drop shadow and the outline in the
+// shadow's colour with the edge line over them in black: its colour and alpha
+fn outside(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>) -> vec4<f32> {
   let shadow = outside_alpha(p, d);
-  let line = edge_line(p, d, pos);
+  let line = edge_line(p, d, pos, n);
   let a = line + shadow * (1.0 - line);
   if (a <= 0.0) { return vec4<f32>(G.shadow_color.rgb, 0.0); }
   return vec4<f32>(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
@@ -242,7 +268,10 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let f = field(p);
   let d = f.d;
   if (d > 0.5) {
-    let o = outside(p, d, f.b.z);
+    // the normal only matters to an edge line kept to the sides, in its band
+    var on = vec2<f32>(0.0);
+    if (G.diffuse.w > 0.0 && G.levels.x > 0.0 && d < 1.5) { on = field_normal(p); }
+    let o = outside(p, d, f.b.z, on);
     let a = o.a * G.info.w * kept;
     if (a <= 0.0) { discard; }
     return vec4<f32>(o.rgb, a);
@@ -318,7 +347,7 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   }
   // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
   let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
-  let o = outside(p, d, f.b.z);
+  let o = outside(p, d, f.b.z, n);
   let under = (1.0 - cov) * o.a;
   let a = cov + under;
   var rgb = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));

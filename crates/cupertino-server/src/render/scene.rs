@@ -2087,9 +2087,8 @@ const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 const POPOVER_OUTLINE_DARK: (f32, f32) = (0.45, 1.0);
 const POPOVER_OUTLINE_LIGHT: (f32, f32) = (0.33, 1.0);
 
-/// The soft band of light under the top and bottom edges of a large panel, in the same terms: wide, so it also lifts the
-/// face where the blur of the backdrop outside the panel darkens it near the edge.
-const LARGE_PANEL_GLOW_DARK: (f32, f32, f32) = (0.06, 9.0, 0.0);
+/// The soft band of light under the top and bottom edges of a light large panel, in the same terms: wide, so it also
+/// lifts the face where the blur of the backdrop outside the panel darkens it near the edge.
 const LARGE_PANEL_GLOW_LIGHT: (f32, f32, f32) = (0.075, 7.5, 0.0);
 
 /// The shortest side a shape of a callout has to be for the callout to cast the panel shadow under it: the label's
@@ -2287,16 +2286,10 @@ fn glass_pieces(
     if !callout {
         use cupertino_theme::GlassStyle;
         match spec.style {
-            GlassStyle::LargePanel => {
+            // the dark panel's recipe holds its bevel and the soft band under it
+            GlassStyle::LargePanel if !mode.dark => {
                 let h = &mut container.params.highlight;
-                let (amount, height, offset) = if mode.dark {
-                    LARGE_PANEL_GLOW_DARK
-                } else {
-                    LARGE_PANEL_GLOW_LIGHT
-                };
-                h.glow_amount = amount;
-                h.glow_height = height;
-                h.glow_offset = offset;
+                (h.glow_amount, h.glow_height, h.glow_offset) = LARGE_PANEL_GLOW_LIGHT;
             }
             // with Reduce Transparency or Increase Contrast the popup's rim is drawn apart (`inner_rim_item`), lit all
             // round, in place of the glass's own
@@ -2366,18 +2359,21 @@ fn glass_pieces(
 /// The glass backdrops of a container (`members`) whose text follows what lies behind them: every one when the
 /// container's bounds are small enough ([`adapts_foreground`]), none otherwise, so the shapes of a larger panel keep
 /// the appearance together. A dark card (`dark`) never follows: its face stays a mid-dark pane over any backdrop, so
-/// its text keeps the light tone and every card of a column reads alike.
+/// its text keeps the light tone and every card of a column reads alike. Nor does a large panel's glass, even where a
+/// piece of it is small (the launcher's search field): its strong tone compression keeps the face in its appearance's
+/// range, so its text keeps the appearance's tone over a bright scene and the field reads with the panel it opens.
 fn tone_probes(members: &[&BackdropArea], dark: bool) -> Vec<ToneProbe> {
-    let card = dark
-        && members.iter().any(|b| {
-            b.glass
-                .is_some_and(|g| g.style == cupertino_theme::GlassStyle::Card)
-        });
+    use cupertino_theme::GlassStyle;
+    let fixed = members.iter().any(|b| {
+        b.glass.is_some_and(|g| {
+            g.style == GlassStyle::LargePanel || (dark && g.style == GlassStyle::Card)
+        })
+    });
     let Some(bounds) = members
         .iter()
         .map(|b| b.area)
         .reduce(|a, b| a.merge(b))
-        .filter(|_| !card)
+        .filter(|_| !fixed)
     else {
         return Vec::new();
     };
@@ -3596,6 +3592,39 @@ mod tests {
                 SceneKind::BackdropCapture
             ],
             "container 1 in front of the material, where its frontmost backdrop is; the lone glass behind it"
+        );
+    }
+
+    #[test]
+    fn large_panel_glass_and_dark_cards_keep_their_foreground_tone_and_small_glass_adapts() {
+        use crate::app_effects_v1::GlassSpec;
+        use cupertino_theme::GlassStyle;
+        let area = |style: GlassStyle| BackdropArea {
+            key: 7,
+            material: String::new(),
+            area: smithay::utils::Rectangle::new((0.0, 0.0).into(), (300.0, 40.0).into()),
+            radius: 20.0,
+            alpha: 1.0,
+            glass: Some(GlassSpec {
+                style,
+                container: 0,
+                spacing: 0.0,
+            }),
+        };
+        let probes = |style: GlassStyle, dark: bool| tone_probes(&[&area(style)], dark).len();
+        for dark in [false, true] {
+            assert_eq!(probes(GlassStyle::Regular, dark), 1, "a small field adapts");
+            assert_eq!(
+                probes(GlassStyle::LargePanel, dark),
+                0,
+                "a field of the large panel glass never adapts"
+            );
+        }
+        assert_eq!(probes(GlassStyle::Card, false), 1, "a light card adapts");
+        assert_eq!(
+            probes(GlassStyle::Card, true),
+            0,
+            "a dark card keeps light text"
         );
     }
 

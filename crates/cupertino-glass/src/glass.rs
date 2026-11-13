@@ -526,14 +526,41 @@ pub fn outline_alpha(d: f32, p: &GlassParams) -> f32 {
 }
 
 /// Stage 7, the edge line: the alpha of black a pixel `d` from the edge (a unit wide band just outside it, one device
-/// pixel on the GPU) takes over a backdrop of colour `backdrop`: the recipe's `edge_line` times the rim's response to
-/// the backdrop's luma ([`rim_brightness`]), so the line shows along light content and not at all over black.
-pub fn edge_line_alpha(d: f32, backdrop: Rgb, p: &GlassParams) -> f32 {
+/// pixel on the GPU) takes over a backdrop of colour `backdrop`, where the outline's outward normal is `normal`: the
+/// recipe's `edge_line` times the rim's response to the backdrop's luma ([`rim_brightness`]), so the line shows along
+/// light content and not at all over black (unless the recipe keeps it even over any backdrop), and times the share its
+/// direction keeps ([`edge_line_side_share`]).
+pub fn edge_line_alpha(d: f32, backdrop: Rgb, normal: [f32; 2], p: &GlassParams) -> f32 {
     let k = p.shadow.edge_line;
     if k <= 0.0 {
         return 0.0;
     }
-    k.min(1.0) * rim_brightness(luma(backdrop)) * (1.5 - d).clamp(0.0, 1.0)
+    let response = if p.shadow.edge_line_even {
+        1.0
+    } else {
+        rim_brightness(luma(backdrop))
+    };
+    k.min(1.0)
+        * response
+        * (1.5 - d).clamp(0.0, 1.0)
+        * edge_line_side_share(normal, p.shadow.edge_line_sides)
+}
+
+/// How much of the edge line shows where the outline's outward normal is `normal` (any length, y down), for arcs
+/// `sides` radians wide facing left and right ([`GlassShadow::edge_line_sides`]): a raised cosine of the normal's angle
+/// from the horizontal, full along a straight side and nothing [`LOBE_REACH`] of `sides` away from it, so a top or
+/// bottom edge draws none. All of it everywhere when `sides` is 0, and where the normal is unknown.
+pub fn edge_line_side_share(normal: [f32; 2], sides: f32) -> f32 {
+    let len = (normal[0] * normal[0] + normal[1] * normal[1]).sqrt();
+    if sides <= 0.0 || len < 1e-6 {
+        return 1.0;
+    }
+    let from_horizontal = (normal[0].abs() / len).clamp(0.0, 1.0).acos();
+    let reach = sides * LOBE_REACH;
+    if from_horizontal >= reach {
+        return 0.0;
+    }
+    0.5 + 0.5 * (from_horizontal / reach * std::f32::consts::PI).cos()
 }
 
 /// The foreground of a glyph on glass: the face `face` under it through `matrix`, mixed over the face by `coverage`
@@ -736,7 +763,7 @@ impl Container {
             level_mix(levels, v.blur_level)
         };
         if d > 0.5 {
-            return self.outside(p, d, backdrop());
+            return self.outside(p, d, normal, backdrop());
         }
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
@@ -767,7 +794,7 @@ impl Container {
         c = c.map(|v| v * (1.0 - ring));
         // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
         let cov = (0.5 - d).clamp(0.0, 1.0);
-        let (outside, alpha) = self.outside(p, d, backdrop());
+        let (outside, alpha) = self.outside(p, d, normal, backdrop());
         let under = (1.0 - cov) * alpha;
         let a = cov + under;
         if a > 0.0 {
@@ -797,13 +824,13 @@ impl Container {
         (shadow_alpha(d_shadow, &self.params) + outline_alpha(d, &self.params)).min(1.0)
     }
 
-    /// What the shape draws outside itself at `p`, `d` from its edge, over a `backdrop` of that colour: the drop shadow
-    /// and the outline in the shadow's colour, and the edge line over them in black ([`edge_line_alpha`]). Returns the
-    /// colour and its alpha.
-    pub fn outside(&self, p: [f32; 2], d: f32, backdrop: Rgb) -> (Rgb, f32) {
+    /// What the shape draws outside itself at `p`, `d` from its edge whose outward normal is `normal`, over a
+    /// `backdrop` of that colour: the drop shadow and the outline in the shadow's colour, and the edge line over them in
+    /// black ([`edge_line_alpha`]). Returns the colour and its alpha.
+    pub fn outside(&self, p: [f32; 2], d: f32, normal: [f32; 2], backdrop: Rgb) -> (Rgb, f32) {
         let fill = self.params.shadow.fill;
         let shadow = self.outside_alpha(p, d);
-        let line = edge_line_alpha(d, backdrop, &self.params);
+        let line = edge_line_alpha(d, backdrop, normal, &self.params);
         let a = line + shadow * (1.0 - line);
         if a <= 0.0 {
             return ([fill[0], fill[1], fill[2]], 0.0);
@@ -842,7 +869,8 @@ pub struct GlassUniform {
     pub highlight2: [f32; 4],
     /// The soft band of light: strength, half-width, offset, and the opacity of the outline outside the shape.
     pub glow: [f32; 4],
-    /// The diffuse band under it: half-width, arcs' width and strength as multiples of the soft band's, 0.
+    /// The diffuse band under it: half-width, arcs' width and strength as multiples of the soft band's, and the
+    /// angular width of the arcs facing left and right that keep the edge line (0: all round).
     pub diffuse: [f32; 4],
     /// Key colour matrix rows: `[r, g, b coefficients, offset (+ alpha coefficient)]`.
     pub highlight_matrix: [[f32; 4]; 3],
@@ -863,7 +891,7 @@ pub struct GlassUniform {
     /// The outline the container is cut to: x, y, w, h.
     pub cut: [f32; 4],
     /// How far its corners reach along the sides, the exponent of their superellipse, 1 when the container is cut and
-    /// 0 when not, 0.
+    /// 0 when not, and 1 when the edge line keeps its strength over any backdrop (0 when it follows its brightness).
     pub cut_shape: [f32; 4],
 }
 
@@ -923,7 +951,7 @@ impl GlassUniform {
             h.diffuse.height_scale,
             h.diffuse.spread_scale,
             h.diffuse.amount_scale,
-            0.0,
+            p.shadow.edge_line_sides,
         ];
         for r in 0..3 {
             let m = &h.matrix[r * 5..r * 5 + 5];
@@ -958,6 +986,7 @@ impl GlassUniform {
             u.cut = cut.rect.map(|x| x * scale);
             u.cut_shape = [cut.extent * scale, cut.exponent, 1.0, 0.0];
         }
+        u.cut_shape[3] = if p.shadow.edge_line_even { 1.0 } else { 0.0 };
         u
     }
 
@@ -2032,6 +2061,143 @@ mod tests {
         // the uniform carries it to the shaders
         let u = GlassUniform::new(&c, 2.0, [[0.0; 3]; 2], [0.0; 4], [400.0, 200.0], 1.0);
         assert_eq!(u.levels[0], k);
+    }
+
+    /// An edge line kept to the sides follows the outline's direction: all of it along a straight side, none along the
+    /// top and the bottom, and a raised cosine round a corner between them; a recipe without arcs keeps it all round.
+    #[test]
+    fn an_edge_line_kept_to_the_sides_draws_none_along_the_top_and_the_bottom() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert_eq!(edge_line_side_share([1.0, 0.0], quarter), 1.0);
+        assert_eq!(edge_line_side_share([-3.0, 0.0], quarter), 1.0);
+        assert_eq!(edge_line_side_share([0.0, 1.0], quarter), 0.0);
+        assert_eq!(edge_line_side_share([0.0, -1.0], quarter), 0.0);
+        // 45° from the horizontal, two thirds of the way to the arc's end of 67.5°
+        let corner = edge_line_side_share([1.0, 1.0], quarter);
+        assert!(close(corner, 0.25, 1e-4), "{corner}");
+        assert_eq!(
+            edge_line_side_share([0.0, 1.0], 0.0),
+            1.0,
+            "no arcs: all round"
+        );
+        assert_eq!(edge_line_side_share([0.0, 0.0], quarter), 1.0, "no normal");
+
+        let tile = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode {
+                dark: true,
+                style: GlassStyle::Module,
+                ..GlassMode::default()
+            },
+        );
+        let k = tile.params.shadow.edge_line;
+        assert!(k > 0.0);
+        let flat = |_: usize, _: [f32; 2]| [0.8; 3];
+        // half a unit outside each side: the whole line, black, as dark over a dark backdrop as over a light one (the
+        // module's line is even); above the top and below the bottom: nothing
+        for p in [[-0.5, 50.0], [200.5, 50.0]] {
+            for v in [0.8, 0.2] {
+                let (col, a) = tile.shade(p, &|_, _| [v; 3]);
+                assert!(close(a, k, 1e-4), "{p:?} over {v}: {a}");
+                assert_eq!(col, [0.0; 3]);
+            }
+        }
+        for p in [[100.0, -0.5], [100.0, 100.5]] {
+            assert_eq!(tile.shade(p, &flat).1, 0.0, "{p:?}");
+        }
+        // round a corner it fades from the side to the top
+        let at = |deg: f32| {
+            let a = deg.to_radians();
+            let (cx, cy) = (180.0, 20.0);
+            tile.shade([cx + 20.5 * a.cos(), cy - 20.5 * a.sin()], &flat)
+                .1
+        };
+        let (side, mid, top) = (at(0.0), at(45.0), at(80.0));
+        assert!(side > mid && mid > top && top == 0.0, "{side} {mid} {top}");
+        // the uniform carries the arcs' width and the even line to the shaders
+        let u = GlassUniform::new(&tile, 2.0, [[0.0; 3]; 2], [0.0; 4], [400.0, 200.0], 1.0);
+        assert_eq!((u.diffuse[3], u.cut_shape[3]), (quarter, 1.0));
+        let regular = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode::default(),
+        );
+        let u = GlassUniform::new(&regular, 2.0, [[0.0; 3]; 2], [0.0; 4], [400.0, 200.0], 1.0);
+        assert_eq!(
+            (u.diffuse[3], u.cut_shape[3]),
+            (0.0, 0.0),
+            "all round, following the backdrop"
+        );
+    }
+
+    /// Module tiles light a line about a point wide just inside their top and bottom edges that takes a mid-toned face
+    /// to near white, as bright at the bottom as at the top, and none down their sides.
+    #[test]
+    fn module_tiles_light_their_top_and_bottom_near_white_and_not_their_sides() {
+        let tile = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 140.0, 64.0], 32.0)],
+            0.0,
+            GlassMode {
+                style: GlassStyle::Module,
+                ..GlassMode::default()
+            },
+        );
+        let warm = [204.0 / 255.0, 172.0 / 255.0, 105.0 / 255.0];
+        let flat = |_: usize, _: [f32; 2]| warm;
+        let face = luma(tile.shade([70.0, 32.0], &flat).0);
+        // half a point inside the top and the bottom
+        let top = luma(tile.shade([70.0, 0.5], &flat).0);
+        let bottom = luma(tile.shade([70.0, 63.5], &flat).0);
+        assert!(face < 0.55, "a mid-toned face: {face}");
+        assert!(top > 0.9 && bottom > 0.9, "near white: {top} {bottom}");
+        assert!((top - bottom).abs() < 0.02, "alike: {top} {bottom}");
+        // a point in, the line has faded to a trace
+        let inside = luma(tile.shade([70.0, 1.25], &flat).0);
+        assert!(inside - face < 0.1, "{inside} vs {face}");
+        // at the middle of a side there is no line of light
+        let side = luma(tile.shade([0.75, 32.0], &flat).0);
+        assert!((side - face).abs() < 0.05, "{side} vs {face}");
+    }
+
+    /// The dark large panel's bevel: just inside its dark edge a rim about a point wide mixes the face about a third of
+    /// the way to white along the top and the bottom, and about two thirds as far along the sides.
+    #[test]
+    fn the_dark_large_panel_has_a_bright_bevel_inside_its_edge_all_round() {
+        let panel = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 400.0, 300.0], 28.0)],
+            0.0,
+            GlassMode {
+                dark: true,
+                style: GlassStyle::LargePanel,
+                ..GlassMode::default()
+            },
+        );
+        let flat = |_: usize, _: [f32; 2]| [0.5; 3];
+        let face = luma(panel.shade([200.0, 150.0], &flat).0);
+        // how far towards white the pixel at p is
+        let mix = |p: [f32; 2]| (luma(panel.shade(p, &flat).0) - face) / (1.0 - face);
+        // half a point inside each edge
+        let (top, bottom) = (mix([200.0, 0.5]), mix([200.0, 299.5]));
+        let (left, right) = (mix([0.5, 150.0]), mix([399.5, 150.0]));
+        assert!((0.28..0.42).contains(&top), "{top}");
+        assert!((top - bottom).abs() < 0.03, "{top} {bottom}");
+        for side in [left, right] {
+            assert!((0.5..0.85).contains(&(side / top)), "{side} vs {top}");
+        }
+        // a point in it has faded to under half, and a point and a half in it is gone but for the soft band
+        let point = mix([200.0, 1.0]);
+        assert!(point < 0.5 * top, "{point} vs {top}");
+        assert!(mix([200.0, 1.75]) < 0.08);
+        // the light panel keeps its own inner line
+        let light = GlassParams::new(
+            GlassMode {
+                style: GlassStyle::LargePanel,
+                ..GlassMode::default()
+            },
+            300.0,
+        );
+        assert_eq!(light.highlight.diffuse, GlowDiffuse::NONE);
     }
 
     /// A pixel the edge crosses shows the glass over the outline in the part the glass leaves uncovered, so the

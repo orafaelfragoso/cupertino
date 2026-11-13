@@ -991,6 +991,9 @@ fn glass_pass_matches_the_cpu_model() {
         (false, options(false, false), GlassStyle::Menu),
         (true, options(false, false), GlassStyle::Menu),
         (true, options(true, false), GlassStyle::Menu),
+        (true, options(false, false), GlassStyle::Module),
+        (false, options(false, false), GlassStyle::Card),
+        (true, options(false, false), GlassStyle::Card),
     ] {
         let large = style == GlassStyle::LargePanel;
         // the style the panel asks for, and the backdrop version that has it
@@ -999,6 +1002,8 @@ fn glass_pass_matches_the_cpu_model() {
             GlassStyle::Veiled => Some((cupertino_backdrop_v1::GlassStyle::Veiled, 18)),
             GlassStyle::Toolbar => Some((cupertino_backdrop_v1::GlassStyle::Toolbar, 19)),
             GlassStyle::Menu => Some((cupertino_backdrop_v1::GlassStyle::Menu, 20)),
+            GlassStyle::Module => Some((cupertino_backdrop_v1::GlassStyle::Module, 13)),
+            GlassStyle::Card => Some((cupertino_backdrop_v1::GlassStyle::Card, 15)),
             _ => None,
         };
         let appearance = if dark {
@@ -1047,16 +1052,11 @@ fn glass_pass_matches_the_cpu_model() {
             0.0,
             mode,
         );
-        if large {
-            // the server lights a soft band under the large panel's top and bottom edges: strength, half-width and
-            // offset in points
-            let (amount, height, offset) = if dark {
-                (0.06, 9.0, 0.0)
-            } else {
-                (0.075, 7.5, 0.0)
-            };
+        if large && !dark {
+            // the server lights a soft band under the light large panel's top and bottom edges: strength, half-width
+            // and offset in points (the dark recipe holds its own)
             let h = &mut container.params.highlight;
-            (h.glow_amount, h.glow_height, h.glow_offset) = (amount, height, offset);
+            (h.glow_amount, h.glow_height, h.glow_offset) = (0.075, 7.5, 0.0);
         }
         let (mut sum, mut max, mut n) = (0.0f64, 0i32, 0usize);
         let mut changed = 0;
@@ -1097,6 +1097,41 @@ fn glass_pass_matches_the_cpu_model() {
             let p = gpu.get_pixel(x, y);
             p[0] as i32 + p[1] as i32 + p[2] as i32
         };
+        if style == GlassStyle::Module || (style == GlassStyle::Card && dark) {
+            // a dark line just outside the sides and none above the top or below the bottom, which carry a bright line
+            // just inside them instead
+            let under = |x: u32, y: u32| {
+                let p = wall.get_pixel(x, y);
+                p[0] as i32 + p[1] as i32 + p[2] as i32
+            };
+            let (left, right, top, bottom) =
+                (x0 as u32, x0 as u32 + 399, y0 as u32, y0 as u32 + 159);
+            let mid = left + 200;
+            let sides = [
+                under(left - 1, top + 80) - lum(left - 1, top + 80),
+                under(right + 1, top + 80) - lum(right + 1, top + 80),
+            ];
+            let ends = [
+                under(mid, top - 1) - lum(mid, top - 1),
+                under(mid, bottom + 1) - lum(mid, bottom + 1),
+            ];
+            let face = lum(mid, top + 80);
+            let lit = [lum(mid, top) - face, lum(mid, bottom) - face];
+            eprintln!("{style:?} edges: sides darkened {sides:?}, ends {ends:?}, lines {lit:?}");
+            assert!(
+                sides.iter().all(|&d| d > 60),
+                "a dark line down the sides: {sides:?}"
+            );
+            assert!(
+                ends.iter().all(|&d| d.abs() <= 6),
+                "none along the top and bottom: {ends:?}"
+            );
+            assert!(
+                lit.iter().all(|&d| d > 60),
+                "a line of light inside the top and bottom: {lit:?}"
+            );
+            continue;
+        }
         if style == GlassStyle::Toolbar {
             // no rim: a line of light along the top edge, fainter along the bottom, over the face between them
             let (mid, top, bottom) = (x0 as u32 + 200, y0 as u32, y0 as u32 + 159);

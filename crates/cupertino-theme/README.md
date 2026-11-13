@@ -103,7 +103,15 @@ flag and its Increase Contrast option.
   8 pt blur fill, bends 24 over a 5 pt band and lights its top and bottom as the bar does. Switcher glass (`GlassStyle::Switcher`, the application switcher's panel)
   blurs with a radius of 0.96 pt at full opacity and no blur fill, bends 41.6 over a 9.6 pt band at every size with a rim
   of 0.4 (bias −0.5) and no ring or drop shadow; its face takes saturation 1.2, black 0.25, white 1.06, a luma cap of
-  0.85 and a clamp of 1.142 (light) or saturation 0.8, black 0.05 and white 0.3 (dark). Dense glass (`GlassStyle::Dense`, menus and popovers) is
+  0.85 and a clamp of 1.142 (light) or saturation 0.8, black 0.05 and white 0.3 (dark). Sidebar glass
+  (`GlassStyle::Sidebar`, a window's sidebar) blurs with a radius of 5 under an 8 pt blur fill (lighten or darken 0.882,
+  normal 0.48), bends 24 over 12 pt, has a ring shadow of 0.06 and a face of saturation 1.2, black 0.4, white 1.03, a
+  luma cap of 0.85 and a white veil of 0.2 (light) or saturation 0.6, black 0.1 and white 0.5 (dark). Subdued module
+  glass (`GlassStyle::SubduedModule`) is module glass with twice the blur, white 0.88 (light) and black 0 (dark).
+  Snippet glass (`GlassStyle::Snippet`) has a faint blur (the first level at 0.2666) under the 8 pt blur fill, bends 24
+  over 12 pt and veils its face white at 0.5 (light) or black at 0.4 (dark). Veiled glass (`GlassStyle::Veiled`) is the
+  clear face under the blur fill, bending 34.56 over 19.2 pt, and `GlassParams::veil` darkens it with black from 0.2 at
+  the top of its shapes to 1 at their bottom. Dense glass (`GlassStyle::Dense`, menus and popovers) is
   the regular recipe of its size with its own blur (radius 6 pt up to a short side of 60, 12 pt from 120, the first
   level at full opacity), bending by 0.4 of its short side over 0.2 of it (at most 60 and 20) and a ring shadow of 0.06,
   over a face that washes the backdrop out: black lifted by 0.8 under a faint light grey veil (light), saturation 1.3,
@@ -124,7 +132,7 @@ flag and its Increase Contrast option.
   glass's colours; Reduce Transparency also takes regular glass's whole blur. `GlassParams::shadow_reach` is how far the shadow reaches past the shape.
   `GlassShadow::edge_line` is the opacity of the dark line one pixel wide just outside the outline (0.2 light, 0.22 dark
   for regular and large panel glass; 0.31 / 0.54 dense; 0.22 / 0.24 track; 0.175 for light popover glass, 0.19 for a
-  light card, 0.2 / 0.32 switcher; none on clear, bar and module glass), scaled by how bright the backdrop is there.
+  light card, 0.2 / 0.32 switcher, 0.2 / 0.4 sidebar, 0.1 for light snippet glass; none on clear, bar and module glass), scaled by how bright the backdrop is there.
 - **Display filter steps.** `ColorOp::{LinearMatrix, Invert, Contrast}` feed `cupertino-glass::display_filter`. No catalog
   recipe uses them.
 

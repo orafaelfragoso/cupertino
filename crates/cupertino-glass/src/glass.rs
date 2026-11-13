@@ -713,6 +713,7 @@ impl Container {
             v.bleed_height,
         );
         c = highlight(c, edge_distance(d, slope), normal, params);
+        c = self.veil(p, c);
         // the ring is moved up: at p it is what the shape's field is a ring offset below p
         let ring = ring_shadow(
             self.field([p[0], p[1] + params.shadow.ring_offset]).0,
@@ -728,6 +729,20 @@ impl Container {
             c = std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * cov + outside[i] * under) / a);
         }
         (c, a)
+    }
+
+    /// The black veil over the face `c` at `p`: its opacity runs from the recipe's top value at the top of the shapes'
+    /// bounds to its bottom value at their bottom.
+    pub fn veil(&self, p: [f32; 2], c: Rgb) -> Rgb {
+        let [top, bottom] = self.params.veil;
+        if top <= 0.0 && bottom <= 0.0 {
+            return c;
+        }
+        let Some(b) = self.bounds() else { return c };
+        // the bounds are x, y, width, height
+        let t = ((p[1] - b[1]) / b[3].max(1e-3)).clamp(0.0, 1.0);
+        let k = 1.0 - (top + (bottom - top) * t).clamp(0.0, 1.0);
+        c.map(|v| v * k)
     }
 
     /// The alpha of what the shape draws outside itself at `p`, `d` from its edge: the drop shadow and the outline.
@@ -766,9 +781,9 @@ pub struct GlassUniform {
     pub uv_y: [f32; 4],
     /// Number of shapes, blend width, antialiasing width, overall opacity.
     pub info: [f32; 4],
-    /// The edge line's strength, unused (0), and the target's width and height.
+    /// The edge line's strength, the veil's opacity at the bottom of the shapes, and the target's width and height.
     pub levels: [f32; 4],
-    /// Blur fill opacities: darken, lighten, normal, 0.
+    /// Blur fill opacities: darken, lighten, normal, and the veil's opacity at the top of the shapes.
     pub fill: [f32; 4],
     /// Face: saturation, white, black, clamp.
     pub face: [f32; 4],
@@ -825,12 +840,12 @@ impl GlassUniform {
             1.0,
             opacity.clamp(0.0, 1.0),
         ];
-        u.levels = [p.shadow.edge_line, 0.0, target[0], target[1]];
+        u.levels = [p.shadow.edge_line, p.veil[1], target[0], target[1]];
         u.fill = [
             p.blur.fill_darken,
             p.blur.fill_lighten,
             p.blur.fill_normal,
-            0.0,
+            p.veil[0],
         ];
         u.face = [p.face.saturation, p.face.white, p.face.black, p.face.clamp];
         u.face_fill = p.face.fill;
@@ -1677,6 +1692,51 @@ mod tests {
     }
 
     /// Regular glass keeps a line one unit wide just outside its outline: black at the edge line's strength times the
+    /// The veil darkens the face by its top opacity at the top of the shapes and its bottom opacity at their bottom,
+    /// linearly between, over the whole union of shapes, and the uniform carries both ends.
+    #[test]
+    fn the_veil_darkens_the_face_from_its_top_value_to_its_bottom_value() {
+        let mut c = Container::new(
+            vec![
+                GlassShape::new([0.0, 0.0, 200.0, 50.0], 20.0),
+                GlassShape::new([0.0, 50.0, 200.0, 50.0], 20.0),
+            ],
+            0.0,
+            GlassMode::default(),
+        );
+        let face = [0.8, 0.6, 0.4];
+        assert_eq!(c.veil([100.0, 50.0], face), face, "none at rest");
+        c.params.veil = [0.2, 1.0];
+        for (y, k) in [
+            (0.0, 0.8),
+            (25.0, 0.6),
+            (50.0, 0.4),
+            (100.0, 0.0),
+            (-10.0, 0.8),
+            (130.0, 0.0),
+        ] {
+            let v = c.veil([100.0, y], face);
+            for i in 0..3 {
+                assert!(close(v[i], face[i] * k, 1e-5), "{y}: {v:?}");
+            }
+        }
+        let u = GlassUniform::new(&c, 2.0, [[0.0; 3]; 2], [0.0; 4], [400.0, 200.0], 1.0);
+        assert_eq!((u.fill[3], u.levels[1]), (0.2, 1.0));
+        // the veiled style shades a dark gradient: its middle is half as bright as its top over the same backdrop
+        let veiled = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 30.0)],
+            0.0,
+            GlassMode {
+                style: GlassStyle::Veiled,
+                ..GlassMode::default()
+            },
+        );
+        let flat = |_: usize, _: [f32; 2]| [0.5; 3];
+        let top = veiled.shade([100.0, 30.0], &flat).0[0];
+        let bottom = veiled.shade([100.0, 70.0], &flat).0[0];
+        assert!(bottom < top * 0.6, "{top} {bottom}");
+    }
+
     /// rim's brightness response to what lies there, so it shows over white and grey and not over black.
     #[test]
     fn the_edge_line_darkens_light_content_just_outside_the_outline_and_not_black() {

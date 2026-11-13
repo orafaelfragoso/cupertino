@@ -79,6 +79,18 @@ pub enum GlassStyle {
     /// bending edge, a face that lifts black and brightens in the light appearance and dims to a smoky pane with less
     /// colour in the dark one, and no shadow.
     Switcher,
+    /// The glass of a window's sidebar: regular glass under a wide soft blur fill, over a face that keeps a light pane
+    /// in the light appearance and a dark, nearly grey one in the dark, with a faint ring shadow.
+    Sidebar,
+    /// The module glass of a tile that steps back (a panel of modules behind what is in front of it): twice the blur, a
+    /// dimmer white in the light appearance and no lifted black in the dark one.
+    SubduedModule,
+    /// The glass of a small card of content over the desktop: a faint blur under a wide soft blur fill, over a face
+    /// veiled white in the light appearance and black in the dark.
+    Snippet,
+    /// Clear glass under a soft blur fill, veiled black from a fifth at its top to fully at its bottom, so it reads as
+    /// a dark gradient that keeps the backdrop's colour at the top.
+    Veiled,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -288,6 +300,9 @@ pub struct GlassParams {
     /// The scale the backdrop is captured at, relative to the output's pixels, before it is blurred: a coarser capture
     /// softens fine detail on its own, a full one keeps it sharp where nothing blurs it.
     pub capture_scale: f32,
+    /// A black veil over the face, its opacity at the top and at the bottom of the shapes' bounds, linear between and
+    /// laid after the rim; `[0, 0]` for none.
+    pub veil: [f32; 2],
 }
 
 // ---- size rules -------------------------------------------------------------------------------------------------
@@ -543,6 +558,102 @@ const SWITCHER_RIM_BIAS: f32 = -0.5;
 /// The opacity of the dark line just outside the switcher's outline in the dark appearance (the light one keeps
 /// regular glass's).
 const SWITCHER_EDGE_LINE_DARK: f32 = 0.32;
+
+/// Sidebar glass: the blur at full opacity of every level, the blur fill's radius and its lighten (light) or darken
+/// (dark) and normal opacities, the bending edge and band in points, the rim and its colour shift, and the ring shadow.
+const SIDEBAR_BLUR: f32 = 5.0;
+const SIDEBAR_FILL_RADIUS: f32 = 8.0;
+const SIDEBAR_FILL_BLEND: f32 = 0.882;
+const SIDEBAR_FILL_NORMAL: f32 = 0.48;
+const SIDEBAR_REFRACTION: f32 = -24.0;
+const SIDEBAR_REFRACTION_HEIGHT: f32 = 12.0;
+const SIDEBAR_RIM: f32 = 0.5;
+const SIDEBAR_RIM_BIAS: f32 = -0.188;
+const SIDEBAR_RING_OPACITY: f32 = 0.06;
+/// The edge line of dark sidebar glass (the light one keeps regular glass's).
+const SIDEBAR_EDGE_LINE_DARK: f32 = 0.4;
+
+/// The face of sidebar glass. Light: the regular light face with white a little past 1, the luma compressed to 0.85,
+/// clamped at 1.07, under a white veil of 0.2. Dark: little colour (0.6), black 0.1 and white dimmed to 0.5, no veil.
+fn sidebar_face(dark: bool) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: 0.6,
+            white: 0.5,
+            black: 0.1,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [0.0; 4],
+        }
+    } else {
+        GlassFace {
+            saturation: 1.2,
+            white: 1.03,
+            black: 0.4,
+            clamp: 1.07,
+            max_luma: 0.85,
+            fill: [1.0, 1.0, 1.0, 0.2],
+        }
+    }
+}
+
+/// Subdued module glass: how much wider its blur is than the module's of the same size, and its face's white (light)
+/// and black (dark).
+const SUBDUED_MODULE_BLUR_SCALE: f32 = 2.0;
+const SUBDUED_MODULE_WHITE_LIGHT: f32 = 0.88;
+const SUBDUED_MODULE_BLACK_DARK: f32 = 0.0;
+
+/// Snippet glass: the blur radius and the first level's opacity, the blur fill, the bending edge, the rim and the ring.
+const SNIPPET_BLUR: f32 = 5.0;
+const SNIPPET_LEVEL_OPACITY: f32 = 0.2666;
+const SNIPPET_FILL_RADIUS: f32 = 8.0;
+const SNIPPET_FILL_BLEND: f32 = 0.882;
+const SNIPPET_FILL_NORMAL: f32 = 0.46;
+const SNIPPET_REFRACTION: f32 = -24.0;
+const SNIPPET_REFRACTION_HEIGHT: f32 = 12.0;
+const SNIPPET_RIM: f32 = 0.4;
+const SNIPPET_RIM_BIAS: f32 = -0.25;
+const SNIPPET_RING_OPACITY: f32 = 0.06;
+/// The edge line of light snippet glass; the dark one has none.
+const SNIPPET_EDGE_LINE_LIGHT: f32 = 0.1;
+
+/// The face of snippet glass. Light: the regular light face with white past 1, a luma cap of 0.94 and a clamp of
+/// 1.07, under a white veil of 0.5. Dark: more colour, black lifted by an eighth, white past 1, the luma compressed to
+/// 0.6 and a clamp of 1.31, under a black veil of 0.4.
+fn snippet_face(dark: bool) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: 1.3,
+            white: 1.12,
+            black: 0.125,
+            clamp: 1.31,
+            max_luma: 0.6,
+            fill: [0.0, 0.0, 0.0, 0.4],
+        }
+    } else {
+        GlassFace {
+            saturation: 1.2,
+            white: 1.03,
+            black: 0.4,
+            clamp: 1.07,
+            max_luma: 0.94,
+            fill: [1.0, 1.0, 1.0, 0.5],
+        }
+    }
+}
+
+/// Veiled glass: the blur, the blur fill (lighten in the light appearance only, darken and normal in both), the
+/// bending edge, the rim, and the black veil's opacity at the top and the bottom.
+const VEILED_BLUR: f32 = 5.0;
+const VEILED_FILL_RADIUS: f32 = 8.0;
+const VEILED_FILL_LIGHTEN: f32 = 0.882;
+const VEILED_FILL_DARKEN: f32 = 0.75;
+const VEILED_FILL_NORMAL: f32 = 0.5;
+const VEILED_REFRACTION: f32 = -34.56;
+const VEILED_REFRACTION_HEIGHT: f32 = 19.2;
+const VEILED_RIM: f32 = 0.4;
+const VEILED_RIM_BIAS: f32 = -0.25;
+const VEILED_VEIL: [f32; 2] = [0.2, 1.0];
 
 /// The side the popover's regular glass is worked out at before its own values replace what follows the size.
 const POPOVER_SIDE: f32 = 26.0;
@@ -838,6 +949,10 @@ impl GlassParams {
             GlassStyle::Track => Self::track(dark, s),
             GlassStyle::Popover => Self::popover(dark),
             GlassStyle::Switcher => Self::switcher(dark, s),
+            GlassStyle::Sidebar => Self::sidebar(dark, s),
+            GlassStyle::SubduedModule => Self::subdued_module(dark, s),
+            GlassStyle::Snippet => Self::snippet(dark, s),
+            GlassStyle::Veiled => Self::veiled(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -864,7 +979,11 @@ impl GlassParams {
                 | GlassStyle::Card
                 | GlassStyle::Track
                 | GlassStyle::Popover
-                | GlassStyle::Switcher => {
+                | GlassStyle::Switcher
+                | GlassStyle::Sidebar
+                | GlassStyle::SubduedModule
+                | GlassStyle::Snippet
+                | GlassStyle::Veiled => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -950,6 +1069,7 @@ impl GlassParams {
                 },
             },
             capture_scale: GLASS_BACKDROP_SCALE,
+            veil: [0.0; 2],
         }
     }
 
@@ -1178,6 +1298,95 @@ impl GlassParams {
         p
     }
 
+    /// The sidebar glass: regular glass of its size with the sidebar's blur, blur fill, face, bending edge, rim and
+    /// ring shadow.
+    fn sidebar(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        p.blur = GlassBlur {
+            radius: SIDEBAR_BLUR,
+            level_opacity: [1.0; BLUR_LEVELS],
+            fill_radius: SIDEBAR_FILL_RADIUS,
+            fill_darken: if dark { SIDEBAR_FILL_BLEND } else { 0.0 },
+            fill_normal: SIDEBAR_FILL_NORMAL,
+            fill_lighten: if dark { 0.0 } else { SIDEBAR_FILL_BLEND },
+        };
+        p.face = sidebar_face(dark);
+        p.refraction = GlassRefraction {
+            amount: SIDEBAR_REFRACTION,
+            height: SIDEBAR_REFRACTION_HEIGHT,
+            outer_amount: 0.0,
+        };
+        p.highlight.amount = SIDEBAR_RIM;
+        p.highlight.color_bias = SIDEBAR_RIM_BIAS;
+        p.highlight.glow_amount = 0.0;
+        p.shadow.ring_opacity = SIDEBAR_RING_OPACITY;
+        if dark {
+            p.shadow.edge_line = SIDEBAR_EDGE_LINE_DARK;
+        }
+        p
+    }
+
+    /// The subdued module glass: the module glass of its size with twice its blur and the subdued face.
+    fn subdued_module(dark: bool, s: f32) -> Self {
+        let mut p = Self::module(dark, s);
+        p.blur.radius *= SUBDUED_MODULE_BLUR_SCALE;
+        if dark {
+            p.face.black = SUBDUED_MODULE_BLACK_DARK;
+        } else {
+            p.face.white = SUBDUED_MODULE_WHITE_LIGHT;
+        }
+        p
+    }
+
+    /// The snippet glass: regular glass of its size with a faint blur under the regular blur fill, the snippet's face,
+    /// bending edge, rim and ring shadow.
+    fn snippet(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        p.blur = GlassBlur {
+            radius: SNIPPET_BLUR,
+            level_opacity: [SNIPPET_LEVEL_OPACITY, 1.0, 1.0, 1.0],
+            fill_radius: SNIPPET_FILL_RADIUS,
+            fill_darken: if dark { SNIPPET_FILL_BLEND } else { 0.0 },
+            fill_normal: SNIPPET_FILL_NORMAL,
+            fill_lighten: if dark { 0.0 } else { SNIPPET_FILL_BLEND },
+        };
+        p.face = snippet_face(dark);
+        p.refraction = GlassRefraction {
+            amount: SNIPPET_REFRACTION,
+            height: SNIPPET_REFRACTION_HEIGHT,
+            outer_amount: 0.0,
+        };
+        p.highlight.amount = SNIPPET_RIM;
+        p.highlight.color_bias = SNIPPET_RIM_BIAS;
+        p.highlight.glow_amount = 0.0;
+        p.shadow.ring_opacity = SNIPPET_RING_OPACITY;
+        p.shadow.edge_line = if dark { 0.0 } else { SNIPPET_EDGE_LINE_LIGHT };
+        p
+    }
+
+    /// The veiled glass: clear glass of its size under the soft blur fill, a bending edge and rim of its own, and the
+    /// black veil from its top to its bottom.
+    fn veiled(dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(dark, s);
+        p.blur = GlassBlur {
+            radius: VEILED_BLUR,
+            level_opacity: [1.0; BLUR_LEVELS],
+            fill_radius: VEILED_FILL_RADIUS,
+            fill_darken: VEILED_FILL_DARKEN,
+            fill_normal: VEILED_FILL_NORMAL,
+            fill_lighten: if dark { 0.0 } else { VEILED_FILL_LIGHTEN },
+        };
+        p.refraction = GlassRefraction {
+            amount: VEILED_REFRACTION,
+            height: VEILED_REFRACTION_HEIGHT,
+            outer_amount: 0.0,
+        };
+        p.highlight.amount = VEILED_RIM;
+        p.highlight.color_bias = VEILED_RIM_BIAS;
+        p.veil = VEILED_VEIL;
+        p
+    }
+
     /// The bar glass: clear glass with the bar's narrow blur, face, thin refraction, rim and a thin line of light along
     /// its top and bottom edges, equally bright, over a wide faint glow.
     fn bar(dark: bool, s: f32) -> Self {
@@ -1265,6 +1474,7 @@ impl GlassParams {
                 edge_line: 0.0,
             },
             capture_scale: GLASS_BACKDROP_SCALE,
+            veil: [0.0; 2],
         }
     }
 
@@ -2034,6 +2244,81 @@ mod tests {
                     expected
                 );
                 assert_eq!(f.fill[3], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_snippet_subdued_and_veiled_glass_take_their_own_recipes() {
+        for dark in [false, true] {
+            let sidebar = GlassParams::new(mode(dark, GlassStyle::Sidebar), 160.0);
+            assert_eq!(sidebar.blur.radius, 5.0);
+            assert_eq!(sidebar.blur.fill_normal, 0.48);
+            assert_eq!(
+                (sidebar.refraction.amount, sidebar.refraction.height),
+                (-24.0, 12.0)
+            );
+            assert_eq!(sidebar.shadow.ring_opacity, 0.06);
+            let f = sidebar.face;
+            if dark {
+                assert_eq!(
+                    (f.saturation, f.black, f.white, f.fill[3]),
+                    (0.6, 0.1, 0.5, 0.0)
+                );
+                assert_eq!(sidebar.shadow.edge_line, 0.4);
+            } else {
+                assert_eq!(
+                    (f.saturation, f.black, f.white, f.max_luma),
+                    (1.2, 0.4, 1.03, 0.85)
+                );
+                assert_eq!(f.fill, [1.0, 1.0, 1.0, 0.2]);
+            }
+
+            let module = GlassParams::new(mode(dark, GlassStyle::Module), 140.0);
+            let subdued = GlassParams::new(mode(dark, GlassStyle::SubduedModule), 140.0);
+            assert_eq!(subdued.blur.radius, 2.0 * module.blur.radius);
+            assert_eq!(subdued.refraction, module.refraction);
+            if dark {
+                assert_eq!(
+                    (subdued.face.black, subdued.face.white),
+                    (0.0, module.face.white)
+                );
+            } else {
+                assert_eq!(
+                    (subdued.face.black, subdued.face.white),
+                    (module.face.black, 0.88)
+                );
+            }
+
+            let snippet = GlassParams::new(mode(dark, GlassStyle::Snippet), 60.0);
+            assert_eq!(snippet.blur.level_opacity[0], 0.2666);
+            assert!(snippet.fill_shows());
+            let expected = if dark {
+                [0.0, 0.0, 0.0, 0.4]
+            } else {
+                [1.0, 1.0, 1.0, 0.5]
+            };
+            assert_eq!(snippet.face.fill, expected);
+
+            let veiled = GlassParams::new(mode(dark, GlassStyle::Veiled), 60.0);
+            assert_eq!(veiled.veil, [0.2, 1.0]);
+            assert_eq!(
+                veiled.face,
+                GlassParams::new(mode(dark, GlassStyle::Clear), 60.0).face
+            );
+            assert_eq!(veiled.shadow.edge_line, 0.0);
+            // only the veiled glass is veiled
+            for style in [
+                GlassStyle::Regular,
+                GlassStyle::Sidebar,
+                GlassStyle::Snippet,
+                GlassStyle::Clear,
+            ] {
+                assert_eq!(
+                    GlassParams::new(mode(dark, style), 60.0).veil,
+                    [0.0; 2],
+                    "{style:?}"
+                );
             }
         }
     }

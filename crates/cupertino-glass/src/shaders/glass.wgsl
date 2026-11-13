@@ -283,6 +283,18 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
       c = clamp(c + vec3<f32>(shift), vec3<f32>(0.0), vec3<f32>(1.0));
     }
   }
+  // the black veil, from its opacity at the top of the shapes to its opacity at their bottom
+  if (G.fill.w > 0.0 || G.levels.y > 0.0) {
+    let vn = i32(G.info.x);
+    var top = G.shapes[0].y;
+    var bottom = G.shapes[0].y + G.shapes[0].w;
+    for (var i = 1; i < vn; i++) {
+      top = min(top, G.shapes[i].y);
+      bottom = max(bottom, G.shapes[i].y + G.shapes[i].w);
+    }
+    let vt = clamp((p.y - top) / max(bottom - top, 1e-3), 0.0, 1.0);
+    c = c * (1.0 - clamp(mix(G.fill.w, G.levels.y, vt), 0.0, 1.0));
+  }
   // stage 6: the ring shadow, a blurred stroke along the inside of the outline moved up, darkening the face
   if (G.shadow_color.w > 0.0 && G.ring.y > 0.0) {
     let dr = field_d(p + vec2<f32>(0.0, G.ring.x));

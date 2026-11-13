@@ -121,7 +121,10 @@ composite then, per pixel:
    darkens the face by its opacity; outside the shape, the drop shadow at its opacity;
 8. the edge line, one pixel wide just outside the outline: black at the recipe's `edge_line` opacity times the rim's
    response g to the luma of the blurred backdrop there, fading out over the pixel and a half past the outline, so the
-   outline shows over light content and vanishes over black. Clear, bar and module glass have none.
+   outline shows over light content and vanishes over black. Clear, bar and module glass have none;
+9. the veil (after the rim, before the ring): the face times `1 − v`, `v` running linearly from the recipe's top value
+   at the top of the shapes' bounds to its bottom value at their bottom (`Container::veil`; the uniform's `fill.w` and
+   `levels.y`).
 
 Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its

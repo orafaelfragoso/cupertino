@@ -272,6 +272,18 @@ void main() {
             c = clamp(c + vec3(shift), vec3(0.0), vec3(1.0));
         }
     }
+    // the black veil, from its opacity at the top of the shapes to its opacity at their bottom
+    if (G.fill.w > 0.0 || G.levels.y > 0.0) {
+        int vn = int(G.info.x);
+        float top = G.shapes[0].y;
+        float bottom = G.shapes[0].y + G.shapes[0].w;
+        for (int i = 1; i < vn; i++) {
+            top = min(top, G.shapes[i].y);
+            bottom = max(bottom, G.shapes[i].y + G.shapes[i].w);
+        }
+        float vt = clamp((p.y - top) / max(bottom - top, 1e-3), 0.0, 1.0);
+        c = c * (1.0 - clamp(mix(G.fill.w, G.levels.y, vt), 0.0, 1.0));
+    }
     // stage 6: the ring shadow, a blurred stroke along the inside of the outline moved up, darkening the face
     if (G.shadow_color.w > 0.0 && G.ring.y > 0.0) {
         float dr = field_d(p + vec2(0.0, G.ring.x));

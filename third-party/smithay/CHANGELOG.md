@@ -12,6 +12,9 @@ client's drag (wl_data_offer.receive during a drag or after its drop); a refused
 pipe, and a read whose seat is gone is refused. `SelectionSource::provider` and the re-exported `SelectionSourceProvider`
 name the protocol object that set a selection.
 
+`GlesRenderer::memory_uploads` counts the textures `ImportMem` made or updated from memory and the bytes of pixels
+they sent (`MemoryUploads`), so a compositor can count its own uploads per frame.
+
 ### Bugfixes
 
 Remove four unused tracing imports, cast the SIGBUS handler through a pointer before its integer representation,

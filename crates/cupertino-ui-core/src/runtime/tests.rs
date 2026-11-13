@@ -3733,6 +3733,51 @@ fn a_scroll_is_timed_from_its_input_to_the_frame_the_compositor_showed() {
     assert_eq!((latency.handled, latency.presented), (50, Some(300)));
 }
 
+/// With a sink, every turn that presents a frame is timed phase by phase and the window system times its copies;
+/// a turn that presents nothing is not heard. Without one, nothing is timed.
+#[test]
+fn a_presented_frame_is_timed_phase_by_phase_and_nothing_is_timed_without_a_sink() {
+    use crate::FrameTiming;
+    let damage = Rc::default();
+    let untimed = Rt::new(FakeSystem::default(), options(&damage));
+    assert!(!untimed.times_frames());
+    assert!(!untimed.window_system().timed_copies);
+
+    let seen: Rc<RefCell<Vec<FrameTiming>>> = Rc::default();
+    let sink = Rc::clone(&seen);
+    let mut rt = Rt::new(FakeSystem::default(), options(&damage))
+        .with_frame_timing(Box::new(move |t| sink.borrow_mut().push(*t)));
+    assert!(rt.times_frames());
+    assert!(rt.window_system().timed_copies);
+    rt.step(steps()).unwrap();
+    assert!(
+        seen.borrow().is_empty(),
+        "no frame before the first configure"
+    );
+    let window = rt.windows()[0].1;
+    configure(&mut rt, window, 1);
+    let presents = rt.window_system().frame_ids.len();
+    assert_eq!(presents, 1);
+    let heard = seen.borrow().clone();
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    let t = heard[0];
+    assert_eq!(t.frames, 1);
+    assert_eq!(
+        t.copy,
+        Duration::from_nanos(1),
+        "the copy the window system timed"
+    );
+    assert!(t.raster > Duration::ZERO && t.paint > Duration::ZERO && t.layout > Duration::ZERO);
+    let phases = t.update + t.view + t.layout + t.paint + t.raster + t.copy + t.commit;
+    assert!(phases <= t.total, "{t:?}");
+
+    // a turn that draws nothing is not a frame
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(2)));
+    rt.step(steps()).unwrap();
+    assert_eq!(seen.borrow().len(), 1);
+}
+
 /// Two text fields side by side.
 struct TwoFields;
 

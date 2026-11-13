@@ -26,7 +26,11 @@ Every one of them reports scroll timing when `CUPERTINO_SCROLL_TIMING` (`app::SC
 one JSON line a pointer scroll event, appended, with its stages in nanoseconds of `CLOCK_MONOTONIC` (`input`, the
 window system's timestamp; `handled`; `updated`, the model update and view, or `null`; `submitted`, the frame that drew
 it; `presented`, the compositor's time for that frame, or `null` when it was dropped). Without the variable no timing
-is kept (`app::Timed`, on `Runtime::with_scroll_timing`).
+is kept (`app::Timed`, on `Runtime::with_scroll_timing`). They report frame timing when `CUPERTINO_FRAME_TIMING`
+(`app::FRAME_TIMING_ENV`) names an absolute path: one JSON line a presented frame, appended (every process of a session
+may share the file), with `pid`, `program`, `start` in nanoseconds of `CLOCK_MONOTONIC`, and the nanoseconds of each
+phase: `update`, `view`, `layout`, `paint`, `raster`, `copy` (into the shared buffer), `commit`, and their `total`
+(`Runtime::with_frame_timing`). `scripts/dev/bench` collects them per program. Without the variable nothing is timed.
 `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads with the interface face, for
 text that lines up by character (a file's contents); `None` when no pack names one.
 

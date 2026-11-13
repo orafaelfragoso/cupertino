@@ -2903,6 +2903,63 @@ mod window_system {
         assert_eq!(present(&mut kit, 4), Some(None));
     }
 
+    /// Copies of frames into buffers are timed only once the runtime asks, and each call hands over what was timed since
+    /// the last one.
+    #[test]
+    fn copies_into_buffers_are_timed_only_when_asked() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, _seen) = spawn_server(server_stream);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        let w = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Dock".into(),
+                app_id: role::APP_ID.into(),
+                size: Size::new(10.0, 10.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: None,
+            })
+            .unwrap();
+        kit.window = w;
+        kit.window_event(|e| matches!(e, WindowEvent::Configure(_)).then_some(()));
+        let present = |kit: &mut Kit, id: u64| {
+            kit.ws.request_frame(w);
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+            let outcome = kit
+                .ws
+                .present(w, &frame_sized(id, (240, 80), [0; 4], &[]), None)
+                .unwrap();
+            assert_eq!(outcome, PresentOutcome::Presented);
+            kit.pump();
+            control.send(Control::FrameDone).unwrap();
+            committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        };
+        present(&mut kit, 1);
+        assert_eq!(kit.ws.take_copy_time(), Duration::ZERO, "not timed");
+        kit.ws.time_copies(true);
+        present(&mut kit, 2);
+        assert!(
+            kit.ws.take_copy_time() > Duration::ZERO,
+            "the copy of a whole frame"
+        );
+        assert_eq!(kit.ws.take_copy_time(), Duration::ZERO, "handed over once");
+        kit.ws.time_copies(false);
+        present(&mut kit, 3);
+        assert_eq!(kit.ws.take_copy_time(), Duration::ZERO);
+    }
+
     /// A window of one colour over the output (a catcher of presses around a panel) is one transparent pixel the
     /// compositor stretches to the configured size, at buffer scale 1 on an output at 2, its input region going with
     /// the commit as a frame's does; the frame presented after it is a whole buffer at the window's scale, which the

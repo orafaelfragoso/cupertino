@@ -152,9 +152,11 @@ pub enum GlesCompletion {
         damage: Option<Vec<Rectangle<i32, Physical>>>,
         sync: SyncPoint,
     },
-    /// Drawn by the DRM compositor, which keeps the frame for the queue: `empty` when nothing differs.
+    /// Drawn by the DRM compositor, which keeps the frame for the queue: `empty` when nothing differs; `planes`, the
+    /// planes it put elements on.
     Direct {
         empty: bool,
+        planes: crate::drm_trace::Planes,
     },
     Image(RgbaImage),
     Snapshot(GlesTexture),
@@ -175,12 +177,12 @@ impl Completion for GlesCompletion {
         match self {
             Self::Drawn { damage: None }
             | Self::Offscreen { damage: None, .. }
-            | Self::Direct { empty: true } => RenderStatus::Empty,
+            | Self::Direct { empty: true, .. } => RenderStatus::Empty,
             Self::Drawn { damage: Some(_) }
             | Self::Offscreen {
                 damage: Some(_), ..
             }
-            | Self::Direct { empty: false }
+            | Self::Direct { empty: false, .. }
             | Self::Image(_)
             | Self::Snapshot(_) => RenderStatus::Rendered,
         }
@@ -328,7 +330,17 @@ impl Renderer for Gles {
                         clear,
                         smithay::backend::drm::compositor::FrameFlags::DEFAULT,
                     )
-                    .map(|r| GlesCompletion::Direct { empty: r.is_empty })
+                    .map(|r| GlesCompletion::Direct {
+                        empty: r.is_empty,
+                        planes: crate::drm_trace::Planes {
+                            direct_scanout: matches!(
+                                r.primary_element,
+                                smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)
+                            ),
+                            cursor_plane: r.cursor_element.is_some(),
+                            overlays: r.overlay_elements.len(),
+                        },
+                    })
                     .map_err(|e| match e {
                         RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
                         RenderFrameError::RenderFrame(e) => tracked(e),
@@ -370,11 +382,19 @@ mod tests {
             RenderStatus::Rendered
         );
         assert_eq!(
-            GlesCompletion::Direct { empty: true }.status(),
+            GlesCompletion::Direct {
+                empty: true,
+                planes: Default::default()
+            }
+            .status(),
             RenderStatus::Empty
         );
         assert_eq!(
-            GlesCompletion::Direct { empty: false }.status(),
+            GlesCompletion::Direct {
+                empty: false,
+                planes: Default::default()
+            }
+            .status(),
             RenderStatus::Rendered
         );
         assert_eq!(
@@ -394,7 +414,11 @@ mod tests {
             Some(damage.as_slice())
         );
         assert_eq!(GlesCompletion::Drawn { damage: None }.damage(), None);
-        assert_eq!(GlesCompletion::Direct { empty: false }.damage(), None);
+        let direct = GlesCompletion::Direct {
+            empty: false,
+            planes: Default::default(),
+        };
+        assert_eq!(direct.damage(), None);
     }
 
     #[test]

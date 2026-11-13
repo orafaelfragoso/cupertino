@@ -12,11 +12,14 @@ fn after_a_tick_nothing_it_waits_for_is_already_due() {
     d.window();
     for ms in [3000, 3400, 4100, 6000, 9000] {
         d.at(ms);
+        // the person uses the desktop, so its window is pinged: the input wakes the loop, which ticks
+        d.state.input_came();
+        d.state.tick();
         let now = d.state.now();
         let next = d
             .state
             .next_tick_deadline()
-            .expect("a mapped window is pinged");
+            .expect("a mapped window is pinged while the desktop is in use");
         assert!(next > now, "at {ms} ms a deadline of {next} s was left due");
         assert!(
             next <= now + PING_INTERVAL.max(PONG_TIMEOUT),
@@ -42,7 +45,7 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it (Shared/cupertino/prism/row236-tick-audit.md):
 /// an event, a frame (`animating`), or a deadline in `next_tick_deadline`. A call added to the tick fails this test until
-/// it is audited the same way and listed here; otherwise its time-driven work would run up to a second late.
+/// it is audited the same way and listed here; otherwise its time-driven work would run up to a minute late (the loop's backstop).
 const AUDITED: [&str; 28] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",

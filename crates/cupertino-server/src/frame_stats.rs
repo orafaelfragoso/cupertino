@@ -5,7 +5,8 @@
 //! backdrop blurs took on the GPU, how many glass backdrops were blurred again or reused, how late it came after the
 //! output owed it and how many refreshes passed meanwhile, and the input-to-present latency of the frame when it is the
 //! first shown after an input; then how many render targets the material and glass passes created and how many passes
-//! they ran.
+//! they ran; then the GPU time of the whole frame (by GPU timestamps, `-` where the device has none), the title bars and
+//! rims and the keyboard HUDs drawn on the CPU, their uploads and the bytes those sent, and the passes of backdrop blurs.
 //!
 //! An output owes a frame from the time it is due ([`crate::state::Cupertino::frame_deadline`]): a change is due at the
 //! next refresh, an animation frame at its grid point. A frame shown more than a refresh after it was owed missed the
@@ -105,6 +106,61 @@ pub struct FrameRecord {
     /// Render targets the material and glass passes created, and the passes they ran.
     pub allocated: u64,
     pub passes: u64,
+    /// The GPU's time for the whole frame, when the device has GPU timestamps.
+    pub gpu: Option<Duration>,
+    pub counts: DrawCounts,
+}
+
+/// What the compositor drew on the CPU and uploaded, and the blur passes it ran, within a frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawCounts {
+    pub decoration_rasters: u64,
+    pub hud_rasters: u64,
+    pub decoration_uploads: u64,
+    pub decoration_upload_bytes: u64,
+    pub hud_uploads: u64,
+    pub hud_upload_bytes: u64,
+    pub blur_passes: u64,
+}
+
+/// The running totals [`DrawCounts`] are taken from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Totals {
+    pub material: crate::render::material::MaterialStats,
+    pub decoration_rasters: u64,
+    pub hud_rasters: u64,
+    pub uploads: crate::render::uploads::Uploads,
+}
+
+impl Totals {
+    /// The totals of `state` now.
+    pub fn of(state: &crate::state::Cupertino) -> Totals {
+        Totals {
+            material: state
+                .render
+                .as_ref()
+                .and_then(|r| r.material.as_ref())
+                .map(|m| m.borrow().stats)
+                .unwrap_or_default(),
+            decoration_rasters: state.decor.renders,
+            hud_rasters: state.overlays.images.rasters,
+            uploads: crate::render::uploads::total(),
+        }
+    }
+
+    /// What happened from `before` to these totals.
+    pub fn since(&self, before: &Totals) -> DrawCounts {
+        DrawCounts {
+            decoration_rasters: self.decoration_rasters - before.decoration_rasters,
+            hud_rasters: self.hud_rasters - before.hud_rasters,
+            decoration_uploads: self.uploads.decoration - before.uploads.decoration,
+            decoration_upload_bytes: self.uploads.decoration_bytes
+                - before.uploads.decoration_bytes,
+            hud_uploads: self.uploads.hud - before.uploads.hud,
+            hud_upload_bytes: self.uploads.hud_bytes - before.uploads.hud_bytes,
+            blur_passes: self.material.blur_passes - before.material.blur_passes,
+        }
+    }
 }
 
 impl FrameRecord {
@@ -112,8 +168,9 @@ impl FrameRecord {
     pub fn line(&self) -> String {
         let us = |d: Duration| d.as_micros().to_string();
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
+        let c = &self.counts;
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -127,7 +184,87 @@ impl FrameRecord {
             opt(self.latency.1),
             self.allocated,
             self.passes,
+            opt(self.gpu),
+            c.decoration_rasters,
+            c.hud_rasters,
+            c.decoration_uploads,
+            c.decoration_upload_bytes,
+            c.hud_uploads,
+            c.hud_upload_bytes,
+            c.blur_passes,
         )
+    }
+}
+
+/// `glQueryCounterEXT` and `glGetQueryObjectui64vEXT` of the timer query extension.
+type QueryCounter = unsafe extern "system" fn(u32, u32);
+type QueryResult64 = unsafe extern "system" fn(u32, u32, *mut u64);
+
+/// `GL_TIMESTAMP_EXT` and `GL_QUERY_RESULT_EXT`.
+const TIMESTAMP: u32 = 0x8E28;
+const QUERY_RESULT: u32 = 0x8866;
+
+/// The GPU's time for a whole frame, from a timestamp before its first command and one after its last. Timestamps,
+/// unlike elapsed-time queries, may be taken while the glass passes time themselves.
+pub struct FrameTimer {
+    counter: QueryCounter,
+    result: QueryResult64,
+    queries: [u32; 2],
+}
+
+impl FrameTimer {
+    /// The timer of a context with GPU timer queries; `None` when the driver has no entry points for them.
+    ///
+    /// # Safety
+    /// `gl` must be current.
+    pub unsafe fn new(gl: &smithay::backend::renderer::gles::ffi::Gles2) -> Option<FrameTimer> {
+        let counter = smithay::backend::egl::get_proc_address("glQueryCounterEXT");
+        let result = smithay::backend::egl::get_proc_address("glGetQueryObjectui64vEXT");
+        if counter.is_null() || result.is_null() {
+            return None;
+        }
+        let mut queries = [0; 2];
+        gl.GenQueries(2, queries.as_mut_ptr());
+        Some(FrameTimer {
+            counter: std::mem::transmute::<*const std::ffi::c_void, QueryCounter>(counter),
+            result: std::mem::transmute::<*const std::ffi::c_void, QueryResult64>(result),
+            queries,
+        })
+    }
+
+    /// Before the frame's first command (`end` false) or after its last (`end` true).
+    ///
+    /// # Safety
+    /// The context the timer was made in must be current.
+    pub unsafe fn stamp(&self, end: bool) {
+        (self.counter)(self.queries[usize::from(end)], TIMESTAMP);
+    }
+
+    /// The time between the two stamps; call once the GPU finished the frame.
+    ///
+    /// # Safety
+    /// The context the timer was made in must be current.
+    pub unsafe fn elapsed(&self) -> Duration {
+        let (mut start, mut end) = (0u64, 0u64);
+        (self.result)(self.queries[0], QUERY_RESULT, &mut start);
+        (self.result)(self.queries[1], QUERY_RESULT, &mut end);
+        Duration::from_nanos(end.saturating_sub(start))
+    }
+}
+
+/// `at` on the monotonic clock (`CLOCK_MONOTONIC`), in nanoseconds.
+pub fn monotonic_ns(at: Instant) -> u128 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid timespec to write to.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    let now = Instant::now();
+    let mono = ts.tv_sec as u128 * 1_000_000_000 + ts.tv_nsec as u128;
+    match at.checked_duration_since(now) {
+        Some(ahead) => mono + ahead.as_nanos(),
+        None => mono.saturating_sub(now.duration_since(at).as_nanos()),
     }
 }
 
@@ -138,14 +275,17 @@ pub struct FrameStats {
     /// From when each output (by index) owes the frame it has not shown yet, on the frame clock.
     owed: Vec<Option<Duration>>,
     refresh: Duration,
-    /// The material counters when the frame being drawn began.
-    before: crate::render::material::MaterialStats,
+    /// The counters when the frame being drawn began.
+    before: Totals,
+    /// Times whole frames on the GPU, where the device can.
+    pub timer: Option<FrameTimer>,
     out: std::io::BufWriter<std::fs::File>,
 }
 
 /// The first line of the file: the column names.
-pub const HEADER: &str =
-    "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us allocated passes";
+pub const HEADER: &str = "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us \
+app_lat_us allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads hud_upload_bytes \
+blur_passes";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -158,13 +298,18 @@ impl FrameStats {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
         writeln!(out, "# renderer {renderer}")?;
         writeln!(out, "# refresh_us {}", refresh.as_micros())?;
+        // where `start` lies on the monotonic clock, so the times of other processes line up with these
+        writeln!(out, "# start_monotonic_ns {}", monotonic_ns(start))?;
         writeln!(out, "{HEADER}")?;
+        // the header at once: a reader lines its own clock up by it while the session runs
+        out.flush()?;
         Ok(Self {
             start,
             latency: Latency::default(),
             owed: Vec::new(),
             refresh,
             before: Default::default(),
+            timer: None,
             out,
         })
     }
@@ -197,14 +342,17 @@ impl FrameStats {
 
 /// Before a frame is composed: the glass passes time themselves from here on, and their counters are noted.
 pub fn start_glass_timing(state: &mut crate::state::Cupertino) {
-    let Some(stats) = state.frame_stats.as_mut() else {
+    if state.frame_stats.is_none() {
         return;
-    };
+    }
+    let totals = Totals::of(state);
+    if let Some(stats) = state.frame_stats.as_mut() {
+        stats.before = totals;
+    }
     if let Some(material) = state.render.as_ref().and_then(|r| r.material.as_ref()) {
         let mut m = material.borrow_mut();
         m.timing = true;
         m.glass_time = GlassTime::default();
-        stats.before = m.stats;
     }
 }
 
@@ -244,42 +392,48 @@ pub fn frame_rendered(
     idx: usize,
     compose: Duration,
     render: Duration,
+    gpu: Option<Duration>,
 ) {
     let clock = state.frame_now();
-    let material = state
+    let glass = state
         .render
         .as_ref()
         .and_then(|r| r.material.as_ref())
-        .map(|m| {
-            let m = m.borrow();
-            (m.glass_time, m.stats)
-        });
+        .map(|m| m.borrow().glass_time)
+        .unwrap_or_default();
+    let totals = Totals::of(state);
     let Some(stats) = state.frame_stats.as_mut() else {
         return;
     };
     let now = Instant::now();
     let late = stats.shown(idx, clock);
-    let (glass, counts) = material.unwrap_or((GlassTime::default(), stats.before));
+    let counts = totals.material;
+    let before = stats.before.material;
     let record = FrameRecord {
         shown: now.saturating_duration_since(stats.start),
         compose,
         render,
         glass,
-        blurred: counts.backdrop_misses - stats.before.backdrop_misses,
-        reused: counts.backdrop_hits - stats.before.backdrop_hits,
+        blurred: counts.backdrop_misses - before.backdrop_misses,
+        reused: counts.backdrop_hits - before.backdrop_hits,
         late,
         missed: missed_refreshes(late, stats.refresh),
         latency: stats.latency.presented(now),
-        allocated: counts.allocations - stats.before.allocations,
-        passes: counts.passes - stats.before.passes,
+        allocated: counts.allocations - before.allocations,
+        passes: counts.passes - before.passes,
+        gpu,
+        counts: totals.since(&stats.before),
     };
     stats.write(&record);
 }
 
-/// An input arrived (benchmark runs only).
+/// An input arrived (benchmark runs and the DRM trace only).
 pub fn note_input(state: &mut crate::state::Cupertino) {
     if let Some(stats) = state.frame_stats.as_mut() {
         stats.latency.input(Instant::now());
+    }
+    if let Some(trace) = state.drm_trace.as_mut() {
+        trace.input(Instant::now());
     }
 }
 
@@ -362,6 +516,26 @@ mod tests {
     }
 
     #[test]
+    fn an_instant_lies_on_the_monotonic_clock_where_the_clock_read_it() {
+        let a = Instant::now();
+        let b = a + Duration::from_millis(5);
+        let (ma, mb) = (monotonic_ns(a), monotonic_ns(b));
+        // the two readings of the clock differ by at most what passed between them
+        let d = mb as i128 - ma as i128 - 5_000_000;
+        assert!(d.abs() < 2_000_000, "{d}");
+    }
+
+    #[test]
+    fn the_header_is_on_disk_before_the_first_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("frames.txt");
+        let _stats = FrameStats::create(&path, "test", ms(16), Instant::now()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# start_monotonic_ns "), "{text}");
+        assert!(text.ends_with(&format!("{HEADER}\n")), "{text}");
+    }
+
+    #[test]
     fn a_line_names_every_column() {
         let r = FrameRecord {
             shown: ms(1),
@@ -374,6 +548,59 @@ mod tests {
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 - 4 9"));
+        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0"));
+    }
+
+    #[test]
+    fn a_line_ends_with_the_frames_gpu_time_and_its_cpu_drawing_uploads_and_blur_passes() {
+        let r = FrameRecord {
+            gpu: Some(Duration::from_micros(1500)),
+            counts: DrawCounts {
+                decoration_rasters: 1,
+                hud_rasters: 2,
+                decoration_uploads: 3,
+                decoration_upload_bytes: 4000,
+                hud_uploads: 5,
+                hud_upload_bytes: 6000,
+                blur_passes: 7,
+            },
+            ..Default::default()
+        };
+        assert!(
+            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7"),
+            "{}",
+            r.line()
+        );
+    }
+
+    #[test]
+    fn the_counts_of_a_frame_are_the_change_of_the_totals() {
+        let mut before = Totals {
+            decoration_rasters: 10,
+            hud_rasters: 3,
+            ..Default::default()
+        };
+        before.uploads.decoration = 4;
+        before.uploads.decoration_bytes = 100;
+        before.material.blur_passes = 20;
+        let mut after = before;
+        after.decoration_rasters = 12;
+        after.uploads.decoration = 6;
+        after.uploads.decoration_bytes = 900;
+        after.uploads.hud = 1;
+        after.uploads.hud_bytes = 64;
+        after.material.blur_passes = 26;
+        assert_eq!(
+            after.since(&before),
+            DrawCounts {
+                decoration_rasters: 2,
+                hud_rasters: 0,
+                decoration_uploads: 2,
+                decoration_upload_bytes: 800,
+                hud_uploads: 1,
+                hud_upload_bytes: 64,
+                blur_passes: 6,
+            }
+        );
     }
 }

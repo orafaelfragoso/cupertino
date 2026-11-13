@@ -343,6 +343,10 @@ thread_local! {
 #[derive(Default)]
 pub(crate) struct FakeSystem {
     pub(crate) queue: VecDeque<PlatformEvent>,
+    /// The runtime asked for the copies into buffers to be timed; each present then reports a copy of 1 ns.
+    pub(crate) timed_copies: bool,
+    /// Copies not yet reported.
+    pub(crate) copy_time: Duration,
     /// The timeout of every wait, in order.
     pub(crate) waits: Rc<RefCell<Vec<Option<Duration>>>>,
     /// A wait that may block (not a step's zero-timeout poll) with nothing queued asks the first window to close, so
@@ -457,6 +461,14 @@ impl FakeSystem {
 impl WindowSystem for FakeSystem {
     fn activated(&self, _: WindowId) -> Option<bool> {
         self.activated
+    }
+
+    fn time_copies(&mut self, on: bool) {
+        self.timed_copies = on;
+    }
+
+    fn take_copy_time(&mut self) -> Duration {
+        std::mem::take(&mut self.copy_time)
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -616,6 +628,9 @@ impl WindowSystem for FakeSystem {
         }
         self.presented.push((window, configure));
         self.frame_ids.push(frame.id);
+        if self.timed_copies {
+            self.copy_time += Duration::from_nanos(1);
+        }
         Ok(PresentOutcome::Presented)
     }
 

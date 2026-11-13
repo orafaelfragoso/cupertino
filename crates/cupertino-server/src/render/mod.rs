@@ -24,6 +24,7 @@ pub mod screenshot;
 pub mod shader_rect;
 pub mod snapshots;
 pub mod ui;
+pub mod uploads;
 pub mod wallpaper;
 
 pub use clip::{ClipElement, ClipShape};

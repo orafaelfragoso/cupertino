@@ -135,6 +135,11 @@ pub struct Cli {
     /// Take a screenshot at a time, `SECONDS:PATH`; repeatable.
     #[arg(long = "shot", value_name = "SECONDS:PATH", value_parser = parse_timed_shot)]
     pub shots: Vec<(f64, PathBuf)>,
+    /// Headless: write the windows at a time, `SECONDS:PATH`, as JSON, one object a line: the application, the title
+    /// and the frame (title bar included) in logical points (`scripts/dev/bench` places its pointer paths by them);
+    /// repeatable.
+    #[arg(long = "window-list", value_name = "SECONDS:PATH", value_parser = parse_timed_shot, requires = "headless")]
+    pub window_lists: Vec<(f64, PathBuf)>,
     /// Do not draw the menu bar.
     #[arg(long)]
     pub no_menu_bar: bool,
@@ -436,7 +441,7 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
                 device: String::new(),
                 source: AxisSource::Finger,
                 usec: Duration::from(state.clock.now()).as_micros() as u64,
-                amount: [Some(0.0), Some(dy)],
+                amount: scripted_scroll(dy),
                 v120: [None, None],
                 relative_direction: [AxisRelativeDirection::Identical; 2],
             });
@@ -460,6 +465,13 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
             }
         })?;
     }
+    for (t, path) in cli.window_lists.iter().cloned() {
+        schedule(event_loop, t, move |state| {
+            if let Err(e) = std::fs::write(&path, window_list(state)) {
+                tracing::warn!(error = %e, path = %path.display(), "writing the window list failed");
+            }
+        })?;
+    }
     for (t, path) in cli.shots.iter().cloned() {
         schedule(event_loop, t, move |state| {
             state.screenshot_requests.push(path);
@@ -475,6 +487,67 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
         })?;
     }
     Ok(())
+}
+
+/// The axis amounts of a scripted two-finger scroll of `dy` points, horizontal then vertical: the horizontal axis
+/// carries nothing (a zero there would end the gesture on it at every step), and a `dy` of zero ends the scroll.
+fn scripted_scroll(dy: f64) -> [Option<f64>; 2] {
+    [None, Some(dy)]
+}
+
+/// The windows of `state`, back to front, one JSON object a line ([`window_line`]).
+fn window_list(state: &Cupertino) -> String {
+    state
+        .wm
+        .windows()
+        .map(|w| {
+            let app = state
+                .wm
+                .app(w.app)
+                .map(|a| a.identity.as_str())
+                .unwrap_or_default();
+            let frame = w.geometry();
+            let entry = state.entry(w.id).filter(|e| e.server_side);
+            // the middle of the close and zoom buttons the server draws, from the frame's top left corner
+            let buttons = entry.map(|e| {
+                let size = e.window.geometry().size;
+                let content = cupertino_geometry::Size::new(f64::from(size.w), f64::from(size.h));
+                let layout = state.decor.for_style(e.titlebar).layout(content);
+                let centre = |kind| {
+                    let c = layout.button(kind).center;
+                    (frame.x + c.x, frame.y + c.y)
+                };
+                [
+                    centre(cupertino_decorations::ButtonKind::Close),
+                    centre(cupertino_decorations::ButtonKind::Zoom),
+                ]
+            });
+            window_line(app, &w.title, frame, buttons)
+        })
+        .collect()
+}
+
+/// One window of the window list: its application, title, frame in logical points and, when the server draws its
+/// title bar, the middle of its close and zoom buttons in the same points (`null` otherwise).
+pub fn window_line(
+    app: &str,
+    title: &str,
+    frame: cupertino_wm::Rect,
+    buttons: Option<[(f64, f64); 2]>,
+) -> String {
+    let mut line = serde_json::json!({
+        "app": app,
+        "title": title,
+        "x": frame.x,
+        "y": frame.y,
+        "width": frame.w,
+        "height": frame.h,
+        "server_side": buttons.is_some(),
+        "buttons": buttons.map(|b| b.map(|(x, y)| [x, y])),
+    })
+    .to_string();
+    line.push('\n');
+    line
 }
 
 /// Start writing per-frame timings to `path`, naming the device that renders.
@@ -506,6 +579,15 @@ fn start_frame_stats(
     let gpu_timers = extensions
         .split_whitespace()
         .any(|e| e == "GL_EXT_disjoint_timer_query");
+    // and each whole frame, by timestamps
+    let timer = if gpu_timers {
+        h.renderer
+            .with_context(|gl| unsafe { crate::frame_stats::FrameTimer::new(gl) })
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     if let Some(material) = state.render.as_ref().and_then(|r| r.material.as_ref()) {
         material.borrow_mut().gpu_timers = gpu_timers;
     }
@@ -523,10 +605,10 @@ fn start_frame_stats(
         }
     );
     let refresh = Duration::from_secs_f64(1000.0 / f64::from(refresh_mhz.max(1000)));
-    state.frame_stats = Some(
-        crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)
-            .with_context(|| format!("creating {}", path.display()))?,
-    );
+    let mut stats = crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)
+        .with_context(|| format!("creating {}", path.display()))?;
+    stats.timer = timer;
+    state.frame_stats = Some(stats);
     Ok(())
 }
 
@@ -1117,6 +1199,42 @@ fn export_socket(state: &Cupertino) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scripted_scroll_moves_the_vertical_axis_alone_and_its_zero_ends_it() {
+        assert_eq!(scripted_scroll(20.0), [None, Some(20.0)]);
+        assert_eq!(scripted_scroll(0.0), [None, Some(0.0)]);
+    }
+
+    #[test]
+    fn a_window_list_line_is_one_json_object_with_the_frame_in_points() {
+        let line = window_line(
+            "org.example.Files",
+            "Home \"docs\"",
+            cupertino_wm::Rect::new(10.0, 32.5, 800.0, 500.0),
+            Some([(36.0, 58.5), (76.0, 58.5)]),
+        );
+        assert!(line.ends_with('\n'));
+        let v: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(v["app"], "org.example.Files");
+        assert_eq!(v["title"], "Home \"docs\"");
+        assert_eq!((v["x"].as_f64(), v["y"].as_f64()), (Some(10.0), Some(32.5)));
+        assert_eq!(
+            (v["width"].as_f64(), v["height"].as_f64()),
+            (Some(800.0), Some(500.0))
+        );
+        assert_eq!(v["server_side"], true);
+        assert_eq!(
+            v["buttons"],
+            serde_json::json!([[36.0, 58.5], [76.0, 58.5]])
+        );
+        let bare = window_line("a", "b", cupertino_wm::Rect::new(0.0, 0.0, 1.0, 1.0), None);
+        let v: serde_json::Value = serde_json::from_str(bare.trim_end()).unwrap();
+        assert_eq!(
+            (v["server_side"].clone(), v["buttons"].clone()),
+            (false.into(), serde_json::Value::Null)
+        );
+    }
 
     #[test]
     fn lost_contexts_are_counted_in_a_row_and_cleared_by_a_normal_end() {

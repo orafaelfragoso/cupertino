@@ -24,17 +24,17 @@ Nothing is optimised before it is measured on the target machine, and no gate ma
 
 Instruments:
 
-- [ ] `scripts/dev/bench` takes size and scale as arguments.
-- [ ] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, Control Center open, launcher
+- [x] `scripts/dev/bench` takes size and scale as arguments.
+- [x] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, Control Center open, launcher
       typing (Files wheel scroll exists).
-- [ ] Toolkit processes write per-phase frame timings (update, view, layout, paint, raster, copy, commit) to a file
+- [x] Toolkit processes write per-phase frame timings (update, view, layout, paint, raster, copy, commit) to a file
       named by an environment variable; bench collects them per process.
-- [ ] Bench counts client frames longer than one refresh, per process, besides the compositor's missed refreshes.
-- [ ] `scripts/dev/measure` reports private dirty memory besides Pss and Rss.
-- [ ] Counters in the frame statistics for decoration and HUD rasters and uploads, and for blur passes.
-- [ ] The DRM backend logs, on request, which presentation-time branch it takes (flip timestamp or own clock), missed
+- [x] Bench counts client frames longer than one refresh, per process, besides the compositor's missed refreshes.
+- [x] `scripts/dev/measure` reports private dirty memory besides Pss and Rss.
+- [x] Counters in the frame statistics for decoration and HUD rasters and uploads, and for blur passes.
+- [x] The DRM backend logs, on request, which presentation-time branch it takes (flip timestamp or own clock), missed
       flips, plane assignment (cursor plane, direct scanout) and input-to-flip latency.
-- [ ] Every timer that wakes a process on an idle desktop recorded with its reason; each is kept (and listed under
+- [x] Every timer that wakes a process on an idle desktop recorded with its reason; each is kept (and listed under
       "Measurements") or removed.
 
 Baseline:
@@ -48,10 +48,10 @@ Baseline:
 
 Probes (small programs outside the product; results recorded here):
 
-- [ ] Context creation, first program, later programs and teardown: time and private memory, from a Rust binary.
-- [ ] Render-target texture cost in total GPU memory, the first one in a process and later ones.
-- [ ] A saved program binary as the first program of a fresh process: time and memory against compiling.
-- [ ] Native fence soak: resident-memory slope with and without the fence over 10 million frames.
+- [x] Context creation, first program, later programs and teardown: time and private memory, from a Rust binary.
+- [x] Render-target texture cost in total GPU memory, the first one in a process and later ones.
+- [x] A saved program binary as the first program of a fresh process: time and memory against compiling.
+- [x] Native fence soak: resident-memory slope with and without the fence over 10 million frames.
 - [ ] 10-bit (`Abgr2101010`) gradient on the primary plane with the driver's dithering off, against 8-bit.
 
 Gate:
@@ -302,6 +302,155 @@ Gate:
 
 Filled in as steps complete.
 
+### Step 0: instruments, probes and the idle desktop
+
+Taken at `624dab3b` on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08), with the
+desktop session running beside the runs.
+
+**Where the instruments are.**
+
+- `scripts/dev/bench` (headless sessions, every process measured; its tests: `python3 -I scripts/dev/test_bench.py`).
+- `CUPERTINO_FRAME_TIMING=PATH`: every toolkit process appends one JSON line a presented frame with its phases
+  (update, view, layout, paint, raster, copy, commit, total). Without the variable no clock is read
+  (`runtime::tests::a_presented_frame_is_timed_phase_by_phase_and_nothing_is_timed_without_a_sink`).
+- The frame statistics (`--frame-stats`, headless) end with the GPU time of the frame (timer queries), title bar and
+  HUD rasters and uploads with their bytes, and blur passes; a `# start_monotonic_ns` line lines other processes'
+  times up with them.
+- `CUPERTINO_DRM_TRACE=1` on the session server logs, under the `cupertino_server::drm_trace` target: the
+  presentation-time branch when it changes (`flip timestamp` or `own clock`), every missed flip with how many refresh
+  periods late, the plane assignment when it changes (direct scanout, cursor plane, overlays) and the input-to-flip
+  latency. Without the variable nothing is kept.
+- `scripts/dev/measure` reports private dirty memory beside Pss and Rss.
+- The probes live in `tools/gpu-probes`, a crate with a workspace of its own: never built by the workspace, never in
+  the packages. Build: `cargo build --release --offline --manifest-path tools/gpu-probes/Cargo.toml --target-dir
+  target/gpu-probes`; `target/gpu-probes/release/gpu-probes --help` lists the probes. Each probe runs its
+  measurements in fresh processes, with the driver's on-disk program cache off unless the probe says otherwise.
+
+**The baseline in one command.** The baseline runs (every scenario five times at scale 1.5 and at scale 2, on the
+target display's size) are:
+
+```sh
+scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 5 --idle-seconds 60 --out baseline-1.5.json
+scripts/dev/bench --size 3840x2160 --scale 2 --runs 5 --idle-seconds 60 --out baseline-2.json
+```
+
+Each JSON holds every run and, per scenario, the median of the runs with their spread (max - min, the noise):
+compositor frame interval p50/p99, missed refreshes, work and GPU time p50/p99, compositor CPU time, slow client frames
+per program, the per-phase client split (p50 and p99 of each phase), and per-program CPU and private memory. The
+scenarios: idle, drag (Settings over Files and its glass), hover (along the window buttons), resize (Files' corner),
+control-center, launcher-typing and files-scroll.
+
+**Smoke run** (one run each, 1280 x 800 at scale 1, 60 Hz; it only shows that each scenario drives what it should):
+
+| Scenario | Frames | Missed | Work p50/p99 ms | GPU p99 ms | Server CPU ms/s | Blur passes/frame | Title bar rasters (upload) | Slow client frames | Client frame p99 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| idle (15 s) | 2 | 0 | 0.75 / 1.35 | 0.61 | 1.3 | 0 | 0 | 0 | 0.38 (menu bar clock) |
+| drag | 180 | 0 | 0.76 / 2.19 | 1.72 | 60 | 7.6 | 0 | 0 | 0.48 |
+| hover | 288 | 0 | 0.52 / 0.83 | 0.30 | 42 | 0 | 36 (5.3 MiB) | 0 | 1.88 |
+| resize | 181 | 0 | 2.91 / 4.20 | 2.91 | 213 | 9.2 | 319 (284 MiB) | 0 | 5.43 |
+| control-center | 86 | 0 | 1.13 / 2.30 | 1.64 | 22 | 6.8 | 0 | 0 | 8.24 |
+| launcher-typing | 240 | 0 | 0.91 / 2.26 | 1.11 | 45 | 3.5 | 0 | 0 | 2.99 |
+| files-scroll | 182 | 0 | 0.88 / 1.32 | 0.67 | 69 | 7.0 | 0 | 0 | 3.27 |
+
+The resize already shows what step 8 removes: a title bar raster and upload on every frame.
+
+**Context, first program, later programs, teardown** (`gpu-probes context --runs 5`, median of five fresh processes,
+spread in brackets; private memory is clean + dirty, after each stage):
+
+| Stage | GBM: time | GBM: private after | EGL device: time | EGL device: private after |
+|---|---|---|---|---|
+| process start | | 0.3 MiB | | 0.3 MiB |
+| context (GLES 3, surfaceless) | 57.3 ms (17.4) | 20.0 MiB | 59.2 ms (6.1) | 20.0 MiB |
+| first program | 31.5 ms (0.8) | 68.8 MiB | 31.2 ms (1.2) | 68.8 MiB |
+| each later program (8) | 5.84 ms (0.05) | 68.9 MiB | 5.85 ms (0.03) | 68.9 MiB |
+| teardown | 13.0 ms (0.5) | 61.7 MiB | 12.9 ms (0.8) | 61.7 MiB |
+
+The first program costs 48.8 MiB of private memory (39 MiB of it dirty), the compiler loading; later programs cost
+almost nothing. Teardown gives back 7 MiB: a process that had a context keeps about 61 MiB until it exits. Both
+platforms are the same.
+
+**Render targets** (`gpu-probes texture --size 3840x2160 --count 4 --runs 5`, an RGBA8 texture and its framebuffer,
+total GPU memory from NVML; identical in all five runs):
+
+| Stage | Total GPU memory added | Process GPU memory |
+|---|---|---|
+| context and one program | 11.4 MiB | 2.7 MiB |
+| first 3840 x 2160 target (31.6 MiB of pixels) | 63.5 MiB | 66.2 MiB |
+| each later target | 32.0 MiB | +32.0 MiB |
+| all four deleted | 63.5 MiB stays | 66.2 MiB |
+
+The first target of a process costs twice its size: the driver reserves a pool the size of one more target, and keeps
+it when the targets are deleted. Later targets cost their size rounded up to 2 MiB.
+
+**A saved program binary** (`gpu-probes binary --runs 5`: the program saved once with `glGetProgramBinary` (9.6 KiB),
+then loaded as the first program of fresh processes; median of five):
+
+| First program of a fresh process | Time | Private memory added |
+|---|---|---|
+| compiled, driver's disk cache off | 32.5 ms | 46.7 MiB (38.6 MiB dirty) |
+| loaded from the saved binary, disk cache off | 4.95 ms | 6.2 MiB (0.6 MiB dirty) |
+| compiled, driver's disk cache on and filled | 0.40 ms | 0.7 MiB (0.2 MiB dirty) |
+
+**Native fence soak** (`gpu-probes fence --frames 10000000`, GBM, one small draw a frame, resident memory sampled and
+fitted by least squares after the first tenth):
+
+| Per frame | Resident growth | Run time |
+|---|---|---|
+| native fence: create, flush, export the fd, wait on it, close, destroy | 15.89 bytes | 305 s |
+| no fence (`glFinish`) | 16.15 bytes | 132 s |
+
+The fence adds nothing (-0.25 bytes a frame, inside the 1 byte a frame budget). Both grow about 16 bytes a frame,
+15.5 MiB a million frames, linearly: any draw without a present grows the driver's memory this way (no draw: no growth;
+the same on the EGL device platform and with the driver's threaded optimisations off). Step 3's slice presents every
+frame and must show whether presenting stops it; until then a GPU toolkit process that draws without presenting
+(offscreen work) is assumed to grow.
+
+**10-bit gradient on the primary plane.** BLOCKED (owner action): it needs the display to itself. Tested as far as it
+goes without the display (`gpu-probes depth --dry-run`): the primary plane of the connected DisplayPort output takes
+`AB30` and `XR24`, both 3840 x 2160 framebuffers are made, the connector offers `dithering mode` (auto now; the probe
+sets off) and no `max bpc`; the CRTC has 1024-entry gamma and degamma tables. To run it: log out, switch to a text
+console (Ctrl+Alt+F3), log in, and from the checkout run `tools/gpu-probes/depth.sh`; then note for each band whether
+the 10-bit half is smoother than the 8-bit half, beside `target/gpu-probes/depth.jsonl`.
+
+**Presentation-time branch and plane assignment on the target driver.** BLOCKED (owner restart): it needs the session
+server on the display. With a build that has the trace installed: log out, switch to a text console, log in, run
+`CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=300 cupertino-session`, use the desktop for a few minutes (move and
+resize a window, scroll in Files, play a video full screen), let it end, then
+`grep drm_trace ~/.local/state/cupertino/server.log`. The lines name the branch, missed flips, planes and latencies.
+
+**Timers that wake an idle desktop.** The bench's idle scenario counts, per thread, its voluntary context switches,
+samples where it sleeps (the call and its timeout) and reads each timerfd's period and count. Headless, 1280 x 800,
+Files and Settings open, nobody touching the desktop for 60 s. Before this step's changes (30 s): every process with a
+bus connection woke twice a second in its pool thread (120 a minute each, 10 processes), the server's main loop woke
+242 times a minute, Settings drew a frame a second.
+
+Removed:
+
+- The pool thread that bus connections run their blocking calls on stayed for good after its first call and woke twice
+  a second, in every process with a bus connection: its 1.7.0 release never ends an idle thread. Held at 1.6.2, which
+  ends it after half a second without work (`dbus::tests::the_blocking_pool_ends_its_threads_once_idle`).
+- Hung-application pings: the server pinged every client with a mapped window once a second, and each woke to answer.
+  Pings now go out only after input since the last one (the first input after a rest pings at once), so a desktop
+  nobody touches pings no one (`hung::tests`, `hung_apps::a_desktop_nobody_uses_pings_no_one_and_the_first_input_pings_at_once`).
+- The main loops' one-second backstop (session and headless): every time-driven piece of work names its deadline (the
+  tick's calls are audited), so the backstop is now a minute (`a_session_at_rest_sleeps_and_wakes_its_loop_once_a_minute_at_most`).
+- Settings drew a frame every second on a pane of readings (Account, 15 frames in 15 s): its rows all share one
+  control, so they shared one key and were mounted again at every refresh. Each row now has a key of its own and a
+  refresh that changes no reading draws nothing (`the_rows_of_a_section_have_keys_of_their_own_though_readings_share_their_control`,
+  `a_turn_that_changes_no_reading_presents_nothing_on_a_pane_of_readings`).
+
+Kept, with what they cost per minute after the changes:
+
+| Who | Every | Why | Wakeups a minute |
+|---|---|---|---|
+| Settings, while its window is open | 1 s (100 ms while the input level meter shows) | re-reads the shown pane's live readings: some services send no change signal | Settings about 1200 over its threads, the server about 250 (its bus threads, and its file watches as Settings reads watched files), the bus daemon about 120; headless runs add a system bus connect attempt a pass, as there is none |
+| menu bar clock | at each minute | the clock; it reads do-not-disturb and the control panel's state with it | menu bar 22, notifications 15, control panel 2, bus daemon 9 |
+| session and headless main loop | 60 s | backstop for a deadline left unnamed | server 1 |
+
+Without Settings open the whole desktop wakes about 50 times a minute, all of it the clock's minute and the backstop.
+Three timerfds stay armed without firing in a minute (one each in the server, the menu bar and Settings): long
+deadlines, not periods.
+
 ## Decisions taken
 
 - Shared maths and one look freeze come first; goldens are not re-recorded per step afterwards.
@@ -316,7 +465,11 @@ Filled in as steps complete.
 
 ## Open questions
 
-- Does a program binary cache avoid the compiler's start-up memory and time? (step 0)
-- Is the panel truly 10-bit, and is a 10-bit plane visibly better than the driver's own dithering? (step 0)
-- Are the driver's flip timestamps real? (step 0)
+- Does a program binary cache avoid the compiler's start-up memory and time? (step 0) Answered: yes. The first
+  program of a fresh process costs 32.5 ms and 46.7 MiB compiled, 4.95 ms and 6.2 MiB loaded from a saved binary,
+  and 0.4 ms and 0.7 MiB when the driver's own disk cache holds it ("Measurements").
+- Is the panel truly 10-bit, and is a 10-bit plane visibly better than the driver's own dithering? (step 0) The
+  plane takes 10-bit formats; the look needs the owner's run of `tools/gpu-probes/depth.sh` ("Measurements").
+- Are the driver's flip timestamps real? (step 0) The trace that answers it is in place; it needs the owner's
+  traced session ("Measurements").
 - Does the dmabuf slice run on llvmpipe inside the goldens container? (step 3)

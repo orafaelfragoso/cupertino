@@ -83,6 +83,8 @@ pub struct Frame {
     /// The client buffers it was drawn from. Dropping the last handle of one signals its explicit-sync release point,
     /// which must wait until the GPU finished reading it: once the flip is done, the frame drawn from it is finished.
     _buffers: Vec<Buffer>,
+    /// The earliest input this frame is the first to show, when the DRM trace is on.
+    input: Option<std::time::Instant>,
 }
 
 struct Surface {
@@ -167,12 +169,11 @@ fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
     !stopped && !waiting && due
 }
 
-/// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue, or
-/// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]). Events (clients, input, vblanks) wake
-/// it sooner. At most a second, so work that names no deadline still runs, if late. Outputs that cannot draw (paused,
-/// asleep, off) wait for an event, not a frame deadline.
-fn loop_timeout(state: &Cupertino) -> Duration {
-    const MAX: Duration = Duration::from_secs(1);
+/// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue,
+/// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]) or the run's limit (`end`) comes.
+/// Events (clients, input, vblanks) wake it sooner; with nothing due it sleeps ([`super::REST_WAIT`]). Outputs that cannot
+/// draw (paused, asleep, off) wait for an event, not a frame deadline.
+fn loop_timeout(state: &Cupertino, end: Option<Instant>) -> Duration {
     // a passed deadline nothing acted on must not spin the loop
     const PASSED: Duration = Duration::from_millis(1);
     let tick = super::tick_wait(state);
@@ -197,11 +198,8 @@ fn loop_timeout(state: &Cupertino) -> Duration {
         }
         _ => None,
     };
-    [tick, frames]
-        .into_iter()
-        .flatten()
-        .min()
-        .map_or(MAX, |wait| wait.min(MAX))
+    let end = end.map(|end| end.saturating_duration_since(Instant::now()));
+    super::loop_wait([tick, frames, end])
 }
 
 impl UdevBackend {
@@ -540,6 +538,12 @@ pub fn run(
         vt = std::env::var("XDG_VTNR").unwrap_or_default(),
         "starting the TTY backend"
     );
+    if crate::drm_trace::requested(std::env::var(crate::drm_trace::ENV).ok().as_deref()) {
+        state.drm_trace = Some(crate::drm_trace::DrmTrace::new());
+        crate::drm_trace::log(
+            "on: presentation-time branch, missed flips, planes and input-to-flip latency follow",
+        );
+    }
     let report = preflight()?;
     for note in &report.notes {
         tracing::info!("{note}");
@@ -760,7 +764,7 @@ pub fn run(
 
     while state.running {
         event_loop
-            .dispatch(Some(loop_timeout(state)), state)
+            .dispatch(Some(loop_timeout(state, deadline)), state)
             .map_err(|e| anyhow!("event loop: {e}"))?;
         state.tick();
         render_outputs(state);
@@ -1394,10 +1398,12 @@ fn render_surface(
     if drawn.rendered {
         let feedback = state.collect_feedback(idx);
         let id = state.outputs[idx].scheduler.next_presentation();
+        let input = state.drm_trace.as_mut().and_then(|t| t.queued());
         let frame = Frame {
             id,
             feedback,
             _buffers: drawn.buffers,
+            input,
         };
         match surface.drm_output.queue_frame(frame) {
             Ok(()) => {
@@ -1445,17 +1451,25 @@ fn draw_direct(
     let buffers = crate::frame::drawn_buffers(&composed.resources.surfaces);
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
-    let result = Gles
-        .render(
-            &composed.frame,
-            &mut resources,
-            GlesTarget::Drm {
-                renderer: &mut card.renderer,
-                output: &mut surface.drm_output,
-                clear: CLEAR,
-            },
-        )
-        .map(|completion| completion.status() == RenderStatus::Rendered);
+    let result = Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Drm {
+            renderer: &mut card.renderer,
+            output: &mut surface.drm_output,
+            clear: CLEAR,
+        },
+    );
+    drop(resources);
+    if let (Ok(GlesCompletion::Direct { planes, .. }), Some(trace)) =
+        (&result, state.drm_trace.as_mut())
+    {
+        let name = state.outputs[idx].output.name();
+        if let Some(line) = trace.planes(&name, *planes) {
+            crate::drm_trace::log(&line);
+        }
+    }
+    let result = result.map(|completion| completion.status() == RenderStatus::Rendered);
     Some(Drawn::of(state, idx, result, buffers, &mut u.renderer_lost))
 }
 
@@ -1626,6 +1640,22 @@ fn frame_finish(
     // only the flip in flight is shown: a late event of a flip dropped by a reset confirms no frame, a lock frame least
     // of all, and the refresh grid does not follow it; its feedback is discarded
     let presented = shown.as_ref().and_then(|f| scheduler.presented(f.id));
+    if let (Some(presented), Some(trace)) = (presented.as_ref(), state.drm_trace.as_mut()) {
+        let now = std::time::Instant::now();
+        let flip = hardware.map_or(now, |t| {
+            crate::drm_trace::instant_of(t, now, Duration::from(state.clock.now()))
+        });
+        let branch = if hardware.is_some() {
+            crate::drm_trace::Branch::FlipTimestamp
+        } else {
+            crate::drm_trace::Branch::OwnClock
+        };
+        let input = shown.as_ref().and_then(|f| f.input);
+        let name = state.outputs[idx].output.name();
+        for line in trace.flipped(&name, branch, presented.late_periods, input, flip) {
+            crate::drm_trace::log(&line);
+        }
+    }
     if let Some(presented) = presented {
         if let Some(Frame { mut feedback, .. }) = shown {
             feedback.presented(

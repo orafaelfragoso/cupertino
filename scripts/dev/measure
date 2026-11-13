@@ -13,6 +13,8 @@ while (rest), then used: the launcher opens and a search is typed, the pointer s
 windows, the launcher closes (use). Then it rests again (rest after use). For each program it reports:
   pss       proportional memory at the end, in MiB (shared pages split between the processes that map them)
   rss       resident memory at the end, in MiB
+  private   private dirty memory at the end, in MiB: written pages no other process shares, what the program alone
+            costs (heap, its own buffers, a driver's private allocations)
   cpu rest  CPU per second of the first rest, in percent of one core
   cpu use   CPU per second of the use
   cpu after CPU per second of the rest after use: an animation or timer left running shows here
@@ -98,17 +100,20 @@ def cpu(pid: int) -> int:
         return 0
 
 
-def memory(pid: int) -> tuple[float, float]:
-    pss = rss = 0.0
+def memory(pid: int) -> tuple[float, float, float]:
+    """Pss, Rss and private dirty memory of `pid`, in MiB."""
+    pss = rss = private = 0.0
     try:
         for line in pathlib.Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
             if line.startswith("Pss:"):
                 pss = int(line.split()[1]) / 1024
             elif line.startswith("Rss:"):
                 rss = int(line.split()[1]) / 1024
+            elif line.startswith("Private_Dirty:"):
+                private = int(line.split()[1]) / 1024
     except OSError:
         pass
-    return pss, rss
+    return pss, rss, private
 
 
 def sample(root: int) -> dict[str, dict]:
@@ -117,11 +122,12 @@ def sample(root: int) -> dict[str, dict]:
         n = name(p)
         if not n.startswith("cupertino") or n.endswith(".sh"):
             continue
-        e = by.setdefault(n, {"cpu": 0, "pss": 0.0, "rss": 0.0, "procs": 0})
+        e = by.setdefault(n, {"cpu": 0, "pss": 0.0, "rss": 0.0, "private": 0.0, "procs": 0})
         e["cpu"] += cpu(p)
-        pss, rss = memory(p)
+        pss, rss, private = memory(p)
         e["pss"] += pss
         e["rss"] += rss
+        e["private"] += private
         e["procs"] += 1
     return by
 
@@ -152,13 +158,14 @@ def one_run(bin_dir: pathlib.Path) -> dict[str, dict]:
                 return float("nan")
             return 100.0 * (sb[n]["cpu"] - sa[n]["cpu"]) / TICK / (tb - ta)
         end = marks["after1"][1][n]
-        result[n] = {"pss": end["pss"], "rss": end["rss"], "procs": end["procs"],
+        result[n] = {"pss": end["pss"], "rss": end["rss"], "private": end["private"], "procs": end["procs"],
                      "cpu rest": rate("rest0", "rest1"), "cpu use": rate("rest1", "use1"),
                      "cpu after": rate("after0", "after1")}
     return result
 
 
-FIELDS = ["pss", "rss", "cpu rest", "cpu use", "cpu after"]
+FIELDS = ["pss", "rss", "private", "cpu rest", "cpu use", "cpu after"]
+MEMORY_FIELDS = 3
 
 
 def median(runs: list[dict[str, dict]]) -> dict[str, dict]:
@@ -175,10 +182,11 @@ def median(runs: list[dict[str, dict]]) -> dict[str, dict]:
 
 
 def table(m: dict[str, dict]) -> str:
-    lines = [f"{'program':34} {'pss MiB':>8} {'rss MiB':>8} {'cpu rest%':>9} {'cpu use%':>9} {'cpu after%':>10}"]
+    lines = [f"{'program':34} {'pss MiB':>8} {'rss MiB':>8} {'priv MiB':>8} {'cpu rest%':>9} {'cpu use%':>9} "
+             f"{'cpu after%':>10}"]
     for n, v in m.items():
-        cells = [f"{v[f]:8.1f}" if v[f] is not None else "       -" for f in FIELDS[:2]]
-        cells += [f"{v[f]:9.1f}" if v[f] is not None else "        -" for f in FIELDS[2:]]
+        cells = [f"{v[f]:8.1f}" if v.get(f) is not None else "       -" for f in FIELDS[:MEMORY_FIELDS]]
+        cells += [f"{v[f]:9.1f}" if v.get(f) is not None else "        -" for f in FIELDS[MEMORY_FIELDS:]]
         lines.append(f"{n:34} " + " ".join(cells))
     return "\n".join(lines)
 

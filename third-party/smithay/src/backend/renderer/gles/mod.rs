@@ -316,6 +316,18 @@ pub struct GlesRenderer {
     // debug
     span: tracing::Span,
     gl_debug_span: Option<*mut tracing::Span>,
+
+    // statistics
+    memory_uploads: MemoryUploads,
+}
+
+/// Uploads of pixels from memory through [`ImportMem`]: textures made or updated, and the bytes of pixels sent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryUploads {
+    /// Calls of [`ImportMem::import_memory`] and [`ImportMem::update_memory`] that uploaded pixels.
+    pub uploads: u64,
+    /// Bytes of pixels those calls sent.
+    pub bytes: u64,
 }
 
 /// Handle to the currently rendered frame during [`GlesRenderer::render`](Renderer::render).
@@ -643,6 +655,7 @@ impl GlesRenderer {
             _not_send: PhantomData,
             span,
             gl_debug_span,
+            memory_uploads: MemoryUploads::default(),
         };
         renderer.egl.unbind()?;
         Ok(renderer)
@@ -995,6 +1008,10 @@ impl ImportMem for GlesRenderer {
                 );
                 self.gl.BindTexture(ffi::TEXTURE_2D, 0);
             }
+            self.memory_uploads.uploads += 1;
+            self.memory_uploads.bytes += (size.w.max(0) as u64)
+                * (size.h.max(0) as u64)
+                * (gl_bpp(format, layout).unwrap_or(32) as u64 / 8);
 
             let mut sync = RwLock::<TextureSync>::default();
             if self.capabilities.contains(&Capability::Fencing) {
@@ -1073,6 +1090,10 @@ impl ImportMem for GlesRenderer {
             self.gl.PixelStorei(ffi::UNPACK_SKIP_PIXELS, 0);
             self.gl.PixelStorei(ffi::UNPACK_SKIP_ROWS, 0);
             self.gl.BindTexture(ffi::TEXTURE_2D, 0);
+            self.memory_uploads.uploads += 1;
+            self.memory_uploads.bytes += (region.size.w.max(0) as u64)
+                * (region.size.h.max(0) as u64)
+                * (gl_bpp(read_format, type_).unwrap_or(32) as u64 / 8);
 
             if self.capabilities.contains(&Capability::Fencing) {
                 sync_lock.update_write(&self.gl);
@@ -1790,6 +1811,11 @@ impl Drop for GlesRenderer {
 }
 
 impl GlesRenderer {
+    /// The pixels uploaded from memory so far ([`MemoryUploads`]).
+    pub fn memory_uploads(&self) -> MemoryUploads {
+        self.memory_uploads
+    }
+
     /// Get access to the underlying [`EGLContext`].
     ///
     /// *Note*: Modifying the context state, might result in rendering issues.

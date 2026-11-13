@@ -95,6 +95,10 @@ cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-test-pam = { path = "../cupertino-test-pam" }
 tempfile = "3"
 async-io = "2"
+# The pool the bus connections run their blocking calls on. 1.7.0 keeps an idle thread for good, waking it twice a
+# second in every process with a bus connection; 1.6.2 ends it after half a second without work. The exact version
+# holds the whole workspace there; `dbus::tests::the_blocking_pool_ends_its_threads_once_idle` checks it.
+blocking = "=1.6.2"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }

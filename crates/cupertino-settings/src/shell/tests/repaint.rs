@@ -422,3 +422,54 @@ fn switching_panes_repaints_in_the_sidebar_only_the_rows_the_selection_left_and_
         from = to;
     }
 }
+
+#[test]
+fn a_turn_that_changes_no_reading_presents_nothing_on_a_pane_of_readings() {
+    let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    // the Account pane's rows are all readings of one control
+    let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+    let (wake, woken) = async_channel::bounded(1);
+    let waker = wake.clone();
+    let (notify, background) = background_channel(move || {
+        let _ = wake.try_send(());
+    });
+    let state = State::new(paths(dir.path()), services, PaneId::Account, 1080.0, notify).unwrap();
+    launch(Start {
+        state,
+        background,
+        woken,
+        activation: String::new(),
+    });
+    let mut driver = TestDriver::new(
+        Capabilities::default(),
+        options(),
+        ManualClock::new(Timestamp(0)),
+    );
+    driver.run_until_idle(budget()).unwrap();
+    let window = driver.runtime().windows()[0].1;
+    let active = WindowStates {
+        activated: true,
+        ..WindowStates::default()
+    };
+    driver
+        .window_system_mut()
+        .configure(window, None, active)
+        .unwrap();
+    settle(&mut driver, window);
+    let mut meter = FrameMeter::new(window, Timestamp(0));
+    until_quiet(&mut driver, &mut meter, 10, 200);
+    assert!(
+        driver
+            .runtime()
+            .find(window, &Key::from("Reading-1"))
+            .is_some(),
+        "the pane shows its readings"
+    );
+    let (_, before) = damage_since(&driver, window, 0);
+    // a wake with nothing waiting: the window updates and views again, and every reading is as it was
+    waker.try_send(()).unwrap();
+    until_quiet(&mut driver, &mut meter, 10, 200);
+    let (damage, after) = damage_since(&driver, window, before);
+    assert_eq!(after, before, "no frame: {damage:?}");
+}

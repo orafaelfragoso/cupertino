@@ -4830,9 +4830,10 @@ fn force_quit_app_kills_an_active_application_that_does_not_answer_at_once() {
     let window = h.mapped_window(1);
     let sent = record_signals(&mut h);
     client.mute(true);
-    // Deliberately time out the muted client without waiting for its pong.
+    // Deliberately time out the muted client without waiting for its pong, the desktop in use.
     for dt in [1.1, 2.5] {
         h.state.fixed_time = Some(h.state.now() + dt);
+        h.state.input_came();
         h.state.tick();
         for _ in 0..3 {
             h.step();

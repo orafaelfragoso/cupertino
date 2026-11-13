@@ -116,6 +116,24 @@ pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     state.shm_state.update_formats(renderer.shm_formats());
 }
 
+/// The longest a main loop sleeps with nothing due. Every piece of time-driven work names its deadline (the tick's calls
+/// are audited for it, `tests/loop_wakeups.rs`), and events, frames and the end of a run wake the loop themselves, so on
+/// a desktop where nothing happens the loop sleeps; this is only a backstop against a deadline left unnamed, which then
+/// runs a minute late instead of never.
+pub(crate) const REST_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a main loop sleeps: until the first of `waits` (a frame, the tick's work, the end of the run), at most
+/// [`REST_WAIT`].
+pub(crate) fn loop_wait(
+    waits: impl IntoIterator<Item = Option<std::time::Duration>>,
+) -> std::time::Duration {
+    waits
+        .into_iter()
+        .flatten()
+        .min()
+        .map_or(REST_WAIT, |wait| wait.min(REST_WAIT))
+}
+
 /// How long until [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]), in wall time; a passed
 /// deadline nothing acted on yet is a millisecond away, so it cannot spin a loop.
 pub(crate) fn tick_wait(state: &Cupertino) -> Option<std::time::Duration> {

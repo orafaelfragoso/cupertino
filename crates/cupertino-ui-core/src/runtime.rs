@@ -2281,6 +2281,21 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if !w.obscuring.is_empty() && !self.system.capabilities().raised_layer {
                 w.geometry = placements(&self.tree, root, &result, &w.env, &w.obscuring);
             }
+            // In a layer every node's paint lies over every material of the layer, so a raised node a floating one
+            // lies across would show through the floating one's glass: it draws with the content instead, under that
+            // glass, and still covers what scrolls under it.
+            if self.system.capabilities().raised_layer && w.obscuring.len() < w.raised.len() {
+                let floating: Vec<Rect> = w
+                    .raised
+                    .iter()
+                    .filter(|r| !w.obscuring.contains(r))
+                    .map(|(_, rect)| *rect)
+                    .collect();
+                let obscuring = &w.obscuring;
+                w.raised.retain(|r| {
+                    !obscuring.contains(r) || !floating.iter().any(|f| f.intersects(&r.1))
+                });
+            }
             w.laid_out = Some(result);
 
             let semantics = build(
@@ -2289,7 +2304,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &w.geometry,
                 w.focus.node(),
                 w.env.direction,
-                &w.raised,
+                &w.obscuring,
             );
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
@@ -2327,7 +2342,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     &w.geometry,
                     w.focus.node(),
                     w.env.direction,
-                    &w.raised,
+                    &w.obscuring,
                 );
                 (pass.nodes, pass.focus)
             } else {
@@ -2363,7 +2378,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 scroll.extend(reveal_events(
                     &self.tree,
                     &w.geometry,
-                    &w.raised,
+                    &w.obscuring,
                     w.env.direction,
                     target,
                     part,

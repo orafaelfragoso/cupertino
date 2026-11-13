@@ -5470,20 +5470,10 @@ fn a_floating_raised_node_draws_over_the_other_raised_nodes_wherever_it_is_in_th
         let materials = last_materials(&rt);
         assert_eq!(materials.len(), 2, "layers {layers}: {materials:?}");
         let w = &rt.windows[0];
-        let list = if layers {
-            &w.layer.list
-        } else {
-            &w.display_list
-        };
-        let order: Vec<_> = list.nodes.iter().map(|n| n.id).collect();
-        let at = |key: &'static str| {
+        let position = |list: &crate::DisplayList, key: &'static str| {
             let id: crate::NodeId = rt.find(w.id, &key.into()).unwrap();
-            order.iter().position(|&n| n == id.into()).unwrap()
+            list.nodes.iter().position(|n| n.id == id.into())
         };
-        assert!(
-            at("row") < at("panel"),
-            "layers {layers}: the panel paints last"
-        );
         let panel: crate::NodeId = rt.find(w.id, &"panel".into()).unwrap();
         let panel_rect = w.geometry.get(&panel).unwrap().rect;
         let last = materials.last().unwrap();
@@ -5491,7 +5481,59 @@ fn a_floating_raised_node_draws_over_the_other_raised_nodes_wherever_it_is_in_th
             last.rect, panel_rect,
             "layers {layers}: its glass is drawn last: {materials:?}"
         );
+        if layers {
+            // the row it lies across leaves the layer, whose paint lies over all its glass, for the content under
+            // the panel's glass
+            assert_eq!(position(&w.layer.list, "row"), None);
+            assert!(position(&w.display_list, "row").is_some());
+            assert!(position(&w.layer.list, "panel").is_some());
+            assert!(last.raised && !materials[0].raised, "{materials:?}");
+        } else {
+            let list = &w.display_list;
+            assert!(
+                position(list, "row") < position(list, "panel"),
+                "the panel paints last"
+            );
+        }
     }
+}
+
+/// A raised row a floating panel does not lie across keeps its place in the layer.
+#[test]
+fn a_raised_node_clear_of_a_floating_one_stays_in_the_layer() {
+    struct Apart;
+    impl Application for Apart {
+        type Model = ();
+        type Message = String;
+        fn init() -> ((), Vec<Command<String>>) {
+            ((), Vec::new())
+        }
+        fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+            Vec::new()
+        }
+        fn view(_: &()) -> Vec<Window<String>> {
+            let mut window = UnderRow::view(&(0.0, false)).remove(0);
+            window.content = Element::new(Layers(vec![
+                Element::new(RaisedRow).key("row"),
+                column(vec![
+                    block(50.0, false),
+                    Element::new(FloatingPanel).key("panel"),
+                ]),
+            ]));
+            vec![window]
+        }
+    }
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.layers = true;
+    system.effects = true;
+    let mut rt = Runtime::<Apart, FakeSystem>::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let materials = last_materials(&rt);
+    assert_eq!(materials.len(), 2, "{materials:?}");
+    assert!(materials.iter().all(|m| m.raised), "{materials:?}");
 }
 
 /// A window that turns one colour hides its raised layer with the colour's commit, as it takes its glass away, and

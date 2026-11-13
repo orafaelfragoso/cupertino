@@ -1,0 +1,4 @@
+title = "Overview: the pointer at the top opens the desktops band with the live picture of the desktop"
+programs = ["cupertino-dock"]
+after = 8
+args = ["--spawn", "cupertino-files", "--spawn", "cupertino-settings", "--action", "5:overview", "--pointer", "7:512,20"]

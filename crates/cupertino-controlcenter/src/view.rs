@@ -60,6 +60,9 @@ const END: Keysym = Keysym(0xff57);
 /// between tiles, so tiles at rest stay apart.
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
+/// The glass container of the tiles behind an expanding view: a container is one glass, so the subdued tiles join one
+/// of their own, under the view's.
+const CONTAINER_BEHIND: u32 = 2;
 
 /// The fills a tile paints itself, in the dark and the light appearance. `RT_*`: the opaque panel and tiles with Reduce
 /// Transparency. `FALLBACK`: a tile the window cannot show glass under.
@@ -222,6 +225,8 @@ pub struct Opened {
     pub progress: f64,
     /// The tile grows into the view; with Reduce Motion the two cross-fade in place instead.
     pub morph: bool,
+    /// Towards the open view; false while it closes.
+    pub opening: bool,
 }
 
 /// The key of the control that holds the focus for `module` on the grid.
@@ -957,7 +962,14 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             glass.radius(radius)
         };
         let glass = shape
-            .container(CONTAINER, BLEND)
+            .container(
+                if self.subdued {
+                    CONTAINER_BEHIND
+                } else {
+                    CONTAINER
+                },
+                BLEND,
+            )
             .alpha(finite_alpha(self.panel) * alpha);
         if !cx.glass(glass) {
             let color = by_appearance(cx, FALLBACK, FALLBACK_LIGHT);
@@ -2287,11 +2299,14 @@ impl<M: Clone + 'static> Builder<'_, M> {
         Rect::new(0.0, 0.0, GRID_WIDTH, self.height())
     }
 
-    /// Every tile, with the detail view opening, open or closing. While a view is opening, open or closing the other
-    /// tiles and Edit Controls lie behind it on subdued module glass as they fade.
+    /// Every tile, with the detail view opening, open or closing. While a view opens or is open the other tiles and
+    /// Edit Controls lie behind it on subdued module glass as they fade; while it closes they come back on module
+    /// glass, as they take presses again once it has closed. They change glass where they cannot be seen: at once
+    /// when the view starts to close, and on the press that opens it, from where they fade within a fraction of a
+    /// second.
     fn board(&self) -> Vec<Element<M>> {
         let opened = self.presentation.detail;
-        let behind = opened.is_some();
+        let behind = opened.is_some_and(|o| o.opening);
         let shown = opened.map_or(
             Visibility {
                 others: 1.0,
@@ -2369,7 +2384,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                         tile_frame,
                         layout::outline(module),
                         1.0 - p,
-                        true,
+                        opened.opening,
                         content,
                     )
                     .key(format!("tile.{}", slug(module))),

@@ -44,8 +44,10 @@ symbols of the asset directory (`symbol.*`), loaded by the kit.
 **Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt. Only the window's rectangle takes input, and nothing while the panel fades out.
 Each tile asks the compositor for module glass under its own outline (`PaintCx::glass`, `Glass::module`): capsules and circles with round
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
-join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
-detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. Module glass
+join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a
+closing detail view blends where it passes them. While a detail view opens or is open, the tiles behind it are subdued
+module glass in a second container under the view's (a container is one glass of one style), so the growing view
+passes over them. The glass alpha follows the fade; the content fades as one layer. Module glass
 keeps the wallpaper's colour: over white a tile comes out at 244 in the light appearance and 207 in the dark one. The
 Edit Controls capsule is glass as the tiles are.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners (0.96 on 0.82 in the light
@@ -86,7 +88,8 @@ grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade 
 (the glass lies under all of the window's content, so the growing tile cannot hide what it passes over) on subdued
 module glass (`Glass::subdued_module`: twice the blur, a flat, quieter face), since they lie behind the view and take
 no presses while it is open, and the tile's
-content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce Motion the tile fades out
+content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is, with the tiles
+back on module glass from its start, while they cannot be seen yet. With Reduce Motion the tile fades out
 in place on subdued glass and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
 (Wi-Fi networks with a check on the connected one and a lock on secured ones; Bluetooth devices; the keyboard backlight;
 sound outputs with a check on the current one) and a row that opens the module's settings page. Escape or a press

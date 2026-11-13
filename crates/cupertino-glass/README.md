@@ -118,7 +118,10 @@ composite then, per pixel:
    (0, 0.63, 1, 1.13, 1 at 0, ¼, ½, ¾, 1) and w = 0.15 + 0.85·sin²(2φ) of the edge's direction (darkening most on the
    diagonal corners when the bias is negative);
 7. the ring shadow, a stroke inside the outline moved up by its offset and blurred by a Gaussian of its radius,
-   darkens the face by its opacity; outside the shape, the drop shadow at its opacity.
+   darkens the face by its opacity; outside the shape, the drop shadow at its opacity;
+8. the edge line, one pixel wide just outside the outline: black at the recipe's `edge_line` opacity times the rim's
+   response g to the luma of the blurred backdrop there, fading out over the pixel and a half past the outline, so the
+   outline shows over light content and vanishes over black. Clear, bar and module glass have none.
 
 Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its

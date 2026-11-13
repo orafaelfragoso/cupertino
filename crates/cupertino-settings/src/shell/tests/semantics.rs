@@ -155,7 +155,7 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
                 "RadioButton \"Right\" off",
                 "PopUpButton \"Minimize windows using\" = \"Warp\" focusable collapsed",
                 "Switch \"Automatically hide and show the Dock\" off focusable",
-                "Switch \"Show suggested and recent apps in Dock\" on focusable",
+                "Switch \"Show suggested and recent apps in Dock\" off focusable",
                 "Button \"Hot Corners\" focusable",
             ],
         ),

@@ -599,7 +599,6 @@ impl Panel {
                 detail: e.detail,
                 progress: e.progress(now),
                 morph: !e.reduce_motion,
-                opening: e.opening,
             }),
         }
     }

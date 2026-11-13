@@ -60,9 +60,6 @@ const END: Keysym = Keysym(0xff57);
 /// between tiles, so tiles at rest stay apart.
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
-/// The glass container of the tiles behind an expanding view: a container is one glass, so the subdued tiles join one
-/// of their own, under the view's.
-const CONTAINER_BEHIND: u32 = 2;
 
 /// The fills a tile paints itself, in the dark and the light appearance. `RT_*`: the opaque panel and tiles with Reduce
 /// Transparency. `FALLBACK`: a tile the window cannot show glass under.
@@ -225,8 +222,6 @@ pub struct Opened {
     pub progress: f64,
     /// The tile grows into the view; with Reduce Motion the two cross-fade in place instead.
     pub morph: bool,
-    /// Towards the open view; false while it closes.
-    pub opening: bool,
 }
 
 /// The key of the control that holds the focus for `module` on the grid.
@@ -535,49 +530,117 @@ fn shadow_at(distance: f64) -> f64 {
     0.0
 }
 
-/// A soft shadow around `rect` (rounded at [`LARGE_RADIUS`]): concentric bands outside the outline, so the modules
-/// themselves are not darkened.
+/// A tile's outline over the soft shadow, and how opaque its glass is: the shadow is not laid under a tile whose glass
+/// shows fully, since the glass lies under everything the window paints, and is laid under a fading tile at the share
+/// its glass lets through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Cutout {
+    rect: Rect,
+    radius: f64,
+    alpha: f64,
+}
+
+/// The outline of the shadow's band `distance` points out from `rect`: as far out on the left, the right and below,
+/// and `top_reach / SHADOW_REACH` as far above, so the shadow fades out within `top_reach` above the modules. Each
+/// outline holds the nearer ones, so the bands between them never overlap.
+fn band_outline(rect: Rect, distance: f64, top_reach: f64) -> (Rect, f64) {
+    let up = distance * (top_reach / SHADOW_REACH).clamp(0.0, 1.0);
+    let outline = Rect::new(
+        rect.x() - distance,
+        rect.y() - up,
+        rect.width() + 2.0 * distance,
+        rect.height() + distance + up,
+    );
+    (outline, LARGE_RADIUS + distance)
+}
+
+/// A soft shadow around `rect` (rounded at [`LARGE_RADIUS`]): concentric bands outside the outline, each filled at the
+/// darkening of its middle, reaching [`SHADOW_REACH`] to the sides and below and `top_reach` above.
 ///
-/// The `holes` are the tiles' outlines (a rectangle and its corner radius): the shadow is also laid between them, where
-/// the glass of the tiles does not cover it, at the strength it has at the edge, and is clipped away over the tiles,
-/// whose glass lies under everything the window paints.
-fn shadow(cx: &mut PaintCx<'_>, rect: Rect, holes: &[(Rect, f64)]) {
-    if !holes.is_empty() {
-        let mut path = rounded_path(rect.outset(SHADOW_REACH + 1.0), 0.0);
-        for (hole, radius) in holes {
-            path.extend(rounded_path(*hole, *radius));
+/// Inside `rect` the shadow is also laid between the `cutouts`, the tiles' outlines, at the strength it has at the
+/// edge, and under a fading tile at the share its glass lets through, so a tile fading out leaves the darkening the
+/// gaps around it have rather than a light patch, and nothing changes the moment a motion starts or ends.
+fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout]) {
+    let edge = shadow_at(0.0);
+    let black = |alpha: f64| Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha as f32));
+    let around = rounded_path(rect.outset(SHADOW_REACH + 1.0), 0.0);
+    let without = |holes: &mut dyn Iterator<Item = &Cutout>| {
+        let mut path = around.clone();
+        for c in holes {
+            path.extend(rounded_path(c.rect, c.radius));
         }
-        cx.push(PaintOp::PushClip(Shape::Path {
+        Shape::Path {
             verbs: path,
             fill_rule: FillRule::EvenOdd,
-        }));
-        fill(
-            cx,
+        }
+    };
+    let fading = cutouts.iter().any(|c| c.alpha < 1.0);
+    if fading {
+        cx.push(PaintOp::PushClip(Shape::RoundedRect {
             rect,
-            LARGE_RADIUS,
-            Color::new(0.0, 0.0, 0.0, shadow_at(0.0) as f32),
-        );
+            radius: LARGE_RADIUS,
+        }));
+    }
+    cx.push(PaintOp::PushClip(without(&mut cutouts.iter())));
+    fill(
+        cx,
+        rect,
+        LARGE_RADIUS,
+        Color::new(0.0, 0.0, 0.0, edge as f32),
+    );
+    cx.push(PaintOp::PopClip);
+    if fading {
+        // the fading tiles by their opacity, the more opaque first: each is clipped away where a more opaque one
+        // lies over it
+        let mut levels: Vec<f64> = cutouts
+            .iter()
+            .map(|c| c.alpha.clamp(0.0, 1.0))
+            .filter(|a| *a < 1.0)
+            .collect();
+        levels.sort_by(|a, b| b.total_cmp(a));
+        levels.dedup();
+        for level in levels {
+            let mut above = cutouts
+                .iter()
+                .filter(|c| c.alpha.clamp(0.0, 1.0) > level)
+                .peekable();
+            let clipped = above.peek().is_some();
+            if clipped {
+                cx.push(PaintOp::PushClip(without(&mut above)));
+            }
+            for c in cutouts.iter().filter(|c| c.alpha.clamp(0.0, 1.0) == level) {
+                cx.push(PaintOp::Fill {
+                    shape: Shape::RoundedRect {
+                        rect: c.rect,
+                        radius: c.radius,
+                    },
+                    paint: black(edge * (1.0 - level)),
+                });
+            }
+            if clipped {
+                cx.push(PaintOp::PopClip);
+            }
+        }
+        cx.push(PaintOp::PopClip);
     }
     let bands = (SHADOW_REACH / SHADOW_BAND).ceil() as usize;
-    for i in (0..bands).rev() {
-        let inner = i as f64 * SHADOW_BAND;
-        let middle = inner + SHADOW_BAND / 2.0;
-        let alpha = shadow_at(middle) as f32;
+    for i in 0..bands {
+        let from = i as f64 * SHADOW_BAND;
+        let alpha = shadow_at(from + SHADOW_BAND / 2.0);
         if alpha <= 0.0 {
             continue;
         }
-        let centre = rect.outset(middle);
-        cx.push(PaintOp::Stroke {
-            shape: Shape::RoundedRect {
-                rect: centre,
-                radius: LARGE_RADIUS + middle,
+        let (outer, outer_radius) = band_outline(rect, from + SHADOW_BAND, top_reach);
+        let (inner, inner_radius) = band_outline(rect, from, top_reach);
+        let mut path = rounded_path(outer, outer_radius);
+        path.extend(rounded_path(inner, inner_radius));
+        cx.push(PaintOp::Fill {
+            shape: Shape::Path {
+                verbs: path,
+                fill_rule: FillRule::EvenOdd,
             },
-            width: SHADOW_BAND,
-            paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
+            paint: black(alpha),
         });
-    }
-    if !holes.is_empty() {
-        cx.push(PaintOp::PopClip);
     }
 }
 
@@ -746,8 +809,8 @@ struct Board<M> {
     height: f64,
     /// The outline of what the soft shadow goes around, relative to the grid's corner.
     shadow: Rect,
-    /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over.
-    holes: Vec<(Rect, f64)>,
+    /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over by their opacity.
+    cutouts: Vec<Cutout>,
     on_outside: M,
     children: Vec<Element<M>>,
 }
@@ -775,7 +838,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
         if self.alpha != old.alpha
             || self.height != old.height
             || self.shadow != old.shadow
-            || self.holes != old.holes
+            || self.cutouts != old.cutouts
         {
             Change::Paint
         } else {
@@ -822,21 +885,21 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             let color = by_appearance(cx, RT_GROUP, RT_GROUP_LIGHT);
             fill(cx, group, layout::GROUP_RADIUS, color);
         } else if !increase_contrast(cx) {
-            let holes: Vec<(Rect, f64)> = self
-                .holes
+            let cutouts: Vec<Cutout> = self
+                .cutouts
                 .iter()
-                .map(|(rect, radius)| (rect.translate(GRID_ORIGIN.x, GRID_ORIGIN.y), *radius))
+                .map(|c| Cutout {
+                    rect: c.rect.translate(GRID_ORIGIN.x, GRID_ORIGIN.y),
+                    ..*c
+                })
                 .collect();
-            // the menu bar lies over the panel's shadow: none of it darkens the bar
+            // the shadow fades out by the menu bar's edge above the modules and never reaches into the bar
             let bar_edge = SHADOW_TOP - f64::from(BAR_MARGIN);
+            let rect = self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
             cx.push(PaintOp::PushClip(Shape::Rect(Rect::new(
                 -1.0e4, bar_edge, 2.0e4, 2.0e4,
             ))));
-            shadow(
-                cx,
-                self.shadow.translate(GRID_ORIGIN.x, GRID_ORIGIN.y),
-                &holes,
-            );
+            shadow(cx, rect, rect.y() - bar_edge, &cutouts);
             cx.push(PaintOp::PopClip);
         }
     }
@@ -857,9 +920,6 @@ struct GlassTile<M> {
     panel: f64,
     /// The tile's own opacity, glass and content.
     alpha: f64,
-    /// Whether the tile lies behind an expanded module: its glass is the quieter subdued module glass then, flat
-    /// across its face, rather than the module glass of a tile that takes presses.
-    subdued: bool,
     light: bool,
     children: Vec<Element<M>>,
 }
@@ -951,25 +1011,13 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             });
             return;
         }
-        let glass = if self.subdued {
-            Glass::subdued_module()
-        } else {
-            Glass::module()
-        };
         let shape = if self.capsule {
-            glass.capsule()
+            Glass::module().capsule()
         } else {
-            glass.radius(radius)
+            Glass::module().radius(radius)
         };
         let glass = shape
-            .container(
-                if self.subdued {
-                    CONTAINER_BEHIND
-                } else {
-                    CONTAINER
-                },
-                BLEND,
-            )
+            .container(CONTAINER, BLEND)
             .alpha(finite_alpha(self.panel) * alpha);
         if !cx.glass(glass) {
             let color = by_appearance(cx, FALLBACK, FALLBACK_LIGHT);
@@ -1635,19 +1683,6 @@ impl<M: Clone + 'static> Builder<'_, M> {
         alpha: f64,
         children: Vec<Element<M>>,
     ) -> Element<M> {
-        self.glass_tile(label, frame, outline, alpha, false, children)
-    }
-
-    /// A glass tile at `frame` in the grid, on subdued module glass when `subdued`.
-    fn glass_tile(
-        &self,
-        label: &str,
-        frame: Rect,
-        outline: Outline,
-        alpha: f64,
-        subdued: bool,
-        children: Vec<Element<M>>,
-    ) -> Element<M> {
         let frame = frame.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
         Element::new(GlassTile {
             label: label.to_owned(),
@@ -1656,7 +1691,6 @@ impl<M: Clone + 'static> Builder<'_, M> {
             capsule: outline == Outline::Capsule,
             panel: self.presentation.alpha,
             alpha,
-            subdued,
             light: self.presentation.light,
             children,
         })
@@ -2231,18 +2265,17 @@ impl<M: Clone + 'static> Builder<'_, M> {
         )
     }
 
-    /// The Edit Controls capsule under the grid, on subdued glass when `subdued`.
-    fn edit(&self, alpha: f64, subdued: bool) -> Element<M> {
+    /// The Edit Controls capsule under the grid.
+    fn edit(&self, alpha: f64) -> Element<M> {
         let frame = layout::edit_frame();
         let origin = frame.origin;
         let origin = Point::new(origin.x + GRID_ORIGIN.x, origin.y + GRID_ORIGIN.y);
         let size = frame.size;
-        self.glass_tile(
+        self.tile(
             "Edit Controls",
             frame,
             Outline::Capsule,
             alpha,
-            subdued,
             vec![self.pressable(
                 origin,
                 "edit-controls",
@@ -2275,22 +2308,70 @@ impl<M: Clone + 'static> Builder<'_, M> {
         })
     }
 
-    /// The outlines of the tiles at rest, from the grid's corner: what the soft shadow is cut away over. None while a
-    /// detail view opens or closes, when the tiles move.
-    fn holes(&self) -> Vec<(Rect, f64)> {
-        if self.presentation.detail.is_some() {
-            return Vec::new();
+    /// The tiles' outlines from the grid's corner, each with the opacity of its glass: what the soft shadow is cut
+    /// away over. They follow the tiles as [`Builder::board`] lays them out, so the shadow changes with them and never
+    /// at once.
+    fn cutouts(&self) -> Vec<Cutout> {
+        let opened = self.presentation.detail;
+        let others = opened.map_or(1.0, |o| visibility(o.progress).others);
+        let source = opened.map(|o| o.detail.module());
+        let cutout = |rect: Rect, radius: f64, alpha: f64| Cutout {
+            rect,
+            radius,
+            alpha,
+        };
+        let mut cutouts = Vec::new();
+        if others > 0.0 {
+            for module in Module::ALL {
+                if Some(module) == source {
+                    continue;
+                }
+                let frame = layout::frame(module);
+                cutouts.push(cutout(
+                    frame,
+                    layout::outline(module).radius(frame.size),
+                    others,
+                ));
+            }
+            let edit = layout::edit_frame();
+            cutouts.push(cutout(edit, edit.height() / 2.0, others));
         }
-        let mut holes: Vec<(Rect, f64)> = Module::ALL
-            .into_iter()
-            .map(|m| {
-                let frame = layout::frame(m);
-                (frame, layout::outline(m).radius(frame.size))
-            })
-            .collect();
-        let edit = layout::edit_frame();
-        holes.push((edit, edit.height() / 2.0));
-        holes
+        if let Some(opened) = opened {
+            let module = opened.detail.module();
+            let p = opened.progress.clamp(0.0, 1.0);
+            if opened.morph {
+                let (frame, radius) = self.morph(opened);
+                cutouts.push(cutout(frame, radius, 1.0));
+            } else {
+                let tile = layout::frame(module);
+                if p < 1.0 {
+                    cutouts.push(cutout(
+                        tile,
+                        layout::outline(module).radius(tile.size),
+                        1.0 - p,
+                    ));
+                }
+                if p > 0.0 {
+                    let open = layout::detail_frame(self.row_count(opened.detail));
+                    cutouts.push(cutout(open, LARGE_RADIUS, p));
+                }
+            }
+        }
+        cutouts
+    }
+
+    /// The frame and corner radius of the tile growing into the open view, from the grid's corner.
+    fn morph(&self, opened: Opened) -> (Rect, f64) {
+        let module = opened.detail.module();
+        let frame = layout::morph(
+            opened.detail,
+            self.row_count(opened.detail),
+            opened.progress,
+        );
+        let tile = layout::frame(module);
+        let from = layout::outline(module).radius(tile.size);
+        let p = opened.progress.clamp(0.0, 1.0);
+        (frame, from + (LARGE_RADIUS - from) * p)
     }
 
     /// What the soft shadow goes around: the grid with the Edit Controls capsule, going to the open detail view's
@@ -2299,14 +2380,11 @@ impl<M: Clone + 'static> Builder<'_, M> {
         Rect::new(0.0, 0.0, GRID_WIDTH, self.height())
     }
 
-    /// Every tile, with the detail view opening, open or closing. While a view opens or is open the other tiles and
-    /// Edit Controls lie behind it on subdued module glass as they fade; while it closes they come back on module
-    /// glass, as they take presses again once it has closed. They change glass where they cannot be seen: at once
-    /// when the view starts to close, and on the press that opens it, from where they fade within a fraction of a
-    /// second.
+    /// Every tile, with the detail view opening, open or closing. Every tile keeps the same module glass in the one
+    /// container through the motion, only its opacity changing, so nothing changes look the moment a motion starts,
+    /// turns or ends.
     fn board(&self) -> Vec<Element<M>> {
         let opened = self.presentation.detail;
-        let behind = opened.is_some_and(|o| o.opening);
         let shown = opened.map_or(
             Visibility {
                 others: 1.0,
@@ -2328,19 +2406,18 @@ impl<M: Clone + 'static> Builder<'_, M> {
             let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
             let content = self.content(module, origin);
             children.push(
-                self.glass_tile(
+                self.tile(
                     module.title(),
                     frame,
                     layout::outline(module),
                     shown.others,
-                    behind,
                     content,
                 )
                 .key(format!("tile.{}", slug(module))),
             );
         }
         if shown.others > 0.0 {
-            children.push(self.edit(shown.others, behind).key("tile.edit"));
+            children.push(self.edit(shown.others).key("tile.edit"));
         }
         if let Some(opened) = opened {
             children.extend(self.opening(opened, shown));
@@ -2377,17 +2454,9 @@ impl<M: Clone + 'static> Builder<'_, M> {
             let p = opened.progress.clamp(0.0, 1.0);
             if p < 1.0 {
                 let content = self.content(module, at(tile_frame));
-                // the tile fading out in place lies behind the view fading in over it
                 tiles.push(
-                    self.glass_tile(
-                        label,
-                        tile_frame,
-                        layout::outline(module),
-                        1.0 - p,
-                        opened.opening,
-                        content,
-                    )
-                    .key(format!("tile.{}", slug(module))),
+                    self.tile(label, tile_frame, layout::outline(module), 1.0 - p, content)
+                        .key(format!("tile.{}", slug(module))),
                 );
             }
             if p > 0.0 {
@@ -2399,10 +2468,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
             }
             return tiles;
         }
-        let frame = layout::morph(detail, rows, opened.progress);
-        let p = opened.progress.clamp(0.0, 1.0);
-        let from = layout::outline(module).radius(tile_frame.size);
-        let radius = from + (LARGE_RADIUS - from) * p;
+        let (frame, radius) = self.morph(opened);
         let mut content = Vec::new();
         if shown.tile_content > 0.0 {
             content.extend(faded(shown.tile_content, self.content(module, at(frame))));
@@ -2608,7 +2674,7 @@ pub fn panel<M: Clone + 'static>(
             alpha: presentation.alpha,
             height: builder.height(),
             shadow: builder.shadow(),
-            holes: builder.holes(),
+            cutouts: builder.cutouts(),
             on_outside: to(away(Via::Pointer)),
             children: builder.board(),
         }),
@@ -2699,6 +2765,49 @@ pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shadows_bands_nest_and_reach_the_top_only_as_far_as_asked() {
+        let rect = Rect::new(10.0, 40.0, 292.0, 492.0);
+        let top_reach = 20.0;
+        let mut last = band_outline(rect, 0.0, top_reach);
+        assert_eq!(
+            last,
+            (rect, LARGE_RADIUS),
+            "the first band starts at the outline"
+        );
+        let mut distance = 0.0;
+        while distance < SHADOW_REACH {
+            distance += SHADOW_BAND;
+            let next = band_outline(rect, distance, top_reach);
+            let (outer, inner) = (next.0, last.0);
+            assert!(
+                outer.min_x() <= inner.min_x()
+                    && outer.min_y() <= inner.min_y()
+                    && outer.max_x() >= inner.max_x()
+                    && outer.max_y() >= inner.max_y()
+                    && next.1 >= last.1,
+                "band {distance} holds the one inside it"
+            );
+            last = next;
+        }
+        let (outer, _) = last;
+        assert_eq!(
+            outer.min_y(),
+            rect.min_y() - top_reach,
+            "above: the asked reach"
+        );
+        assert_eq!(
+            outer.min_x(),
+            rect.min_x() - SHADOW_REACH,
+            "beside: the full reach"
+        );
+        assert_eq!(
+            outer.max_y(),
+            rect.max_y() + SHADOW_REACH,
+            "below: the full reach"
+        );
+    }
 
     #[test]
     fn the_arrows_go_to_the_nearest_control_that_way() {

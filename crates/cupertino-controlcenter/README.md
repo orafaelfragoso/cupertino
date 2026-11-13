@@ -41,13 +41,16 @@ symbols of the asset directory (`symbol.*`), loaded by the kit.
 
 ## How it works
 
-**Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt. Only the window's rectangle takes input, and nothing while the panel fades out.
+**Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt
+to the sides and below, and above the tiles within the 20 pt up to the menu bar's edge, so nothing of it reaches into the
+bar and it shows no edge where the bar begins. Between the tiles it keeps the 9 %; under a fading tile it lies at the
+share the tile's glass lets through, so it follows a detail view's motion without a jump. Only the window's rectangle takes input, and nothing while the panel fades out.
 Each tile asks the compositor for module glass under its own outline (`PaintCx::glass`, `Glass::module`): capsules and circles with round
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a
-closing detail view blends where it passes them. While a detail view opens or is open, the tiles behind it are subdued
-module glass in a second container under the view's (a container is one glass of one style), so the growing view
-passes over them. The glass alpha follows the fade; the content fades as one layer. Module glass
+moving detail view blends where it passes them. Every tile keeps that glass and container through a detail view's
+motion, only its alpha changing, so nothing changes look the moment a motion starts, turns or ends. The glass alpha
+follows the fade; the content fades as one layer. Module glass
 keeps the wallpaper's colour: over white a tile comes out at 244 in the light appearance and 207 in the dark one. The
 Edit Controls capsule is glass as the tiles are.
 With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners (0.96 on 0.82 in the light
@@ -85,12 +88,9 @@ panel.
 **Detail views.** The tile grows into the view on a critically damped spring (response 0.35 s, settled by 0.6 s,
 `motion::spring`): its frame moves from its cell to the top of the grid, 292 pt wide and as high as its list (at most the
 grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade out over the first quarter of the motion
-(the glass lies under all of the window's content, so the growing tile cannot hide what it passes over) on subdued
-module glass (`Glass::subdued_module`: twice the blur, a flat, quieter face), since they lie behind the view and take
-no presses while it is open, and the tile's
-content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is, with the tiles
-back on module glass from its start, while they cannot be seen yet. With Reduce Motion the tile fades out
-in place on subdued glass and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
+(the glass lies under all of the window's content, so the growing tile cannot hide what it passes over), and the tile's
+content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce
+Motion the tile fades out in place and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
 (Wi-Fi networks with a check on the connected one and a lock on secured ones; Bluetooth devices; the keyboard backlight;
 sound outputs with a check on the current one) and a row that opens the module's settings page. Escape or a press
 outside the view closes it; a second Escape dismisses the panel, also while the view is still closing. When the keyboard or assistive technology opened the
@@ -250,7 +250,7 @@ cargo test -p cupertino-controlcenter --features app
 | Lifecycle unit tests | Full opacity, the fade, reopening while hiding, hiding at once from any phase, at literal instants. |
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
-| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
+| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; every tile keeping its glass and container through a view's motion; the shadow following that motion without a jump and fading out before the menu bar; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
 | Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. `Shown` and `Output` say what the panel published, hidden until then, and each change is announced once with `PropertiesChanged`. |
 

@@ -507,7 +507,10 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
             .collect::<String>()
     );
     assert!(
-        stdout.lines().any(|l| l == format!("test {test} ... ok")),
+        // the worker names the test by its path in this program (`goldens::…`)
+        stdout
+            .lines()
+            .any(|l| l == format!("test {} ... ok", cupertino_test_bus::test_path(test))),
         "the worker did not run {test}: its name is passed to isolated() and must match the test function"
     );
 }

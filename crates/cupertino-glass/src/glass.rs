@@ -1420,13 +1420,84 @@ mod tests {
             red[0] > white[0] + 60.0,
             "brighter than the grey of white: {red:?}"
         );
-        // light: the large panel keeps the regular light face
-        for c in [[15.0; 3], [245.0; 3], [229.0, 55.0, 60.0]] {
-            assert_eq!(
-                face(false, GlassStyle::LargePanel, c),
-                face(false, GlassStyle::Regular, c)
-            );
+    }
+
+    /// The light large panel is a bright sheet: black behind comes through as a light grey (about 133 of 255 over a
+    /// near-black 15), anything from a mid tone up clips to white, and a dark warm scene leaves a light tint of its own
+    /// hue rather than grey.
+    #[test]
+    fn the_light_large_panel_lifts_black_to_a_light_grey_and_keeps_tints() {
+        let p = GlassParams::new(
+            GlassMode {
+                dark: false,
+                style: GlassStyle::LargePanel,
+                ..GlassMode::default()
+            },
+            400.0,
+        );
+        let face =
+            |c: [f32; 3]| face_color(c.map(|v| v / 255.0), &p, p.face.max_luma).map(|v| v * 255.0);
+        let black = face([15.0; 3]);
+        assert!(
+            close(black[0], 133.0, 2.0) && close(black[0], black[2], 0.5),
+            "{black:?}"
+        );
+        let grey = face([128.0; 3]);
+        assert!(grey[0] > 200.0, "{grey:?}");
+        let white = face([245.0; 3]);
+        assert!(white.iter().all(|&v| v > 254.0), "{white:?}");
+        // a dark warm brown: red stays well above blue
+        let warm = face([90.0, 50.0, 30.0]);
+        assert!(
+            warm[0] > warm[1] && warm[1] > warm[2] && warm[0] - warm[2] > 30.0,
+            "{warm:?}"
+        );
+        // the regular light face takes black only to about 130 and greys the brown more
+        let regular = GlassParams::new(GlassMode::default(), 400.0);
+        let r = face_color(
+            [90.0 / 255.0, 50.0 / 255.0, 30.0 / 255.0],
+            &regular,
+            regular.face.max_luma,
+        );
+        assert!(warm[0] - warm[2] > (r[0] - r[2]) * 255.0, "{warm:?} {r:?}");
+    }
+
+    /// With Reduce Transparency the dark large panel is near black (about 20 of 255) whatever grey lies behind, and a
+    /// strong colour behind leaves only a faint tint, under half of what regular glass keeps: a saturated blue comes
+    /// through as about (16, 20, 36).
+    #[test]
+    fn the_dark_large_panel_with_reduce_transparency_is_near_black_with_a_faint_tint() {
+        let p = |style| {
+            GlassParams::new(
+                GlassMode {
+                    dark: true,
+                    style,
+                    reduce_transparency: true,
+                    ..GlassMode::default()
+                },
+                400.0,
+            )
+        };
+        let (large, regular) = (p(GlassStyle::LargePanel), p(GlassStyle::Regular));
+        let face = |g: &GlassParams, c: [f32; 3]| {
+            face_color(c.map(|v| v / 255.0), g, g.face.max_luma).map(|v| v * 255.0)
+        };
+        for grey in [10.0, 128.0, 245.0] {
+            let c = face(&large, [grey; 3]);
+            assert!(c.iter().all(|&v| close(v, 20.4, 0.5)), "{grey}: {c:?}");
         }
+        let blue = [35.0, 80.0, 235.0];
+        let tint = face(&large, blue);
+        assert!(
+            tint[2] - tint[0] > 8.0 && tint[2] - tint[0] < 25.0,
+            "{tint:?}"
+        );
+        assert!(tint.iter().all(|&v| v < 40.0), "{tint:?}");
+        let strong = face(&regular, blue);
+        assert!(
+            strong[2] - strong[0] > 2.0 * (tint[2] - tint[0]),
+            "{strong:?} {tint:?}"
+        );
     }
 
     /// The blurred backdrop `x` points along a backdrop that is `source(t)` at `t` points, through `p`: each blur level
@@ -1447,11 +1518,6 @@ mod tests {
             acc.map(|v| v / sum)
         };
         blur_fill(gauss(p.blur_sigma()), gauss(p.fill_sigma()), p)
-    }
-
-    /// The face's luminance (0–255) at `x` of [`blurred`], toned as the shader does.
-    fn through(p: &GlassParams, source: &impl Fn(f32) -> Rgb, x: f32) -> f32 {
-        luma(face_color(blurred(p, source, x), p, p.face.max_luma)) * 255.0
     }
 
     /// The large panel blurs twice as wide as regular glass of its size: a step from white to black behind it is
@@ -1489,9 +1555,12 @@ mod tests {
                 w_large > 1.6 * w_regular && w_large < 2.4 * w_regular,
                 "dark {dark}: {w_regular} pt and {w_large} pt"
             );
-            // a bright stripe 6 points wide over black: how far its peak stands above the black around it
+            // a bright stripe 6 points wide over black: how far its peak stands above the black around it, before the
+            // face (which differs between the two in the light appearance)
             let stripe = |t: f32| if t.abs() < 3.0 { [0.96; 3] } else { [0.06; 3] };
-            let ripple = |g: &GlassParams| through(g, &stripe, 0.0) - through(g, &stripe, 200.0);
+            let ripple = |g: &GlassParams| {
+                (luma(blurred(g, &stripe, 0.0)) - luma(blurred(g, &stripe, 200.0))) * 255.0
+            };
             let (r_regular, r_large) = (ripple(&regular), ripple(&large));
             assert!(
                 r_large < 0.6 * r_regular,

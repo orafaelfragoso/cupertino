@@ -443,6 +443,21 @@ impl Cupertino {
         Image::new(w as i32, h as i32, image.into_raw())
     }
 
+    /// [`Self::render_toplevel_image`] as its width, height and premultiplied RGBA bytes, rows top to bottom.
+    pub(crate) fn render_window_rgba(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        window: cupertino_wm::WindowId,
+    ) -> Result<(u32, u32, Vec<u8>)> {
+        let image = self.render_toplevel_image(renderer, idx, window)?;
+        Ok((
+            u32::try_from(image.width)?,
+            u32::try_from(image.height)?,
+            image.rgba,
+        ))
+    }
+
     /// The window at its natural size with its decorations and without its shadow, as the window snapshots draw it.
     fn render_toplevel_image(
         &mut self,

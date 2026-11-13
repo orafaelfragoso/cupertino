@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="21">
+  <interface name="cupertino_shell_v1" version="22">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -669,7 +669,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="19">
+  <interface name="cupertino_dock_v1" version="22">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -940,6 +940,25 @@
       </description>
       <arg name="app_id" type="string"/>
       <arg name="resident" type="uint" summary="1 while resident, 0 once it is no longer"/>
+    </event>
+
+    <event name="window_thumbnail" since="22">
+      <description summary="a picture of a minimized window">
+        The window as it showed when it minimized: its decorations and its popups without its
+        shadow, scaled down to fit within 256 pixels on its longer side, its shape kept, from a
+        picture drawn at the scale of the window's output. The server draws it soon after the
+        window minimized and sends it after the window's window event, in a group of its own or
+        with other changes. It sends width and height 0 once the window is no longer minimized.
+        A dock that binds is sent the picture of every minimized window that has one. A window
+        whose surface is protected from capture, or that cannot be drawn, gets none.
+
+        pixels is a sealed file of exactly width * height * 4 bytes: wl_shm argb8888
+        (premultiplied alpha, little-endian), rows packed. It is empty when width or height is 0.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="pixels" type="fd"/>
     </event>
 
     <event name="done">

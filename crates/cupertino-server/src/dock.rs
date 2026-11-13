@@ -44,6 +44,7 @@ use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
 use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
+use crate::dock_thumbnail::WindowThumbnail;
 use crate::menu_bar::cut_text;
 use crate::state::Cupertino;
 use crate::toplevel_icon::WindowIcon;
@@ -73,6 +74,8 @@ struct WindowInfo {
     state: WindowState,
     /// The window's copied icon: the same `Arc` until the window commits another.
     icon: Arc<WindowIcon>,
+    /// The picture of the window while it is minimized, once drawn.
+    thumbnail: Option<Arc<WindowThumbnail>>,
 }
 
 impl WindowInfo {
@@ -89,6 +92,9 @@ const ENGAGE_SINCE: u32 = 18;
 
 /// Shell version of `cupertino_dock_v1.app_resident`.
 const APP_RESIDENT_SINCE: u32 = 19;
+
+/// Shell version of `cupertino_dock_v1.window_thumbnail`.
+const WINDOW_THUMBNAIL_SINCE: u32 = 22;
 
 /// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
 /// anywhere else cancels the switch.
@@ -131,6 +137,10 @@ pub struct Docks {
     /// The applications each connected application client has shown a window of: they stay resident while it is
     /// connected, windows or not ([`Cupertino::resident_apps`]).
     residents: HashMap<ClientId, BTreeSet<String>>,
+    /// The pictures of the minimized windows, by window id.
+    thumbnails: HashMap<u32, Arc<WindowThumbnail>>,
+    /// Minimized windows that get no picture: protected from capture, or drawing them failed.
+    no_thumbnail: BTreeSet<u32>,
 }
 
 impl Docks {
@@ -301,6 +311,17 @@ fn send_window_icon(resource: &CupertinoDockV1, id: u32, icon: &WindowIcon) {
             file.as_fd(),
         ),
         Err(e) => tracing::warn!(error = %e, "making the file of a window icon failed"),
+    }
+}
+
+/// `window_thumbnail` for window `id`, its pixels in a sealed memfd, or an empty one for none; nothing when the file
+/// cannot be made.
+fn send_window_thumbnail(resource: &CupertinoDockV1, id: u32, thumbnail: Option<&WindowThumbnail>) {
+    let (width, height, argb) =
+        thumbnail.map_or((0, 0, &[][..]), |t| (t.width, t.height, t.argb.as_slice()));
+    match sealed_file(argb) {
+        Ok(file) => resource.window_thumbnail(id, width, height, file.as_fd()),
+        Err(e) => tracing::warn!(error = %e, "making the file of a window picture failed"),
     }
 }
 
@@ -616,6 +637,7 @@ impl Cupertino {
                         title: cut_text(&w.title).to_owned(),
                         state,
                         icon: self.entry(w.id).map(|e| e.icon()).unwrap_or_default(),
+                        thumbnail: self.docks.thumbnails.get(&(w.id.0 as u32)).cloned(),
                     },
                 )
             })
@@ -700,6 +722,7 @@ impl Cupertino {
             let mut changed = dock.sent.is_none();
             let known = dock.sent.take().unwrap_or_default();
             let icons = dock.resource.version() >= WINDOW_ICON_SINCE;
+            let thumbnails = dock.resource.version() >= WINDOW_THUMBNAIL_SINCE;
             for (id, info) in &feed {
                 let old = known.get(id);
                 if !old.is_some_and(|o| o.same_window_event(info)) {
@@ -712,6 +735,16 @@ impl Cupertino {
                 });
                 if icons && new_icon {
                     send_window_icon(&dock.resource, *id, &info.icon);
+                    changed = true;
+                }
+                let new_thumbnail = match (old.and_then(|o| o.thumbnail.as_ref()), &info.thumbnail)
+                {
+                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    (None, None) => false,
+                    (Some(_), None) | (None, Some(_)) => true,
+                };
+                if thumbnails && new_thumbnail {
+                    send_window_thumbnail(&dock.resource, *id, info.thumbnail.as_deref());
                     changed = true;
                 }
             }
@@ -734,6 +767,70 @@ impl Cupertino {
                 dock.resource.done();
             }
             dock.sent = Some(feed.clone());
+        }
+    }
+
+    /// Draw the picture of each minimized window of output `idx` that has none yet, while a dock takes pictures, and
+    /// forget the pictures of the windows that are no longer minimized; tell the docks when that changed anything.
+    pub fn capture_dock_thumbnails(
+        &mut self,
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+        idx: usize,
+    ) {
+        let minimized: BTreeSet<u32> = self
+            .wm
+            .windows()
+            .filter(|w| w.state() == LifecycleState::Minimized)
+            .map(|w| w.id.0 as u32)
+            .collect();
+        let before = self.docks.thumbnails.len();
+        self.docks.thumbnails.retain(|id, _| minimized.contains(id));
+        self.docks.no_thumbnail.retain(|id| minimized.contains(id));
+        let mut changed = self.docks.thumbnails.len() != before;
+        let wanted = self
+            .docks
+            .docks
+            .iter()
+            .any(|d| d.resource.version() >= WINDOW_THUMBNAIL_SINCE);
+        if let (true, Some(output)) = (wanted, self.outputs.get(idx).map(|o| o.id)) {
+            let pending: Vec<WindowId> = self
+                .wm
+                .windows()
+                .filter(|w| w.state() == LifecycleState::Minimized && w.output == output)
+                .filter(|w| w.parent.is_none())
+                .map(|w| w.id)
+                .filter(|id| {
+                    let key = id.0 as u32;
+                    !self.docks.thumbnails.contains_key(&key)
+                        && !self.docks.no_thumbnail.contains(&key)
+                })
+                .collect();
+            for id in pending {
+                let key = id.0 as u32;
+                let protected = self
+                    .entry(id)
+                    .is_none_or(|e| crate::control::protected_surface(e.surface()));
+                if protected || self.is_shell_window(id) {
+                    self.docks.no_thumbnail.insert(key);
+                    continue;
+                }
+                match self
+                    .render_window_rgba(renderer, idx, id)
+                    .ok()
+                    .and_then(|(w, h, rgba)| crate::dock_thumbnail::from_rgba(w, h, &rgba))
+                {
+                    Some(t) => {
+                        self.docks.thumbnails.insert(key, Arc::new(t));
+                        changed = true;
+                    }
+                    None => {
+                        self.docks.no_thumbnail.insert(key);
+                    }
+                }
+            }
+        }
+        if changed {
+            self.refresh_docks();
         }
     }
 

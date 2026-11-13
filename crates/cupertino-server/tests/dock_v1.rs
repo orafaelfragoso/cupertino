@@ -206,6 +206,13 @@ enum DockEvent {
         size: u32,
         pixels: Vec<u8>,
     },
+    /// `window_thumbnail`: the size and the pixels the file held.
+    WindowThumbnail {
+        id: u32,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+    },
     Closed(u32),
     Launching(String),
     ToggleAutoHide,
@@ -380,6 +387,21 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
                     id,
                     name,
                     size,
+                    pixels: bytes,
+                }
+            }
+            E::WindowThumbnail {
+                id,
+                width,
+                height,
+                pixels,
+            } => {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut std::fs::File::from(pixels), &mut bytes).unwrap();
+                DockEvent::WindowThumbnail {
+                    id,
+                    width,
+                    height,
                     pixels: bytes,
                 }
             }
@@ -1559,6 +1581,96 @@ fn restore_window_unminimizes_out_of_the_given_tile() {
         pres.minimize_target, SLOT_GLOBAL,
         "the window flies out of the tile the dock named"
     );
+}
+
+#[test]
+fn a_minimized_window_s_picture_follows_from_shell_version_22_and_goes_when_it_restores() {
+    let Some(mut h) = Harness::new() else { return };
+    let out = h.state.outputs[0].id;
+    let quit = |h: &mut Harness, dock: DockClient| {
+        h.wait_until("the dock surface to be placed", |s| {
+            s.dock_rect(out).is_some()
+        });
+        dock.send(Cmd::Quit);
+        h.wait_until("the dock to go", |s| s.dock_rect(out).is_none());
+    };
+    let pictures = |dock: &DockClient| -> Vec<(u32, u32, u32, Vec<u8>)> {
+        dock.groups()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| match e {
+                DockEvent::WindowThumbnail {
+                    id,
+                    width,
+                    height,
+                    pixels,
+                } => Some((id, width, height, pixels)),
+                _ => None,
+            })
+            .collect()
+    };
+    let until = |h: &mut Harness, dock: &DockClient, count: usize| {
+        let end = Instant::now() + common::HANG_GUARD;
+        while pictures(dock).len() < count && Instant::now() < end {
+            h.step();
+        }
+    };
+
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 22);
+    let _app = spawn_app(h.socket_path(), "org.example.editor");
+    let id = h.mapped_window(1);
+    let key = id.0 as u32;
+    assert!(pictures(&dock).is_empty(), "no picture before it minimizes");
+    h.state.command(Command::Minimize {
+        window: id,
+        target: None,
+    });
+    h.advance(5.0);
+    until(&mut h, &dock, 1);
+    let got = pictures(&dock);
+    let [(w, width, height, pixels)] = &got[..] else {
+        panic!("one picture: {got:?}");
+    };
+    assert_eq!(*w, key);
+    // the 300 × 200 window and its frame, brought within 256 pixels on its longer side, its shape kept
+    assert!(
+        *width == 256 && *height < 256 && *height > 150,
+        "{width} × {height}"
+    );
+    assert_eq!(pixels.len(), (*width * *height * 4) as usize);
+    // the middle shows the window's own pixels: its buffer is 128 in every byte, a half-transparent grey
+    let mid = ((*height / 2 * *width + *width / 2) * 4) as usize;
+    assert!(
+        pixels[mid..mid + 4].iter().all(|&c| c.abs_diff(128) <= 2),
+        "{:?}",
+        &pixels[mid..mid + 4]
+    );
+    assert_eq!(dock.error(), None);
+    quit(&mut h, dock);
+
+    // a dock of version 21 is sent none
+    let old = DockClient::spawn_at(h.shell_stream(), true, 0, 21);
+    h.wait_for_groups(&old, 1);
+    h.advance(0.5);
+    assert!(pictures(&old).is_empty());
+    quit(&mut h, old);
+
+    // a dock that binds later gets it after the window in its first group
+    let late = DockClient::spawn_at(h.shell_stream(), true, 0, 22);
+    h.wait_for_groups(&late, 1);
+    assert!(matches!(
+        &late.groups()[0][..2],
+        [DockEvent::Window { id: a, minimized: true, .. }, DockEvent::WindowThumbnail { id: b, .. }]
+            if *a == key && *b == key
+    ));
+
+    // restored, its picture goes
+    late.send(Cmd::RestoreWindow(key));
+    h.wait_until("the window to restore", |s| {
+        !s.wm.window(id).unwrap().state().is_minimized()
+    });
+    until(&mut h, &late, 2);
+    assert!(matches!(&pictures(&late)[1..], [(w, 0, 0, p)] if *w == key && p.is_empty()));
 }
 
 #[test]

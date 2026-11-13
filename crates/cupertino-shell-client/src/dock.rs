@@ -41,6 +41,26 @@ pub struct DockWindowIcon {
     pub image: Option<WindowIconImage>,
 }
 
+/// Largest side of a window's picture a dock accepts, in pixels: the server sends at most 256.
+pub const MAX_WINDOW_THUMBNAIL: u32 = 256;
+
+/// A picture: `width` × `height` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThumbnailImage {
+    pub width: u32,
+    pub height: u32,
+    pub argb: Vec<u8>,
+}
+
+/// The picture of a minimized window, as the server drew it when the window minimized; `None` once the window is no
+/// longer minimized. From shell version 22.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DockWindowThumbnail {
+    /// The window's id, as in [`DockWindow`].
+    pub id: u32,
+    pub image: Option<ThumbnailImage>,
+}
+
 /// Which windows the open overview shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OverviewMode {
@@ -74,6 +94,8 @@ pub enum DockChange {
     Window(DockWindow),
     /// The window's own icon is set, changed or removed; it follows the window's [`DockChange::Window`].
     WindowIcon(DockWindowIcon),
+    /// The minimized window's picture is set or removed; it follows the window's [`DockChange::Window`].
+    WindowThumbnail(DockWindowThumbnail),
     /// The window with this id went away.
     WindowClosed(u32),
     /// The server started a program of this application id.
@@ -278,6 +300,31 @@ fn icon_image(size: u32, pixels: std::os::fd::OwnedFd) -> Option<WindowIconImage
     Some(WindowIconImage { size, argb })
 }
 
+/// The image of a `window_thumbnail` event: `None` for an empty size, a side over [`MAX_WINDOW_THUMBNAIL`], or a file
+/// that does not hold exactly the image.
+fn thumbnail_image(
+    width: u32,
+    height: u32,
+    pixels: std::os::fd::OwnedFd,
+) -> Option<ThumbnailImage> {
+    use std::os::unix::fs::FileExt;
+    if width == 0 || height == 0 || width.max(height) > MAX_WINDOW_THUMBNAIL {
+        return None;
+    }
+    let file = std::fs::File::from(pixels);
+    let len = width as usize * height as usize * 4;
+    if file.metadata().ok()?.len() != len as u64 {
+        return None;
+    }
+    let mut argb = vec![0; len];
+    file.read_exact_at(&mut argb, 0).ok()?;
+    Some(ThumbnailImage {
+        width,
+        height,
+        argb,
+    })
+}
+
 /// Collects the events of a group until `done`.
 #[derive(Debug, Default)]
 pub(crate) struct GroupBuilder {
@@ -341,6 +388,17 @@ impl GroupBuilder {
                 name: (!name.is_empty()).then_some(name),
                 image: icon_image(size, pixels),
             })),
+            Event::WindowThumbnail {
+                id,
+                width,
+                height,
+                pixels,
+            } => self
+                .changes
+                .push(DockChange::WindowThumbnail(DockWindowThumbnail {
+                    id,
+                    image: thumbnail_image(width, height, pixels),
+                })),
             Event::WindowClosed { id } => self.changes.push(DockChange::WindowClosed(id)),
             Event::Launching { app_id } => self.changes.push(DockChange::Launching(app_id)),
             Event::ToggleAutoHide => self.changes.push(DockChange::ToggleAutoHide),
@@ -564,6 +622,55 @@ mod tests {
                     app_id: "org.example.f".into(),
                     resident: false
                 },
+            ])
+        );
+    }
+
+    /// A file holding `bytes`, as the server's sealed file would.
+    fn file_of(bytes: &[u8], name: &str) -> std::os::fd::OwnedFd {
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!(
+            "cupertino-shell-client-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        file.into()
+    }
+
+    #[test]
+    fn a_window_picture_is_read_from_its_file_and_an_empty_or_wrong_one_is_none() {
+        let mut group = GroupBuilder::default();
+        let pixels = [1u8, 2, 3, 4].repeat(6);
+        let event = |id, width, height, bytes: &[u8], name| Event::WindowThumbnail {
+            id,
+            width,
+            height,
+            pixels: file_of(bytes, name),
+        };
+        push(&mut group, event(7, 3, 2, &pixels, "good"));
+        push(&mut group, event(8, 0, 0, &[], "none"));
+        push(&mut group, event(9, 3, 3, &pixels, "short"));
+        push(&mut group, event(10, 300, 1, &[0; 1200], "large"));
+        let thumbnail = |id, image| DockChange::WindowThumbnail(DockWindowThumbnail { id, image });
+        assert_eq!(
+            push(&mut group, Event::Done),
+            Some(vec![
+                thumbnail(
+                    7,
+                    Some(ThumbnailImage {
+                        width: 3,
+                        height: 2,
+                        argb: pixels.clone()
+                    })
+                ),
+                thumbnail(8, None),
+                thumbnail(9, None),
+                thumbnail(10, None),
             ])
         );
     }

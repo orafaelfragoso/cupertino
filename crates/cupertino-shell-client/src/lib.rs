@@ -19,8 +19,9 @@ mod session;
 pub mod test_clock;
 
 pub use dock::{
-    AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, DockWindowIcon, Gesture,
-    OverviewMode, OverviewWindow, OverviewWorkspace, WindowIconImage,
+    AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, DockWindowIcon,
+    DockWindowThumbnail, Gesture, OverviewMode, OverviewWindow, OverviewWorkspace, ThumbnailImage,
+    WindowIconImage, MAX_WINDOW_THUMBNAIL,
 };
 pub use error::Error;
 pub use menu_bar::{

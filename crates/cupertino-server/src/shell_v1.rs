@@ -21,7 +21,7 @@ pub struct ShellV1Global {
 impl ShellV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoShellV1, ()>(21, ()),
+            _global: dh.create_global::<Cupertino, CupertinoShellV1, ()>(22, ()),
         }
     }
 }

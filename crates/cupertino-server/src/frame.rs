@@ -492,6 +492,7 @@ impl Cupertino {
             return;
         }
         self.process_captures(renderer, idx);
+        self.capture_dock_thumbnails(renderer, idx);
         self.send_backdrop_tones(renderer);
         let paths = if self.screenshot_each_output {
             self.split_screenshots();

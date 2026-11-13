@@ -155,12 +155,19 @@ pub struct MenuBarUpdate {
     /// The lightness of the wallpaper under the bar (CIE L*/100 in thousandths, at most 1000), from version 14 once
     /// the server has measured it.
     pub backdrop_lightness: Option<u16>,
+    /// The mean encoded sRGB colour of the wallpaper under the bar, band by band from the output's left edge to its right
+    /// (channels from 0 to 65535; at most [`MAX_BACKDROP_BANDS`] bands), from version 21 once the server has measured
+    /// it, in place of [`MenuBarUpdate::backdrop_lightness`].
+    pub backdrop_bands: Option<Vec<[u16; 3]>>,
     /// The windows of the active application, in stacking order from the top; a group with `window_state` carries
     /// the complete list from version 10.
     pub windows: Option<Vec<AppWindow>>,
     /// The chords of the server's actions, from version 10.
     pub shortcuts: Option<Shortcuts>,
 }
+
+/// The most bands of [`MenuBarUpdate::backdrop_bands`] a bar reads; the rest of a longer array is dropped.
+pub const MAX_BACKDROP_BANDS: usize = 256;
 
 /// The process whose ownership of the session agent's bus name is trusted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -448,6 +455,16 @@ impl GroupBuilder {
             Event::BackdropLuminance { luminance } => {
                 self.update.backdrop_lightness = Some(luminance.min(1000) as u16)
             }
+            Event::BackdropBands { bands } => {
+                let (bands, _) = bands.as_chunks::<6>();
+                self.update.backdrop_bands = Some(
+                    bands
+                        .iter()
+                        .take(MAX_BACKDROP_BANDS)
+                        .map(|b| [0, 1, 2].map(|c| u16::from_le_bytes([b[2 * c], b[2 * c + 1]])))
+                        .collect(),
+                )
+            }
             Event::AppWindow { id, title, flags } => {
                 let flags = match flags {
                     WEnum::Value(flags) => flags,
@@ -563,6 +580,7 @@ mod tests {
                 screen_capture: None,
                 session_agent: None,
                 backdrop_lightness: None,
+                backdrop_bands: None,
                 windows: None,
                 shortcuts: None,
             }]
@@ -765,6 +783,39 @@ mod tests {
                 },
                 MenuBarUpdate {
                     backdrop_lightness: Some(1000),
+                    ..MenuBarUpdate::default()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn the_backdrop_bands_arrive_in_their_group_three_channels_a_band_and_capped_in_number() {
+        let bands = |values: &[[u16; 3]]| {
+            values
+                .iter()
+                .flat_map(|b| b.iter().flat_map(|c| c.to_le_bytes()))
+                .collect::<Vec<u8>>()
+        };
+        let mut long = bands(&[[7, 8, 9]; 300]);
+        long.extend([1, 2, 3]);
+        let updates = feed(vec![
+            Event::BackdropBands {
+                bands: bands(&[[0, 1, 2], [65_535, 300, 45]]),
+            },
+            Event::Done,
+            Event::BackdropBands { bands: long },
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates,
+            [
+                MenuBarUpdate {
+                    backdrop_bands: Some(vec![[0, 1, 2], [65_535, 300, 45]]),
+                    ..MenuBarUpdate::default()
+                },
+                MenuBarUpdate {
+                    backdrop_bands: Some(vec![[7, 8, 9]; MAX_BACKDROP_BANDS]),
                     ..MenuBarUpdate::default()
                 }
             ]

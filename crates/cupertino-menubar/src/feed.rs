@@ -523,6 +523,7 @@ mod tests {
             screen_capture: None,
             session_agent: None,
             backdrop_lightness: None,
+            backdrop_bands: None,
             windows: None,
             shortcuts: None,
         }

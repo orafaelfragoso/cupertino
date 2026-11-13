@@ -659,7 +659,15 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
                     bar.window_controls(cupertino_menu_bar_v1::WindowControl::Zoom);
                 }
                 bar.done();
-                if bar.version() >= 14 {
+                if bar.version() >= 21 {
+                    bar.backdrop_bands(
+                        [[0_u16, 0, 0], [65_535, 32_768, 7]]
+                            .iter()
+                            .flat_map(|b| b.iter().flat_map(|c| c.to_le_bytes()))
+                            .collect(),
+                    );
+                    bar.done();
+                } else if bar.version() >= 14 {
                     bar.backdrop_luminance(620);
                     bar.done();
                 }
@@ -1307,6 +1315,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             screen_capture: None,
             session_agent: None,
             backdrop_lightness: None,
+            backdrop_bands: None,
             windows: None,
             shortcuts: None,
         }
@@ -1356,6 +1365,21 @@ fn a_version_14_server_tells_the_bar_the_backdrop_lightness() {
         _ => None,
     });
     assert_eq!(lightness, 620);
+}
+
+#[test]
+fn a_version_21_server_tells_the_bar_the_backdrop_bands() {
+    let (mut conn, _control, _committed, _seen, layer, mut stash) = connected_layer_surface_at(21);
+    let shell = Shell::bind(&mut conn).unwrap();
+    let _bar = shell.menu_bar(&conn, layer, conn.outputs()[0].id).unwrap();
+    flush(&mut conn, &mut stash);
+    let bands = wait_for(&mut conn, &mut stash, |e| match shell_event(e) {
+        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => {
+            update.backdrop_bands.clone()
+        }
+        _ => None,
+    });
+    assert_eq!(bands, [[0, 0, 0], [65_535, 32_768, 7]]);
 }
 
 #[test]

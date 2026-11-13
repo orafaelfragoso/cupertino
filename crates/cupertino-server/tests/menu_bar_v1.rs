@@ -27,9 +27,10 @@ use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::menu_bar::{
-    MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES, MENU_BAR_BUS_NAME,
-    OWNER_RETRY_DELAYS,
+    BACKDROP_BANDS_MAX, MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES,
+    MENU_BAR_BUS_NAME, OWNER_RETRY_DELAYS,
 };
+use cupertino_server::render::wallpaper::{BarBands, BAR_BANDS};
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
 use smithay::backend::input::KeyState;
@@ -265,6 +266,8 @@ enum BarEvent {
     ScreenCapture(u32),
     SessionAgent(u32, u32),
     BackdropLuminance(u32),
+    /// Version 21: the backdrop's bands, three little-endian 16-bit channels each.
+    BackdropBands(Vec<u8>),
     AppWindow {
         id: u32,
         title: String,
@@ -486,6 +489,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
             E::SessionAgent { trust, pid } => BarEvent::SessionAgent(raw(trust), pid),
             E::BackdropLuminance { luminance } => BarEvent::BackdropLuminance(luminance),
+            E::BackdropBands { bands } => BarEvent::BackdropBands(bands),
             E::AppWindow { id, title, flags } => BarEvent::AppWindow {
                 id,
                 title,
@@ -1569,6 +1573,23 @@ fn backdrop_values(bar: &BarClient) -> Vec<u32> {
         .collect()
 }
 
+/// Bands of one grey whose lightness is `lightness` thousandths of CIE L*.
+fn grey(lightness: u16) -> BarBands {
+    let even = |v: u16| BarBands(vec![[v; 3]; BAR_BANDS]);
+    let (mut lo, mut hi) = (0_u16, u16::MAX);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if even(mid).lightness() < lightness {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let bands = even(lo);
+    assert_eq!(bands.lightness(), lightness);
+    bands
+}
+
 /// Name a new session agent, so the bar's next group shows that everything sent before it has arrived.
 fn session_agent_group(h: &mut Harness, bar: &BarClient) {
     let before = bar.groups().len();
@@ -1587,7 +1608,7 @@ fn a_version_14_bar_is_told_the_backdrop_lightness_in_a_group_of_its_own_when_it
     let bar = bar_at(&mut h, 14);
     h.wait_for_groups(&bar, 5);
     assert_eq!(backdrop_values(&bar), [u32::from(procedural)]);
-    h.state.set_backdrop_lightness(out, None);
+    h.state.set_backdrop_bands(out, None);
     session_agent_group(&mut h, &bar);
     assert_eq!(
         backdrop_values(&bar),
@@ -1595,21 +1616,21 @@ fn a_version_14_bar_is_told_the_backdrop_lightness_in_a_group_of_its_own_when_it
         "a forgotten measure sends nothing"
     );
 
-    h.state.set_backdrop_lightness(out, Some(620));
+    h.state.set_backdrop_bands(out, Some(grey(620)));
     h.wait_for_groups(&bar, 7);
     assert_eq!(
         bar.groups()[6],
         [BarEvent::BackdropLuminance(620), BarEvent::Done]
     );
-    h.state.set_backdrop_lightness(out, Some(630));
-    h.state.set_backdrop_lightness(out, Some(610));
-    h.state.set_backdrop_lightness(out, Some(631));
-    h.state.set_backdrop_lightness(out, Some(1200));
+    h.state.set_backdrop_bands(out, Some(grey(630)));
+    h.state.set_backdrop_bands(out, Some(grey(610)));
+    h.state.set_backdrop_bands(out, Some(grey(631)));
+    h.state.set_backdrop_bands(out, Some(grey(1000)));
     h.wait_for_groups(&bar, 9);
     assert_eq!(
         backdrop_values(&bar),
         [u32::from(procedural), 620, 631, 1000],
-        "a move of 10 is not sent, and the value is clamped to white"
+        "a move of 10 is not sent"
     );
     assert_eq!(bar.error(), None);
 }
@@ -1620,7 +1641,7 @@ fn a_version_14_bar_gets_the_known_backdrop_lightness_after_its_first_groups() {
     let out = h.state.outputs[0].id;
     // the procedural wallpaper's measure comes once, before the test's own
     procedural_measure(&mut h, out);
-    h.state.set_backdrop_lightness(out, Some(300));
+    h.state.set_backdrop_bands(out, Some(grey(300)));
     let bar = bar_at(&mut h, 14);
     h.wait_for_groups(&bar, 5);
     assert_eq!(
@@ -1634,11 +1655,73 @@ fn a_version_14_bar_gets_the_known_backdrop_lightness_after_its_first_groups() {
 fn a_version_13_bar_never_gets_the_backdrop_lightness() {
     let Some(mut h) = Harness::new() else { return };
     let out = h.state.outputs[0].id;
-    h.state.set_backdrop_lightness(out, Some(300));
+    h.state.set_backdrop_bands(out, Some(grey(300)));
     let bar = bar_at(&mut h, 13);
-    h.state.set_backdrop_lightness(out, Some(800));
+    h.state.set_backdrop_bands(out, Some(grey(800)));
     session_agent_group(&mut h, &bar);
     assert!(backdrop_values(&bar).is_empty());
+    assert_eq!(bar.error(), None);
+}
+
+/// The `backdrop_bands` the bar got, in order, each band's three channels.
+fn band_values(bar: &BarClient) -> Vec<Vec<[u16; 3]>> {
+    bar.groups()
+        .iter()
+        .flatten()
+        .filter_map(|e| match e {
+            BarEvent::BackdropBands(bytes) => Some(
+                bytes
+                    .as_chunks::<6>()
+                    .0
+                    .iter()
+                    .map(|b| [0, 1, 2].map(|c| u16::from_le_bytes([b[2 * c], b[2 * c + 1]])))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_version_21_bar_is_told_the_backdrop_bands_in_place_of_the_lightness_whenever_they_change() {
+    let Some(mut h) = Harness::new() else { return };
+    let out = h.state.outputs[0].id;
+    h.wait_until("the procedural wallpaper's measure", |s| {
+        s.backdrop_bands(out).is_some()
+    });
+    let procedural = h.state.backdrop_bands(out).cloned().unwrap();
+    let bar = bar_at(&mut h, 21);
+    h.wait_for_groups(&bar, 5);
+    assert_eq!(band_values(&bar), [procedural.0.clone()]);
+    // a left half dark and a right half light, then a change of one band alone
+    let mut split = BarBands(
+        (0..BAR_BANDS)
+            .map(|i| {
+                if i < BAR_BANDS / 2 {
+                    [0; 3]
+                } else {
+                    [u16::MAX; 3]
+                }
+            })
+            .collect(),
+    );
+    h.state.set_backdrop_bands(out, Some(split.clone()));
+    h.state.set_backdrop_bands(out, Some(split.clone()));
+    split.0[3] = [100, 200, 300];
+    h.state.set_backdrop_bands(out, Some(split.clone()));
+    session_agent_group(&mut h, &bar);
+    let got = band_values(&bar);
+    assert_eq!(got.len(), 3, "an unchanged measure is not sent again");
+    assert_eq!(got[2], split.0);
+    assert!(
+        backdrop_values(&bar).is_empty(),
+        "no lightness for this bar"
+    );
+    // more bands than the protocol carries are cut
+    h.state
+        .set_backdrop_bands(out, Some(BarBands(vec![[7; 3]; 300])));
+    session_agent_group(&mut h, &bar);
+    assert_eq!(band_values(&bar)[3].len(), BACKDROP_BANDS_MAX);
     assert_eq!(bar.error(), None);
 }
 

@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="20">
+  <interface name="cupertino_shell_v1" version="21">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -310,13 +310,14 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="20">
+  <interface name="cupertino_menu_bar_v1" version="21">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
       is sent right after the object is created; from version 3 a group with screen_capture
-      follows it, from version 10 a group with the shortcuts, and from version 14 a group with
-      backdrop_luminance once the server knows it.
+      follows it, from version 10 a group with the shortcuts, from version 14 to 20 a group with
+      backdrop_luminance once the server knows it, and from version 21 a group with backdrop_bands
+      in its place.
     </description>
 
     <request name="destroy" type="destructor">
@@ -476,14 +477,31 @@
 
     <event name="backdrop_luminance" since="14">
       <description summary="how light the wallpaper under the bar is">
-        The perceptual lightness (CIE L*/100) of the output's wallpaper under the bar's strip, in thousandths: 0 black,
-        1000 white. Sent in a group of its own, ended by done, once the server knows it: after the first groups, and
+        The perceptual lightness (CIE L*/100) of the mean colour of the output's wallpaper under the bar's strip, in
+        thousandths: 0 black, 1000 white. Sent to a bar of version 14 to 20 (a later bar gets backdrop_bands), in a
+        group of its own, ended by done, once the server knows it: after the first groups, and
         again when it moves by more than 10. A server that has no measure sends nothing, and the bar keeps the
         palette of the appearance. Once sent, a measure is never withdrawn: when the wallpaper image goes, the one
         drawn in its place is measured. Only the server's own wallpaper image is measured; nothing of a window or
         another client is sampled.
       </description>
       <arg name="luminance" type="uint"/>
+    </event>
+
+    <event name="backdrop_bands" since="21">
+      <description summary="the colour of the wallpaper under the bar, across it">
+        The mean colour of the output's wallpaper under the bar's strip, in bands of equal width
+        from the output's left edge to its right: for each band, the mean of the encoded sRGB red,
+        green and blue of its pixels, each a little-endian 16-bit value from 0 (none) to 65535
+        (full), so three values per band and at most 256 bands. The bar averages the bands under
+        an item, or all of them for the whole strip, and takes the relative luminance of that
+        colour. Sent to a bar of version 21 or later in place of backdrop_luminance, in a group of
+        its own ended by done, once the server knows it and again when any band changes. A server
+        that has no measure sends nothing; once sent, a measure is never withdrawn. Only the
+        server's own wallpaper image is measured; nothing of a window or another client is
+        sampled.
+      </description>
+      <arg name="bands" type="array"/>
     </event>
 
     <enum name="window_control" bitfield="true" since="15">

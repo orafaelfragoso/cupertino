@@ -154,14 +154,14 @@ impl Cupertino {
             for_capture: false,
         };
         let result = f(renderer, params);
-        // a new image was put up, perhaps for another output: that output draws it, and the lightness under its bar,
+        // a new image was put up, perhaps for another output: that output draws it, and the colour under its bar,
         // measured once with the decode, goes to the bar
-        for (output, lightness) in self.overlays.wallpaper.take_bar_lightness() {
+        for (output, bands) in self.overlays.wallpaper.take_bar_bands() {
             let id = cupertino_wm::OutputId(output);
             if let Some(out) = self.outputs.iter_mut().find(|o| o.id == id) {
                 out.scheduler.damage();
             }
-            self.set_backdrop_lightness(id, Some(lightness));
+            self.set_backdrop_bands(id, Some(bands));
         }
         Some(result)
     }

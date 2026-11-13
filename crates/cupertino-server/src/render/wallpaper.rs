@@ -137,46 +137,119 @@ fn l_star(y: f64) -> f64 {
     }
 }
 
-/// The lightness of an sRGB colour (channels from 0 to 1), as [`strip_lightness`] gives it with no colour operations.
+/// The lightness of an sRGB colour (channels from 0 to 1), as [`BarBands::lightness`] gives it for a strip of it.
 pub fn colour_lightness(rgb: [f32; 3]) -> u16 {
     lightness(luminance(rgb))
 }
 
-/// About 16 000 pixels of the top `rows` rows of `pixmap`, where the menu bar sits, whatever the size. The pixels are
-/// premultiplied, so a transparent part counts as black; what shows through it is the output's clear colour (0.05, 0.05,
-/// 0.07 on every backend), so it reads at most about 35 tenths darker than it looks, and only where the image is
-/// transparent.
-pub fn strip_samples(pixmap: &Pixmap, rows: u32) -> Vec<[u8; 4]> {
+/// How many bands of equal width across the output the strip under the menu bar is measured in ([`strip_bands`]): a
+/// band of a 2560-pixel output is 20 pixels wide, so an item of the bar's status area covers one to a few.
+pub const BAR_BANDS: usize = 128;
+
+/// The top of a channel of [`BarBands`]: full red, green or blue.
+pub const BAND_CHANNEL_MAX: u16 = u16::MAX;
+
+/// The mean encoded sRGB colour of the wallpaper under the menu bar in each of the bands of equal width across the
+/// output, left to right, each channel from 0 to [`BAND_CHANNEL_MAX`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BarBands(pub Vec<[u16; 3]>);
+
+impl BarBands {
+    /// [`BAR_BANDS`] bands of one sRGB colour (channels from 0 to 1): a solid colour or the procedural wallpaper.
+    pub fn even(rgb: [f32; 3]) -> Self {
+        Self(vec![rgb.map(|c| channel(f64::from(c))); BAR_BANDS])
+    }
+
+    /// The mean encoded sRGB colour of the whole strip, channels from 0 to 1; black when there are no bands.
+    pub fn mean(&self) -> [f64; 3] {
+        let n = self.0.len().max(1) as f64;
+        [0, 1, 2].map(|c| {
+            self.0.iter().map(|b| f64::from(b[c])).sum::<f64>() / n / f64::from(BAND_CHANNEL_MAX)
+        })
+    }
+
+    /// The relative luminance of the strip's mean colour: the mean of the encoded colour, made linear, weighed as
+    /// Rec. 709 weighs red, green and blue.
+    pub fn luminance(&self) -> f64 {
+        linear_luminance(self.mean())
+    }
+
+    /// CIE L* of [`BarBands::luminance`] in tenths (0 black to 1000 white), what a bar older than the bands is told.
+    pub fn lightness(&self) -> u16 {
+        lightness(self.luminance())
+    }
+}
+
+/// An sRGB channel from 0 to 1 as a channel of [`BarBands`].
+fn channel(c: f64) -> u16 {
+    (c.clamp(0.0, 1.0) * f64::from(BAND_CHANNEL_MAX)).round() as u16
+}
+
+/// About 16 000 pixels of the top rows of an image, where the menu bar sits, with where each one lies across it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Strip {
+    pub samples: Vec<[u8; 4]>,
+    /// The image's width in pixels, and the pixels between one sample and the next, row after row.
+    width: usize,
+    step: usize,
+}
+
+/// The [`Strip`] of the top `rows` rows of `pixmap`, whatever the size. The pixels are premultiplied, so a transparent
+/// part counts as black; what shows through it is the output's clear colour (0.05, 0.05, 0.07 on every backend), so it
+/// reads a little darker than it looks, and only where the image is transparent.
+pub fn strip_of(pixmap: &Pixmap, rows: u32) -> Strip {
     let rows = rows.clamp(1, pixmap.height().max(1)) as usize;
     let width = pixmap.width() as usize;
     let (pixels, _) = pixmap.data().as_chunks::<4>();
     let strip = &pixels[..(rows * width).min(pixels.len())];
     let step = (strip.len() / 16_384).max(1);
-    strip.iter().step_by(step).copied().collect()
+    Strip {
+        samples: strip.iter().step_by(step).copied().collect(),
+        width,
+        step,
+    }
 }
 
-/// The lightness under the menu bar of the [`strip_samples`] `samples`, seen through the colour operations `ops`: the
-/// mean of each pixel's CIE L*, in tenths (0 black to 1000 white). The bar's text lies on the pixels themselves, not on
-/// a blur of them, so each pixel counts by how light it looks: a few thin bright lines over a dark strip leave it dark,
-/// where the mean of their luminance would call it light and give it dark text that is lost on most of the strip.
-pub fn strip_lightness(samples: &[[u8; 4]], ops: &[Op]) -> u16 {
-    let sum: f64 = samples
-        .iter()
-        .map(|px| {
-            l_star(luminance(apply_color_ops(
-                [0, 1, 2].map(|i| f32::from(px[i]) / 255.0),
-                ops,
-            )))
-        })
-        .sum();
-    (sum / samples.len().max(1) as f64 * 10.0)
-        .round()
-        .clamp(0.0, 1000.0) as u16
+/// The colour under the menu bar of `strip`, seen through the colour operations `ops`, in [`BAR_BANDS`] bands of equal
+/// width from the left edge to the right: the mean of the encoded sRGB of the samples in each band. A band no sample
+/// falls in takes the mean of the whole strip.
+pub fn strip_bands(strip: &Strip, ops: &[Op]) -> BarBands {
+    let mut bands = [([0.0_f64; 3], 0_u32); BAR_BANDS];
+    let mut all = ([0.0_f64; 3], 0_u32);
+    for (i, px) in strip.samples.iter().enumerate() {
+        let x = (i * strip.step) % strip.width.max(1);
+        let rgb = apply_color_ops([0, 1, 2].map(|c| f32::from(px[c]) / 255.0), ops);
+        let band = &mut bands[x * BAR_BANDS / strip.width.max(1)];
+        for c in 0..3 {
+            let v = f64::from(rgb[c].clamp(0.0, 1.0));
+            band.0[c] += v;
+            all.0[c] += v;
+        }
+        band.1 += 1;
+        all.1 += 1;
+    }
+    let mean = |(sum, n): ([f64; 3], u32)| sum.map(|s| s / f64::from(n.max(1)));
+    let whole = mean(all);
+    BarBands(
+        bands
+            .iter()
+            .map(|&band| {
+                let rgb = if band.1 == 0 { whole } else { mean(band) };
+                rgb.map(channel)
+            })
+            .collect(),
+    )
 }
 
 /// The relative luminance of an sRGB colour (channels from 0 to 1).
 fn luminance(rgb: [f32; 3]) -> f64 {
-    let [r, g, b] = rgb.map(|c| linear(f64::from(c.clamp(0.0, 1.0))));
+    linear_luminance(rgb.map(f64::from))
+}
+
+/// The relative luminance of an encoded sRGB colour (channels from 0 to 1): each channel made linear, weighed as Rec. 709
+/// weighs red, green and blue.
+fn linear_luminance(rgb: [f64; 3]) -> f64 {
+    let [r, g, b] = rgb.map(|c| linear(c.clamp(0.0, 1.0)));
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
@@ -235,10 +308,10 @@ enum Outcome {
     Loaded {
         pixmap: Pixmap,
         tint: [f32; 3],
-        /// [`strip_samples`] of the rows under the menu bar.
-        strip: Vec<[u8; 4]>,
-        /// [`strip_lightness`] of `strip` through the request's `bar_ops`.
-        bar_lightness: u16,
+        /// The [`Strip`] of the rows under the menu bar.
+        strip: Strip,
+        /// [`strip_bands`] of `strip` through the request's `bar_ops`.
+        bar_bands: BarBands,
         bar_ops: Vec<Op>,
         path: PathBuf,
         stamp: Stamp,
@@ -342,9 +415,9 @@ impl WorkerState {
             };
             match scale_cover(&source, request.dst) {
                 Ok((pixmap, tint)) => {
-                    let strip = strip_samples(&pixmap, request.strip_rows);
+                    let strip = strip_of(&pixmap, request.strip_rows);
                     return Outcome::Loaded {
-                        bar_lightness: strip_lightness(&strip, &request.bar_ops),
+                        bar_bands: strip_bands(&strip, &request.bar_ops),
                         bar_ops: request.bar_ops.clone(),
                         strip,
                         pixmap,
@@ -449,8 +522,8 @@ struct Shown {
     buffer: MemoryRenderBuffer,
     px: (i32, i32),
     tint: [f32; 3],
-    /// [`strip_samples`] under the menu bar, measured again when the bar's colour operations change.
-    strip: Vec<[u8; 4]>,
+    /// The [`Strip`] under the menu bar, measured again when the bar's colour operations change.
+    strip: Strip,
 }
 
 /// The image wallpapers of all outputs.
@@ -463,11 +536,11 @@ pub struct Wallpapers {
     next_ticket: u64,
     /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
     pub tint: Option<[f32; 3]>,
-    /// The lightness under the menu bar of each output whose new image has just been put up, until taken.
-    measured: Vec<(u64, u16)>,
-    /// The lightness last handed out for each output, so the procedural wallpaper's is handed out once per change.
-    sent: HashMap<u64, u16>,
-    /// The colour operations of the menu bar's material, which the lightness under it is measured through.
+    /// The colour under the menu bar of each output whose new image has just been put up, until taken.
+    measured: Vec<(u64, BarBands)>,
+    /// The colour last handed out for each output, so the procedural wallpaper's is handed out once per change.
+    sent: HashMap<u64, BarBands>,
+    /// The colour operations of the menu bar's material, which the colour under it is measured through.
     bar_ops: Vec<Op>,
     /// The appearance and Reduce Transparency the operations are those of.
     bar_material: Option<(Appearance, bool)>,
@@ -513,7 +586,7 @@ impl Wallpapers {
     }
 
     /// The menu bar's material now has the colour operations `ops` (another appearance or material option): every
-    /// image shown is measured through them again, and a lightness that changed is handed out. An output with the
+    /// image shown is measured through them again, and a colour that changed is handed out. An output with the
     /// procedural wallpaper is measured through them at its next frame; each of those changes asks every output for one.
     fn set_bar_ops(&mut self, ops: &[Op]) {
         if self.bar_ops == ops {
@@ -522,9 +595,10 @@ impl Wallpapers {
         self.bar_ops = ops.to_vec();
         for (output, state) in &self.outputs {
             let Some(shown) = &state.shown else { continue };
-            let lightness = strip_lightness(&shown.strip, ops);
-            if self.sent.insert(*output, lightness) != Some(lightness) {
-                self.measured.push((*output, lightness));
+            let bands = strip_bands(&shown.strip, ops);
+            if self.sent.get(output) != Some(&bands) {
+                self.sent.insert(*output, bands.clone());
+                self.measured.push((*output, bands));
             }
         }
     }
@@ -572,16 +646,16 @@ impl Wallpapers {
                     pixmap,
                     tint,
                     strip,
-                    bar_lightness,
+                    bar_bands,
                     bar_ops,
                     path,
                     stamp,
                 } => {
                     // the operations changed while the image was read
-                    let bar_lightness = if bar_ops == self.bar_ops {
-                        bar_lightness
+                    let bar_bands = if bar_ops == self.bar_ops {
+                        bar_bands
                     } else {
-                        strip_lightness(&strip, &self.bar_ops)
+                        strip_bands(&strip, &self.bar_ops)
                     };
                     let size = (pixmap.width() as i32, pixmap.height() as i32);
                     let buffer = MemoryRenderBuffer::from_slice(
@@ -599,9 +673,9 @@ impl Wallpapers {
                         strip,
                     });
                     state.loaded = Some((path, stamp));
-                    // every image put up is handed out, so its output draws it at once even at the same lightness
-                    self.measured.push((reply.output, bar_lightness));
-                    self.sent.insert(reply.output, bar_lightness);
+                    // every image put up is handed out, so its output draws it at once even at the same colour
+                    self.measured.push((reply.output, bar_bands.clone()));
+                    self.sent.insert(reply.output, bar_bands);
                 }
                 Outcome::Failed => {
                     state.loaded = None;
@@ -708,9 +782,9 @@ impl Wallpapers {
     }
 
     /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
-    /// Until the image is in, the output keeps what it showed. The lightness of its top `strip_rows` rows, under the
+    /// Until the image is in, the output keeps what it showed. The colour of its top `strip_rows` rows, under the
     /// menu bar, is measured through the colour operations given to [`Wallpapers::set_bar_material`] once per image and
-    /// once per change of those, and handed out by [`Wallpapers::take_bar_lightness`].
+    /// once per change of those, and handed out by [`Wallpapers::take_bar_bands`].
     pub fn shown(
         &mut self,
         output: u64,
@@ -759,7 +833,7 @@ impl Wallpapers {
         }
     }
 
-    /// A solid colour shows on `output`: nothing is read, the desktop's tint and the lightness under its bar are that
+    /// A solid colour shows on `output`: nothing is read, the desktop's tint and the colour under its bar are that
     /// colour's.
     pub fn solid(&mut self, output: u64, colour: [f32; 3], now: f64) {
         self.seen.insert(output, now);
@@ -768,18 +842,19 @@ impl Wallpapers {
         self.procedural(output, colour);
     }
 
-    /// The procedural wallpaper shows on `output`: the lightness under its bar is that of the wallpaper's average colour
+    /// The procedural wallpaper shows on `output`: the colour under its bar is the wallpaper's average colour
     /// ([`crate::render::scene::wallpaper_tint`]) through the bar's colour operations, handed out when it differs from
     /// the last one.
     fn procedural(&mut self, output: u64, tint: [f32; 3]) {
-        let lightness = colour_lightness(apply_color_ops(tint, &self.bar_ops));
-        if self.sent.insert(output, lightness) != Some(lightness) {
-            self.measured.push((output, lightness));
+        let bands = BarBands::even(apply_color_ops(tint, &self.bar_ops));
+        if self.sent.get(&output) != Some(&bands) {
+            self.sent.insert(output, bands.clone());
+            self.measured.push((output, bands));
         }
     }
 
-    /// The lightness under the menu bar of each output whose new image was put up since the last call.
-    pub fn take_bar_lightness(&mut self) -> Vec<(u64, u16)> {
+    /// The colour under the menu bar of each output whose new image was put up since the last call.
+    pub fn take_bar_bands(&mut self) -> Vec<(u64, BarBands)> {
         std::mem::take(&mut self.measured)
     }
 
@@ -851,9 +926,9 @@ mod tests {
         pixmap
     }
 
-    /// The lightness of the top `rows` rows of `pixmap` with no material on them.
-    fn raw_lightness(pixmap: &Pixmap, rows: u32) -> u16 {
-        strip_lightness(&strip_samples(pixmap, rows), &[])
+    /// The bands of the top `rows` rows of `pixmap` with no material on them.
+    fn raw_bands(pixmap: &Pixmap, rows: u32) -> BarBands {
+        strip_bands(&strip_of(pixmap, rows), &[])
     }
 
     /// The colour operations of the menu bar's material in `appearance`.
@@ -869,35 +944,40 @@ mod tests {
         cupertino_glass::ops::color_ops(&recipe.backdrop.unwrap().ops)
     }
 
-    #[test]
-    fn a_strip_is_measured_through_the_bar_material() {
-        let grey = strip_samples(&split_pixmap((64, 48), 48, 119, 119), 24);
-        let ops = bar_ops(cupertino_theme::Appearance::Light);
-        let through = colour_lightness(apply_color_ops([119.0 / 255.0; 3], &ops));
-        assert_eq!(strip_lightness(&grey, &ops), through);
-        assert_eq!(strip_lightness(&grey, &[]), 500);
-        assert_ne!(through, 500, "the material changes mid-grey");
+    /// The bands of an even strip of sRGB grey `v`.
+    fn grey_bands(v: u8) -> BarBands {
+        BarBands::even([f32::from(v) / 255.0; 3])
     }
 
     #[test]
-    fn a_change_of_the_bar_material_hands_out_the_lightness_again_once() {
+    fn a_strip_is_measured_through_the_bar_material() {
+        let grey = strip_of(&split_pixmap((64, 48), 48, 119, 119), 24);
+        let ops = bar_ops(cupertino_theme::Appearance::Light);
+        let through = BarBands::even(apply_color_ops([119.0 / 255.0; 3], &ops));
+        assert_eq!(strip_bands(&grey, &ops), through);
+        assert_eq!(strip_bands(&grey, &[]), grey_bands(119));
+        assert_ne!(through, grey_bands(119), "the material changes mid-grey");
+    }
+
+    #[test]
+    fn a_change_of_the_bar_material_hands_out_the_colour_again_once() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_png(dir.path(), "w.png", (32, 32), |_, _| [119, 119, 119, 255]);
         let mut rig = rig();
         let ops = bar_ops(cupertino_theme::Appearance::Light);
-        let through = strip_lightness(&[[119, 119, 119, 255]], &ops);
+        let through = BarBands::even(apply_color_ops([119.0 / 255.0; 3], &ops));
         rig.wallpapers.set_bar_ops(&ops);
         rig.settle(&path, (32, 32), 0.0);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, through)]);
+        assert_eq!(rig.wallpapers.take_bar_bands(), [(1, through.clone())]);
         rig.wallpapers.set_bar_ops(&ops);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), []);
+        assert_eq!(rig.wallpapers.take_bar_bands(), []);
         // Reduce Transparency: the bar is solid and has no colour operations
         rig.wallpapers.set_bar_ops(&[]);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, 500)]);
+        assert_eq!(rig.wallpapers.take_bar_bands(), [(1, grey_bands(119))]);
         rig.wallpapers.set_bar_ops(&[]);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), []);
+        assert_eq!(rig.wallpapers.take_bar_bands(), []);
         rig.wallpapers.set_bar_ops(&ops);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, through)]);
+        assert_eq!(rig.wallpapers.take_bar_bands(), [(1, through)]);
     }
 
     #[test]
@@ -913,7 +993,7 @@ mod tests {
         rig.wallpapers.set_bar_ops(&[]);
         drop(hold);
         rig.settle(&path, (32, 32), 0.0);
-        assert_eq!(rig.wallpapers.take_bar_lightness(), [(1, 500)]);
+        assert_eq!(rig.wallpapers.take_bar_bands(), [(1, grey_bands(119))]);
     }
 
     #[test]
@@ -935,49 +1015,87 @@ mod tests {
     }
 
     #[test]
-    fn an_output_nobody_asked_about_for_a_while_is_told_its_lightness_again() {
+    fn an_output_nobody_asked_about_for_a_while_is_told_its_colour_again() {
         let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
         let none = WallpaperSettings::default();
-        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
+        let light = BarBands::even(crate::render::scene::wallpaper_tint(false));
         wallpapers.shown(1, &none, false, (8, 8), 1, 0.0);
-        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        assert_eq!(wallpapers.take_bar_bands(), [(1, light.clone())]);
         // output 1 is unplugged; a minute later another output draws, then output 1 comes back
         wallpapers.shown(2, &none, false, (8, 8), 1, FORGET_SECONDS);
-        assert_eq!(wallpapers.take_bar_lightness(), [(2, light)]);
+        assert_eq!(wallpapers.take_bar_bands(), [(2, light.clone())]);
         wallpapers.shown(1, &none, false, (8, 8), 1, FORGET_SECONDS + 1.0);
-        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        assert_eq!(wallpapers.take_bar_bands(), [(1, light)]);
         wallpapers.shown(1, &none, false, (8, 8), 1, FORGET_SECONDS + 2.0);
-        assert_eq!(wallpapers.take_bar_lightness(), []);
+        assert_eq!(wallpapers.take_bar_bands(), []);
     }
 
+    /// The strip's measure is the relative luminance of its mean encoded colour: black 0, white 1, and sRGB 151 (0.592
+    /// encoded) about 0.31, under the 0.334 that splits dark text from light.
     #[test]
-    fn the_lightness_under_the_bar_runs_from_black_to_white_in_cie_l_star() {
-        assert_eq!(raw_lightness(&split_pixmap((64, 48), 48, 0, 0), 24), 0);
-        assert_eq!(
-            raw_lightness(&split_pixmap((64, 48), 48, 255, 255), 24),
-            1000
-        );
-        // sRGB 119 is L* 50.0
-        let grey = raw_lightness(&split_pixmap((64, 48), 48, 119, 119), 24);
-        assert!(grey.abs_diff(500) <= 3, "{grey}");
+    fn the_luminance_under_the_bar_is_that_of_the_mean_encoded_colour() {
+        let black = raw_bands(&split_pixmap((64, 48), 48, 0, 0), 24);
+        let white = raw_bands(&split_pixmap((64, 48), 48, 255, 255), 24);
+        assert_eq!(black.luminance(), 0.0);
+        assert!((white.luminance() - 1.0).abs() < 1e-9);
+        assert_eq!((black.lightness(), white.lightness()), (0, 1000));
+        let grey = raw_bands(&split_pixmap((64, 48), 48, 151, 151), 24).luminance();
+        assert!((grey - 0.3095).abs() < 0.001, "{grey}");
+        // sRGB 119 is L* 50.0, what an older bar is told
+        let mid = raw_bands(&split_pixmap((64, 48), 48, 119, 119), 24).lightness();
+        assert!(mid.abs_diff(500) <= 3, "{mid}");
     }
 
+    /// Black and white rows in equal parts average to encoded grey 0.5 before the luminance is taken: about 0.214, not
+    /// the 0.5 the mean of each pixel's luminance would give.
     #[test]
-    fn a_dark_strip_with_thin_bright_lines_measures_dark() {
-        // one row in four white, the others black: by luminance it is lighter than mid-grey, but most of what the text
-        // lies on is black
+    fn the_colour_is_averaged_encoded_before_it_is_made_linear() {
         let mut pixmap = Pixmap::new(64, 24).unwrap();
         let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
         for (i, px) in pixels.iter_mut().enumerate() {
-            let v = if (i / 64) % 4 == 0 { 255 } else { 0 };
+            let v = if (i / 64) % 2 == 0 { 255 } else { 0 };
             *px = [v, v, v, 255];
         }
-        let measured = raw_lightness(&pixmap, 24);
-        assert_eq!(measured, 250, "a quarter of the way from black to white");
-        assert!(
-            colour_lightness([0.5; 3]) > 500,
-            "the mean colour of the strip would read light"
-        );
+        let y = raw_bands(&pixmap, 24).luminance();
+        assert!((y - 0.2140).abs() < 0.001, "{y}");
+    }
+
+    /// A strip whose left half is black and right half white is black in the left bands and white in the right ones,
+    /// and its whole mean is encoded grey 0.5.
+    #[test]
+    fn a_split_strip_is_measured_band_by_band_from_left_to_right() {
+        let (width, rows) = (2560_u32, 48_u32);
+        let mut pixmap = Pixmap::new(width, rows).unwrap();
+        let (pixels, _) = pixmap.data_mut().as_chunks_mut::<4>();
+        for (i, px) in pixels.iter_mut().enumerate() {
+            let v = if i % width as usize >= width as usize / 2 {
+                255
+            } else {
+                0
+            };
+            *px = [v, v, v, 255];
+        }
+        let bands = raw_bands(&pixmap, rows);
+        assert_eq!(bands.0.len(), BAR_BANDS);
+        for (i, band) in bands.0.iter().enumerate() {
+            let want = if i < BAR_BANDS / 2 {
+                0
+            } else {
+                BAND_CHANNEL_MAX
+            };
+            assert_eq!(*band, [want; 3], "band {i}");
+        }
+        assert!((bands.mean()[0] - 0.5).abs() < 1e-9);
+        // a gradient from black to white rises band by band
+        let mut ramp = Pixmap::new(width, 8).unwrap();
+        let (pixels, _) = ramp.data_mut().as_chunks_mut::<4>();
+        for (i, px) in pixels.iter_mut().enumerate() {
+            let v = ((i % width as usize) * 255 / (width as usize - 1)) as u8;
+            *px = [v, v, v, 255];
+        }
+        let ramp = raw_bands(&ramp, 8);
+        assert!(ramp.0.windows(2).all(|w| w[0][0] <= w[1][0]));
+        assert!(ramp.0[0][0] < 1_000 && ramp.0[BAR_BANDS - 1][0] > 64_000);
     }
 
     #[test]
@@ -985,41 +1103,45 @@ mod tests {
         for grey in [0u8, 40, 119, 200, 255] {
             let v = f32::from(grey) / 255.0;
             assert_eq!(
-                colour_lightness([v; 3]),
-                raw_lightness(&split_pixmap((16, 16), 16, grey, grey), 8),
+                BarBands::even([v; 3]),
+                raw_bands(&split_pixmap((16, 16), 16, grey, grey), 8),
                 "{grey}"
             );
+            assert_eq!(colour_lightness([v; 3]), BarBands::even([v; 3]).lightness());
         }
-        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
-        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
-        assert!(light > 700 && dark < 300, "{light} {dark}");
+        let light = BarBands::even(crate::render::scene::wallpaper_tint(false)).luminance();
+        let dark = BarBands::even(crate::render::scene::wallpaper_tint(true)).luminance();
+        assert!(light > 0.5 && dark < 0.1, "{light} {dark}");
     }
 
     #[test]
-    fn the_procedural_wallpapers_lightness_is_handed_out_once_per_change() {
+    fn the_procedural_wallpapers_colour_is_handed_out_once_per_change() {
         let mut wallpapers = Wallpapers::with_decoder([None, None], Arc::new(decode_file));
         let none = WallpaperSettings::default();
-        let light = colour_lightness(crate::render::scene::wallpaper_tint(false));
+        let light = BarBands::even(crate::render::scene::wallpaper_tint(false));
         for _ in 0..3 {
             assert!(wallpapers.shown(1, &none, false, (8, 8), 1, 0.0).is_none());
         }
-        assert_eq!(wallpapers.take_bar_lightness(), [(1, light)]);
+        assert_eq!(wallpapers.take_bar_bands(), [(1, light)]);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
         wallpapers.shown(1, &none, true, (8, 8), 1, 0.0);
-        let dark = colour_lightness(crate::render::scene::wallpaper_tint(true));
-        assert_eq!(wallpapers.take_bar_lightness(), [(1, dark)]);
+        let dark = BarBands::even(crate::render::scene::wallpaper_tint(true));
+        assert_eq!(wallpapers.take_bar_bands(), [(1, dark)]);
     }
 
     #[test]
     fn only_the_rows_under_the_bar_are_measured() {
         let pixmap = split_pixmap((300, 200), 24, 10, 245);
-        assert!(raw_lightness(&pixmap, 24) < 60, "the bar's rows are dark");
         assert!(
-            raw_lightness(&pixmap, 200) > 800,
+            raw_bands(&pixmap, 24).luminance() < 0.01,
+            "the bar's rows are dark"
+        );
+        assert!(
+            raw_bands(&pixmap, 200).luminance() > 0.6,
             "the whole image is mostly light"
         );
         // a strip taller than the image measures the image
-        assert_eq!(raw_lightness(&pixmap, 900), raw_lightness(&pixmap, 200));
+        assert_eq!(raw_bands(&pixmap, 900), raw_bands(&pixmap, 200));
     }
 
     #[test]

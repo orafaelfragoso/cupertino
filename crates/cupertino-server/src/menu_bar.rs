@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::dbus::{LoginTrust, OwnerRefusal, Request as DbusRequest};
 use crate::input::{translate_action, Action, Chord};
 use crate::owner_check::{OwnerCheck, OwnerKey};
+use crate::render::wallpaper::BarBands;
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_modifiers::{Physical, Profile, RawMods};
@@ -321,8 +322,10 @@ struct Bar {
     agent_sent: Option<LoginTrust>,
     /// The shortcut group last sent (version 10); `None` until the first one.
     shortcuts_sent: Option<Shortcuts>,
-    /// The backdrop lightness last sent (version 14); `None` until the first one.
+    /// The backdrop lightness last sent (version 14 to 20); `None` until the first one.
     backdrop_sent: Option<u16>,
+    /// The backdrop bands last sent (version 21); `None` until the first ones.
+    bands_sent: Option<BarBands>,
 }
 
 /// Where the bar of a surface is drawn: offset from its layout position and opacity.
@@ -357,6 +360,10 @@ const READER_RETRY_MAX: Duration = Duration::from_secs(30);
 pub const BACKDROP_LIGHTNESS_MAX: u16 = 1000;
 /// How far the backdrop lightness moves, in thousandths, before a bar is told again: more than this.
 pub const BACKDROP_LIGHTNESS_STEP: u16 = 10;
+/// The version of `cupertino_menu_bar_v1` that is told the backdrop's bands in place of its lightness, and the most
+/// bands it carries.
+pub const BACKDROP_BANDS_VERSION: u32 = 21;
+pub const BACKDROP_BANDS_MAX: usize = 256;
 
 /// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is
 /// verified too, so a window hides its own menus only while the bar can read them.
@@ -492,8 +499,9 @@ pub struct Announced {
 pub struct MenuBars {
     pub set: MenuBarSet,
     bars: Vec<Bar>,
-    /// The lightness of the wallpaper under the bar of each output whose wallpaper the server has measured.
-    backdrops: HashMap<OutputId, u16>,
+    /// The colour of the wallpaper under the bar of each output whose wallpaper the server has measured, band by band
+    /// across the output.
+    backdrops: HashMap<OutputId, BarBands>,
     /// Addresses announced by windows, by window id and kind.
     addresses: HashMap<(u64, MenuKind), MenuAddress>,
     /// Addresses announced before the window mapped.
@@ -795,13 +803,14 @@ impl Cupertino {
             agent_sent: None,
             shortcuts_sent: None,
             backdrop_sent: None,
+            bands_sent: None,
         });
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
         self.refresh_session_agent();
         self.refresh_menu_bar_shortcuts();
-        self.refresh_backdrop_lightness();
+        self.refresh_backdrop();
         self.refresh_gtk_capabilities();
         self.refresh_app_menus();
         if self.menu_bars.bars.len() == 1 {
@@ -1126,27 +1135,39 @@ impl Cupertino {
         }
     }
 
-    /// The lightness of the wallpaper under the bar of `output` (CIE L*/100 in thousandths, clamped to
-    /// [`BACKDROP_LIGHTNESS_MAX`]). A value equal to the stored one does nothing. `None` forgets the output's measure
-    /// when the output goes and sends nothing: a value sent to a bar is never withdrawn.
-    pub fn set_backdrop_lightness(&mut self, output: OutputId, lightness: Option<u16>) {
-        let Some(lightness) = lightness.map(|l| l.min(BACKDROP_LIGHTNESS_MAX)) else {
+    /// The colour of the wallpaper under the bar of `output`, band by band across it (at most [`BACKDROP_BANDS_MAX`]
+    /// bands). Bands equal to the stored ones do nothing. `None` forgets the output's measure when the output goes and
+    /// sends nothing: a value sent to a bar is never withdrawn.
+    pub fn set_backdrop_bands(&mut self, output: OutputId, bands: Option<BarBands>) {
+        let Some(mut bands) = bands else {
             self.menu_bars.backdrops.remove(&output);
             return;
         };
-        if self.menu_bars.backdrops.insert(output, lightness) != Some(lightness) {
-            self.refresh_backdrop_lightness();
+        bands.0.truncate(BACKDROP_BANDS_MAX);
+        if self.menu_bars.backdrops.get(&output) != Some(&bands) {
+            self.menu_bars.backdrops.insert(output, bands);
+            self.refresh_backdrop();
         }
     }
 
-    /// The lightness of the wallpaper under the bar of `output`, as last measured.
-    pub fn backdrop_lightness(&self, output: OutputId) -> Option<u16> {
-        self.menu_bars.backdrops.get(&output).copied()
+    /// The colour of the wallpaper under the bar of `output`, as last measured.
+    pub fn backdrop_bands(&self, output: OutputId) -> Option<&BarBands> {
+        self.menu_bars.backdrops.get(&output)
     }
 
-    /// Tell the bars of version 14 or later the lightness of the wallpaper under them, each one the first time and
-    /// when it moved by more than [`BACKDROP_LIGHTNESS_STEP`] since.
-    fn refresh_backdrop_lightness(&mut self) {
+    /// The lightness of the wallpaper under the bar of `output` (CIE L*/100 of its mean colour, in thousandths), as
+    /// last measured: what a bar older than the bands is told.
+    pub fn backdrop_lightness(&self, output: OutputId) -> Option<u16> {
+        self.menu_bars
+            .backdrops
+            .get(&output)
+            .map(|b| b.lightness().min(BACKDROP_LIGHTNESS_MAX))
+    }
+
+    /// Tell each bar the wallpaper under it: a bar of version 21 or later its bands, the first time and whenever they
+    /// change; a bar of version 14 to 20 its lightness, the first time and when it moved by more than
+    /// [`BACKDROP_LIGHTNESS_STEP`] since.
+    fn refresh_backdrop(&mut self) {
         let backdrops = &self.menu_bars.backdrops;
         for bar in self
             .menu_bars
@@ -1154,9 +1175,24 @@ impl Cupertino {
             .iter_mut()
             .filter(|b| b.resource.version() >= 14)
         {
-            let Some(&lightness) = backdrops.get(&bar.output) else {
+            let Some(bands) = backdrops.get(&bar.output) else {
                 continue;
             };
+            if bar.resource.version() >= BACKDROP_BANDS_VERSION {
+                if bar.bands_sent.as_ref() == Some(bands) {
+                    continue;
+                }
+                let bytes = bands
+                    .0
+                    .iter()
+                    .flat_map(|band| band.iter().flat_map(|c| c.to_le_bytes()))
+                    .collect();
+                bar.resource.backdrop_bands(bytes);
+                bar.resource.done();
+                bar.bands_sent = Some(bands.clone());
+                continue;
+            }
+            let lightness = bands.lightness().min(BACKDROP_LIGHTNESS_MAX);
             if bar
                 .backdrop_sent
                 .is_some_and(|sent| sent.abs_diff(lightness) <= BACKDROP_LIGHTNESS_STEP)

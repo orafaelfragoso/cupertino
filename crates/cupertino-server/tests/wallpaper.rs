@@ -382,10 +382,11 @@ fn a_quarter_turned_output_draws_the_image_upright() {
 #[test]
 fn the_procedural_wallpaper_is_measured_by_its_average_colour_once_per_change() {
     use cupertino_server::render::scene::wallpaper_tint;
-    use cupertino_server::render::wallpaper::colour_lightness;
+    use cupertino_server::render::wallpaper::BarBands;
     // the average colour as it is: the bar draws nothing between the wallpaper and its text
-    let under_bar =
-        |appearance: Appearance| colour_lightness(wallpaper_tint(appearance == Appearance::Dark));
+    let under_bar = |appearance: Appearance| {
+        BarBands::even(wallpaper_tint(appearance == Appearance::Dark)).lightness()
+    };
     let Some(mut h) = Harness::new(|_, _| {}) else {
         return;
     };

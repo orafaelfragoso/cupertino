@@ -2132,7 +2132,17 @@ impl<M: Clone + 'static> Widget<M> for PullDownButton<M> {
 
 /// The container the panel and its pointer share as glass, and how far their outlines blend into each other.
 const TAIL_CONTAINER: u32 = 1;
-const TAIL_BLEND: f64 = 8.0;
+const TAIL_BLEND: f64 = 5.0;
+
+#[cfg(test)]
+mod tail_tests {
+    #[test]
+    fn the_tail_blends_into_the_panel_over_no_more_than_a_third_of_an_18_point_tail_so_it_still_tapers(
+    ) {
+        // a wider blend melts the pointer's narrowing layers into a blunt round blob under the panel
+        assert!(super::TAIL_BLEND <= 18.0 / 3.0, "{}", super::TAIL_BLEND);
+    }
+}
 
 /// A panel with a pointer stands over a floating bar: it is popover glass.
 fn tail_glass() -> Glass {

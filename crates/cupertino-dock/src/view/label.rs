@@ -44,7 +44,7 @@ const SIDE_GAP: f64 = 3.0;
 /// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
 /// the pointer's sides curve out into the capsule's bottom edge as one piece of glass.
 const GLASS_CONTAINER: u32 = 1;
-const GLASS_BLEND: f64 = 8.0;
+const GLASS_BLEND: f64 = 4.0;
 /// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
 /// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [
@@ -431,5 +431,11 @@ mod tests {
         // a five letter name about 34 points wide at 13 points makes a 63 point capsule
         assert_eq!(34.0 + 2.0 * PADDING, 63.0);
         assert_eq!((POINTER_WIDTH, POINTER_DEPTH), (12.0, 6.5));
+    }
+
+    #[test]
+    fn the_pointer_and_capsule_blend_over_no_more_than_a_third_of_the_pointer_so_it_still_tapers() {
+        // a wider blend melts the pointer's narrowing layers into a blunt round blob under the capsule
+        assert!(GLASS_BLEND <= POINTER_WIDTH / 3.0, "{GLASS_BLEND}");
     }
 }

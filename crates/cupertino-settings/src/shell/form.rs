@@ -465,11 +465,22 @@ fn rows(rows: &[Row], names: &Names, view: &View<'_>) -> Vec<Element<Message>> {
             out.push(slider_pair(&rows[i], &rows[i + 1], names));
             i += 2;
         } else {
-            out.push(row(&rows[i], names, view));
+            out.push(row(&rows[i], names, view).key(row_key(rows, i)));
             i += 1;
         }
     }
     out
+}
+
+/// The key of row `i` of a section: its control, and after the first row of that control (the readings of a pane all
+/// share one) its place among them. Each row keeps its node from one view to the next, so a refresh that changes no
+/// reading repaints nothing.
+fn row_key(rows: &[Row], i: usize) -> String {
+    let id = rows[i].id;
+    match rows[..i].iter().filter(|r| r.id == id).count() {
+        0 => format!("{id:?}"),
+        n => format!("{id:?}-{n}"),
+    }
 }
 
 /// The thumbnail's width and height, its corners, and the space between two of them.
@@ -737,7 +748,6 @@ fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
             content,
         }),
     }
-    .key(format!("{:?}", row.id))
 }
 
 /// A section title, bold, over its group, after the application's `icon` when it has one.
@@ -976,6 +986,21 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    #[test]
+    fn the_rows_of_a_section_have_keys_of_their_own_though_readings_share_their_control() {
+        let reading = |label: &str| {
+            crate::panes::row(
+                ControlId::Reading,
+                label,
+                Control::Text { value: "x".into() },
+                crate::panes::Backend::Service("system"),
+            )
+        };
+        let rows = [reading("Name"), reading("User name"), reading("Computer")];
+        let keys: Vec<String> = (0..rows.len()).map(|i| row_key(&rows, i)).collect();
+        assert_eq!(keys, ["Reading", "Reading-1", "Reading-2"]);
     }
 
     #[test]

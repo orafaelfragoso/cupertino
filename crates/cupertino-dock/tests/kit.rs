@@ -2605,6 +2605,44 @@ fn the_name_over_a_launching_tile_rides_its_bounce() {
     );
 }
 
+/// A tile whose menu is up keeps its pressed darkening, the name over it goes, and the darkening stays while the menu
+/// fades out.
+#[test]
+fn a_tile_stays_pressed_while_its_menu_is_up_and_fading_out() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.pointer(bar, PointerEvent::Enter { position: terminal });
+    run.settle();
+    assert!(label(&run).is_some());
+    // what the terminal's tile draws: its icon
+    let drawn = |run: &Run| {
+        let list = run.driver.runtime().snapshot(bar).unwrap().display_list;
+        list.nodes
+            .iter()
+            .filter(|n| n.bounds.contains(terminal) && !n.ops.is_empty())
+            .map(|n| format!("{:?}", n.ops))
+            .collect::<Vec<_>>()
+    };
+    let rest = drawn(&run);
+    run.button(bar, terminal, MouseButton::Right, true);
+    run.button(bar, terminal, MouseButton::Right, false);
+    run.settle();
+    assert!(open_menu_window(&run, bar).is_some(), "the menu opened");
+    assert!(label(&run).is_none(), "the name went with the press");
+    let pressed = drawn(&run);
+    assert_ne!(pressed, rest, "the icon is darkened");
+    run.message(Message::Input(cupertino_dock::view::Input::MenuClosed));
+    run.advance(0.1);
+    assert_eq!(
+        drawn(&run),
+        pressed,
+        "still darkened while the menu fades out"
+    );
+    run.advance(0.2);
+    assert_eq!(drawn(&run), rest, "and back once it faded");
+}
+
 /// The tile's menu is a grabbing popup of the bar anchored to the tile itself, below it, so the server flips it above
 /// the bar at the bottom of the output.
 #[test]

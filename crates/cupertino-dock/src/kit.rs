@@ -468,7 +468,12 @@ struct OpenMenu {
     tile: TileId,
     items: Vec<MenuItem>,
     label: String,
+    /// The tile's icon darkened, as pressed: the tile shows it while its menu is up and while the menu fades out.
+    dark: IconSet,
 }
+
+/// How long a tile keeps its pressed darkening after its menu closed: the time the menu takes to fade out.
+const MENU_FADE_OUT: f64 = 0.21;
 
 struct ForceQuit {
     output: u32,
@@ -510,6 +515,9 @@ pub struct Model {
     press: Option<TilePress>,
     poof: Option<Poof>,
     menu: Option<OpenMenu>,
+    /// The tile whose menu closed last, its darkened icon and when the menu closed: it keeps the darkening while the
+    /// menu fades out ([`MENU_FADE_OUT`]).
+    menu_fade: Option<(TileId, IconSet, f64)>,
     confirm: Option<OpenConfirm>,
     stack: Option<OpenStack>,
     /// The tile the left button is held on, and its icon darkened: the pressed tile shows it until the button comes up
@@ -592,6 +600,7 @@ impl Model {
             press: None,
             poof: None,
             menu: None,
+            menu_fade: None,
             confirm: None,
             stack: None,
             held: None,
@@ -1480,10 +1489,13 @@ impl Model {
             return;
         }
         let label = self.tile_name(id);
+        let dark = self.darkened_icon(id);
+        self.menu_fade = None;
         self.menu = Some(OpenMenu {
             tile: id,
             items,
             label,
+            dark,
         });
         self.menu_takes_keyboard = self.engaged;
     }
@@ -2311,7 +2323,31 @@ impl Model {
 
     /// Whether the bar moves by itself: a bounce, the magnification, auto-hide, a drag settling or the removal puff.
     fn bar_moving(&self, now: f64) -> bool {
-        self.session.dock.wants_tick(now) || self.poof.is_some()
+        self.session.dock.wants_tick(now) || self.poof.is_some() || self.menu_fading(now).is_some()
+    }
+
+    /// The tile whose closed menu still fades out now, and its darkened icon.
+    fn menu_fading(&self, now: f64) -> Option<(TileId, &IconSet)> {
+        self.menu_fade
+            .as_ref()
+            .filter(|(_, _, closed)| now - closed < MENU_FADE_OUT)
+            .map(|(id, dark, _)| (*id, dark))
+    }
+
+    /// The darkened icon a tile shows now: the one the button is held on, or the one whose menu is up or fading out.
+    fn pressed_icon(&self, id: TileId, now: f64) -> Option<&IconSet> {
+        let held = self
+            .held
+            .as_ref()
+            .filter(|(h, dark)| *h == id && !dark.is_empty());
+        let menu = self
+            .menu
+            .as_ref()
+            .filter(|m| m.tile == id && !m.dark.is_empty());
+        held.map(|(_, dark)| dark).or(menu.map(|m| &m.dark)).or(self
+            .menu_fading(now)
+            .filter(|(t, d)| *t == id && !d.is_empty())
+            .map(|(_, d)| d))
     }
 
     /// Whether the window-manager surfaces of an output move by themselves now (they want the next frame).
@@ -2581,7 +2617,8 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             }))]
         }
         Input::MenuClosed => {
-            model.menu = None;
+            let now = model.now();
+            model.menu_fade = model.menu.take().map(|m| (m.tile, m.dark, now));
             Vec::new()
         }
         Input::Stack(pointer) => model.stack_pointer(pointer),
@@ -2738,9 +2775,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     .stack
                     .as_ref()
                     .is_some_and(|s| s.tile == t.id && s.entries.is_some()),
-                icon: match &model.held {
-                    Some((id, dark)) if *id == t.id && !dark.is_empty() => dark.clone(),
-                    _ => model
+                icon: match model.pressed_icon(t.id, now) {
+                    Some(dark) => dark.clone(),
+                    None => model
                         .tile_icon(t.id)
                         .map(|k| model.icon(&k, &sides))
                         .unwrap_or_default(),

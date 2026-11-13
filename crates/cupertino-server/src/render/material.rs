@@ -266,6 +266,8 @@ pub struct MaterialStats {
     pub composites: u64,
     /// Render targets (texture and framebuffer) created: a pass that keeps reusing its targets creates none.
     pub allocations: u64,
+    /// Passes of a backdrop blur: the pyramid's downsamples and the Gaussian's two directions.
+    pub blur_passes: u64,
 }
 
 /// GL objects of the material pipeline. Created through [`MaterialGl::new`] on a renderer.
@@ -717,6 +719,13 @@ impl MaterialGl {
         gl.Uniform1i(src_loc, 0);
         gl.DrawArrays(ffi::TRIANGLES, 0, 3);
         self.stats.passes += 1;
+        if self
+            .progs
+            .as_ref()
+            .is_some_and(|p| program == p.downsample || program == p.blur)
+        {
+            self.stats.blur_passes += 1;
+        }
     }
 
     /// The blur of `p`'s recipe over its whole framebuffer.

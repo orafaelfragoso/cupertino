@@ -331,6 +331,9 @@ pub fn render(state: &mut Cupertino) {
             if let Some(composed) = state.compose_for_present(&mut h.renderer, idx) {
                 let compose = composing.elapsed();
                 let rendering = Instant::now();
+                if let Some(timer) = state.frame_stats.as_ref().and_then(|s| s.timer.as_ref()) {
+                    let _ = h.renderer.with_context(|_| unsafe { timer.stamp(false) });
+                }
                 if let Some((res, cache, tracker)) = state.gles_parts(idx) {
                     let mut resources = GlesResources::new(res, cache, composed.resources);
                     let result = Gles.render(
@@ -355,11 +358,26 @@ pub fn render(state: &mut Cupertino) {
                 if timing {
                     // the GPU's work belongs to the frame's time: wait for it
                     let st = &*state;
-                    let _ = h.renderer.with_context(|gl| unsafe {
-                        gl.Finish();
-                        crate::frame_stats::collect_pass_times(st, gl);
-                    });
-                    crate::frame_stats::frame_rendered(state, idx, compose, rendering.elapsed());
+                    let timer = st.frame_stats.as_ref().and_then(|s| s.timer.as_ref());
+                    let gpu = h
+                        .renderer
+                        .with_context(|gl| unsafe {
+                            if let Some(timer) = timer {
+                                timer.stamp(true);
+                            }
+                            gl.Finish();
+                            crate::frame_stats::collect_pass_times(st, gl);
+                            timer.map(|t| t.elapsed())
+                        })
+                        .ok()
+                        .flatten();
+                    crate::frame_stats::frame_rendered(
+                        state,
+                        idx,
+                        compose,
+                        rendering.elapsed(),
+                        gpu,
+                    );
                 }
             }
             state.process_screenshots(&mut h.renderer, idx);

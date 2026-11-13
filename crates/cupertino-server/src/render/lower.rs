@@ -476,7 +476,9 @@ fn picture(
         ImageRole::Cursor => Kind::Cursor,
         ImageRole::Standalone | ImageRole::Decoration => Kind::Unspecified,
     };
-    let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+    // the renderer counts what it uploads; an image it already holds costs nothing
+    let before = ctx.renderer.memory_uploads();
+    let element = MemoryRenderBufferRenderElement::from_buffer(
         ctx.renderer,
         loc,
         buffer,
@@ -484,7 +486,16 @@ fn picture(
         Some(src),
         Some(Size::from(size)),
         kind,
-    ) else {
+    );
+    let after = ctx.renderer.memory_uploads();
+    if after != before {
+        super::uploads::note(
+            item.id.kind,
+            after.uploads - before.uploads,
+            after.bytes - before.bytes,
+        );
+    }
+    let Ok(element) = element else {
         return;
     };
     match role {

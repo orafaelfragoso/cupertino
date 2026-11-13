@@ -506,6 +506,15 @@ fn start_frame_stats(
     let gpu_timers = extensions
         .split_whitespace()
         .any(|e| e == "GL_EXT_disjoint_timer_query");
+    // and each whole frame, by timestamps
+    let timer = if gpu_timers {
+        h.renderer
+            .with_context(|gl| unsafe { crate::frame_stats::FrameTimer::new(gl) })
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     if let Some(material) = state.render.as_ref().and_then(|r| r.material.as_ref()) {
         material.borrow_mut().gpu_timers = gpu_timers;
     }
@@ -523,10 +532,10 @@ fn start_frame_stats(
         }
     );
     let refresh = Duration::from_secs_f64(1000.0 / f64::from(refresh_mhz.max(1000)));
-    state.frame_stats = Some(
-        crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)
-            .with_context(|| format!("creating {}", path.display()))?,
-    );
+    let mut stats = crate::frame_stats::FrameStats::create(path, &renderer, refresh, start)
+        .with_context(|| format!("creating {}", path.display()))?;
+    stats.timer = timer;
+    state.frame_stats = Some(stats);
     Ok(())
 }
 

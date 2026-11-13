@@ -30,6 +30,8 @@ pub type Cut = (MemoryRenderBuffer, (i32, i32), [u32; 4]);
 #[derive(Default)]
 pub struct ImageCache {
     map: HashMap<(&'static str, u64), Cached>,
+    /// Images drawn on the CPU so far (the frame statistics count them per frame).
+    pub rasters: u64,
 }
 
 impl ImageCache {
@@ -49,6 +51,7 @@ impl ImageCache {
             }
         }
         let (pm, extra) = render()?;
+        self.rasters += 1;
         let px = (pm.width() as i32, pm.height() as i32);
         let buffer = MemoryRenderBuffer::from_slice(
             pm.data(),

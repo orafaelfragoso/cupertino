@@ -221,7 +221,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   of the bar's tone), the dot of a status item without an icon and the open title's highlight. What keeps the
   appearance: the menus and the screen capture indicator's indigo. Third-party status items keep their own icons. Before
   the first value, below version 14, while Reduce Transparency makes the bar solid and while `show.background` gives it
-  a backdrop of its own, the whole bar keeps the appearance's palette.
+  a backdrop of its own (the `MenuBar` material: its blur under a grey of 0.9647 at 80 % in the light appearance and
+  0.1765 at 90 % in the dark one), the whole bar keeps the appearance's palette.
 - **Status items over an uneven wallpaper.** With `tone.per_item = on` in `menubar.conf` (the default), the bands, a
   see-through bar and a server of version 21, each item of the status area (status items, the control panel and the
   clock) takes the tone of the wallpaper under its own slot (`tone::SlotTones`): the luminance of the mean colour of the

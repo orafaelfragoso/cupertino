@@ -193,7 +193,11 @@ mod tests {
         }
         assert_eq!(ops[1].a[0], OP_SATURATE);
         assert!((ops[1].a[1] - 1.2).abs() < 1e-5);
-        assert!(fill_ops(&r).is_empty());
+        // one plain grey over the blur, in normal blending and not tinted
+        let fills = fill_ops(&r);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].a, [0.0; 4]);
+        assert_eq!(fills[0].b, [0.9647, 0.9647, 0.9647, 0.8]);
     }
 
     #[test]

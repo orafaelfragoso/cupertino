@@ -587,7 +587,18 @@
         }
        ]
       },
-      "fills": [],
+      "fills": [
+       {
+        "rgba": [
+         0.9647,
+         0.9647,
+         0.9647,
+         0.8
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
       "corner_radius": null,
       "corner_curve": "circular",
       "notes": [],
@@ -612,7 +623,18 @@
         }
        ]
       },
-      "fills": [],
+      "fills": [
+       {
+        "rgba": [
+         0.9647,
+         0.9647,
+         0.9647,
+         0.8
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
       "corner_radius": null,
       "corner_curve": "circular",
       "notes": [],
@@ -3169,7 +3191,18 @@
         }
        ]
       },
-      "fills": [],
+      "fills": [
+       {
+        "rgba": [
+         0.1765,
+         0.1765,
+         0.1765,
+         0.9
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
       "corner_radius": null,
       "corner_curve": "circular",
       "notes": [],
@@ -3194,7 +3227,18 @@
         }
        ]
       },
-      "fills": [],
+      "fills": [
+       {
+        "rgba": [
+         0.1765,
+         0.1765,
+         0.1765,
+         0.9
+        ],
+        "blend": "normal",
+        "tint": false
+       }
+      ],
       "corner_radius": null,
       "corner_curve": "circular",
       "notes": [],

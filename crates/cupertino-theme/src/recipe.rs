@@ -703,7 +703,7 @@ mod tests {
         let r = rec(&lib(), Appearance::Light, "MenuBar");
         let b = r.backdrop.as_ref().unwrap();
         assert_eq!((b.scale, b.sigma_pt), (0.5, 180.0));
-        assert!(r.fills.is_empty());
+        assert_eq!(r.fills.len(), 1);
         assert_eq!(r.rendition_key, "active.normal");
         match &b.ops[..] {
             [ColorOp::LumCurve(v, amt), ColorOp::Saturate(s)] => {
@@ -717,6 +717,45 @@ mod tests {
                 assert!(near(*s, 1.2));
             }
             other => panic!("unexpected ops {other:?}"),
+        }
+    }
+
+    /// The bar's own backdrop (`show.background`) lays one plain grey over its blur: 0.9647 at 80 % in the light
+    /// appearance and 0.1765 at 90 % in the dark one, in every variant.
+    #[test]
+    fn menu_bar_lays_a_grey_fill_over_its_blur_in_each_appearance() {
+        for (appearance, grey, alpha) in [
+            (Appearance::Light, 0.9647, 0.8),
+            (Appearance::Dark, 0.1765, 0.9),
+        ] {
+            for variant in ["active.normal", "inactive.normal"] {
+                let r = lib()
+                    .recipe(
+                        appearance,
+                        "MenuBar",
+                        &MaterialOptions {
+                            rendition_key: Some(variant.into()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert!(
+                    r.backdrop.is_some(),
+                    "{appearance:?} {variant}: the blur stays"
+                );
+                match &r.fills[..] {
+                    [fill] => {
+                        assert_eq!(
+                            fill.rgba,
+                            [grey, grey, grey, alpha],
+                            "{appearance:?} {variant}"
+                        );
+                        assert_eq!(fill.blend, Blend::Normal);
+                        assert!(!fill.tint_layer);
+                    }
+                    other => panic!("{appearance:?} {variant}: {other:?}"),
+                }
+            }
         }
     }
 

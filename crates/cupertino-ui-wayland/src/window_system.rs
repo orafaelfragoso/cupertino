@@ -181,23 +181,25 @@ fn set_look(
         })
     });
     match glass {
-        Some(g) => {
-            let style = match g.style {
-                GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
-                GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
-                GlassStyle::LargePanel => cupertino_protocol_app::GlassStyle::LargePanel,
-                GlassStyle::Bar => cupertino_protocol_app::GlassStyle::Bar,
-                GlassStyle::Dense => cupertino_protocol_app::GlassStyle::Dense,
-                GlassStyle::Module => cupertino_protocol_app::GlassStyle::Module,
-                GlassStyle::Card => cupertino_protocol_app::GlassStyle::Card,
-                GlassStyle::Track => cupertino_protocol_app::GlassStyle::Track,
-            };
-            backdrop.set_glass(style, g.container, g.spacing)
-        }
+        Some(g) => backdrop.set_glass(protocol_style(g.style), g.container, g.spacing),
         None => {
             backdrop.set_material(name);
             Ok(())
         }
+    }
+}
+
+/// The protocol's glass style for a region's.
+fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
+    match style {
+        GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
+        GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
+        GlassStyle::LargePanel => cupertino_protocol_app::GlassStyle::LargePanel,
+        GlassStyle::Bar => cupertino_protocol_app::GlassStyle::Bar,
+        GlassStyle::Dense => cupertino_protocol_app::GlassStyle::Dense,
+        GlassStyle::Module => cupertino_protocol_app::GlassStyle::Module,
+        GlassStyle::Card => cupertino_protocol_app::GlassStyle::Card,
+        GlassStyle::Track => cupertino_protocol_app::GlassStyle::Track,
     }
 }
 
@@ -1914,6 +1916,20 @@ fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_card_and_a_track_ask_for_the_protocol_s_card_and_track_glass() {
+        use cupertino_protocol_app::GlassStyle as Wire;
+        assert_eq!(protocol_style(GlassStyle::Card), Wire::Card);
+        assert_eq!(protocol_style(GlassStyle::Track), Wire::Track);
+        assert_eq!(protocol_style(GlassStyle::Module), Wire::Module);
+        // a material named for them stands for that glass
+        assert_eq!(GlassStyle::of_material("CardGlass"), Some(GlassStyle::Card));
+        assert_eq!(
+            GlassStyle::of_material("TrackGlass"),
+            Some(GlassStyle::Track)
+        );
+    }
 
     #[test]
     fn the_session_appearance_and_display_options_make_one_system_appearance() {

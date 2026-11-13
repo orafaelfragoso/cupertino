@@ -813,3 +813,27 @@ pub trait WindowSystem {
     /// Wakes a waiting [`dispatch`](WindowSystem::dispatch) from any thread.
     fn waker(&self) -> Waker;
 }
+
+#[cfg(test)]
+mod glass_style_tests {
+    use super::GlassStyle;
+
+    #[test]
+    fn every_glass_style_has_a_material_name_that_stands_for_it() {
+        for style in [
+            GlassStyle::Regular,
+            GlassStyle::Clear,
+            GlassStyle::LargePanel,
+            GlassStyle::Bar,
+            GlassStyle::Dense,
+            GlassStyle::Module,
+            GlassStyle::Card,
+            GlassStyle::Track,
+        ] {
+            assert_eq!(GlassStyle::of_material(style.material()), Some(style));
+        }
+        assert_eq!(GlassStyle::Card.material(), "CardGlass");
+        assert_eq!(GlassStyle::Track.material(), "TrackGlass");
+        assert_eq!(GlassStyle::of_material("Sidebar"), None);
+    }
+}

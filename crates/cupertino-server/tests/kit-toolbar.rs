@@ -136,6 +136,18 @@ impl Harness {
         );
     }
 
+    /// Steps until `condition` holds or `limit` passes; whether it held.
+    fn wait_for(&mut self, limit: Duration, condition: impl Fn(&Cupertino) -> bool) -> bool {
+        let end = Instant::now() + limit;
+        while Instant::now() < end {
+            self.step();
+            if condition(&self.state) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// [`common::ping_barrier`] on Settings: it has handled what it was sent, and the server has what it did with it.
     fn settle(&mut self) {
         let client = self
@@ -303,6 +315,15 @@ fn a_double_click_on_the_toolbar_zooms_the_kit_window_and_another_restores_it() 
     // the client hears it is maximized before the next double click asks for the other state
     h.settle();
     assert_eq!(h.state(), LifecycleState::Zoomed);
-    h.double_click(TOOLBAR_GAP);
-    h.wait_until("the window to restore", |s| frame(s) == before);
+    // a double click that lands while the client still lays out the zoomed window may meet a control there, which
+    // takes the press; the restore is asked again a little later, past the double click interval
+    for _ in 0..5 {
+        h.double_click(TOOLBAR_GAP);
+        if h.wait_for(Duration::from_secs(2), |s| frame(s) == before) {
+            return;
+        }
+        h.time += 1_000;
+        h.settle();
+    }
+    panic!("the window was not restored; frame={:?}", frame(&h.state));
 }

@@ -24,7 +24,7 @@ use crate::config::Orientation;
 /// The capsule's height with one line and with two, the space either side of the text, and the name's size and weight.
 pub const HEIGHT: f64 = 26.0;
 pub const TWO_LINE_HEIGHT: f64 = 36.0;
-pub const PADDING: f64 = 12.0;
+pub const PADDING: f64 = 14.5;
 pub const FONT_PT: f64 = 13.0;
 const WEIGHT: u16 = 400;
 /// The second line's size, and how far its centre line is below the first line's.
@@ -34,8 +34,8 @@ const STATUS_DROP: f64 = 14.0;
 const STATUS_SHARE: f32 = 0.6;
 /// The capsule's corner radius: half a one-line capsule, and a two-line capsule keeps it.
 pub const RADIUS: f64 = 13.0;
-/// The pointer under the capsule: its width and its depth.
-pub const POINTER_WIDTH: f64 = 14.0;
+/// The pointer under the capsule: its width at the base, before its sides curve out into the capsule, and its depth.
+pub const POINTER_WIDTH: f64 = 12.0;
 pub const POINTER_DEPTH: f64 = 6.5;
 /// How far the pointer's tip stands above the bar's top edge (the label's window ends at the tip).
 pub const GAP: f64 = 3.0;
@@ -409,5 +409,17 @@ impl<M: Clone + 'static> Widget<M> for Body {
         if let Some(status) = &self.status {
             cx.description(status.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_capsule_keeps_14_5_points_either_side_of_the_name_over_a_12_point_pointer() {
+        // a five letter name about 34 points wide at 13 points makes a 63 point capsule
+        assert_eq!(34.0 + 2.0 * PADDING, 63.0);
+        assert_eq!((POINTER_WIDTH, POINTER_DEPTH), (12.0, 6.5));
     }
 }

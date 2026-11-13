@@ -29,7 +29,8 @@
 //! 6. **Ring shadow.** Inside the shape, a stroke `stroke` wide along the inside of the outline, moved up by
 //!    `ring_offset` and blurred with a Gaussian of `ring_blur`, darkens the face by its opacity ([`ring_shadow`]).
 //! 7. **Drop shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at `amount` percent
-//!    of its fill's alpha. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
+//!    of its fill's alpha, and an outline hairline. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
+//!    A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
 //!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
@@ -661,11 +662,10 @@ impl Container {
         } else {
             [gradient[0] / slope, gradient[1] / slope]
         };
+        let fill = params.shadow.fill;
+        let fill = [fill[0], fill[1], fill[2]];
         if d > 0.5 {
-            let s = &params.shadow;
-            let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
-            let a = (shadow_alpha(d_shadow, params) + outline_alpha(d, params)).min(1.0);
-            return ([s.fill[0], s.fill[1], s.fill[2]], a);
+            return (fill, self.outside_alpha(p, d));
         }
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
@@ -693,7 +693,21 @@ impl Container {
             params,
         );
         c = c.map(|v| v * (1.0 - ring));
-        (c, (0.5 - d).clamp(0.0, 1.0))
+        // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
+        let cov = (0.5 - d).clamp(0.0, 1.0);
+        let under = (1.0 - cov) * self.outside_alpha(p, d);
+        let a = cov + under;
+        if a > 0.0 {
+            c = std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * cov + fill[i] * under) / a);
+        }
+        (c, a)
+    }
+
+    /// The alpha of what the shape draws outside itself at `p`, `d` from its edge: the drop shadow and the outline.
+    pub fn outside_alpha(&self, p: [f32; 2], d: f32) -> f32 {
+        let s = &self.params.shadow;
+        let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
+        (shadow_alpha(d_shadow, &self.params) + outline_alpha(d, &self.params)).min(1.0)
     }
 }
 
@@ -1604,6 +1618,43 @@ mod tests {
         // and nothing at rest
         let rest = Container::new(c.shapes.clone(), 0.0, c.mode);
         assert!(close(rest.shade([100.0, 90.0], &grey).0[0], plain, 1e-5));
+    }
+
+    /// A pixel the edge crosses shows the glass over the outline in the part the glass leaves uncovered, so the
+    /// edge's alpha and colour run on without a step from the pixel just inside the edge to the one just outside.
+    #[test]
+    fn an_edge_pixel_shows_the_outline_under_the_part_the_glass_leaves_open() {
+        let mut c = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode::default(),
+        );
+        c.params.shadow.outline_opacity = 0.32;
+        c.params.shadow.outline_width = 1.0;
+        let white = |_: usize, _: [f32; 2]| [1.0f32; 3];
+        let fill = c.params.shadow.fill;
+        // over a white backdrop, as a compositor puts it
+        let seen = |y: f32| {
+            let (col, a) = c.shade([100.0, y], &white);
+            col.map(|v| v * a + (1.0 - a))
+        };
+        // half the pixel is glass and half the outline: alpha ½ + ½ · 0.32
+        let (_, a) = c.shade([100.0, 100.0], &white);
+        assert!(close(a, 0.5 + 0.5 * 0.32, 1e-5), "{a}");
+        // just inside and just outside the outer edge of the pixel row the result is the same
+        let inside = seen(100.5 - 1e-3);
+        let outside = seen(100.5 + 1e-3);
+        for i in 0..3 {
+            assert!(
+                close(inside[i], outside[i], 1e-3),
+                "{inside:?} vs {outside:?}"
+            );
+            assert!(close(outside[i], 1.0 - 0.32 * (1.0 - fill[i]), 1e-3));
+        }
+        // and a shape with no outline leaves the open part to the backdrop
+        c.params.shadow.outline_opacity = 0.0;
+        let (_, a) = c.shade([100.0, 100.0], &white);
+        assert!(close(a, 0.5, 1e-5), "{a}");
     }
 
     /// The rim adds `amount · color_bias` (darker for a negative bias) to every channel, scaled by the face's

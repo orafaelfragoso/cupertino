@@ -187,19 +187,21 @@ float normal_cdf(float x) {
     return 1.0 / (1.0 + exp(-1.702 * x));
 }
 
+// stage 7: the drop shadow outside the shape at its opacity (none at rest), and a hairline of the shadow's colour
+// along the outside of the shape
+float outside_alpha(vec2 p, float d) {
+    float drop = G.shadow.z > 0.0 ? G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w) : 0.0;
+    float line = G.glow.w > 0.0 && G.ring.w > 0.0 ? G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0) : 0.0;
+    return min(drop + line, 1.0);
+}
+
 void main() {
     vec2 p = v_px;
     vec4 fa;
     vec4 fb;
     float d = field(p, fa, fb);
     if (d > 0.5) {
-        // stage 7: the drop shadow outside the shape, drawn at its opacity (none at rest)
-        bool outlined = G.glow.w > 0.0 && G.ring.w > 0.0;
-        if (G.shadow.z <= 0.0 && !outlined) { discard; }
-        float drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w);
-        // a hairline of the shadow's colour along the outside of the shape
-        float line = outlined ? G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0) : 0.0;
-        float a = min(drop + line, 1.0) * G.info.w;
+        float a = outside_alpha(p, d) * G.info.w;
         if (a <= 0.0) { discard; }
         frag_color = vec4(G.shadow_color.rgb, a);
         return;
@@ -253,6 +255,10 @@ void main() {
         }
         c = c * (1.0 - min(G.shadow_color.w, 1.0) * max(m, 0.0));
     }
-    float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
-    frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), cov);
+    // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
+    float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
+    float under = (1.0 - cov) * outside_alpha(p, d);
+    float a = cov + under;
+    c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + G.shadow_color.rgb * under) / a : c;
+    frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), a * G.info.w);
 }

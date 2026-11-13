@@ -196,20 +196,23 @@ fn normal_cdf(x: f32) -> f32 {
   return 1.0 / (1.0 + exp(-1.702 * x));
 }
 
+// stage 7: the drop shadow outside the shape at its opacity (none at rest), and a hairline of the shadow's colour
+// along the outside of the shape
+fn outside_alpha(p: vec2<f32>, d: f32) -> f32 {
+  var drop = 0.0;
+  if (G.shadow.z > 0.0) { drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w); }
+  var line = 0.0;
+  if (G.glow.w > 0.0 && G.ring.w > 0.0) { line = G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0); }
+  return min(drop + line, 1.0);
+}
+
 @fragment
 fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let p = fin.px;
   let f = field(p);
   let d = f.d;
   if (d > 0.5) {
-    // stage 7: the drop shadow outside the shape, drawn at its opacity (none at rest)
-    let outlined = G.glow.w > 0.0 && G.ring.w > 0.0;
-    if (G.shadow.z <= 0.0 && !outlined) { discard; }
-    let drop = G.shadow.z * coverage(field_d(p - G.shadow.xy), G.shadow.w);
-    // a hairline of the shadow's colour along the outside of the shape
-    var line = 0.0;
-    if (outlined) { line = G.glow.w * clamp(G.ring.w + 0.5 - d, 0.0, 1.0); }
-    let a = min(drop + line, 1.0) * G.info.w;
+    let a = outside_alpha(p, d) * G.info.w;
     if (a <= 0.0) { discard; }
     return vec4<f32>(G.shadow_color.rgb, a);
   }
@@ -263,6 +266,11 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     }
     c = c * (1.0 - min(G.shadow_color.w, 1.0) * max(m, 0.0));
   }
-  let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0) * G.info.w;
-  return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), cov);
+  // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
+  let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
+  let under = (1.0 - cov) * outside_alpha(p, d);
+  let a = cov + under;
+  var rgb = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+  if (a > 0.0) { rgb = (rgb * cov + G.shadow_color.rgb * under) / a; }
+  return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a * G.info.w);
 }

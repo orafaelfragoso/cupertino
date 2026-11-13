@@ -174,6 +174,24 @@ fn black(a: f32) -> Color {
     Color::new(0.0, 0.0, 0.0, a)
 }
 
+/// The dark capsule on a material: a mid grey laid nearly opaque over it.
+fn dark_capsule() -> Color {
+    Color::new(0.33, 0.33, 0.33, 0.92)
+}
+
+/// The dark capsule keeps a quiet mid-grey tone over every sidebar tone, from a nearly black one to a light grey
+/// one, instead of lightening with the material under it.
+#[test]
+fn a_dark_capsule_keeps_its_tone_over_any_material() {
+    let mut h = harness(Appearance::Dark);
+    h.click(h.center("toggle"));
+    let (fill, _) = chrome(&h);
+    for under in [38.0, 76.0, 127.0] {
+        let tone = fill.r * 255.0 * fill.a + under * (1.0 - fill.a);
+        assert!((80.0..=89.0).contains(&tone), "over {under}: {tone}");
+    }
+}
+
 fn normal(role: ColorRole) -> Color {
     color(role, InteractionVariant::Normal, false)
 }
@@ -191,7 +209,7 @@ fn a_search_field_is_a_recessed_well_on_content_and_a_light_capsule_on_a_materia
         (
             Appearance::Dark,
             (black(0.25), white(0.05)),
-            (white(0.23), white(0.12)),
+            (dark_capsule(), white(0.28)),
         ),
         (
             Appearance::LightHighContrast,
@@ -201,7 +219,7 @@ fn a_search_field_is_a_recessed_well_on_content_and_a_light_capsule_on_a_materia
         (
             Appearance::DarkHighContrast,
             (black(0.25), border),
-            (white(0.23), border),
+            (dark_capsule(), border),
         ),
     ];
     for (appearance, well, capsule) in cases {

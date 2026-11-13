@@ -214,10 +214,13 @@ pub(crate) fn position(byte: usize) -> TextPosition {
 const SEARCH_GLYPH: f64 = 16.0;
 const SEARCH_GLYPH_X: f64 = 8.25;
 const SEARCH_TEXT_X: f64 = 29.5;
-/// A search field's capsule on a material: its fill and rim, white at these opacities in a dark appearance, the fill
-/// white and the rim black in a light one. On the window's content it is a text field's recessed well instead.
-const SEARCH_FILL_DARK: f32 = 0.23;
-const SEARCH_RIM_DARK: f32 = 0.12;
+/// A search field's capsule on a material in a dark appearance: a quiet mid grey laid nearly opaque over the material,
+/// so the field keeps its tone however light the material under it is, and a bright rim, white at this opacity.
+const SEARCH_FILL_DARK_GREY: f32 = 0.33;
+const SEARCH_FILL_DARK_ALPHA: f32 = 0.92;
+const SEARCH_RIM_DARK: f32 = 0.28;
+/// The same in a light appearance: the fill white and the rim black at these opacities. On the window's content the
+/// capsule is a text field's recessed well instead.
 const SEARCH_FILL_LIGHT: f32 = 0.45;
 const SEARCH_RIM_LIGHT: f32 = 0.09;
 
@@ -774,7 +777,12 @@ fn search_capsule(theme: &ThemeTokens, state: &ControlState) -> (Option<Color>, 
     let black = Color::new(0.0, 0.0, 0.0, 1.0);
     let (fill, rim) = if appearance.is_dark() {
         (
-            white.with_alpha(SEARCH_FILL_DARK),
+            Color::new(
+                SEARCH_FILL_DARK_GREY,
+                SEARCH_FILL_DARK_GREY,
+                SEARCH_FILL_DARK_GREY,
+                SEARCH_FILL_DARK_ALPHA,
+            ),
             white.with_alpha(SEARCH_RIM_DARK),
         )
     } else {

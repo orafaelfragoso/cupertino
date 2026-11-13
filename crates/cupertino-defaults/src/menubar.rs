@@ -10,6 +10,7 @@
 //! | `clock.flash_separators` | `on`, `off` | `off` |
 //! | `clock.hour_cycle` | `12`, `24` | `12` |
 //! | `show.background` | `on`, `off`: the bar has a backdrop of its own over the wallpaper | `off` |
+//! | `tone.per_item` | `on`, `off`: each status item's text and symbol follow the wallpaper under it, not under the whole bar | `on` |
 //! | `show.clock`, `show.wifi`, `show.battery`, `show.bluetooth`, `show.focus` | `on`, `off`: whether the item shows | `on` |
 //! | `recent.documents`, `recent.apps` | how many recent items the system menu lists, 0 to 50 | `10` |
 //! | `tray.hidden` | comma-separated ids of tray items that may not show in the bar | none |
@@ -86,6 +87,8 @@ pub struct MenuBarSettings {
     pub shown: ShownItems,
     /// The bar has a backdrop of its own over the wallpaper.
     pub background: bool,
+    /// Each item of the status area is dark or light for the wallpaper under it, not under the whole bar.
+    pub item_tone: bool,
     /// How many recent documents and applications the system menu lists.
     pub recent_documents: u32,
     pub recent_apps: u32,
@@ -187,6 +190,12 @@ const KEYS: &[Key<MenuBarSettings>] = &[
         keep: |s, g| s.background = g.background,
     },
     Key {
+        name: "tone.per_item",
+        read: |s, v| parse_switch(v).map(|on| s.item_tone = on),
+        write: |s| Some(switch_text(s.item_tone)),
+        keep: |s, g| s.item_tone = g.item_tone,
+    },
+    Key {
         name: "show.clock",
         read: |s, v| parse_switch(v).map(|on| s.shown.clock = on),
         write: |s| Some(switch_text(s.shown.clock)),
@@ -250,6 +259,7 @@ impl MenuBarSettings {
             focus: true,
         },
         background: false,
+        item_tone: true,
         recent_documents: 10,
         recent_apps: 10,
         hidden_tray: Vec::new(),
@@ -299,6 +309,19 @@ mod tests {
             vec![4, 5, 6]
         );
         assert_eq!(MenuBarSettings::parse("", None).0, MenuBarSettings::UNSET);
+    }
+
+    #[test]
+    fn each_status_item_follows_the_wallpaper_under_it_unless_turned_off() {
+        assert!(MenuBarSettings::UNSET.item_tone);
+        let (s, problems) = MenuBarSettings::parse("tone.per_item = off\n", None);
+        assert!(problems.is_empty());
+        assert!(!s.item_tone);
+        assert!(
+            MenuBarSettings::parse("tone.per_item = on\n", None)
+                .0
+                .item_tone
+        );
     }
 
     #[test]

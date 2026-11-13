@@ -1119,7 +1119,7 @@ mod tests {
     #[test]
     fn every_extra_draws_a_template_symbol_at_the_bar_size_in_the_bar_tint() {
         use crate::extras::{BluetoothState, FocusState, SYMBOL_NAMES};
-        use crate::tone::{BarTone, MenuPalette};
+        use crate::tone::BarTone;
         let mut shared = Shared::default();
         shared.extras.wifi = Some(WifiState {
             enabled: true,
@@ -1162,7 +1162,6 @@ mod tests {
         }
         let pack = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/assets/cupertino");
         let (assets, _) = cupertino_assets::Assets::read_pack(std::path::Path::new(pack)).unwrap();
-        let appearance = MenuPalette::new(false);
         let slots = [
             ("extra:wifi", "symbol.wifi"),
             ("extra:bluetooth", "symbol.bluetooth"),
@@ -1179,7 +1178,7 @@ mod tests {
             assert!(SYMBOL_NAMES.contains(&glyph.symbol), "{slot}");
             for scale in [1.0, 2.0] {
                 for tone in [BarTone::DarkText, BarTone::LightText] {
-                    let palette = tone.palette(appearance);
+                    let palette = tone.palette(false, false);
                     let (name, px, tint) = crate::view::status_symbol(glyph, &palette, scale);
                     assert_eq!(name, symbol);
                     assert_eq!(px, status_icon_px(scale), "{slot} at {scale}x");
@@ -1254,7 +1253,7 @@ mod tests {
     /// A tray item's own icon in grey strokes takes the bar's text colour; a coloured one keeps its colours.
     #[test]
     fn a_template_tray_icon_takes_the_bar_tint_and_a_coloured_one_keeps_its_own() {
-        use crate::tone::{BarTone, MenuPalette};
+        use crate::tone::BarTone;
         let solid = |rgba: [u8; 4]| {
             let mut p = Pixmap::new(4, 4).unwrap();
             for px in p.data_mut().as_chunks_mut::<4>().0 {
@@ -1262,7 +1261,7 @@ mod tests {
             }
             crate::view::icon_image(&p)
         };
-        let palette = BarTone::DarkText.palette(MenuPalette::new(true));
+        let palette = BarTone::DarkText.palette(true, false);
         let text = palette.text.map(|v| (v * 255.0).round() as u8);
         let white = crate::view::status_image(&solid([255, 255, 255, 255]), &palette);
         let first = &white.image.pixels[..4];

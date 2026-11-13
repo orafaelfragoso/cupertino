@@ -14,7 +14,7 @@ use crate::layout::{
     STATUS_ICON_PT, SYSTEM_MARK_PT,
 };
 use crate::popups;
-use crate::tone::{BarTone, MenuPalette, Rgba};
+use crate::tone::{BarTone, MenuPalette, Rgba, SlotTones};
 use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_kit::controls::{
     Button, ButtonRole, ButtonStyle, CheckBox, SecureField, Spacer, Stack, Text, TextField,
@@ -243,6 +243,8 @@ pub struct BarScene<'a> {
     pub shared: &'a Shared,
     pub font: BarFont,
     pub tone: BarTone,
+    /// The tone of each item of the status area that follows the wallpaper under it; the others take [`Self::tone`].
+    pub slot_tones: &'a SlotTones,
     /// Whether the bar draws its solid strip ([`crate::tone::solid_bar`] of the session's display options).
     pub solid: bool,
     /// The bar's size: the output's width and the bar's height.
@@ -470,7 +472,7 @@ fn bar<M: Clone + 'static>(scene: &BarScene<'_>, input: fn(Input) -> M) -> Windo
                 name,
                 metrics: controller.bar_metrics.clone(),
                 font: scene.font,
-                tone: scene.tone,
+                tone: scene.slot_tones.tone(&slot.key).unwrap_or(scene.tone),
                 input,
             })
         })
@@ -699,6 +701,11 @@ fn popup_palette(env: &Environment) -> MenuPalette {
     } else {
         palette
     }
+}
+
+/// Whether the session's appearance has Increase Contrast, which makes the bar's text opaque.
+fn high_contrast(env: &Environment) -> bool {
+    env.theme.preferences.appearance.is_high_contrast()
 }
 
 fn dark(env: &Environment) -> bool {
@@ -1187,8 +1194,7 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let appearance = MenuPalette::new(dark(cx.env()));
-        let palette = self.tone.palette(appearance);
+        let palette = self.tone.palette(dark(cx.env()), high_contrast(cx.env()));
         let size = cx.size();
         let m = &self.metrics;
         if self.highlighted {

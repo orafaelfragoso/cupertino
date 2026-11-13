@@ -25,7 +25,7 @@ use cupertino_menubar::geom::Rect;
 use cupertino_menubar::layout::{BarMetrics, SlotKey};
 use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
-use cupertino_menubar::tone::BarTone;
+use cupertino_menubar::tone::{Backdrop as Wallpaper, BarTone, SlotTones};
 use cupertino_menubar::view::{
     self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure, PromptEvent, PromptPhase,
     PromptScene, RowIcons,
@@ -368,10 +368,20 @@ struct Bar {
     focused: bool,
     /// Alt is held on a surface of the bar.
     alt: bool,
-    /// The lightness of the wallpaper under the bar, from the server; `None` before it is known.
-    backdrop_lightness: Option<u16>,
+    /// The wallpaper under the bar, from the server; `None` before it is known.
+    backdrop: Option<Wallpaper>,
     /// The palette of the bar's strip.
     tone: BarTone,
+    /// The tone of each item of the status area over the wallpaper under it, while `tone.per_item` is on, the bar is
+    /// see-through and the server tells the wallpaper band by band; empty otherwise.
+    slot_tones: SlotTones,
+}
+
+impl Bar {
+    /// The relative luminance of the wallpaper under the whole bar, once known.
+    fn luminance(&self) -> Option<f64> {
+        self.backdrop.as_ref().map(Wallpaper::luminance)
+    }
 }
 
 impl Bar {
@@ -774,8 +784,9 @@ impl App {
             keyboard: KeyboardInteractivity::None,
             focused: false,
             alt: false,
-            backdrop_lightness: None,
+            backdrop: None,
             tone: BarTone::Appearance,
+            slot_tones: SlotTones::default(),
         });
         if self.bars.len() == 1 {
             if let Err(e) = self
@@ -905,7 +916,8 @@ impl App {
                 self.dark = dark;
                 let display = self.tone_display();
                 for bar in &mut self.bars {
-                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                    bar.tone = BarTone::fresh(bar.luminance(), display);
+                    bar.slot_tones.clear();
                 }
                 Vec::new()
             }
@@ -915,7 +927,8 @@ impl App {
                 self.display = display;
                 let display = self.tone_display();
                 for bar in &mut self.bars {
-                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                    bar.tone = BarTone::fresh(bar.luminance(), display);
+                    bar.slot_tones.clear();
                     bar.controller.cfg.flash_choice = !display.reduce_motion;
                 }
                 Vec::new()
@@ -939,10 +952,17 @@ impl App {
             .feed
             .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
         let tone_display = self.tone_display();
-        if let Some(lightness) = update.backdrop_lightness {
+        let backdrop = match (&update.backdrop_bands, update.backdrop_lightness) {
+            (Some(bands), _) => Some(Wallpaper::Bands(bands.clone())),
+            (None, Some(lightness)) => Some(Wallpaper::Lightness(lightness)),
+            (None, None) => None,
+        };
+        if let Some(backdrop) = backdrop {
             let bar = &mut self.bars[i];
-            bar.backdrop_lightness = Some(lightness);
-            bar.tone = bar.tone.next(Some(lightness), tone_display);
+            bar.backdrop = Some(backdrop);
+            bar.tone = BarTone::fresh(bar.luminance(), tone_display);
+            // a new wallpaper: each item takes its tone afresh, at once
+            bar.slot_tones.clear();
         }
         if let Some(agent) = update.session_agent {
             let agent = match agent {
@@ -1205,7 +1225,8 @@ impl App {
                                 drop(surfaces);
                                 let display = self.tone_display();
                                 for bar in &mut self.bars {
-                                    bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                                    bar.tone = BarTone::fresh(bar.luminance(), display);
+                                    bar.slot_tones.clear();
                                 }
                             }
                         }
@@ -1352,6 +1373,21 @@ impl App {
                 }
             } else {
                 next = next.min(until.saturating_duration_since(Instant::now()));
+            }
+        }
+        let per_item =
+            self.conf.item_tone && !cupertino_menubar::tone::solid_bar(self.tone_display());
+        for bar in &mut self.bars {
+            match &bar.backdrop {
+                Some(backdrop @ Wallpaper::Bands(_)) if per_item => {
+                    let layout = bar.controller.layout();
+                    bar.slot_tones
+                        .update(&layout.slots, layout.bar, backdrop, now);
+                    if let Some(due) = bar.slot_tones.deadline() {
+                        next = next.min(Duration::from_secs_f64((due - now).max(0.0)));
+                    }
+                }
+                _ => bar.slot_tones.clear(),
             }
         }
         for i in 0..self.bars.len() {
@@ -1654,6 +1690,7 @@ impl Application for App {
                         shared: &app.shared,
                         font: app.font,
                         tone: bar.tone,
+                        slot_tones: &bar.slot_tones,
                         solid: cupertino_menubar::tone::solid_bar(app.tone_display()),
                         size: Size::new(f64::from(bar.width), app.height),
                         open_panels: &open_panels,

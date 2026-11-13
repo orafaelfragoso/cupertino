@@ -209,20 +209,30 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   panel does not know its output yet it shows only where there is one bar. Both items read as expanded to assistive
   technology while their panel is open. The highlight is the same fill in every mode and tone, Reduce Transparency and
   Increase Contrast included.
-- **Backdrop.** From shell version 14 the server sends each bar the lightness of its output's wallpaper under the strip
-  (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`tone::BarTone`): dark text at
-  550 and above, light text at 450 and below, the last tone held in between. The first value, and the first after the
-  appearance or the display options changed, is decided afresh, splitting the band at 500. What follows the tone: the
-  labels, the application name, the clock, the system mark, the control panel glyph, the extras' symbols (drawn by the
-  toolkit in the text colour of the bar's tone), the dot of a status item without
-  an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
-  indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Reduce
-  Transparency makes the bar solid, the whole bar keeps the appearance's palette. The server measures the wallpaper's
-  strip as it is, since nothing lies between it and the text, as the mean of each pixel's L* (a few bright lines over a dark strip leave it dark). Outside the band the chosen text is the one that reads
-  better, at 4.5:1 or more below 400 and above 600; inside it neither colour reaches 4.5:1 (about 4.0:1 at 500). The text, symbols and mark lie sharp on the
-  wallpaper with no halo, ring or backing under them, over any wallpaper and in either tone. The session's Reduce
-  Transparency is the one source of the solid strip (`tone::solid_bar`, `BarScene::solid`). A bar redraws when its tone
-  changes.
+- **Backdrop.** From shell version 21 the server sends each bar the mean encoded sRGB colour of its output's wallpaper
+  under the strip in bands of equal width across the output (`backdrop_bands`); a server of version 14 to 20 sends the
+  lightness of that mean colour instead (`backdrop_luminance`, CIE L*/100 in thousandths), read as the luminance it
+  stands for (`tone::Backdrop`). Each bar picks its own tone (`tone::BarTone::fresh`) from the relative luminance of the
+  mean colour under the whole strip (the encoded mean made linear, weighed as Rec. 709 weighs red, green and blue): light
+  text below 0.334 (`tone::LIGHT_TEXT_BELOW`), dark text from it, with no band held around the cut, since the measure
+  changes only with the wallpaper. The bar's text and symbols are black at 85 % or white at 90 % (`tone::bar_text`), both
+  opaque with Increase Contrast; the menus keep their own palette. What follows the tone: the labels, the application
+  name, the clock, the system mark, the control panel glyph, the extras' symbols (drawn by the toolkit in the text colour
+  of the bar's tone), the dot of a status item without an icon and the open title's highlight. What keeps the
+  appearance: the menus and the screen capture indicator's indigo. Third-party status items keep their own icons. Before
+  the first value, below version 14, while Reduce Transparency makes the bar solid and while `show.background` gives it
+  a backdrop of its own, the whole bar keeps the appearance's palette.
+- **Status items over an uneven wallpaper.** With `tone.per_item = on` in `menubar.conf` (the default), the bands, a
+  see-through bar and a server of version 21, each item of the status area (status items, the control panel and the
+  clock) takes the tone of the wallpaper under its own slot (`tone::SlotTones`): the luminance of the mean colour of the
+  bands it covers, each counted by how much of it lies under the slot. A new item, and every item after a new measure or
+  a change of the appearance or the display options, takes the bar's cut at once; after that an item keeps its tone
+  while the luminance under it stays within 0.02 of the cut (`tone::SLOT_TONE_HOLD`) and changes only when it has been
+  past that band for 0.25 s (`tone::SLOT_TONE_SETTLE`), so an item moved a little by its neighbours or the clock does
+  not change back and forth. The menus and the titles keep the bar's own tone.
+- **Text over the wallpaper.** The text, symbols and mark lie sharp on the wallpaper with no halo, ring or backing under
+  them, over any wallpaper and in either tone. The session's Reduce Transparency is the one source of the solid strip
+  (`tone::solid_bar`, `BarScene::solid`). A bar redraws when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
@@ -299,14 +309,14 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   locale data). `when-space-allows` always shows the date; the compact fallback is open. The battery and Bluetooth rows (open), the symbol choice (one `symbol.wifi` / `symbol.battery` / `symbol.bluetooth` / `symbol.moon` each, drawn in the bar's text
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
-- **approximate.** Bar height (24 pt), paddings, popup metrics, the backdrop thresholds (550 and 450, split at 500 when decided afresh), what the tone covers.
+- **approximate.** Bar height (24 pt), paddings, popup metrics, the band a status item holds its tone in and how long it waits, what the tone covers.
 
 **Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
 
 ### Settings the bar follows
 
 `menubar.conf` also says which items the bar shows (clock, Wi-Fi, Bluetooth, battery, focus), whether the bar has a
-backdrop of its own over the wallpaper, how many recent documents and applications the system menu lists (0 to 50) and
+backdrop of its own over the wallpaper, whether each status item follows the wallpaper under it (`tone.per_item`), how many recent documents and applications the system menu lists (0 to 50) and
 which status icons stay out of the bar (listed by the id the application gives the icon, else its bus name). All apply
 at once. The bar also keeps the automatic look: when `appearance.conf` turns it on, the bar writes the `appearance` key
 of `compositor.json` as the clock passes the two switch times (checked every minute and at each change of the file),

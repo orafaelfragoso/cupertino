@@ -25,7 +25,7 @@ use cupertino_menubar::feed::Shared;
 use cupertino_menubar::geom::Rect;
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{BarContent, BarMetrics, SlotKey};
-use cupertino_menubar::tone::BarTone;
+use cupertino_menubar::tone::{BarTone, SlotTones};
 use cupertino_menubar::view::{self, BarFont, BarId, BarPointer, BarScene, Input, KitMeasure};
 use cupertino_theme::Theme;
 use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
@@ -101,6 +101,8 @@ struct Model {
     /// The scene's solid strip and tone, from [`LOOK`].
     solid: bool,
     tone: BarTone,
+    /// The tone of each status item over the wallpaper under it, from [`LOOK`].
+    slot_tones: SlotTones,
     /// The items whose panel another process shows open on this bar, from [`PANELS`].
     open_panels: Vec<SlotKey>,
     /// The icons of menu rows, from the built-in assets.
@@ -114,6 +116,7 @@ struct Look {
     solid: bool,
     theme_reduce_transparency: bool,
     tone: BarTone,
+    slot_tones: SlotTones,
 }
 
 thread_local! {
@@ -140,6 +143,7 @@ impl Application for Bar {
             effects: Vec::new(),
             solid: LOOK.with_borrow(|l| l.solid),
             tone: LOOK.with_borrow(|l| l.tone),
+            slot_tones: LOOK.with_borrow(|l| l.slot_tones.clone()),
             open_panels: PANELS.with_borrow(Clone::clone),
             icons: std::rc::Rc::new(view::RowIcons::new(
                 cupertino_icons::ThemeIcons::new(&cupertino_assets::Assets::builtin()),
@@ -190,6 +194,7 @@ impl Application for Bar {
                 shared: &model.shared,
                 font: model.font,
                 tone: model.tone,
+                slot_tones: &model.slot_tones,
                 solid: model.solid,
                 size: Size::new(bar.w, bar.h),
                 open_panels: &model.open_panels,
@@ -614,6 +619,7 @@ fn the_items_draw_no_shadow_with_or_without_the_solid_strip() {
                     solid,
                     theme_reduce_transparency,
                     tone,
+                    ..Look::default()
                 };
                 assert_eq!(
                     shadows(look),

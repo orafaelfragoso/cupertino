@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="17">
+  <interface name="cupertino_app_effects_v1" version="18">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -21,7 +21,7 @@
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
       style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop), version 12 the bar glass
       style of cupertino_backdrop_v1, version 13 its dense and module glass styles, version 14 its set_shape_fixed
-      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style; the other interfaces of the protocol are unchanged in each.
+      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style, version 18 its sidebar, subdued_module, snippet and veiled glass styles; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -145,7 +145,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="17">
+  <interface name="cupertino_backdrop_v1" version="18">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -170,6 +170,10 @@
       <entry name="track" value="7" summary="the glass of a level's track: no blur, the backdrop read at the output's scale, a bending edge that follows the track's height and a ring shadow inside the outline" since="15"/>
       <entry name="popover" value="8" summary="the glass of a small popover over a floating bar, a name or a menu: the backdrop under a wide soft blur fill only, a strong bending edge and a thin line of light along its top and bottom edges, the same at every size" since="16"/>
       <entry name="switcher" value="9" summary="the glass of a wide floating panel of large icons, the application switcher: a blur of about a point, a strong bending edge of a fixed depth, a face that lifts black and brightens in the light appearance and dims to a smoky pane in the dark one, and no shadow" since="17"/>
+      <entry name="sidebar" value="10" summary="the glass of a window's sidebar: a wide soft blur fill, a light pane in the light appearance and a dark, nearly grey one in the dark, with a faint ring shadow" since="18"/>
+      <entry name="subdued_module" value="11" summary="the module glass of a tile that steps back: twice the blur, a dimmer white in the light appearance and no lifted black in the dark one" since="18"/>
+      <entry name="snippet" value="12" summary="the glass of a small card of content over the desktop: a faint blur under a wide soft blur fill, over a face veiled white in the light appearance and black in the dark" since="18"/>
+      <entry name="veiled" value="13" summary="clear glass under a soft blur fill, veiled black from a fifth at its top to fully at its bottom" since="18"/>
     </enum>
 
     <request name="destroy" type="destructor">

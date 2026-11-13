@@ -1273,9 +1273,10 @@ fn the_sidebar_shows_the_sidebar_material_where_the_window_can_and_its_fill_wher
             .iter()
             .position(|r| r.material == "WindowBackground")
             .unwrap_or_else(|| panic!("the window background: {regions:?}"));
+        // the toolbar's glass, not the sidebar's
         let glass = regions
             .iter()
-            .position(|r| r.glass.is_some())
+            .position(|r| r.glass.is_some() && !r.material.contains("Sidebar"))
             .unwrap_or_else(|| panic!("the toolbar's glass: {regions:?}"));
         assert!(
             background < glass,

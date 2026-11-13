@@ -1963,3 +1963,38 @@ fn a_switcher_glass_is_regular_glass_of_the_switcher_style() {
         (regular.alpha, regular.container, regular.spacing)
     );
 }
+
+#[test]
+fn the_sidebar_subdued_module_snippet_and_veiled_glass_are_regular_glass_of_their_styles() {
+    use cupertino_ui_platform::GlassStyle;
+    let regular = crate::cx::Glass::regular();
+    for (glass, style, name) in [
+        (
+            crate::cx::Glass::sidebar(),
+            GlassStyle::Sidebar,
+            "SidebarGlass",
+        ),
+        (
+            crate::cx::Glass::subdued_module(),
+            GlassStyle::SubduedModule,
+            "SubduedModuleGlass",
+        ),
+        (
+            crate::cx::Glass::snippet(),
+            GlassStyle::Snippet,
+            "SnippetGlass",
+        ),
+        (
+            crate::cx::Glass::veiled(),
+            GlassStyle::Veiled,
+            "VeiledGlass",
+        ),
+    ] {
+        assert_eq!(glass.style, style);
+        assert_eq!(glass.style.material(), name);
+        assert_eq!(
+            (glass.alpha, glass.container, glass.spacing),
+            (regular.alpha, regular.container, regular.spacing)
+        );
+    }
+}

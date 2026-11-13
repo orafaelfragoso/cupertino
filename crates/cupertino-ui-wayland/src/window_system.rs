@@ -202,6 +202,10 @@ fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
         GlassStyle::Track => cupertino_protocol_app::GlassStyle::Track,
         GlassStyle::Popover => cupertino_protocol_app::GlassStyle::Popover,
         GlassStyle::Switcher => cupertino_protocol_app::GlassStyle::Switcher,
+        GlassStyle::Sidebar => cupertino_protocol_app::GlassStyle::Sidebar,
+        GlassStyle::SubduedModule => cupertino_protocol_app::GlassStyle::SubduedModule,
+        GlassStyle::Snippet => cupertino_protocol_app::GlassStyle::Snippet,
+        GlassStyle::Veiled => cupertino_protocol_app::GlassStyle::Veiled,
     }
 }
 
@@ -1926,6 +1930,13 @@ mod tests {
         assert_eq!(protocol_style(GlassStyle::Track), Wire::Track);
         assert_eq!(protocol_style(GlassStyle::Popover), Wire::Popover);
         assert_eq!(protocol_style(GlassStyle::Switcher), Wire::Switcher);
+        assert_eq!(protocol_style(GlassStyle::Sidebar), Wire::Sidebar);
+        assert_eq!(
+            protocol_style(GlassStyle::SubduedModule),
+            Wire::SubduedModule
+        );
+        assert_eq!(protocol_style(GlassStyle::Snippet), Wire::Snippet);
+        assert_eq!(protocol_style(GlassStyle::Veiled), Wire::Veiled);
         assert_eq!(protocol_style(GlassStyle::Module), Wire::Module);
         // a material named for them stands for that glass
         assert_eq!(GlassStyle::of_material("CardGlass"), Some(GlassStyle::Card));
@@ -1933,6 +1944,13 @@ mod tests {
             GlassStyle::of_material("TrackGlass"),
             Some(GlassStyle::Track)
         );
+    }
+
+    #[test]
+    fn the_sidebar_s_material_name_asks_for_sidebar_glass() {
+        use cupertino_protocol_app::GlassStyle as Wire;
+        let style = GlassStyle::of_material("SidebarGlass").unwrap();
+        assert_eq!(protocol_style(style), Wire::Sidebar);
     }
 
     #[test]

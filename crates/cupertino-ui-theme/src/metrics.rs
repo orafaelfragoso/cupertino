@@ -264,6 +264,31 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_lies_on_sidebar_glass_until_it_goes_opaque() {
+        use crate::Surface;
+        let theme = Theme::load().unwrap();
+        for appearance in Appearance::ALL {
+            for reduce_transparency in [false, true] {
+                let look = ThemeTokens::cupertino(
+                    &theme,
+                    ThemePreferences {
+                        reduce_transparency,
+                        ..preferences(appearance)
+                    },
+                )
+                .unwrap()
+                .surface(Surface::Sidebar);
+                let opaque = reduce_transparency || appearance.is_high_contrast();
+                assert_eq!(
+                    look.material,
+                    (!opaque).then_some(crate::SIDEBAR_GLASS_MATERIAL),
+                    "{appearance:?} {reduce_transparency}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_switcher_lies_on_switcher_glass_in_every_appearance_until_it_goes_opaque() {
         use crate::Surface;
         let theme = Theme::load().unwrap();
@@ -312,7 +337,7 @@ mod tests {
         assert_eq!(
             look(Appearance::Light, false, Surface::Sidebar),
             SurfaceLook {
-                material: Some("Sidebar"),
+                material: Some(crate::SIDEBAR_GLASS_MATERIAL),
                 fill: window(Appearance::Light)
             }
         );

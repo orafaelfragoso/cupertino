@@ -709,6 +709,43 @@ fn switcher_glass_is_a_style_from_version_17() {
     assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
 }
 
+/// A backdrop of version 18 asks for veiled glass; one of version 17, which the style is not defined for, gets
+/// `invalid_glass` for it.
+#[test]
+fn veiled_glass_is_a_style_from_version_18() {
+    let style = cupertino_backdrop_v1::GlassStyle::Veiled;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 18);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(
+        h.backdrops()[0].glass.unwrap().style,
+        cupertino_theme::GlassStyle::Veiled
+    );
+    assert_eq!(client.backdrop_error(), None);
+    drop(h);
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 17);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    let end = Instant::now() + common::HANG_GUARD;
+    while client.backdrop_error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
+}
+
 /// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.
 #[test]
 fn the_last_of_set_glass_and_set_material_decides_the_look() {
@@ -873,8 +910,16 @@ fn glass_pass_matches_the_cpu_model() {
         (false, options(false, false), GlassStyle::LargePanel),
         (true, options(false, false), GlassStyle::LargePanel),
         (true, options(true, false), GlassStyle::LargePanel),
+        (false, options(false, false), GlassStyle::Veiled),
+        (true, options(false, false), GlassStyle::Veiled),
     ] {
         let large = style == GlassStyle::LargePanel;
+        // the style the panel asks for, and the backdrop version that has it
+        let wire = match style {
+            GlassStyle::LargePanel => Some((cupertino_backdrop_v1::GlassStyle::LargePanel, 10)),
+            GlassStyle::Veiled => Some((cupertino_backdrop_v1::GlassStyle::Veiled, 18)),
+            _ => None,
+        };
         let appearance = if dark {
             Appearance::Dark
         } else {
@@ -884,19 +929,16 @@ fn glass_pass_matches_the_cpu_model() {
             let mut h = Harness::with_config(|c| c.appearance = appearance)?;
             h.state.cursor_status = CursorImageStatus::Hidden;
             h.state.accessibility.settings.display = display;
-            let client = with_panel.then(|| TestClient::spawn_at(h.socket_path(), panel, 10));
+            let version = wire.map_or(10, |(_, v)| v);
+            let client = with_panel.then(|| TestClient::spawn_at(h.socket_path(), panel, version));
             if let Some(client) = &client {
                 h.wait_until("the glass backdrop", |s| {
                     !layer_backdrops(&s.outputs[0].output).is_empty()
                 });
-                if large {
-                    client.send(Cmd::SetGlass(
-                        cupertino_backdrop_v1::GlassStyle::LargePanel,
-                        0,
-                        0.0,
-                    ));
+                if let Some((wire, _)) = wire {
+                    client.send(Cmd::SetGlass(wire, 0, 0.0));
                     client.send(Cmd::Commit);
-                    h.wait_until("the large-panel glass", |s| {
+                    h.wait_until("the glass of the style", |s| {
                         layer_backdrops(&s.outputs[0].output)
                             .iter()
                             .any(|b| b.glass.is_some_and(|g| g.style == style))

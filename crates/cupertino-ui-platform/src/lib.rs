@@ -235,6 +235,15 @@ pub enum GlassStyle {
     /// The glass of a wide floating panel of large icons (the application switcher): a blur of about a point, a strong
     /// bending edge and no shadow.
     Switcher,
+    /// The glass of a window's sidebar: a wide soft blur fill over a light pane in the light appearance and a dark,
+    /// nearly grey one in the dark.
+    Sidebar,
+    /// The module glass of a tile that steps back: twice the blur and a quieter face.
+    SubduedModule,
+    /// The glass of a small card of content over the desktop: a faint blur under a wide soft blur fill and a veiled face.
+    Snippet,
+    /// Clear glass veiled black from a fifth at its top to fully at its bottom.
+    Veiled,
 }
 
 impl GlassStyle {
@@ -252,6 +261,10 @@ impl GlassStyle {
             Self::Track => "TrackGlass",
             Self::Popover => "PopoverGlass",
             Self::Switcher => "SwitcherGlass",
+            Self::Sidebar => "SidebarGlass",
+            Self::SubduedModule => "SubduedModuleGlass",
+            Self::Snippet => "SnippetGlass",
+            Self::Veiled => "VeiledGlass",
         }
     }
 
@@ -268,6 +281,10 @@ impl GlassStyle {
             Self::Track,
             Self::Popover,
             Self::Switcher,
+            Self::Sidebar,
+            Self::SubduedModule,
+            Self::Snippet,
+            Self::Veiled,
         ]
         .into_iter()
         .find(|s| s.material() == name)
@@ -841,6 +858,10 @@ mod glass_style_tests {
             GlassStyle::Track,
             GlassStyle::Popover,
             GlassStyle::Switcher,
+            GlassStyle::Sidebar,
+            GlassStyle::SubduedModule,
+            GlassStyle::Snippet,
+            GlassStyle::Veiled,
         ] {
             assert_eq!(GlassStyle::of_material(style.material()), Some(style));
         }
@@ -848,6 +869,10 @@ mod glass_style_tests {
         assert_eq!(GlassStyle::Track.material(), "TrackGlass");
         assert_eq!(GlassStyle::Popover.material(), "PopoverGlass");
         assert_eq!(GlassStyle::Switcher.material(), "SwitcherGlass");
+        assert_eq!(GlassStyle::Sidebar.material(), "SidebarGlass");
+        assert_eq!(GlassStyle::SubduedModule.material(), "SubduedModuleGlass");
+        assert_eq!(GlassStyle::Snippet.material(), "SnippetGlass");
+        assert_eq!(GlassStyle::Veiled.material(), "VeiledGlass");
         assert_eq!(GlassStyle::of_material("Sidebar"), None);
     }
 

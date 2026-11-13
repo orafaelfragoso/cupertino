@@ -423,6 +423,8 @@ pub const GLASS_MATERIAL: &str = "Glass";
 pub const DENSE_GLASS_MATERIAL: &str = "DenseGlass";
 /// The material name of the glass of the tiles of a panel of modules.
 pub const MODULE_GLASS_MATERIAL: &str = "ModuleGlass";
+/// The material name of the glass of a window's sidebar.
+pub const SIDEBAR_GLASS_MATERIAL: &str = "SidebarGlass";
 /// The material name of the glass of the application switcher.
 pub const SWITCHER_GLASS_MATERIAL: &str = "SwitcherGlass";
 /// The material name of clear glass.
@@ -437,7 +439,7 @@ impl ThemeTokens {
         let prefs = &self.preferences;
         let opaque = prefs.reduce_transparency || prefs.appearance.is_high_contrast();
         let (material, kept) = match surface {
-            Surface::Sidebar => ("Sidebar", false),
+            Surface::Sidebar => (SIDEBAR_GLASS_MATERIAL, false),
             Surface::Menu | Surface::Popover => (DENSE_GLASS_MATERIAL, true),
             Surface::Hud => ("LoginWindowControl", false),
             Surface::AppGrid => ("AppGrid", true),

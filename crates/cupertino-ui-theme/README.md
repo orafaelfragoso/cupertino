@@ -69,7 +69,7 @@ Links (`Link`) take the theme's link token in light and dark and reach 4.5:1 aga
 the built-in palettes. A page indicator dot for a page not shown (`PageDot`) is text at 20 % in light and dark and an
 opaque grey at 3:1 or more in the built-in palettes; the shown page's dot is `Text`.
 
-`ThemeTokens::surface` gives each surface the material to ask the compositor for (`Sidebar`, `Glass` for menus,
+`ThemeTokens::surface` gives each surface the material to ask the compositor for (`SidebarGlass` for a sidebar, `Glass` for menus,
 popovers and the Dock, `LoginWindowControl` for a heads-up display, `AppGrid` for the application grid's panel,
 `SwitcherGlass` for the application switcher's panel, `RunningIndicator` for the Dock's running dot, `WindowBackground`
 for a window's background and `TextBackground` for the colour behind a form's groups) and the opaque fill to paint

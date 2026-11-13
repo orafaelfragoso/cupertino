@@ -484,8 +484,8 @@ fn a_disabled_button_looks_disabled_skips_tab_and_ignores_activation() {
     assert!(node.states.disabled && !node.states.focusable);
 }
 
-/// A glass button alone in a window whose background is the sidebar's material when `ON_MATERIAL`, the theme's own
-/// opaque background otherwise.
+/// A glass button alone in a window whose background is a heads-up display's material (a material, not glass) when
+/// `ON_MATERIAL`, the theme's own opaque background otherwise.
 struct GlassButtonWindow<const ON_MATERIAL: bool>;
 
 impl<const ON_MATERIAL: bool> Application for GlassButtonWindow<ON_MATERIAL> {
@@ -518,7 +518,7 @@ impl<const ON_MATERIAL: bool> Application for GlassButtonWindow<ON_MATERIAL> {
         }));
         if ON_MATERIAL {
             windows[0].background = WindowBackground::Surface {
-                surface: Surface::Sidebar,
+                surface: Surface::Hud,
                 radius: 0.0,
                 alpha: 1.0,
             };

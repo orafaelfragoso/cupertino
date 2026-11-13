@@ -62,6 +62,15 @@ pub enum GlassStyle {
     /// The glass of a wide floating panel of large icons (the application switcher): a blur of about a point, a strong
     /// bending edge and no shadow.
     Switcher,
+    /// The glass of a window's sidebar: a wide soft blur fill over a light pane in the light appearance and a dark,
+    /// nearly grey one in the dark.
+    Sidebar,
+    /// The module glass of a tile that steps back: twice the blur and a quieter face.
+    SubduedModule,
+    /// The glass of a small card of content over the desktop: a faint blur under a wide soft blur fill and a veiled face.
+    Snippet,
+    /// Clear glass veiled black from a fifth at its top to fully at its bottom.
+    Veiled,
 }
 
 impl GlassStyle {
@@ -159,7 +168,8 @@ impl Backdrop {
     /// [`GlassStyle::LargePanel`] as regular glass, and one before version 15 draws [`GlassStyle::Card`] as dense glass
     /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass, and one before version 16 draws
     /// [`GlassStyle::Popover`] as regular glass, and one before version 17 draws [`GlassStyle::Switcher`] as regular
-    /// glass.
+    /// glass; one before version 18 draws [`GlassStyle::SubduedModule`] as module glass, [`GlassStyle::Veiled`] as clear
+    /// glass and [`GlassStyle::Sidebar`] and [`GlassStyle::Snippet`] as regular glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -193,6 +203,10 @@ impl Backdrop {
             GlassStyle::Track => WireStyle::Track,
             GlassStyle::Popover => popover_style(self.proxy.version()),
             GlassStyle::Switcher => switcher_style(self.proxy.version()),
+            GlassStyle::Sidebar
+            | GlassStyle::SubduedModule
+            | GlassStyle::Snippet
+            | GlassStyle::Veiled => sidebar_style(style, self.proxy.version()),
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -227,6 +241,8 @@ const CARD_VERSION: u32 = 15;
 const POPOVER_VERSION: u32 = 16;
 /// The version of `cupertino_backdrop_v1` that has the switcher glass style.
 const SWITCHER_VERSION: u32 = 17;
+/// The version of `cupertino_backdrop_v1` that has the sidebar, subdued module, snippet and veiled glass styles.
+const SIDEBAR_VERSION: u32 = 18;
 
 /// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
 /// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.
@@ -253,6 +269,23 @@ fn switcher_style(version: u32) -> WireStyle {
         WireStyle::Regular
     } else {
         WireStyle::Switcher
+    }
+}
+
+/// The wire style of the sidebar, the subdued module, the snippet or the veiled glass on a server of `version`: one before
+/// [`SIDEBAR_VERSION`] draws the subdued module as module glass (regular glass before [`DENSE_VERSION`]), the veiled
+/// glass as clear glass and the others as regular glass.
+fn sidebar_style(style: GlassStyle, version: u32) -> WireStyle {
+    match style {
+        _ if version >= SIDEBAR_VERSION => match style {
+            GlassStyle::SubduedModule => WireStyle::SubduedModule,
+            GlassStyle::Snippet => WireStyle::Snippet,
+            GlassStyle::Veiled => WireStyle::Veiled,
+            _ => WireStyle::Sidebar,
+        },
+        GlassStyle::SubduedModule if version >= DENSE_VERSION => WireStyle::Module,
+        GlassStyle::Veiled => WireStyle::Clear,
+        _ => WireStyle::Regular,
     }
 }
 
@@ -322,6 +355,29 @@ mod tests {
     fn an_older_server_draws_the_switcher_as_regular_glass() {
         assert_eq!(switcher_style(16), WireStyle::Regular);
         assert_eq!(switcher_style(17), WireStyle::Switcher);
+    }
+
+    #[test]
+    fn an_older_server_draws_the_sidebar_the_subdued_module_the_snippet_and_the_veil_with_styles_it_has(
+    ) {
+        assert_eq!(sidebar_style(GlassStyle::Sidebar, 18), WireStyle::Sidebar);
+        assert_eq!(
+            sidebar_style(GlassStyle::SubduedModule, 18),
+            WireStyle::SubduedModule
+        );
+        assert_eq!(sidebar_style(GlassStyle::Snippet, 18), WireStyle::Snippet);
+        assert_eq!(sidebar_style(GlassStyle::Veiled, 18), WireStyle::Veiled);
+        assert_eq!(sidebar_style(GlassStyle::Sidebar, 17), WireStyle::Regular);
+        assert_eq!(
+            sidebar_style(GlassStyle::SubduedModule, 17),
+            WireStyle::Module
+        );
+        assert_eq!(
+            sidebar_style(GlassStyle::SubduedModule, 12),
+            WireStyle::Regular
+        );
+        assert_eq!(sidebar_style(GlassStyle::Snippet, 17), WireStyle::Regular);
+        assert_eq!(sidebar_style(GlassStyle::Veiled, 17), WireStyle::Clear);
     }
 
     #[test]

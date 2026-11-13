@@ -747,6 +747,41 @@ impl Glass {
         }
     }
 
+    /// The glass of a window's sidebar with square corners, on its own, opaque: a wide soft blur fill over a light pane
+    /// in the light appearance and a dark, nearly grey one in the dark.
+    pub fn sidebar() -> Self {
+        Self {
+            style: GlassStyle::Sidebar,
+            ..Self::regular()
+        }
+    }
+
+    /// The module glass of a tile that steps back, with square corners, on its own, opaque: twice the module's blur and
+    /// a quieter face.
+    pub fn subdued_module() -> Self {
+        Self {
+            style: GlassStyle::SubduedModule,
+            ..Self::regular()
+        }
+    }
+
+    /// The glass of a small card of content over the desktop with square corners, on its own, opaque: a faint blur under
+    /// a wide soft blur fill and a veiled face.
+    pub fn snippet() -> Self {
+        Self {
+            style: GlassStyle::Snippet,
+            ..Self::regular()
+        }
+    }
+
+    /// Clear glass veiled black from a fifth at its top to fully at its bottom, with square corners, on its own, opaque.
+    pub fn veiled() -> Self {
+        Self {
+            style: GlassStyle::Veiled,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

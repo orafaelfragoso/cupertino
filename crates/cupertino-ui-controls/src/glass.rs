@@ -58,7 +58,7 @@ pub enum GlassMaterial {
 impl GlassRole {
     /// What draws each role. A floating toolbar group is glass over the content pane's background, which the
     /// compositor draws below it; the sidebar panel lies at the window's edge over what is behind the window, which
-    /// the compositor's sidebar material shows. A translucent button is glass of its own where that glass can show
+    /// the compositor's sidebar glass shows. A translucent button is glass of its own where that glass can show
     /// ([`paint_glass`]) and paints its body elsewhere. A thumb's lens lies over the track it slides along, which the
     /// window paints and which would hide the compositor's glass, so the toolkit paints it.
     pub const fn material(self) -> GlassMaterial {

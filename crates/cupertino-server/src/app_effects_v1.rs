@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 17;
+const VERSION: u32 = 18;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -69,6 +69,8 @@ const CARD_VERSION: u32 = 15;
 const POPOVER_VERSION: u32 = 16;
 /// The version of `cupertino_backdrop_v1` that has the switcher glass style.
 const SWITCHER_VERSION: u32 = 17;
+/// The version of `cupertino_backdrop_v1` that has the sidebar, subdued module, snippet and veiled glass styles.
+const SIDEBAR_VERSION: u32 = 18;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,7 +190,7 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 10] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 14] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
     ("LargePanelGlass", GlassStyle::LargePanel),
@@ -199,6 +201,10 @@ pub const GLASS_MATERIALS: [(&str, GlassStyle); 10] = [
     ("TrackGlass", GlassStyle::Track),
     ("PopoverGlass", GlassStyle::Popover),
     ("SwitcherGlass", GlassStyle::Switcher),
+    ("SidebarGlass", GlassStyle::Sidebar),
+    ("SubduedModuleGlass", GlassStyle::SubduedModule),
+    ("SnippetGlass", GlassStyle::Snippet),
+    ("VeiledGlass", GlassStyle::Veiled),
 ];
 
 /// The glass style a material name stands for.
@@ -924,6 +930,26 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         if resource.version() >= SWITCHER_VERSION =>
                     {
                         Some(GlassStyle::Switcher)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Sidebar)
+                        if resource.version() >= SIDEBAR_VERSION =>
+                    {
+                        Some(GlassStyle::Sidebar)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::SubduedModule)
+                        if resource.version() >= SIDEBAR_VERSION =>
+                    {
+                        Some(GlassStyle::SubduedModule)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Snippet)
+                        if resource.version() >= SIDEBAR_VERSION =>
+                    {
+                        Some(GlassStyle::Snippet)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Veiled)
+                        if resource.version() >= SIDEBAR_VERSION =>
+                    {
+                        Some(GlassStyle::Veiled)
                     }
                     _ => None,
                 };

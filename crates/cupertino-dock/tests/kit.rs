@@ -2577,6 +2577,34 @@ fn a_launch_bounces_its_tile_until_the_window_comes() {
     assert_eq!(y(&run), rest, "the window came: the tile rests");
 }
 
+/// The name over a launching tile rides its bounce: it rises and comes back down with the tile.
+#[test]
+fn the_name_over_a_launching_tile_rides_its_bounce() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.pointer(bar, PointerEvent::Enter { position: editor });
+    run.settle();
+    let (window, _) = label(&run).expect("the name shows");
+    let rest = placed_at(&mut run, window).y();
+    run.click(bar, editor);
+    let (mut highest, mut tile_highest) = (rest, f64::MAX);
+    for _ in 0..14 {
+        run.advance(0.05);
+        let (window, _) = label(&run).expect("the name stays through the click");
+        highest = highest.min(placed_at(&mut run, window).y());
+        tile_highest = tile_highest.min(run.bounds(bar, Role::Button, "Editor").y());
+    }
+    let tile_rise =
+        editor.y - run.bounds(bar, Role::Button, "Editor").height() / 2.0 - tile_highest;
+    assert!(rest - highest > 10.0, "the name rose: {highest} < {rest}");
+    assert!(
+        (rest - highest - tile_rise).abs() < 1.0,
+        "as far as the tile: {} and {tile_rise}",
+        rest - highest
+    );
+}
+
 /// The tile's menu is a grabbing popup of the bar anchored to the tile itself, below it, so the server flips it above
 /// the bar at the bottom of the output.
 #[test]

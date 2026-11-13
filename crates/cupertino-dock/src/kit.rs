@@ -2767,9 +2767,10 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             (height > 0.0).then(|| cupertino_kit::geometry::Rect::new(x, y, width, height))
         };
         let label = model.label(&layout);
+        // the name rides its tile's bounce
         let label_anchor = label.as_ref().and_then(|(id, ..)| {
             let t = layout.tiles.iter().find(|t| t.id == *id)?;
-            to_bottom(t.rect.x, layout.bar.y, t.rect.w)
+            to_bottom(t.rect.x, layout.bar.y - t.lift, t.rect.w)
         });
         let fan_open = model
             .stack

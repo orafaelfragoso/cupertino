@@ -214,8 +214,8 @@ fn launch_bounce_then_running() {
     let peak = d.bounce.period / 2.0;
     assert_eq!(get(&d, peak).lifecycle, TileLifecycle::Launching);
     assert!(
-        (get(&d, peak).lift - (0.2 * (48.0 - 8.0) + 6.0)).abs() < 1e-9,
-        "verified launch lift 0.2*(len-8)+6"
+        (get(&d, peak).lift - (0.2 * (48.0 - 8.0) + 6.7)).abs() < 1e-9,
+        "verified launch lift 0.2*(len-8)+6.7"
     );
     assert_eq!(get(&d, 0.0).lift, 0.0);
     d.app_started("mail", peak + 0.1);
@@ -256,7 +256,7 @@ fn attention_critical_until_cleared_and_informational_ends() {
             .unwrap()
             .lifecycle
     };
-    assert_eq!(life(&d, 100.0 * 0.7 / 2.0), TileLifecycle::Attention);
+    assert_eq!(life(&d, 100.0 * 0.71 / 2.0), TileLifecycle::Attention);
     assert_eq!(life(&d, 500.0), TileLifecycle::Attention);
     d.clear_attention("mail", 10.0);
     assert_eq!(life(&d, 20.0), TileLifecycle::Running);
@@ -1714,7 +1714,7 @@ fn magnification_is_a_local_bulge_whose_neighbours_grow_too() {
 }
 
 #[test]
-fn the_launch_hop_lifts_a_64_pt_tile_17_2_pt_at_350_ms_and_lands_at_700_ms() {
+fn the_launch_hop_lifts_a_64_pt_tile_17_9_pt_at_355_ms_and_lands_at_710_ms() {
     let mut d = Dock::new(DockConfig::default());
     d.set_pinned(&["a"]);
     d.app_launching("a", 0.0);
@@ -1727,12 +1727,12 @@ fn the_launch_hop_lifts_a_64_pt_tile_17_2_pt_at_350_ms_and_lands_at_700_ms() {
             .unwrap()
             .lift
     };
-    assert!((lift(&d, 0.35) - 17.2).abs() < 1e-9);
+    assert!((lift(&d, 0.355) - 17.9).abs() < 1e-9);
     // a parabola: three quarters of the height half way up and half way down
-    assert!((lift(&d, 0.175) - 0.75 * 17.2).abs() < 1e-9);
-    assert!((lift(&d, 0.525) - 0.75 * 17.2).abs() < 1e-9);
+    assert!((lift(&d, 0.1775) - 0.75 * 17.9).abs() < 1e-9);
+    assert!((lift(&d, 0.5325) - 0.75 * 17.9).abs() < 1e-9);
     assert_eq!(lift(&d, 0.0), 0.0);
-    assert_eq!(lift(&d, 0.7), 0.0);
+    assert_eq!(lift(&d, 0.71), 0.0);
     assert_eq!(
         lift(&d, 0.8),
         0.0,

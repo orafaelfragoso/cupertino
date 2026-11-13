@@ -68,7 +68,7 @@ displaces edges overrides `layout`.
 `floor(ln(dist·0.5 + 1) + 1) · 60 · time_modifier` ms: 240 ms for the default dock, 300 ms with the magnification open.
 
 **Bounce.** `Bounce` / `BounceConfig`. The default `BounceModel::Verified` is the curve; what starts and stops it is (§7.1). Launch is
-a parabola with a 700 ms cycle capped at 120 s and lift `0.2·(len − 8) + 6` pt. Attention is three hops of 500/326/212 ms
+a parabola with a 710 ms cycle capped at 120 s and lift `0.2·(len − 8) + 6.7` pt (17.9 at 64); the name over the tile rides it. Attention is three hops of 500/326/212 ms
 with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (informational plays it once, critical loops).
 `BounceConfig::parametric keeps the old generic arcs (approximate).
 

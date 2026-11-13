@@ -1,7 +1,7 @@
 //! Launch and attention bounce animations.
 //!
 //! With [`BounceModel::Verified`] (default): a launch bounce is the continuous
-//! parabola `y = 1 − (s/P)²` with `P = 350 ms` (a 700 ms cycle, 0 at the start, peak at 350 ms)
+//! parabola `y = 1 − (s/P)²` with `P = 355 ms` (a 710 ms cycle, 0 at the start, peak at 355 ms)
 //! capped at 120 s; attention bounces are the three-hop sequence 500/326/212 ms with amplitudes
 //! 1/0.5/0.25, each hop a parabola `1 − ((r − L/2)/(L/2))²`, repeating every 2000 ms. An
 //! informational request plays the sequence once, a critical one loops until cleared.
@@ -248,17 +248,17 @@ mod tests {
         let cfg = BounceConfig::default();
         let b = Bounce::new(BounceKind::Launch, 0.0);
         assert_eq!(b.shape(&cfg, 0.0), 0.0);
-        assert!((b.shape(&cfg, 0.350) - 1.0).abs() < 1e-12, "peak at 350 ms");
-        assert!(b.shape(&cfg, 0.699).abs() < 1e-2);
-        for k in 0..700 {
+        assert!((b.shape(&cfg, 0.355) - 1.0).abs() < 1e-12, "peak at 355 ms");
+        assert!(b.shape(&cfg, 0.709).abs() < 1e-2);
+        for k in 0..710 {
             let t = k as f64 / 1000.0;
-            let s = if t + 0.35 >= 0.7 {
-                t + 0.35 - 0.7
+            let s = if t + 0.355 >= 0.71 {
+                t + 0.355 - 0.71
             } else {
-                t + 0.35
+                t + 0.355
             };
-            let s = if s > 0.35 { s - 0.7 } else { s };
-            let expected = 1.0 - (s / 0.35) * (s / 0.35);
+            let s = if s > 0.355 { s - 0.71 } else { s };
+            let expected = 1.0 - (s / 0.355) * (s / 0.355);
             assert!((b.shape(&cfg, t) - expected).abs() < 1e-9, "t={t}");
         }
         assert!(b.is_active(&cfg, 119.9));
@@ -269,9 +269,9 @@ mod tests {
     fn launch_lift_formula() {
         let cfg = BounceConfig::default();
         let b = Bounce::new(BounceKind::Launch, 0.0);
-        assert!((b.peak_lift_pt(&cfg, 64.0) - 17.2).abs() < 1e-9);
-        assert!((b.lift_pt(&cfg, 64.0, 0.35) - 17.2).abs() < 1e-9);
-        assert!((b.offset(&cfg, 0.35) * cfg.tile_len - 17.2).abs() < 1e-9);
+        assert!((b.peak_lift_pt(&cfg, 64.0) - 17.9).abs() < 1e-9);
+        assert!((b.lift_pt(&cfg, 64.0, 0.355) - 17.9).abs() < 1e-9);
+        assert!((b.offset(&cfg, 0.355) * cfg.tile_len - 17.9).abs() < 1e-9);
     }
 
     #[test]
@@ -320,10 +320,10 @@ mod tests {
         );
         let mut l = Bounce::new(BounceKind::Launch, 0.0);
         l.stop(&cfg, 0.75);
-        assert!(l.is_active(&cfg, 1.39));
+        assert!(l.is_active(&cfg, 1.41));
         assert!(
-            !l.is_active(&cfg, 1.4 + 1e-9),
-            "rounded up to the end of the 700 ms cycle"
+            !l.is_active(&cfg, 1.42 + 1e-9),
+            "rounded up to the end of the 710 ms cycle"
         );
     }
 

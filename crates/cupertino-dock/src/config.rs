@@ -277,7 +277,7 @@ pub struct Hop {
 /// Launch and attention bounce parameters.
 ///
 /// With [`BounceModel::Verified`] (default) the timings, amplitudes and lift formulas are the
-/// values: launch lift `0.2 · (len − 8) + 6` pt, attention
+/// values: launch lift `0.2 · (len − 8) + 6.7` pt (17.9 at 64), attention
 /// lift `len + 1` pt, informational attention plays the hop sequence once (about 1.04 s), critical
 /// attention repeats it every 2000 ms until cleared. The fields `height`, `decay`,
 /// `informational_arcs`, `secondary_duration` and `secondary_interval` only drive
@@ -290,7 +290,7 @@ pub struct BounceConfig {
     pub model: BounceModel,
     /// Peak lift of an arc as a fraction of the tile size (parametric model).
     pub height: f64,
-    /// Seconds per launch arc (0.7 = 2 · 350 ms).
+    /// Seconds per launch arc (0.71).
     pub period: f64,
     /// Lift multiplier applied per successive informational arc (parametric model).
     pub decay: f64,
@@ -323,7 +323,7 @@ impl Default for BounceConfig {
         Self {
             model: BounceModel::Verified,
             height: 0.5,
-            period: 0.7,
+            period: 0.71,
             decay: 1.0,
             launch_timeout: 120.0,
             informational_arcs: 1,
@@ -333,7 +333,7 @@ impl Default for BounceConfig {
             launch_lift: LiftFormula {
                 k: 0.2,
                 m: 8.0,
-                c: 6.0,
+                c: 6.7,
             },
             attention_lift: LiftFormula {
                 k: 1.0,

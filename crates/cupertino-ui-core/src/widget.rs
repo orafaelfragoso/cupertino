@@ -78,6 +78,13 @@ pub trait Widget<M>: 'static {
     fn raised(&self, _state: &Self::State) -> bool {
         false
     }
+    /// Whether a raised node ([`raised`](Self::raised)) covers what lies under it for the rest of the window. One that
+    /// floats over the window's middle for a moment (an alert) answers no: it draws in the raised layer, with its glass
+    /// over the window's content, but obscures nothing ([`PaintCx::obscured`]), so scroll containers keep their edges
+    /// and bars where they are and, without a raised layer, clip nothing for it.
+    fn obscures(&self, _state: &Self::State) -> bool {
+        true
+    }
     /// Whether the window whose root this widget is grows out of what it opened from: a popup that is a popover
     /// starts small at the point of its anchor nearest to it, springs to its full size, and shrinks back into that
     /// point as it closes, its glass with it. Under Reduce Motion it shows and goes at once.
@@ -222,6 +229,7 @@ pub(crate) trait AnyWidget<M> {
     fn target(&self, state: &dyn Any, env: &Environment) -> Size;
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
     fn raised(&self, state: &dyn Any) -> bool;
+    fn obscures(&self, state: &dyn Any) -> bool;
     fn grows_from_anchor(&self) -> bool;
 }
 
@@ -303,6 +311,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn raised(&self, state: &dyn Any) -> bool {
         Widget::raised(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn obscures(&self, state: &dyn Any) -> bool {
+        Widget::obscures(self, state.downcast_ref().expect(STATE))
     }
 
     fn grows_from_anchor(&self) -> bool {

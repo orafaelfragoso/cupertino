@@ -255,6 +255,8 @@ struct WindowState<M> {
     damage: DamageTracker,
     /// The raised nodes ([`Widget::raised`]) of the last layout with their rects, in window coordinates.
     raised: Vec<(NodeId, Rect)>,
+    /// Those of them that cover what lies under them ([`Widget::obscures`]).
+    obscuring: Vec<(NodeId, Rect)>,
     /// The raised layer the window system shows over the window's content.
     layer: LayerState,
     display_list: DisplayList,
@@ -1002,6 +1004,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             painter: Painter::default(),
             damage: DamageTracker::default(),
             raised: Vec::new(),
+            obscuring: Vec::new(),
             layer: LayerState::default(),
             display_list: DisplayList::default(),
             resources: PaintResources::default(),
@@ -2264,9 +2267,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
             w.geometry = placements(&self.tree, root, &result, &w.env, &[]);
             w.raised = raised_nodes(&self.tree, root, &w.geometry);
+            w.obscuring = w
+                .raised
+                .iter()
+                .filter(|(id, _)| {
+                    self.tree
+                        .get(*id)
+                        .is_some_and(|n| n.widget.obscures(&*n.state))
+                })
+                .copied()
+                .collect();
             // raised nodes that draw in place leave what scrolls under them out: it would cover the glass under them
-            if !w.raised.is_empty() && !self.system.capabilities().raised_layer {
-                w.geometry = placements(&self.tree, root, &result, &w.env, &w.raised);
+            if !w.obscuring.is_empty() && !self.system.capabilities().raised_layer {
+                w.geometry = placements(&self.tree, root, &result, &w.env, &w.obscuring);
             }
             w.laid_out = Some(result);
 
@@ -2459,6 +2472,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     materials: effects && !w.materials_refused,
                     now,
                     raised: &w.raised,
+                    obscuring: &w.obscuring,
                     layer: layered,
                     pinned,
                 },
@@ -2950,6 +2964,7 @@ fn drag_image<M: 'static>(
             materials: false,
             now,
             raised: &[],
+            obscuring: &[],
             layer: false,
             pinned: &[None, None],
         },

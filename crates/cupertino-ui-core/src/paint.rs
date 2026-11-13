@@ -391,6 +391,8 @@ pub(crate) fn raised_nodes<M: 'static>(
         }
         stack.extend(node.children.iter().rev());
     }
+    // floating ones paint after the rest
+    out.sort_by_key(|(id, _)| tree.get(*id).is_some_and(|n| !n.widget.obscures(&*n.state)));
     out
 }
 
@@ -413,7 +415,10 @@ pub(crate) fn unobscured(rect: Rect, raised: &[(NodeId, Rect)]) -> Rect {
 
 /// The nodes under `root` in the order they paint: the tree's preorder, and where raised nodes (`raised`) draw in place
 /// (no `layer`) their subtrees after all the rest, so what they draw and the materials they ask for lie over the rest
-/// of the window's, wherever they are in the tree. A raised subtree's root still comes after its parent.
+/// of the window's, wherever they are in the tree. Raised nodes that float over the rest and obscure nothing
+/// ([`Widget::obscures`](crate::Widget::obscures)), such as an alert, draw their subtrees after every other raised
+/// one, with or without a layer, so a bar's controls never lie over them. A raised subtree's root still comes after
+/// its parent.
 fn paint_order<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
@@ -421,24 +426,32 @@ fn paint_order<M: 'static>(
     layer: bool,
 ) -> Vec<NodeId> {
     let all = tree.preorder(root);
-    if layer || raised.is_empty() {
+    if raised.is_empty() {
         return all;
     }
-    let mut lifted: HashSet<NodeId> = HashSet::new();
-    let (mut rest, mut over) = (Vec::with_capacity(all.len()), Vec::new());
+    // where each lifted node goes: over the rest (`false`) or over every other raised node (`true`)
+    let mut lifted: HashMap<NodeId, bool> = HashMap::new();
+    let (mut rest, mut over, mut floating) =
+        (Vec::with_capacity(all.len()), Vec::new(), Vec::new());
     for id in all {
-        let parent_lifted = tree
-            .get(id)
-            .and_then(|n| n.parent)
-            .is_some_and(|p| lifted.contains(&p));
-        if raised.contains(&id) || parent_lifted {
-            lifted.insert(id);
-            over.push(id);
-        } else {
-            rest.push(id);
+        let Some(node) = tree.get(id) else { continue };
+        let from_parent = node.parent.and_then(|p| lifted.get(&p).copied());
+        let floats = match from_parent {
+            Some(floats) => Some(floats),
+            None if raised.contains(&id) => Some(!node.widget.obscures(&*node.state)),
+            None => None,
+        };
+        match floats {
+            Some(true) => floating.push(id),
+            Some(false) if !layer => over.push(id),
+            _ => rest.push(id),
+        }
+        if let Some(floats) = floats {
+            lifted.insert(id, floats);
         }
     }
     rest.append(&mut over);
+    rest.append(&mut floating);
     rest
 }
 
@@ -513,6 +526,8 @@ pub(crate) struct PaintInput<'a> {
     pub(crate) now: Timestamp,
     /// The window's raised nodes ([`Widget::raised`](crate::Widget::raised)) with their rects, in window coordinates.
     pub(crate) raised: &'a [(NodeId, Rect)],
+    /// Those of them that cover what lies under them ([`Widget::obscures`](crate::Widget::obscures)).
+    pub(crate) obscuring: &'a [(NodeId, Rect)],
     /// The window system shows a raised layer, which the raised nodes draw in.
     pub(crate) layer: bool,
     /// The window's theme in the light and the dark appearance, for subtrees pinned to one
@@ -675,7 +690,7 @@ impl Painter {
             let obscured = if raised {
                 Insets::ZERO
             } else {
-                obscured_insets(placement.rect, input.raised)
+                obscured_insets(placement.rect, input.obscuring)
             };
             let size = placement.rect.size;
             let focused = input.focus == Some(id);
@@ -988,8 +1003,8 @@ impl Painter {
                 }
                 // a caret and the like are cut from what raised nodes cover, as what they mark lies under them
                 let cut = match (raised || reach_obscured, placement.clip.or(window)) {
-                    (false, Some(around)) if !input.raised.is_empty() => {
-                        Some(unobscured(around, input.raised))
+                    (false, Some(around)) if !input.obscuring.is_empty() => {
+                        Some(unobscured(around, input.obscuring))
                     }
                     _ => None,
                 };

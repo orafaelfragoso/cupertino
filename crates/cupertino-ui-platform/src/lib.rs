@@ -877,6 +877,18 @@ mod glass_style_tests {
     }
 
     #[test]
+    fn the_sidebar_subdued_module_snippet_and_veiled_glass_go_by_their_material_names() {
+        for (name, style) in [
+            ("SidebarGlass", GlassStyle::Sidebar),
+            ("SubduedModuleGlass", GlassStyle::SubduedModule),
+            ("SnippetGlass", GlassStyle::Snippet),
+            ("VeiledGlass", GlassStyle::Veiled),
+        ] {
+            assert_eq!(GlassStyle::of_material(name), Some(style));
+        }
+    }
+
+    #[test]
     fn the_switcher_glass_goes_by_its_material_name() {
         assert_eq!(
             GlassStyle::of_material("SwitcherGlass"),

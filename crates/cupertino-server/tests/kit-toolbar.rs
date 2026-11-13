@@ -53,8 +53,40 @@ struct Harness {
     _home: tempfile::TempDir,
     /// The height of the server's title bar over the content.
     title_bar: f64,
-    /// The input clock in milliseconds, which the client reads double clicks with.
-    time: u32,
+    /// The input clock, which the client reads double clicks with.
+    clock: InputClock,
+}
+
+/// The milliseconds an input event is stamped with. They keep pace with real time, as a compositor's do: a client lays
+/// them on its own clock and takes a stamp that falls far behind it for one of another clock, laid afresh at the moment
+/// it is read, so a clock that ran slower would lose the spacing of a double click whose presses straddle that moment.
+struct InputClock {
+    start: Instant,
+    last: u32,
+}
+
+impl InputClock {
+    /// The first stamp: a second, so no event is at zero.
+    const START: u32 = 1_000;
+
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            last: 0,
+        }
+    }
+
+    /// The stamp of an event sent now.
+    fn next(&mut self) -> u32 {
+        self.stamp(Instant::now())
+    }
+
+    /// The stamp of an event sent at `at`: the time since the clock started, and always past the last stamp.
+    fn stamp(&mut self, at: Instant) -> u32 {
+        let elapsed = u32::try_from(at.duration_since(self.start).as_millis()).unwrap();
+        self.last = (Self::START + elapsed).max(self.last + 1);
+        self.last
+    }
 }
 
 impl Harness {
@@ -100,7 +132,7 @@ impl Harness {
             bus,
             _home: home,
             title_bar: 0.0,
-            time: 1_000,
+            clock: InputClock::new(),
         };
         h.wait_until("the Settings window", |s| title(s) == "Accessibility");
         h.settle();
@@ -136,18 +168,6 @@ impl Harness {
         );
     }
 
-    /// Steps until `condition` holds or `limit` passes; whether it held.
-    fn wait_for(&mut self, limit: Duration, condition: impl Fn(&Cupertino) -> bool) -> bool {
-        let end = Instant::now() + limit;
-        while Instant::now() < end {
-            self.step();
-            if condition(&self.state) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// [`common::ping_barrier`] on Settings: it has handled what it was sent, and the server has what it did with it.
     fn settle(&mut self) {
         let client = self
@@ -176,19 +196,19 @@ impl Harness {
     }
 
     fn move_to(&mut self, point: (f64, f64)) {
-        self.time += 10;
-        self.state.pointer_moved_to(point.into(), self.time, None);
+        let time = self.clock.next();
+        self.state.pointer_moved_to(point.into(), time, None);
         self.step();
     }
 
     fn button(&mut self, pressed: bool) {
-        self.time += 10;
         let state = if pressed {
             ButtonState::Pressed
         } else {
             ButtonState::Released
         };
-        self.state.pointer_button(BTN_LEFT, state, self.time);
+        let time = self.clock.next();
+        self.state.pointer_button(BTN_LEFT, state, time);
         self.step();
     }
 
@@ -315,15 +335,24 @@ fn a_double_click_on_the_toolbar_zooms_the_kit_window_and_another_restores_it() 
     // the client hears it is maximized before the next double click asks for the other state
     h.settle();
     assert_eq!(h.state(), LifecycleState::Zoomed);
-    // a double click that lands while the client still lays out the zoomed window may meet a control there, which
-    // takes the press; the restore is asked again a little later, past the double click interval
-    for _ in 0..5 {
-        h.double_click(TOOLBAR_GAP);
-        if h.wait_for(Duration::from_secs(2), |s| frame(s) == before) {
-            return;
-        }
-        h.time += 1_000;
-        h.settle();
-    }
-    panic!("the window was not restored; frame={:?}", frame(&h.state));
+    h.double_click(TOOLBAR_GAP);
+    h.wait_until("the window to restore", |s| frame(s) == before);
+}
+
+/// However long the server takes between two events, their stamps are as far apart as the events were sent: a zoom
+/// that took a second between two double clicks leaves the stamps no second behind the client's clock.
+#[test]
+fn the_input_clock_keeps_pace_with_real_time() {
+    let mut clock = InputClock::new();
+    let first = clock.stamp(clock.start);
+    assert_eq!(first, InputClock::START);
+    let later = clock.stamp(clock.start + Duration::from_millis(1_500));
+    assert_eq!(
+        later - first,
+        1_500,
+        "the stamps keep the time between the events"
+    );
+    // two events sent within the same millisecond still come in order
+    let next = clock.stamp(clock.start + Duration::from_millis(1_500));
+    assert_eq!(next, later + 1);
 }

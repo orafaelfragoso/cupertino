@@ -2781,6 +2781,59 @@ fn the_name_over_a_launching_tile_rides_its_bounce() {
     );
 }
 
+/// With auto-hide, the name that showed as the pointer left stays over its tile while the bar goes down, riding it and
+/// fading with it, and goes once the bar is hidden.
+#[test]
+fn the_name_rides_a_hiding_bar_down_and_fades_with_it() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    run.pointer(bar, PointerEvent::Enter { position: editor });
+    run.settle();
+    // auto-hide turned on while the pointer rests on the bar: the bar stays up
+    run.record.borrow_mut().conf = Some(DockSettings {
+        autohide: Some(true),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    run.pointer(bar, PointerEvent::Motion { position: editor });
+    run.advance(0.5);
+    let (window, _) = label(&run).expect("the name shows over the shown bar");
+    let rest = placed_at(&mut run, window).y();
+    let alpha = |run: &mut Run, window: WindowId| -> f64 {
+        let requests = run.driver.window_system_mut().requests(window).unwrap();
+        requests
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => {
+                    regions.iter().map(|r| r.alpha).reduce(f64::max)
+                }
+                _ => None,
+            })
+            .unwrap_or(1.0)
+    };
+    assert_eq!(alpha(&mut run, window), 1.0);
+    run.pointer(bar, PointerEvent::Leave);
+    let (mut lowest, mut faintest, mut seen) = (rest, 1.0f64, 0);
+    for _ in 0..20 {
+        run.advance(0.02);
+        if let Some((window, _)) = label(&run) {
+            seen += 1;
+            lowest = lowest.max(placed_at(&mut run, window).y());
+            faintest = faintest.min(alpha(&mut run, window));
+        }
+    }
+    assert!(seen > 3, "the name stays while the bar goes down");
+    assert!(
+        lowest > rest + 5.0,
+        "it rode the bar down: {lowest} > {rest}"
+    );
+    assert!(faintest < 0.9, "and faded with it: {faintest}");
+    run.advance(1.0);
+    assert!(label(&run).is_none(), "gone once the bar is hidden");
+}
+
 /// A tile whose menu is up keeps its pressed darkening, the name over it goes, and the darkening stays while the menu
 /// fades out.
 #[test]

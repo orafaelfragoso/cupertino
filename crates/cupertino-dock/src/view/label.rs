@@ -113,6 +113,8 @@ pub struct LabelView<'a> {
     /// A second, dimmer line under the name.
     pub status: Option<&'a str>,
     pub orientation: Orientation,
+    /// How much of it shows: it fades with a bar that hides.
+    pub opacity: f64,
 }
 
 /// The label of a tile.
@@ -153,10 +155,12 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
             name: view.name.to_owned(),
             pointer,
             children: {
+                let opacity = view.opacity.clamp(0.0, 1.0);
                 let mut children = vec![Element::new(Body {
                     name: view.name.to_owned(),
                     status: view.status.map(str::to_owned),
                     pointer,
+                    opacity,
                 })
                 .key("body")];
                 if pointer {
@@ -164,7 +168,9 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
                         CalloutPointer {
                             width: POINTER_WIDTH,
                             depth: POINTER_DEPTH,
-                            glass: Glass::popover().container(GLASS_CONTAINER, GLASS_BLEND),
+                            glass: Glass::popover()
+                                .container(GLASS_CONTAINER, GLASS_BLEND)
+                                .alpha(opacity),
                             surface: Surface::Tooltip,
                             fills_without_glass: false,
                             up: false,
@@ -308,6 +314,7 @@ struct Body {
     name: String,
     status: Option<String>,
     pointer: bool,
+    opacity: f64,
 }
 
 impl Body {
@@ -332,7 +339,7 @@ impl<M: Clone + 'static> Widget<M> for Body {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.name != old.name || self.status != old.status {
             Change::Layout
-        } else if self.pointer != old.pointer {
+        } else if self.pointer != old.pointer || self.opacity != old.opacity {
             Change::Paint
         } else {
             Change::None
@@ -363,7 +370,10 @@ impl<M: Clone + 'static> Widget<M> for Body {
         let env = cx.env().clone();
         let mode = usize::from(paint::is_dark(&env));
         let (w, h) = (cx.size().width, cx.size().height);
-        let shown = shown_on_glass(cx, Glass::popover().radius(RADIUS));
+        let shown = shown_on_glass(cx, Glass::popover().radius(RADIUS).alpha(self.opacity));
+        if self.opacity < 1.0 {
+            cx.set_group(self.opacity as f32, Vec::new());
+        }
         // the glass lights its own rim, along the top and the bottom
         if !shown {
             let shape = Shape::Path {

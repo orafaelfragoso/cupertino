@@ -53,7 +53,7 @@ Preference defaults: tile size 64 (52 for displays at most 800 pt tall,
 | Hit-testing | `Dock::hit_test(pointer, screen, now) on the magnified layout. |
 | Minimize target | `Dock::minimize_target(window, app, screen) returns the rectangle a minimizing window flies to. It matches the tile rectangle once the tile has appeared. The process reports the next minimized-window slot, since the protocol has one target. |
 | Drag-reorder | `begin_drag` / `drag_move` / `end_drag` with a gap placeholder, section limits, removal when dragged out or dropped on the trash. `Dock::pinned_keys` lists the pins in order for storing. |
-| Auto-hide | `AutoHide` state machine and `reveal_zone`. |
+| Auto-hide | `AutoHide` state machine and `reveal_zone`. The tile's name fades as the bar hides (its opacity is one less the hidden share), and the name that showed as the pointer left stays over its tile, riding the bar down, until the bar is hidden or the pointer comes back. |
 
 **Magnification.** The default profile is the half-sine fisheye, `FisheyeProfile`.
 Both edges of every tile move by `real_scale · sin(π·d / (2·fish_size))`, clamped to ±`real_scale`, with

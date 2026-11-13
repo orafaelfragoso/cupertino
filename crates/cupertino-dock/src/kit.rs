@@ -532,6 +532,9 @@ pub struct Model {
     /// The tile the left button is held on, and its icon darkened: the pressed tile shows it until the button comes up
     /// or the pointer leaves the tile.
     held: Option<(TileId, IconSet)>,
+    /// The name that showed as the pointer left a bar that hides: it stays over its tile, riding the bar down and
+    /// fading with it, until the bar is hidden or the pointer comes back.
+    leaving_label: Option<(TileId, String, Option<&'static str>)>,
     /// The counts the applications show on their tiles.
     badges: crate::badge::Badges,
     /// The folders the host shows as stacks were asked for, and their icons' theme names by path.
@@ -617,6 +620,7 @@ impl Model {
             confirm: None,
             stack: None,
             held: None,
+            leaving_label: None,
             badges: crate::badge::Badges::default(),
             folders_asked: false,
             folder_icons: HashMap::new(),
@@ -841,6 +845,9 @@ impl Model {
             return Vec::new();
         };
         let at = |p: cupertino_kit::geometry::Point| Point::new(p.x, p.y);
+        if matches!(pointer, Pointer::Move(_)) {
+            self.leaving_label = None;
+        }
         match pointer {
             Pointer::Move(p) => {
                 let p = at(p);
@@ -864,6 +871,11 @@ impl Model {
                 Vec::new()
             }
             Pointer::Leave => {
+                self.leaving_label = if self.session.dock.cfg.autohide {
+                    self.label(&self.session.dock.layout(screen, now))
+                } else {
+                    None
+                };
                 self.pointer = None;
                 self.held = None;
                 Vec::new()
@@ -2856,7 +2868,19 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             let height = screen.bottom() - y;
             (height > 0.0).then(|| cupertino_kit::geometry::Rect::new(x, y, width, height))
         };
-        let label = model.label(&layout);
+        // the name fades as the bar hides, and one that showed as the pointer left stays while the bar goes down
+        let hidden = if model.session.dock.cfg.autohide {
+            model.session.dock.autohide.hidden_fraction(now)
+        } else {
+            0.0
+        };
+        let label = model.label(&layout).or_else(|| {
+            model
+                .leaving_label
+                .clone()
+                .filter(|(id, ..)| hidden < 1.0 && layout.tiles.iter().any(|t| t.id == *id))
+        });
+        let label_opacity = 1.0 - hidden;
         // the name rides its tile's bounce
         let label_anchor = label.as_ref().and_then(|(id, ..)| {
             let t = layout.tiles.iter().find(|t| t.id == *id)?;
@@ -2904,6 +2928,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     name: &name,
                     status,
                     orientation,
+                    opacity: label_opacity,
                 },
                 message,
             ));

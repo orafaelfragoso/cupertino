@@ -66,6 +66,15 @@ RECORDED_3 = "re-recorded 3 goldens; rerun without CUPERTINO_UPDATE_GOLDENS"
 RECORDED_5 = "re-recorded 5 goldens; rerun without CUPERTINO_UPDATE_GOLDENS"
 
 
+class ListTest(unittest.TestCase):
+    def test_each_listed_test_is_a_test_of_the_suite_s_goldens_module_by_its_path(self):
+        source = (Path(__file__).resolve().parent.parent / "crates/cupertino-server/tests/goldens.rs").read_text()
+        for name in TESTS:
+            module, _, function = name.partition("::")
+            self.assertEqual(module, "goldens", name)
+            self.assertRegex(source, rf"\bfn {re.escape(function)}\(\)", name)
+
+
 class CompareTest(unittest.TestCase):
     def test_every_golden_test_passing_passes(self):
         self.assertIsNone(verdict(log([*UNIT, DESKTOP, SHELL], {}), update=False))

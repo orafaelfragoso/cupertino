@@ -13,12 +13,13 @@ import re
 import sys
 from pathlib import Path
 
-# The tests of the goldens binary that ci/goldens.sh runs; change it with the tests.
+# The tests of the server's test suite that ci/goldens.sh runs, by their path in it (the `goldens` module); change it
+# with the tests.
 TESTS = (
-    "pixel_comparison_fails_on_a_change_at_unchanged_geometry",
-    "only_a_lone_re_record_panic_is_an_update",
-    "desktop_goldens_and_input_replay",
-    "shell_process_goldens",
+    "goldens::pixel_comparison_fails_on_a_change_at_unchanged_geometry",
+    "goldens::only_a_lone_re_record_panic_is_an_update",
+    "goldens::desktop_goldens_and_input_replay",
+    "goldens::shell_process_goldens",
 )
 
 RESULT = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)$")

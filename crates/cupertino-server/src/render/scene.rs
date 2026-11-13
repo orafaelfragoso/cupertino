@@ -2052,11 +2052,6 @@ fn popup_backdrop_elements(
 /// The white lifted over the face of a small dark callout.
 const SMALL_CALLOUT_FACE_DARK: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 
-/// The glow of dense glass under its top and bottom edges: how strong it is, how wide it is in points and how far inside
-/// the edge its middle lies.
-const DENSE_GLOW_DARK: (f32, f32, f32) = (0.09, 1.8, -0.8);
-const DENSE_GLOW_LIGHT: (f32, f32, f32) = (0.07, 4.2, -1.0);
-
 /// The opacity and the width in points of the black outline along the outside of a popover.
 const POPOVER_OUTLINE_DARK: (f32, f32) = (0.45, 1.0);
 const POPOVER_OUTLINE_LIGHT: (f32, f32) = (0.33, 1.0);
@@ -2261,21 +2256,6 @@ fn glass_pieces(
     if !callout {
         use cupertino_theme::GlassStyle;
         match spec.style {
-            // dense glass has a soft glow under its top and bottom edges
-            GlassStyle::Dense => {
-                let h = &mut container.params.highlight;
-                let (amount, height, offset) = if mode.dark {
-                    DENSE_GLOW_DARK
-                } else {
-                    DENSE_GLOW_LIGHT
-                };
-                h.glow_amount = amount;
-                h.glow_height = height;
-                h.glow_offset = offset;
-                if popup && (mode.reduce_transparency || mode.increase_contrast) {
-                    h.amount = 0.0;
-                }
-            }
             GlassStyle::LargePanel => {
                 let h = &mut container.params.highlight;
                 let (amount, height, offset) = if mode.dark {

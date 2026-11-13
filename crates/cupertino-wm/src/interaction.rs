@@ -117,6 +117,11 @@ impl Wm {
         !matches!(self.interaction, Interaction::Idle)
     }
 
+    /// Whether a window is being moved (not resized).
+    pub fn is_moving(&self) -> bool {
+        matches!(self.interaction, Interaction::Moving(_))
+    }
+
     pub fn interacting_window(&self) -> Option<WindowId> {
         match &self.interaction {
             Interaction::Idle => None,

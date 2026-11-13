@@ -2,8 +2,8 @@
 //!
 //! The existence of four corner actions, a per-corner modifier requirement and a corner action
 //! delay is as designed; the delay's default value is
-//! unknown, so [`HotCornerConfig::dwell`] is a configurable placeholder. The corner hit region size
-//! is approximate.
+//! unknown, so [`HotCornerConfig::dwell`] is a configurable placeholder. The corner hit region reaches
+//! 4 pt from the corner along each edge.
 //!
 //! The recognizer must be fed pointer motion and modifier changes through [`HotCorners::update`]
 //! and time through [`HotCorners::tick`] (use [`HotCorners::next_deadline`] to schedule a timer):
@@ -96,7 +96,7 @@ pub struct HotCornerConfig {
     /// Per-corner binding in [`Corner::ALL`] order; `None` disables the corner. No corner is bound
     /// by default.
     pub bindings: [Option<CornerBinding>; 4],
-    /// Distance from the corner (per axis) that counts as "in the corner". approximate.
+    /// Distance from the corner (per axis) that counts as "in the corner" (4 pt).
     pub size: f64,
     /// Seconds the pointer must rest in the corner. unknown placeholder.
     pub dwell: f64,
@@ -106,7 +106,7 @@ impl Default for HotCornerConfig {
     fn default() -> Self {
         Self {
             bindings: [None, None, None, None],
-            size: 2.0,
+            size: 4.0,
             dwell: 0.1,
         }
     }
@@ -492,6 +492,18 @@ mod tests {
                 output: 0
             }
         );
+    }
+
+    #[test]
+    fn the_corner_reaches_four_points_from_it() {
+        let mut h = corners();
+        assert!(!h
+            .update(Point::new(3.5, 3.5), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
+        let mut h = corners();
+        assert!(h
+            .update(Point::new(4.5, 1.0), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
     }
 
     #[test]

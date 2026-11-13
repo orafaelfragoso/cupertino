@@ -15,8 +15,13 @@
 //!   the optics of the first and the colours of the second, and Reduce Motion flattens the refraction and widens the
 //!   blur.
 
-/// The scale the backdrop of a glass container is captured at, relative to the output's pixels.
+/// The scale the backdrop of a glass container is captured at, relative to the output's pixels, unless its recipe
+/// says otherwise ([`GlassParams::capture_scale`]).
 pub const GLASS_BACKDROP_SCALE: f32 = 0.5;
+/// The capture scale of a notification card's glass.
+pub const CARD_CAPTURE_SCALE: f32 = 0.25;
+/// The capture scale of a track's glass: the output's own.
+pub const TRACK_CAPTURE_SCALE: f32 = 1.0;
 
 /// Most blurred copies of the backdrop one container mixes: one per distinct blur of its shapes (each shape's Gaussian
 /// follows its size), up to this many; a shape whose blur lies between two of them mixes the two.
@@ -51,16 +56,21 @@ pub enum GlassStyle {
     /// tone compression (a lower white point, a lifted black and a little less saturation), so a big surface softens
     /// the scene behind it, and a broad drop shadow of its own.
     LargePanel,
-    /// The glass of a floating bar of icons (the Dock): the clear glass optics (a wide bending edge, a bright rim along
-    /// the top and bottom) over a face that barely changes the scene, only a small lift of white, so the wallpaper stays
-    /// readable through it.
+    /// The glass of a floating bar of icons (the dock): a narrow blur, a little more colour, a thin bending edge and a
+    /// soft light along the ends of its long axis, over a face that lifts black a little and dims white a little.
     Bar,
-    /// The glass of a dense floating surface with text on it (a menu, a popover, a notification card): regular glass over
-    /// a face pressed to a mid grey veil, so any backdrop reads as a quiet smoky pane under light text.
+    /// The glass of a dense floating surface with text on it (a menu, a popover): regular glass over a face pressed to
+    /// a mid grey veil, so any backdrop reads as a quiet smoky pane under light text.
     Dense,
-    /// The glass of the tiles of a panel of modules (the control panel): regular optics over a face that lets the
-    /// scene through darker, in both appearances, so white labels read over a bright sky.
+    /// The glass of the tiles of a panel of modules (the control panel): the clear face, which keeps the scene's colour,
+    /// a wide blur and a strong bending edge, light in the light appearance and dark in the dark one.
     Module,
+    /// The glass of a notification card: the clear face over a wide blur and the blur fill, a bending edge and a faint
+    /// ring shadow inside its outline, read from a backdrop captured at a quarter of the output's scale.
+    Card,
+    /// The glass of a level's track (the control panel's sliders): no blur, the backdrop read at the output's scale, a
+    /// slight lift of black, a bending edge that follows the track's height and a ring shadow inside its outline.
+    Track,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -237,6 +247,9 @@ pub struct GlassParams {
     pub bleed: GlassBleed,
     pub highlight: GlassHighlight,
     pub shadow: GlassShadow,
+    /// The scale the backdrop is captured at, relative to the output's pixels, before it is blurred: a coarser capture
+    /// softens fine detail on its own, a full one keeps it sharp where nothing blurs it.
+    pub capture_scale: f32,
 }
 
 // ---- size rules -------------------------------------------------------------------------------------------------
@@ -403,29 +416,65 @@ fn clear_face(dark: bool) -> GlassFace {
     }
 }
 
-/// How strongly the rim light of bar glass shows along its top and bottom edges.
-const BAR_HIGHLIGHT_AMOUNT: f32 = 0.6;
-/// The white laid over bar glass in the dark appearance: a faint lift, so the bar is only just paler than the scene.
-const BAR_LIFT_DARK: f32 = 0.03;
-/// The white laid over bar glass in the light appearance: a little more, still clear enough to show the scene.
-const BAR_LIFT_LIGHT: f32 = 0.12;
-
-/// The face of bar glass: the blurred scene as it is, with a small lift of white.
+/// The face of bar glass: a little more colour, black lifted and white dimmed a little. Light: black 0.15, white 0.9.
+/// Dark: black 0.05, white 0.92, the luma compressed to 0.75 and a faint black veil.
 fn bar_face(dark: bool) -> GlassFace {
-    GlassFace {
-        saturation: 1.0,
-        white: 1.0,
-        black: 0.0,
-        clamp: 1.0,
-        max_luma: 1.0,
-        fill: [
-            1.0,
-            1.0,
-            1.0,
-            if dark { BAR_LIFT_DARK } else { BAR_LIFT_LIGHT },
-        ],
+    if dark {
+        GlassFace {
+            saturation: BAR_SATURATION,
+            white: 0.92,
+            black: 0.05,
+            clamp: 1.0,
+            max_luma: 0.75,
+            fill: [0.0, 0.0, 0.0, BAR_VEIL_DARK],
+        }
+    } else {
+        GlassFace {
+            saturation: BAR_SATURATION,
+            white: 0.9,
+            black: 0.15,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [1.0, 1.0, 1.0, 0.0],
+        }
     }
 }
+
+/// The saturation of the bar's face in both appearances.
+const BAR_SATURATION: f32 = 1.25;
+/// The black veil over the dark bar's face.
+const BAR_VEIL_DARK: f32 = 0.02;
+/// The bar's blur radius in points, at full opacity of the first level.
+const BAR_BLUR: f32 = 2.761;
+/// The bar's refraction: strength and band width in points, the same at every size.
+const BAR_REFRACTION: f32 = -8.64;
+const BAR_REFRACTION_HEIGHT: f32 = 3.84;
+/// The bar's rim: strength and colour shift per unit of strength.
+const BAR_RIM: f32 = 0.4;
+const BAR_RIM_BIAS: f32 = -0.25;
+/// The bar's soft light along the ends of its long axis: strength, half-width and middle (points from the edge, inside
+/// for a negative value), the arcs' angular width and the exponent of their falloff.
+const BAR_GLOW: f32 = 0.5;
+const BAR_GLOW_HEIGHT: f32 = 1.0;
+const BAR_GLOW_OFFSET: f32 = -0.5;
+const BAR_GLOW_SPREAD: f32 = 80.0 * std::f32::consts::PI / 180.0;
+/// The bar's drop shadow (shown at no opacity at rest): strength in percent and blur in points.
+const BAR_SHADOW_AMOUNT: f32 = 30.0;
+const BAR_SHADOW_HEIGHT: f32 = 19.2;
+/// The colour of the bar's soft light from the face under it: a little more saturated and lifted than the face, in the
+/// light and the dark appearance.
+const BAR_GLOW_MATRIX_LIGHT: ColorMatrix = [
+    1.2625, -0.2385, -0.024, 0.0, 0.2, //
+    -0.0708, 1.0949, -0.0241, 0.0, 0.2, //
+    -0.0709, -0.2383, 1.3093, 0.0, 0.2, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+const BAR_GLOW_MATRIX_DARK: ColorMatrix = [
+    1.0937, -0.3577, -0.036, 0.0, 0.25, //
+    -0.1063, 0.8424, -0.0361, 0.0, 0.25, //
+    -0.1064, -0.3575, 1.1639, 0.0, 0.25, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
 
 /// The face of dense glass. Dark: a bright backdrop comes out near a mid grey (about 125 of 255) and a dark one is
 /// lifted a little, with the colours kept, under a faint grey veil. Light: the regular light face.
@@ -452,18 +501,46 @@ const DENSE_BLACK_DARK: f32 = 0.039;
 const DENSE_MAX_LUMA_DARK: f32 = 0.395;
 const DENSE_FILL_DARK: [f32; 4] = [0.261, 0.261, 0.261, 0.482];
 
-/// The face of module glass: the colours kept and every channel dimmed by about a fifth of the face's luma, so a bright
-/// backdrop comes out a darker tone of itself (white at 199 of 255, a mid grey at 102).
-fn module_face() -> GlassFace {
-    GlassFace {
-        saturation: 1.0,
-        white: 0.779,
-        black: 0.024,
-        clamp: 1.308_310_9,
-        max_luma: 1.0,
-        fill: [0.0; 4],
-    }
-}
+/// Module glass: the clear glass of its size with a strong bending edge and a darker rim. The strength is the same at
+/// every size; the band is [`MODULE_REFRACTION_HEIGHT_PER_POINT`] of the short side, at most
+/// [`MODULE_REFRACTION_HEIGHT_MAX`] points.
+const MODULE_REFRACTION: f32 = -80.0;
+const MODULE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.225;
+const MODULE_REFRACTION_HEIGHT_MAX: f32 = 18.0;
+const MODULE_RIM_BIAS: f32 = -0.3;
+
+/// Card glass: the blur radius at full opacity of the first level, the blur fill's radius and opacities (lighten in the
+/// light appearance, darken in the dark one, and normal), the refraction, the rim and the ring shadow inside the
+/// outline, which shows at rest.
+const CARD_BLUR: f32 = 10.0;
+const CARD_FILL_RADIUS: f32 = 8.0;
+const CARD_FILL_BLEND: f32 = 0.8821;
+const CARD_FILL_NORMAL: f32 = 0.4602;
+const CARD_REFRACTION: f32 = -60.0;
+const CARD_REFRACTION_HEIGHT: f32 = 20.0;
+const CARD_RIM: f32 = 0.4;
+const CARD_RIM_BIAS: f32 = -0.25;
+/// The angular width of the card's light, light and dark appearance, in radians (96° and 75°).
+const CARD_SPREAD_LIGHT: f32 = 1.676;
+const CARD_SPREAD_DARK: f32 = 5.0 * std::f32::consts::PI / 12.0;
+const CARD_RING_OPACITY: f32 = 0.06;
+
+/// Track glass: the face lifts black by a tenth and leaves white; the refraction's strength and band follow the
+/// track's height (its short side); the rim; the ring shadow inside the outline, darker in the dark appearance; and a
+/// faint bluish shadow below it.
+const TRACK_BLACK: f32 = 0.1;
+const TRACK_REFRACTION_PER_POINT: f32 = 0.3;
+const TRACK_REFRACTION_HEIGHT_PER_POINT: f32 = 0.18;
+const TRACK_RIM: f32 = 0.5;
+const TRACK_RIM_BIAS: f32 = -0.225;
+const TRACK_RING_BLUR: f32 = 3.0;
+const TRACK_RING_LIGHT: f32 = 0.15;
+const TRACK_RING_DARK: f32 = 0.40;
+const TRACK_SHADOW_OFFSET: f32 = 7.0;
+const TRACK_SHADOW_AMOUNT: f32 = 6.0;
+const TRACK_SHADOW_BLUR: f32 = 8.0;
+const TRACK_SHADOW_OPACITY: f32 = 0.0018;
+const TRACK_SHADOW_COLOR: [f32; 4] = [0.337, 0.445, 0.562, 1.0];
 
 /// Face colours with Reduce Transparency.
 fn reduced_transparency_face(dark: bool, style: GlassStyle) -> GlassFace {
@@ -589,7 +666,9 @@ impl GlassParams {
             GlassStyle::LargePanel => Self::large_panel(dark, s),
             GlassStyle::Bar => Self::bar(dark, s),
             GlassStyle::Dense => Self::dense(dark, s),
-            GlassStyle::Module => Self::module(s),
+            GlassStyle::Module => Self::module(dark, s),
+            GlassStyle::Card => Self::card(dark, s),
+            GlassStyle::Track => Self::track(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -612,7 +691,9 @@ impl GlassParams {
                 | GlassStyle::LargePanel
                 | GlassStyle::Bar
                 | GlassStyle::Dense
-                | GlassStyle::Module => {
+                | GlassStyle::Module
+                | GlassStyle::Card
+                | GlassStyle::Track => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -690,6 +771,7 @@ impl GlassParams {
                 outline_opacity: 0.0,
                 outline_width: 0.0,
             },
+            capture_scale: GLASS_BACKDROP_SCALE,
         }
     }
 
@@ -724,19 +806,131 @@ impl GlassParams {
         p
     }
 
-    /// The module glass: the dark regular recipe of its size over the module face ([`module_face`]), in both
-    /// appearances.
-    fn module(s: f32) -> Self {
-        let mut p = Self::regular(true, s);
-        p.face = module_face();
+    /// The module glass: the clear glass of its size with the module's refraction and rim.
+    fn module(dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(dark, s);
+        p.refraction.amount = MODULE_REFRACTION;
+        p.refraction.height =
+            (MODULE_REFRACTION_HEIGHT_PER_POINT * s).min(MODULE_REFRACTION_HEIGHT_MAX);
+        p.highlight.color_bias = MODULE_RIM_BIAS;
         p
     }
 
-    /// The bar glass: clear glass with the bar face ([`bar_face`]) and a brighter rim.
+    /// The card glass: the clear face over a wide blur and the regular glass's blur fill, with the card's refraction,
+    /// rim and ring shadow, captured at [`CARD_CAPTURE_SCALE`].
+    fn card(dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(dark, s);
+        p.blur = GlassBlur {
+            radius: CARD_BLUR,
+            level_opacity: [1.0; BLUR_LEVELS],
+            fill_radius: CARD_FILL_RADIUS,
+            fill_darken: if dark { CARD_FILL_BLEND } else { 0.0 },
+            fill_normal: CARD_FILL_NORMAL,
+            fill_lighten: if dark { 0.0 } else { CARD_FILL_BLEND },
+        };
+        p.refraction.amount = CARD_REFRACTION;
+        p.refraction.height = CARD_REFRACTION_HEIGHT;
+        p.highlight.amount = CARD_RIM;
+        p.highlight.color_bias = CARD_RIM_BIAS;
+        p.highlight.spread = if dark {
+            CARD_SPREAD_DARK
+        } else {
+            CARD_SPREAD_LIGHT
+        };
+        p.highlight.matrix = HIGHLIGHT_MATRIX_REGULAR;
+        p.shadow = GlassShadow {
+            amount: 0.0,
+            height: 0.0,
+            fill: [0.0, 0.0, 0.0, 0.3],
+            saturation: 1.0,
+            ring_blur: 5.0,
+            ring_stroke: 4.0,
+            ring_offset: 8.0,
+            ring_opacity: CARD_RING_OPACITY,
+            ..p.shadow
+        };
+        p.capture_scale = CARD_CAPTURE_SCALE;
+        p
+    }
+
+    /// The track glass: no blur, read at [`TRACK_CAPTURE_SCALE`], a refraction that follows the track's height, and
+    /// a ring shadow inside the outline.
+    fn track(dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(dark, s);
+        p.blur = GlassBlur {
+            radius: 0.0,
+            level_opacity: [0.0; BLUR_LEVELS],
+            fill_radius: 0.0,
+            fill_darken: 0.0,
+            fill_normal: 0.0,
+            fill_lighten: 0.0,
+        };
+        p.face = GlassFace {
+            saturation: 1.0,
+            white: 1.0,
+            black: TRACK_BLACK,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [1.0, 1.0, 1.0, 0.0],
+        };
+        p.refraction.amount = -TRACK_REFRACTION_PER_POINT * s;
+        p.refraction.height = TRACK_REFRACTION_HEIGHT_PER_POINT * s;
+        p.highlight = GlassHighlight {
+            amount: TRACK_RIM,
+            spread: 2.0 * std::f32::consts::FRAC_PI_3,
+            height: 1.0,
+            offset: -1.0,
+            color_bias: TRACK_RIM_BIAS,
+            matrix: HIGHLIGHT_MATRIX_REGULAR,
+            ..p.highlight
+        };
+        p.shadow = GlassShadow {
+            offset: [0.0, TRACK_SHADOW_OFFSET],
+            amount: TRACK_SHADOW_AMOUNT,
+            height: TRACK_SHADOW_BLUR,
+            fill: TRACK_SHADOW_COLOR,
+            saturation: 1.0,
+            opacity: TRACK_SHADOW_OPACITY,
+            ring_blur: TRACK_RING_BLUR,
+            ring_stroke: 4.0,
+            ring_offset: 8.0,
+            ring_opacity: if dark {
+                TRACK_RING_DARK
+            } else {
+                TRACK_RING_LIGHT
+            },
+            outline_opacity: 0.0,
+            outline_width: 0.0,
+        };
+        p.capture_scale = TRACK_CAPTURE_SCALE;
+        p
+    }
+
+    /// The bar glass: clear glass with the bar's narrow blur, face, thin refraction, rim and soft light along the ends
+    /// of its long axis.
     fn bar(dark: bool, s: f32) -> Self {
         let mut p = Self::clear(dark, s);
+        p.blur.radius = BAR_BLUR;
         p.face = bar_face(dark);
-        p.highlight.amount = BAR_HIGHLIGHT_AMOUNT;
+        p.refraction.amount = BAR_REFRACTION;
+        p.refraction.height = BAR_REFRACTION_HEIGHT;
+        p.highlight = GlassHighlight {
+            amount: BAR_RIM,
+            angle: 0.0,
+            spread: BAR_GLOW_SPREAD,
+            color_bias: BAR_RIM_BIAS,
+            glow_amount: BAR_GLOW,
+            glow_height: BAR_GLOW_HEIGHT,
+            glow_offset: BAR_GLOW_OFFSET,
+            matrix: if dark {
+                BAR_GLOW_MATRIX_DARK
+            } else {
+                BAR_GLOW_MATRIX_LIGHT
+            },
+            ..p.highlight
+        };
+        p.shadow.amount = BAR_SHADOW_AMOUNT;
+        p.shadow.height = BAR_SHADOW_HEIGHT;
         p
     }
 
@@ -793,6 +987,7 @@ impl GlassParams {
                 outline_opacity: 0.0,
                 outline_width: 0.0,
             },
+            capture_scale: GLASS_BACKDROP_SCALE,
         }
     }
 
@@ -931,8 +1126,24 @@ pub fn apply_matrix(m: &ColorMatrix, c: [f32; 4]) -> [f32; 4] {
 /// How strongly a primary label (text, a control's text, a header) is drawn on glass: the face behind it is busier
 /// than a window's background, so labels on glass are drawn more opaque than on a plain window.
 pub const VIBRANT_PRIMARY: f32 = 1.0;
-/// How strongly a secondary label is drawn on glass.
-pub const VIBRANT_SECONDARY: f32 = 0.75;
+/// The shift a secondary label's matrix gives every channel of the face under it: down on light glass, up on dark
+/// glass (a primary label's goes all the way to black or near white).
+pub const SECONDARY_SHIFT_LIGHT: f32 = -0.4;
+pub const SECONDARY_SHIFT_DARK: f32 = 0.3;
+/// The face a label drawn as a plain colour is taken to lie over, as the window does not know the face: the regular
+/// glass's face over a mid grey, in the light and the dark appearance.
+pub const LABEL_FACE_LIGHT: f32 = 0.73;
+pub const LABEL_FACE_DARK: f32 = 0.43;
+
+/// How strongly a secondary label is drawn on glass whose foreground is the `dark` side's: the opacity at which the
+/// side's foreground (black or white) shifts the label face by [`SECONDARY_SHIFT_LIGHT`] or [`SECONDARY_SHIFT_DARK`].
+pub fn vibrant_secondary(dark: bool) -> f32 {
+    if dark {
+        SECONDARY_SHIFT_DARK / (1.0 - LABEL_FACE_DARK)
+    } else {
+        -SECONDARY_SHIFT_LIGHT / LABEL_FACE_LIGHT
+    }
+}
 /// How strongly a text field's placeholder is drawn on glass.
 pub const VIBRANT_PLACEHOLDER: f32 = 0.7;
 
@@ -1420,6 +1631,209 @@ mod tests {
         assert_eq!(
             foreground_matrix_for(false, Some(FaceTone::Dark)),
             foreground_matrix(true)
+        );
+    }
+
+    #[test]
+    fn module_tiles_are_clear_glass_with_a_strong_bending_edge() {
+        // (short side, blur radius, refraction band): the clear blur rule and 0.225 of the side, at most 18 points
+        for (side, blur, band) in [
+            (170.0, 10.0, 18.0),
+            (69.0, 6.458_333, 15.525),
+            (40.0, 5.0, 9.0),
+        ] {
+            for dark in [false, true] {
+                let p = GlassParams::new(mode(dark, GlassStyle::Module), side);
+                let clear = GlassParams::new(mode(dark, GlassStyle::Clear), side);
+                assert_eq!(p.face, clear_face(dark), "{side} {dark}");
+                assert!(close(p.blur.radius, blur), "{side}: {}", p.blur.radius);
+                assert_eq!(p.blur.level_opacity, [1.0; BLUR_LEVELS]);
+                assert!(!p.fill_shows(), "no blur fill");
+                assert_eq!(p.refraction.amount, -80.0);
+                assert!(close(p.refraction.height, band), "{side}");
+                let h = p.highlight;
+                assert_eq!((h.amount, h.color_bias, h.height), (0.4, -0.3, 0.5));
+                assert!(close(h.spread, 75f32.to_radians()));
+                assert_eq!(h.matrix, HIGHLIGHT_MATRIX_CLEAR);
+                assert_eq!((p.shadow, p.bleed), (clear.shadow, clear.bleed));
+                assert_eq!(p.capture_scale, GLASS_BACKDROP_SCALE);
+            }
+        }
+        // light: black lifted by 0.2, white dimmed to 0.95 under a white veil of 0.1; dark: 0.05, 0.8 and 0.05
+        let light = clear_face(false);
+        assert_eq!((light.black, light.white, light.fill[3]), (0.2, 0.95, 0.1));
+        let dark = clear_face(true);
+        assert_eq!((dark.black, dark.white, dark.fill[3]), (0.05, 0.8, 0.05));
+    }
+
+    #[test]
+    fn a_card_is_clear_glass_over_a_wide_blur_and_the_blur_fill_read_at_a_quarter_scale() {
+        for dark in [false, true] {
+            for side in [56.0, 120.0] {
+                let p = GlassParams::new(mode(dark, GlassStyle::Card), side);
+                assert_eq!(p.face, clear_face(dark));
+                // radius 10 at full opacity: a deviation of 20 points; the fill of radius 8
+                assert!(close(p.blur_sigma(), 20.0) && close(p.fill_sigma(), 16.0));
+                let b = p.blur;
+                if dark {
+                    assert_eq!((b.fill_darken, b.fill_lighten), (0.8821, 0.0));
+                } else {
+                    assert_eq!((b.fill_darken, b.fill_lighten), (0.0, 0.8821));
+                }
+                assert_eq!(b.fill_normal, 0.4602);
+                assert_eq!((p.refraction.amount, p.refraction.height), (-60.0, 20.0));
+                let h = p.highlight;
+                assert_eq!(
+                    (h.amount, h.color_bias, h.matrix),
+                    (0.4, -0.25, HIGHLIGHT_MATRIX_REGULAR)
+                );
+                let spread = if dark { 75f32 } else { 96.0 };
+                assert!((h.spread - spread.to_radians()).abs() < 1e-3, "{dark}");
+                let s = p.shadow;
+                assert_eq!(
+                    (s.ring_opacity, s.ring_blur, s.ring_stroke, s.ring_offset),
+                    (0.06, 5.0, 4.0, 8.0),
+                    "the ring shows at rest"
+                );
+                assert_eq!(p.shadow_reach(), 0.0, "no drop shadow");
+                assert_eq!(p.bleed.opacity, 0.0);
+                assert_eq!(p.capture_scale, 0.25);
+            }
+        }
+    }
+
+    #[test]
+    fn a_track_reads_the_backdrop_unblurred_and_bends_by_its_height() {
+        for dark in [false, true] {
+            let p = GlassParams::new(mode(dark, GlassStyle::Track), 24.0);
+            assert_eq!((p.blur_sigma(), p.fill_shows()), (0.0, false));
+            assert_eq!(p.capture_scale, 1.0);
+            assert!(close(p.refraction.amount, -7.2) && close(p.refraction.height, 4.32));
+            let f = p.face;
+            assert_eq!(
+                (f.saturation, f.black, f.white, f.max_luma, f.fill[3]),
+                (1.0, 0.1, 1.0, 1.0, 0.0)
+            );
+            let h = p.highlight;
+            assert_eq!(
+                (h.amount, h.color_bias, h.height, h.offset),
+                (0.5, -0.225, 1.0, -1.0)
+            );
+            let s = p.shadow;
+            assert_eq!((s.ring_blur, s.ring_stroke, s.ring_offset), (3.0, 4.0, 8.0));
+            assert_eq!(s.ring_opacity, if dark { 0.40 } else { 0.15 });
+            // a faint bluish shadow below it
+            assert_eq!(
+                (s.offset, s.amount, s.height, s.opacity),
+                ([0.0, 7.0], 6.0, 8.0, 0.0018)
+            );
+            assert!(s.fill[2] > s.fill[1] && s.fill[1] > s.fill[0]);
+            // a taller track bends further
+            let tall = GlassParams::new(mode(dark, GlassStyle::Track), 48.0);
+            assert!(close(tall.refraction.amount, -14.4) && close(tall.refraction.height, 8.64));
+        }
+    }
+
+    #[test]
+    fn the_bar_blurs_narrowly_lifts_its_colour_and_lights_the_ends_of_its_long_axis() {
+        let light = GlassParams::new(mode(false, GlassStyle::Bar), 70.0);
+        let dark = GlassParams::new(mode(true, GlassStyle::Bar), 70.0);
+        for p in [light, dark] {
+            assert!(close(p.blur_sigma(), 2.0 * 2.761));
+            assert!(!p.fill_shows());
+            assert_eq!((p.refraction.amount, p.refraction.height), (-8.64, 3.84));
+            let h = p.highlight;
+            assert_eq!((h.amount, h.color_bias), (0.4, -0.25));
+            // the soft light along the ends of the horizontal axis
+            assert_eq!((h.angle, h.glow_amount, h.glow_height), (0.0, 0.5, 1.0));
+            assert!(close(h.spread, 80f32.to_radians()));
+            assert_eq!(
+                (p.shadow.amount, p.shadow.height, p.shadow.opacity),
+                (30.0, 19.2, 0.0)
+            );
+            assert_eq!(p.capture_scale, GLASS_BACKDROP_SCALE);
+        }
+        let f = light.face;
+        assert_eq!(
+            (f.saturation, f.black, f.white, f.max_luma, f.fill[3]),
+            (1.25, 0.15, 0.9, 1.0, 0.0)
+        );
+        let f = dark.face;
+        assert_eq!(
+            (f.saturation, f.black, f.white, f.max_luma),
+            (1.25, 0.05, 0.92, 0.75)
+        );
+        assert_eq!(f.fill, [0.0, 0.0, 0.0, 0.02]);
+        assert_eq!(light.highlight.matrix[4], 0.2);
+        assert_eq!(dark.highlight.matrix[4], 0.25);
+        // the same at every size
+        assert_eq!(
+            GlassParams::new(mode(false, GlassStyle::Bar), 120.0).refraction,
+            light.refraction
+        );
+    }
+
+    #[test]
+    fn the_new_surfaces_keep_their_accessibility_recipes() {
+        for style in [
+            GlassStyle::Module,
+            GlassStyle::Card,
+            GlassStyle::Track,
+            GlassStyle::Bar,
+        ] {
+            for dark in [false, true] {
+                let base = with(dark, style, false, false, false);
+                let rt = with(dark, style, true, false, false);
+                let ic = with(dark, style, false, true, false);
+                let what = format!("{style:?} dark {dark}");
+                // Reduce Transparency: no bending, the wide blur and a dense face
+                assert_eq!(
+                    (rt.refraction.amount, rt.refraction.height),
+                    (0.0, 0.0),
+                    "{what}"
+                );
+                assert_eq!(rt.blur.radius, REDUCED_TRANSPARENCY_BLUR, "{what}");
+                assert_eq!(rt.face, reduced_transparency_face(dark, style), "{what}");
+                assert!(rt.face.fill[3] >= 0.6, "{what}");
+                assert_eq!(rt.shadow.ring_stroke, 0.0, "{what}");
+                // Increase Contrast: the optics kept, the contrast colours
+                assert_eq!(
+                    (ic.refraction, ic.blur),
+                    (base.refraction, base.blur),
+                    "{what}"
+                );
+                assert_eq!(
+                    Some(ic.face),
+                    increased_contrast_face(dark, style),
+                    "{what}"
+                );
+                assert_ne!(ic.face, base.face, "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_style_but_the_card_and_the_track_is_captured_at_half_scale() {
+        for style in [
+            GlassStyle::Regular,
+            GlassStyle::Clear,
+            GlassStyle::LargePanel,
+            GlassStyle::Bar,
+            GlassStyle::Dense,
+            GlassStyle::Module,
+        ] {
+            assert_eq!(
+                GlassParams::new(mode(false, style), 60.0).capture_scale,
+                GLASS_BACKDROP_SCALE
+            );
+        }
+        assert_eq!(
+            GlassParams::new(mode(true, GlassStyle::Card), 56.0).capture_scale,
+            CARD_CAPTURE_SCALE
+        );
+        assert_eq!(
+            GlassParams::new(mode(true, GlassStyle::Track), 24.0).capture_scale,
+            TRACK_CAPTURE_SCALE
         );
     }
 

@@ -1500,18 +1500,18 @@ fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_
     assert_eq!(
         shown,
         vec![MaterialRegion {
-            material: "DenseGlass".into(),
+            material: "CardGlass".into(),
             rect: card,
             radius: view::CORNER_RADIUS,
             alpha: 1.0,
             glass: Some(cupertino_kit::platform::GlassRegion {
-                style: cupertino_kit::platform::GlassStyle::Dense,
+                style: cupertino_kit::platform::GlassStyle::Card,
                 container: 0,
                 spacing: 0.0,
             }),
             raised: false,
         }],
-        "the dense glass under the banner's card and nowhere else in its strip"
+        "the card glass under the banner's card and nowhere else in its strip"
     );
     run.notify(NotifyInput::new("Calendar", "Stand-up", "In 5 minutes"));
     run.notify(NotifyInput::new("Calendar", "Review", "In 10 minutes"));

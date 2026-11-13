@@ -219,18 +219,21 @@ pub enum GlassStyle {
     /// The regular glass of a large floating panel (the launcher): its face toned further towards the middle, with a
     /// soft drop shadow of its own below it.
     LargePanel,
-    /// The glass of a floating bar of icons (the Dock): clear glass optics over a face that barely changes the scene.
+    /// The glass of a floating bar of icons (the dock): a narrow blur, a thin bending edge and a soft light at its ends.
     Bar,
-    /// The glass of a dense floating surface with text on it (a menu, a popover, a card): regular glass over a mid
-    /// grey veil.
+    /// The glass of a dense floating surface with text on it (a menu, a popover): regular glass over a mid grey veil.
     Dense,
-    /// The glass of the tiles of a panel of modules: regular optics over a face that lets the scene through darker.
+    /// The glass of the tiles of a panel of modules: the clear face under a wide blur and a strong bending edge.
     Module,
+    /// The glass of a notification card: the clear face over a wide blur and a blur fill, with a faint ring shadow.
+    Card,
+    /// The glass of a level's track: no blur, a bending edge that follows its height and a ring shadow.
+    Track,
 }
 
 impl GlassStyle {
     /// The material name that stands for this glass on its own, as the theme names it (`Glass`, `ClearGlass`,
-    /// `LargePanelGlass`, `BarGlass`, `DenseGlass`, `ModuleGlass`).
+    /// `LargePanelGlass`, `BarGlass`, `DenseGlass`, `ModuleGlass`, `CardGlass`, `TrackGlass`).
     pub fn material(self) -> &'static str {
         match self {
             Self::Regular => "Glass",
@@ -239,6 +242,8 @@ impl GlassStyle {
             Self::Bar => "BarGlass",
             Self::Dense => "DenseGlass",
             Self::Module => "ModuleGlass",
+            Self::Card => "CardGlass",
+            Self::Track => "TrackGlass",
         }
     }
 
@@ -251,6 +256,8 @@ impl GlassStyle {
             Self::Bar,
             Self::Dense,
             Self::Module,
+            Self::Card,
+            Self::Track,
         ]
         .into_iter()
         .find(|s| s.material() == name)

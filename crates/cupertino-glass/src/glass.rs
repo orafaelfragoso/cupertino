@@ -1624,4 +1624,73 @@ mod tests {
             }
         }
     }
+
+    /// The face of `style` glass `side` points high over a flat backdrop `rgb` (0–255), in 0–255.
+    fn flat_face(dark: bool, style: GlassStyle, side: f32, rgb: [f32; 3]) -> [f32; 3] {
+        let p = GlassParams::new(
+            GlassMode {
+                dark,
+                style,
+                ..GlassMode::default()
+            },
+            side,
+        );
+        let c = rgb.map(|v| v / 255.0);
+        // over a flat backdrop every blur and the blur fill are the backdrop itself
+        face_color(blur_fill(c, c, &p), &p, p.face.max_luma).map(|v| v * 255.0)
+    }
+
+    #[test]
+    fn module_tiles_keep_the_backdrop_light_in_the_light_appearance_and_dark_in_the_dark_one() {
+        let light = flat_face(false, GlassStyle::Module, 170.0, [255.0; 3]);
+        assert!(light.iter().all(|v| (v - 244.0).abs() <= 1.0), "{light:?}");
+        let dark = flat_face(true, GlassStyle::Module, 170.0, [255.0; 3]);
+        assert!(dark.iter().all(|v| (v - 207.0).abs() <= 1.0), "{dark:?}");
+        // a strong colour keeps its hue in both
+        for dark in [false, true] {
+            let red = flat_face(dark, GlassStyle::Module, 80.0, [255.0, 51.0, 51.0]);
+            assert!(
+                red[0] > 2.5 * red[1] && (red[1] - red[2]).abs() < 1.0,
+                "{red:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dark_card_keeps_the_backdrops_colour() {
+        let white = flat_face(true, GlassStyle::Card, 56.0, [255.0; 3]);
+        assert!(white.iter().all(|v| (v - 207.0).abs() <= 1.0), "{white:?}");
+        let red = flat_face(true, GlassStyle::Card, 56.0, [255.0, 51.0, 51.0]);
+        for (got, want) in red.iter().zip([245.0, 51.0, 51.0]) {
+            assert!((got - want).abs() <= 1.0, "{red:?}");
+        }
+        // the dense glass of menus presses the same red to a mid grey veil
+        let dense = flat_face(true, GlassStyle::Dense, 56.0, [255.0, 51.0, 51.0]);
+        assert!(dense[0] < 200.0, "{dense:?}");
+    }
+
+    #[test]
+    fn the_label_faces_are_the_regular_faces_over_a_mid_grey() {
+        use cupertino_theme::glass::{LABEL_FACE_DARK, LABEL_FACE_LIGHT};
+        let light = flat_face(false, GlassStyle::Regular, 100.0, [127.5; 3])[1] / 255.0;
+        let dark = flat_face(true, GlassStyle::Regular, 120.0, [127.5; 3])[1] / 255.0;
+        assert!(close(light, LABEL_FACE_LIGHT, 0.01), "{light}");
+        assert!(close(dark, LABEL_FACE_DARK, 0.01), "{dark}");
+    }
+
+    #[test]
+    fn the_bar_lifts_black_dims_white_and_saturates() {
+        let light_black = flat_face(false, GlassStyle::Bar, 70.0, [0.0; 3]);
+        let light_white = flat_face(false, GlassStyle::Bar, 70.0, [255.0; 3]);
+        assert!(
+            close(light_black[0], 0.15 * 255.0, 0.5) && close(light_white[0], 0.9 * 255.0, 0.5)
+        );
+        // dark: the luma compressed to 0.75 and a faint black veil
+        let dark_white = flat_face(true, GlassStyle::Bar, 70.0, [255.0; 3]);
+        let expect = (0.75 + 0.05 * 0.25 - 0.08 * 0.75) * 0.98 * 255.0;
+        assert!(close(dark_white[0], expect, 1.0), "{dark_white:?} {expect}");
+        let muted = [120.0, 140.0, 200.0];
+        let out = flat_face(false, GlassStyle::Bar, 70.0, muted);
+        assert!(out[2] - out[0] > muted[2] - muted[0], "{out:?}");
+    }
 }

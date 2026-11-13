@@ -46,12 +46,16 @@ pub enum GlassStyle {
     Clear,
     /// The regular glass of a large floating panel, toned further towards the middle, with a soft drop shadow.
     LargePanel,
-    /// The glass of a floating bar of icons, clear glass optics over a face that barely changes the scene.
+    /// The glass of a floating bar of icons: a narrow blur, a thin bending edge and a soft light at its ends.
     Bar,
     /// The glass of a dense floating surface with text on it, regular glass over a mid grey veil.
     Dense,
-    /// The glass of the tiles of a panel of modules, regular optics over a face that lets the scene through darker.
+    /// The glass of the tiles of a panel of modules: the clear face under a wide blur and a strong bending edge.
     Module,
+    /// The glass of a notification card: the clear face over a wide blur and a blur fill, with a faint ring shadow.
+    Card,
+    /// The glass of a level's track: no blur, a bending edge that follows its height and a ring shadow.
+    Track,
 }
 
 impl GlassStyle {
@@ -145,8 +149,9 @@ impl Backdrop {
     /// Draw the backdrop as glass of `style` instead of a material recipe. Backdrops of one surface with the same
     /// nonzero `container` join into one shape whose outlines blend over `spacing` points (0 joins them with a hard
     /// edge); container 0 keeps the backdrop on its own. A server before version 6 draws the backdrop with the
-    /// material of [`GlassStyle::fallback_material`] instead, and one before version 10 draws
-    /// [`GlassStyle::LargePanel`] as regular glass.
+    /// material of [`GlassStyle::fallback_material`] instead, one before version 10 draws
+    /// [`GlassStyle::LargePanel`] as regular glass, and one before version 15 draws [`GlassStyle::Card`] as dense glass
+    /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -172,6 +177,12 @@ impl Backdrop {
             }
             GlassStyle::Dense => WireStyle::Dense,
             GlassStyle::Module => WireStyle::Module,
+            // a server before it draws the card as dense glass and the track as clear glass
+            GlassStyle::Card | GlassStyle::Track if self.proxy.version() < CARD_VERSION => {
+                legacy_style(style, self.proxy.version())
+            }
+            GlassStyle::Card => WireStyle::Card,
+            GlassStyle::Track => WireStyle::Track,
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -200,6 +211,18 @@ const BAR_VERSION: u32 = 12;
 const DENSE_VERSION: u32 = 13;
 /// The first version that takes a shape in fractional points.
 const FRACTIONAL_SHAPE_VERSION: u32 = 14;
+/// The version of `cupertino_backdrop_v1` that has the card and track glass styles.
+const CARD_VERSION: u32 = 15;
+
+/// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
+/// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.
+fn legacy_style(style: GlassStyle, version: u32) -> WireStyle {
+    match style {
+        GlassStyle::Card if version >= DENSE_VERSION => WireStyle::Dense,
+        GlassStyle::Track => WireStyle::Clear,
+        _ => WireStyle::Regular,
+    }
+}
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
     fn event(
@@ -246,6 +269,15 @@ mod tests {
             (s.x, s.y, s.width, s.height, s.radius),
             (10, 21, 344, 71, 12.0)
         );
+    }
+
+    #[test]
+    fn an_older_server_draws_the_card_and_the_track_with_styles_it_has() {
+        assert_eq!(legacy_style(GlassStyle::Card, 14), WireStyle::Dense);
+        assert_eq!(legacy_style(GlassStyle::Card, 13), WireStyle::Dense);
+        assert_eq!(legacy_style(GlassStyle::Card, 12), WireStyle::Regular);
+        assert_eq!(legacy_style(GlassStyle::Track, 14), WireStyle::Clear);
+        assert_eq!(legacy_style(GlassStyle::Track, 6), WireStyle::Clear);
     }
 
     #[test]

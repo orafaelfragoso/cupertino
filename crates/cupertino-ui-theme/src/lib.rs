@@ -20,7 +20,7 @@ mod vibrant;
 
 pub use accent::selection_tint;
 pub use vibrant::{
-    glass_foreground, vibrant_level, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY, VIBRANT_SECONDARY,
+    glass_foreground, vibrant_level, vibrant_secondary, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY,
 };
 
 /// The semantic colours controls draw with.

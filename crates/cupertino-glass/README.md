@@ -132,7 +132,7 @@ is their CPU model. The toolkit draws its text in the client, which never sees t
    while the backdrop does not change; a shape that stops adapting is told `appearance` once;
 2. the toolkit gives a glass node and everything drawn on it (its subtree, and later nodes inside its shape) the theme
    of text on glass (`ThemeTokens::on_glass`): neutral labels take `foreground_rgb` of the tone at the vibrant levels
-   (`VIBRANT_PRIMARY`, `VIBRANT_SECONDARY`, `VIBRANT_PLACEHOLDER`); accents, fills and selected labels keep theirs.
+   (`VIBRANT_PRIMARY`, `vibrant_secondary`, `VIBRANT_PLACEHOLDER`); accents, fills and selected labels keep theirs.
 
 The alternative, drawing glass text in the compositor as the menu bar's vibrant text is (`draw_vibrant`), needs the
 glyphs on a surface of their own and is not planned.

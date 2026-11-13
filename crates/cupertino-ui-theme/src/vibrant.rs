@@ -3,18 +3,19 @@
 //! to white on dark glass, pushed to black on light glass. A small shape takes the matrix of the side its face was
 //! measured on, so a control over a light backdrop in the dark appearance gets dark text; larger bars and panels keep
 //! their appearance's. Labels on glass are also drawn more opaque than on a plain window, since the face behind them
-//! is busier: a primary label at full strength, a secondary one and a placeholder somewhat less.
+//! is busier: a primary label at full strength, a placeholder somewhat less, and a secondary label at the strength
+//! that shifts the face under it by the secondary shift of its side (darker on light glass, lighter on dark glass).
 
 use crate::{Color, ColorRole, InteractionVariant, ThemeTokens};
 use cupertino_theme::glass::{foreground_rgb, FaceTone};
-pub use cupertino_theme::glass::{VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY, VIBRANT_SECONDARY};
+pub use cupertino_theme::glass::{vibrant_secondary, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY};
 
-/// How strongly the text of `role` is drawn on glass, or `None` for a colour that stays as the theme has it (fills,
-/// accents, the text of a filled control).
-pub fn vibrant_level(role: ColorRole) -> Option<f32> {
+/// How strongly the text of `role` is drawn on glass whose foreground is the `dark` side's (white text), or `None`
+/// for a colour that stays as the theme has it (fills, accents, the text of a filled control).
+pub fn vibrant_level(role: ColorRole, dark: bool) -> Option<f32> {
     match role {
         ColorRole::Text | ColorRole::ControlText | ColorRole::Header => Some(VIBRANT_PRIMARY),
-        ColorRole::SecondaryText => Some(VIBRANT_SECONDARY),
+        ColorRole::SecondaryText => Some(vibrant_secondary(dark)),
         ColorRole::PlaceholderText => Some(VIBRANT_PLACEHOLDER),
         _ => None,
     }
@@ -60,8 +61,11 @@ impl ThemeTokens {
     pub fn on_glass(&self, tone: Option<FaceTone>) -> ThemeTokens {
         let dark = self.preferences.appearance.is_dark();
         let fg = glass_foreground(dark, tone);
+        // the side whose foreground the labels take: the measured face's, else the appearance's
+        let side = tone.map_or(dark, |t| t == FaceTone::Dark);
         let colors = self.colors.map(|role, state, c| {
-            let (Some(level), Some(strength)) = (vibrant_level(role), label_strength(c, dark))
+            let (Some(level), Some(strength)) =
+                (vibrant_level(role, side), label_strength(c, dark))
             else {
                 return c;
             };
@@ -117,12 +121,39 @@ mod tests {
             let over_light = get(&t.on_glass(Some(FaceTone::Light)), ColorRole::Text);
             let over_dark = get(&t.on_glass(Some(FaceTone::Dark)), ColorRole::Text);
             assert!(black(over_light) && white(over_dark), "{appearance:?}");
-            // the secondary label and the placeholder keep their places below the primary label
+            // the secondary label and the placeholder stay below the primary label
             let secondary = get(&large, ColorRole::SecondaryText).a;
             let placeholder = get(&large, ColorRole::PlaceholderText).a;
-            assert!(secondary >= VIBRANT_SECONDARY && placeholder >= VIBRANT_PLACEHOLDER);
-            assert!(placeholder <= secondary && secondary <= VIBRANT_PRIMARY);
+            assert!(secondary >= vibrant_secondary(dark) && placeholder >= VIBRANT_PLACEHOLDER);
+            assert!(placeholder <= VIBRANT_PRIMARY && secondary <= VIBRANT_PRIMARY);
         }
+    }
+
+    #[test]
+    fn a_secondary_label_shifts_the_label_face_by_its_sides_shift() {
+        use cupertino_theme::glass::{
+            LABEL_FACE_DARK, LABEL_FACE_LIGHT, SECONDARY_SHIFT_DARK, SECONDARY_SHIFT_LIGHT,
+        };
+        // light: black over the light label face at the strength lowers it by 0.4
+        let light = vibrant_secondary(false);
+        assert!(
+            (LABEL_FACE_LIGHT * (1.0 - light) - (LABEL_FACE_LIGHT + SECONDARY_SHIFT_LIGHT)).abs()
+                < 1e-5
+        );
+        // dark: white over the dark label face at the strength raises it by 0.3
+        let dark = vibrant_secondary(true);
+        let over = LABEL_FACE_DARK + dark * (1.0 - LABEL_FACE_DARK);
+        assert!((over - (LABEL_FACE_DARK + SECONDARY_SHIFT_DARK)).abs() < 1e-5);
+        assert!(
+            (0.5..0.6).contains(&light) && (0.5..0.6).contains(&dark),
+            "{light} {dark}"
+        );
+        // a small shape's secondary label takes the strength of the side its face was measured on
+        let t = theme(Appearance::Dark);
+        let over_light = get(&t.on_glass(Some(FaceTone::Light)), ColorRole::SecondaryText);
+        let over_dark = get(&t.on_glass(Some(FaceTone::Dark)), ColorRole::SecondaryText);
+        assert!(over_light.a >= light && over_dark.a >= dark);
+        assert_eq!([over_light.r, over_dark.r], [0.0, 1.0]);
     }
 
     #[test]
@@ -185,7 +216,7 @@ mod tests {
                     "{appearance:?} {role:?}"
                 );
                 assert!(
-                    after.a >= strength && after.a >= vibrant_level(role).unwrap(),
+                    after.a >= strength && after.a >= vibrant_level(role, dark).unwrap(),
                     "{appearance:?} {role:?}: {before:?} became {after:?}"
                 );
             }

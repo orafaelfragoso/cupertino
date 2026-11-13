@@ -1008,15 +1008,14 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
     };
     let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
     let black = |a: f32| Color::new(0.0, 0.0, 0.0, a);
-    let vibrant = [
-        cupertino_ui_theme::VIBRANT_PRIMARY,
-        cupertino_ui_theme::VIBRANT_SECONDARY,
-    ];
+    // a secondary label takes the strength of the side whose foreground it takes, or its own where that is more
+    let secondary_on = |dark: bool| secondary.a.max(cupertino_ui_theme::vibrant_secondary(dark));
+    let primary = cupertino_ui_theme::VIBRANT_PRIMARY;
 
     // nothing measured: the appearance's matrix, labels at their strength on glass, on the glass node and inside it
     let (glass, inside, beside, beside_inside, regions) = paint(&mut painter);
     assert_eq!(regions, 1);
-    let on_glass = vec![white(vibrant[0]), white(vibrant[1])];
+    let on_glass = vec![white(primary), white(secondary_on(true))];
     assert_eq!((&glass, &inside), (&on_glass, &on_glass));
     // text beside the glass keeps the theme's colours
     assert_eq!(beside, vec![label, secondary]);
@@ -1025,7 +1024,7 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
     // the compositor measured a light face under the small capsule: its text turns dark, the rest stays
     painter.tones.regions = vec![GlassTone::Light];
     let (glass, inside, beside, _, _) = paint(&mut painter);
-    let flipped = vec![black(vibrant[0]), black(vibrant[1])];
+    let flipped = vec![black(primary), black(secondary_on(false))];
     assert_eq!((&glass, &inside), (&flipped, &flipped));
     assert_eq!(beside, vec![label, secondary]);
 
@@ -1120,13 +1119,15 @@ fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
         [of(over), of(straddling), of(past)]
     };
     let vibrant = |c: Color| {
+        // white is the dark side's foreground
+        let dark = c.r > 0.5;
         vec![
             Color {
                 a: cupertino_ui_theme::VIBRANT_PRIMARY,
                 ..c
             },
             Color {
-                a: cupertino_ui_theme::VIBRANT_SECONDARY,
+                a: secondary.a.max(cupertino_ui_theme::vibrant_secondary(dark)),
                 ..c
             },
         ]

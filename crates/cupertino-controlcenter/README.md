@@ -32,31 +32,27 @@ cupertino-controlcenter [--fake-backends] [--alsa-card N]
 | `--fake-backends` | off | In-memory radios, microphone, dock setting, keyboard backlight, focus mode, brightness, volume, outputs and media player instead of the machine's, and a lock and settings launcher that only record what they are asked. For trying the panel and for headless runs. |
 | `--alsa-card N` | the default PipeWire sink, else the best master of all cards (rule in `cupertino-alsa`) | Use the master volume of sound card `N`. |
 
-The panel keeps the dark appearance in either session appearance: it runs through `cupertino_kit::app::run_on_with_appearance`
-with `dark` forced on, so its text is white and its symbols light. It follows the display options as they change: Increase
-Contrast takes the high-contrast catalog and makes each tile a solid grey with a darker rim; Reduce Transparency makes
+The panel follows the session's appearance: light glass with dark text and symbols in the light appearance, dark glass
+with light ones in the dark appearance. It follows the display options as they change: Increase
+Contrast takes the high-contrast catalog and makes each tile a solid grey with a rim (mid grey with a darker rim in the
+dark appearance, light grey with a mid grey rim in the light one); Reduce Transparency makes
 the tiles opaque on one opaque panel; Reduce Motion replaces the growth of a detail view with a cross-fade. Icons are the
 symbols of the asset directory (`symbol.*`), loaded by the kit.
 
 ## How it works
 
 **Windows.** `view::panel` is one transparent surface (`layout::SURFACE`) with no background of its own: the 308 x 500 pt window (`layout::WINDOW`) inside a transparent margin of 122 pt left and below it (24 pt above, to the output's edge on the right) where the soft shadow around the tiles is drawn, a darkening of about 9 % at the tiles' edge that fades out over 130 pt. Only the window's rectangle takes input, and nothing while the panel fades out.
-Each tile asks the compositor for regular glass under its own outline (`PaintCx::glass`): capsules and circles with round
+Each tile asks the compositor for module glass under its own outline (`PaintCx::glass`, `Glass::module`): capsules and circles with round
 ends, the media tile and an open detail view with 32 pt corners, the display and sound tiles with 24 pt corners. The tiles
 join one glass container with an 8 pt blend, less than the 12 pt between them, so tiles at rest stay apart and a growing
-detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. In a light
-session each tile lays black at 0.27 over its glass, so over a white page it reads as a mid-light grey under its white text.
-Over its glass each tile lays its own light: a soft white glow under its top edge fading out over 6 pt, and a fine rim
-0.75 pt wide, brightest along the top (white 0.42), faint down the sides (0.12) and at 0.6 of the top's along the bottom
-(0.30, 0.08 and 0.06 for the glow in a light session), so a tile reads as a raised piece of glass on any wallpaper. The
-solid tiles of Reduce Transparency and Increase Contrast draw none of it. The glass takes its colour from the wallpaper:
-its saturation works on the encoded colour (`cupertino-glass`), so over a strong blue a tile reads as a brighter, milky
-blue rather than a dull purple-grey. The Edit Controls capsule is glass as the tiles are, so over a light part of the
-wallpaper it reads as a light blue-grey under the same rim.
-With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners, 8 pt around the grid and
-the Edit Controls capsule, closing in to an open detail view as it opens. With Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of
-grey 0.341, with no glass. A
-tile the window cannot show glass under fills a dark grey instead. `view::catcher` is a transparent window with no drawing
+detail view blends where it passes them. The glass alpha follows the fade; the content fades as one layer. Module glass
+keeps the wallpaper's colour: over white a tile comes out at 244 in the light appearance and 207 in the dark one. The
+Edit Controls capsule is glass as the tiles are.
+With Reduce Transparency each tile fills grey 0.114 on one grey 0.302 panel of 40 pt corners (0.96 on 0.82 in the light
+appearance), 8 pt around the grid and the Edit Controls capsule, closing in to an open detail view as it opens. With
+Increase Contrast each tile fills grey 0.463 inside a 0.5 pt rim of grey 0.341 (0.86 inside 0.45 in the light
+appearance), with no glass. A tile the window cannot show glass under fills a translucent grey of its appearance
+instead. `view::catcher` is a transparent window with no drawing
 (`WindowBackground::INPUT_ONLY`: one transparent pixel stretched over the output) that takes a left or right press anywhere on it. The process's `PanelRoles` gives the panel (`view::APP_ID`) an overlay
 layer surface anchored top and right, with an exclusive zone of -1 and margins that put the window 6 pt from the right edge
 and 12 pt below the bar, so the tiles sit 14 pt from the edge and 20 pt below the bar, 44 pt from the top of the output. The bar reserves no layer zone, so
@@ -64,17 +60,23 @@ the top margin adds the theme's menu bar height. The catcher (`view::CATCHER_APP
 it, over the whole output.
 
 **Tiles.** A capsule shows a 36 pt badge 14 pt in from its leading and top edges, white with the symbol in the accent
-colour when the module is on, a light veil when it is off, and its title (13 semibold) over its state (11 regular),
+colour when the module is on, a veil when it is off (white at 0.108 in the dark appearance, black at 0.102 in the light
+one), and its title (13 semibold) over its state (11 regular),
 wrapping onto a second line where the column is too narrow. The sizes are the theme's body and caption sizes; the panel
 sets its labels itself (`view::Label`), since the kit's static text sets every label in its role's size. Over the glass a
-tile's title is white at 0.85 and its state white at 0.70, so the state reads as a quieter line under the name; the
-display and sound tiles' titles and the Edit Controls label (13 medium) are full white, and a detail's heading is 11
-semibold in the secondary label colour. Increase Contrast draws every label in the theme's own colours. The badge is the
+tile's title is the primary label colour and its state the secondary one, so the state reads as a quieter line under the
+name; the kit draws both as the glass's foreground (black in the light appearance, white in the dark one, the
+secondary label at the strength that shifts the face by −0.4 or +0.3). The display and sound tiles' titles and the Edit
+Controls label (13 medium) are primary labels, and a detail's heading is 11 semibold in the secondary label colour.
+Other veils (a pressed control, a row under the pointer, the artwork placeholder, a separator) are white in the dark
+appearance and black in the light one. The badge is the
 module's switch. On Wi-Fi and Bluetooth the text is a second control that opens the detail view. A circular tile is a
 switch or button as a whole, white when on. The media tile shows an artwork placeholder, what plays (or "Not Playing")
 and the previous, play or pause and next buttons,
 disabled while no player can take them. The display and sound tiles show their title, which opens the detail view, and a
-4 pt level, white over a faint track, without a knob, between their symbols; the sound tile also has the output button that
+level between their symbols: a 24 pt track of track glass of its own (`Glass::track`, no blur, bending with its height,
+a ring shadow inside its outline) over the tile's glass, filled in white up to the level, without a knob; with Reduce
+Transparency or Increase Contrast, or where the window shows no glass, the track is a veil; the sound tile also has the output button that
 opens its detail view. A press on a tile away from its controls does nothing; a press between the tiles dismisses the
 panel.
 

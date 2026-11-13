@@ -319,6 +319,20 @@ pub fn edge_blits(fb: [i32; 4], size: (i32, i32), within: [i32; 4]) -> Vec<([i32
     out
 }
 
+/// The size in texels of the capture of framebuffer rectangle `fb` at `scale` of the output's pixels (at most the
+/// output's own), at least one texel each way.
+pub fn capture_size(fb: [i32; 4], scale: f32) -> (i32, i32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale.min(1.0)
+    } else {
+        GLASS_BACKDROP_SCALE
+    };
+    (
+        ((fb[2] as f32 * scale).ceil() as i32).max(1),
+        ((fb[3] as f32 * scale).ceil() as i32).max(1),
+    )
+}
+
 /// The affine map from output pixels to the texture coordinates of a capture of framebuffer rectangle `fb`.
 pub fn capture_uv(projection: &[f32; 9], viewport: [i32; 4], fb: [i32; 4]) -> [[f32; 3]; 2] {
     let p = projection;
@@ -752,7 +766,7 @@ impl MaterialGl {
         Some(out)
     }
 
-    /// Capture framebuffer rectangle `fb` of `src_fbo` at half scale and blur it into the copies (one per distinct
+    /// Capture framebuffer rectangle `fb` of `src_fbo` at the recipe's capture scale and blur it into the copies (one per distinct
     /// deviation of its shapes' blur) and the blur fill `glass` reads. With `within`, a framebuffer rectangle, the capture outside it repeats its edge pixels.
     unsafe fn process_glass(
         &mut self,
@@ -765,10 +779,7 @@ impl MaterialGl {
     ) -> Option<(Vec<Target>, [usize; BLUR_LEVELS + 1])> {
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
-        let size = (
-            ((fb[2] as f32 * GLASS_BACKDROP_SCALE).ceil() as i32).max(1),
-            ((fb[3] as f32 * GLASS_BACKDROP_SCALE).ceil() as i32).max(1),
-        );
+        let size = capture_size(fb, glass.params.capture_scale);
         let capture = self.take_target(gl, size)?;
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, capture.fbo);
@@ -1285,6 +1296,7 @@ mod tests {
     use super::*;
     use cupertino_glass::glass::GlassShape;
     use cupertino_theme::glass::GlassMode;
+    use cupertino_theme::GlassStyle;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
         Rectangle::new((x, y).into(), (w, h).into())
@@ -1324,6 +1336,27 @@ mod tests {
 
     /// Outside the window a capture repeats the window's edge: each side and corner is filled from the nearest row,
     /// column or pixel inside, and nothing is filled where the window covers the capture.
+    #[test]
+    fn the_capture_is_as_large_as_the_recipe_s_scale_says() {
+        let fb = [10, 20, 600, 112];
+        let mode = |style| GlassMode {
+            style,
+            ..GlassMode::default()
+        };
+        let scale = |style, side| GlassParams::new(mode(style), side).capture_scale;
+        // a card at a quarter, a track at the output's own scale, the rest at half
+        assert_eq!(capture_size(fb, scale(GlassStyle::Card, 56.0)), (150, 28));
+        assert_eq!(capture_size(fb, scale(GlassStyle::Track, 24.0)), (600, 112));
+        assert_eq!(
+            capture_size(fb, scale(GlassStyle::Regular, 56.0)),
+            (300, 56)
+        );
+        // never past the output's pixels, never empty, and a broken scale reads at half
+        assert_eq!(capture_size(fb, 4.0), (600, 112));
+        assert_eq!(capture_size([0, 0, 1, 1], 0.25), (1, 1));
+        assert_eq!(capture_size(fb, f32::NAN), (300, 56));
+    }
+
     #[test]
     fn a_capture_outside_its_window_repeats_the_window_edge() {
         // a 100 x 50 capture at half scale of a 200 x 100 rectangle, the window covering its upper-left part

@@ -2784,7 +2784,7 @@ impl<M: 'static> Widget<M> for Card<M> {
         };
         let glass = self.material
             && cx.glass(
-                Glass::dense()
+                Glass::card()
                     .radius(radius)
                     .container(self.container, 0.0)
                     .alpha(opacity),

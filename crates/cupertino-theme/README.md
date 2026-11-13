@@ -9,7 +9,7 @@ and typography.
 |---|---|
 | `tokens.json` | `DesignTokens`: named colours per `Appearance` (sRGB `f32` + alpha) and the system font sizes, metrics and tracking table |
 | `materials.json` | `MaterialLibrary`/`Recipe`: backdrop filter chain + fill layers per window state and interaction, opaque variants, high-contrast catalogs |
-| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear, LargePanel, Bar, Dense, Module}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `VIBRANT_SECONDARY`, `VIBRANT_PLACEHOLDER` (1, 0.75, 0.7), how opaque labels are drawn on glass; `relative_luminance`, `contrast_ratio` |
+| `glass` (code) | `GlassParams::new(GlassMode, short_side)`: the glass recipe of an appearance, style (`GlassStyle::{Regular, Clear, LargePanel, Bar, Dense, Module, Card, Track}`), Reduce Transparency, Increase Contrast and Reduce Motion, for a shape whose shorter side is `short_side` points; `foreground_matrix(dark)`, `adapts_foreground(side)`, `apply_matrix` for content on glass; `FaceTone`, `face_tone(luminance, previous)` (light above `FACE_TONE_THRESHOLD`, 0.179, where white and black text read alike, changing only `FACE_TONE_HYSTERESIS`, 0.03, past it), `foreground_matrix_for(dark, tone)` and `foreground_rgb(dark, tone)`, the colour of text on glass; `VIBRANT_PRIMARY`, `vibrant_secondary(dark)`, `VIBRANT_PLACEHOLDER` (1, about 0.55, 0.7), how opaque labels are drawn on glass, a secondary label at the opacity that shifts the label face by `SECONDARY_SHIFT_LIGHT` (−0.4) or `SECONDARY_SHIFT_DARK` (+0.3); `relative_luminance`, `contrast_ratio` |
 | `control_sizes` (code) | `control_geometry(ControlFamily, ControlSize, compact)`: each control family's height, width, corners, label size and inset at the five sizes (`ControlSize::ASCENDING`: mini, small, regular, large, extra large), normal and compact; `switch_geometry(compact)`, `slider_geometry(size)` and `choice_mark(size, compact)` for the parts of a switch, a slider and a check box or radio button. It is the one table of control sizes: `metrics` keeps only `ControlSize`, `ShapeTokens` and `WindowShadowPreset`, and `tests/one-size-table.rs` checks that no crate reads a per-control height table beside it |
 | `animations.json` | `AnimationPresets`: springs, timing functions, momentum, rubber band and dock timings as `cupertino-animation` types; `Easing` (bézier timing functions plus the cosine ease, which is not a bézier) via `AnimationPresets::easing(name)`; the dock auto-hide curve is `Easing::CosineEase` with the 0.15 s delay / 0.24 s duration; an unknown curve name is an error, not a silent fallback |
 
@@ -92,13 +92,20 @@ flag and its Increase Contrast option.
   the glass off: Reduce Transparency removes the bending at the edge, widens the blur (40.6 pt, 200 for clear glass)
   and lays a dense fill over it; Increase Contrast keeps the optics with firmer colours; both together use the
   reduced-transparency optics with the increased-contrast colours; Reduce Motion drops the refraction band and widens the
-  narrowest blur. `GLASS_BACKDROP_SCALE` (0.5) is the scale the backdrop is read at. Content on glass is coloured by a
+  narrowest blur. `GlassParams::capture_scale` is the scale the backdrop is read at: `GLASS_BACKDROP_SCALE` (0.5),
+  `CARD_CAPTURE_SCALE` (0.25) for cards and `TRACK_CAPTURE_SCALE` (1) for tracks. Content on glass is coloured by a
   4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The bar
-  (`GlassStyle::Bar`) is clear glass over a face that only lifts the scene by a little white (3 % dark, 12 % light)
-  with a brighter rim along its top and bottom edges. Dense glass (`GlassStyle::Dense`, menus, popovers and cards) is the
-  regular recipe of its size over a face pressed to a mid grey veil (a bright backdrop comes out near 125 in the dark
-  appearance, a pastel of the backdrop in the light one); module glass (`GlassStyle::Module`, the control panel's tiles)
-  is regular optics over a darker face in both appearances. The large
+  (`GlassStyle::Bar`, the dock) blurs with a radius of 2.761 pt, bends 8.64 over a 3.84 pt band, and its face takes
+  saturation 1.25, black 0.15 and white 0.9 (light) or black 0.05, white 0.92, a luma cap of 0.75 and a faint black veil
+  (dark), with a soft light along the ends of its long axis. Dense glass (`GlassStyle::Dense`, menus and popovers) is
+  the regular recipe of its size over a face pressed to a mid grey veil (a bright backdrop comes out near 125 in the
+  dark appearance, a pastel of the backdrop in the light one). Module glass (`GlassStyle::Module`, the control panel's
+  tiles) is clear glass of its size bending by 80 over a band of 0.225 of its short side (at most 18 pt) with a rim
+  bias of −0.3: white comes out at 244 in the light appearance and 207 in the dark one. Card glass
+  (`GlassStyle::Card`, notification cards) is the clear face over a blur of radius 10 and the regular blur fill,
+  bending by 60 over 20 pt, with a ring shadow of 0.06 at rest, read at a quarter scale. Track glass
+  (`GlassStyle::Track`, the control panel's levels) has no blur, bends by 0.3 of its height over 0.18 of it, lifts black
+  by 0.1 and has a ring shadow of 0.15 (light) or 0.4 (dark), read at the output's scale. The large
   panel (`GlassStyle::LargePanel`) is regular glass with a blur twice as wide (`LARGE_PANEL_BLUR_SCALE`: levels from 10
   pt, the blur fill 16 pt) and its tones pressed together, so a launcher-sized sheet reads as one calm surface over any
   wallpaper, stripes and text in the scene melting into broad fields of colour: in the dark appearance a luminance cap

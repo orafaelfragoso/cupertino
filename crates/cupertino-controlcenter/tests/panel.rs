@@ -22,6 +22,7 @@ use cupertino_kit::core::{
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
+use cupertino_kit::platform::GlassStyle;
 use cupertino_kit::platform::{
     Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp, WindowEvent,
     WindowId, WindowRequest, WindowStates,
@@ -445,9 +446,9 @@ fn a_light_session_draws_the_panel_as_a_dark_one_does() {
     assert!(light.data() == dark.data(), "the same frame");
 }
 
-/// A tile's state is set in the theme's caption size under its title in the body size: the title in white at 0.85, the
-/// state in full white at a medium weight, so it reads as the brighter line under the name. The slider
-/// tiles' titles and Edit Controls are full white, in the body size. Increase Contrast draws the theme's own colours.
+/// A tile's state is set in the theme's caption size under its title in the body size: the title in the label colour,
+/// the state in the secondary label colour, quieter under the name. The slider tiles' titles and Edit Controls are in
+/// the label colour, in the body size. Increase Contrast draws the theme's own colours.
 #[test]
 fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
     let run = Run::shown();
@@ -456,18 +457,18 @@ fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
         let (title_size, title_color) = run.glyphs(title);
         let (state_size, state_color) = run.glyphs(state);
         assert_eq!((title_size, state_size), (13.0, 11.0), "{title}");
-        assert_eq!(
-            (alpha(title_color), alpha(state_color)),
-            (0.85, 1.0),
-            "{title}"
+        assert_eq!(alpha(title_color), 1.0, "{title}");
+        assert!(
+            alpha(state_color) < alpha(title_color) && alpha(state_color) > 0.4,
+            "{title}: {state_color:?}"
         );
     }
     for full in ["Display", "Sound", "Edit Controls"] {
         let (size, color) = run.glyphs(full);
         assert_eq!((size, alpha(color)), (13.0, 1.0), "{full}");
     }
-    assert_eq!(alpha(run.glyphs("Not Playing").1), 0.85);
-    assert_eq!(alpha(run.glyphs("Do Not Disturb").1), 0.85);
+    assert_eq!(alpha(run.glyphs("Not Playing").1), 1.0);
+    assert_eq!(alpha(run.glyphs("Do Not Disturb").1), 1.0);
 
     let contrast = Run::start(
         tokens(Appearance::DarkHighContrast, false),
@@ -524,6 +525,11 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
             })
             .expect("the panel asks for glass");
         assert!(!regions.is_empty(), "{presentation:?}: no glass");
+        // the levels' tracks are glass of their own over the tiles, apart from the container
+        let regions: Vec<_> = regions
+            .iter()
+            .filter(|r| r.glass.expect("every tile is glass").style != GlassStyle::Track)
+            .collect();
         let containers: Vec<u32> = regions
             .iter()
             .map(|r| r.glass.expect("every tile is glass").container)
@@ -545,14 +551,20 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
     }
 }
 
-/// The glass regions the panel last asked for.
+/// The glass regions the panel last asked for, but the levels' tracks.
 fn glass_regions(run: &mut Run) -> Vec<Rect> {
     let requests = run.driver.window_system_mut().requests(run.window).unwrap();
     requests
         .iter()
         .rev()
         .find_map(|r| match r {
-            WindowRequest::Materials(regions) => Some(regions.iter().map(|r| r.rect).collect()),
+            WindowRequest::Materials(regions) => Some(
+                regions
+                    .iter()
+                    .filter(|r| r.glass.is_none_or(|g| g.style != GlassStyle::Track))
+                    .map(|r| r.rect)
+                    .collect(),
+            ),
             _ => None,
         })
         .expect("the panel asks for glass")
@@ -673,7 +685,7 @@ fn the_tiles_sit_on_their_grid_eight_points_in() {
     );
     assert_eq!(
         within(run.bounds(Role::Slider, "Sound")),
-        (37.0, 420.0, 188.0, 20.0),
+        (37.0, 418.0, 188.0, 24.0),
         "the level's band is centred 42 below the tile's top and reaches 4 past each end of the track"
     );
 }

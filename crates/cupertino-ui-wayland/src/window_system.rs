@@ -189,6 +189,8 @@ fn set_look(
                 GlassStyle::Bar => cupertino_protocol_app::GlassStyle::Bar,
                 GlassStyle::Dense => cupertino_protocol_app::GlassStyle::Dense,
                 GlassStyle::Module => cupertino_protocol_app::GlassStyle::Module,
+                GlassStyle::Card => cupertino_protocol_app::GlassStyle::Card,
+                GlassStyle::Track => cupertino_protocol_app::GlassStyle::Track,
             };
             backdrop.set_glass(style, g.container, g.spacing)
         }

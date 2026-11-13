@@ -168,8 +168,7 @@ pub enum Request {
     Dismiss,
     /// The output the panel's surfaces are on went away: the panel is hidden at once.
     OutputGone,
-    /// The session's appearance: whether it is dark. The panel stays dark either way and tints its glass in a light
-    /// session.
+    /// The session's appearance: whether it is dark; the panel's theme follows it.
     Appearance { dark: bool },
     /// The session's Reduce Motion: a detail view then cross-fades in place instead of growing out of its tile.
     ReduceMotion(bool),
@@ -673,14 +672,6 @@ fn input(input: Input) -> Message {
     Message::Input(input)
 }
 
-/// The panel keeps the dark appearance whatever the session's, and follows its display options.
-fn always_dark(session: SystemAppearance) -> SystemAppearance {
-    SystemAppearance {
-        dark: true,
-        ..session
-    }
-}
-
 impl Application for Panel {
     type Model = Panel;
     type Message = Message;
@@ -796,10 +787,9 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         keyboard: CardKeyboard::default(),
         control: Some(control),
     });
-    cupertino_kit::app::run_on_with_appearance::<Panel>(
+    cupertino_kit::app::run_on::<Panel>(
         system,
         start(Controller::new(backends(options)), requests, appearance),
-        always_dark,
     )?;
     Err("the control panel's window system stopped".into())
 }

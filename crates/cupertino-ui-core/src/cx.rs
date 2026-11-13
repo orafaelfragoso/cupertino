@@ -693,11 +693,29 @@ impl Glass {
         }
     }
 
-    /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: regular optics over a face
-    /// that lets the scene through darker.
+    /// The glass of the tiles of a panel of modules with square corners, on its own, opaque: the clear face under a
+    /// wide blur and a strong bending edge.
     pub fn module() -> Self {
         Self {
             style: GlassStyle::Module,
+            ..Self::regular()
+        }
+    }
+
+    /// The glass of a notification card with square corners, on its own, opaque: the clear face over a wide blur and a
+    /// blur fill, with a faint ring shadow inside its outline.
+    pub fn card() -> Self {
+        Self {
+            style: GlassStyle::Card,
+            ..Self::regular()
+        }
+    }
+
+    /// The glass of a level's track with square corners, on its own, opaque: no blur, a bending edge that follows the
+    /// track's height and a ring shadow inside its outline.
+    pub fn track() -> Self {
+        Self {
+            style: GlassStyle::Track,
             ..Self::regular()
         }
     }

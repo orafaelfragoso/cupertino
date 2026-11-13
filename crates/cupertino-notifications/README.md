@@ -112,7 +112,7 @@ surface, ends the process with a failure status so the server restarts it.
   `max(dx/100, 8) / 15`; a leftward one springs back.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
-- **Drawing.** Kit controls on a card the `view` module paints: regular glass under the card (`PaintCx::glass`, cut to the
+- **Drawing.** Kit controls on a card the `view` module paints: card glass under the card (`PaintCx::glass`, `Glass::card`, cut to the
   part the list shows), a 0.5 pt separator outline, 18 pt corners and a wide dark halo (standard deviation 32 pt, peak 0.45 black, the surface holds its 96 pt reach) drawn only outside it, faded as one
   layer with its content. A collapsed group's front card and the sheets peeking below it join one glass container with a
   hard edge, so they read as one shape; each sheet's shadow, darkening and outline stay off the front card. The list keeps its glass
@@ -234,7 +234,7 @@ The model's calls, for a host of its own (all take `now`):
 | alerts skip the timer (critical urgency → alert mapping is ours) | |
 | top inset (menu bar + 16 pt), right margin 16 pt (Dock at the bottom) | |
 | centre header: a 33 pt row without a panel, 5 pt above the first card; title "Notification Centre" bold 19 pt 2.5 pt in from the cards' leading edge; a 20 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
-| card: 18 pt corners, regular glass, icon 13 pt from the leading edge and 14 pt before the text, 16 pt trailing, 12 pt top and bottom, at least 58 pt tall; age 11 pt at the top right in 56 pt of room | |
+| card: 18 pt corners, card glass, icon 13 pt from the leading edge and 14 pt before the text, 16 pt trailing, 12 pt top and bottom, at least 58 pt tall; age 11 pt at the top right in 56 pt of room | |
 | expanded group: a 30 pt header row (application 15 pt semibold, Show Less, clear), cards 6 pt apart; a spring of perceptual duration 0.35 s, no bounce | |
 | Clear menu scopes: "Banners Only" (keeps pinned; offered only with both pinned and other notifications in the list) and "All Notifications" (always); panel metrics item 22, edge padding 5, minimum width 150, radius 6, row highlight radius 4 | |
 | corner radius 14 pt, platter material `Medium`, all other banner metrics | |

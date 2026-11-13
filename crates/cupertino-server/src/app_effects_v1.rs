@@ -45,7 +45,7 @@ impl AppEffectsV1Global {
 }
 
 /// The version of `cupertino_app_effects_v1` the server offers.
-const VERSION: u32 = 14;
+const VERSION: u32 = 15;
 /// The version from which the backdrops of a subsurface are drawn, above the rest of its surface tree.
 pub const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
 
@@ -63,6 +63,8 @@ const LARGE_PANEL_VERSION: u32 = 10;
 const BAR_VERSION: u32 = 12;
 /// The version of `cupertino_backdrop_v1` that has the dense and module glass styles.
 const DENSE_VERSION: u32 = 13;
+/// The version of `cupertino_backdrop_v1` that has the card and track glass styles.
+const CARD_VERSION: u32 = 15;
 
 /// The tone a backdrop's text is drawn with, as the wire carries it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,13 +184,15 @@ struct Shape {
 
 /// Material names that draw glass rather than a recipe of the design tokens: each backdrop is a glass shape of its
 /// own, like `set_glass` with container 0.
-pub const GLASS_MATERIALS: [(&str, GlassStyle); 6] = [
+pub const GLASS_MATERIALS: [(&str, GlassStyle); 8] = [
     ("Glass", GlassStyle::Regular),
     ("ClearGlass", GlassStyle::Clear),
     ("LargePanelGlass", GlassStyle::LargePanel),
     ("BarGlass", GlassStyle::Bar),
     ("DenseGlass", GlassStyle::Dense),
     ("ModuleGlass", GlassStyle::Module),
+    ("CardGlass", GlassStyle::Card),
+    ("TrackGlass", GlassStyle::Track),
 ];
 
 /// The glass style a material name stands for.
@@ -894,6 +898,16 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
                         if resource.version() >= DENSE_VERSION =>
                     {
                         Some(GlassStyle::Module)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Card)
+                        if resource.version() >= CARD_VERSION =>
+                    {
+                        Some(GlassStyle::Card)
+                    }
+                    WEnum::Value(cupertino_backdrop_v1::GlassStyle::Track)
+                        if resource.version() >= CARD_VERSION =>
+                    {
+                        Some(GlassStyle::Track)
                     }
                     _ => None,
                 };

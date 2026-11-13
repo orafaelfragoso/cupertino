@@ -3,9 +3,10 @@
 //! it.
 //!
 //! The window paints no panel of its own: every tile asks the compositor for glass under its outline, and the tiles
-//! join one glass container so the compositor can blend them where they come close. With Reduce Transparency the
-//! tiles are opaque and sit on one opaque panel. The panel keeps the dark appearance in a light session; there the
-//! tiles lay a dark tint over their glass so the white text reads on it.
+//! join one glass container so the compositor can blend them where they come close. A level's track is glass of its own
+//! over its tile's. With Reduce Transparency the tiles are opaque and sit on one opaque panel. The panel follows the
+//! session's appearance: light glass with dark labels in the light appearance, dark glass with light labels in the
+//! dark one.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -60,34 +61,40 @@ const END: Keysym = Keysym(0xff57);
 const CONTAINER: u32 = 1;
 const BLEND: f64 = 8.0;
 
-/// The fills a tile paints itself. `RT_*`: the opaque panel and tiles with Reduce Transparency. `FALLBACK`: a tile the window cannot show glass under.
+/// The fills a tile paints itself, in the dark and the light appearance. `RT_*`: the opaque panel and tiles with Reduce
+/// Transparency. `FALLBACK`: a tile the window cannot show glass under.
 const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);
 const RT_TILE: Color = Color::new(0.114, 0.114, 0.114, 1.0);
-/// The tiles with Increase Contrast: opaque mid grey inside a darker rim half a point wide, so no backdrop shows through
-/// behind the white text.
+const RT_GROUP_LIGHT: Color = Color::new(0.82, 0.82, 0.82, 1.0);
+const RT_TILE_LIGHT: Color = Color::new(0.96, 0.96, 0.96, 1.0);
+/// The tiles with Increase Contrast: opaque grey inside a rim half a point wide, so no backdrop shows through behind
+/// the text; mid grey with a darker rim in the dark appearance, light grey with a mid grey rim in the light one.
 const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
+const IC_TILE_LIGHT: Color = Color::new(0.86, 0.86, 0.86, 1.0);
+const IC_RIM_COLOR_LIGHT: Color = Color::new(0.45, 0.45, 0.45, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
+const FALLBACK_LIGHT: Color = Color::new(0.93, 0.93, 0.94, 0.92);
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
 const ON_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
-/// A switch badge that is off: a light veil.
-const OFF_BADGE: Color = Color::new(1.0, 1.0, 1.0, 0.16);
-/// Laid over a control while it is pressed: darker on a white disc, lighter on glass.
+/// A switch badge that is off: a veil of white in the dark appearance, of black in the light one ([`veil`]).
+const OFF_BADGE: f32 = 0.1078;
+const OFF_BADGE_LIGHT: f32 = 0.1016;
+/// Laid over a control while it is pressed: darker on a white disc, a veil on glass.
 const PRESSED_ON: Color = Color::new(0.0, 0.0, 0.0, 0.12);
-const PRESSED_OFF: Color = Color::new(1.0, 1.0, 1.0, 0.12);
+const PRESSED_OFF: f32 = 0.12;
 /// Under a list row the pointer is over.
-const HOVER_ROW: Color = Color::new(1.0, 1.0, 1.0, 0.1);
-/// The track of a level: the level in white over a faint white track.
+const HOVER_ROW: f32 = 0.1;
+/// A level: white over its track's glass, as high as the track. Without the glass the track is a veil.
 const TRACK_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
-const TRACK_EMPTY: Color = Color::new(1.0, 1.0, 1.0, 0.2);
-const TRACK_HEIGHT: f64 = 4.0;
+const TRACK_EMPTY: f32 = 0.2;
 /// A disabled control's content is drawn at this opacity.
 const DISABLED_ALPHA: f32 = 0.4;
-/// The media tile's artwork placeholder and the separator of a detail view.
-const ARTWORK: Color = Color::new(1.0, 1.0, 1.0, 0.12);
+/// The media tile's artwork placeholder and the separator of a detail view, as veils.
+const ARTWORK: f32 = 0.12;
 const ARTWORK_RADIUS: f64 = 10.0;
-const SEPARATOR: Color = Color::new(1.0, 1.0, 1.0, 0.16);
+const SEPARATOR: f32 = 0.16;
 
 /// Type of the panel. Sizes come from the theme's type scale: titles in its body size (13) semibold, second lines in
 /// its caption size (11), the Edit Controls label in the body size medium, a detail's heading in the caption size
@@ -96,14 +103,6 @@ const TITLE_WEIGHT: u16 = 600;
 const LINE_WEIGHT: u16 = 500;
 const EDIT_WEIGHT: u16 = 500;
 const ROW_WEIGHT: u16 = 400;
-
-/// How strongly the labels of a tile are drawn over its glass, as the opacity of the label colour: a title somewhat
-/// below full white, its second line in full white at a medium weight, so the state reads as the brighter line under
-/// the name. The slider
-/// tiles' titles and the Edit Controls label are drawn in full white. Increase Contrast draws every label in the
-/// theme's own colours.
-const TITLE_STRENGTH: f32 = 0.85;
-const LINE_STRENGTH: f32 = 1.0;
 
 /// A capsule's badge: its diameter, its inset from the capsule's leading and top edges, and where the text starts.
 const BADGE: f64 = 36.0;
@@ -118,7 +117,7 @@ const ROW_SYMBOL: f64 = 16.0;
 const SLIDER_TITLE_INSET: f64 = 16.0;
 const SLIDER_TITLE_TOP: f64 = 9.0;
 const TRACK_CENTRE: f64 = 42.0;
-const SLIDER_BAND: f64 = 20.0;
+const SLIDER_BAND: f64 = 24.0;
 /// How far past each end of its track a level takes the pointer.
 const LEVEL_REACH: f64 = 4.0;
 /// The display tile's track and its two suns; the sound tile's track, speakers and output button.
@@ -194,7 +193,7 @@ impl Input {
 pub struct Presentation {
     /// The panel's opacity while it fades out.
     pub alpha: f64,
-    /// The session is in the light appearance: the panel keeps its dark glass.
+    /// The session is in the light appearance.
     pub light: bool,
     /// The panel takes input: false while it fades out.
     pub input: bool,
@@ -273,12 +272,13 @@ enum TypeSize {
     Caption,
 }
 
-/// How a label is coloured.
+/// How a label is coloured. Over glass the label colours are the glass's foreground: a title and a primary label go
+/// to black on light glass and to near white on dark glass, a second line and a secondary label shift the face less.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tone {
-    /// A tile's title: the label colour at [`TITLE_STRENGTH`].
+    /// A tile's title: the primary label colour.
     Title,
-    /// A tile's second line: the label colour at [`LINE_STRENGTH`].
+    /// A tile's second line: the secondary label colour.
     Line,
     /// The label colour at its full strength.
     Primary,
@@ -339,22 +339,17 @@ impl Label {
     /// The colour of the label where it is painted.
     fn color(&self, cx: &PaintCx<'_>) -> Color {
         let colors = &cx.env().theme.colors;
-        let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+        let tone = if dark(cx) { 1.0 } else { 0.0 };
+        let fallback = |a: f32| Color::new(tone, tone, tone, a);
         let label = colors
             .get(ColorRole::Text, StateVariant::NORMAL)
-            .unwrap_or(white(1.0));
+            .unwrap_or(fallback(1.0));
         let secondary = colors
             .get(ColorRole::SecondaryText, StateVariant::NORMAL)
-            .unwrap_or(white(0.55));
-        let at = |strength: f32| Color {
-            a: label.a.min(strength),
-            ..label
-        };
-        match (self.tone, increase_contrast(cx)) {
-            (Tone::Title, false) => at(TITLE_STRENGTH),
-            (Tone::Line, false) => at(LINE_STRENGTH),
-            (Tone::Title | Tone::Primary, _) => label,
-            (Tone::Line | Tone::Secondary, _) => secondary,
+            .unwrap_or(fallback(0.55));
+        match self.tone {
+            Tone::Title | Tone::Primary => label,
+            Tone::Line | Tone::Secondary => secondary,
         }
     }
 }
@@ -578,6 +573,26 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, holes: &[(Rect, f64)]) {
     }
 }
 
+/// Whether the panel is drawn in the dark appearance.
+fn dark(cx: &PaintCx<'_>) -> bool {
+    cx.env().theme.preferences.appearance.is_dark()
+}
+
+/// A veil of `alpha`: white over the dark appearance's glass, black over the light one's.
+fn veil(cx: &PaintCx<'_>, alpha: f32) -> Color {
+    let tone = if dark(cx) { 1.0 } else { 0.0 };
+    Color::new(tone, tone, tone, alpha)
+}
+
+/// `dark` in the dark appearance, `light` in the light one.
+fn by_appearance(cx: &PaintCx<'_>, dark_color: Color, light: Color) -> Color {
+    if dark(cx) {
+        dark_color
+    } else {
+        light
+    }
+}
+
 fn reduce_transparency(cx: &PaintCx<'_>) -> bool {
     cx.env().theme.preferences.reduce_transparency
 }
@@ -796,7 +811,8 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
                 WINDOW.width,
                 self.height + 2.0 * INSET,
             );
-            fill(cx, group, layout::GROUP_RADIUS, RT_GROUP);
+            let color = by_appearance(cx, RT_GROUP, RT_GROUP_LIGHT);
+            fill(cx, group, layout::GROUP_RADIUS, color);
         } else if !increase_contrast(cx) {
             let holes: Vec<(Rect, f64)> = self
                 .holes
@@ -897,11 +913,17 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             self.radius
         };
         if reduce_transparency(cx) {
-            fill(cx, rect, radius, RT_TILE);
+            let color = by_appearance(cx, RT_TILE, RT_TILE_LIGHT);
+            fill(cx, rect, radius, color);
             return;
         }
         if increase_contrast(cx) {
-            fill(cx, rect, radius, IC_TILE);
+            let (tile, rim_color) = if dark(cx) {
+                (IC_TILE, IC_RIM_COLOR)
+            } else {
+                (IC_TILE_LIGHT, IC_RIM_COLOR_LIGHT)
+            };
+            fill(cx, rect, radius, tile);
             let rim = Rect::new(
                 IC_RIM / 2.0,
                 IC_RIM / 2.0,
@@ -914,7 +936,7 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
                     radius: (radius - IC_RIM / 2.0).max(0.0),
                 },
                 width: IC_RIM,
-                paint: Paint::Solid(IC_RIM_COLOR),
+                paint: Paint::Solid(rim_color),
             });
             return;
         }
@@ -927,7 +949,8 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             .container(CONTAINER, BLEND)
             .alpha(finite_alpha(self.panel) * alpha);
         if !cx.glass(glass) {
-            fill(cx, rect, radius, FALLBACK);
+            let color = by_appearance(cx, FALLBACK, FALLBACK_LIGHT);
+            fill(cx, rect, radius, color);
         }
     }
 
@@ -1221,19 +1244,22 @@ impl<M: 'static> Widget<M> for Pressable<M> {
         let radius = self.radius(size);
         match self.face {
             Face::Badge { on: true } | Face::Circle { on: true } => fill(cx, rect, radius, ON_FILL),
-            Face::Badge { on: false } => fill(cx, rect, radius, OFF_BADGE),
+            Face::Badge { on: false } => {
+                let alpha = if dark(cx) { OFF_BADGE } else { OFF_BADGE_LIGHT };
+                fill(cx, rect, radius, veil(cx, alpha))
+            }
             Face::Plain { hover: true, .. } if state.hovered && self.enabled => {
-                fill(cx, rect, radius, HOVER_ROW)
+                fill(cx, rect, radius, veil(cx, HOVER_ROW))
             }
             _ => {}
         }
         if state.pressed() {
-            let veil = if self.face.on() {
+            let shade = if self.face.on() {
                 PRESSED_ON
             } else {
-                PRESSED_OFF
+                veil(cx, PRESSED_OFF)
             };
-            fill(cx, rect, radius, veil);
+            fill(cx, rect, radius, shade);
         }
         if cx.focus_visible() && cx.window_active() {
             let theme = cx.env().theme.clone();
@@ -1299,14 +1325,17 @@ struct Drag {
     dragging: bool,
 }
 
-/// A level: a thin white track over a faint one, with no knob. A press or drag puts the level under the pointer;
-/// Left and Right, Home and End step it.
+/// A level: a track of glass of its own over its tile's, filled in white up to the level, with no knob. A press or drag
+/// puts the level under the pointer; Left and Right, Home and End step it. Where the tile is opaque (Reduce
+/// Transparency, Increase Contrast) or the window shows no glass, the track is a veil.
 struct Level<M> {
     key: String,
     label: String,
     slider: Slider,
     frame: Rect,
     value: Option<f64>,
+    /// The panel's opacity: it reaches the track's glass.
+    panel: f64,
     map: Map,
     to: fn(Input) -> M,
 }
@@ -1338,7 +1367,7 @@ impl<M: 'static> Widget<M> for Level<M> {
     fn update(&self, old: &Self, _: &mut Drag) -> Change {
         if self.frame != old.frame {
             Change::Layout
-        } else if self.value != old.value || self.label != old.label {
+        } else if self.value != old.value || self.label != old.label || self.panel != old.panel {
             Change::Paint
         } else {
             Change::None
@@ -1447,22 +1476,19 @@ impl<M: 'static> Widget<M> for Level<M> {
             cx.set_group(DISABLED_ALPHA, Vec::new());
         }
         let size = cx.size();
-        let track = Rect::new(
-            LEVEL_REACH,
-            (size.height - TRACK_HEIGHT) / 2.0,
-            size.width - 2.0 * LEVEL_REACH,
-            TRACK_HEIGHT,
-        );
-        let radius = TRACK_HEIGHT / 2.0;
-        fill(cx, track, radius, TRACK_EMPTY);
+        let track = Rect::from_origin_size(Point::ZERO, size);
+        let radius = size.height / 2.0;
+        let glass = !reduce_transparency(cx)
+            && !increase_contrast(cx)
+            && cx.glass(Glass::track().capsule().alpha(finite_alpha(self.panel)));
+        if !glass {
+            fill(cx, track, radius, veil(cx, TRACK_EMPTY));
+        }
         let level = self.value.unwrap_or(0.0).clamp(0.0, 1.0);
         if level > 0.0 {
-            let filled = Rect::new(
-                track.x(),
-                track.y(),
-                (track.width() * level).max(TRACK_HEIGHT),
-                track.height(),
-            );
+            // the level runs over the reach the pointer is taken past the track's ends
+            let width = LEVEL_REACH + (size.width - 2.0 * LEVEL_REACH) * level;
+            let filled = Rect::new(0.0, 0.0, width.max(size.height), size.height);
             fill(cx, filled, radius, TRACK_FILL);
         }
         if cx.focus_visible() && cx.window_active() {
@@ -1566,6 +1592,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
             slider,
             frame,
             value,
+            panel: self.presentation.alpha,
             map: Rc::clone(&self.map),
             to: self.to,
         })
@@ -2380,7 +2407,7 @@ impl<M: 'static> Widget<M> for Spacer8 {
 
 /// A drawn shape with no input: the media tile's artwork placeholder, or a detail view's separator.
 macro_rules! shape_widget {
-    ($name:ident, $color:expr, $radius:expr) => {
+    ($name:ident, $alpha:expr, $radius:expr) => {
         struct $name {
             frame: Rect,
         }
@@ -2415,7 +2442,8 @@ macro_rules! shape_widget {
 
             fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
                 let rect = Rect::from_origin_size(Point::ZERO, cx.size());
-                fill(cx, rect, $radius, $color);
+                let color = veil(cx, $alpha);
+                fill(cx, rect, $radius, color);
             }
 
             fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

@@ -40,8 +40,12 @@ pub const STATUS_ICON_PT: f64 = 16.0;
 pub const SYSTEM_MARK_PT: f64 = 16.0;
 /// Room on each side of the system menu's mark in its slot.
 pub const SYSTEM_MARK_PADDING: f64 = 10.875;
-/// Diameter of the privacy indicator dot attached to a menu-bar item (6 pt).
-pub const PRIVACY_DOT_PT: f64 = 6.0;
+/// Diameter of the screen-capture indicator dot, the right-most thing on the bar while a capture runs.
+pub const PRIVACY_DOT_PT: f64 = 9.0;
+/// Room between the indicator dot's right edge and the output's right edge.
+pub const PRIVACY_DOT_MARGIN: f64 = 7.5;
+/// Room between the clock's text and the indicator dot right of it.
+pub const PRIVACY_DOT_GAP: f64 = 8.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarMetrics {
@@ -51,19 +55,19 @@ pub struct BarMetrics {
     pub edge_inset: f64,
     /// Horizontal padding inside a title slot (each side): half the space between two titles' text.
     pub title_padding: f64,
-    /// Room on each side of a status item's content inside its frame, the shape its highlight fills.
+    /// Room on each side of the content of an item of the status area (status items, the control panel, the clock)
+    /// inside its slot. The slots meet, so two contents are `2 * status_frame_padding` apart.
     pub status_frame_padding: f64,
-    /// Space between the frames of two items of the status area (status items, the control panel, the clock). Each
-    /// slot reaches half of it past its frame, so the slots meet and two contents are `2 * status_frame_padding +
-    /// status_spacing` apart.
-    pub status_spacing: f64,
+    /// How far the highlight of an item of the status area reaches past its slot on each side, over the edge of its
+    /// neighbour's: its capsule is the content and `status_frame_padding + status_highlight_overhang` on each side.
+    pub status_highlight_overhang: f64,
     /// How far the highlight of a title or the system mark reaches past its slot on each side.
     pub title_highlight_overhang: f64,
     /// Width of the system menu slot.
     pub system_width: f64,
-    /// Width of the control panel slot: its glyph, the frame's padding and the spacing.
+    /// Width of the control panel slot: its glyph and the frame's padding on each side.
     pub control_panel_width: f64,
-    /// Padding of the clock text (each side): the frame's padding and half the spacing.
+    /// Padding of the clock text (each side): the frame's padding.
     pub clock_padding: f64,
     /// Smallest gap kept between the menus and the status area before items are dropped.
     pub min_gap: f64,
@@ -79,12 +83,12 @@ impl Default for BarMetrics {
             height: 33.0,
             edge_inset: 6.0,
             title_padding: 10.0,
-            status_frame_padding: 5.0,
-            status_spacing: 6.0,
+            status_frame_padding: 10.5,
+            status_highlight_overhang: 2.0,
             title_highlight_overhang: 3.875,
             system_width: SYSTEM_MARK_PT + 2.0 * SYSTEM_MARK_PADDING,
-            control_panel_width: 32.0,
-            clock_padding: 8.0,
+            control_panel_width: STATUS_ICON_PT + 2.0 * 10.5,
+            clock_padding: 10.5,
             min_gap: 24.0,
             selection_corner_radius: 11.0,
             selection_inset_y: (33.0 - Self::ITEM_FRAME_HEIGHT) / 2.0,
@@ -104,18 +108,15 @@ impl BarMetrics {
 
     /// Where the highlight of the slot of `key`, `width` points wide, lies along it: its left edge from the slot's and
     /// its width. A title's and the system mark's reach [`BarMetrics::title_highlight_overhang`] past the slot on each
-    /// side; an item of the status area's fills its frame, the slot less half the spacing on each side.
+    /// side, an item of the status area's [`BarMetrics::status_highlight_overhang`].
     pub fn highlight_span(&self, key: &SlotKey, width: f64) -> (f64, f64) {
-        match key {
-            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => (
-                -self.title_highlight_overhang,
-                width + 2.0 * self.title_highlight_overhang,
-            ),
+        let overhang = match key {
+            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => self.title_highlight_overhang,
             SlotKey::Status(_) | SlotKey::ControlPanel | SlotKey::Clock => {
-                let inset = self.status_spacing / 2.0;
-                (inset, (width - 2.0 * inset).max(0.0))
+                self.status_highlight_overhang
             }
-        }
+        };
+        (-overhang, width + 2.0 * overhang)
     }
 }
 
@@ -152,6 +153,8 @@ pub struct BarContent {
     pub menus: Vec<MenuItem>,
     /// Status items, nearest to the control panel first.
     pub status: Vec<StatusEntry>,
+    /// The indicator dot laid out right of the clock, at the bar's right end (its width is the dot's diameter).
+    pub indicator: Option<StatusEntry>,
     pub clock: String,
     pub control_panel: bool,
 }
@@ -229,7 +232,21 @@ pub fn layout_bar(
 
     let mut right = bar.right() - metrics.edge_inset;
     let mut right_slots: Vec<Slot> = Vec::new();
-    let clock_w = measure.width(&content.clock, false) + 2.0 * metrics.clock_padding;
+    let mut clock_w = measure.width(&content.clock, false) + 2.0 * metrics.clock_padding;
+    if let Some(dot) = &content.indicator {
+        // the dot centred in its slot, `PRIVACY_DOT_MARGIN` from the output's edge; the slot reaches half the gap to
+        // the clock's text, and the clock keeps the other half on its right
+        let half_gap = PRIVACY_DOT_GAP / 2.0;
+        let w = dot.width + 2.0 * half_gap;
+        let x = bar.right() - PRIVACY_DOT_MARGIN - dot.width - half_gap;
+        right_slots.push(Slot {
+            key: SlotKey::Status(dot.id.clone()),
+            rect: Rect::new(x, bar.y, w, bar.h),
+            bold: false,
+        });
+        right = x;
+        clock_w += half_gap - metrics.clock_padding;
+    }
     if !content.clock.is_empty() {
         right -= clock_w;
         right_slots.push(Slot {
@@ -249,7 +266,7 @@ pub fn layout_bar(
     let fixed_right = right;
     let mut status_slots: Vec<Slot> = Vec::new();
     for s in &content.status {
-        let w = s.width + 2.0 * metrics.status_frame_padding + metrics.status_spacing;
+        let w = s.width + 2.0 * metrics.status_frame_padding;
         right -= w;
         status_slots.push(Slot {
             key: SlotKey::Status(s.id.clone()),
@@ -698,6 +715,7 @@ mod tests {
                     menu: None,
                 },
             ],
+            indicator: None,
             clock: "Tue 10:42".into(),
             control_panel: true,
         }
@@ -759,9 +777,9 @@ mod tests {
         assert!(l.hidden_menus.is_empty() && l.hidden_status.is_empty());
     }
 
-    /// A title is its text and 10 points on each side; the items of the status area are 16 points apart from content to
-    /// content, each highlight is its frame (the content and 5 points on each side) with no overhang, and two frames
-    /// are 6 points apart.
+    /// A title is its text and 10 points on each side; the items of the status area are 21 points apart from content to
+    /// content (a 37 point pitch for 16 point icons), their slots meet, and each highlight is a 41 point capsule for a
+    /// 16 point icon: 12.5 points past the content on each side, 2 points over each neighbour's slot.
     #[test]
     fn titles_and_status_items_are_spaced_by_their_frames() {
         let metrics = BarMetrics::default();
@@ -775,36 +793,81 @@ mod tests {
             rect(SlotKey::Status("net".into())),
         );
         let content_x = |r: Rect| r.x + (r.w - 16.0) / 2.0;
-        assert!((content_x(net) - content_x(vol) - (16.0 + 16.0)).abs() < 1e-9);
+        assert!(
+            (content_x(net) - content_x(vol) - 37.0).abs() < 1e-9,
+            "pitch"
+        );
+        assert!(
+            (content_x(net) - (content_x(vol) + 16.0) - 21.0).abs() < 1e-9,
+            "ink gap"
+        );
         let frame = |key: SlotKey, r: Rect| {
             let (dx, w) = metrics.highlight_span(&key, r.w);
             (r.x + dx, w)
         };
         let (vol_x, vol_w) = frame(SlotKey::Status("vol".into()), vol);
         let (net_x, net_w) = frame(SlotKey::Status("net".into()), net);
-        assert!((vol_w - (16.0 + 10.0)).abs() < 1e-9 && (net_w - 26.0).abs() < 1e-9);
+        assert!((vol_w - 41.0).abs() < 1e-9 && (net_w - 41.0).abs() < 1e-9);
         assert!(
-            (net_x - (vol_x + vol_w) - 6.0).abs() < 1e-9,
-            "frames 6 apart"
+            (content_x(vol) - vol_x - 12.5).abs() < 1e-9,
+            "12.5 past the icon"
+        );
+        assert!(
+            ((vol_x + vol_w) - net_x - 4.0).abs() < 1e-9,
+            "neighbouring capsules overlap by 4"
         );
         let cp = rect(SlotKey::ControlPanel);
         let clock = rect(SlotKey::Clock);
-        let (cp_x, cp_w) = frame(SlotKey::ControlPanel, cp);
-        let (clock_x, clock_w) = frame(SlotKey::Clock, clock);
-        assert!((cp_x - (net_x + net_w) - 6.0).abs() < 1e-9);
-        assert!((clock_x - (cp_x + cp_w) - 6.0).abs() < 1e-9);
-        assert!((clock_w - (measure.width("Tue 10:42", false) + 10.0)).abs() < 1e-9);
-        // the highlight lies inside the item's own slot: no overhang
+        assert!((cp.x - net.right()).abs() < 1e-9 && (clock.x - cp.right()).abs() < 1e-9);
+        assert!((cp.w - 37.0).abs() < 1e-9);
+        assert!((clock.w - (measure.width("Tue 10:42", false) + 21.0)).abs() < 1e-9);
+        // every highlight of the status area reaches 2 points past its slot, as a title's reaches past its own
         for (key, r) in [
             (SlotKey::Status("vol".into()), vol),
             (SlotKey::ControlPanel, cp),
             (SlotKey::Clock, clock),
         ] {
             let (dx, w) = metrics.highlight_span(&key, r.w);
-            assert!(dx >= 0.0 && dx + w <= r.w, "{key:?}");
+            assert!(
+                (dx + 2.0).abs() < 1e-9 && (w - r.w - 4.0).abs() < 1e-9,
+                "{key:?}"
+            );
         }
-        // a title's highlight still reaches past its slot
         assert!(metrics.highlight_span(&SlotKey::Menu(ItemId(1)), file.w).0 < 0.0);
+    }
+
+    /// While a screen capture runs its 9 point dot is the bar's right-most item, 7.5 points from the output's edge,
+    /// with 8 points between it and the clock's text; without it the clock's text ends 16.5 points from the edge.
+    #[test]
+    fn the_capture_dot_sits_right_of_the_clock() {
+        let metrics = BarMetrics::default();
+        let measure = MonoMeasure::default();
+        let mut c = content();
+        let plain = layout_bar(OUT, &c, &metrics, &measure);
+        let clock_ink_right = |l: &BarLayout| {
+            let r = l.slot(&SlotKey::Clock).unwrap().rect;
+            r.x + metrics.clock_padding + measure.width("Tue 10:42", false)
+        };
+        assert!((clock_ink_right(&plain) - (1920.0 - 16.5)).abs() < 1e-9);
+        c.indicator = Some(StatusEntry {
+            id: "dot".into(),
+            width: PRIVACY_DOT_PT,
+            menu: None,
+        });
+        let l = layout_bar(OUT, &c, &metrics, &measure);
+        assert_eq!(l.slots.last().unwrap().key, SlotKey::Status("dot".into()));
+        let dot = l.slot(&SlotKey::Status("dot".into())).unwrap().rect;
+        let (dot_left, dot_right) = (dot.x + dot.w / 2.0 - 4.5, dot.x + dot.w / 2.0 + 4.5);
+        assert_eq!(PRIVACY_DOT_PT, 9.0);
+        assert!((1920.0 - dot_right - 7.5).abs() < 1e-9, "7.5 from the edge");
+        assert!(
+            (dot_left - clock_ink_right(&l) - 8.0).abs() < 1e-9,
+            "8 from the clock"
+        );
+        let clock = l.slot(&SlotKey::Clock).unwrap().rect;
+        assert!((clock.right() - dot.x).abs() < 1e-9, "the slots meet");
+        let mid = Point::new(dot.x + dot.w / 2.0, 16.0);
+        assert_eq!(l.hit(mid).unwrap().key, SlotKey::Status("dot".into()));
     }
 
     #[test]

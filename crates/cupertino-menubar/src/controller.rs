@@ -423,7 +423,11 @@ impl MenuController {
         let text_x = match slot.key {
             SlotKey::AppMenu | SlotKey::Menu(_) => slot.rect.x + self.bar_metrics.title_padding,
             SlotKey::System => slot.rect.x + (slot.rect.w - SYSTEM_MARK_PT) / 2.0,
-            _ => return slot.rect,
+            // an item of the status area's menu or panel lines up with its highlight, which reaches past the slot
+            SlotKey::Status(_) | SlotKey::ControlPanel | SlotKey::Clock => {
+                let (dx, w) = self.bar_metrics.highlight_span(&slot.key, slot.rect.w);
+                return Rect::new(slot.rect.x + dx, slot.rect.y, w, slot.rect.h);
+            }
         };
         Rect::new(
             text_x - self.menu_metrics.padding_x,
@@ -1076,7 +1080,12 @@ impl MenuController {
     fn level_anchor(&self, level: usize) -> Anchor {
         if level == 0 {
             let key = self.open_slot.clone().unwrap_or(SlotKey::AppMenu);
-            Anchor::BelowSlot(self.layout.slot(&key).map(|s| s.rect).unwrap_or_default())
+            Anchor::BelowSlot(
+                self.layout
+                    .slot(&key)
+                    .map(|s| self.menu_anchor(s))
+                    .unwrap_or_default(),
+            )
         } else {
             let p = &self.levels[level - 1];
             let row = p

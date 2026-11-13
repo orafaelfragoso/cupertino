@@ -2473,8 +2473,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         into,
                         fade.scale,
                     );
-                    morph::fade_materials(&mut painting.materials, fade.opacity);
                 }
+                // the glass the content declares fades with it, a popover's and a menu's that draws its own
+                morph::fade_materials(&mut painting.materials, fade.opacity);
             } else if let Some(scale) = w.grow.and_then(|g| g.scale(now)) {
                 let origin = w.grow.map_or(Point::ZERO, |g| g.origin);
                 morph::apply(&mut painting.list, &mut painting.materials, origin, scale);

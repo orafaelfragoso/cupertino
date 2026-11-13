@@ -806,6 +806,8 @@ impl XdgShellHandler for Cupertino {
 
     fn popup_destroyed(&mut self, _surface: PopupSurface) {
         self.popup_dismissed_by_client();
+        // a dismissed popup still drawn while it faded is gone now
+        self.request_redraw();
     }
 
     fn reposition_request(

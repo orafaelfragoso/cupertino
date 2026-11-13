@@ -3823,6 +3823,8 @@ mod popup_release {
     struct Menu {
         label: &'static str,
         children: Vec<Element<String>>,
+        /// It draws its own glass and fades out as it closes.
+        closes_as_menu: bool,
     }
 
     impl Widget<String> for Menu {
@@ -3845,6 +3847,10 @@ mod popup_release {
 
         fn update(&self, _: &Self, _: &mut ()) -> Change {
             Change::None
+        }
+
+        fn closes_as_menu(&self) -> bool {
+            self.closes_as_menu
         }
 
         fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -3890,6 +3896,8 @@ mod popup_release {
     struct Shown {
         menu: bool,
         submenu: bool,
+        /// The menus draw their own glass, so they fade out as they close.
+        own_glass: bool,
         /// Every message, in order.
         heard: Vec<String>,
     }
@@ -3944,6 +3952,7 @@ mod popup_release {
             match message.as_str() {
                 "opener:Target:press" => model.menu = true,
                 "more:Target:motion" => model.submenu = true,
+                "other:Target:press" => model.own_glass = true,
                 "menu dismissed" => model.menu = false,
                 _ => {}
             }
@@ -3973,6 +3982,7 @@ mod popup_release {
                     Element::new(Menu {
                         label: "menu",
                         children: vec![Element::new(leaf("item")), Element::new(leaf("more"))],
+                        closes_as_menu: model.own_glass,
                     }),
                 ));
             }
@@ -3984,6 +3994,7 @@ mod popup_release {
                     Element::new(Menu {
                         label: "submenu",
                         children: vec![Element::new(leaf("deep"))],
+                        closes_as_menu: model.own_glass,
                     }),
                 ));
             }
@@ -4253,6 +4264,56 @@ mod popup_release {
         desk.focus("main", false);
         desk.focus("main", true);
         assert!(desk.crossing("main"), "back from elsewhere, it crosses");
+    }
+
+    /// A menu that draws its own glass (one with a pointer) fades out as a menu on the menu surface does: its window
+    /// stays for the fade, takes no input from its start, and goes once it is over; one that does not goes at once.
+    #[test]
+    fn a_menu_that_draws_its_own_glass_fades_out_and_takes_no_input_meanwhile() {
+        for own_glass in [false, true] {
+            let mut desk = Desk::new();
+            if own_glass {
+                // the main window's second item, right of the opener
+                desk.button("main", Point::new(15.0, 5.0), true);
+                desk.button("main", Point::new(15.0, 5.0), false);
+                assert!(desk.rt.model().own_glass);
+            }
+            desk.press_opener();
+            desk.frames();
+            let menu = desk.id("menu");
+            desk.rt
+                .window_system_mut()
+                .send(menu, WindowEvent::PopupDone);
+            desk.rt.step(steps()).unwrap();
+            assert!(!desk.rt.model().menu, "the menu closed");
+            let system = desk.rt.window_system();
+            assert_eq!(
+                system.destroyed.contains(&menu),
+                !own_glass,
+                "own glass {own_glass}: destroyed at once only without it"
+            );
+            if !own_glass {
+                continue;
+            }
+            assert!(
+                system
+                    .requests
+                    .contains(&(menu, WindowRequest::SetInputRegion(Some(Vec::new())))),
+                "out of the input as the fade begins"
+            );
+            desk.at(PRESSED + 200_000_000);
+            desk.rt.step(steps()).unwrap();
+            assert!(
+                !desk.rt.window_system().destroyed.contains(&menu),
+                "still fading at 0.2 s"
+            );
+            desk.at(PRESSED + 240_000_000);
+            desk.rt.step(steps()).unwrap();
+            assert!(
+                desk.rt.window_system().destroyed.contains(&menu),
+                "gone after the fade"
+            );
+        }
     }
 
     #[test]

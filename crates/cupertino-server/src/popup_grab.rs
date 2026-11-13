@@ -193,7 +193,10 @@ impl Cupertino {
             return;
         };
         {
+            // the dismissed popups stay drawn while their clients fade them out
+            let before = crate::popup_linger::snapshot(&active.root);
             let _ = active.grab.ungrab(PopupUngrabStrategy::All);
+            crate::popup_linger::keep_dismissed(&active.root, before, self.now());
             if let Some(keyboard) = self.seat.get_keyboard() {
                 if keyboard.is_grabbed()
                     && (keyboard.has_grab(active.grab.serial())

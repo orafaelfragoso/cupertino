@@ -1,7 +1,8 @@
-//! A menu that closes fades out instead of vanishing. The application stops declaring the popup, and the runtime keeps
-//! its window, takes it out of the input, and shows it at a falling opacity until the fade is over; then it destroys
-//! it. Only a menu's first level fades, and only when no other menu opens in its place; a submenu that closes while
-//! its menu stays open, and a menu that another one replaces, go at once, as does every menu with Reduce Motion.
+//! A menu that closes fades out instead of vanishing: a popup on the menu surface, or one that draws a menu's glass
+//! itself (a menu with a pointer). The application stops declaring the popup, and the runtime keeps its window, takes
+//! it out of the input, and shows it and its glass at a falling opacity until the fade is over; then it destroys it.
+//! Only a menu's first level fades, and only when no other menu opens in its place; a submenu that closes while its
+//! menu stays open, and a menu that another one replaces, go at once, as does every menu with Reduce Motion.
 //! A popover that closes shrinks back into its anchor as it fades ([`super::morph`]), unless another opens in its
 //! place or Reduce Motion is on.
 
@@ -60,18 +61,23 @@ pub(super) fn dim(list: &mut DisplayList, opacity: f32) {
     }
 }
 
-fn is_menu<M>(w: &WindowState<M>) -> bool {
-    w.popup.is_some()
-        && matches!(
-            w.background,
-            WindowBackground::Surface {
-                surface: Surface::Menu,
-                ..
-            }
-        )
-}
-
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
+    /// Whether `w` is a menu: a popup on the menu surface, or one whose content draws a menu's material itself
+    /// ([`crate::Widget::closes_as_menu`]).
+    fn is_menu(&self, w: &WindowState<A::Message>) -> bool {
+        w.popup.is_some()
+            && (matches!(
+                w.background,
+                WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    ..
+                }
+            ) || w
+                .root
+                .and_then(|root| self.tree.get(root))
+                .is_some_and(|n| n.widget.closes_as_menu()))
+    }
+
     /// Keeps the menus among `old`, the windows the view no longer declares, that fade out, and gives back the windows
     /// to close. `reopened` is whether the view opened a menu the last one did not have.
     pub(super) fn fade_closed(
@@ -97,12 +103,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.committed && !reopened && !w.env.theme.preferences.reduce_motion
                 }
                 Some(parent) => {
-                    is_menu(&w)
+                    self.is_menu(&w)
                         && w.committed
                         && !reopened
                         && !w.env.theme.preferences.reduce_motion
                         // a submenu goes with its menu, or at once
-                        && (!is_menu(parent) || parent.fade.is_some())
+                        && (!self.is_menu(parent) || parent.fade.is_some())
                 }
             };
             if !keep {

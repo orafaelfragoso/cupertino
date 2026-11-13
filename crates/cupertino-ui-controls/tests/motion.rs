@@ -383,7 +383,7 @@ fn marks(h: &Harness<View>) -> Vec<f64> {
 }
 
 #[test]
-fn a_new_choice_glides_its_mark_across_the_segments_between() {
+fn a_new_choice_is_marked_at_once_at_the_release() {
     let mut h = Harness::<View>::new();
     assert_eq!(marks(&h), [1.0, 0.0, 0.0]);
     let rect = h.rect("view");
@@ -393,17 +393,11 @@ fn a_new_choice_glides_its_mark_across_the_segments_between() {
     // the pointer goes away, so no segment shows it over itself
     h.send_now(pointer(PointerEvent::Leave));
     assert_eq!(*h.model(), Some(2), "chosen at the release");
-    assert!(h.animating());
-    h.later(40);
-    let gliding = marks(&h);
-    assert!(
-        gliding[1] > 0.0,
-        "the mark crosses the middle segment: {gliding:?}"
-    );
-    assert!(gliding[2] < 1.0);
-    h.later(200);
-    assert_eq!(marks(&h), [0.0, 0.0, 1.0], "settled on the choice");
+    // an inline control's mark jumps: no frame shows it between the segments
+    assert_eq!(marks(&h), [0.0, 0.0, 1.0], "marked in the release's frame");
     assert!(!h.animating());
+    h.later(40);
+    assert_eq!(marks(&h), [0.0, 0.0, 1.0]);
 }
 
 #[test]

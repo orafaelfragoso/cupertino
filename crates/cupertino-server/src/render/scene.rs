@@ -19,7 +19,7 @@ use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
 use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::desktop::{layer_map_for_output, LayerSurface, PopupManager};
+use smithay::desktop::{layer_map_for_output, LayerSurface};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Scale};
@@ -1047,7 +1047,8 @@ fn window_popup_elements(
         return out;
     };
     let alpha = plan.opacity as f32;
-    for (popup, popup_offset) in PopupManager::popups_for_surface(&surface) {
+    // a dismissed popup its client still fades out is drawn as it lay, under the live ones
+    for (popup, popup_offset) in crate::popup_linger::shown(&surface, p.now) {
         let offset: Point<i32, Physical> =
             (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
         let popup_origin = Point::<f64, Logical>::from((
@@ -1963,7 +1964,7 @@ fn layer_elements(
         let loc: Point<i32, Physical> = origin.to_physical_precise_round(scale);
         // popups above their parent, each with its own backdrop directly below it
         let mut own = Vec::new();
-        for (popup, popup_offset) in PopupManager::popups_for_surface(surface.wl_surface()) {
+        for (popup, popup_offset) in crate::popup_linger::shown(surface.wl_surface(), p.now) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
             let tree = standalone_tree(
                 popup.wl_surface(),

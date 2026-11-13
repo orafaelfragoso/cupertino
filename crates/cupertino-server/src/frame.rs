@@ -698,6 +698,28 @@ impl Cupertino {
                     Some(out.clone())
                 });
             }
+            // the dismissed popups still drawn while they fade are called back too, so their fades advance
+            let now = self.now();
+            let roots = self
+                .windows
+                .iter()
+                .filter(|e| e.mapped)
+                .filter_map(|e| {
+                    smithay::wayland::seat::WaylandFocus::wl_surface(&e.window)
+                        .map(|s| s.into_owned())
+                })
+                .chain(map.layers().map(|l| l.wl_surface().clone()));
+            for root in roots {
+                for (popup, _) in crate::popup_linger::dismissed(&root, now) {
+                    send_frames_surface_tree(
+                        popup.wl_surface(),
+                        out,
+                        time,
+                        Some(HIDDEN_FRAME_THROTTLE),
+                        move |_, _| Some(out.clone()),
+                    );
+                }
+            }
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             send_frames_surface_tree(s, out, time, Some(HIDDEN_FRAME_THROTTLE), move |_, _| {

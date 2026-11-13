@@ -277,8 +277,9 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   - Bluetooth: a `Bluetooth` switch row, then the paired devices by name, checked when connected. A row connects or
     disconnects.
   - Focus: shown only while do not disturb is on. A `Do Not Disturb` row turns it off, and the duration rows re-arm it.
-- **Screen capture indicator.** While the server reports a capture session (`screen_capture`, menu bar version 3), a 6 pt
-  indigo dot (size and colours) sits nearest the control panel. The enter / exit animation and
+- **Screen capture indicator.** While the server reports a capture session (`screen_capture`, menu bar version 3), a 9 pt
+  indigo dot sits right of the clock at the bar's right end, 7.5 pt from the output's edge and 8 pt from the clock's
+  text (`BarContent::indicator`). The enter / exit animation and
   minimum time are not played. Camera, microphone and system-audio indicators need the PipeWire graph and
   are not shown.
 
@@ -302,9 +303,11 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   (`BarMetrics::item_inset_y`). The selection highlight of a pressed title is a capsule 22 pt tall, reaching 13.875 pt past the title's text on
   each side (`BarMetrics::selection_corner_radius`, `title_highlight_overhang`), in a veil of the text's tone: dark at 7 %
   under dark text, light at 10 % under light text. A title is its text and 10 pt on each side, so two titles' text is
-  20 pt apart. An item of the status area (status items, the control panel, the clock) sits in a frame of its content
-  and 5 pt on each side, frames 6 pt apart (`status_frame_padding`, `status_spacing`), so two status icons are 16 pt
-  apart; its highlight is that frame, with no overhang (`BarMetrics::highlight_span`). A menu hangs from the
+  20 pt apart. An item of the status area (status items, the control panel, the clock) sits in a slot of its content
+  and 10.5 pt on each side (`status_frame_padding`), the slots meeting, so two 16 pt status icons are 21 pt apart
+  (37 pt from middle to middle); its highlight is a capsule 2 pt wider than its slot on each side, 12.5 pt past the
+  content (`status_highlight_overhang`, `BarMetrics::highlight_span`), and a status panel's right edge is level with
+  it. A menu hangs from the
   bar so that its labels line up with the title's text (the menu's edge 16.5 pt left of it), its rows are 24 pt and its
   separators 11 pt, its highlight is inset 5.5 pt with a 6.75 pt corner and its corner is 11.5 pt. A row with an
   icon (an inline picture or a themed name) draws it in the icon column before the label, a symbol in the label's

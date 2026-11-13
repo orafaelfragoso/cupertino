@@ -701,14 +701,7 @@ impl Model {
     /// Files dropped from another application: copied into the desktop folder, an application's desktop file
     /// among them, as a paste does. The desktop's own items, and a list that is not of local files, are refused.
     fn dropped_in(&mut self, dropped: cupertino_kit::core::Dropped) -> Vec<Command<Message>> {
-        let sources = super::drops::uri_paths(&dropped.data.bytes)
-            .filter(|paths| !paths.is_empty())
-            .filter(|paths| {
-                paths
-                    .iter()
-                    .all(|p| p.parent() != Some(self.folder.as_path()))
-            });
-        let Some(sources) = sources else {
+        let Some(sources) = dropped_sources(&dropped.data.bytes, &self.folder) else {
             return vec![Command::FinishDrop(dropped.token, None)];
         };
         let dest = self.folder.clone();
@@ -1220,4 +1213,46 @@ fn takes_drops(content: Element<Message>) -> Element<Message> {
         on_drop: Box::new(Message::DroppedIn),
         on_leave: None,
     })
+}
+
+/// The local files a `text/uri-list` dropped on the desktop names, to copy into `folder`: none when the list is not of
+/// local files, is empty, or holds an item already in `folder` (the desktop's own items move by its own drag).
+fn dropped_sources(bytes: &[u8], folder: &Path) -> Option<Vec<PathBuf>> {
+    super::drops::uri_paths(bytes)
+        .filter(|paths| !paths.is_empty())
+        .filter(|paths| paths.iter().all(|p| p.parent() != Some(folder)))
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::dropped_sources;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn files_from_another_folder_are_taken_and_the_desktops_own_or_none_are_refused() {
+        let desk = Path::new("/home/u/Desktop");
+        assert_eq!(
+            dropped_sources(
+                b"file:///home/u/Documents/a.txt\r\nfile:///usr/share/applications/b.desktop\r\n",
+                desk
+            ),
+            Some(vec![
+                PathBuf::from("/home/u/Documents/a.txt"),
+                PathBuf::from("/usr/share/applications/b.desktop"),
+            ])
+        );
+        assert_eq!(
+            dropped_sources(b"file:///home/u/Desktop/c.txt\r\n", desk),
+            None
+        );
+        assert_eq!(
+            dropped_sources(
+                b"file:///home/u/Documents/a.txt\r\nfile:///home/u/Desktop/c.txt\r\n",
+                desk
+            ),
+            None
+        );
+        assert_eq!(dropped_sources(b"", desk), None);
+        assert_eq!(dropped_sources(b"https://example.org/x\r\n", desk), None);
+    }
 }

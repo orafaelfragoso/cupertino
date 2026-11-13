@@ -668,6 +668,8 @@ pub struct Cupertino {
     pub fixed_time: Option<f64>,
     /// Per-frame timings for the frame-rate benchmark (`--frame-stats`).
     pub frame_stats: Option<crate::frame_stats::FrameStats>,
+    /// The DRM backend's trace of flips, planes and latency, when asked for (`CUPERTINO_DRM_TRACE`).
+    pub drm_trace: Option<crate::drm_trace::DrmTrace>,
     /// Model time runs at this multiple of the wall clock (slow motion for inspection, 1.0 = real
     /// time) starting from `time_origin`.
     pub time_scale: f64,
@@ -979,6 +981,7 @@ impl Cupertino {
             output_screenshots: Vec::new(),
             fixed_time: None,
             frame_stats: None,
+            drm_trace: None,
             time_scale: 1.0,
             time_origin: policy::clock_seconds(std::time::Duration::from(
                 Clock::<Monotonic>::new().now(),

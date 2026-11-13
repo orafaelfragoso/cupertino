@@ -26,6 +26,7 @@ pub mod displays;
 pub mod dock;
 pub mod dock_thumbnail;
 pub mod drag_return;
+pub mod drm_trace;
 pub mod events;
 pub mod file_limit;
 pub mod force_quit;

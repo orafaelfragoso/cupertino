@@ -680,3 +680,16 @@ pub fn system_accessibility(path: &Path) -> Option<AccessibilitySettings> {
     let text = read_root_file(path).ok()??;
     Some(SystemAccessibility::from_text(&text).0.settings)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_files_the_dock_hides_recents_and_neither_magnifies_nor_hides() {
+        let s = Settings::load(&Paths::default(), 900.0).unwrap();
+        assert!(!s.recents());
+        assert!(!s.magnification());
+        assert!(!s.autohide());
+    }
+}

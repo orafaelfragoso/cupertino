@@ -187,9 +187,7 @@ impl Backdrop {
             }
             GlassStyle::Card => WireStyle::Card,
             GlassStyle::Track => WireStyle::Track,
-            // a server before it draws the popover as regular glass
-            GlassStyle::Popover if self.proxy.version() < POPOVER_VERSION => WireStyle::Regular,
-            GlassStyle::Popover => WireStyle::Popover,
+            GlassStyle::Popover => popover_style(self.proxy.version()),
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -230,6 +228,15 @@ fn legacy_style(style: GlassStyle, version: u32) -> WireStyle {
         GlassStyle::Card if version >= DENSE_VERSION => WireStyle::Dense,
         GlassStyle::Track => WireStyle::Clear,
         _ => WireStyle::Regular,
+    }
+}
+
+/// The wire style of the popover on a server of `version`: one before [`POPOVER_VERSION`] draws it as regular glass.
+fn popover_style(version: u32) -> WireStyle {
+    if version < POPOVER_VERSION {
+        WireStyle::Regular
+    } else {
+        WireStyle::Popover
     }
 }
 
@@ -287,6 +294,12 @@ mod tests {
         assert_eq!(legacy_style(GlassStyle::Card, 12), WireStyle::Regular);
         assert_eq!(legacy_style(GlassStyle::Track, 14), WireStyle::Clear);
         assert_eq!(legacy_style(GlassStyle::Track, 6), WireStyle::Clear);
+    }
+
+    #[test]
+    fn an_older_server_draws_the_popover_as_regular_glass() {
+        assert_eq!(popover_style(15), WireStyle::Regular);
+        assert_eq!(popover_style(16), WireStyle::Popover);
     }
 
     #[test]

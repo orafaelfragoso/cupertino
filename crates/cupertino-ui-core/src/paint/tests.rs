@@ -1939,3 +1939,15 @@ fn a_subtree_pinned_to_an_appearance_paints_in_its_theme_and_the_rest_keeps_the_
     let (_, [_, inside, _, _]) = paint(&[None, None]);
     assert_eq!(inside, in_light);
 }
+
+#[test]
+fn a_popover_glass_is_regular_glass_of_the_popover_style() {
+    let popover = crate::cx::Glass::popover();
+    let regular = crate::cx::Glass::regular();
+    assert_eq!(popover.style, cupertino_ui_platform::GlassStyle::Popover);
+    assert_eq!(popover.style.material(), "PopoverGlass");
+    assert_eq!(
+        (popover.alpha, popover.container, popover.spacing),
+        (regular.alpha, regular.container, regular.spacing)
+    );
+}

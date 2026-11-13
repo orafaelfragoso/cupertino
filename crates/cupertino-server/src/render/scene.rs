@@ -2309,8 +2309,16 @@ fn glass_pieces(
         let small = container
             .bounds()
             .is_some_and(|b| b[2].min(b[3]) < CALLOUT_SHADOW_MIN_SIDE as f32);
-        if callout && small && !mode.reduce_transparency && !mode.increase_contrast && mode.dark {
-            // a small dark callout (a label) is a veil a little lighter than the plain glass
+        let own_face = spec.style == cupertino_theme::GlassStyle::Popover;
+        if callout
+            && small
+            && !own_face
+            && !mode.reduce_transparency
+            && !mode.increase_contrast
+            && mode.dark
+        {
+            // a small dark callout (a label) is a veil a little lighter than the plain glass; popover glass keeps its
+            // own face
             container.params.face.fill = SMALL_CALLOUT_FACE_DARK;
         }
     }

@@ -2577,6 +2577,48 @@ fn a_launch_bounces_its_tile_until_the_window_comes() {
     assert_eq!(y(&run), rest, "the window came: the tile rests");
 }
 
+/// The glass styles window `window` last asked for.
+fn glass_styles(run: &mut Run, window: WindowId) -> Vec<cupertino_kit::platform::GlassStyle> {
+    let requests = run.driver.window_system_mut().requests(window).unwrap();
+    requests
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r.glass.map(|g| g.style))
+        .collect()
+}
+
+/// A tile's name and a tile's menu are popover glass, the name with its pointer and the menu with its own.
+#[test]
+fn a_tiles_name_and_menu_are_popover_glass() {
+    use cupertino_kit::platform::GlassStyle;
+    let mut run = Run::start();
+    let bar = run.bar();
+    let terminal = centre(run.bounds(bar, Role::Button, "Terminal"));
+    run.pointer(bar, PointerEvent::Enter { position: terminal });
+    run.settle();
+    let (name, _) = label(&run).expect("the name shows");
+    let styles = glass_styles(&mut run, name);
+    assert!(
+        styles.len() > 1 && styles.iter().all(|s| *s == GlassStyle::Popover),
+        "the capsule and its pointer: {styles:?}"
+    );
+    run.button(bar, terminal, MouseButton::Right, true);
+    run.button(bar, terminal, MouseButton::Right, false);
+    run.settle();
+    let menu = open_menu_window(&run, bar).expect("the menu opened");
+    let styles = glass_styles(&mut run, menu);
+    assert!(
+        !styles.is_empty() && styles.iter().all(|s| *s == GlassStyle::Popover),
+        "{styles:?}"
+    );
+}
+
 /// The name over a launching tile rides its bounce: it rises and comes back down with the tile.
 #[test]
 fn the_name_over_a_launching_tile_rides_its_bounce() {

@@ -71,6 +71,10 @@ pub enum GlassStyle {
     /// The glass of a level's track (the control panel's sliders): no blur, the backdrop read at the output's scale, a
     /// slight lift of black, a bending edge that follows the track's height and a ring shadow inside its outline.
     Track,
+    /// The glass of a small popover over a floating bar (a tile's name, a tile's menu): the backdrop under a wide soft
+    /// blur fill only, a strong bending edge and a thin line of light along its top and bottom edges, the same at every
+    /// size.
+    Popover,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -466,6 +470,45 @@ fn bar_face(dark: bool) -> GlassFace {
     }
 }
 
+/// The face of popover glass. Light: the regular light face with white a little past 1. Dark: black lifted by an
+/// eighth, white past 1 and the luma compressed to 0.6, with more colour.
+fn popover_face(dark: bool) -> GlassFace {
+    let regular = regular_face(dark);
+    if dark {
+        GlassFace {
+            black: POPOVER_BLACK_DARK,
+            max_luma: POPOVER_MAX_LUMA_DARK,
+            ..regular
+        }
+    } else {
+        GlassFace {
+            white: POPOVER_WHITE_LIGHT,
+            ..regular
+        }
+    }
+}
+
+/// The side the popover's regular glass is worked out at before its own values replace what follows the size.
+const POPOVER_SIDE: f32 = 26.0;
+/// The popover's blur: its radius, and the opacity of each level, the first 0, so only the blur fill softens it.
+const POPOVER_BLUR: f32 = 10.0;
+const POPOVER_LEVELS: [f32; BLUR_LEVELS] = [0.0, 0.0, 0.5, 1.0];
+/// The popover's blur fill: its radius, its opacity in darken (dark) or lighten (light) mode, and in normal mode.
+const POPOVER_FILL_RADIUS: f32 = 16.0;
+const POPOVER_FILL_OVER: f32 = 0.882;
+const POPOVER_FILL_NORMAL: f32 = 0.46;
+/// The popover's refraction: strength and band width in points.
+const POPOVER_REFRACTION: f32 = -24.0;
+const POPOVER_REFRACTION_HEIGHT: f32 = 5.0;
+/// The popover's bleed band (shown at no opacity at rest).
+const POPOVER_BLEED: f32 = 16.8;
+/// The faint ring shadow inside the popover's outline.
+const POPOVER_RING_OPACITY: f32 = 0.06;
+/// The dark popover face's black lift and luma compression, and the light face's white point.
+const POPOVER_BLACK_DARK: f32 = 0.125;
+const POPOVER_MAX_LUMA_DARK: f32 = 0.6;
+const POPOVER_WHITE_LIGHT: f32 = 1.03;
+
 /// The saturation of the bar's face in both appearances.
 const BAR_SATURATION: f32 = 1.25;
 /// The black veil over the dark bar's face.
@@ -475,8 +518,10 @@ const BAR_BLUR: f32 = 2.761;
 /// The bar's refraction: strength and band width in points, the same at every size.
 const BAR_REFRACTION: f32 = -8.64;
 const BAR_REFRACTION_HEIGHT: f32 = 3.84;
-/// How strongly a soft band lights the far end of its axis, as a share of the near end, unless a surface says otherwise.
+/// How strongly a soft band lights the far end of its axis, as a share of the near end, unless a surface says
+/// otherwise: on clear glass and on regular glass (and the styles built on it).
 const GLOW_FILL: f32 = 0.75;
+const GLOW_FILL_REGULAR: f32 = 0.8125;
 /// The bar's rim: strength and colour shift per unit of strength.
 const BAR_RIM: f32 = 0.4;
 const BAR_RIM_BIAS: f32 = -0.25;
@@ -707,6 +752,7 @@ impl GlassParams {
             GlassStyle::Module => Self::module(dark, s),
             GlassStyle::Card => Self::card(dark, s),
             GlassStyle::Track => Self::track(dark, s),
+            GlassStyle::Popover => Self::popover(dark),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -731,7 +777,8 @@ impl GlassParams {
                 | GlassStyle::Dense
                 | GlassStyle::Module
                 | GlassStyle::Card
-                | GlassStyle::Track => {
+                | GlassStyle::Track
+                | GlassStyle::Popover => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -793,7 +840,7 @@ impl GlassParams {
                 glow_amount: 0.0,
                 glow_height: 0.0,
                 glow_offset: 0.0,
-                glow_fill: GLOW_FILL,
+                glow_fill: GLOW_FILL_REGULAR,
                 diffuse: GlowDiffuse::NONE,
                 matrix: HIGHLIGHT_MATRIX_REGULAR,
             },
@@ -943,6 +990,42 @@ impl GlassParams {
             outline_width: 0.0,
         };
         p.capture_scale = TRACK_CAPTURE_SCALE;
+        p
+    }
+
+    /// The popover glass: no blur of its own, only the wide soft blur fill, the popover's face, a strong bending edge,
+    /// the rim and the thin line of light along the top and bottom edges over a wide faint glow; a faint ring shadow
+    /// inside its outline. Nothing in it follows the size.
+    fn popover(dark: bool) -> Self {
+        let mut p = Self::regular(dark, POPOVER_SIDE);
+        p.blur = GlassBlur {
+            radius: POPOVER_BLUR,
+            level_opacity: POPOVER_LEVELS,
+            fill_radius: POPOVER_FILL_RADIUS,
+            fill_darken: if dark { POPOVER_FILL_OVER } else { 0.0 },
+            fill_normal: POPOVER_FILL_NORMAL,
+            fill_lighten: if dark { 0.0 } else { POPOVER_FILL_OVER },
+        };
+        p.face = popover_face(dark);
+        p.refraction = GlassRefraction {
+            amount: POPOVER_REFRACTION,
+            height: POPOVER_REFRACTION_HEIGHT,
+            outer_amount: 0.0,
+        };
+        p.bleed.amount = POPOVER_BLEED;
+        p.bleed.height = POPOVER_BLEED;
+        p.highlight = GlassHighlight {
+            amount: BAR_RIM,
+            spread: BAR_GLOW_SPREAD,
+            color_bias: BAR_RIM_BIAS,
+            glow_amount: BAR_GLOW,
+            glow_height: BAR_GLOW_HEIGHT,
+            glow_offset: BAR_GLOW_OFFSET,
+            glow_fill: BAR_GLOW_FILL,
+            diffuse: BAR_GLOW_DIFFUSE,
+            ..p.highlight
+        };
+        p.shadow.ring_opacity = POPOVER_RING_OPACITY;
         p
     }
 
@@ -1792,6 +1875,60 @@ mod tests {
             let tall = GlassParams::new(mode(dark, GlassStyle::Track), 48.0);
             assert!(close(tall.refraction.amount, -14.4) && close(tall.refraction.height, 8.64));
         }
+    }
+
+    #[test]
+    fn regular_and_clear_glass_light_the_far_end_of_their_soft_band_at_one_plus_their_rims_shift() {
+        for style in [
+            GlassStyle::Regular,
+            GlassStyle::Dense,
+            GlassStyle::LargePanel,
+            GlassStyle::Clear,
+        ] {
+            for dark in [false, true] {
+                let h = GlassParams::new(mode(dark, style), 40.0).highlight;
+                assert_eq!(h.glow_fill, 1.0 + h.color_bias, "{style:?} dark={dark}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_popover_softens_only_through_its_blur_fill_and_lights_its_top_and_bottom_edges_at_every_size(
+    ) {
+        for dark in [false, true] {
+            let small = GlassParams::new(mode(dark, GlassStyle::Popover), 26.0);
+            let large = GlassParams::new(mode(dark, GlassStyle::Popover), 120.0);
+            assert_eq!(small, large, "the same at every size");
+            let p = small;
+            assert_eq!(p.blur_sigma(), 0.0, "no blur of its own");
+            assert_eq!(p.blur.fill_radius, 16.0);
+            let over = if dark {
+                p.blur.fill_darken
+            } else {
+                p.blur.fill_lighten
+            };
+            assert_eq!((over, p.blur.fill_normal), (0.882, 0.46));
+            assert_eq!((p.refraction.amount, p.refraction.height), (-24.0, 5.0));
+            let h = p.highlight;
+            assert_eq!(
+                (h.angle, h.glow_amount, h.glow_fill),
+                (std::f32::consts::FRAC_PI_2, 0.5, 1.0)
+            );
+            assert_eq!((h.amount, h.color_bias), (0.4, -0.25));
+            assert_eq!(h.diffuse.height_scale, 8.0);
+            assert_eq!(p.shadow.ring_opacity, 0.06);
+            assert_eq!(p.shadow.opacity, 0.0, "no drop shadow");
+        }
+        let light = GlassParams::new(mode(false, GlassStyle::Popover), 26.0).face;
+        assert_eq!(
+            (light.black, light.white, light.saturation, light.fill[3]),
+            (0.4, 1.03, 1.2, REGULAR_FILL_LIGHT)
+        );
+        let dark = GlassParams::new(mode(true, GlassStyle::Popover), 26.0).face;
+        assert_eq!(
+            (dark.black, dark.white, dark.saturation, dark.max_luma),
+            (0.125, 1.125, 1.3, 0.6)
+        );
     }
 
     #[test]

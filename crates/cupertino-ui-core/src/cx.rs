@@ -720,6 +720,15 @@ impl Glass {
         }
     }
 
+    /// The glass of a small popover over a floating bar with square corners, on its own, opaque: a wide soft blur fill,
+    /// a strong bending edge and a thin line of light along its top and bottom edges.
+    pub fn popover() -> Self {
+        Self {
+            style: GlassStyle::Popover,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

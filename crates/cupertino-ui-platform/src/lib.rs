@@ -229,6 +229,9 @@ pub enum GlassStyle {
     Card,
     /// The glass of a level's track: no blur, a bending edge that follows its height and a ring shadow.
     Track,
+    /// The glass of a small popover over a floating bar (a name, a menu): a wide soft blur fill, a strong bending edge
+    /// and a thin line of light along its top and bottom edges.
+    Popover,
 }
 
 impl GlassStyle {
@@ -244,6 +247,7 @@ impl GlassStyle {
             Self::Module => "ModuleGlass",
             Self::Card => "CardGlass",
             Self::Track => "TrackGlass",
+            Self::Popover => "PopoverGlass",
         }
     }
 
@@ -258,6 +262,7 @@ impl GlassStyle {
             Self::Module,
             Self::Card,
             Self::Track,
+            Self::Popover,
         ]
         .into_iter()
         .find(|s| s.material() == name)
@@ -829,11 +834,13 @@ mod glass_style_tests {
             GlassStyle::Module,
             GlassStyle::Card,
             GlassStyle::Track,
+            GlassStyle::Popover,
         ] {
             assert_eq!(GlassStyle::of_material(style.material()), Some(style));
         }
         assert_eq!(GlassStyle::Card.material(), "CardGlass");
         assert_eq!(GlassStyle::Track.material(), "TrackGlass");
+        assert_eq!(GlassStyle::Popover.material(), "PopoverGlass");
         assert_eq!(GlassStyle::of_material("Sidebar"), None);
     }
 }

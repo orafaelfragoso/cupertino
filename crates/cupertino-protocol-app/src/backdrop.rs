@@ -56,6 +56,9 @@ pub enum GlassStyle {
     Card,
     /// The glass of a level's track: no blur, a bending edge that follows its height and a ring shadow.
     Track,
+    /// The glass of a small popover over a floating bar: a wide soft blur fill, a strong bending edge and a thin line
+    /// of light along its top and bottom edges.
+    Popover,
 }
 
 impl GlassStyle {
@@ -151,7 +154,8 @@ impl Backdrop {
     /// edge); container 0 keeps the backdrop on its own. A server before version 6 draws the backdrop with the
     /// material of [`GlassStyle::fallback_material`] instead, one before version 10 draws
     /// [`GlassStyle::LargePanel`] as regular glass, and one before version 15 draws [`GlassStyle::Card`] as dense glass
-    /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass.
+    /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass, and one before version 16 draws
+    /// [`GlassStyle::Popover`] as regular glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -183,6 +187,9 @@ impl Backdrop {
             }
             GlassStyle::Card => WireStyle::Card,
             GlassStyle::Track => WireStyle::Track,
+            // a server before it draws the popover as regular glass
+            GlassStyle::Popover if self.proxy.version() < POPOVER_VERSION => WireStyle::Regular,
+            GlassStyle::Popover => WireStyle::Popover,
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -213,6 +220,8 @@ const DENSE_VERSION: u32 = 13;
 const FRACTIONAL_SHAPE_VERSION: u32 = 14;
 /// The version of `cupertino_backdrop_v1` that has the card and track glass styles.
 const CARD_VERSION: u32 = 15;
+/// The version of `cupertino_backdrop_v1` that has the popover glass style.
+const POPOVER_VERSION: u32 = 16;
 
 /// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
 /// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.

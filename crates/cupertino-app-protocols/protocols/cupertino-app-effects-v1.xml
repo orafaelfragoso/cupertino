@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="15">
+  <interface name="cupertino_app_effects_v1" version="16">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -21,7 +21,7 @@
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
       style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop), version 12 the bar glass
       style of cupertino_backdrop_v1, version 13 its dense and module glass styles, version 14 its set_shape_fixed
-      request, version 15 its card and track glass styles; the other interfaces of the protocol are unchanged in each.
+      request, version 15 its card and track glass styles, version 16 its popover glass style; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -145,7 +145,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="15">
+  <interface name="cupertino_backdrop_v1" version="16">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -168,6 +168,7 @@
       <entry name="module" value="5" summary="the glass of the tiles of a panel of modules: the clear glass face, which keeps the scene's colour, under a wide blur and a strong bending edge, light in the light appearance and dark in the dark one" since="13"/>
       <entry name="card" value="6" summary="the glass of a notification card: the clear glass face over a wide blur and a blur fill, a bending edge and a faint ring shadow inside the outline" since="15"/>
       <entry name="track" value="7" summary="the glass of a level's track: no blur, the backdrop read at the output's scale, a bending edge that follows the track's height and a ring shadow inside the outline" since="15"/>
+      <entry name="popover" value="8" summary="the glass of a small popover over a floating bar, a name or a menu: the backdrop under a wide soft blur fill only, a strong bending edge and a thin line of light along its top and bottom edges, the same at every size" since="16"/>
     </enum>
 
     <request name="destroy" type="destructor">

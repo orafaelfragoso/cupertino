@@ -44,7 +44,7 @@ const SIDE_GAP: f64 = 3.0;
 /// The glass container the capsule and its pointer share, and how far their outlines blend into each other in points:
 /// the pointer's sides curve out into the capsule's bottom edge as one piece of glass.
 const GLASS_CONTAINER: u32 = 1;
-const GLASS_BLEND: f64 = 4.0;
+const GLASS_BLEND: f64 = 8.0;
 /// The capsule's fill where the session shows no material (Reduce Transparency, Increase Contrast, no desktop
 /// effects), in the light and the dark appearance.
 const FILL: [Color; 2] = [
@@ -164,7 +164,7 @@ pub fn window<M: Clone + 'static>(view: LabelView<'_>, input: fn(Input) -> M) ->
                         CalloutPointer {
                             width: POINTER_WIDTH,
                             depth: POINTER_DEPTH,
-                            glass: Glass::regular().container(GLASS_CONTAINER, GLASS_BLEND),
+                            glass: Glass::popover().container(GLASS_CONTAINER, GLASS_BLEND),
                             surface: Surface::Tooltip,
                             fills_without_glass: false,
                             up: false,
@@ -363,7 +363,7 @@ impl<M: Clone + 'static> Widget<M> for Body {
         let env = cx.env().clone();
         let mode = usize::from(paint::is_dark(&env));
         let (w, h) = (cx.size().width, cx.size().height);
-        let shown = shown_on_glass(cx, Glass::regular().radius(RADIUS));
+        let shown = shown_on_glass(cx, Glass::popover().radius(RADIUS));
         // the glass lights its own rim, along the top and the bottom
         if !shown {
             let shape = Shape::Path {

@@ -2132,10 +2132,11 @@ impl<M: Clone + 'static> Widget<M> for PullDownButton<M> {
 
 /// The container the panel and its pointer share as glass, and how far their outlines blend into each other.
 const TAIL_CONTAINER: u32 = 1;
-const TAIL_BLEND: f64 = 5.0;
+const TAIL_BLEND: f64 = 8.0;
 
+/// A panel with a pointer stands over a floating bar: it is popover glass.
 fn tail_glass() -> Glass {
-    Glass::regular().container(TAIL_CONTAINER, TAIL_BLEND)
+    Glass::popover().container(TAIL_CONTAINER, TAIL_BLEND)
 }
 
 /// The content of a menu window with a pointer: the panel, and under it the row that holds the pointer.

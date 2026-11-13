@@ -220,8 +220,8 @@ pub fn strip_bands(strip: &Strip, ops: &[Op]) -> BarBands {
         let x = (i * strip.step) % strip.width.max(1);
         let rgb = apply_color_ops([0, 1, 2].map(|c| f32::from(px[c]) / 255.0), ops);
         let band = &mut bands[x * BAR_BANDS / strip.width.max(1)];
-        for c in 0..3 {
-            let v = f64::from(rgb[c].clamp(0.0, 1.0));
+        for (c, channel) in rgb.iter().enumerate() {
+            let v = f64::from(channel.clamp(0.0, 1.0));
             band.0[c] += v;
             all.0[c] += v;
         }

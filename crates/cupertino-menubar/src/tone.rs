@@ -642,7 +642,7 @@ mod tests {
             LIGHT_TEXT_BELOW - SLOT_TONE_HOLD,
             LIGHT_TEXT_BELOW + SLOT_TONE_HOLD,
         );
-        assert!(SLOT_TONE_HOLD <= 0.025, "the band stays narrow");
+        const { assert!(SLOT_TONE_HOLD <= 0.025, "the band stays narrow") };
         let light = SlotTone::fresh(LIGHT_TEXT_BELOW - 0.001);
         assert_eq!(light.tone, BarTone::LightText);
         assert_eq!(

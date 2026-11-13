@@ -1692,7 +1692,7 @@ fn a_version_21_bar_is_told_the_backdrop_bands_in_place_of_the_lightness_wheneve
     let procedural = h.state.backdrop_bands(out).cloned().unwrap();
     let bar = bar_at(&mut h, 21);
     h.wait_for_groups(&bar, 5);
-    assert_eq!(band_values(&bar), [procedural.0.clone()]);
+    assert_eq!(band_values(&bar), std::slice::from_ref(&procedural.0));
     // a left half dark and a right half light, then a change of one band alone
     let mut split = BarBands(
         (0..BAR_BANDS)

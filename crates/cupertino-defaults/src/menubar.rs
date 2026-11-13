@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn each_status_item_follows_the_wallpaper_under_it_unless_turned_off() {
-        assert!(MenuBarSettings::UNSET.item_tone);
+        assert!(MenuBarSettings::parse("", None).0.item_tone);
         let (s, problems) = MenuBarSettings::parse("tone.per_item = off\n", None);
         assert!(problems.is_empty());
         assert!(!s.item_tone);

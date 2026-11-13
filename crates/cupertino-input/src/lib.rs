@@ -5,6 +5,7 @@
 //! * [`hotcorner`]: output-corner dwell triggers with modifier requirements.
 //! * [`cursor`]: the accessibility cursor scale and the shake-to-locate detector.
 //! * [`edge`]: screen-edge dwell for revealing the dock or a fullscreen menu bar.
+//! * [`top_zone`]: a window dragged up into the top of the screen opens the overview.
 //! * [`shortcuts`] and [`keysym`]: configurable key combinations → [`Action`]s.
 //! * [`pointer`]: pointer acceleration curves (curve family and formula)
 //!   and the fresh-account defaults.
@@ -37,6 +38,7 @@ pub mod scroll_accel;
 pub mod scroll_count;
 pub mod shortcuts;
 pub mod table;
+pub mod top_zone;
 pub mod touchpad;
 pub use cupertino_animation::velocity;
 
@@ -70,6 +72,7 @@ pub use shortcuts::{
     names_super, Action, ConfigReport, KeyCombo, ParseError, ScreenshotRequest, ShortcutMap,
 };
 pub use table::{AccelTable, TableCurve, TableEntry, TableError, DEFAULT_TABLE};
+pub use top_zone::{TopZone, TopZoneConfig};
 pub use touchpad::{
     ClickPressure, CornerClick, SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent,
     TouchpadFrame, TouchpadGeometry, TouchpadSettings, MM_PER_COUNT, SWIPE_COMPLETE_MM,

@@ -1,0 +1,4 @@
+title = "Overview: two windows, the pointer on one (its ring and name), the desktops band closed"
+programs = ["cupertino-dock"]
+after = 8
+args = ["--spawn", "cupertino-files", "--spawn", "cupertino-settings", "--action", "5:overview", "--pointer", "7:250,380"]

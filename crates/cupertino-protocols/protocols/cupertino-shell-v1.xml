@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="22">
+  <interface name="cupertino_shell_v1" version="23">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request, version 14 its backdrop_luminance event, version 15 its window_controls event, version 16 its window_full_screen event, version 17 the window_icon event of the dock object, version 18 its engage event, version 19 its app_resident event, version 20 the activate_app request and app_activation event of the session object, version 21 the backdrop_bands event of the menu bar object, version 22 the window_thumbnail event of the dock object, version 23 its overview_drag, overview_move_window and overview_workspace_frame requests. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -669,7 +669,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="22">
+  <interface name="cupertino_dock_v1" version="23">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -1110,6 +1110,44 @@
       <description summary="the pointer was released on the panel off the entries">
         Ends the open switch without activating anything; ignored while no switcher is open.
       </description>
+    </request>
+
+    <request name="overview_drag" since="23">
+      <description summary="a window of the overview follows the pointer">
+        The person drags the window: it is drawn at this frame at once, above the dock's
+        overview surface, until the next overview_frame for it (which takes it back with the
+        reflow spring), an overview_move_window or the end of the overview. An id that is not
+        in the overview, or a request while none is open, is ignored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="overview_move_window" since="23">
+      <description summary="a window of the overview was dropped on a workspace">
+        Moves the window to the workspace of the dock's output; it leaves the overview, which
+        is sent again. An id that is not in the overview, an unknown workspace, a full-screen
+        workspace or the current one is ignored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="workspace" type="uint"/>
+    </request>
+
+    <request name="overview_workspace_frame" since="23">
+      <description summary="where a workspace's live picture is drawn">
+        While the overview is open, the server draws the workspace as it is (an opaque black
+        backing, the wallpaper and its windows, scaled) in this frame, over the dock's overview
+        surface's material and under its content. Width or height 0 removes the picture. The
+        pictures go when the overview closes. An unknown workspace is ignored.
+      </description>
+      <arg name="workspace" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
     </request>
   </interface>
 </protocol>

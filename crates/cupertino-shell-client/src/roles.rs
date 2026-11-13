@@ -463,8 +463,8 @@ impl Shell {
         // version 15 the enabled controls of the active window, version 16 whether it is in full screen,
         // version 17 the dock's window icons, version 18 the dock's engage event, version 19 its resident applications,
         // version 20 the session object's activate_app, version 21 the menu bar's backdrop bands, version 22 the dock's
-        // pictures of minimized windows
-        conn.bind_extension(9..=22, Quiet).map(Shell)
+        // pictures of minimized windows, version 23 the overview's window drag, drop and workspace pictures
+        conn.bind_extension(9..=23, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

@@ -10,13 +10,13 @@ pub use cupertino_wm::geometry::Rect;
 /// as the point windows scale about, and the repulsion as the shallower axis of each overlap.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutParams {
-    /// The display rectangle is inset by this much before packing (20 pt).
+    /// The display rectangle is inset by this much before packing (16 pt).
     pub inset: f64,
-    /// Space kept between two windows (8 pt).
+    /// Space kept between two windows (14 pt).
     pub gap: f64,
     /// Windows are placed this much above their scaled centre (20 pt).
     pub lift: f64,
-    /// Packing stops when every overlap is at most this and the largest move is below it (4 pt).
+    /// Packing stops when every overlap is at most this and the largest move is below it (2 pt).
     pub tolerance: f64,
     /// Shrink constant `s = s·(r + shrink·(1 − r)) (0.9).
     pub shrink: f64,
@@ -32,10 +32,10 @@ pub struct LayoutParams {
 impl Default for LayoutParams {
     fn default() -> Self {
         Self {
-            inset: 20.0,
-            gap: 8.0,
+            inset: 16.0,
+            gap: 14.0,
             lift: 20.0,
-            tolerance: 4.0,
+            tolerance: 2.0,
             shrink: 0.9,
             max_passes: 499,
             max_scale: 1.0,
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn a_window_larger_than_the_area_is_scaled_to_fit_without_a_pass() {
         let packing = check(&[Rect::new(-100.0, 0.0, 3000.0, 1500.0)], AREA);
-        let work = AREA.inset(20.0);
+        let work = AREA.inset(LayoutParams::default().inset);
         let r = packing.rects[0];
         assert_eq!(packing.passes, 0);
         assert!(

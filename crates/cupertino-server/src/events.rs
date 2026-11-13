@@ -920,6 +920,22 @@ impl Cupertino {
         self.pointer_moved_to(pos, evt.time_msec(), Some(rel));
     }
 
+    /// Feed a window move's motion to the top zone: true once the pointer, at its output's top edge, pushed up past it
+    /// far enough to open the overview.
+    fn window_drag_reached_top(
+        &mut self,
+        pos: Point<f64, Logical>,
+        rel: Option<&RelativeMotionEvent>,
+    ) -> bool {
+        if !self.wm.is_moving() || self.shell.overview_open() {
+            return false;
+        }
+        let (Some(rel), Some(top)) = (rel, self.output_at(pos).map(|o| o.rect.y)) else {
+            return false;
+        };
+        self.top_zone.motion(pos.y - top, rel.delta.x, rel.delta.y)
+    }
+
     /// Clamp `pos` to the union of the outputs.
     fn clamp_to_outputs(&self, pos: Point<f64, Logical>) -> Point<f64, Logical> {
         if self.outputs.is_empty() {
@@ -1007,8 +1023,16 @@ impl Cupertino {
                 pointer: mp,
                 modifiers: m,
             });
+            if self.window_drag_reached_top(pos, rel.as_ref()) {
+                // the window stays where it was taken and the overview opens on its output
+                self.command(Command::PointerRelease);
+                if let Some(output) = self.output_at(pos).map(|o| o.id) {
+                    self.open_overview(output, cupertino_overview::OverviewMode::Overview);
+                }
+            }
             if !self.wm.is_interacting() {
                 self.pointer_mode = PointerMode::Normal;
+                self.top_zone.reset();
             }
             pointer.motion(
                 self,

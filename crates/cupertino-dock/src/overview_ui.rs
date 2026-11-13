@@ -1,9 +1,11 @@
 //! The overview as the dock process shows it: the layout of the windows the server lists (the
 //! reference packing in `cupertino-overview`, which the dock answers with one `overview_frame` per
-//! window), the workspaces bar with its add slot, remove button and drag-reorder, the selection
-//! highlight, the titles, and what a click or key asks the server for. The server owns the
-//! open/close transition and the windows themselves; this model is always at the final layout.
+//! window), the desktops bar (names, opening on the pointer at the top to show the desktops' pictures, the add button,
+//! the remove button after a rest on a picture, drag-reorder), the selection ring and name, dragging a window onto a
+//! desktop, and what a click or key asks the server for. The server owns the open/close transition and the windows
+//! themselves; this model is always at the final layout.
 
+use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 use cupertino_overview::bar::{BarHit, BarLayout};
 use cupertino_overview::{
     Highlight, Key, Overview, OverviewAction, OverviewConfig, OverviewMode, OverviewWindow,
@@ -15,15 +17,20 @@ use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
 /// Wayland layer-shell namespace of the overview's surface.
 pub const NAMESPACE: &str = "cupertino-dock-overview";
 
-/// The chrome fades out over the transition's duration when the overview leaves (0.25 s,
-/// the same value the server's transition uses).
-pub const HIDE_DURATION: f64 = 0.25;
+/// Response of the spring the chrome leaves on when the overview closes: critically damped, 0.125 s.
+pub const HIDE_RESPONSE: f64 = 0.125;
 
-/// A press on a workspace slot becomes a reorder drag once the pointer moved this far (approximate).
+/// The chrome is gone once its opacity fell below this.
+const GONE_ALPHA: f64 = 1e-3;
+
+/// A press on a workspace slot or a window becomes a drag once the pointer moved this far (approximate).
 pub const DRAG_SLACK: f64 = 4.0;
 
-/// Diameter of the remove button on the hovered workspace slot (approximate).
-pub const REMOVE_BUTTON: f64 = 18.0;
+/// Diameter of the remove button on a desktop's picture (28 pt).
+pub const REMOVE_BUTTON: f64 = 28.0;
+
+/// Seconds the pointer rests on a desktop's picture before its remove button shows (1 s).
+pub const REMOVE_HOVER_DELAY: f64 = 1.0;
 
 /// Which windows the server put in the overview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +72,11 @@ pub enum UiAction {
         id: u32,
         index: usize,
     },
+    /// A window was dropped on another desktop of the bar.
+    MoveWindow {
+        window: u32,
+        workspace: u32,
+    },
 }
 
 /// A press on a workspace slot: a release in place switches, a release after moving reorders.
@@ -76,14 +88,29 @@ struct Drag {
     moved: bool,
 }
 
+/// A press on a window: a release in place picks it, a release on a desktop of the bar after moving moves it there.
+#[derive(Clone, Copy, Debug)]
+struct WindowDrag {
+    id: u32,
+    /// Its frame in the layout when the press came.
+    frame: Rect,
+    origin: Point,
+    pointer: Point,
+    moved: bool,
+}
+
 pub struct OverviewUi {
     overview: Overview,
     mode: Mode,
     workspaces: Vec<Workspace>,
-    /// When the server said the overview leaves: the chrome fades from then.
-    closed_at: Option<f64>,
+    /// The chrome's opacity: 1 while open, springing to 0 once the server said the overview leaves.
+    alpha: AnimatedValue<f64>,
+    closing: bool,
     drag: Option<Drag>,
+    window_drag: Option<WindowDrag>,
     hovered_slot: Option<u32>,
+    /// The desktop picture the pointer rests on, and since when.
+    resting: Option<(u32, f64)>,
 }
 
 fn entries(windows: &[WindowEntry]) -> Vec<OverviewWindow> {
@@ -125,12 +152,9 @@ impl OverviewUi {
         area: Rect,
         windows: &[WindowEntry],
         workspaces: Vec<Workspace>,
-        now: f64,
+        _now: f64,
     ) -> Self {
-        let mut cfg = OverviewConfig::default();
-        // the bar stays expanded (thumbnail slots with the add slot) for the whole overview; the
-        // reference collapses it to names until the pointer reaches it (approximate)
-        cfg.bar.expand_on_hover = false;
+        let cfg = OverviewConfig::default();
         let model_mode = match mode {
             Mode::All => OverviewMode::Overview,
             Mode::App => OverviewMode::AppOverview(AppId(0)),
@@ -138,16 +162,18 @@ impl OverviewUi {
         let mut overview = Overview::new(cfg, area, model_mode, entries(windows));
         // the server drives the transition: here the layout is final from the first frame
         overview.transition.progress.set_immediately(1.0);
-        overview.bar.set_expanded(true, now - 10.0);
         let (list, current) = ids(&workspaces);
         overview.set_workspaces(&list, current);
         Self {
             overview,
             mode,
             workspaces,
-            closed_at: None,
+            alpha: AnimatedValue::new(1.0),
+            closing: false,
             drag: None,
+            window_drag: None,
             hovered_slot: None,
+            resting: None,
         }
     }
 
@@ -158,6 +184,12 @@ impl OverviewUi {
     /// The server sent the window set again: windows reflow with the model's spring.
     pub fn set_windows(&mut self, windows: &[WindowEntry], now: f64) {
         self.overview.set_windows(entries(windows), now);
+        if self
+            .window_drag
+            .is_some_and(|d| !windows.iter().any(|w| w.id == d.id))
+        {
+            self.window_drag = None;
+        }
     }
 
     pub fn set_workspaces(&mut self, workspaces: Vec<Workspace>) {
@@ -178,6 +210,11 @@ impl OverviewUi {
             .zip(self.overview.layout_rects())
             .map(|(w, r)| (w.id.0 as u32, *r))
             .collect()
+    }
+
+    /// Changes whenever [`Self::frames`] may have (the band opened or closed, the window set changed).
+    pub fn layout_revision(&self) -> u64 {
+        self.overview.layout_revision()
     }
 
     /// The windows at `now` (the reflow spring may still be moving them), with titles and selection.
@@ -222,7 +259,34 @@ impl OverviewUi {
         })
     }
 
-    /// The remove button of a slot: a circle on its top-left corner.
+    /// The window being dragged and the frame it follows the pointer at.
+    pub fn window_drag(&self) -> Option<(u32, Rect)> {
+        self.window_drag.filter(|d| d.moved).map(|d| {
+            (
+                d.id,
+                d.frame
+                    .translate(d.pointer.x - d.origin.x, d.pointer.y - d.origin.y),
+            )
+        })
+    }
+
+    /// The desktop a dragged window would go to if it were dropped now: another one than the current, under the
+    /// pointer in the bar.
+    pub fn drop_target(&self, now: f64) -> Option<u32> {
+        let d = self.window_drag.filter(|d| d.moved)?;
+        match self.slot_hit(d.pointer, now) {
+            Some(BarHit::Workspace(id)) => {
+                let id = id.0 as u32;
+                self.workspaces
+                    .iter()
+                    .any(|w| w.id == id && !w.current)
+                    .then_some(id)
+            }
+            _ => None,
+        }
+    }
+
+    /// The remove button of a desktop's picture: a circle on its top-left corner.
     pub fn remove_button(slot: &Rect) -> Rect {
         Rect::new(
             slot.x - REMOVE_BUTTON / 2.0,
@@ -232,20 +296,61 @@ impl OverviewUi {
         )
     }
 
+    /// The desktop whose remove button shows: the pointer rested on its picture for [`REMOVE_HOVER_DELAY`] in the
+    /// open band, and there is another desktop to keep.
+    pub fn removable(&self, now: f64) -> Option<u32> {
+        let (id, since) = self.resting?;
+        (self.workspaces.len() > 1
+            && self.drag.is_none()
+            && self.window_drag.is_none()
+            && now - since >= REMOVE_HOVER_DELAY)
+            .then_some(id)
+    }
+
     fn slot_hit(&self, p: Point, now: f64) -> Option<BarHit> {
         (self.mode == Mode::All)
             .then(|| self.overview.bar.hit_test(p, now))
             .flatten()
     }
 
-    /// Pointer motion: hover selection, the hovered slot, and a drag in progress.
+    /// Pointer motion: hover selection, the hovered slot, the band opening, and a drag in progress.
     pub fn pointer_moved(&mut self, p: Option<Point>, now: f64) {
-        self.overview.pointer_moved(p, now);
+        if self.window_drag.is_none_or(|d| !d.moved) {
+            self.overview.pointer_moved(p, now);
+        } else if let Some(p) = p {
+            // a dragged window still opens the band when it reaches the top
+            let open = self.overview.bar.is_expanded_target()
+                || p.y < self.overview.bar.layout(now).rect.bottom();
+            self.overview.set_bar_open(open, now);
+        }
         self.hovered_slot = p.and_then(|p| match self.slot_hit(p, now) {
             Some(BarHit::Workspace(id)) => Some(id.0 as u32),
             _ => None,
         });
+        // the rest on a picture of the open band that shows the remove button
+        let on_picture = p.and_then(|p| {
+            let bar = self.bar(now)?;
+            (bar.expansion > 0.5)
+                .then(|| {
+                    bar.slots
+                        .iter()
+                        .find(|s| s.thumb.inset(-REMOVE_BUTTON / 2.0).contains(p))
+                })
+                .flatten()
+                .map(|s| s.id.0 as u32)
+        });
+        self.resting = match (on_picture, self.resting) {
+            (Some(id), Some((was, since))) if id == was => Some((id, since)),
+            (Some(id), _) => Some((id, now)),
+            (None, _) => None,
+        };
         if let (Some(d), Some(p)) = (self.drag.as_mut(), p) {
+            d.pointer = p;
+            if (p.x - d.origin.x).abs() > DRAG_SLACK || (p.y - d.origin.y).abs() > DRAG_SLACK {
+                d.moved = true;
+            }
+        }
+        if let (Some(d), Some(p)) = (self.window_drag.as_mut(), p) {
             d.pointer = p;
             if (p.x - d.origin.x).abs() > DRAG_SLACK || (p.y - d.origin.y).abs() > DRAG_SLACK {
                 d.moved = true;
@@ -253,17 +358,19 @@ impl OverviewUi {
         }
     }
 
-    /// A left press: the remove button, the add slot, a workspace slot (acted on at the release) or
-    /// a window (selected) or the background (leaves).
+    /// A left press: the remove button, the add button, a workspace slot (acted on at the release), a window (picked
+    /// or dragged at the release) or the background (leaves).
     pub fn press(&mut self, p: Point, now: f64) -> UiAction {
         if self.is_closing() {
             return UiAction::None;
         }
-        if let Some(bar) = self.bar(now) {
-            if let Some(slot) = bar.slots.iter().find(|s| {
-                Some(s.id.0 as u32) == self.hovered_slot && Self::remove_button(&s.rect).contains(p)
-            }) {
-                return UiAction::RemoveWorkspace(slot.id.0 as u32);
+        if let (Some(bar), Some(id)) = (self.bar(now), self.removable(now)) {
+            if bar
+                .slots
+                .iter()
+                .any(|s| s.id.0 as u32 == id && Self::remove_button(&s.thumb).contains(p))
+            {
+                return UiAction::RemoveWorkspace(id);
             }
         }
         match self.slot_hit(p, now) {
@@ -280,7 +387,22 @@ impl OverviewUi {
             None => {}
         }
         match self.overview.click(p, now) {
-            OverviewAction::Select(w) => UiAction::Select(w.0 as u32),
+            OverviewAction::Select(w) => {
+                let id = w.0 as u32;
+                let frame = self
+                    .frames()
+                    .into_iter()
+                    .find(|f| f.0 == id)
+                    .map_or(Rect::default(), |f| f.1);
+                self.window_drag = Some(WindowDrag {
+                    id,
+                    frame,
+                    origin: p,
+                    pointer: p,
+                    moved: false,
+                });
+                UiAction::None
+            }
             OverviewAction::Close => UiAction::Close,
             OverviewAction::None
             | OverviewAction::SwitchWorkspace(_)
@@ -289,8 +411,21 @@ impl OverviewUi {
     }
 
     /// A left release: ends a slot press as a switch (in place) or a reorder (after a drag, to the
-    /// position of the slot under the pointer, or the end past the last one).
+    /// position of the slot under the pointer, or the end past the last one), and a window press as a pick (in
+    /// place) or a move to the desktop it was dropped on.
     pub fn release(&mut self, p: Point, now: f64) -> UiAction {
+        if let Some(d) = self.window_drag {
+            self.pointer_moved(Some(p), now);
+            let target = self.drop_target(now);
+            self.window_drag = None;
+            if !d.moved {
+                return UiAction::Select(d.id);
+            }
+            return target.map_or(UiAction::None, |workspace| UiAction::MoveWindow {
+                window: d.id,
+                workspace,
+            });
+        }
         let Some(d) = self.drag.take() else {
             return UiAction::None;
         };
@@ -303,7 +438,7 @@ impl OverviewUi {
         let index = bar
             .slots
             .iter()
-            .position(|s| p.x < s.rect.right())
+            .position(|s| p.x < s.name.right())
             .unwrap_or(bar.slots.len().saturating_sub(1));
         let from = self.workspaces.iter().position(|w| w.id == d.id);
         if from == Some(index) {
@@ -326,33 +461,46 @@ impl OverviewUi {
         }
     }
 
-    /// The server said the overview leaves: the chrome fades from `now`.
+    /// The server said the overview leaves: the chrome springs out from `now`.
     pub fn close(&mut self, now: f64) {
-        if self.closed_at.is_none() {
-            self.closed_at = Some(now);
+        if !self.closing {
+            self.closing = true;
             self.drag = None;
+            self.window_drag = None;
+            self.alpha.animate_to(
+                0.0,
+                Curve::Spring(SpringParams::from_ratio(HIDE_RESPONSE, 1.0)),
+                now,
+            );
         }
     }
 
     pub fn is_closing(&self) -> bool {
-        self.closed_at.is_some()
+        self.closing
     }
 
-    /// Opacity of the chrome: 1 while open, fading to 0 over [`HIDE_DURATION`] after `close`.
+    /// Opacity of the chrome: 1 while open, springing to 0 after `close`.
     pub fn alpha(&self, now: f64) -> f64 {
-        match self.closed_at {
-            None => 1.0,
-            Some(t) => (1.0 - (now - t) / HIDE_DURATION).clamp(0.0, 1.0),
-        }
+        self.alpha.value(now).clamp(0.0, 1.0)
     }
 
     pub fn is_gone(&self, now: f64) -> bool {
-        self.closed_at.is_some_and(|t| now - t >= HIDE_DURATION)
+        self.closing && (self.alpha(now) < GONE_ALPHA || !self.alpha.is_animating(now))
     }
 
-    /// Whether another frame is wanted: a reflow, the highlight or the fade is moving.
+    /// Whether another frame is wanted: a reflow, the band, the highlight, a drag or the fade is moving.
     pub fn is_animating(&self, now: f64) -> bool {
-        self.closed_at.is_some() || self.overview.is_animating(now) || self.drag().is_some()
+        self.closing
+            || self.overview.is_animating(now)
+            || self.drag().is_some()
+            || self.window_drag().is_some()
+    }
+
+    /// When the chrome next changes by itself without moving: the remove button showing after the rest.
+    pub fn next_change(&self, now: f64) -> Option<f64> {
+        let (_, since) = self.resting?;
+        let at = since + REMOVE_HOVER_DELAY;
+        (at > now && self.workspaces.len() > 1).then_some(at)
     }
 }
 
@@ -362,7 +510,7 @@ mod tests {
 
     const AREA: Rect = Rect {
         x: 0.0,
-        y: 24.0,
+        y: 0.0,
         w: 1000.0,
         h: 600.0,
     };
@@ -398,20 +546,16 @@ mod tests {
     }
 
     #[test]
-    fn windows_get_frames_apart_from_each_other_below_the_bar() {
+    fn windows_get_frames_apart_from_each_other_below_the_closed_band() {
         let ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         let frames = ui.frames();
         assert_eq!(frames.iter().map(|f| f.0).collect::<Vec<_>>(), vec![1, 2]);
         assert!(!frames[0].1.intersects(&frames[1].1), "{frames:?}");
         let bar = ui.bar(0.0).unwrap();
         assert_eq!(bar.slots.len(), 2);
-        assert!(bar.add.is_some(), "the bar is expanded with its add slot");
+        assert_eq!(bar.rect.h, 72.0, "the band starts closed");
         for (_, f) in &frames {
-            assert!(
-                f.y >= bar.rect.bottom(),
-                "windows are laid out below the bar: {f:?} vs {:?}",
-                bar.rect
-            );
+            assert!(f.y >= 72.0 + 39.0 - 1e-9, "{f:?} below the band");
             assert!(f.right() <= AREA.right() && f.bottom() <= AREA.bottom());
         }
         let app = OverviewUi::new(Mode::App, AREA, &windows(), Vec::new(), 0.0);
@@ -420,13 +564,27 @@ mod tests {
     }
 
     #[test]
-    fn a_press_on_a_window_selects_and_on_the_background_leaves() {
+    fn the_pointer_at_the_top_opens_the_band_and_moves_the_windows_down() {
+        let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
+        let (rev, before) = (ui.layout_revision(), ui.frames());
+        ui.pointer_moved(Some(Point::new(500.0, 30.0)), 1.0);
+        assert_ne!(ui.layout_revision(), rev, "a new layout");
+        let after = ui.frames();
+        assert!(after
+            .iter()
+            .all(|(_, f)| f.y >= 165.0 + 39.0 - 1e-9 && before.iter().any(|b| b.1.y < f.y)));
+        assert!((ui.bar(5.0).unwrap().rect.h - 165.0).abs() < 1e-3);
+        ui.pointer_moved(Some(Point::new(500.0, 500.0)), 5.0);
+        assert_eq!(ui.frames(), before, "closing the band brings them back");
+    }
+
+    #[test]
+    fn a_press_and_release_on_a_window_selects_and_on_the_background_leaves() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         let (id, frame) = ui.frames()[1];
-        assert_eq!(
-            ui.press(Point::new(frame.cx(), frame.cy()), 1.0),
-            UiAction::Select(id)
-        );
+        let c = Point::new(frame.cx(), frame.cy());
+        assert_eq!(ui.press(c, 1.0), UiAction::None);
+        assert_eq!(ui.release(c, 1.0), UiAction::Select(id));
         assert_eq!(
             ui.press(Point::new(AREA.x + 1.0, AREA.bottom() - 1.0), 1.0),
             UiAction::Close
@@ -434,44 +592,83 @@ mod tests {
     }
 
     #[test]
+    fn a_window_dropped_on_another_desktop_moves_there() {
+        let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
+        let (id, frame) = ui.frames()[0];
+        let c = Point::new(frame.cx(), frame.cy());
+        assert_eq!(ui.press(c, 1.0), UiAction::None);
+        let other = ui.bar(1.0).unwrap().slots[1].name.center();
+        ui.pointer_moved(Some(Point::new(c.x, c.y - 50.0)), 1.1);
+        let (dragged, at) = ui
+            .window_drag()
+            .expect("past the slack the window is dragged");
+        assert_eq!(dragged, id);
+        assert!(
+            (at.y - (frame.y - 50.0)).abs() < 1e-9,
+            "it follows the pointer"
+        );
+        ui.pointer_moved(Some(other), 1.2);
+        assert_eq!(ui.drop_target(1.2), Some(11));
+        assert_eq!(
+            ui.release(other, 1.3),
+            UiAction::MoveWindow {
+                window: id,
+                workspace: 11
+            }
+        );
+        assert!(ui.window_drag().is_none());
+        // dropped on the current desktop or off the bar: nothing, the window goes back
+        assert_eq!(ui.press(c, 2.0), UiAction::None);
+        let current = ui.bar(2.0).unwrap().slots[0].name.center();
+        ui.pointer_moved(Some(current), 2.1);
+        assert_eq!(ui.release(current, 2.2), UiAction::None);
+    }
+
+    #[test]
     fn the_bar_switches_adds_removes_and_reorders_workspaces() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         let bar = ui.bar(1.0).unwrap();
-        let second = bar.slots[1].rect;
+        let second = bar.slots[1].name;
         let centre = Point::new(second.cx(), second.cy());
         // press and release in place: a switch
         assert_eq!(ui.press(centre, 1.0), UiAction::None);
         ui.pointer_moved(Some(centre), 1.0);
         assert_eq!(ui.release(centre, 1.0), UiAction::SwitchWorkspace(11));
-        // the add slot
-        let add = bar.add.unwrap();
-        assert_eq!(
-            ui.press(Point::new(add.cx(), add.cy()), 1.0),
-            UiAction::AddWorkspace
-        );
-        // the remove button shows on the hovered slot only
-        ui.pointer_moved(Some(centre), 1.0);
+        // the add button
+        assert_eq!(ui.press(bar.add.center(), 1.0), UiAction::AddWorkspace);
+        // the remove button shows on a picture of the open band after a second's rest
+        let thumb = ui.bar(10.0).unwrap().slots[1].thumb;
+        let on = Point::new(thumb.cx(), thumb.cy());
+        ui.pointer_moved(Some(on), 10.0);
         assert_eq!(ui.hovered_slot(), Some(11));
-        let button = OverviewUi::remove_button(&second);
+        ui.pointer_moved(Some(Point::new(on.x + 1.0, on.y)), 10.2);
+        assert_eq!(ui.removable(10.5), None, "not yet");
+        assert_eq!(ui.next_change(10.5), Some(11.0));
+        assert_eq!(ui.removable(11.0), Some(11));
+        let button = OverviewUi::remove_button(&thumb);
+        assert_eq!(button.w, 28.0);
         assert_eq!(
-            ui.press(Point::new(button.cx(), button.cy()), 1.0),
+            ui.press(button.center(), 11.0),
             UiAction::RemoveWorkspace(11)
         );
-        ui.pointer_moved(Some(Point::new(AREA.cx(), AREA.bottom() - 1.0)), 1.0);
+        ui.pointer_moved(Some(Point::new(AREA.cx(), AREA.bottom() - 1.0)), 11.0);
         assert_eq!(ui.hovered_slot(), None);
-        // a drag of the second slot to before the first reorders
-        ui.pointer_moved(Some(centre), 1.0);
-        assert_eq!(ui.press(centre, 1.0), UiAction::None);
-        let first = bar.slots[0].rect;
+        assert_eq!(ui.removable(20.0), None);
+        // a drag of the second name to before the first reorders
+        let bar = ui.bar(30.0).unwrap();
+        let (first, second) = (bar.slots[0].name, bar.slots[1].name);
+        let centre = Point::new(second.cx(), second.cy());
+        ui.pointer_moved(Some(centre), 30.0);
+        assert_eq!(ui.press(centre, 30.0), UiAction::None);
         let target = Point::new(first.x + 2.0, first.cy());
-        ui.pointer_moved(Some(target), 1.1);
+        ui.pointer_moved(Some(target), 30.1);
         assert_eq!(
             ui.drag().map(|d| d.0),
             Some(11),
             "past the slack the slot is dragged"
         );
         assert_eq!(
-            ui.release(target, 1.2),
+            ui.release(target, 30.2),
             UiAction::MoveWorkspace { id: 11, index: 0 }
         );
         assert!(ui.drag().is_none());
@@ -500,15 +697,17 @@ mod tests {
     }
 
     #[test]
-    fn closing_fades_the_chrome_and_ignores_input() {
+    fn closing_springs_the_chrome_out_quickly_and_ignores_input() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         assert_eq!(ui.alpha(5.0), 1.0);
         ui.close(5.0);
-        assert!(ui.is_closing() && ui.is_animating(5.1));
-        assert!((ui.alpha(5.0 + HIDE_DURATION / 2.0) - 0.5).abs() < 1e-9);
-        assert!(!ui.is_gone(5.2));
-        assert!(ui.is_gone(5.0 + HIDE_DURATION));
-        assert_eq!(ui.alpha(6.0), 0.0);
+        assert!(ui.is_closing() && ui.is_animating(5.01));
+        // critically damped, response 0.125 s: (1 + ωt)·e^(−ωt) with ω = 2π / 0.125
+        let w = std::f64::consts::TAU / HIDE_RESPONSE;
+        let t = 0.04;
+        assert!((ui.alpha(5.0 + t) - (1.0 + w * t) * (-w * t).exp()).abs() < 1e-6);
+        assert!(!ui.is_gone(5.05));
+        assert!(ui.is_gone(5.3), "gone within a few tenths");
         let (_, frame) = ui.frames()[0];
         assert_eq!(
             ui.press(Point::new(frame.cx(), frame.cy()), 5.1),

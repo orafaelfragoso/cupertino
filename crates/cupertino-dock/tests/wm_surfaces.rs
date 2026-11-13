@@ -11,7 +11,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_dock::overview_kit::{OverviewInput, OverviewSurface};
+use cupertino_dock::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
 use cupertino_dock::overview_ui::{Mode, WindowEntry, Workspace};
 use cupertino_dock::switcher::SwitcherLayout;
 use cupertino_dock::switcher_kit::{self, SwitcherEntry, SwitcherInput, SwitcherSurface};
@@ -85,6 +85,22 @@ struct Model {
     frames: Vec<(u32, WmRect)>,
 }
 
+impl Model {
+    /// A request of the overview: a window's new frame updates [`Model::frames`], the pictures and a drag's frames
+    /// are the server's drawing, and everything else is noted in [`Model::requests`].
+    fn follow(&mut self, r: OverviewRequest) {
+        match r {
+            OverviewRequest::Frame(id, f) => {
+                if let Some(frame) = self.frames.iter_mut().find(|x| x.0 == id) {
+                    frame.1 = f;
+                }
+            }
+            OverviewRequest::Picture(..) | OverviewRequest::Drag(..) => {}
+            r => self.requests.push(format!("{r:?}")),
+        }
+    }
+}
+
 fn next(steps: &async_channel::Receiver<Step>) -> Command<Message> {
     let steps = steps.clone();
     Command::Perform(Box::pin(async move {
@@ -149,13 +165,15 @@ impl Application for Scripted {
                         model.overview.input(input, now);
                     }
                 }
-                model.overview.tick(model.now);
+                for r in model.overview.tick(model.now) {
+                    model.follow(r);
+                }
                 model.switcher.tick(model.now);
                 vec![next(&model.steps)]
             }
             Message::Overview(input) => {
                 for r in model.overview.input(input, now) {
-                    model.requests.push(format!("{r:?}"));
+                    model.follow(r);
                 }
                 Vec::new()
             }
@@ -541,12 +559,8 @@ const DOCK_ZONE: f64 = 70.0;
 
 /// The usable area of an output of `size` points: below the menu bar, above the dock.
 fn area(size: Size) -> WmRect {
-    WmRect::new(
-        0.0,
-        MENU_BAR,
-        size.width,
-        size.height - MENU_BAR - DOCK_ZONE,
-    )
+    // the overview lays out over the whole height down to the dock: the menu bar gives way to it
+    WmRect::new(0.0, 0.0, size.width, size.height - DOCK_ZONE)
 }
 
 /// Three windows of different sizes, one small, at desktop places of an output of `size` points.
@@ -607,9 +621,9 @@ const OUTPUTS: [(f64, f64); 4] = [
 const SCALES: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
 
 /// The issue's case on the migrated chrome: three windows of different sizes, one small, at every output size and
-/// scale. The toolkit lays the windows out where the server is told they go, at least 20 pt below the strip's slots,
-/// clear of every slot and of each other, centred across the area, with a title under each, and a click on a window
-/// selects it.
+/// scale. The toolkit lays the windows out where the server is told they go, at least 39 pt below the closed desktops
+/// band, clear of every name and of each other, centred across the area, with no title under them, and a click on a
+/// window selects it.
 #[test]
 fn three_windows_clear_the_strip_and_each_other_at_every_size_and_scale() {
     for (w, h) in OUTPUTS {
@@ -627,8 +641,10 @@ fn three_windows_clear_the_strip_and_each_other_at_every_size_and_scale() {
                 .map(|(_, r)| r)
                 .chain(run.rect(window, "add"))
                 .collect();
-            assert_eq!(slots.len(), 4, "{case}: three slots and the add slot");
-            let strip = slots.iter().map(|r| bottom(*r)).fold(0.0, f64::max);
+            assert_eq!(slots.len(), 4, "{case}: three names and the add button");
+            let band = run.rect(window, "band").expect("the band");
+            assert_eq!(band.size.height, 72.0, "{case}: the band is closed");
+            let strip = bottom(band);
             let thumbnails: Vec<Rect> = frames
                 .iter()
                 .map(|(id, f)| {
@@ -643,8 +659,8 @@ fn three_windows_clear_the_strip_and_each_other_at_every_size_and_scale() {
                 .collect();
             for (i, t) in thumbnails.iter().enumerate() {
                 assert!(
-                    t.origin.y >= strip + 20.0 - 1e-6,
-                    "{case}: window {i} at {} within 20 pt of the strip at {strip}",
+                    t.origin.y >= strip + 39.0 - 1e-6,
+                    "{case}: window {i} at {} within 39 pt of the band at {strip}",
                     t.origin.y
                 );
                 for s in &slots {
@@ -656,24 +672,15 @@ fn three_windows_clear_the_strip_and_each_other_at_every_size_and_scale() {
                 for (j, u) in thumbnails.iter().enumerate().skip(i + 1) {
                     assert!(!intersects(*t, *u), "{case}: windows {i} and {j} overlap");
                 }
-                let title = run.rect(window, &format!("title-{}", frames[i].0)).unwrap();
                 assert!(
-                    title.origin.y >= bottom(*t),
-                    "{case}: title {i} under its window"
+                    bottom(*t) <= area(output).bottom(),
+                    "{case}: window {i} in the area"
                 );
                 assert!(
-                    bottom(title) <= area(output).bottom(),
-                    "{case}: window {i} and its title in the area"
+                    run.rect(window, &format!("title-{}", frames[i].0))
+                        .is_none(),
+                    "{case}: no title under window {i}"
                 );
-                for (j, u) in thumbnails.iter().enumerate() {
-                    let other = run.rect(window, &format!("title-{}", frames[j].0)).unwrap();
-                    if j != i {
-                        assert!(
-                            !intersects(title, *u) && !intersects(title, other),
-                            "{case}: title {i} {title:?} over window {j} {u:?} or its title"
-                        );
-                    }
-                }
             }
             let left = thumbnails
                 .iter()
@@ -749,14 +756,24 @@ fn the_strip_switches_adds_removes_and_reorders_workspaces() {
     let second = run.rect(window, "slot-102").unwrap();
     run.click(window, centre(second));
     run.click(window, centre(run.rect(window, "add").unwrap()));
-    // hovering a slot shows its remove button
-    run.moved(window, centre(second));
+    // the pointer at the top opens the band; a second's rest on a desktop's picture shows its remove button
+    run.at(1.0);
+    let picture = run
+        .rect(window, "picture-102")
+        .expect("the open band shows the pictures");
+    assert!(run.rect(window, "band").unwrap().size.height > 160.0);
+    run.moved(window, centre(picture));
+    assert!(run.rect(window, "remove-102").is_none(), "not at once");
+    run.at(2.1);
+    run.moved(window, centre(picture));
     let remove = run
         .rect(window, "remove-102")
-        .expect("the hovered slot's remove button");
+        .expect("the remove button after the rest");
+    assert_eq!(remove.size.width, 28.0);
     run.click(window, centre(remove));
-    // dragging the second slot before the first
+    // dragging the second name before the first
     let first = run.rect(window, "slot-101").unwrap();
+    let second = run.rect(window, "slot-102").unwrap();
     run.moved(window, centre(second));
     run.button(window, centre(second), true);
     let target = Point::new(first.origin.x + 2.0, centre(first).y);
@@ -874,17 +891,10 @@ fn under_reduce_motion_the_highlight_goes_straight_to_the_selection() {
         .find(|n| n.widget.contains("Part") && n.key.is_none() && n.rect.size.width > frame.w)
         .map(|n| n.rect)
         .expect("the highlight is drawn");
-    let inset = cupertino_overview::OverviewConfig::default()
-        .highlight
-        .inset;
+    let ring = OverviewSurface::ring(frame);
     assert_eq!(
         highlight,
-        Rect::new(
-            frame.x - inset,
-            frame.y - inset,
-            frame.w + 2.0 * inset,
-            frame.h + 2.0 * inset
-        ),
+        Rect::new(ring.x, ring.y, ring.w, ring.h),
         "no glide from the last selection"
     );
 }
@@ -918,7 +928,7 @@ fn reduce_transparency_and_increase_contrast_draw_the_slots_opaque() {
         let window = open_overview(&mut run, output, three_windows(output), 2);
         let fills = fills(&run, window);
         assert!(
-            fills.len() >= 3 && fills.iter().all(|c| c.a == 1.0 || c.a > 0.84),
+            fills.len() >= 2 && fills.iter().all(|c| c.a == 1.0 || c.a > 0.84),
             "{appearance:?}: {fills:?}"
         );
     }

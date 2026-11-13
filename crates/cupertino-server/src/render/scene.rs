@@ -852,8 +852,16 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
 }
 
 fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
-    let dark = p.config.is_dark();
-    let colours = if dark {
+    full_output_wallpaper(
+        p,
+        SceneKind::Wallpaper,
+        wallpaper_colours(p.config.is_dark()),
+    )
+}
+
+/// The corner colours of the drawn wallpaper, dark or light.
+fn wallpaper_colours(dark: bool) -> [[f32; 4]; 4] {
+    if dark {
         [
             [0.07, 0.09, 0.20, 1.0],
             [0.20, 0.09, 0.27, 1.0],
@@ -867,8 +875,7 @@ fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
             [0.45, 0.68, 0.99, 1.0],
             [0.99, 0.66, 0.50, 1.0],
         ]
-    };
-    full_output_wallpaper(p, SceneKind::Wallpaper, colours)
+    }
 }
 
 /// Solid black over the whole output: all that is visible of the session besides the lock surface.
@@ -1927,9 +1934,16 @@ fn layer_elements(
         let Some(geo) = map.layer_geometry(surface) else {
             continue;
         };
-        // a menu bar is offset and faded by its presentation (hide, reveal, inactive output)
+        // a menu bar is offset and faded by its presentation (hide, reveal, inactive output), and gives way to an
+        // overview of its output
         let look = p.menu_bars.look(surface.wl_surface(), p.rect.y, p.now);
-        let (dy, opacity) = look.map_or((0.0, 1.0), |l| (l.dy, l.alpha));
+        let overview_bar = p
+            .shell
+            .overview
+            .as_ref()
+            .filter(|o| o.output == p.output_id)
+            .map_or(1.0, |o| o.menu_bar_alpha(p.now) as f32);
+        let (dy, opacity) = look.map_or((0.0, 1.0), |l| (l.dy, l.alpha * overview_bar));
         if opacity <= 0.0 {
             continue;
         }
@@ -1966,6 +1980,10 @@ fn layer_elements(
                 bound,
             )
         }));
+        if layer == Layer::Overlay && surface.namespace() == crate::dock::OVERVIEW_NAMESPACE {
+            // the workspaces' live pictures lie on the chrome's band, under what it draws
+            out.extend(overview_pictures(p, opacity));
+        }
         let backdrops = surface_backdrops(surface.wl_surface(), origin);
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
@@ -2626,6 +2644,117 @@ fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
     }
 }
 
+/// The live pictures of the workspaces the dock's overview asked for (`overview_workspace_frame`), front to back: each
+/// an opaque black backing, the wallpaper and, for a workspace other than the current one (whose windows the overview
+/// itself shows), its windows, all scaled from the output into the picture's frame, at `alpha`.
+fn overview_pictures(p: &mut SceneParams<'_>, alpha: f32) -> Vec<Piece> {
+    let Some(session) = p
+        .shell
+        .overview
+        .as_ref()
+        .filter(|s| s.output == p.output_id && !s.closing)
+    else {
+        return Vec::new();
+    };
+    let pictures = session.pictures.clone();
+    let current = p.wm.current_workspace(p.output_id);
+    let out_rect = p.rect;
+    let mut out = Vec::new();
+    for (workspace, frame) in pictures {
+        let k = frame.w / out_rect.w.max(1.0);
+        let local_frame = local(frame, &out_rect);
+        // windows of the workspace, front first
+        if Some(workspace) != current {
+            let order: Vec<WindowId> = p.wm.stacking_order().to_vec();
+            for id in order.iter().rev() {
+                let Some(w) = p.wm.window(*id) else { continue };
+                if w.output != p.output_id
+                    || w.workspace != workspace
+                    || w.sticky
+                    || w.state().is_minimized()
+                    || w.state().is_dead()
+                {
+                    continue;
+                }
+                let Some(entry) = p.windows.iter().find(|e| e.id == *id) else {
+                    continue;
+                };
+                if p.for_capture && crate::control::protected_surface(entry.surface()) {
+                    continue;
+                }
+                let g = w.geometry();
+                let visual = cupertino_wm::Rect::new(
+                    frame.x + (g.x - out_rect.x) * k,
+                    frame.y + (g.y - out_rect.y) * k,
+                    g.w * k,
+                    g.h * k,
+                );
+                let geo = entry.window.geometry();
+                let ins = entry.insets();
+                let plan = WindowPlan {
+                    visual,
+                    scale_x: visual.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
+                    scale_y: visual.h / (f64::from(geo.size.h) + ins.vertical()).max(1.0),
+                    opacity: f64::from(alpha),
+                    shadow: 0.0,
+                    exact: false,
+                    corner: None,
+                    corner_cap: None,
+                };
+                let deco = window_decorations(p, entry, &plan, false);
+                out.extend(window_elements(p, entry, &plan, false, false, deco));
+            }
+        }
+        // the wallpaper, scaled into the frame
+        let index = 1 + workspace.0;
+        match wallpaper_element(p) {
+            Piece::Image(mut picture) => {
+                picture.index = index;
+                picture.size = (
+                    local_frame.size.w.round() as i32,
+                    local_frame.size.h.round() as i32,
+                );
+                picture.placement.origin = OutputPoint(cupertino_geometry::Point::new(
+                    local_frame.loc.x,
+                    local_frame.loc.y,
+                ));
+                picture.opacity = alpha;
+                out.push(Piece::Image(picture));
+            }
+            _ => {
+                let colours = match p.config.wallpaper_color {
+                    Some(c) => {
+                        let rgb = c.map(|c| f32::from(c) / 255.0);
+                        [[rgb[0], rgb[1], rgb[2], 1.0]; 4]
+                    }
+                    None => wallpaper_colours(p.config.is_dark()),
+                };
+                out.push(Piece::item(item(
+                    SceneKind::Wallpaper,
+                    index,
+                    Source::Wallpaper {
+                        rect: output_rect(local_frame),
+                        colours,
+                    },
+                    f64::from(alpha),
+                )));
+            }
+        }
+        // the opaque black backing
+        out.push(rrect_item(
+            SceneKind::OverviewDim,
+            index,
+            local_frame,
+            0.0,
+            false,
+            [0.0, 0.0, 0.0, 1.0],
+            None,
+            alpha,
+        ));
+    }
+    out
+}
+
 fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
     let Some(session) = p
         .shell
@@ -2636,25 +2765,42 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
         return false;
     };
     let now = p.now;
-    let progress = session.transition.progress_at(now).clamp(0.0, 1.0);
-    let placed = session.frames(now);
+    // under Reduce Motion the windows do not move: they fade out of their desktop places and into their overview
+    // places (`crossfade`), each drawn at its target
+    let reduced = session.reduce_motion;
+    let crossfade = session.crossfade(now);
+    let progress = if reduced {
+        crossfade
+    } else {
+        session.transition.progress_at(now).clamp(0.0, 1.0)
+    };
+    let placed = if reduced {
+        session.targets()
+    } else {
+        session.frames(now)
+    };
+    let origins: Vec<(WindowId, cupertino_wm::Rect)> =
+        session.windows.iter().map(|w| (w.id, w.from)).collect();
+    let dragged = session.dragged;
     let dim = p.config.shell.overview_dim;
 
-    let full = smithay::utils::Rectangle::<f64, Logical>::new(
-        (0.0, 0.0).into(),
-        (p.rect.w, p.rect.h).into(),
-    );
-    let e = rrect_item(
-        SceneKind::OverviewDim,
-        0,
-        full,
-        0.0,
-        false,
-        [0.0, 0.0, 0.0, (dim * progress) as f32],
-        None,
-        1.0,
-    );
-    stack.push(SceneLayer::OverviewBackdrop, e);
+    if dim > 0.0 {
+        let full = smithay::utils::Rectangle::<f64, Logical>::new(
+            (0.0, 0.0).into(),
+            (p.rect.w, p.rect.h).into(),
+        );
+        let e = rrect_item(
+            SceneKind::OverviewDim,
+            0,
+            full,
+            0.0,
+            false,
+            [0.0, 0.0, 0.0, (dim * progress) as f32],
+            None,
+            1.0,
+        );
+        stack.push(SceneLayer::OverviewBackdrop, e);
+    }
 
     // windows, back to front in stacking order, drawn at their frames; the workspaces bar, the
     // highlight and the titles are the dock's layer surface
@@ -2673,12 +2819,25 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
         }
         let geo = entry.window.geometry();
         let ins = entry.insets();
-        let frame = pw.frame;
+        // under Reduce Motion a window that has not faded in yet is seen at its desktop place, fading out
+        let (frame, opacity) = if reduced && crossfade < 0.5 {
+            (
+                origins
+                    .iter()
+                    .find(|o| o.0 == *id)
+                    .map_or(pw.frame, |o| o.1),
+                1.0 - 2.0 * crossfade,
+            )
+        } else if reduced {
+            (pw.frame, 2.0 * crossfade - 1.0)
+        } else {
+            (pw.frame, 1.0)
+        };
         let plan = WindowPlan {
             visual: frame,
             scale_x: frame.w / (f64::from(geo.size.w) + ins.horizontal()).max(1.0),
             scale_y: frame.h / (f64::from(geo.size.h) + ins.vertical()).max(1.0),
-            opacity: 1.0,
+            opacity: opacity.clamp(0.0, 1.0),
             shadow: 1.0,
             exact: false,
             corner: None,
@@ -2686,10 +2845,15 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
         };
         let active = key == Some(*id);
         let deco = window_decorations(p, entry, &plan, active);
-        // a window keeps its popups over it while it is a preview
-        windows_front_to_back.extend(window_popup_elements(p, entry, &plan));
-        let els = window_elements(p, entry, &plan, active, true, deco);
-        windows_front_to_back.extend(els);
+        let mut els = window_popup_elements(p, entry, &plan);
+        els.extend(window_elements(p, entry, &plan, active, true, deco));
+        if dragged == Some(*id) {
+            // a dragged window goes over the chrome, so it can be taken onto the desktops band
+            stack.extend(SceneLayer::DragIcon, els);
+        } else {
+            // a window keeps its popups over it while it is a preview
+            windows_front_to_back.extend(els);
+        }
     }
     stack.extend(SceneLayer::Windows, windows_front_to_back);
     true

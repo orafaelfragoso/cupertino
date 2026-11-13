@@ -2,8 +2,9 @@
 //! gesture drives 1:1 and a spring completes. The display server owns it (it is bound to input and
 //! the frame clock); the dock process draws the overview's chrome around it.
 //!
-//! the duration, 0.25 s, and 2.0 s while the slow-motion modifier is held.
-//! approximate: the spring form, the swipe distance, the rubber band and the velocity projection.
+//! The spring is critically damped with a response of 0.25 s (2.0 s while the slow-motion modifier is held); a
+//! trackpad release faster than 5 progress per second settles on a response 0.6 times as long. Approximate: the swipe
+//! distance, the rubber band and the velocity projection.
 
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 
@@ -19,6 +20,8 @@ pub struct Transition {
     spring: SpringParams,
     slow_spring: SpringParams,
     slow_motion: bool,
+    fast_release_speed: f64,
+    fast_release_scale: f64,
 }
 
 impl Transition {
@@ -31,6 +34,8 @@ impl Transition {
             spring: cfg.spring,
             slow_spring: cfg.slow_motion_spring(),
             slow_motion: false,
+            fast_release_speed: cfg.fast_release_speed,
+            fast_release_scale: cfg.fast_release_scale,
         }
     }
 
@@ -49,14 +54,27 @@ impl Transition {
     }
 
     /// Decide the target from position and velocity (projected end point) and spring to it; true
-    /// when the overview opens.
+    /// when the overview opens. A release faster than the fast-release speed settles on the shorter spring.
     pub fn gesture_end(&mut self, now: f64) -> bool {
         let p = self.progress.value(now);
         let v = self.progress.velocity(now);
         let open = p + v * self.projection_s >= 0.5;
+        let spring = self.release_spring(v);
         self.progress
-            .release(if open { 1.0 } else { 0.0 }, self.spring(), now);
+            .release(if open { 1.0 } else { 0.0 }, spring, now);
         open
+    }
+
+    /// The spring a release at `velocity` (progress per second) settles on: the open/close one, or one with the
+    /// same damping and its response scaled by the fast-release scale when the release is faster than the
+    /// fast-release speed.
+    pub fn release_spring(&self, velocity: f64) -> SpringParams {
+        let spring = self.spring();
+        if velocity.abs() <= self.fast_release_speed {
+            return spring;
+        }
+        let zeta = spring.damping / (2.0 * (spring.stiffness * spring.mass).sqrt());
+        SpringParams::from_ratio(spring.perceptual_duration() * self.fast_release_scale, zeta)
     }
 
     pub fn toggle(&mut self, open: bool, now: f64) {
@@ -134,6 +152,16 @@ mod tests {
         }
         assert!(!t.gesture_end(0.48));
         assert!(!t.is_open());
+    }
+
+    #[test]
+    fn a_fast_release_settles_on_a_spring_six_tenths_as_long() {
+        let t = Transition::new(&OverviewConfig::default());
+        let slow = t.release_spring(4.0);
+        assert!((slow.perceptual_duration() - 0.25).abs() < 1e-9);
+        let fast = t.release_spring(-6.0);
+        assert!((fast.perceptual_duration() - 0.15).abs() < 1e-9);
+        assert!(fast.bounce().abs() < 1e-9, "still critically damped");
     }
 
     #[test]

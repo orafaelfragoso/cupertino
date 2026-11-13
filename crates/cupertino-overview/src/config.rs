@@ -1,16 +1,11 @@
-//! Overview configuration. The transition duration (0.25 s, 2.0 s in slow motion) and the
-//! workspaces bar height (90 pt) are as designed.
-//! Everything else is approximate or unknown: the window layout algorithm and the bar's inner
-//! metrics is not known.
+//! Overview configuration: the open/close spring (critically damped, response 0.25 s, 2.0 s in slow motion), the
+//! shortened response after a fast trackpad release, the desktops bar's metrics ([`BarConfig`]) and the packing's
+//! constants ([`LayoutParams`]).
 
 use cupertino_animation::{Curve, SpringParams};
 
 use crate::bar::BarConfig;
 use crate::layout::LayoutParams;
-
-/// Space the overviews keep under every window for its title: the space between the window and its title and the
-/// title's row, in points (24 pt).
-pub const TITLE_SPACE: f64 = 24.0;
 
 /// Window titles fade in near the end of the open transition (approximate schedule: they start
 /// to appear once progress exceeds `start` and are fully visible at `end`).
@@ -42,7 +37,7 @@ impl TitleFade {
 
 #[derive(Clone, Debug)]
 pub struct HighlightConfig {
-    /// The highlight outline is the window frame grown by this many points. approximate.
+    /// The highlight follows the window frame grown by this many points: 0, the ring is drawn round the frame.
     pub inset: f64,
     pub fade_s: f64,
     pub move_curve: Curve,
@@ -51,7 +46,7 @@ pub struct HighlightConfig {
 impl Default for HighlightConfig {
     fn default() -> Self {
         Self {
-            inset: 6.0,
+            inset: 0.0,
             fade_s: 0.12,
             move_curve: Curve::Spring(SpringParams::from_perceptual(0.2, 0.0)),
         }
@@ -94,9 +89,12 @@ pub struct OverviewConfig {
     pub animation_duration: f64,
     /// Duration while the slow-motion modifier is held. 2.0 s.
     pub slow_motion_duration: f64,
-    /// Open/close spring: perceptual duration `animation_duration`, bounce 0 (the spring form is
-    /// approximate, only the duration is as designed).
+    /// Open/close spring: critically damped, response `animation_duration`.
     pub spring: SpringParams,
+    /// A trackpad release faster than this (progress per second) settles on a shorter spring (5).
+    pub fast_release_speed: f64,
+    /// The response of that shorter spring as a fraction of the open/close one (0.6).
+    pub fast_release_scale: f64,
     /// Progress damping beyond [0, 1].
     pub rubber_band: f64,
     /// Velocity projection window used to decide on release.
@@ -115,10 +113,7 @@ impl OverviewConfig {
 impl Default for OverviewConfig {
     fn default() -> Self {
         Self {
-            layout: LayoutParams {
-                title_space: TITLE_SPACE,
-                ..LayoutParams::default()
-            },
+            layout: LayoutParams::default(),
             app_overview: AppOverviewConfig::default(),
             title_fade: TitleFade::default(),
             highlight: HighlightConfig::default(),
@@ -126,7 +121,9 @@ impl Default for OverviewConfig {
             swipe_distance: 300.0,
             animation_duration: 0.25,
             slow_motion_duration: 2.0,
-            spring: SpringParams::from_perceptual(0.25, 0.0),
+            spring: SpringParams::from_ratio(0.25, 1.0),
+            fast_release_speed: 5.0,
+            fast_release_scale: 0.6,
             rubber_band: 0.15,
             projection_s: 0.15,
             reflow: Curve::Spring(SpringParams::from_perceptual(0.25, 0.0)),
@@ -147,7 +144,18 @@ mod tests {
     }
 
     #[test]
-    fn bar_band_is_90pt() {
-        assert_eq!(BarConfig::default().reserved_height(), 90.0);
+    fn the_bar_band_is_72pt_closed_and_165pt_open() {
+        let bar = BarConfig::default();
+        assert_eq!(
+            (bar.band_height(false), bar.band_height(true)),
+            (72.0, 165.0)
+        );
+    }
+
+    #[test]
+    fn the_spring_is_critically_damped() {
+        let c = OverviewConfig::default();
+        assert!(c.spring.bounce().abs() < 1e-9);
+        assert_eq!((c.fast_release_speed, c.fast_release_scale), (5.0, 0.6));
     }
 }

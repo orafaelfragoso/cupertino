@@ -136,8 +136,8 @@ fn overview_layout_avoids_the_bar_and_has_no_overlap() {
     );
     let area = o.layout_area();
     let bar = &o.cfg.bar;
-    assert_eq!(area.y, bar.thumbnails_top() - o.cfg.layout.inset);
-    assert_eq!(bar.thumbnails_top(), bar.strip_bottom() + 20.0);
+    assert_eq!(area.y, bar.windows_top(false) - o.cfg.layout.inset);
+    assert_eq!(bar.windows_top(false), bar.band_height(false) + 39.0);
     for (i, r) in o.layout_rects().iter().enumerate() {
         assert!(
             r.y >= area.y - 1e-9
@@ -165,7 +165,7 @@ fn three_windows_under_the_menu_bar(expand_on_hover: bool) -> Overview {
         OverviewMode::Overview,
         windows,
     );
-    o.bar.set_expanded(!expand_on_hover, -10.0);
+    o.set_bar_open(!expand_on_hover, -10.0);
     o.set_workspaces(&[WorkspaceId(1), WorkspaceId(2)], Some(WorkspaceId(1)));
     o
 }
@@ -174,9 +174,8 @@ fn three_windows_under_the_menu_bar(expand_on_hover: bool) -> Overview {
 fn windows_clear_a_pinned_expanded_bar_by_the_layout_gap() {
     let o = three_windows_under_the_menu_bar(false);
     let bar = o.bar.layout(0.0).rect;
-    assert_eq!(bar.bottom(), 168.0);
-    let slots = o.bar.layout(0.0).slots[0].rect.bottom();
-    assert_eq!(slots, 156.0);
+    assert_eq!(bar.bottom(), 24.0 + 165.0);
+    let slots = bar.bottom() + 19.0;
     let rects = o.layout_rects();
     assert_eq!(rects.len(), 3);
     for (i, r) in rects.iter().enumerate() {
@@ -195,18 +194,27 @@ fn windows_clear_a_pinned_expanded_bar_by_the_layout_gap() {
 #[test]
 fn a_bar_that_expands_on_hover_keeps_the_windows_below_its_expanded_slots() {
     let mut o = three_windows_under_the_menu_bar(true);
-    assert_eq!(
-        o.bar.layout(0.0).rect.bottom(),
-        24.0 + 90.0,
-        "collapsed band"
-    );
-    o.bar.set_expanded(true, 0.0);
-    let expanded = o.bar.layout(10.0);
-    let slots = expanded.slots[0].rect.bottom();
-    assert!((slots - (24.0 + 12.0 + 120.0)).abs() < 0.2, "{slots}");
+    assert_eq!(o.bar.layout(0.0).rect.bottom(), 24.0 + 72.0, "closed band");
     for r in o.layout_rects() {
-        assert!(r.y >= slots + 20.0 - 0.2, "{r:?} under the expanded strip");
+        assert!(
+            r.y >= 24.0 + 72.0 + 39.0 - 1e-9,
+            "{r:?} under the closed band"
+        );
     }
+    let closed = o.layout_rects().to_vec();
+    o.pointer_moved(Some(Point::new(640.0, 40.0)), 0.0);
+    assert!(
+        o.bar.is_expanded_target(),
+        "the pointer at the top opens the band"
+    );
+    let expanded = o.bar.layout(10.0).rect.bottom();
+    assert!((expanded - (24.0 + 165.0)).abs() < 0.2, "{expanded}");
+    for r in o.layout_rects() {
+        assert!(r.y >= expanded + 39.0 - 0.2, "{r:?} under the open band");
+    }
+    assert_ne!(closed, o.layout_rects(), "the windows moved down");
+    o.pointer_moved(Some(Point::new(640.0, 600.0)), 10.0);
+    assert_eq!(closed, o.layout_rects(), "and back up once the band closes");
 }
 
 #[test]
@@ -426,13 +434,13 @@ fn click_actions() {
     let r = o.layout_rects()[2];
     assert_eq!(o.click(r.center(), t), OverviewAction::Select(WindowId(3)));
     assert_eq!(o.click(Point::new(5.0, 1075.0), t), OverviewAction::Close);
-    let slot = o.bar.layout(t).slots[1].rect.center();
+    let slot = o.bar.layout(t).slots[1].name.center();
     assert_eq!(
         o.click(slot, t),
         OverviewAction::SwitchWorkspace(WorkspaceId(2))
     );
     o.pointer_moved(Some(slot), t);
-    let add = o.bar.layout(t + 3.0).add.unwrap().center();
+    let add = o.bar.layout(t + 3.0).add.center();
     assert_eq!(o.click(add, t + 3.0), OverviewAction::AddWorkspace);
 }
 
@@ -694,15 +702,15 @@ fn transition_uses_the_verified_duration_and_slow_motion_is_longer() {
 }
 
 #[test]
-fn bar_band_height_is_the_verified_90pt() {
+fn the_closed_bar_band_is_72pt() {
     let o = Overview::new(
         OverviewConfig::default(),
         AREA,
         OverviewMode::Overview,
         grid4(),
     );
-    assert_eq!(o.cfg.bar.reserved_height(), 90.0);
-    assert_eq!(o.bar.layout(0.0).rect.h, 90.0);
+    assert_eq!(o.cfg.bar.band_height(false), 72.0);
+    assert_eq!(o.bar.layout(0.0).rect.h, 72.0);
 }
 
 /// Output modes in device pixels and the scales they run at; the overview works in points.
@@ -766,14 +774,9 @@ fn three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale() {
                     );
                     let ids: Vec<WorkspaceId> = (1..=3).map(WorkspaceId).collect();
                     o.set_workspaces(&ids, Some(WorkspaceId(1)));
-                    o.bar.set_expanded(true, 0.0);
+                    o.set_bar_open(true, 0.0);
                     let strip = o.bar.layout(10.0);
-                    let strip_bottom = strip
-                        .slots
-                        .iter()
-                        .map(|s| s.rect.bottom())
-                        .chain(strip.add.map(|a| a.bottom()))
-                        .fold(0.0, f64::max);
+                    let strip_bottom = area.y + o.cfg.bar.band_height(true);
                     let case = format!(
                         "{pw}×{ph} px at {scale} ({w}×{h} pt), arrangement {arrangement}, \
                          hover {expand_on_hover}"
@@ -796,10 +799,15 @@ fn three_windows_stay_below_the_strip_and_apart_at_every_size_and_scale() {
                     for (i, r) in rects.iter().enumerate() {
                         assert!(r.w > 0.0 && r.h > 0.0, "{case}: window {i} is {r:?}");
                         assert!(
-                            r.y >= gap - 1e-6,
-                            "{case}: window {i} {r:?} within 20 pt of the strip"
+                            r.y >= gap - 1.0 / scale,
+                            "{case}: window {i} {r:?} within 39 pt of the band"
                         );
-                        for s in strip.slots.iter().map(|s| s.rect).chain(strip.add) {
+                        for s in strip
+                            .slots
+                            .iter()
+                            .map(|s| s.thumb)
+                            .chain(std::iter::once(strip.add))
+                        {
                             assert!(
                                 !r.intersects(&s),
                                 "{case}: window {i} {r:?} over slot {s:?}"
@@ -856,8 +864,8 @@ impl Cases {
 /// The smallest output the overview is laid out on, in points: 1280×720 pixels at scale 2.
 const SMALLEST_OUTPUT: (f64, f64) = (640.0, 360.0);
 
-/// What the dock draws under every window: the space to its title and the title's row, in points.
-const TITLE_BAND: f64 = 24.0;
+/// What the dock draws under every window: nothing, a window's name lies on the window.
+const TITLE_BAND: f64 = 0.0;
 
 /// Up to sixteen windows, among them tiny ones, very wide and very tall ones and windows on the same place, on
 /// outputs from the smallest to 4K at scale 1 and at fractional scales. Every thumbnail keeps a size, sits at least
@@ -905,15 +913,15 @@ fn adversarial_window_sets_keep_thumbnails_and_titles_apart_and_below_the_strip(
         let mut o = Overview::new(cfg, area, OverviewMode::Overview, windows);
         let ids: Vec<WorkspaceId> = (1..=1 + case as u64 % 6).map(WorkspaceId).collect();
         o.set_workspaces(&ids, Some(WorkspaceId(1)));
-        o.bar.set_expanded(true, 0.0);
+        o.set_bar_open(true, 0.0);
         let strip = o.bar.layout(10.0);
         let slots: Vec<Rect> = strip
             .slots
             .iter()
-            .map(|s| s.rect)
-            .chain(strip.add)
+            .map(|s| s.thumb)
+            .chain(std::iter::once(strip.add))
             .collect();
-        let strip_bottom = slots.iter().map(|s| s.bottom()).fold(0.0, f64::max);
+        let strip_bottom = area.y + o.cfg.bar.band_height(true);
         let id = format!("case {case}: {w}×{h} pt at {scale}, {n} windows");
         let snapped = |r: &Rect| {
             let (x, y) = (snap(r.x, scale), snap(r.y, scale));

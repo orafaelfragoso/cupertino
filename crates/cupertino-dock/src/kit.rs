@@ -197,6 +197,15 @@ pub enum Request {
     SwitcherActivate(usize),
     SwitcherCancel,
     OverviewFrame(u32, Rect),
+    /// A window of the overview follows the pointer at this frame.
+    OverviewDrag(u32, Rect),
+    /// A window of the overview was dropped on a workspace.
+    OverviewMoveWindow {
+        window: u32,
+        workspace: u32,
+    },
+    /// Where a workspace's live picture is drawn in the overview (an empty rectangle for none).
+    OverviewPicture(u32, Rect),
     OverviewSelect(u32),
     OverviewClose,
     SwitchWorkspace(u32),
@@ -206,6 +215,24 @@ pub enum Request {
         id: u32,
         index: usize,
     },
+}
+
+/// The dock role's request for what the overview's chrome asked.
+fn overview_request(request: OverviewRequest) -> Request {
+    match request {
+        OverviewRequest::Select(id) => Request::OverviewSelect(id),
+        OverviewRequest::Close => Request::OverviewClose,
+        OverviewRequest::SwitchWorkspace(id) => Request::SwitchWorkspace(id),
+        OverviewRequest::AddWorkspace => Request::AddWorkspace,
+        OverviewRequest::RemoveWorkspace(id) => Request::RemoveWorkspace(id),
+        OverviewRequest::MoveWorkspace { id, index } => Request::MoveWorkspace { id, index },
+        OverviewRequest::Frame(id, frame) => Request::OverviewFrame(id, frame),
+        OverviewRequest::Drag(id, frame) => Request::OverviewDrag(id, frame),
+        OverviewRequest::MoveWindow { window, workspace } => {
+            Request::OverviewMoveWindow { window, workspace }
+        }
+        OverviewRequest::Picture(id, frame) => Request::OverviewPicture(id, frame),
+    }
 }
 
 /// What a tile menu asks of a running application.
@@ -1913,19 +1940,7 @@ impl Model {
             return;
         };
         for request in surfaces.overview.input(input, now) {
-            self.host.request(
-                output,
-                match request {
-                    OverviewRequest::Select(id) => Request::OverviewSelect(id),
-                    OverviewRequest::Close => Request::OverviewClose,
-                    OverviewRequest::SwitchWorkspace(id) => Request::SwitchWorkspace(id),
-                    OverviewRequest::AddWorkspace => Request::AddWorkspace,
-                    OverviewRequest::RemoveWorkspace(id) => Request::RemoveWorkspace(id),
-                    OverviewRequest::MoveWorkspace { id, index } => {
-                        Request::MoveWorkspace { id, index }
-                    }
-                },
-            );
+            self.host.request(output, overview_request(request));
         }
     }
 
@@ -2257,9 +2272,11 @@ impl Model {
             self.press = None;
             self.open_menu(id);
         }
-        for surfaces in self.wm.values_mut() {
+        for (&output, surfaces) in self.wm.iter_mut() {
             surfaces.switcher.tick(now);
-            surfaces.overview.tick(now);
+            for request in surfaces.overview.tick(now) {
+                self.host.request(output, overview_request(request));
+            }
         }
         if self.poof.is_some_and(|p| p.progress(now).is_none()) {
             self.poof = None;

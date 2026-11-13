@@ -116,6 +116,8 @@ pub struct Overview {
     last_pointer: Option<Point>,
     highlight_rect: AnimatedValue<[f64; 4]>,
     highlight_opacity: AnimatedValue<f64>,
+    /// Counts the layouts, so a caller can tell the final frames changed.
+    revision: u64,
 }
 
 impl Overview {
@@ -144,6 +146,7 @@ impl Overview {
             last_pointer: None,
             highlight_rect: AnimatedValue::new([0.0; 4]),
             highlight_opacity: AnimatedValue::new(0.0),
+            revision: 0,
         };
         o.relayout(None, HashMap::new());
         o.prev_to = o.to.clone();
@@ -155,13 +158,14 @@ impl Overview {
     }
 
     /// Area the windows are packed into in the current mode. In `Overview` it starts below the
-    /// workspaces strip: the packing's inset then puts the thumbnails at least the strip's
-    /// [`layout_gap`](crate::BarConfig::layout_gap) below the bottom of its slots.
+    /// desktops band at the height it is heading for: the packing's inset then puts the thumbnails at least the
+    /// band's [`layout_gap`](crate::BarConfig::layout_gap) below its bottom.
     pub fn layout_area(&self) -> Rect {
         match self.mode {
             OverviewMode::Overview => {
-                let top = (self.cfg.bar.thumbnails_top() - self.cfg.layout.inset)
-                    .max(self.cfg.bar.strip_bottom());
+                let open = self.bar.is_expanded_target();
+                let top = (self.cfg.bar.windows_top(open) - self.cfg.layout.inset)
+                    .max(self.cfg.bar.band_height(open));
                 Rect::new(
                     self.area.x,
                     self.area.y + top,
@@ -236,6 +240,7 @@ impl Overview {
             .collect();
         let shown: Vec<&OverviewWindow> = self.shown.iter().map(|i| &self.all[*i]).collect();
         self.to = self.compute_layout(&shown);
+        self.revision += 1;
         self.prev_to = self
             .shown
             .iter()
@@ -377,6 +382,11 @@ impl Overview {
         &self.to
     }
 
+    /// How many layouts were made: it changes whenever [`Self::layout_rects`] may have.
+    pub fn layout_revision(&self) -> u64 {
+        self.revision
+    }
+
     // ---- selection and input ------------------------------------------------------------
 
     pub fn selection(&self) -> Option<WindowId> {
@@ -435,11 +445,29 @@ impl Overview {
         })
     }
 
+    /// Open or close the desktops band (the pointer reached the top, or left the band): the windows are laid out
+    /// again below the band's new height.
+    pub fn set_bar_open(&mut self, open: bool, now: f64) {
+        if self.bar.is_expanded_target() != open {
+            self.bar.set_expanded(open, now);
+            let current = self.current_targets(now);
+            self.relayout(Some(now), current);
+            self.update_highlight(now);
+        }
+    }
+
     /// Pointer motion: hover selection (suppressed while the keyboard drives the selection until
     /// the pointer really moves) and the workspaces bar.
     pub fn pointer_moved(&mut self, p: Option<Point>, now: f64) {
         if self.mode == OverviewMode::Overview {
+            let open = self.bar.is_expanded_target();
             self.bar.pointer_moved(p, now);
+            if self.bar.is_expanded_target() != open {
+                // the band opens or closes: the windows move down below it or back up
+                let current = self.current_targets(now);
+                self.relayout(Some(now), current);
+                self.update_highlight(now);
+            }
         }
         let moved = match (p, self.last_pointer) {
             (Some(a), Some(b)) => (a.x - b.x).abs() + (a.y - b.y).abs() > 0.5,

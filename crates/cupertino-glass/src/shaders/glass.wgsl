@@ -1,6 +1,5 @@
 // Glass composite: one draw per container over the union of its shapes. The stages and every value are described in
-// src/glass.rs, whose CPU model this follows. Lengths are target pixels, y down; colours are sRGB-encoded except in
-// the face stage, which works on linear light.
+// src/glass.rs, whose CPU model this follows. Lengths are target pixels, y down; colours are sRGB-encoded throughout.
 
 struct Glass {
   quad: vec4<f32>,        // where to draw: x, y, w, h
@@ -94,15 +93,6 @@ fn uv_of(p: vec2<f32>) -> vec2<f32> {
   return vec2<f32>(dot(G.uv_x.xyz, h), dot(G.uv_y.xyz, h));
 }
 
-fn decode(c: vec3<f32>) -> vec3<f32> {
-  return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
-}
-
-fn encode(c0: vec3<f32>) -> vec3<f32> {
-  let c = max(c0, vec3<f32>(0.0));
-  return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
-}
-
 // saturation about the Rec. 709 luma of encoded values
 fn saturate_encoded(c: vec3<f32>, s: f32) -> vec3<f32> {
   let y = dot(c, LUMA);
@@ -127,13 +117,13 @@ fn face_at(q: vec2<f32>, pos: f32, max_luma: f32) -> vec3<f32> {
   c = mix(c, min(c, f), G.fill.x);
   c = mix(c, max(c, f), G.fill.y);
   c = mix(c, f, G.fill.z);
-  var lin = decode(saturate_encoded(c, G.face.x));
-  lin = min(lin * G.face.y, vec3<f32>(G.face.w));
-  let limit = max_luma * G.face.w;
-  let y = dot(lin, LUMA);
-  if (y > limit && y > 0.0) { lin = lin * (limit / y); }
-  var e = min(encode(lin), vec3<f32>(1.0));
-  e = e + G.face.z * (vec3<f32>(1.0) - e);
+  // stage 2, on encoded values: saturation, luma compression, levels, limit, fill
+  var s = saturate_encoded(c, G.face.x);
+  var l = dot(s, LUMA);
+  s = s - (1.0 - max_luma) * l * (0.75 * s + vec3<f32>(0.25 * l));
+  l = dot(s, LUMA);
+  s = s + vec3<f32>(G.face.z * (1.0 - l) - (1.0 - G.face.y) * l);
+  let e = clamp(s, vec3<f32>(0.0), vec3<f32>(min(G.face.w, 1.0)));
   return mix(e, G.face_fill.rgb, G.face_fill.a);
 }
 

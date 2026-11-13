@@ -763,8 +763,8 @@ fn labels_on_glass_over_a_busy_wallpaper_reach_the_contrast_the_rule_allows() {
 
             let face = mean(&shot, on_output(LARGE_FACE, 0));
             if dark {
-                // dark glass holds its face under the brightness cap, which is what keeps white labels readable over
-                // a bright wall: the face is never brighter than the recipe's face over white
+                // dark glass compresses its face's luma, which is what keeps white labels readable over a bright
+                // wall: the face is what the recipe makes of the flat wall, never brighter
                 let mode = GlassMode {
                     dark,
                     style: GlassStyle::Regular,
@@ -772,11 +772,14 @@ fn labels_on_glass_over_a_busy_wallpaper_reach_the_contrast_the_rule_allows() {
                     ..GlassMode::default()
                 };
                 let params = GlassParams::new(mode, LARGE.2.min(LARGE.3) as f32);
-                let brightest =
-                    relative_luminance(face_color([1.0; 3], &params, params.face.max_luma));
+                let expect = relative_luminance(face_color(
+                    wall.map(|v| f32::from(v) / 255.0),
+                    &params,
+                    params.face.max_luma,
+                ));
                 assert!(
-                    relative_luminance(face) <= brightest + 0.02,
-                    "{what}: the panel's face {:.3} is brighter than the cap allows ({brightest:.3})",
+                    relative_luminance(face) <= expect + 0.02,
+                    "{what}: the panel's face {:.3} is brighter than the recipe makes of the wall ({expect:.3})",
                     relative_luminance(face)
                 );
             }

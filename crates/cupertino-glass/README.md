@@ -99,8 +99,10 @@ composite then, per pixel:
    radius 10); the container blurs once per distinct deviation of its shapes (at most four copies, a shape between two
    mixing them), then the fill, a Gaussian of twice its radius, darkens, lightens or covers;
 4. face colour: saturation about the luma of the encoded colour (so the weaker channels of a strong colour keep a milky
-   floor rather than dropping to black, as they would in linear light), then on linear light the white gain,
-   per-channel limit and luminance cap, then the encoded black lift and fill;
+   floor rather than dropping to black, as they would in linear light), then the luma compression
+   `c − (1 − max_luma)·L·(0.75c + 0.25L)` (a grey x becomes `x − (1 − max_luma)·x²`), the levels, one shift
+   `black·(1 − L) − (1 − white)·L` added to every channel (L the luma after the compression), then the fill over it,
+   all on encoded values;
 5. bleed: the blur fill (made whenever a shape bleeds, even when the fill does not show), saturated (encoded) and mapped
    between black and white, lightens (dark) or darkens (light) the face in the bleed band;
 6. key and fill rim lights: a Gaussian band about the edge where light is added along the axis of the light angle,

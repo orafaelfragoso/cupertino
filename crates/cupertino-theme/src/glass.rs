@@ -93,19 +93,21 @@ pub struct GlassBlur {
     pub fill_lighten: f32,
 }
 
-/// The face colour: how the blurred backdrop is toned before the edge effects.
+/// The face colour: how the blurred backdrop is toned before the edge effects. Every step works on encoded values, in
+/// this order: saturation, the luma compression of `max_luma`, the levels of `black` and `white`, then the fill.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassFace {
-    /// Saturation about Rec. 709 luminance (1 leaves the colour).
+    /// Saturation about the Rec. 709 luma of the encoded colour (1 leaves the colour).
     pub saturation: f32,
-    /// Gain on linear light.
+    /// The white level: the face loses `(1 − white) · L` on every channel, `L` its luma after the compression, so a
+    /// value under 1 dims bright faces more than dark ones (over 1 it brightens them).
     pub white: f32,
-    /// Lift of the encoded value towards white: `v + black · (1 − v)`.
+    /// The black level: the face gains `black · (1 − L)` on every channel, so dark faces are lifted most.
     pub black: f32,
-    /// Largest linear channel value after the gain; it also scales `max_luma`.
+    /// Largest encoded channel value of the face.
     pub clamp: f32,
-    /// Largest linear luminance the face lets through, as a fraction of `clamp`; brighter backdrops are scaled down
-    /// to it with their hue kept.
+    /// The luma compression: a colour `c` of luma `L` becomes `c − (1 − max_luma) · L · (0.75 c + 0.25 L)`, so a grey
+    /// `x` becomes `x − (1 − max_luma) · x²` and white comes out at `max_luma`.
     pub max_luma: f32,
     /// Straight sRGB fill laid over the face.
     pub fill: [f32; 4],
@@ -336,12 +338,12 @@ fn regular_face(dark: bool) -> GlassFace {
     }
 }
 
-/// The light regular face: a strong saturation under a pale veil, so a backdrop's colour comes through as a pastel of it
-/// (a strong gain on the colour, then the black lift and the white fill that keep it light).
-const REGULAR_SATURATION_LIGHT: f32 = 2.2;
-const REGULAR_WHITE_LIGHT: f32 = 1.09;
-const REGULAR_BLACK_LIGHT: f32 = 0.43;
-const REGULAR_FILL_LIGHT: f32 = 0.215;
+/// The light regular face: a little more colour, black lifted by 0.4 of what is left and white dimmed a little, under a
+/// white veil, so a dark backdrop comes through as a light grey of it (black comes out at 130 of 255, white at 240).
+const REGULAR_SATURATION_LIGHT: f32 = 1.2;
+const REGULAR_WHITE_LIGHT: f32 = 0.96;
+const REGULAR_BLACK_LIGHT: f32 = 0.40;
+const REGULAR_FILL_LIGHT: f32 = 0.184;
 
 fn clear_face(dark: bool) -> GlassFace {
     if dark {
@@ -406,23 +408,23 @@ fn dense_face(dark: bool) -> GlassFace {
     }
 }
 
-/// Saturation, gain on linear light, black lift and largest luminance (as a fraction of the clamp) of the dark dense
-/// face, and the straight sRGB veil laid over it.
-const DENSE_SATURATION_DARK: f32 = 1.62;
-const DENSE_WHITE_DARK: f32 = 1.43;
-const DENSE_BLACK_DARK: f32 = 0.054;
-const DENSE_MAX_LUMA_DARK: f32 = 0.251;
+/// Saturation, white and black levels and luma compression of the dark dense face, and the straight sRGB veil laid over
+/// it: white comes out at 114 of 255, black at 37, a mid grey at 105, and a strong red keeps its colour.
+const DENSE_SATURATION_DARK: f32 = 2.04;
+const DENSE_WHITE_DARK: f32 = 1.5;
+const DENSE_BLACK_DARK: f32 = 0.039;
+const DENSE_MAX_LUMA_DARK: f32 = 0.395;
 const DENSE_FILL_DARK: [f32; 4] = [0.261, 0.261, 0.261, 0.482];
 
-/// The face of module glass: a gain on linear light of about 0.6 with a little more colour, and a largest luminance
-/// below the regular glass's, so a bright backdrop comes out a darker, more saturated tone of itself.
+/// The face of module glass: the colours kept and every channel dimmed by about a fifth of the face's luma, so a bright
+/// backdrop comes out a darker tone of itself (white at 199 of 255, a mid grey at 102).
 fn module_face() -> GlassFace {
     GlassFace {
-        saturation: 1.32,
-        white: 0.557,
-        black: 0.034,
+        saturation: 1.0,
+        white: 0.779,
+        black: 0.024,
         clamp: 1.308_310_9,
-        max_luma: 0.434,
+        max_luma: 1.0,
         fill: [0.0; 4],
     }
 }
@@ -482,13 +484,14 @@ fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
 }
 
 /// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
-/// 50), while strong colours keep much of their brightness, as their luminance is under the cap; the saturation is a
+/// 53), while strong colours keep much of their brightness, as their luma is compressed less; the saturation is a
 /// little under the regular glass's. Light: the regular light face.
 fn large_panel_face(dark: bool) -> GlassFace {
     let regular = regular_face(dark);
     if dark {
         GlassFace {
             saturation: LARGE_PANEL_SATURATION_DARK,
+            white: LARGE_PANEL_WHITE_DARK,
             black: LARGE_PANEL_BLACK_DARK,
             max_luma: LARGE_PANEL_MAX_LUMA_DARK,
             ..regular
@@ -498,13 +501,13 @@ fn large_panel_face(dark: bool) -> GlassFace {
     }
 }
 
-/// The dark large panel's tone compression: saturation, black lift and largest face luminance (as a fraction of the
-/// face's `clamp`). The white point sits well below the face's own, so a bright spot in the scene (a sunlit sky, a white
-/// page, the light centre of a picture) comes through as a light patch near the panel's tint rather than a glare: white
-/// comes out near 125.
-pub const LARGE_PANEL_SATURATION_DARK: f32 = 1.15;
-pub const LARGE_PANEL_BLACK_DARK: f32 = 0.15;
-pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.102;
+/// The dark large panel's tone compression: saturation, white and black levels and luma compression. A bright spot in
+/// the scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the
+/// panel's tint rather than a glare: white comes out near 125, black near 53.
+pub const LARGE_PANEL_SATURATION_DARK: f32 = 0.93;
+pub const LARGE_PANEL_WHITE_DARK: f32 = 0.94;
+pub const LARGE_PANEL_BLACK_DARK: f32 = 0.164;
+pub const LARGE_PANEL_MAX_LUMA_DARK: f32 = 0.415;
 /// How much wider the large panel blurs than regular glass: its blur levels and its blur fill (10 and 16 points
 /// rather than 5 and 8), so stripes, text and bright spots in the scene behind a launcher-sized sheet melt into broad
 /// fields of colour instead of showing through as ripples.
@@ -978,9 +981,10 @@ mod tests {
         let p = GlassParams::new(mode(false, GlassStyle::Regular), 100.0);
         assert_eq!(
             (p.face.saturation, p.face.white, p.face.black, p.face.clamp),
-            (2.2, 1.09, 0.43, 1.0)
+            (1.2, 0.96, 0.40, 1.0)
         );
-        assert_eq!(p.face.fill, [1.0, 1.0, 1.0, 0.215]);
+        assert_eq!(p.face.max_luma, 0.94);
+        assert_eq!(p.face.fill, [1.0, 1.0, 1.0, 0.184]);
         assert_eq!((p.blur.fill_darken, p.blur.fill_lighten), (0.0, 0.882));
         assert!(p.bleed.darken && p.bleed.saturation == 1.2);
         let dark = GlassParams::new(mode(true, GlassStyle::Regular), 100.0);
@@ -1119,12 +1123,12 @@ mod tests {
                 )
             );
             assert_eq!(
-                (panel.face.white, panel.face.clamp, panel.face.fill),
-                (regular.face.white, regular.face.clamp, regular.face.fill)
+                (panel.face.clamp, panel.face.fill),
+                (regular.face.clamp, regular.face.fill)
             );
-            // dark: a lower white point, a lifted black and a little less saturation; light: the regular face
+            // dark: a lower white level, a lifted black and a little less saturation; light: the regular face
             if dark {
-                assert!(panel.face.max_luma < regular.face.max_luma);
+                assert!(panel.face.white < regular.face.white);
                 assert!(panel.face.black > regular.face.black);
                 assert!(panel.face.saturation < regular.face.saturation);
             } else {

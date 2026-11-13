@@ -1,6 +1,6 @@
 #version 300 es
 // Glass composite (port of fs_glass in src/shaders/glass.wgsl; the stages and values are described in src/glass.rs).
-// Lengths are target pixels, y down; colours are sRGB-encoded except in the face stage, which works on linear light.
+// Lengths are target pixels, y down; colours are sRGB-encoded throughout.
 // The level textures are sampled through the uniform's affine map from target pixels to their coordinates. Use the
 // blend state (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) for colour and (ZERO, ONE) for alpha.
 precision highp float;
@@ -82,15 +82,6 @@ vec2 uv_of(vec2 p) {
     return vec2(dot(G.uv_x.xyz, h), dot(G.uv_y.xyz, h));
 }
 
-vec3 decode(vec3 c) {
-    return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, vec3(lessThanEqual(c, vec3(0.04045))));
-}
-
-vec3 encode(vec3 c0) {
-    vec3 c = max(c0, vec3(0.0));
-    return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, vec3(lessThanEqual(c, vec3(0.0031308))));
-}
-
 // saturation about the Rec. 709 luma of encoded values
 vec3 saturate_encoded(vec3 c, float s) {
     float y = dot(c, LUMA);
@@ -117,13 +108,13 @@ vec3 face_at(vec2 q, float pos, float max_luma) {
     c = mix(c, min(c, f), G.fill.x);
     c = mix(c, max(c, f), G.fill.y);
     c = mix(c, f, G.fill.z);
-    vec3 lin = decode(saturate_encoded(c, G.face.x));
-    lin = min(lin * G.face.y, vec3(G.face.w));
-    float limit = max_luma * G.face.w;
-    float y = dot(lin, LUMA);
-    if (y > limit && y > 0.0) { lin = lin * (limit / y); }
-    vec3 e = min(encode(lin), vec3(1.0));
-    e = e + G.face.z * (vec3(1.0) - e);
+    // stage 2, on encoded values: saturation, luma compression, levels, limit, fill
+    vec3 s = saturate_encoded(c, G.face.x);
+    float l = dot(s, LUMA);
+    s = s - (1.0 - max_luma) * l * (0.75 * s + vec3(0.25 * l));
+    l = dot(s, LUMA);
+    s = s + vec3(G.face.z * (1.0 - l) - (1.0 - G.face.y) * l);
+    vec3 e = clamp(s, vec3(0.0), vec3(min(G.face.w, 1.0)));
     return mix(e, G.face_fill.rgb, G.face_fill.a);
 }
 

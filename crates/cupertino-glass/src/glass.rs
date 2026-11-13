@@ -10,10 +10,10 @@
 //!    opacity ([`GlassParams::blur_sigma`]). The container blurs the backdrop once per distinct deviation of its shapes
 //!    (at most [`BLUR_LEVELS`]); a shape between two of them mixes the two ([`level_mix`]). Then the blur fill (a
 //!    Gaussian of twice the fill radius) is blended in darken, lighten and normal mode at their opacities.
-//! 2. **Colour matrix.** Saturation about the Rec. 709 luma of the encoded colour; then on linear light the `white`
-//!    gain, a per-channel limit at `clamp` and a luminance limit at `max_luma · clamp` that keeps the hue; then,
-//!    encoded, the `black` lift
-//!    `v + black · (1 − v)` and the fill colour over it.
+//! 2. **Colour matrix.** On encoded values: saturation about the Rec. 709 luma `L`; the luma compression
+//!    `c − (1 − max_luma) · L · (0.75 c + 0.25 L)` (a grey `x` becomes `x − (1 − max_luma) · x²`); the levels, one shift
+//!    `black · (1 − L) − (1 − white) · L` added to every channel, `L` the luma after the compression; a limit at
+//!    `clamp`; then the fill colour over it.
 //! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read further out along the field's
 //!    normal, by `−amount · REFRACTION_REACH_PER_AMOUNT · (1 − t)²` points where `t` runs from 0 at the edge to 1 at the
 //!    band's inner side: what lies past the edge bends into the rim.
@@ -242,22 +242,28 @@ pub fn blur_fill(c: Rgb, fill: Rgb, p: &GlassParams) -> Rgb {
     mix(c, fill, b.fill_normal)
 }
 
+/// The luma compression of the face: `c − (1 − max_luma) · L · (0.75 c + 0.25 L)`, `L` the luma of `c`. A grey `x`
+/// becomes `x − (1 − max_luma) · x²`: white comes out at `max_luma`, and below 0.5 the brightest greys come out darker
+/// than slightly dimmer ones.
+pub fn compress_luma(c: Rgb, max_luma: f32) -> Rgb {
+    let (k, l) = (1.0 - max_luma, luma(c));
+    c.map(|v| v - k * l * (0.75 * v + 0.25 * l))
+}
+
+/// The levels of the face: `black · (1 − L) − (1 − white) · L` added to every channel, `L` the luma of `c`.
+pub fn face_levels(c: Rgb, black: f32, white: f32) -> Rgb {
+    let l = luma(c);
+    let shift = black * (1.0 - l) - (1.0 - white) * l;
+    c.map(|v| v + shift)
+}
+
 /// Stage 2: the face colour of the blurred backdrop `c`, with the face's `max_luma` replaced by `max_luma` (it depends
-/// on the shape's size).
+/// on the shape's size): saturation, luma compression and levels on encoded values, then the fill over it.
 pub fn face_color(c: Rgb, p: &GlassParams, max_luma: f32) -> Rgb {
     let f = &p.face;
-    let lin = saturate_encoded(c, f.saturation).map(srgb_decode);
-    let mut lin = lin.map(|v| (v * f.white).min(f.clamp));
-    let limit = max_luma * f.clamp;
-    let y = luma(lin);
-    if y > limit && y > 0.0 {
-        lin = lin.map(|v| v * limit / y);
-    }
-    let enc = lin.map(|v| {
-        let e = srgb_encode(v).min(1.0);
-        e + f.black * (1.0 - e)
-    });
-    mix(enc, [f.fill[0], f.fill[1], f.fill[2]], f.fill[3])
+    let c = compress_luma(saturate_encoded(c, f.saturation), max_luma);
+    let c = face_levels(c, f.black, f.white).map(|v| v.clamp(0.0, f.clamp.min(1.0)));
+    mix(c, [f.fill[0], f.fill[1], f.fill[2]], f.fill[3])
 }
 
 /// Stage 3: where the face is read for a pixel `d` from the edge (negative inside) with outward `normal`, as an
@@ -877,19 +883,69 @@ mod tests {
     }
 
     #[test]
-    fn dark_face_limits_bright_backdrops_and_keeps_saturated_ones() {
+    fn dark_face_compresses_bright_backdrops_and_keeps_saturated_ones() {
         let p = params(true);
-        // a near-white backdrop is held at the luminance limit 0.375 · 1.3083 (≈ 186 of 255), then lifted by 0.08
-        let white = face_color([0.953; 3], &p, p.face.max_luma);
-        let held = srgb_encode(0.375 * 1.308_310_9);
-        let expect = held + 0.08 * (1.0 - held);
-        assert!(close(white[0], expect, 2e-3), "{white:?} vs {expect}");
-        // a saturated blue under the limit keeps its hue and grows more saturated
-        let blue = face_color([0.12, 0.27, 0.93], &p, p.face.max_luma);
-        assert!(blue[2] > 0.93 && blue[0] < 0.2, "{blue:?}");
-        // black is lifted
+        // a near-white grey x = 0.953 is compressed to x − 0.625·x², then the levels add 0.08·(1 − L) + 0.125·L
+        let x = 0.953f32;
+        let l = x - (1.0 - 0.375) * x * x;
+        let expect = l + 0.08 * (1.0 - l) + 0.125 * l;
+        let white = face_color([x; 3], &p, p.face.max_luma);
+        assert!(close(white[0], expect, 1e-5), "{white:?} vs {expect}");
+        assert!(close(white[0] * 255.0, 123.1, 0.2), "{white:?}");
+        // a saturated blue keeps its hue and grows more saturated: about (35, 78, 255)
+        let blue = face_color([0.12, 0.27, 0.93], &p, p.face.max_luma).map(|v| v * 255.0);
+        assert!(
+            close(blue[0], 35.4, 0.5) && close(blue[1], 78.4, 0.5),
+            "{blue:?}"
+        );
+        assert_eq!(blue[2], 255.0);
+        // black is lifted by the black level alone
         let black = face_color([0.0; 3], &p, p.face.max_luma);
-        assert!(close(black[0], 0.08, 1e-4));
+        assert!(close(black[0], 0.08, 1e-6));
+    }
+
+    /// The face's steps on known inputs, each worked out by hand from its formula.
+    #[test]
+    fn the_face_compresses_luma_then_shifts_every_channel_by_its_levels() {
+        // compression: a grey x becomes x − (1 − m)·x², non-monotonic below m = 0.5
+        for (x, m) in [(1.0f32, 0.6f32), (0.5, 0.6), (0.8, 0.358), (1.0, 0.358)] {
+            let c = compress_luma([x; 3], m);
+            assert!(close(c[0], x - (1.0 - m) * x * x, 1e-6), "{x} {m}");
+        }
+        assert!(compress_luma([1.0; 3], 0.358)[0] < compress_luma([0.8; 3], 0.358)[0]);
+        // a colour: c − (1 − m)·L·(0.75c + 0.25L), each channel against the luma of the whole
+        let red = [0.9f32, 0.2, 0.1];
+        let l = 0.2126 * 0.9 + 0.7152 * 0.2 + 0.0722 * 0.1;
+        let c = compress_luma(red, 0.5);
+        for i in 0..3 {
+            assert!(close(
+                c[i],
+                red[i] - 0.5 * l * (0.75 * red[i] + 0.25 * l),
+                1e-6
+            ));
+        }
+        // the levels: one shift black·(1 − L) − (1 − white)·L on every channel
+        let shifted = face_levels([0.6, 0.4, 0.2], 0.1, 0.8);
+        let l = 0.2126 * 0.6 + 0.7152 * 0.4 + 0.0722 * 0.2;
+        let shift = 0.1 * (1.0 - l) - 0.2 * l;
+        assert!(close(shifted[0], 0.6 + shift, 1e-6) && close(shifted[2], 0.2 + shift, 1e-6));
+        // and in order, with the dark regular values: white comes out at 180 over a control up to 60 points high,
+        // and at 116 over a panel whose recipe compresses to 0.358
+        let mut p = params(true);
+        let white = |p: &GlassParams, m: f32| face_color([1.0; 3], p, m)[0] * 255.0;
+        assert!(close(white(&p, 0.6), 180.3, 0.2), "{}", white(&p, 0.6));
+        assert!(close(white(&p, 0.358), 115.8, 0.2), "{}", white(&p, 0.358));
+        let small = GlassParams::new(
+            GlassMode {
+                dark: true,
+                ..GlassMode::default()
+            },
+            44.0,
+        );
+        assert!(close(white(&small, small.face.max_luma), 180.3, 0.2));
+        // the fill lies over it all
+        p.face.fill = [1.0, 1.0, 1.0, 0.5];
+        assert!(close(white(&p, 0.6), (180.28 + 255.0) * 0.5, 0.2));
     }
 
     #[test]
@@ -925,11 +981,11 @@ mod tests {
             p.face.max_luma,
         )
         .map(|v| v * 255.0);
-        // about (61, 41, 220): brighter and bluer than the wallpaper, and the weak green stays well above the lift
+        // about (60, 40, 218): brighter and bluer than the wallpaper, and the weak green stays well above the lift
         // alone (0.08, 20 of 255), which is where saturating linear light would leave it
-        assert!(close(face[0], 61.0, 2.0), "{face:?}");
-        assert!(close(face[1], 41.0, 2.0), "{face:?}");
-        assert!(close(face[2], 220.0, 2.0), "{face:?}");
+        assert!(close(face[0], 60.2, 1.0), "{face:?}");
+        assert!(close(face[1], 40.4, 1.0), "{face:?}");
+        assert!(close(face[2], 217.6, 1.0), "{face:?}");
         // a strong red keeps green and blue near what the backdrop had (54 and 59 of 255), not lifted black
         let red = face_color(
             [227.0 / 255.0, 54.0 / 255.0, 59.0 / 255.0],
@@ -954,7 +1010,7 @@ mod tests {
         };
         let large = |c| face(true, GlassStyle::LargePanel, c);
         // dark: a white page behind comes out a mid grey (about 125) and black a dark grey (about 53); regular glass
-        // of the same size keeps white much lighter (about 184) and black darker (about 36)
+        // of the same size takes white a little darker (about 118) and black much darker (about 35)
         let white = large([245.0; 3]);
         assert!(
             close(white[0], 125.0, 3.0) && close(white[0], white[2], 0.5),
@@ -963,9 +1019,9 @@ mod tests {
         let black = large([15.0; 3]);
         assert!(close(black[0], 53.0, 3.0), "{black:?}");
         let regular_white = face(true, GlassStyle::Regular, [245.0; 3]);
-        assert!(regular_white[0] > 175.0, "{regular_white:?}");
+        assert!(close(regular_white[0], 118.5, 1.0), "{regular_white:?}");
         let regular_black = face(true, GlassStyle::Regular, [15.0; 3]);
-        assert!(regular_black[0] < 40.0, "{regular_black:?}");
+        assert!(close(regular_black[0], 35.5, 1.0), "{regular_black:?}");
         // a saturated red band keeps its colour and much of its brightness: about (205, 69, 73)
         let red = large([229.0, 55.0, 60.0]);
         assert!(close(red[0], 205.0, 4.0), "{red:?}");
@@ -1060,11 +1116,19 @@ mod tests {
     #[test]
     fn light_face_stays_light_and_takes_its_white_fill() {
         let p = params(false);
-        let white = face_color([0.953; 3], &p, p.face.max_luma);
-        assert!(white[0] > 0.95, "{white:?}");
+        // white: compressed to 0.94, the levels take 0.4·0.06 − 0.04·0.94 off, then white at 0.184 over it: 240
+        let white = face_color([1.0; 3], &p, p.face.max_luma);
+        let l = 0.94f32;
+        let expect = l + 0.4 * (1.0 - l) - 0.04 * l;
+        assert!(
+            close(white[0], expect + (1.0 - expect) * 0.184, 1e-5),
+            "{white:?}"
+        );
+        assert!(close(white[0] * 255.0, 239.7, 0.2), "{white:?}");
+        // black: lifted by the black level 0.4, then the white fill over it: 130
         let black = face_color([0.0; 3], &p, p.face.max_luma);
-        // lift 0.43, then white at 0.215 over it
-        assert!(close(black[0], 0.43 * 0.785 + 0.215, 1e-4), "{black:?}");
+        assert!(close(black[0], 0.4 + 0.6 * 0.184, 1e-5), "{black:?}");
+        assert!(close(black[0] * 255.0, 130.2, 0.2), "{black:?}");
     }
 
     #[test]

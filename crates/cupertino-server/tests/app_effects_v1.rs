@@ -1071,9 +1071,10 @@ fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
         mean < 1.0 && max <= 12,
         "GLES glass over sharp content vs CPU model: mean {mean:.3} max {max}"
     );
+    // the dark face compresses the content's contrast, so the offset shows by a dozen levels at most
     assert!(
-        shifted_max > 2 * max.max(6),
-        "the comparison must see a 2 px offset: {shifted_max} vs {max}"
+        shifted_max >= 2 * max.max(5) && shifted_mean > 4.0 * mean.max(0.1),
+        "the comparison must see a 2 px offset: {shifted_max} vs {max}, mean {shifted_mean:.3} vs {mean:.3}"
     );
 }
 

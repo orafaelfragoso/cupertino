@@ -746,6 +746,43 @@ fn veiled_glass_is_a_style_from_version_18() {
     assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
 }
 
+/// A backdrop of version 19 asks for toolbar glass; one of version 18, which the style is not defined for, gets
+/// `invalid_glass` for it.
+#[test]
+fn toolbar_glass_is_a_style_from_version_19() {
+    let style = cupertino_backdrop_v1::GlassStyle::Toolbar;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 19);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(
+        h.backdrops()[0].glass.unwrap().style,
+        cupertino_theme::GlassStyle::Toolbar
+    );
+    assert_eq!(client.backdrop_error(), None);
+    drop(h);
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 18);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    let end = Instant::now() + common::HANG_GUARD;
+    while client.backdrop_error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
+}
+
 /// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.
 #[test]
 fn the_last_of_set_glass_and_set_material_decides_the_look() {
@@ -912,12 +949,15 @@ fn glass_pass_matches_the_cpu_model() {
         (true, options(true, false), GlassStyle::LargePanel),
         (false, options(false, false), GlassStyle::Veiled),
         (true, options(false, false), GlassStyle::Veiled),
+        (false, options(false, false), GlassStyle::Toolbar),
+        (true, options(false, false), GlassStyle::Toolbar),
     ] {
         let large = style == GlassStyle::LargePanel;
         // the style the panel asks for, and the backdrop version that has it
         let wire = match style {
             GlassStyle::LargePanel => Some((cupertino_backdrop_v1::GlassStyle::LargePanel, 10)),
             GlassStyle::Veiled => Some((cupertino_backdrop_v1::GlassStyle::Veiled, 18)),
+            GlassStyle::Toolbar => Some((cupertino_backdrop_v1::GlassStyle::Toolbar, 19)),
             _ => None,
         };
         let appearance = if dark {
@@ -1011,15 +1051,27 @@ fn glass_pass_matches_the_cpu_model() {
         if large {
             continue;
         }
+        let lum = |x: u32, y: u32| {
+            let p = gpu.get_pixel(x, y);
+            p[0] as i32 + p[1] as i32 + p[2] as i32
+        };
+        if style == GlassStyle::Toolbar {
+            // no rim: a line of light along the top edge, fainter along the bottom, over the face between them
+            let (mid, top, bottom) = (x0 as u32 + 200, y0 as u32, y0 as u32 + 159);
+            let face = lum(mid, top + 80);
+            let (lit_top, lit_bottom) = (lum(mid, top), lum(mid, bottom));
+            eprintln!("toolbar line: top {lit_top}, bottom {lit_bottom}, face {face}");
+            assert!(
+                lit_top > lit_bottom && lit_bottom > face,
+                "{lit_top} {lit_bottom} {face}"
+            );
+            continue;
+        }
         // the rim darkens the edge of a mid face most where the edge runs diagonally, at the corners, and only a
         // little along the straight sides (measured on dark glass at rest)
         if !dark || display.reduce_transparency || display.increase_contrast {
             continue;
         }
-        let lum = |x: u32, y: u32| {
-            let p = gpu.get_pixel(x, y);
-            p[0] as i32 + p[1] as i32 + p[2] as i32
-        };
         let (left, top, bottom) = (x0 as u32, y0 as u32, y0 as u32 + 159);
         let mid = left + 200;
         let straight = [

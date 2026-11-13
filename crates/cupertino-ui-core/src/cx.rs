@@ -782,6 +782,15 @@ impl Glass {
         }
     }
 
+    /// The glass of a window's toolbar controls with square corners, on its own, opaque: regular glass with a face
+    /// lifted a little further and a thin line of light along its top and bottom edges.
+    pub fn toolbar() -> Self {
+        Self {
+            style: GlassStyle::Toolbar,
+            ..Self::regular()
+        }
+    }
+
     /// Corners of `radius` points.
     pub fn radius(self, radius: f64) -> Self {
         Self {

@@ -2451,4 +2451,58 @@ mod tests {
         let out = flat_face(false, GlassStyle::Bar, 70.0, muted);
         assert!(out[2] - out[0] > muted[2] - muted[0], "{out:?}");
     }
+
+    /// A toolbar control's glass over the window's flat background: its face stands further from the background than
+    /// regular glass does (31 comes out at 58 rather than 51 in the dark appearance, white at 245 rather than 240 in the
+    /// light), a thin line of light runs along its top, fainter along its bottom and not at all across the middle of its
+    /// sides, and no rim darkens its edge.
+    #[test]
+    fn a_toolbar_control_lifts_its_face_and_lights_its_top_edge() {
+        for (dark, bg, regular_face, toolbar_face) in
+            [(true, 31.0, 51.0, 58.0), (false, 255.0, 240.0, 245.0)]
+        {
+            let shade = |style| {
+                let c = Container::new(
+                    vec![GlassShape::new([0.0, 0.0, 110.0, 36.0], 18.0)],
+                    0.0,
+                    GlassMode {
+                        dark,
+                        style,
+                        ..GlassMode::default()
+                    },
+                );
+                let flat = move |_: usize, _: [f32; 2]| [bg / 255.0; 3];
+                move |x: f32, y: f32| {
+                    let (col, a) = c.shade([x, y], &flat);
+                    col[0] * 255.0 * a + bg * (1.0 - a)
+                }
+            };
+            let regular = shade(GlassStyle::Regular);
+            let toolbar = shade(GlassStyle::Toolbar);
+            let face = toolbar(55.0, 18.0);
+            assert!(
+                (regular(55.0, 18.0) - regular_face).abs() <= 1.0,
+                "{}",
+                regular(55.0, 18.0)
+            );
+            assert!((face - toolbar_face).abs() <= 1.0, "{face}");
+            // the line of light a quarter point inside the top and the bottom, the top the brighter
+            let (top, bottom) = (toolbar(55.0, 0.25), toolbar(55.0, 35.75));
+            assert!(top >= bottom && bottom > face, "{top} {bottom} {face}");
+            if dark {
+                assert!(top > face + 40.0 && bottom > face + 15.0, "{top} {bottom}");
+            }
+            // across the middle of a side it barely shows, and regular glass draws no such line at all
+            assert!(toolbar(0.75, 18.0) - face < 4.0, "{}", toolbar(0.75, 18.0));
+            assert!(regular(55.0, 0.25) <= regular(55.0, 18.0) + 1.0);
+            // no rim darkens the toolbar's edge: nothing inside it (past the antialiased outermost half point) is
+            // darker than its face
+            for i in 0..12 {
+                let d = 0.75 + i as f32 * 0.5;
+                for v in [toolbar(55.0, d), toolbar(d, 18.0)] {
+                    assert!(v >= face - 1.0, "{d}: {v}");
+                }
+            }
+        }
+    }
 }

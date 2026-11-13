@@ -1472,9 +1472,22 @@ fn window_decorations(
     out
 }
 
+/// What a window snapshot shows where the window's materials are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotBackdrop {
+    /// A translucent fill per outline stands in for its materials: nothing behind the window is kept, so the picture
+    /// can move and scale on its own.
+    Fills,
+    /// The materials themselves, each over an opaque ground of the wallpaper's average colour laid inside the window's
+    /// outline: every material keeps its own colour and its edges stay where they are drawn, so the picture matches the
+    /// window as it shows and can fade over the window's own redrawn picture.
+    Ground,
+}
+
 /// Render a window (decorations, content, optionally its shadow) at its natural size into a new
 /// texture covering `natural` grown by `margin` points. Returns the texture and the captured
 /// rectangle (global logical points).
+#[allow(clippy::too_many_arguments)]
 pub fn capture_window(
     renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
@@ -1483,6 +1496,7 @@ pub fn capture_window(
     active: bool,
     margin: f64,
     shadow: bool,
+    backdrop: SnapshotBackdrop,
 ) -> Option<(smithay::backend::renderer::gles::GlesTexture, Rect)> {
     if p.for_capture && crate::control::protected_surface(entry.surface()) {
         return None;
@@ -1511,12 +1525,19 @@ pub fn capture_window(
         corner_cap: None,
     };
     let deco = window_decorations(p, entry, &plan, active);
-    // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would
-    // leave its area transparent: the fallback fill stands in
     // the snapshot holds the window as it shows, its popups over it
     let mut pieces = window_popup_elements(p, entry, &plan);
     pieces.extend(window_elements(p, entry, &plan, active, shadow, deco));
-    let pieces = snapshot_fills(p, pieces);
+    // a material samples what lies below it and keeps the target's alpha, so on the clear snapshot it would leave
+    // its area transparent: either the fallback fill stands in, or the window's ground is laid under it
+    let pieces = match backdrop {
+        SnapshotBackdrop::Fills => snapshot_fills(p, pieces),
+        SnapshotBackdrop::Ground => {
+            let mut pieces = pieces;
+            pieces.push(snapshot_ground(p, entry, natural));
+            pieces
+        }
+    };
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
     let composed = stack.finish(p);
@@ -1537,6 +1558,35 @@ pub fn capture_window(
             None
         }
     }
+}
+
+/// The opaque ground a [`SnapshotBackdrop::Ground`] snapshot lays under the window, back-most: the wallpaper's
+/// average colour inside the window's outline at `natural` (global logical points), so the window's materials read
+/// a backdrop as they do on screen and nothing outside the outline is covered.
+fn snapshot_ground(p: &SceneParams<'_>, entry: &WindowEntry, natural: Rect) -> Piece {
+    let style = p.config.window;
+    let radius = if entry.styled(style.style_client_decorated) {
+        style.corner_radius
+    } else {
+        0.0
+    };
+    let [r, g, b] = ground_colour(p.overlays.wallpaper.tint, p.config.is_dark());
+    rrect_item(
+        SceneKind::Backdrop,
+        entry.id.0,
+        local(natural, &p.rect),
+        radius,
+        style.continuous_corners,
+        [r, g, b, 1.0],
+        None,
+        1.0,
+    )
+}
+
+/// The colour of a snapshot's ground: the wallpaper's average (`measured`, when an image's was measured), else the
+/// procedural wallpaper's.
+fn ground_colour(measured: Option<[f32; 3]>, dark: bool) -> [f32; 3] {
+    measured.unwrap_or_else(|| wallpaper_tint(dark))
 }
 
 /// The fills that stand in for the materials of a window snapshot, in `pieces`' order, each at its first material's
@@ -1764,7 +1814,16 @@ fn minimize_elements(
     if natural.w < 1.0 || natural.h < 1.0 {
         return None;
     }
-    let (texture, _) = capture_window(renderer, p, entry, natural, active, 0.0, false)?;
+    let (texture, _) = capture_window(
+        renderer,
+        p,
+        entry,
+        natural,
+        active,
+        0.0,
+        false,
+        SnapshotBackdrop::Fills,
+    )?;
     let owner = p.res.snapshots.insert(texture);
     let effect = MinimizeEffect::new(
         kind,

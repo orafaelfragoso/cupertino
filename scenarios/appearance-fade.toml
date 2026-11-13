@@ -1,0 +1,6 @@
+title = "Files changing appearance, halfway through the fade (motion slowed to a quarter)"
+programs = ["cupertino-files"]
+after = 7
+scales = [1, 2]
+appearances = ["light"]
+args = ["--time-scale", "0.25", "--spawn", "cupertino-files", "--action", "6:toggle-appearance"]

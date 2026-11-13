@@ -34,7 +34,7 @@ use smithay::utils::Rectangle;
 use smithay::wayland::shm::{with_buffer_contents_mut, BufferAccessError};
 
 use super::{capture_client, Placement, Source};
-use crate::render::scene::capture_window;
+use crate::render::scene::{capture_window, SnapshotBackdrop};
 use crate::state::Cupertino;
 
 /// The shm formats a frame is copied into. Both keep blue, green, red, alpha (or unused) in memory order.
@@ -467,7 +467,16 @@ impl Cupertino {
                     f64::from(geo.size.w) + entry.insets().horizontal(),
                     f64::from(geo.size.h) + entry.insets().vertical(),
                 );
-                capture_window(r, &mut p, entry, natural, active, 0.0, false)
+                capture_window(
+                    r,
+                    &mut p,
+                    entry,
+                    natural,
+                    active,
+                    0.0,
+                    false,
+                    SnapshotBackdrop::Fills,
+                )
             })
             .flatten()
             .context("the window could not be rendered")?;

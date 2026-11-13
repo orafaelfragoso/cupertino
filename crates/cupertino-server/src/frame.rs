@@ -286,10 +286,12 @@ impl Cupertino {
     }
 
     /// Render window `id` at its natural size with its shadow into a texture (`None` when it is not
-    /// drawn right now). Returns the texture, the captured area and the window frame's origin.
+    /// drawn right now), its materials as `backdrop` says. Returns the texture, the captured area and the window frame's
+    /// origin.
     fn capture_snapshot(
         &mut self,
         id: cupertino_wm::WindowId,
+        backdrop: crate::render::scene::SnapshotBackdrop,
     ) -> Option<(
         crate::render::snapshots::SnapshotOwner,
         cupertino_wm::Rect,
@@ -345,6 +347,7 @@ impl Cupertino {
                     active,
                     shadow_reach,
                     true,
+                    backdrop,
                 )?;
                 Some((p.res.snapshots.insert(tex), area, (natural.x, natural.y)))
             })
@@ -393,7 +396,9 @@ impl Cupertino {
         {
             return;
         }
-        if let Some((owner, area, origin)) = self.capture_snapshot(id) {
+        if let Some((owner, area, origin)) =
+            self.capture_snapshot(id, crate::render::scene::SnapshotBackdrop::Fills)
+        {
             self.fx.store_snapshot(id, owner, area, origin, now);
         }
     }
@@ -422,7 +427,7 @@ impl Cupertino {
             (f.x, f.y)
         };
         let captured = if live {
-            self.capture_snapshot(id)
+            self.capture_snapshot(id, crate::render::scene::SnapshotBackdrop::Fills)
         } else {
             None
         };
@@ -448,7 +453,11 @@ impl Cupertino {
             let Some(output) = self.wm.window(id).map(|w| w.output) else {
                 continue;
             };
-            if let Some((snapshot, rect, _)) = self.capture_snapshot(id) {
+            // the window as it shows, its materials over a ground of their own: the picture fades over the redrawn
+            // window in place, so a stand-in fill would flatten its sidebar and content into one grey at once
+            if let Some((snapshot, rect, _)) =
+                self.capture_snapshot(id, crate::render::scene::SnapshotBackdrop::Ground)
+            {
                 self.fx.start_close(
                     id,
                     output,

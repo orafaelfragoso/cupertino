@@ -10,6 +10,8 @@ mod activation_env;
 mod app_chooser;
 #[path = "app_effects_v1.rs"]
 mod app_effects_v1;
+#[path = "appearance_fade.rs"]
+mod appearance_fade;
 #[path = "asset-isolation.rs"]
 mod asset_isolation;
 #[path = "backdrop_tone.rs"]

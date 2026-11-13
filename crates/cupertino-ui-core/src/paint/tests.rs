@@ -1989,6 +1989,11 @@ fn the_sidebar_subdued_module_snippet_and_veiled_glass_are_regular_glass_of_thei
             GlassStyle::Veiled,
             "VeiledGlass",
         ),
+        (
+            crate::cx::Glass::toolbar(),
+            GlassStyle::Toolbar,
+            "ToolbarGlass",
+        ),
     ] {
         assert_eq!(glass.style, style);
         assert_eq!(glass.style.material(), name);

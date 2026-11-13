@@ -77,6 +77,17 @@ impl GlassRole {
         }
     }
 
+    /// The glass a role of [`GlassMaterial::Glass`] asks for: a toolbar control's glass of its own, lifted further from
+    /// the content with a line of light along its top, and regular glass for the rest.
+    pub fn glass(self) -> Glass {
+        match self {
+            GlassRole::ToolbarGroup => Glass::toolbar(),
+            GlassRole::SidebarPanel | GlassRole::GlassButton | GlassRole::ThumbLens => {
+                Glass::regular()
+            }
+        }
+    }
+
     /// The glass container the role's nodes join and its blend width in points: nodes of one window in the same
     /// container blend into one shape where they come closer than the width.
     pub const fn container(self) -> (u32, f64) {
@@ -136,13 +147,10 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
         }
         GlassMaterial::Glass => {
             let (container, spacing) = role.container();
-            if cx.glass(
-                Glass::regular()
-                    .radius(radius)
-                    .container(container, spacing),
-            ) {
-                // with Increase Contrast the toolkit lays a firmer rim over the compositor's glass
-                paint_edge(cx, rect, radius);
+            if cx.glass(role.glass().radius(radius).container(container, spacing)) {
+                // the toolkit lays a toolbar control's outline, and with Increase Contrast a firmer rim, over the
+                // compositor's glass
+                paint_edge(cx, role, rect, radius);
                 return true;
             }
             // without the desktop's glass the toolkit paints its own
@@ -179,20 +187,51 @@ fn shows_button_glass(cx: &PaintCx<'_>, rect: Rect) -> bool {
 
 /// The rim the toolkit lays over a floating control's glass with Increase Contrast in the light appearance, at its sides
 /// and at its top and bottom: a dark line on the outermost device pixel of the shape, strongest across the middle of the
-/// sides. At rest the compositor's glass draws its own outline, which follows the brightness of the face and of what
-/// lies around it.
+/// sides.
 const EDGE_RIM_CONTRAST_SIDES: f32 = 0.5;
 const EDGE_RIM_CONTRAST_ENDS: f32 = 0.3;
+/// The outline of a toolbar control's glass at rest, as a share of black on the outermost device pixel of its shape, at
+/// the middle of its sides and at its top and bottom. Light: a grey line at the sides and a faint one at the ends, so a
+/// face of 245 over white keeps its sides at 181 and its top and bottom at 228. Dark: a dark line along the sides only,
+/// which leaves the top and bottom to the glass's line of light.
+const TOOLBAR_RIM_LIGHT: (f32, f32) = (0.26, 0.07);
+const TOOLBAR_RIM_DARK: (f32, f32) = (0.6, 0.0);
+/// The faint shade a toolbar control casts just below itself in the light appearance, as a share of black, its offset
+/// down and its blur in points, cut out of the control's shape so it never dims the glass.
+const TOOLBAR_SHADE: f32 = 0.015;
+const TOOLBAR_SHADE_OFFSET: f64 = 4.0;
+const TOOLBAR_SHADE_BLUR: f64 = 4.5;
+/// How far past the shape the shade may reach, in points.
+const TOOLBAR_SHADE_REACH: f64 = TOOLBAR_SHADE_OFFSET + 3.0 * TOOLBAR_SHADE_BLUR;
 
-/// The firmer rim the toolkit lays over the compositor's glass of a floating control with Increase Contrast in the
-/// light appearance ([`EDGE_RIM_CONTRAST_SIDES`]); the dark appearance's glass stands out by its face, and at rest the
-/// glass's own outline serves.
-fn paint_edge(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
-    let theme = &cx.env().theme;
-    if theme.preferences.appearance.is_dark() || !theme.preferences.appearance.is_high_contrast() {
-        return;
+/// The rim of a floating control's glass as a share of black `(sides, ends)`, or none: the firmer one with Increase
+/// Contrast in the light appearance, else a toolbar control's outline ([`TOOLBAR_RIM_LIGHT`], [`TOOLBAR_RIM_DARK`]);
+/// any other glass draws no outline of its own.
+fn edge_rim(theme: &cupertino_ui_theme::ThemeTokens, role: GlassRole) -> Option<(f32, f32)> {
+    let appearance = theme.preferences.appearance;
+    if !appearance.is_dark() && appearance.is_high_contrast() {
+        Some((EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS))
+    } else if role == GlassRole::ToolbarGroup {
+        Some(if appearance.is_dark() {
+            TOOLBAR_RIM_DARK
+        } else {
+            TOOLBAR_RIM_LIGHT
+        })
+    } else {
+        None
     }
-    let (sides, ends) = (EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS);
+}
+
+/// The rim the toolkit lays over the compositor's glass of a floating control ([`edge_rim`]), and in the light
+/// appearance the faint shade below a toolbar control ([`TOOLBAR_SHADE`]).
+fn paint_edge(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) {
+    let theme = &cx.env().theme;
+    let Some((sides, ends)) = edge_rim(theme, role) else {
+        return;
+    };
+    if role == GlassRole::ToolbarGroup && !theme.preferences.appearance.is_dark() {
+        paint_toolbar_shade(cx, rect, radius);
+    }
     let scale = cx.env().scale.max(1.0);
     let px = 1.0 / scale;
     let black = |a| Color::new(0.0, 0.0, 0.0, a);
@@ -213,6 +252,30 @@ fn paint_edge(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
             ],
         },
     });
+}
+
+/// The faint shade below a toolbar control in the light appearance, cut out of its shape.
+fn paint_toolbar_shade(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
+    let mut outside = crate::tabs::rounded(rect.inset(Insets::uniform(-TOOLBAR_SHADE_REACH)), 0.0);
+    outside.extend(crate::tabs::rounded(rect, radius));
+    cx.push(PaintOp::PushClip(Shape::Path {
+        verbs: outside,
+        fill_rule: cupertino_ui_render::FillRule::EvenOdd,
+    }));
+    cx.push(PaintOp::PushLayer {
+        opacity: 1.0,
+        effects: vec![cupertino_ui_render::Effect::DropShadow {
+            offset: cupertino_geometry::Point::new(0.0, TOOLBAR_SHADE_OFFSET),
+            blur: TOOLBAR_SHADE_BLUR,
+            color: Color::new(0.0, 0.0, 0.0, TOOLBAR_SHADE),
+        }],
+    });
+    cx.push(PaintOp::Fill {
+        shape: Shape::RoundedRect { rect, radius },
+        paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
+    });
+    cx.push(PaintOp::PopLayer);
+    cx.push(PaintOp::PopClip);
 }
 
 /// The painted glass: in the light appearance a soft shade first, then the body and its rim.

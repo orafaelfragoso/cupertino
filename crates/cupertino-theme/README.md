@@ -111,7 +111,10 @@ flag and its Increase Contrast option.
   Snippet glass (`GlassStyle::Snippet`) has a faint blur (the first level at 0.2666) under the 8 pt blur fill, bends 24
   over 12 pt and veils its face white at 0.5 (light) or black at 0.4 (dark). Veiled glass (`GlassStyle::Veiled`) is the
   clear face under the blur fill, bending 34.56 over 19.2 pt, and `GlassParams::veil` darkens it with black from 0.2 at
-  the top of its shapes to 1 at their bottom. Dense glass (`GlassStyle::Dense`, menus and popovers) is
+  the top of its shapes to 1 at their bottom. Toolbar glass (`GlassStyle::Toolbar`, a window's toolbar controls) is the
+  regular recipe of its size with black 0.11 (dark) or white 0.99 (light), no rim and no edge line, and a line of light
+  0.45 pt wide a quarter point inside its edge (strength 0.7 dark, 0.25 light) on arcs 140° wide about the top, half as
+  strong at the bottom, over a glow eight times as wide at 0.12 of its strength. Dense glass (`GlassStyle::Dense`, menus and popovers) is
   the regular recipe of its size with its own blur (radius 6 pt up to a short side of 60, 12 pt from 120, the first
   level at full opacity), bending by 0.4 of its short side over 0.2 of it (at most 60 and 20) and a ring shadow of 0.06,
   over a face that washes the backdrop out: black lifted by 0.8 under a faint light grey veil (light), saturation 1.3,

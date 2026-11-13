@@ -209,8 +209,9 @@ from the application's model and reports changes as messages.
   buttons, a segment with a menu as a pop-up button that opens on the press; a group with an empty label adds no
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
-  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. Each control's glass marks
-  its own edge (the compositor's rim and edge line, which follow the brightness of the face and of what lies around it). `NavigationStack` puts its back and
+  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. Each control's glass gets an
+  outline from the toolkit: a grey rim on its outermost device pixel (26 % black at the sides, 7 % at the top and bottom)
+  and a faint shade below it in the light appearance, a dark rim along its sides (60 % black) in the dark one. `NavigationStack` puts its back and
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the
   row takes the pointer first); the page lays out below the row with `unobscured_insets(mode)`, the top the window's
   chrome covers (52 pt for the unified and sidebar modes, 40 pt compact, none for a title bar above the content), so a
@@ -231,13 +232,13 @@ from the application's model and reports changes as messages.
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.
 - **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and
-  `GlassRole::material` says what draws it; a toolbar group is regular glass (`PaintCx::glass`) in one container
+  `GlassRole::material` says what draws it; a toolbar group is toolbar glass (`Glass::toolbar`, through `GlassRole::glass`) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
-  soft shade in the light appearance). At rest the compositor's glass marks its own edge; with Increase Contrast in the
-  light appearance the toolkit lays its own over it: a dark rim on the outermost device pixel, 50 % black at the sides
-  and 30 % at the top and bottom. A glass button is regular glass of its own (container 0) where that glass can show,
+  soft shade in the light appearance). At rest the toolkit outlines a toolbar group's glass (above); with Increase Contrast
+  in the light appearance it lays a firmer rim over any floating control's glass: a dark rim on the outermost device
+  pixel, 50 % black at the sides and 30 % at the top and bottom. A glass button is regular glass of its own (container 0) where that glass can show,
   its body filling its node, without Reduce Transparency: on a material the window shows (a sidebar, a translucent
   window background), and over the window's own content, as the button is a raised node (`Widget::raised`) whose glass
   lies between the window's raised layer and its content, so the content shows through it; its label then takes the

@@ -91,6 +91,10 @@ pub enum GlassStyle {
     /// Clear glass under a soft blur fill, veiled black from a fifth at its top to fully at its bottom, so it reads as
     /// a dark gradient that keeps the backdrop's colour at the top.
     Veiled,
+    /// The glass of a window's toolbar controls: regular glass with a face lifted a little further from the content
+    /// under it, a thin line of light along its top edge (fainter along its bottom) over a soft glow, and no rim or edge
+    /// line of its own, as the toolkit draws the control's outline.
+    Toolbar,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -725,6 +729,27 @@ const BAR_GLOW_MATRIX_DARK: ColorMatrix = [
     0.0, 0.0, 0.0, 1.0, 0.0,
 ];
 
+/// The toolbar face: the dark one lifts black by 0.11 rather than 0.08, so the window background under a control (31 of
+/// 255) comes out at 58; the light one keeps white at 0.99, so a white background comes out at 245.
+const TOOLBAR_BLACK_DARK: f32 = 0.11;
+const TOOLBAR_WHITE_LIGHT: f32 = 0.99;
+/// The toolbar's line of light: strength in the dark and the light appearance (the light face is near white, so the light
+/// added to it is brighter and a weaker line lifts it as far), half-width and middle (points from the edge, inside for a
+/// negative value), the arcs' angular width (lit to the corners' diagonals, dark across the middle of the sides) and
+/// the bottom's strength as a share of the top's.
+const TOOLBAR_GLOW_DARK: f32 = 0.7;
+const TOOLBAR_GLOW_LIGHT: f32 = 0.25;
+const TOOLBAR_GLOW_HEIGHT: f32 = 0.45;
+const TOOLBAR_GLOW_OFFSET: f32 = -0.25;
+const TOOLBAR_GLOW_SPREAD: f32 = 140.0 * std::f32::consts::PI / 180.0;
+const TOOLBAR_GLOW_FILL: f32 = 0.5;
+/// The soft glow under the toolbar's line of light: eight times as wide, on arcs as wide, at 0.12 of its strength.
+const TOOLBAR_GLOW_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: 8.0,
+    spread_scale: 1.0,
+    amount_scale: 0.12,
+};
+
 /// The face of dense glass, before its size sets the dark face's luma compression. Dark: a little more colour, black
 /// lifted by 0.15 and white dimmed to 0.3, so any backdrop comes through as a dark smoky grey of it. Light: black lifted
 /// by 0.8 and white dimmed a little under a faint light grey veil, so any backdrop comes through as a pale wash of it.
@@ -980,6 +1005,7 @@ impl GlassParams {
             GlassStyle::SubduedModule => Self::subdued_module(dark, s),
             GlassStyle::Snippet => Self::snippet(dark, s),
             GlassStyle::Veiled => Self::veiled(dark, s),
+            GlassStyle::Toolbar => Self::toolbar(dark, s),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -1010,7 +1036,8 @@ impl GlassParams {
                 | GlassStyle::Sidebar
                 | GlassStyle::SubduedModule
                 | GlassStyle::Snippet
-                | GlassStyle::Veiled => {
+                | GlassStyle::Veiled
+                | GlassStyle::Toolbar => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -1453,6 +1480,35 @@ impl GlassParams {
         };
         p.shadow.amount = BAR_SHADOW_AMOUNT;
         p.shadow.height = BAR_SHADOW_HEIGHT;
+        p
+    }
+
+    /// The toolbar glass: the regular recipe of its size with a face lifted further ([`TOOLBAR_BLACK_DARK`],
+    /// [`TOOLBAR_WHITE_LIGHT`]), a thin line of light along its top edge and a fainter one along its bottom over a soft
+    /// glow, and neither the rim nor the edge line, which the toolkit draws along the control's outline.
+    fn toolbar(dark: bool, s: f32) -> Self {
+        let mut p = Self::regular(dark, s);
+        if dark {
+            p.face.black = TOOLBAR_BLACK_DARK;
+        } else {
+            p.face.white = TOOLBAR_WHITE_LIGHT;
+        }
+        p.highlight = GlassHighlight {
+            amount: 0.0,
+            spread: TOOLBAR_GLOW_SPREAD,
+            curvature: 1.0,
+            glow_amount: if dark {
+                TOOLBAR_GLOW_DARK
+            } else {
+                TOOLBAR_GLOW_LIGHT
+            },
+            glow_height: TOOLBAR_GLOW_HEIGHT,
+            glow_offset: TOOLBAR_GLOW_OFFSET,
+            glow_fill: TOOLBAR_GLOW_FILL,
+            diffuse: TOOLBAR_GLOW_DIFFUSE,
+            ..p.highlight
+        };
+        p.shadow.edge_line = 0.0;
         p
     }
 
@@ -2419,6 +2475,51 @@ mod tests {
                     [0.0; 2],
                     "{style:?}"
                 );
+            }
+        }
+    }
+
+    /// Toolbar glass is the regular glass of its size with the face lifted further (black 0.11 in the dark appearance,
+    /// white 0.99 in the light), a line of light along its top and a fainter one along its bottom in place of the rim,
+    /// and no edge line.
+    #[test]
+    fn toolbar_glass_is_regular_glass_with_a_lifted_face_and_a_line_of_light() {
+        for dark in [false, true] {
+            for side in [28.0, 36.0, 52.0] {
+                let regular = GlassParams::new(mode(dark, GlassStyle::Regular), side);
+                let toolbar = GlassParams::new(mode(dark, GlassStyle::Toolbar), side);
+                assert_eq!(
+                    (toolbar.blur, toolbar.refraction, toolbar.bleed),
+                    (regular.blur, regular.refraction, regular.bleed)
+                );
+                let mut face = regular.face;
+                if dark {
+                    face.black = 0.11;
+                } else {
+                    face.white = 0.99;
+                }
+                assert_eq!(toolbar.face, face);
+                let h = toolbar.highlight;
+                assert_eq!(h.amount, 0.0, "no rim");
+                assert!(h.glow_amount > 0.0 && h.glow_height > 0.0);
+                assert_eq!((h.angle, h.glow_fill), (HIGHLIGHT_ANGLE, 0.5));
+                assert_eq!(toolbar.shadow.edge_line, 0.0);
+                assert!(regular.shadow.edge_line > 0.0);
+            }
+            // the accessibility recipes take the toolbar like regular glass
+            for (rt, ic) in [(true, false), (false, true)] {
+                let with = |style| {
+                    GlassParams::new(
+                        GlassMode {
+                            reduce_transparency: rt,
+                            increase_contrast: ic,
+                            ..mode(dark, style)
+                        },
+                        36.0,
+                    )
+                };
+                let (regular, toolbar) = (with(GlassStyle::Regular), with(GlassStyle::Toolbar));
+                assert_eq!((toolbar.face, toolbar.blur), (regular.face, regular.blur));
             }
         }
     }

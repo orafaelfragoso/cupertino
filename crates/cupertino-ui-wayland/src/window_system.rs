@@ -206,6 +206,7 @@ fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
         GlassStyle::SubduedModule => cupertino_protocol_app::GlassStyle::SubduedModule,
         GlassStyle::Snippet => cupertino_protocol_app::GlassStyle::Snippet,
         GlassStyle::Veiled => cupertino_protocol_app::GlassStyle::Veiled,
+        GlassStyle::Toolbar => cupertino_protocol_app::GlassStyle::Toolbar,
     }
 }
 
@@ -1937,6 +1938,7 @@ mod tests {
         );
         assert_eq!(protocol_style(GlassStyle::Snippet), Wire::Snippet);
         assert_eq!(protocol_style(GlassStyle::Veiled), Wire::Veiled);
+        assert_eq!(protocol_style(GlassStyle::Toolbar), Wire::Toolbar);
         assert_eq!(protocol_style(GlassStyle::Module), Wire::Module);
         // a material named for them stands for that glass
         assert_eq!(GlassStyle::of_material("CardGlass"), Some(GlassStyle::Card));

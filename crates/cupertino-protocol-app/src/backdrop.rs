@@ -71,6 +71,9 @@ pub enum GlassStyle {
     Snippet,
     /// Clear glass veiled black from a fifth at its top to fully at its bottom.
     Veiled,
+    /// The glass of a window's toolbar controls: regular glass with a face lifted a little further and a thin line of
+    /// light along its top and bottom edges.
+    Toolbar,
 }
 
 impl GlassStyle {
@@ -169,7 +172,8 @@ impl Backdrop {
     /// (regular glass before version 13) and [`GlassStyle::Track`] as clear glass, and one before version 16 draws
     /// [`GlassStyle::Popover`] as regular glass, and one before version 17 draws [`GlassStyle::Switcher`] as regular
     /// glass; one before version 18 draws [`GlassStyle::SubduedModule`] as module glass, [`GlassStyle::Veiled`] as clear
-    /// glass and [`GlassStyle::Sidebar`] and [`GlassStyle::Snippet`] as regular glass.
+    /// glass and [`GlassStyle::Sidebar`] and [`GlassStyle::Snippet`] as regular glass; one before version 19 draws
+    /// [`GlassStyle::Toolbar`] as regular glass.
     pub fn set_glass(&self, style: GlassStyle, container: u32, spacing: f64) -> Result<(), Error> {
         if !(spacing.is_finite() && spacing >= 0.0) {
             return Err(Error::InvalidGlass);
@@ -207,6 +211,7 @@ impl Backdrop {
             | GlassStyle::SubduedModule
             | GlassStyle::Snippet
             | GlassStyle::Veiled => sidebar_style(style, self.proxy.version()),
+            GlassStyle::Toolbar => toolbar_style(self.proxy.version()),
         };
         self.proxy.set_glass(style, container, spacing);
         Ok(())
@@ -243,6 +248,8 @@ const POPOVER_VERSION: u32 = 16;
 const SWITCHER_VERSION: u32 = 17;
 /// The version of `cupertino_backdrop_v1` that has the sidebar, subdued module, snippet and veiled glass styles.
 const SIDEBAR_VERSION: u32 = 18;
+/// The version of `cupertino_backdrop_v1` that has the toolbar glass style.
+const TOOLBAR_VERSION: u32 = 19;
 
 /// The wire style a server of `version`, older than [`CARD_VERSION`], draws in place of the card or the track: the
 /// card as dense glass (regular glass before [`DENSE_VERSION`]), the track as clear glass.
@@ -286,6 +293,15 @@ fn sidebar_style(style: GlassStyle, version: u32) -> WireStyle {
         GlassStyle::SubduedModule if version >= DENSE_VERSION => WireStyle::Module,
         GlassStyle::Veiled => WireStyle::Clear,
         _ => WireStyle::Regular,
+    }
+}
+
+/// The wire style of the toolbar on a server of `version`: one before [`TOOLBAR_VERSION`] draws it as regular glass.
+fn toolbar_style(version: u32) -> WireStyle {
+    if version < TOOLBAR_VERSION {
+        WireStyle::Regular
+    } else {
+        WireStyle::Toolbar
     }
 }
 
@@ -378,6 +394,13 @@ mod tests {
         );
         assert_eq!(sidebar_style(GlassStyle::Snippet, 17), WireStyle::Regular);
         assert_eq!(sidebar_style(GlassStyle::Veiled, 17), WireStyle::Clear);
+    }
+
+    #[test]
+    fn an_older_server_draws_the_toolbar_as_regular_glass() {
+        assert_eq!(toolbar_style(19), WireStyle::Toolbar);
+        assert_eq!(toolbar_style(18), WireStyle::Regular);
+        assert_eq!(toolbar_style(6), WireStyle::Regular);
     }
 
     #[test]

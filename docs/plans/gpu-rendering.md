@@ -291,9 +291,9 @@ Gate:
 
 ## Documentation
 
-- [ ] Design page in the book, linked from `SUMMARY.md`.
-- [ ] Rules in `docs/architecture/rendering.md`.
-- [ ] Rendering paragraph of `docs/src/architecture.md`, the roadmap section and `docs/src/displays-and-gpus.md` point
+- [x] Design page in the book, linked from `SUMMARY.md`.
+- [x] Rules in `docs/architecture/rendering.md`.
+- [x] Rendering paragraph of `docs/src/architecture.md`, the roadmap section and `docs/src/displays-and-gpus.md` point
       here.
 - [ ] Each step that changes behaviour updates the pages it affects (`apps-on-kit.md`, `kit-getting-started.md`,
       `displays-and-gpus.md`, crate READMEs) in the same change.

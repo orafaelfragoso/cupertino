@@ -12,7 +12,7 @@ layout(std140) uniform Glass {
     vec4 uv_x;
     vec4 uv_y;
     vec4 info;        // shapes, blend width, antialiasing width, opacity
-    vec4 levels;      // unused (0, 0), target w, h
+    vec4 levels;      // the edge line's strength, unused (0), target w, h
     vec4 fill;        // blur fill: darken, lighten, normal
     vec4 face;        // saturation, white, black, clamp
     vec4 face_fill;
@@ -196,15 +196,35 @@ float outside_alpha(vec2 p, float d) {
     return min(drop + line, 1.0);
 }
 
+// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
+// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over black
+float edge_line(vec2 p, float d, float pos) {
+    float band = clamp(1.5 - d, 0.0, 1.0);
+    if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
+    vec3 b = blurred(uv_of(p), pos);
+    return min(G.levels.x, 1.0) * rim_brightness(dot(b, LUMA)) * band;
+}
+
+// stage 7: what the shape draws outside itself, the drop shadow and the outline in the shadow's colour with the edge
+// line over them in black: its colour and alpha
+vec4 outside(vec2 p, float d, float pos) {
+    float shadow = outside_alpha(p, d);
+    float line = edge_line(p, d, pos);
+    float a = line + shadow * (1.0 - line);
+    if (a <= 0.0) { return vec4(G.shadow_color.rgb, 0.0); }
+    return vec4(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
+}
+
 void main() {
     vec2 p = v_px;
     vec4 fa;
     vec4 fb;
     float d = field(p, fa, fb);
     if (d > 0.5) {
-        float a = outside_alpha(p, d) * G.info.w;
+        vec4 o = outside(p, d, fb.z);
+        float a = o.a * G.info.w;
         if (a <= 0.0) { discard; }
-        frag_color = vec4(G.shadow_color.rgb, a);
+        frag_color = vec4(o.rgb, a);
         return;
     }
     vec2 g = vec2(field_d(p + vec2(0.5, 0.0)) - field_d(p - vec2(0.5, 0.0)),
@@ -265,8 +285,9 @@ void main() {
     }
     // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
     float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
-    float under = (1.0 - cov) * outside_alpha(p, d);
+    vec4 o = outside(p, d, fb.z);
+    float under = (1.0 - cov) * o.a;
     float a = cov + under;
-    c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + G.shadow_color.rgb * under) / a : c;
+    c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + o.rgb * under) / a : c;
     frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), a * G.info.w);
 }

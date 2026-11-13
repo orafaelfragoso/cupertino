@@ -6,7 +6,7 @@ struct Glass {
   uv_x: vec4<f32>,        // u = a·x + b·y + c
   uv_y: vec4<f32>,        // v = d·x + e·y + f
   info: vec4<f32>,        // shapes, blend width, antialiasing width, opacity
-  levels: vec4<f32>,      // unused (0, 0), target w, h
+  levels: vec4<f32>,      // the edge line's strength, unused (0), target w, h
   fill: vec4<f32>,        // blur fill: darken, lighten, normal
   face: vec4<f32>,        // saturation, white, black, clamp
   face_fill: vec4<f32>,
@@ -207,15 +207,35 @@ fn outside_alpha(p: vec2<f32>, d: f32) -> f32 {
   return min(drop + line, 1.0);
 }
 
+// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
+// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over black
+fn edge_line(p: vec2<f32>, d: f32, pos: f32) -> f32 {
+  let band = clamp(1.5 - d, 0.0, 1.0);
+  if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
+  let b = blurred(uv_of(p), pos);
+  return min(G.levels.x, 1.0) * rim_brightness(dot(b, LUMA)) * band;
+}
+
+// stage 7: what the shape draws outside itself, the drop shadow and the outline in the shadow's colour with the edge
+// line over them in black: its colour and alpha
+fn outside(p: vec2<f32>, d: f32, pos: f32) -> vec4<f32> {
+  let shadow = outside_alpha(p, d);
+  let line = edge_line(p, d, pos);
+  let a = line + shadow * (1.0 - line);
+  if (a <= 0.0) { return vec4<f32>(G.shadow_color.rgb, 0.0); }
+  return vec4<f32>(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
+}
+
 @fragment
 fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let p = fin.px;
   let f = field(p);
   let d = f.d;
   if (d > 0.5) {
-    let a = outside_alpha(p, d) * G.info.w;
+    let o = outside(p, d, f.b.z);
+    let a = o.a * G.info.w;
     if (a <= 0.0) { discard; }
-    return vec4<f32>(G.shadow_color.rgb, a);
+    return vec4<f32>(o.rgb, a);
   }
   let g = vec2<f32>(field_d(p + vec2<f32>(0.5, 0.0)) - field_d(p - vec2<f32>(0.5, 0.0)),
                     field_d(p + vec2<f32>(0.0, 0.5)) - field_d(p - vec2<f32>(0.0, 0.5)));
@@ -276,9 +296,10 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   }
   // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
   let cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
-  let under = (1.0 - cov) * outside_alpha(p, d);
+  let o = outside(p, d, f.b.z);
+  let under = (1.0 - cov) * o.a;
   let a = cov + under;
   var rgb = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
-  if (a > 0.0) { rgb = (rgb * cov + G.shadow_color.rgb * under) / a; }
+  if (a > 0.0) { rgb = (rgb * cov + o.rgb * under) / a; }
   return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a * G.info.w);
 }

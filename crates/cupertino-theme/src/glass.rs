@@ -266,6 +266,10 @@ pub struct GlassShadow {
     /// A hairline just outside the shape, in the drop shadow's colour: its opacity (0 for none) and its width in points.
     pub outline_opacity: f32,
     pub outline_width: f32,
+    /// The edge line: a line one device pixel wide just outside the outline, black at this alpha times the rim's
+    /// response to the brightness of what lies there ([`rim_brightness`]), so the glass keeps an outline over light
+    /// content and draws none over black. 0 for none.
+    pub edge_line: f32,
 }
 
 /// The complete background recipe of one glass shape.
@@ -423,6 +427,9 @@ const REGULAR_SATURATION_LIGHT: f32 = 1.2;
 const REGULAR_WHITE_LIGHT: f32 = 0.96;
 const REGULAR_BLACK_LIGHT: f32 = 0.40;
 const REGULAR_FILL_LIGHT: f32 = 0.184;
+/// The edge line of regular glass in the light and the dark appearance ([`GlassShadow::edge_line`]).
+const REGULAR_EDGE_LINE_LIGHT: f32 = 0.2;
+const REGULAR_EDGE_LINE_DARK: f32 = 0.22;
 
 fn clear_face(dark: bool) -> GlassFace {
     if dark {
@@ -504,6 +511,8 @@ const POPOVER_REFRACTION_HEIGHT: f32 = 5.0;
 const POPOVER_BLEED: f32 = 16.8;
 /// The faint ring shadow inside the popover's outline.
 const POPOVER_RING_OPACITY: f32 = 0.06;
+/// The popover's edge line in the light appearance; the dark popover has none.
+const POPOVER_EDGE_LINE_LIGHT: f32 = 0.175;
 /// The dark popover face's black lift and luma compression, and the light face's white point.
 const POPOVER_BLACK_DARK: f32 = 0.125;
 const POPOVER_MAX_LUMA_DARK: f32 = 0.6;
@@ -595,6 +604,9 @@ const DENSE_REFRACTION_PER_POINT: f32 = 0.4;
 const DENSE_REFRACTION_HEIGHT_PER_POINT: f32 = 0.2;
 /// The faint ring shadow inside the dense glass's outline.
 const DENSE_RING_OPACITY: f32 = 0.06;
+/// The dense glass's edge line, light and dark appearance.
+const DENSE_EDGE_LINE_LIGHT: f32 = 0.31;
+const DENSE_EDGE_LINE_DARK: f32 = 0.54;
 /// The scale the dense glass's backdrop is captured at: a quarter of the output's, an eighth once its blur is as wide as
 /// it grows.
 const DENSE_CAPTURE_SCALE: f32 = 0.25;
@@ -625,6 +637,8 @@ const CARD_RIM_BIAS: f32 = -0.25;
 const CARD_SPREAD_LIGHT: f32 = 1.676;
 const CARD_SPREAD_DARK: f32 = 5.0 * std::f32::consts::PI / 12.0;
 const CARD_RING_OPACITY: f32 = 0.06;
+/// The card's edge line in the light appearance; the dark card has none.
+const CARD_EDGE_LINE_LIGHT: f32 = 0.19;
 
 /// Track glass: the face lifts black by a tenth and leaves white; the refraction's strength and band follow the
 /// track's height (its short side); the rim; the ring shadow inside the outline, darker in the dark appearance; and a
@@ -642,6 +656,9 @@ const TRACK_SHADOW_AMOUNT: f32 = 6.0;
 const TRACK_SHADOW_BLUR: f32 = 8.0;
 const TRACK_SHADOW_OPACITY: f32 = 0.0018;
 const TRACK_SHADOW_COLOR: [f32; 4] = [0.337, 0.445, 0.562, 1.0];
+/// The track's edge line, light and dark appearance.
+const TRACK_EDGE_LINE_LIGHT: f32 = 0.22;
+const TRACK_EDGE_LINE_DARK: f32 = 0.24;
 
 /// Face colours with Reduce Transparency.
 fn reduced_transparency_face(dark: bool, style: GlassStyle) -> GlassFace {
@@ -875,6 +892,11 @@ impl GlassParams {
                 ring_opacity: 0.0,
                 outline_opacity: 0.0,
                 outline_width: 0.0,
+                edge_line: if dark {
+                    REGULAR_EDGE_LINE_DARK
+                } else {
+                    REGULAR_EDGE_LINE_LIGHT
+                },
             },
             capture_scale: GLASS_BACKDROP_SCALE,
         }
@@ -918,6 +940,11 @@ impl GlassParams {
         p.refraction.amount = -(DENSE_REFRACTION_PER_POINT * s).min(REFRACTION_AMOUNT_MAX);
         p.refraction.height = (DENSE_REFRACTION_HEIGHT_PER_POINT * s).min(REFRACTION_HEIGHT_MAX);
         p.shadow.ring_opacity = DENSE_RING_OPACITY;
+        p.shadow.edge_line = if dark {
+            DENSE_EDGE_LINE_DARK
+        } else {
+            DENSE_EDGE_LINE_LIGHT
+        };
         let widest = DENSE_BLUR_BY_SIDE[DENSE_BLUR_BY_SIDE.len() - 1].1;
         p.capture_scale = if p.blur.radius >= widest {
             DENSE_CAPTURE_SCALE_WIDE
@@ -969,6 +996,7 @@ impl GlassParams {
             ring_stroke: 4.0,
             ring_offset: 8.0,
             ring_opacity: CARD_RING_OPACITY,
+            edge_line: if dark { 0.0 } else { CARD_EDGE_LINE_LIGHT },
             ..p.shadow
         };
         p.capture_scale = CARD_CAPTURE_SCALE;
@@ -1023,6 +1051,11 @@ impl GlassParams {
             },
             outline_opacity: 0.0,
             outline_width: 0.0,
+            edge_line: if dark {
+                TRACK_EDGE_LINE_DARK
+            } else {
+                TRACK_EDGE_LINE_LIGHT
+            },
         };
         p.capture_scale = TRACK_CAPTURE_SCALE;
         p
@@ -1061,6 +1094,7 @@ impl GlassParams {
             ..p.highlight
         };
         p.shadow.ring_opacity = POPOVER_RING_OPACITY;
+        p.shadow.edge_line = if dark { 0.0 } else { POPOVER_EDGE_LINE_LIGHT };
         p
     }
 
@@ -1148,6 +1182,7 @@ impl GlassParams {
                 ring_opacity: 0.0,
                 outline_opacity: 0.0,
                 outline_width: 0.0,
+                edge_line: 0.0,
             },
             capture_scale: GLASS_BACKDROP_SCALE,
         }
@@ -1181,7 +1216,12 @@ impl GlassParams {
         // a Gaussian is read three deviations out; the refraction reads the face further inside the shape, never past
         // its edge
         let read = 3.0 * self.blur_sigma().max(fill);
-        read.max(self.shadow_reach())
+        let line = if self.shadow.edge_line > 0.0 {
+            EDGE_LINE_REACH
+        } else {
+            0.0
+        };
+        read.max(self.shadow_reach()).max(line)
     }
 
     /// How far past the shape a shown drop shadow reaches, in points: its offset and half its smooth edge of three
@@ -1194,6 +1234,10 @@ impl GlassParams {
         s.offset[0].abs().max(s.offset[1].abs()) + 1.5 * s.height
     }
 }
+
+/// How far past the shape the edge line ([`GlassShadow::edge_line`]) needs the glass drawn, in points: its pixel and the
+/// half pixel its band fades over, at a scale of 1 or more.
+const EDGE_LINE_REACH: f32 = 2.0;
 
 /// The refraction's offset at the edge, as a share of its strength.
 pub const REFRACTION_EDGE_SHARE: f32 = 0.9;
@@ -1965,6 +2009,28 @@ mod tests {
             (dark.black, dark.white, dark.saturation, dark.max_luma),
             (0.125, 1.125, 1.3, 0.6)
         );
+    }
+
+    #[test]
+    fn regular_and_lit_styles_keep_an_edge_line_and_clear_ones_none() {
+        let line = |dark, style| GlassParams::new(mode(dark, style), 60.0).shadow.edge_line;
+        for (style, light, dark) in [
+            (GlassStyle::Regular, 0.2, 0.22),
+            (GlassStyle::LargePanel, 0.2, 0.22),
+            (GlassStyle::Dense, 0.31, 0.54),
+            (GlassStyle::Track, 0.22, 0.24),
+            (GlassStyle::Popover, 0.175, 0.0),
+            (GlassStyle::Card, 0.19, 0.0),
+            (GlassStyle::Clear, 0.0, 0.0),
+            (GlassStyle::Module, 0.0, 0.0),
+            (GlassStyle::Bar, 0.0, 0.0),
+        ] {
+            assert_eq!((line(false, style), line(true, style)), (light, dark), "{style:?}");
+        }
+        // the glass is drawn far enough past its outline for the line, even with nothing else outside it
+        let mut p = GlassParams::new(mode(false, GlassStyle::Track), 24.0);
+        p.shadow.opacity = 0.0;
+        assert!(p.reach() >= EDGE_LINE_REACH);
     }
 
     #[test]

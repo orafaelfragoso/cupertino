@@ -525,6 +525,17 @@ pub fn outline_alpha(d: f32, p: &GlassParams) -> f32 {
     s.outline_opacity * (s.outline_width + 0.5 - d).clamp(0.0, 1.0)
 }
 
+/// Stage 7, the edge line: the alpha of black a pixel `d` from the edge (a unit wide band just outside it, one device
+/// pixel on the GPU) takes over a backdrop of colour `backdrop`: the recipe's `edge_line` times the rim's response to
+/// the backdrop's luma ([`rim_brightness`]), so the line shows along light content and not at all over black.
+pub fn edge_line_alpha(d: f32, backdrop: Rgb, p: &GlassParams) -> f32 {
+    let k = p.shadow.edge_line;
+    if k <= 0.0 {
+        return 0.0;
+    }
+    k.min(1.0) * rim_brightness(luma(backdrop)) * (1.5 - d).clamp(0.0, 1.0)
+}
+
 /// The foreground of a glyph on glass: the face `face` under it through `matrix`, mixed over the face by `coverage`
 /// (the glyph's coverage times its alpha).
 pub fn foreground(face: Rgb, matrix: &ColorMatrix, coverage: f32) -> Rgb {
@@ -674,10 +685,13 @@ impl Container {
         } else {
             [gradient[0] / slope, gradient[1] / slope]
         };
-        let fill = params.shadow.fill;
-        let fill = [fill[0], fill[1], fill[2]];
+        // what lies under the shape at p, as its blur reads it: the edge line darkens it by its brightness
+        let backdrop = || {
+            let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, p));
+            level_mix(levels, v.blur_level)
+        };
         if d > 0.5 {
-            return (fill, self.outside_alpha(p, d));
+            return self.outside(p, d, backdrop());
         }
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
@@ -707,10 +721,11 @@ impl Container {
         c = c.map(|v| v * (1.0 - ring));
         // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
         let cov = (0.5 - d).clamp(0.0, 1.0);
-        let under = (1.0 - cov) * self.outside_alpha(p, d);
+        let (outside, alpha) = self.outside(p, d, backdrop());
+        let under = (1.0 - cov) * alpha;
         let a = cov + under;
         if a > 0.0 {
-            c = std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * cov + fill[i] * under) / a);
+            c = std::array::from_fn(|i| (c[i].clamp(0.0, 1.0) * cov + outside[i] * under) / a);
         }
         (c, a)
     }
@@ -720,6 +735,21 @@ impl Container {
         let s = &self.params.shadow;
         let d_shadow = self.field([p[0] - s.offset[0], p[1] - s.offset[1]]).0;
         (shadow_alpha(d_shadow, &self.params) + outline_alpha(d, &self.params)).min(1.0)
+    }
+
+    /// What the shape draws outside itself at `p`, `d` from its edge, over a `backdrop` of that colour: the drop shadow
+    /// and the outline in the shadow's colour, and the edge line over them in black ([`edge_line_alpha`]). Returns the
+    /// colour and its alpha.
+    pub fn outside(&self, p: [f32; 2], d: f32, backdrop: Rgb) -> (Rgb, f32) {
+        let fill = self.params.shadow.fill;
+        let shadow = self.outside_alpha(p, d);
+        let line = edge_line_alpha(d, backdrop, &self.params);
+        let a = line + shadow * (1.0 - line);
+        if a <= 0.0 {
+            return ([fill[0], fill[1], fill[2]], 0.0);
+        }
+        let k = shadow * (1.0 - line) / a;
+        ([fill[0] * k, fill[1] * k, fill[2] * k], a)
     }
 }
 
@@ -736,7 +766,7 @@ pub struct GlassUniform {
     pub uv_y: [f32; 4],
     /// Number of shapes, blend width, antialiasing width, overall opacity.
     pub info: [f32; 4],
-    /// Unused (0, 0), and the target's width and height.
+    /// The edge line's strength, unused (0), and the target's width and height.
     pub levels: [f32; 4],
     /// Blur fill opacities: darken, lighten, normal, 0.
     pub fill: [f32; 4],
@@ -795,7 +825,7 @@ impl GlassUniform {
             1.0,
             opacity.clamp(0.0, 1.0),
         ];
-        u.levels = [0.0, 0.0, target[0], target[1]];
+        u.levels = [p.shadow.edge_line, 0.0, target[0], target[1]];
         u.fill = [
             p.blur.fill_darken,
             p.blur.fill_lighten,
@@ -1026,9 +1056,10 @@ mod tests {
                 ([60.5, 59.5], [60.5, 60.5]),
             ] {
                 assert_eq!(c.shade(inside, &grey).1, 1.0, "{corner:?} {inside:?}");
-                // half a pixel out: no glass, and the drop shadow starts past it
+                // half a pixel out: no glass, only the edge line, and the drop shadow starts past it
                 assert_eq!(c.field(outside).0, 0.5, "{corner:?} {outside:?}");
-                assert_eq!(c.shade(outside, &grey).1, 0.0, "{corner:?} {outside:?}");
+                let (col, a) = c.shade(outside, &grey);
+                assert_eq!((col, a), ([0.0; 3], c.params.shadow.edge_line), "{corner:?} {outside:?}");
             }
         }
     }
@@ -1054,6 +1085,7 @@ mod tests {
         p.highlight.amount = 0.0;
         p.highlight.glow_amount = 0.0;
         p.shadow.ring_opacity = 0.0;
+        p.shadow.edge_line = 0.0;
         for (amount, height) in [(-20.0, 40.0), (-10.0, 10.0), (-40.0, 20.0)] {
             c.values[0].max_luma = 1.0;
             c.values[0].refraction_amount = amount;
@@ -1640,6 +1672,55 @@ mod tests {
         assert!(close(rest.shade([100.0, 90.0], &grey).0[0], plain, 1e-5));
     }
 
+    /// Regular glass keeps a line one unit wide just outside its outline: black at the edge line's strength times the
+    /// rim's brightness response to what lies there, so it shows over white and grey and not over black.
+    #[test]
+    fn the_edge_line_darkens_light_content_just_outside_the_outline_and_not_black() {
+        let c = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode::default(),
+        );
+        let k = c.params.shadow.edge_line;
+        assert_eq!(k, 0.2);
+        let flat = |v: f32| move |_: usize, _: [f32; 2]| [v; 3];
+        // a pixel whose centre lies half a unit outside the bottom edge: the whole line
+        for (v, want) in [(1.0, k), (0.5, k), (0.25, k * 0.63), (0.0, 0.0)] {
+            let (col, a) = c.shade([100.0, 100.5], &flat(v));
+            assert!(close(a, want, 1e-4), "{v}: {a}");
+            if a > 0.0 {
+                assert_eq!(col, [0.0; 3], "black");
+            }
+        }
+        // it fades over the next half unit and is gone past it
+        let (_, half) = c.shade([100.0, 101.0], &flat(1.0));
+        assert!(close(half, k * 0.5, 1e-4), "{half}");
+        assert_eq!(c.shade([100.0, 101.6], &flat(1.0)).1, 0.0);
+        // a pixel the edge crosses shows the line under the part the glass leaves open
+        let (_, a) = c.shade([100.0, 100.0], &flat(1.0));
+        assert!(close(a, 0.5 + 0.5 * k, 1e-4), "{a}");
+        // clear glass draws none
+        let clear = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode {
+                style: GlassStyle::Clear,
+                ..GlassMode::default()
+            },
+        );
+        assert_eq!(clear.shade([100.0, 100.5], &flat(1.0)).1, 0.0);
+        // the uniform carries it to the shaders
+        let u = GlassUniform::new(
+            &c,
+            2.0,
+            [[0.0; 3]; 2],
+            [0.0; 4],
+            [400.0, 200.0],
+            1.0,
+        );
+        assert_eq!(u.levels[0], k);
+    }
+
     /// A pixel the edge crosses shows the glass over the outline in the part the glass leaves uncovered, so the
     /// edge's alpha and colour run on without a step from the pixel just inside the edge to the one just outside.
     #[test]
@@ -1651,6 +1732,7 @@ mod tests {
         );
         c.params.shadow.outline_opacity = 0.32;
         c.params.shadow.outline_width = 1.0;
+        c.params.shadow.edge_line = 0.0;
         let white = |_: usize, _: [f32; 2]| [1.0f32; 3];
         let fill = c.params.shadow.fill;
         // over a white backdrop, as a compositor puts it

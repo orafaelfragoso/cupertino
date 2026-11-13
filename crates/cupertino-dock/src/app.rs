@@ -572,6 +572,13 @@ impl AppHost {
             Request::SwitcherActivate(i) => shape(role.switcher_activate(i))?,
             Request::SwitcherCancel => role.switcher_cancel(),
             Request::OverviewFrame(id, frame) => shape(role.overview_frame(id, &rect(&frame)))?,
+            Request::OverviewDrag(id, frame) => shape(role.overview_drag(id, &rect(&frame)))?,
+            Request::OverviewMoveWindow { window, workspace } => {
+                role.overview_move_window(window, workspace)
+            }
+            Request::OverviewPicture(id, frame) => {
+                shape(role.overview_workspace_frame(id, &rect(&frame)))?
+            }
             Request::OverviewSelect(id) => role.overview_select(id),
             Request::OverviewClose => role.overview_close(),
             Request::SwitchWorkspace(id) => role.switch_workspace(id),

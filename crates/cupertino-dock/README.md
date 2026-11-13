@@ -316,32 +316,41 @@ activation token (see the launcher's README, *Opening an application*).
 
 Code: `src/overview_ui.rs`, `src/overview_kit.rs` and the overview part of `src/kit.rs`. The server owns the session: the
 transition, the windows' frames and their animation, Escape, the click fallback, and closing on a workspace switch and when
-the dock dies. It sends the dock of its output the window set with desktop frames, the workspaces and the usable area
-(`overview_changed`).
+the dock dies. It sends the dock of its output the window set with desktop frames, the workspaces and the area from the
+output's top to the usable area's bottom (`overview_changed`); the menu bar gives way while the overview is open.
 
-The dock lays the windows out with the design packing (`cupertino-overview`,: inset 20, gap 8, lift 20, tolerance 4,
+The dock lays the windows out with the design packing (`cupertino-overview`: inset 16, gap 14, lift 20, tolerance 2,
 shrink 0.9, 499 passes, constants; the application mode puts minimized windows in a lower row) and answers one
-`overview_frame` per window. A changed set is laid out again and resent. The windows start 20 pt (`BarConfig::layout_gap`)
-below the expanded workspaces bar, and the arrangement is centred in the area left (see the `cupertino-overview` README).
+`overview_frame` per window. A changed set is laid out again and resent. The windows start 39 pt (`BarConfig::layout_gap`)
+below the desktops band (111 pt from the top while it is closed), and are laid out again when the band opens or
+closes; the arrangement is centred in the area left (see the `cupertino-overview` README).
 
 The chrome is a keyboard-exclusive overlay surface over the whole output (namespace `cupertino-dock-overview`, exclusive zone
--1, so surface and output coordinates agree). The server draws the dim and the windows. The chrome has:
+-1, so surface and output coordinates agree). The server draws the windows and the desktops' live pictures. The chrome has:
 
-- the workspaces bar: slots with "Desktop n" labels and a border on the current one, and an add slot with a plus. It stays
-  expanded for the whole overview, where the design collapses it until hovered (approximate);
-- a remove button on the hovered slot;
-- the selection highlight, from hover or the keys (arrows, `Tab` / `Shift+Tab`, `Return` / `Space` select, `Escape` leaves);
-- a 13 pt title under every window (colours and sizes approximate).
+- the desktops band across the output: 72 pt tall with a light tint and a 44 pt shadow below it, showing the desktops'
+  names ("Desktop", or "Desktop n" with several), the current one on a 24 pt white pill of radius 5 with white 14 pt text,
+  and a bare 20 pt plus whose centre is 28 pt from the right edge and 35 pt from the top. While the pointer is over it, the
+  band opens to 165 pt on a critically damped 0.25 s spring and shows a 146 × 95 pt live picture of each desktop above its
+  name (`overview_workspace_frame`; the server draws it), the current one in a 3 pt accent ring of radius 4. The tint
+  and gap between pictures are approximate;
+- a 28 pt remove button on a picture the pointer has rested on for 1 s;
+- the selection ring, from hover or the keys (arrows, `Tab` / `Shift+Tab`, `Return` / `Space` select, `Escape` leaves): a 5 pt
+  accent ring just outside the window, following its corners;
+- the highlighted window's name only, centred on the window on a 28 pt light translucent plate with dark 16 pt text, never
+  wider than the window.
 
-The chrome fades out over 0.25 s on `overview_closed`, and then the surface goes.
+A window dragged past 4 pt follows the pointer at once (`overview_drag`); let go over another desktop's picture it moves
+there (`overview_move_window`), elsewhere it glides back. The chrome closes on a critically damped spring of response
+0.125 s on `overview_closed`, and then the surface goes.
 
 **On Kit.** `src/overview_kit.rs` is the same chrome as a Kit window (`OverviewSurface`, app id `cupertino-dock-overview`,
 no background), with the model of `overview_ui.rs` and its layout. It is a group named "Overview" holding one button per
 slot ("Desktop n", selected when current), the hovered slot's "Remove Desktop n", "Add Desktop" and one button per window
 named by its title ("Untitled Window" without one). A screen reader presses them as the pointer would. The selected window
 takes the keyboard focus, so its title is read as the keys move the selection. Under Reduce Motion the highlight goes
-straight to the selection and the windows' frames are their final ones. Under Reduce Transparency the slots are opaque, and
-under Increase Contrast the slots get an outline, the borders and highlight are wider, and the titles sit on a plate.
+straight to the selection and the windows' frames are their final ones. Under Reduce Transparency the band and the name plate are opaque, and
+under Increase Contrast the pills get an outline and the ring's corners are tighter.
 The dock's Kit model keeps one `OverviewSurface` per output, sends its `overview_frame` answers and requests, passes
 Reduce Motion, and gives its surface the keyboard exclusively while `wants_keyboard` holds (before the bar).
 
@@ -387,7 +396,7 @@ Minimising into the application's tile, the launch bounce and the running indica
 
 ## Protocols / D-Bus it speaks
 
-The process speaks the server's dock protocol (version 22) and `cupertino_session_v1`. On the session bus it only calls
+The process speaks the server's dock protocol (version 23) and `cupertino_session_v1`. On the session bus it only calls
 `org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). It listens for the launcher entry signal (`com.canonical.Unity.LauncherEntry.Update`): an application names its
 desktop file as `application://ID.desktop` and sets `count` and `count-visible`, and a running application's tile shows
 a visible count above zero on its badge (`badge.rs`). The messages are named

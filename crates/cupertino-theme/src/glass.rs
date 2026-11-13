@@ -182,8 +182,33 @@ pub struct GlassHighlight {
     pub glow_amount: f32,
     pub glow_height: f32,
     pub glow_offset: f32,
+    /// How strongly the soft band lights the far end of its axis, as a share of the near end.
+    pub glow_fill: f32,
+    /// A second, wider and fainter band of the same light under the soft band: its half-width, the angular width of its
+    /// arcs and its strength as multiples of the soft band's (all 0 for none).
+    pub diffuse: GlowDiffuse,
     /// Colour of the soft band's light, from the face colour under it.
     pub matrix: ColorMatrix,
+}
+
+/// The wider, fainter band under the soft band of [`GlassHighlight`], in multiples of the soft band's values.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlowDiffuse {
+    /// Half-width per unit of the soft band's half-width.
+    pub height_scale: f32,
+    /// Angular width of its arcs per unit of the soft band's.
+    pub spread_scale: f32,
+    /// Strength per unit of the soft band's strength.
+    pub amount_scale: f32,
+}
+
+impl GlowDiffuse {
+    /// No second band.
+    pub const NONE: Self = Self {
+        height_scale: 0.0,
+        spread_scale: 0.0,
+        amount_scale: 0.0,
+    };
 }
 
 /// How deep the rim reaches into the shape, per point of its `height`.
@@ -450,15 +475,27 @@ const BAR_BLUR: f32 = 2.761;
 /// The bar's refraction: strength and band width in points, the same at every size.
 const BAR_REFRACTION: f32 = -8.64;
 const BAR_REFRACTION_HEIGHT: f32 = 3.84;
+/// How strongly a soft band lights the far end of its axis, as a share of the near end, unless a surface says otherwise.
+const GLOW_FILL: f32 = 0.75;
 /// The bar's rim: strength and colour shift per unit of strength.
 const BAR_RIM: f32 = 0.4;
 const BAR_RIM_BIAS: f32 = -0.25;
-/// The bar's soft light along the ends of its long axis: strength, half-width and middle (points from the edge, inside
-/// for a negative value), the arcs' angular width and the exponent of their falloff.
+/// The bar's line of light along its top and bottom edges: strength, half-width and middle (points from the edge, inside
+/// for a negative value), the arcs' angular width, and the bottom's strength as a share of the top's.
 const BAR_GLOW: f32 = 0.5;
-const BAR_GLOW_HEIGHT: f32 = 1.0;
-const BAR_GLOW_OFFSET: f32 = -0.5;
+const BAR_GLOW_HEIGHT: f32 = 0.6;
+const BAR_GLOW_OFFSET: f32 = -0.25;
 const BAR_GLOW_SPREAD: f32 = 80.0 * std::f32::consts::PI / 180.0;
+const BAR_GLOW_FILL: f32 = 1.0;
+/// The faint glow under the bar's line of light: eight times as wide, on arcs 0.65 as wide, at 0.15 of its strength.
+const BAR_GLOW_DIFFUSE: GlowDiffuse = GlowDiffuse {
+    height_scale: 8.0,
+    spread_scale: 0.65,
+    amount_scale: 0.15,
+};
+/// The dark hairline just outside the bar's outline, which shows at its ends: its opacity and width in points.
+const BAR_OUTLINE_OPACITY: f32 = 0.45;
+const BAR_OUTLINE_WIDTH: f32 = 0.5;
 /// The bar's drop shadow (shown at no opacity at rest): strength in percent and blur in points.
 const BAR_SHADOW_AMOUNT: f32 = 30.0;
 const BAR_SHADOW_HEIGHT: f32 = 19.2;
@@ -756,6 +793,8 @@ impl GlassParams {
                 glow_amount: 0.0,
                 glow_height: 0.0,
                 glow_offset: 0.0,
+                glow_fill: GLOW_FILL,
+                diffuse: GlowDiffuse::NONE,
                 matrix: HIGHLIGHT_MATRIX_REGULAR,
             },
             shadow: GlassShadow {
@@ -907,8 +946,8 @@ impl GlassParams {
         p
     }
 
-    /// The bar glass: clear glass with the bar's narrow blur, face, thin refraction, rim and soft light along the ends
-    /// of its long axis.
+    /// The bar glass: clear glass with the bar's narrow blur, face, thin refraction, rim and a thin line of light along
+    /// its top and bottom edges, equally bright, over a wide faint glow.
     fn bar(dark: bool, s: f32) -> Self {
         let mut p = Self::clear(dark, s);
         p.blur.radius = BAR_BLUR;
@@ -917,12 +956,14 @@ impl GlassParams {
         p.refraction.height = BAR_REFRACTION_HEIGHT;
         p.highlight = GlassHighlight {
             amount: BAR_RIM,
-            angle: 0.0,
+            angle: HIGHLIGHT_ANGLE,
             spread: BAR_GLOW_SPREAD,
             color_bias: BAR_RIM_BIAS,
             glow_amount: BAR_GLOW,
             glow_height: BAR_GLOW_HEIGHT,
             glow_offset: BAR_GLOW_OFFSET,
+            glow_fill: BAR_GLOW_FILL,
+            diffuse: BAR_GLOW_DIFFUSE,
             matrix: if dark {
                 BAR_GLOW_MATRIX_DARK
             } else {
@@ -932,6 +973,8 @@ impl GlassParams {
         };
         p.shadow.amount = BAR_SHADOW_AMOUNT;
         p.shadow.height = BAR_SHADOW_HEIGHT;
+        p.shadow.outline_opacity = BAR_OUTLINE_OPACITY;
+        p.shadow.outline_width = BAR_OUTLINE_WIDTH;
         p
     }
 
@@ -972,6 +1015,8 @@ impl GlassParams {
                 glow_amount: 0.0,
                 glow_height: 0.0,
                 glow_offset: 0.0,
+                glow_fill: GLOW_FILL,
+                diffuse: GlowDiffuse::NONE,
                 matrix: HIGHLIGHT_MATRIX_CLEAR,
             },
             shadow: GlassShadow {
@@ -1750,7 +1795,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_blurs_narrowly_lifts_its_colour_and_lights_the_ends_of_its_long_axis() {
+    fn the_bar_blurs_narrowly_lifts_its_colour_and_lights_its_top_and_bottom_edges() {
         let light = GlassParams::new(mode(false, GlassStyle::Bar), 70.0);
         let dark = GlassParams::new(mode(true, GlassStyle::Bar), 70.0);
         for p in [light, dark] {
@@ -1759,8 +1804,24 @@ mod tests {
             assert_eq!((p.refraction.amount, p.refraction.height), (-8.64, 3.84));
             let h = p.highlight;
             assert_eq!((h.amount, h.color_bias), (0.4, -0.25));
-            // the soft light along the ends of the horizontal axis
-            assert_eq!((h.angle, h.glow_amount, h.glow_height), (0.0, 0.5, 1.0));
+            // the line of light along the top and the bottom, both alike, over a wide faint glow
+            assert_eq!(
+                (h.angle, h.glow_amount, h.glow_height, h.glow_fill),
+                (std::f32::consts::FRAC_PI_2, 0.5, 0.6, 1.0)
+            );
+            // a dark hairline just outside the outline
+            assert_eq!(
+                (p.shadow.outline_opacity, p.shadow.outline_width),
+                (0.45, 0.5)
+            );
+            assert_eq!(
+                (
+                    h.diffuse.height_scale,
+                    h.diffuse.spread_scale,
+                    h.diffuse.amount_scale
+                ),
+                (8.0, 0.65, 0.15)
+            );
             assert!(close(h.spread, 80f32.to_radians()));
             assert_eq!(
                 (p.shadow.amount, p.shadow.height, p.shadow.opacity),

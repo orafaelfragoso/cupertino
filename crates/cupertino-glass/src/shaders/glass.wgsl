@@ -12,8 +12,9 @@ struct Glass {
   face_fill: vec4<f32>,
   bleed: vec4<f32>,       // white, black, saturation, darken
   highlight: vec4<f32>,   // rim strength, light angle, spread, rim depth
-  highlight2: vec4<f32>,  // offset, colour bias, curvature
+  highlight2: vec4<f32>,  // offset, colour bias, curvature, the soft band's far end
   glow: vec4<f32>,        // soft band: amount, half-width, offset
+  diffuse: vec4<f32>,     // diffuse band: half-width, arcs' width, strength, per unit of the soft band's
   hm: array<vec4<f32>, 3>,
   shadow: vec4<f32>,      // offset x, offset y, alpha, blur
   shadow_color: vec4<f32>,// rgb, ring darkening
@@ -156,8 +157,8 @@ const LOBE_REACH: f32 = 0.75;
 // the shortest field slope the rim's distance to the edge divides by
 const MIN_FIELD_SLOPE: f32 = 0.05;
 
-fn lobe(normal_angle: f32, light: f32) -> f32 {
-  let reach = G.highlight.z * LOBE_REACH;
+fn lobe(normal_angle: f32, light: f32, spread_scale: f32) -> f32 {
+  let reach = G.highlight.z * spread_scale * LOBE_REACH;
   if (reach <= 0.0) { return 0.0; }
   let a = angle_between(normal_angle, light);
   if (a >= reach) { return 0.0; }
@@ -244,9 +245,16 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     let de = d / max(gl, MIN_FIELD_SLOPE);
     if (glow_on) {
       let na = atan2(-n.y, n.x);
-      let ends = lobe(na, G.highlight.y) + lobe(na, G.highlight.y + PI) * max(1.0 + G.highlight2.y, 0.0);
+      let fill = max(G.highlight2.w, 0.0);
+      let ends = lobe(na, G.highlight.y, 1.0) + lobe(na, G.highlight.y + PI, 1.0) * fill;
       let xg = (de - G.glow.z) / G.glow.y;
-      c = min(c + key_color(c) * (G.glow.x * exp(-xg * xg) * ends), vec3<f32>(1.0));
+      var w = G.glow.x * exp(-xg * xg) * ends;
+      if (G.diffuse.z > 0.0 && G.diffuse.x > 0.0) {
+        let xd = (de - G.glow.z) / (G.glow.y * G.diffuse.x);
+        let wide = lobe(na, G.highlight.y, G.diffuse.y) + lobe(na, G.highlight.y + PI, G.diffuse.y) * fill;
+        w = w + G.glow.x * G.diffuse.z * exp(-xd * xd) * wide;
+      }
+      c = min(c + key_color(c) * w, vec3<f32>(1.0));
     }
     // the rim: one shift of every channel, by the face's brightness and the edge's direction, in a band along it
     if (rim_on) {

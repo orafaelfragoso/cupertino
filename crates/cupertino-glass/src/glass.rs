@@ -403,25 +403,37 @@ pub const LOBE_REACH: f32 = 0.75;
 
 /// Stage 5, first part: the soft band of light on the face `c` at distance `d` (negative inside, points) from the edge,
 /// with outward `normal` in y-down coordinates: the colour `matrix · face` added along the arcs facing either end of the
-/// axis through the light's angle, the far end at `1 + color_bias` of the near one. Nothing where the recipe has no
-/// band.
+/// axis through the light's angle, the far end at `glow_fill` of the near one; under it the diffuse band, as wide,
+/// on arcs as wide and as strong as the soft band's times its scales. Nothing where the recipe has no band.
 pub fn glow(c: Rgb, d: f32, normal: [f32; 2], p: &GlassParams) -> Rgb {
     let h = &p.highlight;
     if h.glow_amount <= 0.0 || h.glow_height <= 0.0 || (normal[0] == 0.0 && normal[1] == 0.0) {
         return c;
     }
-    let x = (d - h.glow_offset) / h.glow_height;
-    let band = h.glow_amount * (-x * x).exp();
     // y up for the angle
     let normal_angle = (-normal[1]).atan2(normal[0]);
-    let key = highlight_lobe(normal_angle, h.angle, h.spread, h.curvature);
-    let fill = highlight_lobe(
-        normal_angle,
-        h.angle + std::f32::consts::PI,
-        h.spread,
-        h.curvature,
-    );
-    let w = band * (key + fill * (1.0 + h.color_bias).max(0.0));
+    let ends = |spread: f32| {
+        let key = highlight_lobe(normal_angle, h.angle, spread, h.curvature);
+        let fill = highlight_lobe(
+            normal_angle,
+            h.angle + std::f32::consts::PI,
+            spread,
+            h.curvature,
+        );
+        key + fill * h.glow_fill.max(0.0)
+    };
+    let band = |height: f32| {
+        let x = (d - h.glow_offset) / height;
+        (-x * x).exp()
+    };
+    let mut w = h.glow_amount * band(h.glow_height) * ends(h.spread);
+    let diffuse = &h.diffuse;
+    if diffuse.amount_scale > 0.0 && diffuse.height_scale > 0.0 {
+        w += h.glow_amount
+            * diffuse.amount_scale
+            * band(h.glow_height * diffuse.height_scale)
+            * ends(h.spread * diffuse.spread_scale);
+    }
     let light = matrix_rgb(&h.matrix, c);
     std::array::from_fn(|i| (c[i] + light[i] * w).min(1.0))
 }
@@ -736,10 +748,12 @@ pub struct GlassUniform {
     pub bleed: [f32; 4],
     /// Rim strength, the soft band's light angle and spread, the rim's depth.
     pub highlight: [f32; 4],
-    /// Highlight: offset, colour bias, curvature, 0.
+    /// Highlight: offset, colour bias, curvature, the soft band's strength at the far end of its axis.
     pub highlight2: [f32; 4],
     /// The soft band of light: strength, half-width, offset, and the opacity of the outline outside the shape.
     pub glow: [f32; 4],
+    /// The diffuse band under it: half-width, arcs' width and strength as multiples of the soft band's, 0.
+    pub diffuse: [f32; 4],
     /// Key colour matrix rows: `[r, g, b coefficients, offset (+ alpha coefficient)]`.
     pub highlight_matrix: [[f32; 4]; 3],
     /// Drop shadow: offset x, offset y, alpha, blur radius.
@@ -803,12 +817,18 @@ impl GlassUniform {
             h.spread,
             RIM_DEPTH_PER_HEIGHT * h.height * scale,
         ];
-        u.highlight2 = [h.offset * scale, h.color_bias, h.curvature, 0.0];
+        u.highlight2 = [h.offset * scale, h.color_bias, h.curvature, h.glow_fill];
         u.glow = [
             h.glow_amount,
             h.glow_height * scale,
             h.glow_offset * scale,
             p.shadow.outline_opacity,
+        ];
+        u.diffuse = [
+            h.diffuse.height_scale,
+            h.diffuse.spread_scale,
+            h.diffuse.amount_scale,
+            0.0,
         ];
         for r in 0..3 {
             let m = &h.matrix[r * 5..r * 5 + 5];
@@ -875,7 +895,7 @@ impl Container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cupertino_theme::glass::foreground_matrix;
+    use cupertino_theme::glass::{foreground_matrix, GlowDiffuse};
 
     fn params(dark: bool) -> GlassParams {
         GlassParams::new(
@@ -1749,6 +1769,43 @@ mod tests {
     }
 
     #[test]
+    fn the_bar_lights_a_thin_line_along_its_top_and_bottom_over_a_wide_faint_glow() {
+        for dark in [false, true] {
+            let mode = GlassMode {
+                dark,
+                style: GlassStyle::Bar,
+                ..GlassMode::default()
+            };
+            let mut p = GlassParams::new(mode, 84.0);
+            p.highlight.amount = 0.0;
+            let face = [0.2, 0.16, 0.14];
+            let at = |d: f32, n: [f32; 2], p: &GlassParams| glow(face, d, n, p);
+            let (top, bottom, side) = ([0.0, -1.0], [0.0, 1.0], [1.0, 0.0]);
+            // the top and the bottom edge alike, the ends of the long axis not at all
+            assert_eq!(at(-0.5, top, &p), at(-0.5, bottom, &p));
+            assert!(
+                at(-0.5, top, &p)[0] > face[0] + 0.15,
+                "{:?}",
+                at(-0.5, top, &p)
+            );
+            assert_eq!(at(-0.5, side, &p), face);
+            // the line is thin: three points in, only the faint glow is left, and without it nothing
+            let deep = at(-3.5, top, &p)[0] - face[0];
+            assert!(deep > 0.0 && deep < 0.05, "{deep}");
+            let mut no_glow = p;
+            no_glow.highlight.diffuse = GlowDiffuse::NONE;
+            assert!(at(-3.5, top, &no_glow)[0] - face[0] < 1e-3);
+            // the glow lights narrower arcs than the line: none on a corner's diagonal, which the line still lights
+            let diagonal = [
+                std::f32::consts::FRAC_1_SQRT_2,
+                -std::f32::consts::FRAC_1_SQRT_2,
+            ];
+            assert_eq!(at(-6.0, diagonal, &p), face);
+            assert!(at(-0.5, diagonal, &p)[0] > face[0]);
+        }
+    }
+
+    #[test]
     fn foreground_follows_the_face_under_the_glyph() {
         let dark = foreground([0.3, 0.2, 0.6], &foreground_matrix(true), 1.0);
         assert_eq!(dark, [1.0, 1.0, 1.0], "lifted to white");
@@ -1813,7 +1870,7 @@ mod tests {
     fn uniform_layout_and_scaling() {
         assert_eq!(
             std::mem::size_of::<GlassUniform>(),
-            (18 + 3 * MAX_SHAPES) * 16
+            (19 + 3 * MAX_SHAPES) * 16
         );
         let c = Container::new(
             vec![GlassShape::capsule([10.0, 20.0, 100.0, 40.0])],

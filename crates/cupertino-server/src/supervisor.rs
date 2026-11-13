@@ -581,6 +581,7 @@ fn start(
         .env("XDG_SESSION_TYPE", "wayland");
     crate::xwayland::set_client_env(&mut command, x11);
     hand_over(&mut command, &stream);
+    end_with_server(&mut command);
     match command.spawn() {
         Ok(mut child) => {
             if let Err(e) = bind_holder(&state, child.id()) {
@@ -613,6 +614,28 @@ fn start(
             tracing::warn!(name = spec.name, program = %program.display(), error = %e, "starting shell process failed");
             retry("spawn", &program, e.to_string())
         }
+    }
+}
+
+/// Kill the process `command` starts when the server's thread that starts it ends, however it ends: a server killed or
+/// crashed never runs [`Supervisor`]'s drop, and its shell processes would run on without a compositor. A server that
+/// is already gone when the child sets this up kills the child at once.
+fn end_with_server(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let server = rustix::process::getpid();
+    // Safety: the closure runs in the child between fork and exec and calls only prctl, getppid, getpid and kill,
+    // which are system calls.
+    unsafe {
+        command.pre_exec(move || {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::KILL))?;
+            if rustix::process::getppid() != Some(server) {
+                let _ = rustix::process::kill_process(
+                    rustix::process::getpid(),
+                    rustix::process::Signal::KILL,
+                );
+            }
+            Ok(())
+        });
     }
 }
 
@@ -755,6 +778,37 @@ mod tests {
         let exit = &test_events::recorded("server.shell.exited")[0];
         assert_eq!(exit.fields.get("signal").unwrap(), libc::SIGSEGV);
         assert!(exit.fields.get("status").is_none());
+    }
+
+    /// A server that ends without dropping its supervisor (killed, crashed) leaves no shell process behind: the thread
+    /// that started it ends here with the supervisor forgotten, and the process is killed with it.
+    #[test]
+    fn a_shell_process_is_killed_when_the_server_ends_without_stopping_it() {
+        let starter = std::thread::spawn(|| {
+            let mut s = Supervisor::new(&[spec("exec sleep 60")], Instant::now());
+            poll_until(&mut s, |s| !s.pids().is_empty());
+            let pid = s.pids()[0];
+            std::mem::forget(s);
+            pid
+        });
+        let pid = libc::pid_t::try_from(starter.join().unwrap()).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut status = 0;
+        loop {
+            // Safety: waits for this process's own child, which nothing else reaps
+            let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            assert_ne!(reaped, -1, "{}", std::io::Error::last_os_error());
+            if reaped == pid {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "the shell process outlived its server"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(libc::WIFSIGNALED(status), "status {status:#x}");
+        assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
     }
 
     /// The first poll of a process named `dock` running `command`, with its connection from `connect`: the supervisor

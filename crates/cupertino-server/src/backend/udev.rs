@@ -169,12 +169,11 @@ fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
     !stopped && !waiting && due
 }
 
-/// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue, or
-/// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]). Events (clients, input, vblanks) wake
-/// it sooner. At most a second, so work that names no deadline still runs, if late. Outputs that cannot draw (paused,
-/// asleep, off) wait for an event, not a frame deadline.
-fn loop_timeout(state: &Cupertino) -> Duration {
-    const MAX: Duration = Duration::from_secs(1);
+/// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue,
+/// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]) or the run's limit (`end`) comes.
+/// Events (clients, input, vblanks) wake it sooner; with nothing due it sleeps ([`super::REST_WAIT`]). Outputs that cannot
+/// draw (paused, asleep, off) wait for an event, not a frame deadline.
+fn loop_timeout(state: &Cupertino, end: Option<Instant>) -> Duration {
     // a passed deadline nothing acted on must not spin the loop
     const PASSED: Duration = Duration::from_millis(1);
     let tick = super::tick_wait(state);
@@ -199,11 +198,8 @@ fn loop_timeout(state: &Cupertino) -> Duration {
         }
         _ => None,
     };
-    [tick, frames]
-        .into_iter()
-        .flatten()
-        .min()
-        .map_or(MAX, |wait| wait.min(MAX))
+    let end = end.map(|end| end.saturating_duration_since(Instant::now()));
+    super::loop_wait([tick, frames, end])
 }
 
 impl UdevBackend {
@@ -768,7 +764,7 @@ pub fn run(
 
     while state.running {
         event_loop
-            .dispatch(Some(loop_timeout(state)), state)
+            .dispatch(Some(loop_timeout(state, deadline)), state)
             .map_err(|e| anyhow!("event loop: {e}"))?;
         state.tick();
         render_outputs(state);

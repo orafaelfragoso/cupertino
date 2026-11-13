@@ -409,18 +409,11 @@ pub fn step(
 }
 
 /// The longest a headless loop waits without an event: until the earliest output is due to draw (`frames`), the
-/// next time-driven work of [`Cupertino::tick`] (`tick`) or the end of the run (`end`), and at most [`IDLE_WAIT`].
-/// With nothing due the loop sleeps; clients, input and the scripted steps' timers wake it sooner.
+/// next time-driven work of [`Cupertino::tick`] (`tick`) or the end of the run (`end`), and at most
+/// [`super::REST_WAIT`]. With nothing due the loop sleeps; clients, input and the scripted steps' timers wake it sooner.
 fn loop_wait(frames: Option<Duration>, tick: Option<Duration>, end: Option<Duration>) -> Duration {
-    [frames, tick, end]
-        .into_iter()
-        .flatten()
-        .min()
-        .map_or(IDLE_WAIT, |wait| wait.min(IDLE_WAIT))
+    super::loop_wait([frames, tick, end])
 }
-
-/// The longest a headless loop sleeps with nothing due, so work that names no deadline still runs, if late.
-const IDLE_WAIT: Duration = Duration::from_secs(1);
 
 /// Run until `deadline` or until the compositor stops.
 #[allow(irrefutable_let_patterns)]
@@ -458,11 +451,11 @@ mod tests {
     const MS: Duration = Duration::from_millis(1);
 
     #[test]
-    fn a_session_at_rest_wakes_its_loop_once_a_second_at_most() {
-        assert_eq!(loop_wait(None, None, None), IDLE_WAIT);
-        // ten seconds of rest are ten passes, not the hundreds a fixed short pass makes
-        let passes = Duration::from_secs(10).as_millis() / loop_wait(None, None, None).as_millis();
-        assert_eq!(passes, 10);
+    fn a_session_at_rest_sleeps_and_wakes_its_loop_once_a_minute_at_most() {
+        assert_eq!(loop_wait(None, None, None), super::super::REST_WAIT);
+        // a minute of rest is one pass, not the sixty a one-second backstop makes
+        let passes = Duration::from_secs(60).as_millis() / loop_wait(None, None, None).as_millis();
+        assert_eq!(passes, 1);
     }
 
     #[test]
@@ -470,7 +463,11 @@ mod tests {
         assert_eq!(loop_wait(Some(16 * MS), Some(200 * MS), None), 16 * MS);
         assert_eq!(loop_wait(None, Some(200 * MS), Some(3000 * MS)), 200 * MS);
         assert_eq!(loop_wait(None, None, Some(300 * MS)), 300 * MS);
-        assert_eq!(loop_wait(Some(5000 * MS), None, None), IDLE_WAIT);
+        assert_eq!(loop_wait(Some(5000 * MS), None, None), 5000 * MS);
+        assert_eq!(
+            loop_wait(Some(Duration::from_secs(600)), None, None),
+            super::super::REST_WAIT
+        );
         assert_eq!(loop_wait(Some(Duration::ZERO), None, None), Duration::ZERO);
     }
 }

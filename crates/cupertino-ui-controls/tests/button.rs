@@ -2,11 +2,13 @@ use crate::support;
 
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_ui_controls::{Button, ButtonRole, ButtonStyle, Stack};
-use cupertino_ui_core::{Action, Application, Command, Element, Role, Window};
+use cupertino_ui_core::{Action, Application, Command, Element, Role, Window, WindowBackground};
 use cupertino_ui_layout::{Align, Axis};
-use cupertino_ui_platform::{Mods, PointerEvent, TouchEvent, WindowEvent};
+use cupertino_ui_platform::{
+    GlassStyle, MaterialRegion, Mods, PointerEvent, TouchEvent, WindowEvent, WindowRequest,
+};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
+use cupertino_ui_theme::{Color, ColorRole, InteractionVariant, Surface};
 use support::{color, label_width, point, window, Harness, ESCAPE, RETURN, SPACE, TAB};
 
 /// One button per role and style; `BUSY` and `ENABLED` apply to the first.
@@ -480,4 +482,151 @@ fn a_disabled_button_looks_disabled_skips_tab_and_ignores_activation() {
     assert_eq!(fill(&h, "ok"), Some(bezel(BEZEL_DISABLED)));
     let node = h.accessible("ok");
     assert!(node.states.disabled && !node.states.focusable);
+}
+
+/// A glass button alone in a window whose background is the sidebar's material when `ON_MATERIAL`, the theme's own
+/// opaque background otherwise.
+struct GlassButtonWindow<const ON_MATERIAL: bool>;
+
+impl<const ON_MATERIAL: bool> Application for GlassButtonWindow<ON_MATERIAL> {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        let mut windows = window(Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::uniform(20.0),
+            spacing: 0.0,
+            align: Align::Start,
+            children: vec![Element::new(Button {
+                label: "Glass".into(),
+                role: ButtonRole::Normal,
+                style: ButtonStyle::Glass,
+                enabled: true,
+                busy: false,
+                on_press: Some(()),
+            })
+            .key("glass")],
+        }));
+        if ON_MATERIAL {
+            windows[0].background = WindowBackground::Surface {
+                surface: Surface::Sidebar,
+                radius: 0.0,
+                alpha: 1.0,
+            };
+        }
+        windows
+    }
+}
+
+/// The glass regions the window last asked for.
+fn glass_regions<A: Application>(h: &Harness<A>) -> Vec<MaterialRegion> {
+    h.rt.window_system()
+        .requests(h.window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.glass.is_some())
+        .collect()
+}
+
+/// Whether the button paints a body of its own: a fill over its whole chrome, outside any clip (the shade of a rim over
+/// glass is clipped to outside the shape).
+fn paints_body<A: Application>(h: &Harness<A>) -> bool {
+    let rect = h.rect("glass");
+    let local = Rect::new(0.0, 0.0, rect.width(), rect.height());
+    let mut clips = 0;
+    h.ops("glass").iter().any(|op| match op {
+        PaintOp::PushClip(_) => {
+            clips += 1;
+            false
+        }
+        PaintOp::PopClip => {
+            clips -= 1;
+            false
+        }
+        PaintOp::Fill {
+            shape: Shape::RoundedRect { rect: r, .. },
+            ..
+        } => clips == 0 && *r == local,
+        _ => false,
+    })
+}
+
+#[test]
+fn a_glass_button_on_a_material_is_the_compositor_s_regular_glass_and_paints_no_body() {
+    for dark in [false, true] {
+        let mut theme = support::theme();
+        if dark {
+            theme.preferences.appearance = cupertino_ui_theme::Appearance::Dark;
+        }
+        let h = Harness::<GlassButtonWindow<true>>::with_effects(theme);
+        let regions = glass_regions(&h);
+        let rect = h.rect("glass");
+        let button = regions
+            .iter()
+            .find(|r| r.rect == rect)
+            .unwrap_or_else(|| panic!("glass under the button (dark {dark}): {regions:?}"));
+        let glass = button.glass.unwrap();
+        assert_eq!(
+            (glass.style, glass.container),
+            (GlassStyle::Regular, 0),
+            "regular glass of its own"
+        );
+        assert!(button.radius > 0.0, "with the button's corners");
+        assert!(!paints_body(&h), "the glass is its body (dark {dark})");
+    }
+}
+
+#[test]
+fn a_glass_button_paints_its_body_over_content_with_reduce_transparency_and_without_the_desktop_s_glass(
+) {
+    // over the window's own background, which would hide glass under it
+    let over_content = Harness::<GlassButtonWindow<false>>::with_effects(support::theme());
+    assert!(glass_regions(&over_content).is_empty());
+    assert!(paints_body(&over_content));
+    // with Reduce Transparency, on a material
+    let mut reduced = support::theme();
+    reduced.preferences.reduce_transparency = true;
+    let reduced = Harness::<GlassButtonWindow<true>>::with_effects(reduced);
+    let rect = reduced.rect("glass");
+    assert!(glass_regions(&reduced).iter().all(|r| r.rect != rect));
+    assert!(paints_body(&reduced));
+    // on a desktop that shows no glass
+    let plain = Harness::<GlassButtonWindow<true>>::with_theme(support::theme());
+    assert!(glass_regions(&plain).is_empty());
+    assert!(paints_body(&plain));
+}
+
+#[test]
+fn a_glass_button_on_glass_with_increase_contrast_adds_its_rim_in_the_light_appearance() {
+    let mut theme = support::theme();
+    theme.preferences.appearance = cupertino_ui_theme::Appearance::LightHighContrast;
+    let h = Harness::<GlassButtonWindow<true>>::with_effects(theme);
+    let rect = h.rect("glass");
+    assert!(
+        glass_regions(&h).iter().any(|r| r.rect == rect),
+        "the glass stays"
+    );
+    assert!(
+        h.ops("glass")
+            .iter()
+            .any(|op| matches!(op, PaintOp::Stroke { .. })),
+        "a fine rim over the glass"
+    );
+    assert!(!paints_body(&h));
 }

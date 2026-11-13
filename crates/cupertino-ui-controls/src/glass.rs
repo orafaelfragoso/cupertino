@@ -12,6 +12,11 @@
 //! draw that pane's background too ([`Surface::WindowBackground`]): the glass then reads the window, not the desktop
 //! behind it.
 //!
+//! A glass button is glass only where the compositor's glass can show: on a material the window shows (a sidebar, a
+//! translucent window background), filling its node, and without Reduce Transparency. Over the window's own content,
+//! which would hide glass under it, and with Reduce Transparency it paints its body, as it does where the desktop shows
+//! no glass.
+//!
 //! Roles are either content surfaces, which hold a window's content (the sidebar panel), or floating controls over
 //! that content (a toolbar group, a translucent button, a held thumb's lens); see [`GlassRole::floating`]. Glass is
 //! never laid on glass: a role whose node already lies on glass ([`PaintCx::on_glass`]) draws none of its own, the
@@ -51,14 +56,14 @@ pub enum GlassMaterial {
 impl GlassRole {
     /// What draws each role. A floating toolbar group is glass over the content pane's background, which the
     /// compositor draws below it; the sidebar panel lies at the window's edge over what is behind the window, which
-    /// the compositor's sidebar material shows.
-    /// A translucent button and a thumb's lens lie over the window's own content (a form's background, the track),
-    /// which would hide the compositor's glass, so the toolkit paints them.
+    /// the compositor's sidebar material shows. A translucent button is glass of its own where that glass can show
+    /// ([`paint_glass`]) and paints its body elsewhere. A thumb's lens lies over the track it slides along, which the
+    /// window paints and which would hide the compositor's glass, so the toolkit paints it.
     pub const fn material(self) -> GlassMaterial {
         match self {
-            GlassRole::ToolbarGroup => GlassMaterial::Glass,
+            GlassRole::ToolbarGroup | GlassRole::GlassButton => GlassMaterial::Glass,
             GlassRole::SidebarPanel => GlassMaterial::Compositor(Surface::Sidebar),
-            GlassRole::GlassButton | GlassRole::ThumbLens => GlassMaterial::Painted,
+            GlassRole::ThumbLens => GlassMaterial::Painted,
         }
     }
 
@@ -105,10 +110,14 @@ const SHADE_BLUR: f64 = 3.0;
 
 /// Paints the glass of `role` over the whole node, `rect` being the node's bounds and `radius` its corner radius.
 /// Returns true when the compositor draws it, or when the node already lies on glass, which then serves it: glass is
-/// never doubled.
+/// never doubled. A glass button asks for glass only where it can show ([`shows_button_glass`]).
 pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f64) -> bool {
     if cx.on_glass() {
         return true;
+    }
+    if role == GlassRole::GlassButton && !shows_button_glass(cx, rect) {
+        paint_button_body(cx, rect, radius);
+        return false;
     }
     match role.material() {
         GlassMaterial::Compositor(surface) => {
@@ -137,7 +146,10 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
                 return true;
             }
             // without the desktop's glass the toolkit paints its own
-            paint_body(cx, rect, radius);
+            match role {
+                GlassRole::GlassButton => paint_button_body(cx, rect, radius),
+                _ => paint_body(cx, rect, radius),
+            }
             false
         }
         GlassMaterial::Painted => {
@@ -148,6 +160,18 @@ pub fn paint_glass(cx: &mut PaintCx<'_>, role: GlassRole, rect: Rect, radius: f6
             false
         }
     }
+}
+
+/// Whether a glass button's own glass would show: it lies on a material the window shows rather than on the window's
+/// content, which the window paints over glass under it; Reduce Transparency is off, which keeps the painted body; and
+/// its body fills the node, the shape the compositor draws the glass in.
+fn shows_button_glass(cx: &PaintCx<'_>, rect: Rect) -> bool {
+    let size = cx.size();
+    let fills = rect.min_x().abs() < 1e-6
+        && rect.min_y().abs() < 1e-6
+        && (rect.width() - size.width).abs() < 1e-6
+        && (rect.height() - size.height).abs() < 1e-6;
+    cx.on_material() && !cx.env().theme.preferences.reduce_transparency && fills
 }
 
 /// The edge of a floating control's glass in the light appearance with Increase Contrast, at its sides and at its top
@@ -369,7 +393,7 @@ mod tests {
             GlassRole::SidebarPanel.material(),
             GlassMaterial::Compositor(Surface::Sidebar)
         );
-        assert_eq!(GlassRole::GlassButton.material(), GlassMaterial::Painted);
+        assert_eq!(GlassRole::GlassButton.material(), GlassMaterial::Glass);
         assert_eq!(GlassRole::ThumbLens.material(), GlassMaterial::Painted);
     }
 

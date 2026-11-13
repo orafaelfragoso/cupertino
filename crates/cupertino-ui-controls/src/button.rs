@@ -402,9 +402,12 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         };
         let chrome = chrome(cx.size(), self.style, &theme);
         let radius = self.radius(chrome, &theme);
-        let look = ButtonLook::of(self.role, self.style, &theme, &state);
+        let mut look = ButtonLook::of(self.role, self.style, &theme, &state);
         if self.style == ButtonStyle::Glass {
-            crate::glass::paint_glass(cx, GlassRole::GlassButton, chrome, radius);
+            if crate::glass::paint_glass(cx, GlassRole::GlassButton, chrome, radius) {
+                // the label takes the colours of text on the glass
+                look = ButtonLook::of(self.role, self.style, &cx.env().theme, &state);
+            }
             // a press darkens or lightens the glass a little, never moves or grows it
             let tint = if state.enabled {
                 button.tint.sample(cx)

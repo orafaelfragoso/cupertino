@@ -229,15 +229,19 @@ from the application's model and reports changes as messages.
   disabled colour when disabled. Besides symbols a toolbar item may draw a glyph of its own (`ToolbarGlyph`): the
   back and forward chevrons, `More`'s three dots and `Tag`, a tag outline pointing up and to the trailing side with its
   hole by the point, mirrored right to left.
-- **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and `GlassRole::material` says
-t; a toolbar group is regular glass (`PaintCx::glass`) in one container
+- **Glass.** Each glass surface names a `GlassRole` (`ToolbarGroup`, `SidebarPanel`, `GlassButton`, `ThumbLens`) and
+  `GlassRole::material` says what draws it; a toolbar group is regular glass (`PaintCx::glass`) in one container
   per window (`GlassRole::container`, blending only when two controls come closer than the 8 pt gap between them),
   kept by the compositor with Reduce Transparency and Increase Contrast, over the content pane's background, which the
   compositor draws below it; where the desktop shows no glass it paints a translucent body with a one-pixel rim (and a
-  soft shade in the light appearance). Over a light face the compositor's rim light marks no edge, so in the light
-  appearance the toolkit lays its own over the compositor's glass: a dark rim on the outermost device pixel, 25 %
-  black at the sides and 9 % at the top and bottom where the light falls (50 % and 30 % with Increase Contrast), and
-  a faint shade below, cut out of the shape so it never dims the glass. A light divider is 40 % black, as strong over
+  soft shade in the light appearance). At rest the compositor's glass marks its own edge; with Increase Contrast in the
+  light appearance the toolkit lays its own over it: a dark rim on the outermost device pixel, 50 % black at the sides
+  and 30 % at the top and bottom, and a faint shade below, cut out of the shape so it never dims the glass. A glass
+  button is regular glass of its own (container 0) where that glass can show: on a material the window shows (a
+  sidebar, a translucent window background), its body filling its node, without Reduce Transparency; its label then
+  takes the colours of text on glass. Over the window's own content, which would hide glass under it, with Reduce
+  Transparency and where the desktop shows no glass it paints its body and rim. A held thumb's lens lies over the
+  track the window paints, so it stays painted. A light divider is 40 % black, as strong over
   the glass as the disabled glyphs beside it. The field under a resting `ToolbarSearch` button is not drawn, so the button's
   glass shows what lies below the field. Moving a role to another material is its one arm in `GlassRole::material`.
   `GlassRole::floating` tells the floating controls (toolbar groups, glass buttons, a held thumb) from the content

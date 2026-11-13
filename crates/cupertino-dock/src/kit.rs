@@ -393,6 +393,8 @@ pub enum Message {
     ConfChanged,
     /// An application asked for its badge's count to change ([`crate::badge`]).
     Badge(crate::badge::BadgeUpdate),
+    /// Something was dropped on the bar: an application's desktop file is kept in the dock where it landed.
+    Dropped(cupertino_kit::core::Dropped),
     /// Nothing will tell the model about the session any more: the process ends.
     Unheard,
 }
@@ -947,6 +949,46 @@ impl Model {
     fn store_pins(&mut self) {
         let pins = self.session.dock.pinned_keys();
         self.host.store_pins(&pins);
+    }
+
+    /// A drop on the bar: the first application desktop file of a `text/uri-list` the session knows is kept in the
+    /// dock at the slot the drop landed on, among the applications; anything else is refused, so its source keeps it.
+    fn dropped(&mut self, dropped: cupertino_kit::core::Dropped) -> Vec<Command<Message>> {
+        let refuse = vec![Command::FinishDrop(dropped.token, None)];
+        let text = String::from_utf8_lossy(&dropped.data.bytes);
+        let Some(key) = dropped_app(&text).filter(|key| {
+            self.session
+                .desktop()
+                .find(key)
+                .is_some_and(|e| !e.no_display)
+        }) else {
+            return refuse;
+        };
+        let Some(screen) = self.screen() else {
+            return refuse;
+        };
+        let now = self.now();
+        let orientation = self.session.dock.cfg.orientation;
+        let layout = self.session.dock.layout(screen, now);
+        // the slot: how many application tiles stand before the point along the bar
+        let along = |p: Point| match orientation {
+            Orientation::Bottom => p.x,
+            _ => p.y,
+        };
+        let at = along(Point::new(dropped.position.x, dropped.position.y));
+        let index = layout
+            .tiles
+            .iter()
+            .filter(|t| t.kind == TileKind::App)
+            .filter(|t| along(t.rect.center()) < at)
+            .count();
+        self.learn_names([key.as_str()]);
+        self.session.dock.pin(&key, Some(index), now);
+        self.store_pins();
+        vec![Command::FinishDrop(
+            dropped.token,
+            Some(cupertino_kit::platform::DropAction::Copy),
+        )]
     }
 
     /// Look the desktop entry's name of every key in `keys` up once.
@@ -2544,6 +2586,7 @@ fn tile_description(model: &Model, id: TileId, lifecycle: TileLifecycle) -> Stri
 pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     let mut commands = match message {
         Message::Input(input) => input_message(model, input),
+        Message::Dropped(dropped) => model.dropped(dropped),
         Message::Dock { output, events } => model.dock_events(output, events),
         Message::Dark(dark) => {
             model.dark = dark;
@@ -2901,7 +2944,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
             let t = layout.tiles.iter().find(|t| t.id == tile)?;
             to_bottom(t.rect.x + t.rect.w / 2.0 - 0.5, layout.bar.y, 1.0)
         });
-        windows.push(view::bar::window(
+        let mut bar_window = view::bar::window(
             view::bar::BarView {
                 key: key.clone(),
                 output,
@@ -2919,7 +2962,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 surface_changes: model.surface_changes,
             },
             message,
-        ));
+        );
+        bar_window.content = app_drops(bar_window.content);
+        windows.push(bar_window);
         if let Some((id, name, status)) = label {
             windows.push(view::label::window(
                 view::label::LabelView {
@@ -3114,4 +3159,71 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         windows.extend(overview.map(|w| on_output(w, output, Wm::Overview)));
     }
     windows
+}
+
+/// The type an application is dropped on the bar in: a list of `file://` URIs, its desktop file among them.
+const URI_LIST: &str = "text/uri-list";
+
+/// The bar's `content` taking drops of applications' desktop files ([`Message::Dropped`]).
+fn app_drops(
+    content: cupertino_kit::core::Element<Message>,
+) -> cupertino_kit::core::Element<Message> {
+    use cupertino_kit::core::{DropPlace, DropTarget};
+    use cupertino_kit::platform::DropAction;
+    cupertino_kit::core::Element::from(DropTarget {
+        content,
+        mimes: vec![URI_LIST.into()],
+        actions: [DropAction::Copy].into(),
+        place: Box::new(|over| {
+            over.actions
+                .contains(&DropAction::Copy)
+                .then_some(DropPlace {
+                    key: None,
+                    action: DropAction::Copy,
+                })
+        }),
+        on_hover: None,
+        on_drop: Box::new(Message::Dropped),
+        on_leave: None,
+    })
+}
+
+/// The key of the application whose desktop file is the first `file://` URI of a `text/uri-list` ending in
+/// `.desktop`: the file's name without the suffix, as the dock keeps its pins. `None` when the list holds none.
+pub fn dropped_app(list: &str) -> Option<String> {
+    list.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.strip_prefix("file://"))
+        .map(percent_decoded)
+        .find_map(|path| {
+            let name = path.rsplit('/').next()?;
+            let key = name.strip_suffix(".desktop")?;
+            (!key.is_empty()).then(|| key.to_owned())
+        })
+}
+
+/// `text` with its `%XX` escapes decoded; an escape that is not one is kept as it is.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escape = match (bytes[i], bytes.get(i + 1), bytes.get(i + 2)) {
+            (b'%', Some(&h), Some(&l)) => hex(h).zip(hex(l)),
+            _ => None,
+        };
+        match escape {
+            Some((h, l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

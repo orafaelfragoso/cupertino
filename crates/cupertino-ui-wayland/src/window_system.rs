@@ -206,6 +206,7 @@ fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
         GlassStyle::SubduedModule => cupertino_protocol_app::GlassStyle::SubduedModule,
         GlassStyle::Snippet => cupertino_protocol_app::GlassStyle::Snippet,
         GlassStyle::Veiled => cupertino_protocol_app::GlassStyle::Veiled,
+        GlassStyle::Menu => cupertino_protocol_app::GlassStyle::Menu,
     }
 }
 
@@ -1944,6 +1945,13 @@ mod tests {
             GlassStyle::of_material("TrackGlass"),
             Some(GlassStyle::Track)
         );
+    }
+
+    #[test]
+    fn the_menu_s_material_name_asks_for_menu_glass() {
+        use cupertino_protocol_app::GlassStyle as Wire;
+        let style = GlassStyle::of_material("MenuGlass").unwrap();
+        assert_eq!(protocol_style(style), Wire::Menu);
     }
 
     #[test]

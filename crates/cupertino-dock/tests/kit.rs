@@ -2831,9 +2831,9 @@ fn glass_styles(run: &mut Run, window: WindowId) -> Vec<cupertino_kit::platform:
         .collect()
 }
 
-/// A tile's name and a tile's menu are popover glass, the name with its pointer and the menu with its own.
+/// A tile's name is popover glass with its pointer, and a tile's menu menu glass with its own.
 #[test]
-fn a_tiles_name_and_menu_are_popover_glass() {
+fn a_tiles_name_is_popover_glass_and_its_menu_menu_glass() {
     use cupertino_kit::platform::GlassStyle;
     let mut run = Run::start();
     let bar = run.bar();
@@ -2852,7 +2852,7 @@ fn a_tiles_name_and_menu_are_popover_glass() {
     let menu = open_menu_window(&run, bar).expect("the menu opened");
     let styles = glass_styles(&mut run, menu);
     assert!(
-        !styles.is_empty() && styles.iter().all(|s| *s == GlassStyle::Popover),
+        !styles.is_empty() && styles.iter().all(|s| *s == GlassStyle::Menu),
         "{styles:?}"
     );
 }

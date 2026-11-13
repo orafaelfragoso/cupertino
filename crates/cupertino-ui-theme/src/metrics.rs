@@ -343,7 +343,7 @@ mod tests {
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Menu).material,
-            Some(crate::DENSE_GLASS_MATERIAL)
+            Some(crate::MENU_GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Dark, false, Surface::Popover).material,
@@ -352,7 +352,7 @@ mod tests {
         // glass takes the recipe of reduced transparency rather than going opaque
         assert_eq!(
             look(Appearance::Light, true, Surface::Menu).material,
-            Some(crate::DENSE_GLASS_MATERIAL)
+            Some(crate::MENU_GLASS_MATERIAL)
         );
         assert_eq!(
             look(Appearance::Light, true, Surface::Sidebar).material,

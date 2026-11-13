@@ -91,6 +91,10 @@ pub enum GlassStyle {
     /// Clear glass under a soft blur fill, veiled black from a fifth at its top to fully at its bottom, so it reads as
     /// a dark gradient that keeps the backdrop's colour at the top.
     Veiled,
+    /// The glass of a menu: a wide blur under a face that tones the backdrop into a narrow band, a pale wash of it in the
+    /// light appearance and in the dark one a mid-dark pane that lifts a dark backdrop and holds a bright one down, with
+    /// a thin line of light along its top and bottom edges and no bending edge.
+    Menu,
 }
 
 /// Everything besides the shape's size that selects a recipe.
@@ -772,6 +776,61 @@ const DENSE_EDGE_LINE_DARK: f32 = 0.54;
 const DENSE_CAPTURE_SCALE: f32 = 0.25;
 const DENSE_CAPTURE_SCALE_WIDE: f32 = 0.125;
 
+/// The face of menu glass. Light: a pale wash of the backdrop, about `0.41 · c + 144` of 255 per channel over the
+/// backdrop's range (white comes out near 248, black near 113). Dark: the luma compression bends the tone curve over, so a
+/// dark backdrop is lifted (black near 22, a grey of 64 near 76) and a bright one held near 112 to 115, keeping its
+/// colour (white comes out near 102).
+fn menu_face(dark: bool) -> GlassFace {
+    if dark {
+        GlassFace {
+            saturation: MENU_SATURATION_DARK,
+            white: MENU_WHITE_DARK,
+            black: MENU_BLACK_DARK,
+            clamp: 1.0,
+            max_luma: MENU_MAX_LUMA_DARK,
+            fill: [0.0; 4],
+        }
+    } else {
+        GlassFace {
+            saturation: MENU_SATURATION_LIGHT,
+            white: MENU_WHITE_LIGHT,
+            black: MENU_BLACK_LIGHT,
+            clamp: 1.0,
+            max_luma: MENU_MAX_LUMA_LIGHT,
+            fill: [0.0; 4],
+        }
+    }
+}
+
+/// The dark menu face: saturation, white and black levels and luma compression.
+pub const MENU_SATURATION_DARK: f32 = 1.193;
+pub const MENU_WHITE_DARK: f32 = 1.0966;
+pub const MENU_BLACK_DARK: f32 = 0.0877;
+pub const MENU_MAX_LUMA_DARK: f32 = 0.3096;
+/// The light menu face: saturation, white and black levels and luma compression.
+pub const MENU_SATURATION_LIGHT: f32 = 1.2271;
+pub const MENU_WHITE_LIGHT: f32 = 1.2825;
+pub const MENU_BLACK_LIGHT: f32 = 0.4413;
+pub const MENU_MAX_LUMA_LIGHT: f32 = 0.6321;
+/// The menu's blur radius at full opacity of the first level: a Gaussian of 13.5 points.
+pub const MENU_BLUR: f32 = 6.75;
+/// The scale the menu's backdrop is captured at.
+const MENU_CAPTURE_SCALE: f32 = 0.25;
+/// The line of light along the menu's top and bottom edges, in the dark and the light appearance: its strength (white
+/// added at its middle), its half-width and where its middle lies inside the edge, in points. Dark: one device pixel
+/// at 2× about 48 levels over the face; light: a point about 100 levels over the face, white over a pale one.
+const MENU_LINE_DARK: (f32, f32, f32) = (0.19, 0.3, -0.25);
+const MENU_LINE_LIGHT: (f32, f32, f32) = (0.5, 0.5, -0.5);
+/// The angular width of the arcs the menu's line lights, in radians: the whole top and bottom, fading round the corners.
+const MENU_LINE_SPREAD: f32 = std::f32::consts::FRAC_PI_2;
+/// The colour of the menu's line of light: white, whatever the face under it.
+const MENU_LINE_MATRIX: ColorMatrix = [
+    0.0, 0.0, 0.0, 0.0, 1.0, //
+    0.0, 0.0, 0.0, 0.0, 1.0, //
+    0.0, 0.0, 0.0, 0.0, 1.0, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+
 /// Module glass: the clear glass of its size with a strong bending edge and a darker rim. The strength is the same at
 /// every size; the band is [`MODULE_REFRACTION_HEIGHT_PER_POINT`] of the short side, at most
 /// [`MODULE_REFRACTION_HEIGHT_MAX`] points.
@@ -980,6 +1039,7 @@ impl GlassParams {
             GlassStyle::SubduedModule => Self::subdued_module(dark, s),
             GlassStyle::Snippet => Self::snippet(dark, s),
             GlassStyle::Veiled => Self::veiled(dark, s),
+            GlassStyle::Menu => Self::menu(dark),
         };
         if mode.increase_contrast {
             if let Some(face) = increased_contrast_face(dark, mode.style) {
@@ -1010,7 +1070,8 @@ impl GlassParams {
                 | GlassStyle::Sidebar
                 | GlassStyle::SubduedModule
                 | GlassStyle::Snippet
-                | GlassStyle::Veiled => {
+                | GlassStyle::Veiled
+                | GlassStyle::Menu => {
                     // the large panel's wider blur gives way to regular glass's whole blur recipe
                     p.blur = Self::regular(dark, s).blur;
                     p.blur.radius = REDUCED_TRANSPARENCY_BLUR;
@@ -1030,6 +1091,10 @@ impl GlassParams {
             }
         } else if mode.density > 0 {
             p.face.fill = denser_fill(p.face.fill, dark, f32::from(mode.density.min(100)) / 100.0);
+        }
+        if mode.style == GlassStyle::Menu && (mode.reduce_transparency || mode.increase_contrast) {
+            // the popup's own rim, drawn apart, marks the edge of the opaque menu
+            p.highlight.glow_amount = 0.0;
         }
         p
     }
@@ -1423,6 +1488,51 @@ impl GlassParams {
         p.highlight.amount = VEILED_RIM;
         p.highlight.color_bias = VEILED_RIM_BIAS;
         p.veil = VEILED_VEIL;
+        p
+    }
+
+    /// The menu glass: one Gaussian of [`MENU_BLUR`] at full opacity and no blur fill, the menu's face
+    /// ([`menu_face`]), no bending edge, bleed or rim, and a thin line of light along its top and bottom edges; captured
+    /// coarsely, as the wide blur leaves no fine detail. Nothing in it follows the size. The outline and the drop shadow
+    /// are the popup's own.
+    fn menu(dark: bool) -> Self {
+        let mut p = Self::regular(dark, 0.0);
+        p.blur = GlassBlur {
+            radius: MENU_BLUR,
+            level_opacity: [1.0; BLUR_LEVELS],
+            fill_radius: 0.0,
+            fill_darken: 0.0,
+            fill_normal: 0.0,
+            fill_lighten: 0.0,
+        };
+        p.face = menu_face(dark);
+        p.refraction = GlassRefraction {
+            amount: 0.0,
+            height: 0.0,
+            outer_amount: 0.0,
+        };
+        p.bleed.amount = 0.0;
+        p.bleed.height = 0.0;
+        let (amount, height, offset) = if dark {
+            MENU_LINE_DARK
+        } else {
+            MENU_LINE_LIGHT
+        };
+        p.highlight = GlassHighlight {
+            amount: 0.0,
+            spread: MENU_LINE_SPREAD,
+            curvature: 1.0,
+            glow_amount: amount,
+            glow_height: height,
+            glow_offset: offset,
+            glow_fill: 1.0,
+            diffuse: GlowDiffuse::NONE,
+            matrix: MENU_LINE_MATRIX,
+            ..p.highlight
+        };
+        p.shadow.ring_opacity = 0.0;
+        p.shadow.edge_line = 0.0;
+        p.capture_scale = MENU_CAPTURE_SCALE;
         p
     }
 
@@ -2582,6 +2692,72 @@ mod tests {
         };
         assert!(tone(&light, 0.0) > 0.75, "{}", tone(&light, 0.0));
         assert!(tone(&dark, 1.0) < 0.4, "{}", tone(&dark, 1.0));
+    }
+
+    #[test]
+    fn menu_glass_blurs_widely_at_every_size_bends_nothing_and_lights_its_top_and_bottom_edges() {
+        for dark in [false, true] {
+            let small = GlassParams::new(mode(dark, GlassStyle::Menu), 30.0);
+            let large = GlassParams::new(mode(dark, GlassStyle::Menu), 400.0);
+            assert_eq!(small, large, "nothing follows the size");
+            let p = small;
+            assert!(close(p.blur_sigma(), 13.5), "{}", p.blur_sigma());
+            assert!(!p.fill_shows(), "no blur fill");
+            assert_eq!((p.refraction.amount, p.refraction.height), (0.0, 0.0));
+            assert_eq!(p.highlight.amount, 0.0, "no rim of the face's own");
+            assert!(p.highlight.glow_amount > 0.0 && p.highlight.glow_fill == 1.0);
+            assert!(close(p.highlight.angle, HIGHLIGHT_ANGLE));
+            // the line is white over any face
+            let white = apply_matrix(&p.highlight.matrix, [0.2, 0.4, 0.1, 1.0]);
+            assert_eq!(white, [1.0; 4]);
+            assert_eq!((p.shadow.edge_line, p.shadow.ring_opacity), (0.0, 0.0));
+            assert_eq!(p.face.fill[3], 0.0, "no veil");
+        }
+        // the dark face bends over: its tone curve rises to a top near 115 of 255 and falls a little past it
+        let dark = GlassParams::new(mode(true, GlassStyle::Menu), 200.0).face;
+        let k = 1.0 - dark.max_luma;
+        let top = 1.0 / (2.0 * k);
+        assert!((0.65..0.8).contains(&top), "{top}");
+        let grey = |x: f32| {
+            let g = x - k * x * x;
+            dark.black + (dark.white - dark.black) * g
+        };
+        assert!(
+            (grey(top) * 255.0 - 115.0).abs() < 2.0,
+            "{}",
+            grey(top) * 255.0
+        );
+        assert!(grey(1.0) > 0.38 && grey(0.0) < 0.1);
+        // the light face is a pale wash: black near 113, white near 248
+        let light = GlassParams::new(mode(false, GlassStyle::Menu), 200.0).face;
+        let k = 1.0 - light.max_luma;
+        let grey = |x: f32| (light.black + (light.white - light.black) * (x - k * x * x)).min(1.0);
+        assert!(
+            (grey(0.0) * 255.0 - 113.0).abs() < 2.0,
+            "{}",
+            grey(0.0) * 255.0
+        );
+        assert!(
+            (grey(1.0) * 255.0 - 248.0).abs() < 2.0,
+            "{}",
+            grey(1.0) * 255.0
+        );
+    }
+
+    #[test]
+    fn menu_glass_with_reduce_transparency_or_increase_contrast_takes_their_faces_and_drops_its_line(
+    ) {
+        for dark in [false, true] {
+            for (rt, ic) in [(true, false), (false, true), (true, true)] {
+                let menu = with(dark, GlassStyle::Menu, rt, ic, false);
+                let dense = with(dark, GlassStyle::Dense, rt, ic, false);
+                assert_eq!(menu.face, dense.face, "{dark} {rt} {ic}");
+                assert_eq!(menu.highlight.glow_amount, 0.0);
+                if rt {
+                    assert_eq!(menu.blur, dense.blur);
+                }
+            }
+        }
     }
 
     #[test]

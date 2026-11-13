@@ -746,6 +746,43 @@ fn veiled_glass_is_a_style_from_version_18() {
     assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
 }
 
+/// A backdrop of version 20 asks for menu glass; one of version 19, which the style is not defined for, gets
+/// `invalid_glass` for it.
+#[test]
+fn menu_glass_is_a_style_from_version_20() {
+    let style = cupertino_backdrop_v1::GlassStyle::Menu;
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 20);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    client.send(Cmd::Commit);
+    h.wait_until("the glass commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.glass.is_some())
+    });
+    assert_eq!(
+        h.backdrops()[0].glass.unwrap().style,
+        cupertino_theme::GlassStyle::Menu
+    );
+    assert_eq!(client.backdrop_error(), None);
+    drop(h);
+
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn_at(h.socket_path(), CARD, 19);
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    client.send(Cmd::SetGlass(style, 0, 0.0));
+    let end = Instant::now() + common::HANG_GUARD;
+    while client.backdrop_error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(client.backdrop_error(), Some(INVALID_GLASS));
+}
+
 /// `set_glass` and `set_material` replace each other: the one sent last decides how the backdrop draws.
 #[test]
 fn the_last_of_set_glass_and_set_material_decides_the_look() {
@@ -878,8 +915,8 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
 
 /// The GLES glass pass against the CPU model of `cupertino-glass`: a rounded glass panel over the procedural wallpaper,
 /// whose colours change slowly enough that every blur level of it is the wallpaper itself, must match it within the
-/// error of the half-scale capture, in each appearance and with each accessibility recipe, for the regular style and
-/// the large-panel one, whose face saturates and caps its lightness.
+/// error of the half-scale capture, in each appearance and with each accessibility recipe, for the regular style, the
+/// large-panel one, whose face saturates and caps its lightness, the veiled one and the menu one.
 #[test]
 fn glass_pass_matches_the_cpu_model() {
     use cupertino_defaults::accessibility::DisplayOptions;
@@ -912,12 +949,16 @@ fn glass_pass_matches_the_cpu_model() {
         (true, options(true, false), GlassStyle::LargePanel),
         (false, options(false, false), GlassStyle::Veiled),
         (true, options(false, false), GlassStyle::Veiled),
+        (false, options(false, false), GlassStyle::Menu),
+        (true, options(false, false), GlassStyle::Menu),
+        (true, options(true, false), GlassStyle::Menu),
     ] {
         let large = style == GlassStyle::LargePanel;
         // the style the panel asks for, and the backdrop version that has it
         let wire = match style {
             GlassStyle::LargePanel => Some((cupertino_backdrop_v1::GlassStyle::LargePanel, 10)),
             GlassStyle::Veiled => Some((cupertino_backdrop_v1::GlassStyle::Veiled, 18)),
+            GlassStyle::Menu => Some((cupertino_backdrop_v1::GlassStyle::Menu, 20)),
             _ => None,
         };
         let appearance = if dark {
@@ -1008,7 +1049,8 @@ fn glass_pass_matches_the_cpu_model() {
             "glass {style:?} dark={dark} {display:?}: GLES vs CPU mean {mean:.3} max {max}"
         );
         assert!(changed > 400 * 160 / 2, "the glass pass ran");
-        if large {
+        // menu glass has no rim of its own, only its line of light
+        if large || style == GlassStyle::Menu {
             continue;
         }
         // the rim darkens the edge of a mid face most where the edge runs diagonally, at the corners, and only a

@@ -2211,6 +2211,57 @@ mod tests {
         face_color(blur_fill(c, c, &p), &p, p.face.max_luma).map(|v| v * 255.0)
     }
 
+    /// Flat backdrops and the face dark menu glass gives each, in 8-bit levels: a dark backdrop lifted, a mid one kept,
+    /// a bright one held down near 112 to 125 with its colour.
+    const MENU_TONES_DARK: [([f32; 3], [f32; 3]); 9] = [
+        ([46.0, 37.0, 32.0], [65.0, 55.0, 50.0]),
+        ([67.0, 51.0, 41.0], [84.0, 66.0, 53.0]),
+        ([84.0, 61.0, 47.0], [98.0, 73.0, 57.0]),
+        ([112.0, 86.0, 73.0], [113.0, 87.0, 74.0]),
+        ([140.0, 110.0, 88.0], [126.0, 97.0, 77.0]),
+        ([157.0, 144.0, 150.0], [119.0, 109.0, 115.0]),
+        ([180.0, 165.0, 163.0], [123.0, 112.0, 111.0]),
+        ([196.0, 181.0, 174.0], [124.0, 113.0, 108.0]),
+        ([230.0, 215.0, 169.0], [122.0, 113.0, 86.0]),
+    ];
+    /// The same for light menu glass: a pale wash, about `0.41 · c + 144` per channel.
+    const MENU_TONES_LIGHT: [([f32; 3], [f32; 3]); 7] = [
+        ([45.0, 35.0, 30.0], [154.0, 139.0, 130.0]),
+        ([113.0, 87.0, 74.0], [203.0, 175.0, 161.0]),
+        ([134.0, 105.0, 88.0], [215.0, 184.0, 166.0]),
+        ([155.0, 143.0, 152.0], [219.0, 207.0, 216.0]),
+        ([180.0, 165.0, 164.0], [232.0, 216.0, 215.0]),
+        ([196.0, 181.0, 174.0], [240.0, 223.0, 216.0]),
+        ([255.0, 255.0, 255.0], [248.0, 248.0, 248.0]),
+    ];
+
+    #[test]
+    fn menu_glass_tones_a_flat_backdrop_into_a_narrow_band_keeping_its_colour() {
+        for (dark, tones, within) in [
+            (true, &MENU_TONES_DARK[..], 4.0),
+            (false, &MENU_TONES_LIGHT[..], 4.0),
+        ] {
+            for (backdrop, body) in tones {
+                // the size does not change the menu's face
+                for side in [40.0, 300.0] {
+                    let face = flat_face(dark, GlassStyle::Menu, side, *backdrop);
+                    for c in 0..3 {
+                        assert!(
+                            (face[c] - body[c]).abs() <= within,
+                            "dark {dark}: {backdrop:?} gave {face:?}, not {body:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // a bright sky behind a dark menu comes through as a mid-dark grey of it, not a near-opaque dark one
+        let sky = flat_face(true, GlassStyle::Menu, 200.0, [212.0, 214.0, 209.0]);
+        assert!(sky.iter().all(|v| (105.0..=120.0).contains(v)), "{sky:?}");
+        // and black stays well below every bright backdrop
+        let black = flat_face(true, GlassStyle::Menu, 200.0, [0.0; 3]);
+        assert!(black.iter().all(|v| (15.0..=30.0).contains(v)), "{black:?}");
+    }
+
     #[test]
     fn module_tiles_keep_the_backdrop_light_in_the_light_appearance_and_dark_in_the_dark_one() {
         let light = flat_face(false, GlassStyle::Module, 170.0, [255.0; 3]);

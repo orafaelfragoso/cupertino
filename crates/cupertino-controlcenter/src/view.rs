@@ -4,9 +4,9 @@
 //!
 //! The window paints no panel of its own: every tile asks the compositor for glass under its outline, and the tiles
 //! join one glass container so the compositor can blend them where they come close. A level's track is glass of its own
-//! over its tile's. With Reduce Transparency the tiles are opaque and sit on one opaque panel. The panel follows the
-//! session's appearance: light glass with dark labels in the light appearance, dark glass with light labels in the
-//! dark one.
+//! over its tile's. With Reduce Transparency the tiles are opaque and sit on one opaque panel, in the session's
+//! appearance. Otherwise the tiles look the same in both appearances: mid-toned glass with light labels and symbols;
+//! with Increase Contrast the glass takes its contrast face and each tile draws a rim.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -67,11 +67,9 @@ const RT_GROUP: Color = Color::new(0.302, 0.302, 0.302, 1.0);
 const RT_TILE: Color = Color::new(0.114, 0.114, 0.114, 1.0);
 const RT_GROUP_LIGHT: Color = Color::new(0.82, 0.82, 0.82, 1.0);
 const RT_TILE_LIGHT: Color = Color::new(0.96, 0.96, 0.96, 1.0);
-/// The tiles with Increase Contrast: opaque grey inside a rim half a point wide, so no backdrop shows through behind
-/// the text; mid grey with a darker rim in the dark appearance, light grey with a mid grey rim in the light one.
-const IC_TILE: Color = Color::new(0.463, 0.463, 0.463, 1.0);
+/// The rim a tile draws over its glass with Increase Contrast, half a point wide: a mid grey over the dark tiles (the
+/// tiles keep the dark appearance in both), a darker one over light tiles.
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
-const IC_TILE_LIGHT: Color = Color::new(0.86, 0.86, 0.86, 1.0);
 const IC_RIM_COLOR_LIGHT: Color = Color::new(0.45, 0.45, 0.45, 1.0);
 const IC_RIM: f64 = 0.5;
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
@@ -884,7 +882,11 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             );
             let color = by_appearance(cx, RT_GROUP, RT_GROUP_LIGHT);
             fill(cx, group, layout::GROUP_RADIUS, color);
-        } else if !increase_contrast(cx) {
+        } else {
+            // the tiles look the same in both appearances: a mid-toned glass with light labels and symbols
+            cx.pin_appearance(true);
+        }
+        if !reduce_transparency(cx) && !increase_contrast(cx) {
             let cutouts: Vec<Cutout> = self
                 .cutouts
                 .iter()
@@ -988,13 +990,21 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             fill(cx, rect, radius, color);
             return;
         }
+        let shape = if self.capsule {
+            Glass::module().capsule()
+        } else {
+            Glass::module().radius(radius)
+        };
+        let glass = shape
+            .container(CONTAINER, BLEND)
+            .alpha(finite_alpha(self.panel) * alpha);
+        if !cx.glass(glass) {
+            let color = by_appearance(cx, FALLBACK, FALLBACK_LIGHT);
+            fill(cx, rect, radius, color);
+        }
         if increase_contrast(cx) {
-            let (tile, rim_color) = if dark(cx) {
-                (IC_TILE, IC_RIM_COLOR)
-            } else {
-                (IC_TILE_LIGHT, IC_RIM_COLOR_LIGHT)
-            };
-            fill(cx, rect, radius, tile);
+            // the glass takes the contrast face; the tile marks its edge with a rim
+            let rim_color = by_appearance(cx, IC_RIM_COLOR, IC_RIM_COLOR_LIGHT);
             let rim = Rect::new(
                 IC_RIM / 2.0,
                 IC_RIM / 2.0,
@@ -1009,19 +1019,6 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
                 width: IC_RIM,
                 paint: Paint::Solid(rim_color),
             });
-            return;
-        }
-        let shape = if self.capsule {
-            Glass::module().capsule()
-        } else {
-            Glass::module().radius(radius)
-        };
-        let glass = shape
-            .container(CONTAINER, BLEND)
-            .alpha(finite_alpha(self.panel) * alpha);
-        if !cx.glass(glass) {
-            let color = by_appearance(cx, FALLBACK, FALLBACK_LIGHT);
-            fill(cx, rect, radius, color);
         }
     }
 

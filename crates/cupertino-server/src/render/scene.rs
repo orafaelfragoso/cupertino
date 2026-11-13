@@ -2349,7 +2349,7 @@ fn glass_pieces(
     if !ready {
         return glass_fallback(p, SceneKind::Backdrop, index, &container, alpha);
     }
-    let probes = tone_probes(members);
+    let probes = tone_probes(members, mode.dark);
     if probes.is_empty() {
         if let Some(m) = &p.res.material {
             m.borrow_mut().note_unadapted(members.iter().map(|b| b.key));
@@ -2365,9 +2365,20 @@ fn glass_pieces(
 
 /// The glass backdrops of a container (`members`) whose text follows what lies behind them: every one when the
 /// container's bounds are small enough ([`adapts_foreground`]), none otherwise, so the shapes of a larger panel keep
-/// the appearance together.
-fn tone_probes(members: &[&BackdropArea]) -> Vec<ToneProbe> {
-    let Some(bounds) = members.iter().map(|b| b.area).reduce(|a, b| a.merge(b)) else {
+/// the appearance together. A dark card (`dark`) never follows: its face stays a mid-dark pane over any backdrop, so
+/// its text keeps the light tone and every card of a column reads alike.
+fn tone_probes(members: &[&BackdropArea], dark: bool) -> Vec<ToneProbe> {
+    let card = dark
+        && members.iter().any(|b| {
+            b.glass
+                .is_some_and(|g| g.style == cupertino_theme::GlassStyle::Card)
+        });
+    let Some(bounds) = members
+        .iter()
+        .map(|b| b.area)
+        .reduce(|a, b| a.merge(b))
+        .filter(|_| !card)
+    else {
         return Vec::new();
     };
     if !adapts_foreground(bounds.size.w.min(bounds.size.h) as f32) {

@@ -5041,6 +5041,8 @@ thread_local! {
     static OBSCURED_SEEN: Cell<Option<cupertino_geometry::Insets>> = const { Cell::new(None) };
     /// What the last paint of a [`RaisedRow`] read of [`PaintCx::in_raised_layer`].
     static IN_LAYER_SEEN: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The [`RaisedRow`] floats over the window and covers nothing ([`Widget::obscures`]).
+    static ROW_FLOATS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A row in the window's raised layer, 30 pt tall: glass under it where the window system draws it, else a fill of
@@ -5098,6 +5100,10 @@ impl Widget<String> for RaisedRow {
 
     fn raised(&self, _: &()) -> bool {
         true
+    }
+
+    fn obscures(&self, _: &()) -> bool {
+        !ROW_FLOATS.get()
     }
 }
 
@@ -5279,7 +5285,7 @@ fn draws(rt: &Under, layer: bool, color: Color) -> bool {
     })
 }
 
-fn last_materials(rt: &Under) -> Vec<MaterialRegion> {
+fn last_materials<A: Application>(rt: &Runtime<A, FakeSystem>) -> Vec<MaterialRegion> {
     rt.window_system()
         .requests
         .iter()
@@ -5441,6 +5447,156 @@ fn without_a_layer_a_raised_row_s_glass_lies_over_a_material_that_comes_after_it
     }
 }
 
+/// A raised panel that floats over the window and covers nothing, as an alert does: glass where it can, a mark.
+struct FloatingPanel;
+
+impl Widget<String> for FloatingPanel {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        RaisedRow.layout()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, state: &(), constraints: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        RaisedRow.measure(state, constraints, cx)
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, String>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.glass(crate::Glass::regular());
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, 10.0, 10.0)),
+            paint: Paint::Solid(ROW_FILL),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn raised(&self, _: &()) -> bool {
+        true
+    }
+
+    fn obscures(&self, _: &()) -> bool {
+        false
+    }
+}
+
+/// A floating panel that comes first in the tree, then a raised row it lies across.
+struct FloatFirst;
+
+impl Application for FloatFirst {
+    type Model = ();
+    type Message = String;
+
+    fn init() -> ((), Vec<Command<String>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<String>> {
+        let mut window = UnderRow::view(&(0.0, false)).remove(0);
+        window.content = Element::new(Layers(vec![
+            Element::new(FloatingPanel).key("panel"),
+            Element::new(RaisedRow).key("row"),
+        ]));
+        vec![window]
+    }
+}
+
+/// A raised node that floats draws over every other raised node, paint and glass, with or without a layer, wherever
+/// it is in the tree: a bar's controls never lie over an alert.
+#[test]
+fn a_floating_raised_node_draws_over_the_other_raised_nodes_wherever_it_is_in_the_tree() {
+    for layers in [false, true] {
+        let damage = Rc::default();
+        let mut system = FakeSystem::default();
+        system.layers = layers;
+        system.effects = true;
+        let mut rt = Runtime::<FloatFirst, FakeSystem>::new(system, options(&damage));
+        rt.step(steps()).unwrap();
+        let window = rt.windows()[0].1;
+        configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+        let materials = last_materials(&rt);
+        assert_eq!(materials.len(), 2, "layers {layers}: {materials:?}");
+        let w = &rt.windows[0];
+        let position = |list: &crate::DisplayList, key: &'static str| {
+            let id: crate::NodeId = rt.find(w.id, &key.into()).unwrap();
+            list.nodes.iter().position(|n| n.id == id.into())
+        };
+        let panel: crate::NodeId = rt.find(w.id, &"panel".into()).unwrap();
+        let panel_rect = w.geometry.get(&panel).unwrap().rect;
+        let last = materials.last().unwrap();
+        assert_eq!(
+            last.rect, panel_rect,
+            "layers {layers}: its glass is drawn last: {materials:?}"
+        );
+        if layers {
+            // the row it lies across leaves the layer, whose paint lies over all its glass, for the content under
+            // the panel's glass
+            assert_eq!(position(&w.layer.list, "row"), None);
+            assert!(position(&w.display_list, "row").is_some());
+            assert!(position(&w.layer.list, "panel").is_some());
+            assert!(last.raised && !materials[0].raised, "{materials:?}");
+        } else {
+            let list = &w.display_list;
+            assert!(
+                position(list, "row") < position(list, "panel"),
+                "the panel paints last"
+            );
+        }
+    }
+}
+
+/// A raised row a floating panel does not lie across keeps its place in the layer.
+#[test]
+fn a_raised_node_clear_of_a_floating_one_stays_in_the_layer() {
+    struct Apart;
+    impl Application for Apart {
+        type Model = ();
+        type Message = String;
+        fn init() -> ((), Vec<Command<String>>) {
+            ((), Vec::new())
+        }
+        fn update(_: &mut (), _: String) -> Vec<Command<String>> {
+            Vec::new()
+        }
+        fn view(_: &()) -> Vec<Window<String>> {
+            let mut window = UnderRow::view(&(0.0, false)).remove(0);
+            window.content = Element::new(Layers(vec![
+                Element::new(RaisedRow).key("row"),
+                column(vec![
+                    block(50.0, false),
+                    Element::new(FloatingPanel).key("panel"),
+                ]),
+            ]));
+            vec![window]
+        }
+    }
+    let damage = Rc::default();
+    let mut system = FakeSystem::default();
+    system.layers = true;
+    system.effects = true;
+    let mut rt = Runtime::<Apart, FakeSystem>::new(system, options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let materials = last_materials(&rt);
+    assert_eq!(materials.len(), 2, "{materials:?}");
+    assert!(materials.iter().all(|m| m.raised), "{materials:?}");
+}
+
 /// A window that turns one colour hides its raised layer with the colour's commit, as it takes its glass away, and
 /// shows it again once its content is drawn again.
 #[test]
@@ -5525,6 +5681,33 @@ fn without_a_raised_layer_the_row_draws_in_place_and_nothing_scrolls_under_its_g
         "the block under the row is not drawn there: {:?}",
         target.bounds
     );
+}
+
+#[test]
+fn a_raised_node_that_floats_draws_in_the_layer_but_obscures_nothing_under_it() {
+    ROW_FLOATS.set(true);
+    let (mut rt, window) = under_row(true);
+    rt.messages.push_back("scroll:50".into());
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    ROW_FLOATS.set(false);
+    // the marked block lies at 10–30, all under the row, yet nothing covers it and its mark is drawn whole
+    assert_eq!(OBSCURED_SEEN.get().map(|i| i.top), Some(0.0));
+    assert_eq!(
+        IN_LAYER_SEEN.get(),
+        Some(true),
+        "the row still draws in the layer"
+    );
+    let w = &rt.windows[0];
+    let marked: crate::NodeId = rt.find(window, &"marked".into()).unwrap();
+    let overlay = w
+        .display_list
+        .nodes
+        .iter()
+        .find(|n| n.id == crate::paint::overlay_id(marked))
+        .expect("the mark");
+    assert!(overlay.bounds.min_y() < 30.0, "{overlay:?}");
 }
 
 #[test]

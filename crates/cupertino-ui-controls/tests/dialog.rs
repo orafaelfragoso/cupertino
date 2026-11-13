@@ -370,3 +370,56 @@ fn the_sheet_is_a_modal_alert_named_by_its_title_and_the_content_behind_is_hidde
         "hidden from assistive technology"
     );
 }
+
+/// The glass regions the window last asked for.
+fn glass_regions<A: Application>(h: &Harness<A>) -> Vec<cupertino_ui_platform::MaterialRegion> {
+    h.rt.window_system()
+        .requests(h.window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            cupertino_ui_platform::WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.glass.is_some())
+        .collect()
+}
+
+/// Once it has popped in, an alert on a desktop with a raised layer is dense glass in that layer, so the window's
+/// content shows blurred through it; the content keeps its own place under it.
+#[test]
+fn a_settled_alert_is_dense_glass_in_the_raised_layer_over_the_content() {
+    let mut h = Harness::<App>::with_layer(support::theme());
+    h.tap(TAB);
+    h.tap(SPACE);
+    assert!(h.model().open);
+    h.settle();
+    let alert = h
+        .snapshot()
+        .accessibility
+        .into_iter()
+        .find(|(_, n)| n.role == Role::AlertDialog)
+        .map(|(_, n)| n.bounds)
+        .unwrap();
+    let glass = glass_regions(&h);
+    let body = glass
+        .iter()
+        // the window clips the region to itself: the alert is taller than this small window
+        .find(|r| r.rect.origin == alert.origin && r.rect.width() == alert.width())
+        .unwrap_or_else(|| panic!("no glass under the alert {alert:?}: {glass:?}"));
+    assert_eq!(
+        body.glass.map(|g| g.style),
+        Some(cupertino_ui_platform::GlassStyle::Dense)
+    );
+    assert!(body.raised, "in the raised layer");
+
+    // without a raised layer the alert paints its own grey and asks for no glass
+    let mut flat = Harness::<App>::with_effects(support::theme());
+    flat.tap(TAB);
+    flat.tap(SPACE);
+    flat.settle();
+    assert!(glass_regions(&flat).is_empty());
+}

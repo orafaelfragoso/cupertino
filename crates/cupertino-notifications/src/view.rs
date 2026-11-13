@@ -132,6 +132,11 @@ pub const HEADER_GAP: f64 = 5.0;
 pub const TITLE_INSET: f64 = 2.5;
 /// The centre's title size.
 pub const TITLE_SIZE: f64 = 19.0;
+/// The faint shadow under the centre's title when it is drawn light, so it reads over a bright wallpaper as well as a
+/// dark one: black at this opacity, blurred by this many points and dropped this far below the text.
+const TITLE_SHADOW_ALPHA: f32 = 0.45;
+const TITLE_SHADOW_BLUR: f64 = 4.0;
+const TITLE_SHADOW_DROP: f64 = 1.0;
 /// The header's clear button: a circle of [`CLOSE_DIAMETER`] that grows into a capsule this wide, naming itself, while
 /// the pointer is over it or it has the keyboard.
 pub const CLEAR_WIDTH: f64 = 86.0;
@@ -1136,6 +1141,7 @@ fn centre_window<M: Clone + 'static>(
             HEADER_HEIGHT,
         )),
         hidden: false,
+        halo: true,
     })
     .key("title")];
     if let Some(&only) = scopes.first() {
@@ -1380,6 +1386,7 @@ fn centre_window<M: Clone + 'static>(
                 align: TextAlign::Start,
                 rect: None,
                 hidden: false,
+                halo: false,
             })
             .fill(),
             Element::new(Button {
@@ -1838,6 +1845,7 @@ fn card_content<M: Clone + 'static>(
                     AGE_SIZE * 1.4,
                 )),
                 hidden: false,
+                halo: false,
             })
             .key("age"),
         );
@@ -2920,6 +2928,9 @@ struct Label {
     align: TextAlign,
     rect: Option<Rect>,
     hidden: bool,
+    /// Drawn straight over the wallpaper: a light label keeps a faint shadow ([`TITLE_SHADOW_ALPHA`]) so it reads over a
+    /// bright one.
+    halo: bool,
 }
 
 impl Label {
@@ -3012,6 +3023,16 @@ impl<M: 'static> Widget<M> for Label {
         let top = ((size.height - layout.size().height) / 2.0)
             .max(0.0)
             .round();
+        if self.halo && color.r + color.g + color.b > 1.5 {
+            cx.set_group(
+                1.0,
+                vec![Effect::DropShadow {
+                    offset: Point::new(0.0, TITLE_SHADOW_DROP),
+                    blur: TITLE_SHADOW_BLUR,
+                    color: Color::new(0.0, 0.0, 0.0, TITLE_SHADOW_ALPHA),
+                }],
+            );
+        }
         for line in layout.lines() {
             for run in &line.runs {
                 cx.push(PaintOp::Glyphs {
@@ -3068,6 +3089,7 @@ impl<M: Clone + 'static> ClearButton<M> {
             align: TextAlign::Start,
             rect: None,
             hidden: true,
+            halo: false,
         };
         let layout = label.laid_out(env, f64::INFINITY);
         let text = layout.as_ref().map_or(0.0, |l| l.size().width);

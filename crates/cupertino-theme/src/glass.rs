@@ -579,29 +579,42 @@ const SIDEBAR_RIM: f32 = 0.5;
 const SIDEBAR_RIM_BIAS: f32 = -0.188;
 const SIDEBAR_RING_OPACITY: f32 = 0.06;
 
-/// The face of sidebar glass. Light: the regular light face with white a little past 1, the luma compressed to 0.85,
-/// clamped at 1.07, under a white veil of 0.2. Dark: little colour (0.6), black 0.1 and white dimmed to 0.5, no veil.
+/// The face of sidebar glass: a dense pane that lets only a trace of the backdrop through. Dark: a grey `x` comes out at
+/// `SIDEBAR_BLACK_DARK + (SIDEBAR_WHITE_DARK − SIDEBAR_BLACK_DARK) · x`, about `0.034 · x + 34` of 255 (black near 34,
+/// white near 42). Light: the levels under a half veil of a warm light grey, about `0.02 · x + 229` (black near 229,
+/// white near 234). The backdrop's colour comes through at [`SIDEBAR_SATURATION`] of its departure from grey, so the pane
+/// only takes a faint tint of what lies behind it.
 fn sidebar_face(dark: bool) -> GlassFace {
     if dark {
         GlassFace {
-            saturation: 0.6,
-            white: 0.5,
-            black: 0.1,
+            saturation: SIDEBAR_SATURATION,
+            white: SIDEBAR_WHITE_DARK,
+            black: SIDEBAR_BLACK_DARK,
             clamp: 1.0,
             max_luma: 1.0,
             fill: [0.0; 4],
         }
     } else {
         GlassFace {
-            saturation: 1.2,
-            white: 1.03,
-            black: 0.4,
-            clamp: 1.07,
-            max_luma: 0.85,
-            fill: [1.0, 1.0, 1.0, 0.2],
+            saturation: SIDEBAR_SATURATION,
+            white: SIDEBAR_WHITE_LIGHT,
+            black: SIDEBAR_BLACK_LIGHT,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: SIDEBAR_VEIL_LIGHT,
         }
     }
 }
+
+/// How much of the backdrop's departure from grey the sidebar keeps, in both appearances.
+pub const SIDEBAR_SATURATION: f32 = 0.1;
+/// The dark sidebar's black and white levels.
+pub const SIDEBAR_BLACK_DARK: f32 = 0.1325;
+pub const SIDEBAR_WHITE_DARK: f32 = 0.1665;
+/// The light sidebar's black and white levels and the warm light grey veil over them.
+pub const SIDEBAR_BLACK_LIGHT: f32 = 0.9;
+pub const SIDEBAR_WHITE_LIGHT: f32 = 0.94;
+pub const SIDEBAR_VEIL_LIGHT: [f32; 4] = [0.9094, 0.8969, 0.8827, 0.5];
 
 /// Subdued module glass: how much wider its blur is than the module's of the same size, and its face's white (light)
 /// and black (dark).
@@ -863,6 +876,18 @@ const MODULE_REFRACTION_HEIGHT_MAX: f32 = 25.0;
 /// The module's blur radius by short side `(side, radius)`; linear between, flat outside.
 const MODULE_BLUR_BY_SIDE: [(f32, f32); 2] = [(60.0, 5.0), (140.0, 10.0)];
 const MODULE_RIM_BIAS: f32 = -0.3;
+/// The module's face, the same in both appearances: a little more colour, black lifted to about 27 of 255 and white held
+/// near 178, so every channel comes out at about `0.59 · c + 27` and a sunlit backdrop as a mid tone of its own colour.
+pub const MODULE_SATURATION: f32 = 1.045;
+pub const MODULE_WHITE: f32 = 0.697;
+pub const MODULE_BLACK: f32 = 0.107;
+/// The module's line of light just inside its top and bottom edges: its strength at the top (white added at its middle),
+/// its half-width and where its middle lies inside the edge, in points, and the bottom's strength as a share of the
+/// top's: a point-wide line about 58 levels over the face at the top and 32 at the bottom.
+pub const MODULE_LINE: (f32, f32, f32) = (0.23, 0.5, -0.5);
+pub const MODULE_LINE_BOTTOM: f32 = 0.55;
+/// The dark line just outside the module's outline, which marks its sides against a bright backdrop.
+const MODULE_EDGE_LINE: f32 = 0.55;
 
 /// Card glass: the blur radius at full opacity of the first level, the blur fill's radius and opacities (lighten in the
 /// light appearance, darken in the dark one, and normal), the refraction, the rim and the ring shadow inside the
@@ -881,6 +906,14 @@ const CARD_SPREAD_DARK: f32 = 5.0 * std::f32::consts::PI / 12.0;
 const CARD_RING_OPACITY: f32 = 0.06;
 /// The card's edge line in the light appearance; the dark card has none.
 const CARD_EDGE_LINE_LIGHT: f32 = 0.19;
+/// The dark card's face: a mid-dark pane that holds a bright backdrop near 115 of 255 with a little of its colour, about
+/// `0.42 · c + 26` per channel over the bright half of the range, and lets a dark one through darker still (a grey of
+/// 128 near 86, black at black). A little less colour than the backdrop's, white kept, no black lift and a strong luma
+/// compression, which holds a bright neutral below a bright warm colour; no veil.
+pub const CARD_SATURATION_DARK: f32 = 0.794;
+pub const CARD_WHITE_DARK: f32 = 0.884;
+pub const CARD_BLACK_DARK: f32 = 0.0;
+pub const CARD_MAX_LUMA_DARK: f32 = 0.518;
 
 /// Track glass: the face lifts black by a tenth and leaves white; the refraction's strength and band follow the
 /// track's height (its short side); the rim; the ring shadow inside the outline, darker in the dark appearance; and a
@@ -933,10 +966,11 @@ fn reduced_transparency_face(dark: bool, style: GlassStyle) -> GlassFace {
     }
 }
 
-/// Face colours with Increase Contrast; clear glass keeps its own.
+/// Face colours with Increase Contrast; clear glass keeps its own, and so does the sidebar, whose dense face already
+/// keeps the backdrop from showing through.
 fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
     match (style, dark) {
-        (GlassStyle::Clear, _) => None,
+        (GlassStyle::Clear | GlassStyle::Sidebar, _) => None,
         (_, true) => Some(GlassFace {
             saturation: 0.8,
             white: 0.3,
@@ -959,7 +993,7 @@ fn increased_contrast_face(dark: bool, style: GlassStyle) -> Option<GlassFace> {
 /// Face of the large panel. Dark: white behind it comes out a mid grey (about 125 of 255) and black a dark grey (about
 /// 53), while strong colours keep much of their brightness, as their luma is compressed less; the saturation is a
 /// little under the regular glass's. Light: a bright sheet that keeps the scene's colour: every channel comes out at
-/// about `0.61 · c + 124` of 255 after a strong saturation, so black comes through as a light grey near 124, a dark warm
+/// about `0.61 · c + 124` of 255 after a moderate saturation, so black comes through as a light grey near 124, a dark warm
 /// scene as a light tint of its own hue, and anything from a mid tone up is near white.
 fn large_panel_face(dark: bool) -> GlassFace {
     let regular = regular_face(dark);
@@ -985,7 +1019,7 @@ fn large_panel_face(dark: bool) -> GlassFace {
 
 /// The light large panel's face: saturation, white and black levels (no luma compression) and the white veil over it.
 /// A grey `x` comes out at `(1 − fill) · (b + (w − b) · x) + fill`: 0.61 per unit of the scene above 0.486.
-pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.8;
+pub const LARGE_PANEL_SATURATION_LIGHT: f32 = 1.4;
 pub const LARGE_PANEL_WHITE_LIGHT: f32 = 1.118;
 pub const LARGE_PANEL_BLACK_LIGHT: f32 = 0.37;
 pub const LARGE_PANEL_FILL_LIGHT: f32 = 0.184;
@@ -1047,6 +1081,8 @@ impl GlassParams {
             0.0
         };
         let dark = mode.dark;
+        // module tiles look the same in both appearances, with every option
+        let face_dark = dark || mode.style == GlassStyle::Module;
         let mut p = match mode.style {
             GlassStyle::Regular => Self::regular(dark, s),
             GlassStyle::Clear => Self::clear(dark, s),
@@ -1066,7 +1102,7 @@ impl GlassParams {
             GlassStyle::Menu => Self::menu(dark),
         };
         if mode.increase_contrast {
-            if let Some(face) = increased_contrast_face(dark, mode.style) {
+            if let Some(face) = increased_contrast_face(face_dark, mode.style) {
                 p.face = face;
             }
         }
@@ -1107,15 +1143,19 @@ impl GlassParams {
             // both options: these optics with the contrast colours (clear glass has none of its own)
             let contrast = mode
                 .increase_contrast
-                .then(|| increased_contrast_face(dark, mode.style))
+                .then(|| increased_contrast_face(face_dark, mode.style))
                 .flatten();
-            p.face = contrast.unwrap_or_else(|| reduced_transparency_face(dark, mode.style));
+            p.face = contrast.unwrap_or_else(|| reduced_transparency_face(face_dark, mode.style));
             if contrast.is_none() && dark && mode.style == GlassStyle::LargePanel {
                 // a launcher-sized sheet is near black with only a faint trace of the colours behind it
                 p.face.saturation = LARGE_PANEL_REDUCED_SATURATION_DARK;
             }
         } else if mode.density > 0 {
-            p.face.fill = denser_fill(p.face.fill, dark, f32::from(mode.density.min(100)) / 100.0);
+            p.face.fill = denser_fill(
+                p.face.fill,
+                face_dark,
+                f32::from(mode.density.min(100)) / 100.0,
+            );
         }
         if mode.style == GlassStyle::Menu && (mode.reduce_transparency || mode.increase_contrast) {
             // the popup's own rim, drawn apart, marks the edge of the opaque menu
@@ -1254,14 +1294,33 @@ impl GlassParams {
         p
     }
 
-    /// The module glass: the clear glass of its size with the module's refraction and rim.
-    fn module(dark: bool, s: f32) -> Self {
-        let mut p = Self::clear(dark, s);
+    /// The module glass, the same in both appearances: the dark clear glass of its size with the module's face,
+    /// refraction and rim, a line of light inside its top and bottom edges and a dark line outside its outline.
+    fn module(_dark: bool, s: f32) -> Self {
+        let mut p = Self::clear(true, s);
         p.blur.radius = by_side(&MODULE_BLUR_BY_SIDE, s);
+        p.face = GlassFace {
+            saturation: MODULE_SATURATION,
+            white: MODULE_WHITE,
+            black: MODULE_BLACK,
+            clamp: 1.0,
+            max_luma: 1.0,
+            fill: [0.0; 4],
+        };
         p.refraction.amount = MODULE_REFRACTION;
         p.refraction.height =
             (MODULE_REFRACTION_HEIGHT_PER_POINT * s).min(MODULE_REFRACTION_HEIGHT_MAX);
         p.highlight.color_bias = MODULE_RIM_BIAS;
+        let (amount, height, offset) = MODULE_LINE;
+        p.highlight.glow_amount = amount;
+        p.highlight.glow_height = height;
+        p.highlight.glow_offset = offset;
+        p.highlight.glow_fill = MODULE_LINE_BOTTOM;
+        p.highlight.spread = MENU_LINE_SPREAD;
+        p.highlight.curvature = 1.0;
+        p.highlight.diffuse = GlowDiffuse::NONE;
+        p.highlight.matrix = MENU_LINE_MATRIX;
+        p.shadow.edge_line = MODULE_EDGE_LINE;
         p
     }
 
@@ -1269,6 +1328,16 @@ impl GlassParams {
     /// rim and ring shadow, captured at [`CARD_CAPTURE_SCALE`].
     fn card(dark: bool, s: f32) -> Self {
         let mut p = Self::clear(dark, s);
+        if dark {
+            p.face = GlassFace {
+                saturation: CARD_SATURATION_DARK,
+                white: CARD_WHITE_DARK,
+                black: CARD_BLACK_DARK,
+                clamp: 1.0,
+                max_luma: CARD_MAX_LUMA_DARK,
+                fill: [0.0; 4],
+            };
+        }
         p.blur = GlassBlur {
             radius: CARD_BLUR,
             level_opacity: [1.0; BLUR_LEVELS],
@@ -2408,7 +2477,7 @@ mod tests {
     }
 
     #[test]
-    fn module_tiles_are_clear_glass_with_a_strong_bending_edge() {
+    fn module_tiles_are_one_glass_in_both_appearances_with_a_bending_edge_and_lit_rims() {
         // (short side, blur radius, refraction band): 5 points of blur up to a side of 60 and 10 from 140, linear between,
         // and a band 0.18 of the side, at most 25 points
         for (side, blur, band) in [
@@ -2420,8 +2489,22 @@ mod tests {
         ] {
             for dark in [false, true] {
                 let p = GlassParams::new(mode(dark, GlassStyle::Module), side);
-                let clear = GlassParams::new(mode(dark, GlassStyle::Clear), side);
-                assert_eq!(p.face, clear_face(dark), "{side} {dark}");
+                let clear = GlassParams::new(mode(true, GlassStyle::Clear), side);
+                assert_eq!(
+                    p,
+                    GlassParams::new(mode(!dark, GlassStyle::Module), side),
+                    "{side}: the appearance changes nothing"
+                );
+                assert_eq!(
+                    (
+                        p.face.saturation,
+                        p.face.white,
+                        p.face.black,
+                        p.face.max_luma
+                    ),
+                    (MODULE_SATURATION, MODULE_WHITE, MODULE_BLACK, 1.0)
+                );
+                assert_eq!(p.face.fill[3], 0.0, "no veil");
                 assert!(close(p.blur.radius, blur), "{side}: {}", p.blur.radius);
                 assert_eq!(p.blur.level_opacity, [1.0; BLUR_LEVELS]);
                 assert!(!p.fill_shows(), "no blur fill");
@@ -2429,13 +2512,26 @@ mod tests {
                 assert!(close(p.refraction.height, band), "{side}");
                 let h = p.highlight;
                 assert_eq!((h.amount, h.color_bias, h.height), (0.4, -0.3, 0.5));
-                assert!(close(h.spread, 75f32.to_radians()));
-                assert_eq!(h.matrix, HIGHLIGHT_MATRIX_CLEAR);
-                assert_eq!((p.shadow, p.bleed), (clear.shadow, clear.bleed));
+                // a white line a point wide just inside the top, a little over half as bright at the bottom
+                assert_eq!((h.glow_amount, h.glow_height, h.glow_offset), MODULE_LINE);
+                assert_eq!(h.glow_fill, MODULE_LINE_BOTTOM);
+                assert_eq!(h.matrix, MENU_LINE_MATRIX);
+                assert_eq!(p.shadow.edge_line, 0.55, "a dark line marks its sides");
+                assert_eq!(
+                    (
+                        GlassShadow {
+                            edge_line: 0.0,
+                            ..p.shadow
+                        },
+                        p.bleed
+                    ),
+                    (clear.shadow, clear.bleed)
+                );
                 assert_eq!(p.capture_scale, GLASS_BACKDROP_SCALE);
             }
         }
-        // light: black lifted by 0.2, white dimmed to 0.95 under a white veil of 0.1; dark: 0.05, 0.8 and 0.05
+        // the clear faces it no longer takes: light black lifted by 0.2, white dimmed to 0.95 under a white veil of 0.1;
+        // dark 0.05, 0.8 and 0.05
         let light = clear_face(false);
         assert_eq!((light.black, light.white, light.fill[3]), (0.2, 0.95, 0.1));
         let dark = clear_face(true);
@@ -2447,7 +2543,21 @@ mod tests {
         for dark in [false, true] {
             for side in [56.0, 120.0] {
                 let p = GlassParams::new(mode(dark, GlassStyle::Card), side);
-                assert_eq!(p.face, clear_face(dark));
+                if dark {
+                    let f = p.face;
+                    assert_eq!(
+                        (f.saturation, f.white, f.black, f.max_luma, f.fill[3]),
+                        (
+                            CARD_SATURATION_DARK,
+                            CARD_WHITE_DARK,
+                            CARD_BLACK_DARK,
+                            CARD_MAX_LUMA_DARK,
+                            0.0
+                        )
+                    );
+                } else {
+                    assert_eq!(p.face, clear_face(dark));
+                }
                 // radius 10 at full opacity: a deviation of 20 points; the fill of radius 8
                 assert!(close(p.blur_sigma(), 20.0) && close(p.fill_sigma(), 16.0));
                 let b = p.blur;
@@ -2527,18 +2637,15 @@ mod tests {
                 "no line where it meets the content"
             );
             let f = sidebar.face;
-            if dark {
-                assert_eq!(
-                    (f.saturation, f.black, f.white, f.fill[3]),
-                    (0.6, 0.1, 0.5, 0.0)
-                );
-            } else {
-                assert_eq!(
-                    (f.saturation, f.black, f.white, f.max_luma),
-                    (1.2, 0.4, 1.03, 0.85)
-                );
-                assert_eq!(f.fill, [1.0, 1.0, 1.0, 0.2]);
-            }
+            // a dense pane: a grey comes out within a few levels whatever lies behind
+            let grey = |x: f32| {
+                let g = f.black + (f.white - f.black) * x;
+                (g + (f.fill[0] - g) * f.fill[3]) * 255.0
+            };
+            let (at_black, at_white) = if dark { (33.8, 42.5) } else { (230.7, 235.8) };
+            assert!((grey(0.0) - at_black).abs() < 0.5, "{dark} {}", grey(0.0));
+            assert!((grey(1.0) - at_white).abs() < 0.5, "{dark} {}", grey(1.0));
+            assert_eq!((f.saturation, f.max_luma, f.clamp), (0.1, 1.0, 1.0));
 
             let module = GlassParams::new(mode(dark, GlassStyle::Module), 140.0);
             let subdued = GlassParams::new(mode(dark, GlassStyle::SubduedModule), 140.0);
@@ -2731,7 +2838,7 @@ mod tests {
             (GlassStyle::Popover, 0.175, 0.0),
             (GlassStyle::Card, 0.19, 0.0),
             (GlassStyle::Clear, 0.0, 0.0),
-            (GlassStyle::Module, 0.0, 0.0),
+            (GlassStyle::Module, 0.55, 0.55),
             (GlassStyle::Bar, 0.0, 0.0),
         ] {
             assert_eq!(
@@ -2926,6 +3033,8 @@ mod tests {
                 let rt = with(dark, style, true, false, false);
                 let ic = with(dark, style, false, true, false);
                 let what = format!("{style:?} dark {dark}");
+                // module tiles take the dark appearance's faces in both
+                let face_dark = dark || style == GlassStyle::Module;
                 // Reduce Transparency: no bending, the wide blur and a dense face
                 assert_eq!(
                     (rt.refraction.amount, rt.refraction.height),
@@ -2933,7 +3042,11 @@ mod tests {
                     "{what}"
                 );
                 assert_eq!(rt.blur.radius, REDUCED_TRANSPARENCY_BLUR, "{what}");
-                assert_eq!(rt.face, reduced_transparency_face(dark, style), "{what}");
+                assert_eq!(
+                    rt.face,
+                    reduced_transparency_face(face_dark, style),
+                    "{what}"
+                );
                 assert!(rt.face.fill[3] >= 0.6, "{what}");
                 assert_eq!(rt.shadow.ring_stroke, 0.0, "{what}");
                 // Increase Contrast: the optics kept, the contrast colours
@@ -2944,7 +3057,7 @@ mod tests {
                 );
                 assert_eq!(
                     Some(ic.face),
-                    increased_contrast_face(dark, style),
+                    increased_contrast_face(face_dark, style),
                     "{what}"
                 );
                 assert_ne!(ic.face, base.face, "{what}");

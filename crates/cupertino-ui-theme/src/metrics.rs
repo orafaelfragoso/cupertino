@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_lies_on_sidebar_glass_until_it_goes_opaque() {
+    fn the_sidebar_lies_on_sidebar_glass_in_every_appearance_until_transparency_is_reduced() {
         use crate::Surface;
         let theme = Theme::load().unwrap();
         for appearance in Appearance::ALL {
@@ -278,7 +278,7 @@ mod tests {
                 )
                 .unwrap()
                 .surface(Surface::Sidebar);
-                let opaque = reduce_transparency || appearance.is_high_contrast();
+                let opaque = reduce_transparency;
                 assert_eq!(
                     look.material,
                     (!opaque).then_some(crate::SIDEBAR_GLASS_MATERIAL),
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switcher_lies_on_switcher_glass_in_every_appearance_until_it_goes_opaque() {
+    fn the_switcher_lies_on_switcher_glass_in_every_appearance_until_transparency_is_reduced() {
         use crate::Surface;
         let theme = Theme::load().unwrap();
         for appearance in Appearance::ALL {
@@ -303,7 +303,7 @@ mod tests {
                 )
                 .unwrap()
                 .surface(Surface::Switcher);
-                let opaque = reduce_transparency || appearance.is_high_contrast();
+                let opaque = reduce_transparency;
                 assert_eq!(
                     look.material,
                     (!opaque).then_some(crate::SWITCHER_GLASS_MATERIAL),
@@ -378,8 +378,22 @@ mod tests {
         assert_eq!(high_contrast.fill, window(Appearance::DarkHighContrast));
         assert_eq!(
             look(Appearance::DarkHighContrast, false, Surface::Sidebar).material,
-            None
+            Some(crate::SIDEBAR_GLASS_MATERIAL),
+            "high contrast keeps the sidebar glass"
         );
+        for surface in [Surface::Switcher, Surface::Tooltip, Surface::Hud] {
+            assert!(
+                look(Appearance::LightHighContrast, false, surface)
+                    .material
+                    .is_some(),
+                "{surface:?}"
+            );
+            assert_eq!(
+                look(Appearance::LightHighContrast, true, surface).material,
+                None,
+                "{surface:?}"
+            );
+        }
         for appearance in Appearance::ALL {
             assert_eq!(look(appearance, true, Surface::Menu).fill.unwrap().a, 1.0);
         }

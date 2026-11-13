@@ -18,7 +18,7 @@ layout
   NodeId(2v1) cupertino_launcher::view::Enclosure<cupertino_launcher::kit::Message> key=Some(Str("panel")) parent=Some(NodeId(1v1)) children=[NodeId(3v1)] rect=[60,44 640x432] clip=[none]
   NodeId(3v1) cupertino_launcher::view::PanelRoot<cupertino_launcher::kit::Message> key=Some(Str("content")) parent=Some(NodeId(2v1)) children=[NodeId(4v1), NodeId(11v1), NodeId(12v1)] rect=[60,44 640x432] clip=[60,44 640x432]
   NodeId(4v1) cupertino_launcher::view::Bar<cupertino_launcher::kit::Message> key=Some(Str("query-row")) parent=Some(NodeId(3v1)) children=[NodeId(5v1), NodeId(6v1)] rect=[60,44 640x57] clip=[60,44 640x432]
-  NodeId(5v1) cupertino_ui_controls::Icon key=Some(Str("search-symbol")) parent=Some(NodeId(4v1)) children=[] rect=[83,61 23x23] clip=[60,44 640x432]
+  NodeId(5v1) cupertino_ui_controls::Icon key=Some(Str("search-symbol")) parent=Some(NodeId(4v1)) children=[] rect=[79.5,58 29x29] clip=[60,44 640x432]
   NodeId(6v1) cupertino_ui_controls::BareField<cupertino_launcher::kit::Message> key=Some(Str("query")) parent=Some(NodeId(4v1)) children=[] rect=[123,44 555x57] clip=[60,44 640x432]
   NodeId(11v1) cupertino_launcher::view::Hairline key=Some(Str("separator")) parent=Some(NodeId(3v1)) children=[] rect=[60,101 640x1] clip=[60,44 640x432]
   NodeId(12v1) cupertino_launcher::view::Plain<cupertino_launcher::kit::Message> key=Some(Str("body")) parent=Some(NodeId(3v1)) children=[NodeId(13v1), NodeId(44v1), NodeId(45v1)] rect=[60,102 640x257.978515625] clip=[60,44 640x432]
@@ -78,8 +78,8 @@ display
     Stroke { shape: RoundedRect { rect: Rect { origin: Point { x: -0.25, y: -0.25 }, size: Size { width: 640.5, height: 432.5 } }, radius: 28.75 }, width: 0.5, paint: Solid(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.27 }) }
   paint 4294967299 parent=Some(4294967298) revision=60 bounds=[60,43 640x433] hit=[60,44 640x432] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
   paint 4294967300 parent=Some(4294967299) revision=13 bounds=[60,43 640x64.86] hit=[60,44 640x57] clip=None transform=[1.0, 0.0, 0.0, 1.0, 60.0, 44.0]
-  paint 4294967301 parent=Some(4294967300) revision=6 bounds=[83,61 23x23] hit=[83,61 23x23] clip=None transform=[1.0, 0.0, 0.0, 1.0, 83.0, 61.0]
-    Image { image: ResourceRef { id: ResourceId(#0), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 23.0, height: 23.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 23.0, height: 23.0 } }, sampling: Linear }
+  paint 4294967301 parent=Some(4294967300) revision=6 bounds=[79.5,58 29x29] hit=[79.5,58 29x29] clip=None transform=[1.0, 0.0, 0.0, 1.0, 79.5, 58.0]
+    Image { image: ResourceRef { id: ResourceId(#0), revision: 1 }, src: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 29.0, height: 29.0 } }, dst: Rect { origin: Point { x: 0.0, y: 0.0 }, size: Size { width: 29.0, height: 29.0 } }, sampling: Linear }
   paint 4294967302 parent=Some(4294967300) revision=86 bounds=[97,43 581x64.86] hit=[123,44 555x57] clip=None transform=[1.0, 0.0, 0.0, 1.0, 123.0, 44.0]
     PushClip(Rect(Rect { origin: Point { x: 0.0, y: 11.0 }, size: Size { width: 555.0, height: 35.0 } }))
     Glyphs origin=0,37.86 font=FontId(0) size=26 count=4 color=Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }

@@ -72,8 +72,9 @@ pub const CORNER_RADIUS: f64 = COLLAPSED_HEIGHT / 2.0;
 pub const SIDE_PADDING: f64 = 22.0;
 /// Where the query's text starts, from the panel's leading edge, behind every header's symbol.
 pub const QUERY_INSET: f64 = 63.0;
-/// Between the panel's leading edge and the search field's magnifier, and between a scope's edge and its symbol.
-pub const SEARCH_ICON_INSET: f64 = 23.0;
+/// Between the panel's leading edge and the search field's magnifier's box (its ink starts about 23.2 points in), and
+/// between a scope's edge and its symbol.
+pub const SEARCH_ICON_INSET: f64 = 19.5;
 pub const SCOPE_ICON_INSET: f64 = 21.5;
 /// The query's text size.
 pub const QUERY_SIZE: f64 = 26.0;
@@ -89,8 +90,9 @@ pub const ROW_HEIGHT: f64 = 40.0;
 pub const CALCULATOR_ROW_HEIGHT: f64 = 64.0;
 /// Result icons.
 pub const ICON_SIZE: f64 = 32.0;
-/// The search symbol before the query, and a scope's symbol (the applications', the files') in its place.
-pub const SEARCH_ICON_SIZE: f64 = 23.0;
+/// The search symbol's box before the query, whose drawn magnifier is about 23 points across, and a scope's symbol (the
+/// applications', the files') in its place.
+pub const SEARCH_ICON_SIZE: f64 = 29.0;
 pub const SCOPE_ICON_SIZE: f64 = 25.0;
 /// Between a row's selection and the list's edges.
 pub const SELECTION_INSET: f64 = 8.0;

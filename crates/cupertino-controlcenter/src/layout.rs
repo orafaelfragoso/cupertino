@@ -199,9 +199,8 @@ mod tests {
     }
 
     #[test]
-    fn the_tiles_start_44_points_below_the_top_and_14_in_from_the_right() {
-        let bar = cupertino_theme::ShapeTokens::default().menu_bar_height;
-        assert_eq!(bar + f64::from(BAR_MARGIN) + INSET, 44.0);
+    fn the_tiles_start_20_points_below_the_menu_bar_and_14_in_from_the_right() {
+        assert_eq!(f64::from(BAR_MARGIN) + INSET, 20.0);
         assert_eq!(f64::from(EDGE_MARGIN) + INSET, 14.0);
     }
 

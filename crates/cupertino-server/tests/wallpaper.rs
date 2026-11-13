@@ -246,8 +246,8 @@ fn display(name: &str, size: (i32, i32)) -> headless::HeadlessDisplay {
 #[test]
 fn the_strip_under_the_bar_is_measured_once_the_image_is_up_and_again_when_it_changes() {
     let Some(mut h) = Harness::new(|config, dir| {
-        // dark only in the 30 rows under the 24 pt bar
-        config.wallpaper.light = Some(dark_topped(dir, "dark-top.png", (800, 600), 30));
+        // dark only in the 40 rows under the 33 pt bar
+        config.wallpaper.light = Some(dark_topped(dir, "dark-top.png", (800, 600), 40));
     }) else {
         return;
     };

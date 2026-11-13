@@ -298,7 +298,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **.** Behaviour of the design: bar structure, press-drag-release and
   click-sticky interaction, hover switching, keyboard navigation, type-ahead. The per-output presentation (dimmed inactive
   output, auto-hide in full screen) lives in `cupertino-wm::menu_bar`.
-- **.** The selection highlight of a pressed title is a capsule 22 pt tall, reaching 13.875 pt past the title's text on
+- **.** The bar is 33 pt tall and every item's frame 22 pt, centred with 5.5 pt above and below
+  (`BarMetrics::item_inset_y`). The selection highlight of a pressed title is a capsule 22 pt tall, reaching 13.875 pt past the title's text on
   each side (`BarMetrics::selection_corner_radius`, `title_highlight_overhang`), in a veil of the text's tone: dark at 7 %
   under dark text, light at 10 % under light text. A title is its text and 10 pt on each side, so two titles' text is
   20 pt apart. An item of the status area (status items, the control panel, the clock) sits in a frame of its content
@@ -316,7 +317,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   locale data). `when-space-allows` always shows the date; the compact fallback is open. The battery and Bluetooth rows (open), the symbol choice (one `symbol.wifi` / `symbol.battery` / `symbol.bluetooth` / `symbol.moon` each, drawn in the bar's text
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
-- **approximate.** Bar height (24 pt), paddings, popup metrics, the band a status item holds its tone in and how long it waits, what the tone covers.
+- **approximate.** Paddings, popup metrics, the band a status item holds its tone in and how long it waits, what the tone covers.
 
 **Text.** The controller measures with the toolkit's text system (`view::KitMeasure`), the one the windows draw with, so the slots and rows it lays out hold the text the windows draw, at every output scale.
 

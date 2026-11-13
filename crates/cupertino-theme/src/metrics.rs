@@ -46,8 +46,7 @@ pub struct ShapeTokens {
     pub menu_bar_selection_corner_radius: f64,
     /// window rim is one pixel wide (window rim colour).
     pub window_rim_width_px: f64,
-    /// approximate: menu bar height ≈ 24 pt on displays without a notch;
-    /// needs runtime verification.
+    /// Height of the menu bar: 33 pt, its 22 pt items centred with 5.5 pt above and below.
     pub menu_bar_height: f64,
 }
 
@@ -58,7 +57,7 @@ impl Default for ShapeTokens {
             window_corner_radius_small: WINDOW_CORNER_RADIUS_SMALL,
             menu_bar_selection_corner_radius: 11.0,
             window_rim_width_px: 1.0,
-            menu_bar_height: 24.0,
+            menu_bar_height: 33.0,
         }
     }
 }

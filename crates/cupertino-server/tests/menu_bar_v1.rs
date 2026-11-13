@@ -82,8 +82,8 @@ use cupertino_test_bus::PrivateBus;
 use gtk_shell::gtk_shell1::{self, GtkShell1};
 
 const OUTPUT: (i32, i32) = (1000, 700);
-/// Height of the bar surface; the server reserves the height of the design tokens (24 pt).
-const BAR_HEIGHT: i32 = 24;
+/// Height of the bar surface; the server reserves the height of the design tokens (33 pt).
+const BAR_HEIGHT: i32 = 33;
 
 struct Harness {
     state: Cupertino,
@@ -1489,7 +1489,7 @@ fn the_bar_gets_a_first_group_and_the_server_reserves_its_height() {
     // the client's exclusive zone is 0: the reservation is the server's
     assert_eq!(
         h.state.usable_area(out),
-        Rect::new(0.0, 24.0, 1000.0, 676.0)
+        Rect::new(0.0, 33.0, 1000.0, 667.0)
     );
     assert_eq!(bar.error(), None);
 }
@@ -2335,7 +2335,7 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     let visible =
         |h: &Harness, at: f64| h.state.menu_bars.set.presentation(out, at).unwrap().visible;
     assert_eq!(visible(&h, h.state.now()), 1.0);
-    assert_eq!(h.state.usable_area(out).y, 24.0);
+    assert_eq!(h.state.usable_area(out).y, 33.0);
     let top = (500.0, 10.0).into();
     assert!(
         h.state.surface_under(top).is_some(),
@@ -2450,7 +2450,7 @@ fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_butto
         .layout(Size::new(width, 300.0))
         .button(ButtonKind::Zoom)
         .center;
-    let (x, y) = (zoom.x, 24.0 + zoom.y);
+    let (x, y) = (zoom.x, 33.0 + zoom.y);
     h.state.pointer_moved_to((x, y).into(), 0, None);
     assert_eq!(h.state.decor.hover_group, None, "hidden with the bar");
     assert_eq!(title_bars(&mut h), 0);
@@ -2471,7 +2471,7 @@ fn the_top_edge_reveals_the_title_bar_of_a_full_screen_window_and_its_zoom_butto
         strip,
         Some(Rect::new(
             0.0,
-            24.0,
+            33.0,
             width,
             metrics.titlebar_height(TitlebarStyle::Standard)
         )),
@@ -2566,7 +2566,7 @@ fn the_revealed_title_bar_of_a_full_screen_window_is_published_while_it_shows() 
     let shown = shown.expect("published while the title bar shows");
     assert_eq!(
         shown.frame,
-        cupertino_geometry::Rect::new(0.0, 24.0, width, height),
+        cupertino_geometry::Rect::new(0.0, 33.0, width, height),
         "at the revealed bar's place"
     );
     assert_eq!(
@@ -2588,7 +2588,7 @@ fn the_revealed_title_bar_of_a_full_screen_window_is_published_while_it_shows() 
         .button(ButtonKind::Minimize)
         .center;
     h.state
-        .pointer_moved_to((minimize.x, 24.0 + minimize.y).into(), 0, None);
+        .pointer_moved_to((minimize.x, 33.0 + minimize.y).into(), 0, None);
     h.advance(0.1);
     h.state
         .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);

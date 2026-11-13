@@ -45,8 +45,7 @@ pub const PRIVACY_DOT_PT: f64 = 6.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarMetrics {
-    /// Bar height. approximate 24 pt (22 pt in legacy documentation; larger on displays with a
-    /// camera cut-out: configure per output).
+    /// Bar height: 33 pt, which leaves 5.5 pt above and below an item's 22 pt frame.
     pub height: f64,
     /// Space between the output edge and the first / last slot.
     pub edge_inset: f64,
@@ -70,14 +69,14 @@ pub struct BarMetrics {
     pub min_gap: f64,
     /// Corner radius of the selection highlight: a capsule when it is at least half the highlight's height.
     pub selection_corner_radius: f64,
-    /// Vertical inset of the selection highlight inside the bar.
+    /// Vertical inset of the selection highlight inside the bar: the 22 pt item frame centred in the bar's height.
     pub selection_inset_y: f64,
 }
 
 impl Default for BarMetrics {
     fn default() -> Self {
         Self {
-            height: 24.0,
+            height: 33.0,
             edge_inset: 6.0,
             title_padding: 10.0,
             status_frame_padding: 5.0,
@@ -88,12 +87,21 @@ impl Default for BarMetrics {
             clock_padding: 8.0,
             min_gap: 24.0,
             selection_corner_radius: 11.0,
-            selection_inset_y: 1.0,
+            selection_inset_y: (33.0 - Self::ITEM_FRAME_HEIGHT) / 2.0,
         }
     }
 }
 
 impl BarMetrics {
+    /// Height of an item's frame (a title's, a status item's), the shape its highlight fills.
+    pub const ITEM_FRAME_HEIGHT: f64 = 22.0;
+
+    /// How far an item's frame sits below the top of a bar `height` points tall: the frame centred, never above the
+    /// top when the bar is shorter than the frame.
+    pub fn item_inset_y(height: f64) -> f64 {
+        ((height - Self::ITEM_FRAME_HEIGHT) / 2.0).max(0.0)
+    }
+
     /// Where the highlight of the slot of `key`, `width` points wide, lies along it: its left edge from the slot's and
     /// its width. A title's and the system mark's reach [`BarMetrics::title_highlight_overhang`] past the slot on each
     /// side; an item of the status area's fills its frame, the slot less half the spacing on each side.
@@ -695,6 +703,21 @@ mod tests {
         }
     }
 
+    /// The bar is 33 points tall and an item's 22 point frame sits in its middle, 5.5 points from the top and the
+    /// bottom, in the defaults and for any other height the theme gives.
+    #[test]
+    fn items_are_centred_in_the_bar_with_room_above_and_below() {
+        let m = BarMetrics::default();
+        assert_eq!(m.height, 33.0);
+        assert_eq!(m.selection_inset_y, 5.5);
+        assert_eq!(
+            m.height - 2.0 * m.selection_inset_y,
+            BarMetrics::ITEM_FRAME_HEIGHT
+        );
+        assert_eq!(BarMetrics::item_inset_y(24.0), 1.0);
+        assert_eq!(BarMetrics::item_inset_y(20.0), 0.0);
+    }
+
     #[test]
     fn slots_flow_left_and_right_without_overlap() {
         let l = layout_bar(
@@ -703,7 +726,7 @@ mod tests {
             &BarMetrics::default(),
             &MonoMeasure::default(),
         );
-        assert_eq!(l.bar, Rect::new(0.0, 0.0, 1920.0, 24.0));
+        assert_eq!(l.bar, Rect::new(0.0, 0.0, 1920.0, 33.0));
         let keys: Vec<&SlotKey> = l.slots.iter().map(|s| &s.key).collect();
         assert_eq!(
             keys,
@@ -842,7 +865,7 @@ mod tests {
             SlotKey::Menu(ItemId(1))
         );
         assert!(
-            l.hit(Point::new(file.x + 1.0, 30.0)).is_none(),
+            l.hit(Point::new(file.x + 1.0, 40.0)).is_none(),
             "below the bar"
         );
         assert!(l.hit(Point::new(900.0, 10.0)).is_none(), "gap");

@@ -536,6 +536,7 @@ pub fn run() -> Result<std::convert::Infallible> {
     let metrics = BarMetrics {
         height: theme.shapes.menu_bar_height,
         selection_corner_radius: theme.shapes.menu_bar_selection_corner_radius,
+        selection_inset_y: BarMetrics::item_inset_y(theme.shapes.menu_bar_height),
         ..BarMetrics::default()
     };
     let font = BarFont::new(theme.tokens.typography());

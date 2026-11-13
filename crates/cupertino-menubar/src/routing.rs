@@ -818,7 +818,7 @@ mod tests {
                 service: ":1.9".into(),
                 path: "/StatusNotifierItem".into(),
                 x: 2815,
-                y: 12
+                y: 17
             }))
         );
     }

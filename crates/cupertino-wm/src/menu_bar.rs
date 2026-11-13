@@ -48,7 +48,7 @@ impl Default for BarSetConfig {
             bezier: CubicBezier::EASE_IN_EASE_OUT,
         };
         Self {
-            bar_height: 24.0,
+            bar_height: 33.0,
             auto_hide: AutoHide::FullscreenOnly,
             reveal_dwell: 0.15,
             hide_delay: 0.3,
@@ -492,14 +492,14 @@ mod tests {
         let mut s = two();
         assert_eq!(
             s.usable_area(O1),
-            Some(Rect::new(0.0, 24.0, 1920.0, 1056.0))
+            Some(Rect::new(0.0, 33.0, 1920.0, 1047.0))
         );
         let ev = s.set_fullscreen(O1, true, 1.0);
         assert_eq!(ev, vec![BarEvent::UsableAreaChanged { output: O1 }]);
         assert_eq!(s.usable_area(O1), Some(A));
         assert_eq!(
             s.usable_area(O2),
-            Some(Rect::new(1920.0, 24.0, 1280.0, 776.0)),
+            Some(Rect::new(1920.0, 33.0, 1280.0, 767.0)),
             "other outputs are unaffected"
         );
         assert!(!s.reserves_space(O1) && s.reserves_space(O2));
@@ -512,9 +512,9 @@ mod tests {
         s.set_fullscreen(O1, true, 0.0);
         let mid = s.presentation(O1, 0.1).unwrap();
         assert!(mid.visible > 0.0 && mid.visible < 1.0);
-        assert!(mid.rect.y < 0.0 && mid.rect.y > -24.0);
+        assert!(mid.rect.y < 0.0 && mid.rect.y > -33.0);
         let hidden = s.presentation(O1, 2.0).unwrap();
-        assert_eq!((hidden.visible, hidden.rect.y), (0.0, -24.0));
+        assert_eq!((hidden.visible, hidden.rect.y), (0.0, -33.0));
         s.set_fullscreen(O1, false, 3.0);
         assert_eq!(s.presentation(O1, 5.0).unwrap().visible, 1.0);
     }
@@ -566,12 +566,12 @@ mod tests {
         let mid = s.fullscreen_titlebar(O1, 38.0, 2.1).unwrap();
         let bar = s.presentation(O1, 2.1).unwrap().rect;
         assert!(
-            mid.y < 24.0 && mid.y <= bar.y + bar.h,
+            mid.y < 33.0 && mid.y <= bar.y + bar.h,
             "no gap below the sliding bar"
         );
         assert_eq!(
             s.fullscreen_titlebar(O1, 38.0, 5.0),
-            Some(Rect::new(0.0, 24.0, 1920.0, 38.0))
+            Some(Rect::new(0.0, 33.0, 1920.0, 38.0))
         );
         s.set_auto_hide(AutoHide::Never, 6.0);
         assert_eq!(

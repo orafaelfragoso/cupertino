@@ -135,8 +135,8 @@ pub enum TransformKind {
     WindowOpen,
     /// Ordinary window close, 0.15 s: fades out quickly (exponential) while shrinking a little.
     WindowClose,
-    /// Appearance change, 0.5 s: the window as it was before the change fades out over the redrawn one, eased in and out,
-    /// without scaling.
+    /// Appearance change, 0.5 s: the window as it was before the change fades out over the redrawn one on
+    /// [`APPEARANCE_FADE_CURVE`], without scaling.
     AppearanceFade,
 }
 
@@ -150,6 +150,8 @@ const WINDOW_OPEN_RATE: f64 = 3.0;
 const WINDOW_OPEN_SHADOW_START: f64 = 0.45;
 /// Duration of the crossfade when the appearance changes (0.5 s).
 pub const APPEARANCE_FADE_DURATION: f64 = 0.5;
+/// How the appearance crossfade advances: a quick start that settles slowly, half done before a third of the way in.
+pub const APPEARANCE_FADE_CURVE: CubicBezier = CubicBezier::DEFAULT;
 /// Scale an ordinary window ends at when it closes (0.983).
 pub const WINDOW_CLOSE_SCALE: f64 = 0.983;
 /// Duration of the ordinary window close (0.15 s).
@@ -245,7 +247,11 @@ impl TransformKind {
                 };
                 Driver::Timed {
                     duration: self.duration() * factor,
-                    ease: Ease::Cosine,
+                    ease: if self == TransformKind::AppearanceFade {
+                        Ease::Bezier(APPEARANCE_FADE_CURVE)
+                    } else {
+                        Ease::Cosine
+                    },
                 }
             }
         }
@@ -657,7 +663,10 @@ mod tests {
         );
         assert_eq!(d(TransformKind::FadeOut, false), (0.15, Ease::Cosine));
         assert_eq!(d(TransformKind::FadeOut, true), (0.6, Ease::Cosine));
-        assert_eq!(d(TransformKind::AppearanceFade, false), (0.5, Ease::Cosine));
+        assert_eq!(
+            d(TransformKind::AppearanceFade, false),
+            (0.5, Ease::Bezier(APPEARANCE_FADE_CURVE))
+        );
         // the pops and the ordinary window's open and close run on linear time and shape themselves, slow motion or not
         for slow in [false, true] {
             assert_eq!(d(TransformKind::PopIn, slow), (0.31, Ease::Linear));
@@ -764,6 +773,20 @@ mod tests {
     fn an_appearance_change_fades_the_old_window_out_without_scaling() {
         let fade = TransformKind::AppearanceFade.sample(0.25);
         assert_eq!((fade.scale, fade.alpha, fade.dy), (1.0, 0.75, 0.0));
+    }
+
+    /// The appearance crossfade starts quickly and settles slowly: a fifth done a sixth of the way in, half done at
+    /// 0.3 and 85 % done at 0.55, where the symmetric cosine ease would be at 0.07, 0.2 and 0.58.
+    #[test]
+    fn the_appearance_crossfade_starts_quickly_and_settles_slowly() {
+        let mut fade = TransformKind::AppearanceFade.animator(false);
+        fade.animate_to(1.0, 0.0);
+        for (t, done) in [(1.0 / 6.0, 0.22), (0.3, 0.51), (0.55, 0.85), (0.8, 0.976)] {
+            let v = fade.value(t * APPEARANCE_FADE_DURATION);
+            assert!((v - done).abs() < 0.01, "{t}: {v} vs {done}");
+        }
+        assert_eq!(fade.value(APPEARANCE_FADE_DURATION), 1.0);
+        assert!(!fade.is_animating(APPEARANCE_FADE_DURATION));
     }
 
     #[test]

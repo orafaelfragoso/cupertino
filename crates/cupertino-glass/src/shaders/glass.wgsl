@@ -7,7 +7,7 @@ struct Glass {
   uv_x: vec4<f32>,        // u = a·x + b·y + c
   uv_y: vec4<f32>,        // v = d·x + e·y + f
   info: vec4<f32>,        // shapes, blend width, antialiasing width, opacity
-  levels: vec4<f32>,      // opacity of levels 2 and 3, target w, h
+  levels: vec4<f32>,      // unused (0, 0), target w, h
   fill: vec4<f32>,        // blur fill: darken, lighten, normal
   face: vec4<f32>,        // saturation, white, black, clamp
   face_fill: vec4<f32>,
@@ -21,7 +21,7 @@ struct Glass {
   ring: vec4<f32>,        // offset, stroke, blur
   shapes: array<vec4<f32>, 16>,
   shape_a: array<vec4<f32>, 16>, // radius, refraction offset at the edge, refraction band, bleed fraction
-  shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, opacity of levels 0 and 1
+  shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -113,12 +113,16 @@ fn tap(t: texture_2d<f32>, uv: vec2<f32>) -> vec3<f32> {
   return textureSampleLevel(t, samp, uv, 0.0).rgb;
 }
 
-// Stages 1 and 2: blurred levels, blur fill and face colour at `q`.
-fn face_at(q: vec2<f32>, narrow: f32, max_luma: f32) -> vec3<f32> {
+// Stage 1: the blurred copy of the shape's blur at `pos` among them, or the two around it mixed.
+fn blurred(uv: vec2<f32>, pos: f32) -> vec3<f32> {
+  let w = max(vec4<f32>(1.0) - abs(vec4<f32>(clamp(pos, 0.0, 3.0)) - vec4<f32>(0.0, 1.0, 2.0, 3.0)), vec4<f32>(0.0));
+  return w.x * tap(level0, uv) + w.y * tap(level1, uv) + w.z * tap(level2, uv) + w.w * tap(level3, uv);
+}
+
+// Stages 1 and 2: the shape's blur, the blur fill and the face colour at `q`.
+fn face_at(q: vec2<f32>, pos: f32, max_luma: f32) -> vec3<f32> {
   let uv = uv_of(q);
-  var c = mix(tap(level3, uv), tap(level2, uv), G.levels.x);
-  c = mix(c, tap(level1, uv), narrow);
-  c = mix(c, tap(level0, uv), narrow);
+  var c = blurred(uv, pos);
   let f = tap(blur_fill, uv);
   c = mix(c, min(c, f), G.fill.x);
   c = mix(c, max(c, f), G.fill.y);
@@ -194,12 +198,12 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     off = n * f.a.y * (1.0 - t) * (1.0 - t);
   }
   var c = face_at(p + off, f.b.z, f.b.y);
-  // stage 4: bleed of the widest level
+  // stage 4: bleed of the blur fill
   if (f.a.w > 0.0 && f.b.x > 0.0) {
     let t = clamp(-d / f.b.x, 0.0, 1.0);
     let w = f.a.w * (1.0 - t) * (1.0 - t);
     let tone = vec3<f32>(G.bleed.y) + (G.bleed.x - G.bleed.y)
-      * min(saturate_encoded(tap(level3, uv_of(p)), G.bleed.z), vec3<f32>(1.0));
+      * min(saturate_encoded(tap(blur_fill, uv_of(p)), G.bleed.z), vec3<f32>(1.0));
     let b = select(max(c, tone), min(c, tone), G.bleed.w > 0.5);
     c = mix(c, b, w);
   }

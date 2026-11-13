@@ -6,9 +6,10 @@
 //! included. The shapes join into one signed distance field: a smooth union whose blend width is the container's
 //! spacing (0 is a hard union). Every pixel of the field is then shaded in this order:
 //!
-//! 1. **Blur.** Four levels of the backdrop blurred with `radius · 2^i` points are laid over each other, widest first,
-//!    each narrower level mixed in at its opacity; then the blur fill (the backdrop at the fill radius) is blended in
-//!    darken, lighten and normal mode at their opacities.
+//! 1. **Blur.** One Gaussian of the backdrop per shape, its deviation twice the radius scaled by the first level's
+//!    opacity ([`GlassParams::blur_sigma`]). The container blurs the backdrop once per distinct deviation of its shapes
+//!    (at most [`BLUR_LEVELS`]); a shape between two of them mixes the two ([`level_mix`]). Then the blur fill (a
+//!    Gaussian of twice the fill radius) is blended in darken, lighten and normal mode at their opacities.
 //! 2. **Colour matrix.** Saturation about the Rec. 709 luma of the encoded colour; then on linear light the `white`
 //!    gain, a per-channel limit at `clamp` and a luminance limit at `max_luma · clamp` that keeps the hue; then,
 //!    encoded, the `black` lift
@@ -16,7 +17,7 @@
 //! 3. **Inner refraction.** Inside a band `height` wide along the edge, the face is read further out along the field's
 //!    normal, by `−amount · REFRACTION_REACH_PER_AMOUNT · (1 − t)²` points where `t` runs from 0 at the edge to 1 at the
 //!    band's inner side: what lies past the edge bends into the rim.
-//! 4. **Bleed.** The widest blur level, mapped to the encoded range `[black, white]` after its own saturation, blends
+//! 4. **Bleed.** The blur fill, mapped to the encoded range `[black, white]` after its own saturation, blends
 //!    into the face over a band `height` wide at `amount` percent: lighten on dark glass, darken on light glass.
 //! 5. **Key/fill highlight.** A thin rim band (half-width `height`, centred `offset` from the edge) adds light along
 //!    the axis through `angle`: the key colour `matrix · face` at `amount` on the arc of edge facing `angle`, and the
@@ -35,6 +36,9 @@
 use cupertino_theme::glass::{
     apply_matrix, ColorMatrix, GlassParams, BLUR_LEVELS, REFRACTION_REACH_PER_AMOUNT,
 };
+
+/// Deviations closer than this, in points, are blurred once.
+const SAME_SIGMA: f32 = 0.05;
 
 pub use cupertino_theme::glass::{GlassMode, GlassStyle, GLASS_BACKDROP_SCALE};
 
@@ -180,13 +184,52 @@ pub fn saturate_encoded(c: Rgb, s: f32) -> Rgb {
     c.map(|v| (y + (v - y) * s).max(0.0))
 }
 
-/// Stage 1: the blur levels laid over each other (widest first, each narrower one at its opacity).
-pub fn blend_levels(levels: [Rgb; BLUR_LEVELS], opacity: [f32; BLUR_LEVELS]) -> Rgb {
-    let mut c = levels[BLUR_LEVELS - 1];
-    for i in (0..BLUR_LEVELS - 1).rev() {
-        c = mix(c, levels[i], opacity[i].clamp(0.0, 1.0));
+/// The weight of each blurred copy for a shape at `position` among them: the copy itself at a whole position, the two
+/// on either side mixed between.
+pub fn level_weights(position: f32) -> [f32; BLUR_LEVELS] {
+    let p = position.clamp(0.0, (BLUR_LEVELS - 1) as f32);
+    std::array::from_fn(|i| (1.0 - (p - i as f32).abs()).max(0.0))
+}
+
+/// Stage 1: the blurred copies `levels` mixed for a shape at `position` among them ([`level_weights`]).
+pub fn level_mix(levels: [Rgb; BLUR_LEVELS], position: f32) -> Rgb {
+    let w = level_weights(position);
+    std::array::from_fn(|c| (0..BLUR_LEVELS).map(|i| levels[i][c] * w[i]).sum())
+}
+
+/// The deviations (points, ascending) a container blurs its backdrop with for shapes blurring with `sigmas`: each
+/// distinct one when there are at most [`BLUR_LEVELS`], else that many spread evenly from the narrowest to the widest.
+pub fn blur_levels(sigmas: &[f32]) -> Vec<f32> {
+    let mut d: Vec<f32> = sigmas.iter().map(|s| s.max(0.0)).collect();
+    d.sort_by(f32::total_cmp);
+    d.dedup_by(|a, b| (*a - *b).abs() < SAME_SIGMA);
+    if d.len() <= BLUR_LEVELS {
+        return d;
     }
-    c
+    let (lo, hi) = (d[0], d[d.len() - 1]);
+    (0..BLUR_LEVELS)
+        .map(|i| lo + (hi - lo) * i as f32 / (BLUR_LEVELS - 1) as f32)
+        .collect()
+}
+
+/// Where a shape blurring with `sigma` lies among `levels` (ascending): the index of the copy it reads, with the share
+/// of the next one as its fraction.
+pub fn level_position(levels: &[f32], sigma: f32) -> f32 {
+    let Some(last) = levels.len().checked_sub(1) else {
+        return 0.0;
+    };
+    for i in 0..last {
+        let (a, b) = (levels[i], levels[i + 1]);
+        if sigma <= b + SAME_SIGMA * 0.5 {
+            let t = if b - a > 1e-6 {
+                (sigma - a) / (b - a)
+            } else {
+                0.0
+            };
+            return i as f32 + t.clamp(0.0, 1.0);
+        }
+    }
+    last as f32
 }
 
 /// Stage 1, second part: the blur fill `fill` blended over the blurred backdrop `c`.
@@ -363,7 +406,10 @@ pub struct ShapeValues {
     pub bleed_amount: f32,
     pub bleed_height: f32,
     pub max_luma: f32,
-    pub narrow_opacity: f32,
+    /// The deviation of the shape's blur in points.
+    pub blur_sigma: f32,
+    /// Where that blur lies among the container's blurred copies ([`level_position`]).
+    pub blur_level: f32,
 }
 
 impl ShapeValues {
@@ -374,7 +420,8 @@ impl ShapeValues {
             bleed_amount: p.bleed.amount,
             bleed_height: p.bleed.height,
             max_luma: p.face.max_luma,
-            narrow_opacity: p.blur.level_opacity[0],
+            blur_sigma: p.blur_sigma(),
+            blur_level: 0.0,
         }
     }
 
@@ -386,7 +433,8 @@ impl ShapeValues {
             bleed_amount: m(a.bleed_amount, b.bleed_amount),
             bleed_height: m(a.bleed_height, b.bleed_height),
             max_luma: m(a.max_luma, b.max_luma),
-            narrow_opacity: m(a.narrow_opacity, b.narrow_opacity),
+            blur_sigma: m(a.blur_sigma, b.blur_sigma),
+            blur_level: m(a.blur_level, b.blur_level),
         }
     }
 }
@@ -400,6 +448,8 @@ pub struct Container {
     /// The recipe of the container's values that do not depend on size (from its largest shape).
     pub params: GlassParams,
     pub values: Vec<ShapeValues>,
+    /// The deviations in points the backdrop is blurred with, ascending ([`blur_levels`]).
+    pub sigmas: Vec<f32>,
 }
 
 impl Container {
@@ -412,10 +462,14 @@ impl Container {
             .iter()
             .map(GlassShape::short_side)
             .fold(0.0f32, f32::max);
-        let values = shapes
+        let mut values: Vec<ShapeValues> = shapes
             .iter()
             .map(|s| ShapeValues::of(&GlassParams::new(mode, s.short_side())))
             .collect();
+        let sigmas = blur_levels(&values.iter().map(|v| v.blur_sigma).collect::<Vec<_>>());
+        for v in &mut values {
+            v.blur_level = level_position(&sigmas, v.blur_sigma);
+        }
         Self {
             shapes,
             spacing: if spacing.is_finite() {
@@ -426,6 +480,7 @@ impl Container {
             mode,
             params: GlassParams::new(mode, largest),
             values,
+            sigmas,
         }
     }
 
@@ -494,13 +549,10 @@ impl Container {
             let a = (drop + ring + outline_alpha(d, params)).min(1.0);
             return ([s.fill[0], s.fill[1], s.fill[2]], a);
         }
-        let mut opacity = params.blur.level_opacity;
-        opacity[0] = v.narrow_opacity;
-        opacity[1] = v.narrow_opacity;
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
             let c = blur_fill(
-                blend_levels(levels, opacity),
+                level_mix(levels, v.blur_level),
                 sample(BLUR_LEVELS, q),
                 params,
             );
@@ -510,7 +562,7 @@ impl Container {
         let mut c = face_at([p[0] + off[0], p[1] + off[1]]);
         c = bleed(
             c,
-            sample(BLUR_LEVELS - 1, p),
+            sample(BLUR_LEVELS, p),
             d,
             params,
             v.bleed_amount,
@@ -534,7 +586,7 @@ pub struct GlassUniform {
     pub uv_y: [f32; 4],
     /// Number of shapes, blend width, antialiasing width, overall opacity.
     pub info: [f32; 4],
-    /// Opacity of blur levels 2 and 3 (levels 0 and 1 are per shape), and the target's width and height.
+    /// Unused (0, 0), and the target's width and height.
     pub levels: [f32; 4],
     /// Blur fill opacities: darken, lighten, normal, 0.
     pub fill: [f32; 4],
@@ -562,7 +614,7 @@ pub struct GlassUniform {
     pub shapes: [[f32; 4]; MAX_SHAPES],
     /// Each shape: corner radius, refraction offset at the edge, refraction band, bleed fraction.
     pub shape_a: [[f32; 4]; MAX_SHAPES],
-    /// Each shape: bleed band, largest luminance, opacity of levels 0 and 1, 0.
+    /// Each shape: bleed band, largest luminance, where its blur lies among the blurred copies, 0.
     pub shape_b: [[f32; 4]; MAX_SHAPES],
 }
 
@@ -589,12 +641,7 @@ impl GlassUniform {
             1.0,
             opacity.clamp(0.0, 1.0),
         ];
-        u.levels = [
-            p.blur.level_opacity[2],
-            p.blur.level_opacity[3],
-            target[0],
-            target[1],
-        ];
+        u.levels = [0.0, 0.0, target[0], target[1]];
         u.fill = [
             p.blur.fill_darken,
             p.blur.fill_lighten,
@@ -644,35 +691,36 @@ impl GlassUniform {
                 v.refraction_height * scale,
                 (v.bleed_amount / 100.0).clamp(0.0, 1.0),
             ];
-            u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.narrow_opacity, 0.0];
+            u.shape_b[i] = [v.bleed_height * scale, v.max_luma, v.blur_level, 0.0];
         }
         u
     }
 }
 
 impl Container {
-    /// Blur radius in points of each level of the backdrop, and whether any shape uses it: through the levels' blend,
-    /// or the widest level through the bleed.
+    /// The deviation in points of each blurred copy of the backdrop, and whether a shape reads it.
     pub fn levels(&self) -> [(f32, bool); BLUR_LEVELS] {
-        let radii = self.params.level_radii();
         let mut used = [false; BLUR_LEVELS];
         for v in &self.values {
-            let mut p = self.params;
-            p.blur.level_opacity[0] = v.narrow_opacity;
-            p.blur.level_opacity[1] = v.narrow_opacity;
-            for (u, w) in used.iter_mut().zip(p.level_weights()) {
-                *u |= w > cupertino_theme::glass::LEVEL_WEIGHT_EPSILON;
+            for (u, w) in used.iter_mut().zip(level_weights(v.blur_level)) {
+                *u |= w > 1e-3;
             }
-            used[BLUR_LEVELS - 1] |= v.bleed_amount > 0.0 && v.bleed_height > 0.0;
         }
-        std::array::from_fn(|i| (radii[i], used[i]))
+        let last = self.sigmas.last().copied().unwrap_or(0.0);
+        std::array::from_fn(|i| (self.sigmas.get(i).copied().unwrap_or(last), used[i]))
     }
 
-    /// Blur radius in points of the blur fill, if it shows.
-    pub fn fill_radius(&self) -> Option<f32> {
-        let b = &self.params.blur;
-        (b.fill_darken + b.fill_lighten + b.fill_normal > 0.0 && b.fill_radius > 0.0)
-            .then_some(b.fill_radius)
+    /// Whether a shape bleeds the backdrop into its edge.
+    fn bleeds(&self) -> bool {
+        self.values
+            .iter()
+            .any(|v| v.bleed_amount > 0.0 && v.bleed_height > 0.0)
+    }
+
+    /// The deviation in points of the blur fill, if it shows or the bleed reads it.
+    pub fn fill_sigma(&self) -> Option<f32> {
+        let sigma = self.params.fill_sigma();
+        ((self.params.fill_shows() || self.bleeds()) && sigma > 0.0).then_some(sigma)
     }
 }
 
@@ -733,12 +781,87 @@ mod tests {
     }
 
     #[test]
-    fn level_blend_puts_the_narrow_levels_over_the_wide_ones() {
+    fn a_shape_reads_the_copy_of_its_own_blur_or_mixes_the_two_around_it() {
         let levels = [[1.0; 3], [0.5; 3], [0.25; 3], [0.0; 3]];
-        let c = blend_levels(levels, params(true).blur.level_opacity);
-        // 0.55 of level 0, 0.2475 of level 1, 0.2025 of level 2
-        assert!(close(c[0], 0.55 + 0.2475 * 0.5 + 0.2025 * 0.25, 1e-5));
-        assert_eq!(blend_levels(levels, [1.0, 1.0, 0.0, 0.0])[0], 1.0);
+        assert_eq!(level_mix(levels, 0.0), [1.0; 3]);
+        assert_eq!(level_mix(levels, 2.0), [0.25; 3]);
+        assert!(close(
+            level_mix(levels, 1.25)[0],
+            0.75 * 0.5 + 0.25 * 0.25,
+            1e-6
+        ));
+        assert_eq!(level_mix(levels, 7.0), [0.0; 3], "past the last copy");
+        // each distinct deviation is blurred once, ascending
+        assert_eq!(blur_levels(&[8.0, 4.0, 4.0, 8.01]), vec![4.0, 8.0]);
+        // past four, four spread from the narrowest to the widest, and a shape between two mixes them
+        let many = blur_levels(&[4.0, 5.0, 6.0, 7.0, 10.0]);
+        assert_eq!(many, vec![4.0, 6.0, 8.0, 10.0]);
+        assert!(close(level_position(&many, 7.0), 1.5, 1e-6));
+        assert_eq!(level_position(&many, 10.0), 3.0);
+        assert_eq!(level_position(&[4.0], 4.0), 0.0);
+        // a container of a small control and a large panel blurs twice, each shape with its own deviation
+        let c = Container::new(
+            vec![
+                GlassShape::new([0.0, 0.0, 44.0, 44.0], 22.0),
+                GlassShape::new([0.0, 60.0, 300.0, 160.0], 30.0),
+            ],
+            0.0,
+            GlassMode::default(),
+        );
+        assert_eq!(c.sigmas, vec![4.0, 8.0]);
+        assert_eq!((c.values[0].blur_level, c.values[1].blur_level), (0.0, 1.0));
+        assert_eq!(c.levels().map(|l| l.1), [true, true, false, false]);
+    }
+
+    /// A row of a hard black-to-white edge (at texel 1001 of 2048) blurred with a Gaussian of `sigma` texels as the
+    /// GPU passes make it ([`crate::blur::plan_blur`]: 2× box halvings, then the separable weights on the last level,
+    /// reads clamped to the row), read back at every full-resolution texel with linear filtering.
+    fn blurred_edge(sigma: f32) -> Vec<f32> {
+        const N: usize = 2048;
+        let plan = crate::blur::plan_blur(N as u32, 64, 1.0, sigma, 1.0);
+        let mut row: Vec<f32> = (0..N).map(|j| if j > 1000 { 1.0 } else { 0.0 }).collect();
+        for _ in &plan.levels {
+            row = row.chunks(2).map(|p| (p[0] + p[1]) * 0.5).collect();
+        }
+        let n = row.len() as i64;
+        let at = |i: i64| row[i.clamp(0, n - 1) as usize];
+        let r = plan.weights.len() as i64 - 1;
+        let blur: Vec<f32> = (0..n)
+            .map(|i| {
+                (-r..=r)
+                    .map(|j| plan.weights[j.unsigned_abs() as usize] * at(i + j))
+                    .sum()
+            })
+            .collect();
+        let k = (N as i64 / n) as f32;
+        (0..N)
+            .map(|x| {
+                let u = (x as f32 + 0.5) / k - 0.5;
+                let (i, t) = (u.floor(), u - u.floor());
+                let get = |i: f32| blur[(i as i64).clamp(0, n - 1) as usize];
+                get(i) * (1.0 - t) + get(i + 1.0) * t
+            })
+            .collect()
+    }
+
+    /// The 16 % to 84 % width of a blurred edge is two deviations, for each deviation glass blurs with: the backdrop
+    /// blurs as one Gaussian of the deviation the recipe asks for, however many halvings the passes take to reach it.
+    #[test]
+    fn the_blur_passes_give_an_edge_two_deviations_wide_between_16_and_84_percent() {
+        for sigma in [4.0f32, 8.0, 16.0, 20.0, 40.0] {
+            let row = blurred_edge(sigma);
+            // where the row first reaches `level`, between texels
+            let find = |level: f32| {
+                let i = row.iter().position(|&v| v >= level).unwrap();
+                let (a, b) = (row[i - 1], row[i]);
+                i as f32 - 1.0 + (level - a) / (b - a)
+            };
+            let width = find(0.841_344_7) - find(0.158_655_3);
+            assert!(
+                (width - 2.0 * sigma).abs() < 0.08 * sigma + 0.5,
+                "σ {sigma}: {width}"
+            );
+        }
     }
 
     #[test]
@@ -880,9 +1003,7 @@ mod tests {
             }
             acc.map(|v| v / sum)
         };
-        let levels = p.level_radii().map(gauss);
-        let c = blend_levels(levels, p.blur.level_opacity);
-        blur_fill(c, gauss(p.blur.fill_radius), p)
+        blur_fill(gauss(p.blur_sigma()), gauss(p.fill_sigma()), p)
     }
 
     /// The face's luminance (0–255) at `x` of [`blurred`], toned as the shader does.
@@ -1173,28 +1294,26 @@ mod tests {
         assert_eq!(u.shape_a[0][1], 20.0 * REFRACTION_REACH_PER_AMOUNT * 2.0);
         assert_eq!(u.shape_a[0][2], 20.0);
         assert_eq!(u.highlight_matrix[0][3], 0.1471);
-        let levels = c.levels();
-        // level 3 has no weight in the blend, but the bleed reads it
-        assert_eq!(levels.map(|l| l.1), [true, true, true, true]);
-        assert_eq!(c.fill_radius(), Some(8.0));
+        // one shape, one blur: 4 points for a 40 point control
+        assert_eq!(c.levels().map(|l| l.1), [true, false, false, false]);
+        assert_eq!(c.levels()[0].0, 4.0);
+        assert_eq!(u.shape_b[0][2], 0.0);
+        assert_eq!(c.fill_sigma(), Some(16.0));
     }
 
     #[test]
-    fn the_widest_level_is_made_only_when_the_blend_or_the_bleed_reads_it() {
+    fn the_blur_fill_is_made_only_when_it_shows_or_the_bleed_reads_it() {
         let shape = vec![GlassShape::new([0.0, 0.0, 150.0, 100.0], 18.0)];
-        let mode = |style, reduce_transparency| GlassMode {
+        let mode = |style| GlassMode {
             dark: true,
             style,
-            reduce_transparency,
             ..GlassMode::default()
         };
-        // regular glass bleeds the widest level into its edge though its weight in the blend is 0
-        let regular = Container::new(shape.clone(), 0.0, mode(GlassStyle::Regular, false));
-        assert_eq!(regular.params.level_weights()[3], 0.0);
-        assert!(regular.values[0].bleed_amount > 0.0);
-        assert!(regular.levels()[3].1, "the bleed reads level 3");
-        // clear glass has no bleed and only its narrowest level shows
-        let clear = Container::new(shape, 0.0, mode(GlassStyle::Clear, false));
+        let regular = Container::new(shape.clone(), 0.0, mode(GlassStyle::Regular));
+        assert_eq!(regular.fill_sigma(), Some(16.0));
+        // clear glass has no fill and no bleed: one blurred copy and nothing else
+        let clear = Container::new(shape, 0.0, mode(GlassStyle::Clear));
+        assert_eq!(clear.fill_sigma(), None);
         assert_eq!(clear.levels().map(|l| l.1), [true, false, false, false]);
     }
 

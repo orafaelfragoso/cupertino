@@ -18,8 +18,19 @@
 /// The scale the backdrop of a glass container is captured at, relative to the output's pixels.
 pub const GLASS_BACKDROP_SCALE: f32 = 0.5;
 
-/// Number of blur levels of the multiscale backdrop. Level `i` is blurred with `blur.radius · 2^i` points.
+/// Most blurred copies of the backdrop one container mixes: one per distinct blur of its shapes (each shape's Gaussian
+/// follows its size), up to this many; a shape whose blur lies between two of them mixes the two.
 pub const BLUR_LEVELS: usize = 4;
+
+/// The Gaussian deviation of a glass blur, in points per point of its radius scaled by the first level's opacity: a
+/// regular control (radius 5 at opacity 0.4) blurs with a deviation of 4 points, a large regular panel (opacity 0.8)
+/// with 8, clear glass of radius 10 with 20.
+pub const BLUR_SIGMA_PER_RADIUS: f32 = 2.0;
+/// The Gaussian deviation of the blur fill, in points per point of its radius.
+pub const FILL_SIGMA_PER_RADIUS: f32 = 2.0;
+/// The widest deviation a glass blur takes, in points: past it the face reads as the average colour around it anyway,
+/// and the backdrop it would read grows with it.
+pub const BLUR_SIGMA_MAX: f32 = 100.0;
 
 /// The short side, in points, below which a glass control counts as small: its foreground follows what is behind it
 /// (light text over a dark backdrop, dark over a light one), while larger bars and panels keep their appearance.
@@ -64,13 +75,13 @@ pub struct GlassMode {
     pub density: u8,
 }
 
-/// Blur of the multiscale backdrop and the blur fill laid over it.
+/// The blur of the backdrop and the blur fill laid over it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassBlur {
-    /// Blur radius of the first level in points; level `i` doubles it `i` times.
+    /// Blur radius in points; with the first level's opacity it sets the Gaussian ([`GlassParams::blur_sigma`]).
     pub radius: f32,
-    /// Opacity of each level laid over the wider ones, widest first: the result starts as level 3 and each narrower
-    /// level is mixed in at its opacity.
+    /// Opacity of the levels: the first scales the blur radius (a small control blurs less than a large panel of the
+    /// same recipe); the others leave the blur as it is.
     pub level_opacity: [f32; BLUR_LEVELS],
     /// Blur radius in points of the fill blended over the blurred backdrop.
     pub fill_radius: f32,
@@ -208,9 +219,9 @@ const REFRACTION_HEIGHT_PER_POINT_CLEAR: f32 = 0.36;
 const BLEED_PER_POINT: f32 = 0.35;
 /// Short side past which the bleed stops growing.
 const BLEED_SIDE_MAX: f32 = 240.0;
-/// Opacity of the two narrow blur levels of a regular shape by short side `(side, opacity)`; linear between, flat
-/// outside: small shapes keep more of the sharper levels out, large ones let them in.
-const NARROW_LEVEL_OPACITY_BY_SIDE: [(f32, f32); 3] = [(64.0, 0.4), (100.0, 0.55), (240.0, 0.8)];
+/// Opacity of the first blur level of a regular shape by short side `(side, opacity)`, which scales its blur radius;
+/// linear between, flat outside: a small control blurs with 0.4 of the radius, a panel 160 points high or more with 0.8.
+const NARROW_LEVEL_OPACITY_BY_SIDE: [(f32, f32); 2] = [(64.0, 0.4), (160.0, 0.8)];
 /// Largest face luminance of dark regular glass by short side `(side, max luma)`; linear between, flat outside.
 const DARK_MAX_LUMA_BY_SIDE: [(f32, f32); 5] = [
     (60.0, 0.6),
@@ -744,44 +755,34 @@ impl GlassParams {
         }
     }
 
-    /// Blur radius in points of each level of the multiscale backdrop.
-    pub fn level_radii(&self) -> [f32; BLUR_LEVELS] {
-        std::array::from_fn(|i| self.blur.radius * (1u32 << i) as f32)
+    /// The Gaussian deviation of the backdrop's blur, in points: the radius scaled by the first level's opacity, twice
+    /// over, at most [`BLUR_SIGMA_MAX`].
+    pub fn blur_sigma(&self) -> f32 {
+        (BLUR_SIGMA_PER_RADIUS * self.blur.radius * self.blur.level_opacity[0].clamp(0.0, 1.0))
+            .clamp(0.0, BLUR_SIGMA_MAX)
     }
 
-    /// How much each level contributes once they are laid over each other (widest first, each narrower one mixed in
-    /// at its opacity). The weights sum to 1.
-    pub fn level_weights(&self) -> [f32; BLUR_LEVELS] {
-        let o = self.blur.level_opacity.map(|v| v.clamp(0.0, 1.0));
-        let mut w = [0.0; BLUR_LEVELS];
-        let mut rest = 1.0;
-        for i in 0..BLUR_LEVELS {
-            let take = if i == BLUR_LEVELS - 1 { 1.0 } else { o[i] };
-            w[i] = rest * take;
-            rest *= 1.0 - take;
-        }
-        w
+    /// Whether the blur fill shows.
+    pub fn fill_shows(&self) -> bool {
+        self.blur.fill_darken + self.blur.fill_normal + self.blur.fill_lighten > 0.0
     }
 
-    /// How far past the shape the backdrop is read, in points: the widest blur level that contributes, the blur fill
-    /// and the refraction.
+    /// The Gaussian deviation of the blur fill, in points, at most [`BLUR_SIGMA_MAX`].
+    pub fn fill_sigma(&self) -> f32 {
+        (FILL_SIGMA_PER_RADIUS * self.blur.fill_radius).clamp(0.0, BLUR_SIGMA_MAX)
+    }
+
+    /// How far past the shape the backdrop is read, in points: three deviations of the widest blur it reads (the
+    /// backdrop's, or the blur fill's when it shows) and the refraction.
     pub fn reach(&self) -> f32 {
-        let radii = self.level_radii();
-        let widest = self
-            .level_weights()
-            .iter()
-            .zip(radii)
-            .filter(|(w, _)| **w > LEVEL_WEIGHT_EPSILON)
-            .map(|(_, r)| r)
-            .fold(0.0f32, f32::max);
-        let fill = if self.blur.fill_darken + self.blur.fill_normal + self.blur.fill_lighten > 0.0 {
-            self.blur.fill_radius
+        let fill = if self.fill_shows() {
+            self.fill_sigma()
         } else {
             0.0
         };
-        // a Gaussian of radius r is read three radii out; refraction pulls in from up to its band past the edge
-        let read =
-            3.0 * widest.max(fill) + self.refraction.amount.abs() * REFRACTION_REACH_PER_AMOUNT;
+        // a Gaussian is read three deviations out; refraction pulls in from up to its band past the edge
+        let read = 3.0 * self.blur_sigma().max(fill)
+            + self.refraction.amount.abs() * REFRACTION_REACH_PER_AMOUNT;
         read.max(self.shadow_reach())
     }
 
@@ -795,9 +796,6 @@ impl GlassParams {
         s.offset[0].abs().max(s.offset[1].abs()) + 1.5 * s.height
     }
 }
-
-/// A blur level weighing less than this is not computed.
-pub const LEVEL_WEIGHT_EPSILON: f32 = 1e-3;
 
 /// How far past the edge, in points per unit of refraction strength, the refraction reads the backdrop.
 pub const REFRACTION_REACH_PER_AMOUNT: f32 = 0.25;
@@ -997,11 +995,11 @@ mod tests {
             (20.0, -10.0, 5.0, 7.0, 0.4, 0.6),
             (40.0, -20.0, 10.0, 14.0, 0.4, 0.6),
             (60.0, -30.0, 15.0, 21.0, 0.4, 0.6),
-            (80.0, -40.0, 20.0, 28.0, 0.466_67, 0.5),
+            (80.0, -40.0, 20.0, 28.0, 0.466_666_7, 0.5),
             (100.0, -50.0, 20.0, 35.0, 0.55, 0.375),
-            (120.0, -60.0, 20.0, 42.0, 0.585_714_3, 0.35),
-            (140.0, -60.0, 20.0, 49.0, 0.621_428_6, 0.351_333_3),
-            (180.0, -60.0, 20.0, 63.0, 0.692_857_2, 0.354),
+            (120.0, -60.0, 20.0, 42.0, 0.633_333_3, 0.35),
+            (140.0, -60.0, 20.0, 49.0, 0.716_666_7, 0.351_333_3),
+            (180.0, -60.0, 20.0, 63.0, 0.8, 0.354),
         ];
         for (s, amount, height, bleed, narrow, luma) in rows {
             let p = GlassParams::new(mode(true, GlassStyle::Regular), s);
@@ -1257,17 +1255,35 @@ mod tests {
     }
 
     #[test]
-    fn level_weights_sum_to_one_and_drop_unused_levels() {
+    fn the_blur_is_one_gaussian_twice_the_radius_scaled_by_the_first_level() {
+        let sigma = |style, dark, side| GlassParams::new(mode(dark, style), side).blur_sigma();
+        for dark in [true, false] {
+            // regular glass: radius 5 at opacity 0.4 for controls up to 64 points, 0.8 from 160 points
+            for side in [29.0, 36.0, 44.0, 60.0] {
+                assert!(close(sigma(GlassStyle::Regular, dark, side), 4.0), "{side}");
+            }
+            assert!(close(
+                sigma(GlassStyle::Regular, dark, 90.0),
+                2.0 * 5.0 * 0.508_333_3
+            ));
+            assert!(close(sigma(GlassStyle::Regular, dark, 160.0), 8.0));
+            assert!(close(sigma(GlassStyle::Regular, dark, 400.0), 8.0));
+            // clear glass at radius 10 and every level opaque
+            assert!(close(sigma(GlassStyle::Clear, dark, 160.0), 20.0));
+            // the large panel blurs twice as wide as regular glass of its size
+            assert!(close(sigma(GlassStyle::LargePanel, dark, 400.0), 16.0));
+        }
         let p = GlassParams::new(mode(true, GlassStyle::Regular), 100.0);
-        let w = p.level_weights();
-        assert!(close(w.iter().sum::<f32>(), 1.0));
-        assert!(close(w[0], 0.55) && close(w[1], 0.45 * 0.55) && close(w[2], 0.45 * 0.45));
-        assert_eq!(w[3], 0.0, "level 2 is opaque, so level 3 never shows");
-        let rt = with(true, GlassStyle::Regular, true, false, false).level_weights();
-        assert_eq!(rt, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(p.level_radii(), [5.0, 10.0, 20.0, 40.0]);
-        // reach: three radii of the widest level used (20) plus the refraction's pull
-        assert!(close(p.reach(), 60.0 + 50.0 * REFRACTION_REACH_PER_AMOUNT));
+        // the blur fill: twice its radius of 8 points
+        assert!(close(p.fill_sigma(), 16.0));
+        // reach: three deviations of the widest blur read (the fill's 16) plus the refraction's pull
+        assert!(close(p.reach(), 48.0 + 50.0 * REFRACTION_REACH_PER_AMOUNT));
+        // a deviation no wider than the cap however large the recipe's radius
+        let rt_clear = with(true, GlassStyle::Clear, true, false, false);
+        assert_eq!(rt_clear.blur_sigma(), BLUR_SIGMA_MAX);
+        // Reduce Transparency: radius 40.625 at full opacity
+        let rt = with(true, GlassStyle::Regular, true, false, false);
+        assert!(close(rt.blur_sigma(), 81.25));
     }
 
     #[test]

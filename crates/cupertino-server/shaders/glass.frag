@@ -12,7 +12,7 @@ layout(std140) uniform Glass {
     vec4 uv_x;
     vec4 uv_y;
     vec4 info;        // shapes, blend width, antialiasing width, opacity
-    vec4 levels;      // opacity of levels 2 and 3, target w, h
+    vec4 levels;      // unused (0, 0), target w, h
     vec4 fill;        // blur fill: darken, lighten, normal
     vec4 face;        // saturation, white, black, clamp
     vec4 face_fill;
@@ -26,7 +26,7 @@ layout(std140) uniform Glass {
     vec4 ring;        // offset, stroke, blur
     vec4 shapes[16];
     vec4 shape_a[16]; // radius, refraction offset at the edge, refraction band, bleed fraction
-    vec4 shape_b[16]; // bleed band, largest luminance, opacity of levels 0 and 1
+    vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies
 } G;
 
 uniform sampler2D u_level0;
@@ -97,13 +97,23 @@ vec3 saturate_encoded(vec3 c, float s) {
     return max(vec3(y) + (c - vec3(y)) * s, vec3(0.0));
 }
 
-// Stages 1 and 2: blurred levels, blur fill and face colour at q.
-vec3 face_at(vec2 q, float narrow, float max_luma) {
+// Stage 1: the blurred copy of the shape's blur at `pos` among them, or the two around it mixed; a copy of no weight
+// is not read.
+vec3 blurred(vec2 uv, float pos) {
+    vec4 w = max(vec4(1.0) - abs(vec4(clamp(pos, 0.0, 3.0)) - vec4(0.0, 1.0, 2.0, 3.0)), vec4(0.0));
+    vec3 c = vec3(0.0);
+    if (w.x > 0.0) { c += w.x * textureLod(u_level0, uv, 0.0).rgb; }
+    if (w.y > 0.0) { c += w.y * textureLod(u_level1, uv, 0.0).rgb; }
+    if (w.z > 0.0) { c += w.z * textureLod(u_level2, uv, 0.0).rgb; }
+    if (w.w > 0.0) { c += w.w * textureLod(u_level3, uv, 0.0).rgb; }
+    return c;
+}
+
+// Stages 1 and 2: the shape's blur, the blur fill and the face colour at q.
+vec3 face_at(vec2 q, float pos, float max_luma) {
     vec2 uv = uv_of(q);
-    vec3 c = mix(texture(u_level3, uv).rgb, texture(u_level2, uv).rgb, G.levels.x);
-    c = mix(c, texture(u_level1, uv).rgb, narrow);
-    c = mix(c, texture(u_level0, uv).rgb, narrow);
-    vec3 f = texture(u_fill, uv).rgb;
+    vec3 c = blurred(uv, pos);
+    vec3 f = textureLod(u_fill, uv, 0.0).rgb;
     c = mix(c, min(c, f), G.fill.x);
     c = mix(c, max(c, f), G.fill.y);
     c = mix(c, f, G.fill.z);
@@ -177,12 +187,12 @@ void main() {
         off = n * fa.y * (1.0 - t) * (1.0 - t);
     }
     vec3 c = face_at(p + off, fb.z, fb.y);
-    // stage 4: bleed of the widest level
+    // stage 4: bleed of the blur fill
     if (fa.w > 0.0 && fb.x > 0.0) {
         float t = clamp(-d / fb.x, 0.0, 1.0);
         float w = fa.w * (1.0 - t) * (1.0 - t);
         vec3 tone = vec3(G.bleed.y) + (G.bleed.x - G.bleed.y)
-            * min(saturate_encoded(texture(u_level3, uv_of(p)).rgb, G.bleed.z), vec3(1.0));
+            * min(saturate_encoded(textureLod(u_fill, uv_of(p), 0.0).rgb, G.bleed.z), vec3(1.0));
         vec3 b = G.bleed.w > 0.5 ? min(c, tone) : max(c, tone);
         c = mix(c, b, w);
     }

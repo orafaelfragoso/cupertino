@@ -1011,9 +1011,9 @@ fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
         mode,
     );
     let p = &container.params;
-    // the server blurs each level with a Gaussian whose deviation is half the level's radius
-    let mut sigmas: Vec<f32> = p.level_radii().iter().map(|r| r * 0.5).collect();
-    sigmas.push(p.blur.fill_radius * 0.5);
+    // the server blurs the backdrop once per deviation of its shapes' blur, and once more for the blur fill
+    let mut sigmas: Vec<f32> = container.levels().iter().map(|l| l.0).collect();
+    sigmas.push(p.fill_sigma());
     // only what the panel reads: its bounds and the reach of the widest level and the refraction
     let reach = p.reach().ceil() as i32;
     let (cx, cy) = (panel.margin_left - reach, panel.margin_top - reach);

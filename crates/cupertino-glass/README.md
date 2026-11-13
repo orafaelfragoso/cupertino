@@ -86,7 +86,7 @@ table) with the design's `Normalize`. Channel gains, fade, post offsets and redu
 
 `src/glass.rs` is the model of the glass background pass and `shaders/glass.wgsl` / `gles/glass.vert`, `gles/glass.frag`
 draw it, one draw per container over its sampled area (the shapes grown by the reach of the blur and refraction,
-`Container::sample_area`). The backdrop is read at half scale into up to four blur levels and a blur fill; the
+`Container::sample_area`). The backdrop is read at half scale into up to four blurred copies and a blur fill; the
 composite then, per pixel:
 
 1. evaluates the field: the smooth union of the shapes' rounded-rectangle distances, polynomial blend of width
@@ -94,11 +94,14 @@ composite then, per pixel:
    the same weights; the union bulges up to a quarter of the spacing past the shapes, which the sampled area includes;
 2. refraction: inside the band along the edge, the sample point moves along the outward normal by the offset times
    (1 − t)², t the depth into the band;
-3. blur levels and blur fill: the levels laid over each other widest first, then the fill darkens, lightens or covers;
+3. blur and blur fill: each shape's backdrop is one Gaussian, its deviation twice the recipe's radius scaled by the first
+   level's opacity (4 points for a small regular control, 8 for a regular panel 160 points high, 20 for clear glass of
+   radius 10); the container blurs once per distinct deviation of its shapes (at most four copies, a shape between two
+   mixing them), then the fill, a Gaussian of twice its radius, darkens, lightens or covers;
 4. face colour: saturation about the luma of the encoded colour (so the weaker channels of a strong colour keep a milky
    floor rather than dropping to black, as they would in linear light), then on linear light the white gain,
    per-channel limit and luminance cap, then the encoded black lift and fill;
-5. bleed: the widest level (made whenever a shape bleeds, even with no weight in the blend), saturated (encoded) and mapped
+5. bleed: the blur fill (made whenever a shape bleeds, even when the fill does not show), saturated (encoded) and mapped
    between black and white, lightens (dark) or darkens (light) the face in the bleed band;
 6. key and fill rim lights: a Gaussian band about the edge where light is added along the axis of the light angle,
    the highlight matrix applied to the face; a raised-cosine lobe around each end of the axis falls to nothing three
@@ -106,8 +109,8 @@ composite then, per pixel:
    the light scaled by one plus the colour bias;
 7. outside the shape, the drop shadow and the ring shadow at their opacity.
 
-Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, each level and the
-fill a Gaussian of its radius, shows the large panel blurring a step over twice the distance of regular glass of its
+Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
+fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its
 size and a 6 point bright stripe coming through at about half the height), and that body text (black at 85 %) on light regular glass stays at 4.5:1 or more over the darkest backdrops at every panel size and accessibility recipe, and `tests/shaders.rs` checks that the `Glass` block has the
 same members in both shader languages and the Rust struct's size.
 

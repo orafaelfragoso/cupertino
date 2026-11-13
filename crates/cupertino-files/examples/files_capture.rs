@@ -106,15 +106,13 @@ fn io(e: std::io::Error) -> String {
 }
 
 /// The sample home folder under `root`: the user folders (an hour old) and the sample files (sparse, with their ages).
+/// Every item is dated back from [`sample_now`], a folder once what it holds is written, since writing into a folder
+/// dates it by the wall clock.
 fn home(root: &Path) -> Result<PathBuf, String> {
     let home = root.join(HOME);
     let now = sample_now();
     for (_, name) in USER_DIRS {
-        let dir = home.join(name);
-        std::fs::create_dir_all(&dir).map_err(io)?;
-        std::fs::File::open(&dir)
-            .and_then(|d| d.set_modified(now - Duration::from_secs(3_600)))
-            .map_err(io)?;
+        std::fs::create_dir_all(home.join(name)).map_err(io)?;
     }
     for (n, (name, size, days)) in FILES.into_iter().enumerate() {
         let path = home.join(name);
@@ -151,7 +149,14 @@ fn home(root: &Path) -> Result<PathBuf, String> {
             .and_then(|f| f.set_modified(now - Duration::from_secs(2 * 86_400)))
             .map_err(io)?;
     }
-    std::fs::create_dir_all(documents.join("Projects")).map_err(io)?;
+    let projects = documents.join("Projects");
+    std::fs::create_dir_all(&projects).map_err(io)?;
+    let folders = USER_DIRS.iter().map(|(_, name)| home.join(name));
+    for dir in folders.chain([projects]) {
+        std::fs::File::open(&dir)
+            .and_then(|d| d.set_modified(now - Duration::from_secs(3_600)))
+            .map_err(io)?;
+    }
     Ok(home)
 }
 
@@ -748,6 +753,35 @@ mod tests {
         assert!(
             drawn.data() == again.data(),
             "the second run drew other pixels"
+        );
+    }
+
+    /// The window words each item's date against the sample time, to the minute: an item dated by the wall clock
+    /// would read another minute in a capture drawn a moment later.
+    #[test]
+    fn every_sample_item_is_dated_before_the_sample_time() {
+        let capture = Capture::new().unwrap();
+        let mut dirs = vec![capture.home.clone()];
+        let mut dated = 0;
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let meta = std::fs::metadata(&path).unwrap();
+                assert!(
+                    meta.modified().unwrap() < sample_now(),
+                    "{} is dated by the wall clock",
+                    path.display()
+                );
+                dated += 1;
+                if meta.is_dir() {
+                    dirs.push(path);
+                }
+            }
+        }
+        assert_eq!(
+            dated,
+            USER_DIRS.len() + FILES.len() + DOCUMENTS.len() + 1,
+            "every sample item was looked at"
         );
     }
 

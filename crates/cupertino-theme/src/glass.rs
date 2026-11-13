@@ -294,6 +294,13 @@ pub struct GlassShadow {
     /// response to the brightness of what lies there ([`rim_brightness`]), so the glass keeps an outline over light
     /// content and draws none over black. 0 for none.
     pub edge_line: f32,
+    /// The angular width, in radians, of the arcs facing left and right that keep the edge line: a raised cosine of
+    /// the outline's direction, so a straight side keeps all of it, a top or bottom edge none, and a corner fades from
+    /// one to the other. 0 keeps the line all round.
+    pub edge_line_sides: f32,
+    /// Whether the edge line keeps its strength over any backdrop rather than following the rim's response to its
+    /// brightness, so it reads as dark over a dark scene as over a bright one.
+    pub edge_line_even: bool,
 }
 
 /// The complete background recipe of one glass shape.
@@ -881,13 +888,28 @@ const MODULE_RIM_BIAS: f32 = -0.3;
 pub const MODULE_SATURATION: f32 = 1.045;
 pub const MODULE_WHITE: f32 = 0.697;
 pub const MODULE_BLACK: f32 = 0.107;
-/// The module's line of light just inside its top and bottom edges: its strength at the top (white added at its middle),
-/// its half-width and where its middle lies inside the edge, in points, and the bottom's strength as a share of the
-/// top's: a point-wide line about 58 levels over the face at the top and 32 at the bottom.
-pub const MODULE_LINE: (f32, f32, f32) = (0.23, 0.5, -0.5);
-pub const MODULE_LINE_BOTTOM: f32 = 0.55;
-/// The dark line just outside the module's outline, which marks its sides against a bright backdrop.
-const MODULE_EDGE_LINE: f32 = 0.55;
+/// The module's line of light just inside its top and bottom edges: its strength (the share of its colour added at its
+/// middle), its half-width and where its middle lies inside the edge, in points, and the bottom's strength as a share
+/// of the top's: a bright line about a point wide along the top and as bright along the bottom, which takes a
+/// mid-toned face to near white.
+pub const MODULE_LINE: (f32, f32, f32) = (0.55, 0.55, -0.45);
+pub const MODULE_LINE_BOTTOM: f32 = 1.0;
+/// The exponent on the module line's arc falloff: under 1, so the line keeps most of its light round the corners until
+/// the side's dark line takes over.
+const MODULE_LINE_CURVATURE: f32 = 0.5;
+/// The colour of the module's line of light from the face under it: the face plus nearly half white, so a mid tone of
+/// a warm backdrop turns a pale tint of it and a light one white.
+const MODULE_LINE_MATRIX: ColorMatrix = [
+    1.0, 0.0, 0.0, 0.0, 0.47, //
+    0.0, 1.0, 0.0, 0.0, 0.47, //
+    0.0, 0.0, 1.0, 0.0, 0.47, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
+/// The dark line just outside the module's outline, which marks its sides: its strength, the same over any backdrop,
+/// and the angular width of the arcs facing left and right it keeps to (none along the top and the bottom, which carry
+/// the line of light).
+const MODULE_EDGE_LINE: f32 = 0.64;
+const MODULE_EDGE_LINE_SIDES: f32 = std::f32::consts::FRAC_PI_2;
 
 /// Card glass: the blur radius at full opacity of the first level, the blur fill's radius and opacities (lighten in the
 /// light appearance, darken in the dark one, and normal), the refraction, the rim and the ring shadow inside the
@@ -904,8 +926,13 @@ const CARD_RIM_BIAS: f32 = -0.25;
 const CARD_SPREAD_LIGHT: f32 = 1.676;
 const CARD_SPREAD_DARK: f32 = 5.0 * std::f32::consts::PI / 12.0;
 const CARD_RING_OPACITY: f32 = 0.06;
-/// The card's edge line in the light appearance; the dark card has none.
+/// The card's edge line in the light appearance, all round.
 const CARD_EDGE_LINE_LIGHT: f32 = 0.19;
+/// The dark card's edges, as the module's: a dark line just outside its sides only (its strength over any backdrop,
+/// on arcs as wide as the module's), and a line of light just inside its top and bottom (its strength, half-width and
+/// middle in points, in the module line's colour), about a point wide and some 50 levels over a dark face.
+const CARD_EDGE_LINE_DARK: f32 = 0.62;
+const CARD_LINE_DARK: (f32, f32, f32) = (0.28, 0.45, -0.4);
 /// The dark card's face: a mid-dark pane that holds a bright backdrop near 115 of 255 with a little of its colour, about
 /// `0.42 · c + 26` per channel over the bright half of the range, and lets a dark one through darker still (a grey of
 /// 128 near 86, black at black). A little less colour than the backdrop's, white kept, no black lift and a strong luma
@@ -1034,6 +1061,29 @@ pub const LARGE_PANEL_REFRACTION_HEIGHT_MAX: f32 = 6.0;
 pub const LARGE_PANEL_INNER_LINE_LIGHT: f32 = 0.6;
 pub const LARGE_PANEL_INNER_LINE_WIDTH: f32 = 0.35;
 pub const LARGE_PANEL_INNER_LINE_DEPTH: f32 = -0.6;
+/// The dark large panel's bevel: a bright rim about a point wide just inside its dark edge, which mixes the face this
+/// share of the way to white at its middle, its half-width and depth in points. With the arcs below it lights the top
+/// and the bottom fully and the sides at about 0.7, so the panel reads as raised rather than outlined.
+pub const LARGE_PANEL_RIM_DARK: (f32, f32, f32) = (0.33, 0.7, -0.3);
+/// The angular width of the arcs the dark bevel lights round each end of its axis, and the exponent on their falloff:
+/// two arcs this wide meet at the sides, where each gives about a third of its light.
+pub const LARGE_PANEL_RIM_SPREAD_DARK: f32 = 4.0 * std::f32::consts::FRAC_PI_3;
+pub const LARGE_PANEL_RIM_CURVATURE_DARK: f32 = 1.5;
+/// The soft band of light under the dark bevel, along the top and the bottom: as many times wider than the bevel, on
+/// arcs half as wide, at this share of its strength, so it also lifts the face where the blur of the darker backdrop
+/// outside the panel darkens it near the edge.
+pub const LARGE_PANEL_GLOW_DARK: GlowDiffuse = GlowDiffuse {
+    height_scale: 13.0,
+    spread_scale: 0.5,
+    amount_scale: 0.125,
+};
+/// The colour the dark bevel mixes the face towards: white.
+const TOWARDS_WHITE_MATRIX: ColorMatrix = [
+    -1.0, 0.0, 0.0, 0.0, 1.0, //
+    0.0, -1.0, 0.0, 0.0, 1.0, //
+    0.0, 0.0, -1.0, 0.0, 1.0, //
+    0.0, 0.0, 0.0, 1.0, 0.0,
+];
 
 /// The dark large panel's tone compression: saturation, white and black levels and luma compression. A bright spot in
 /// the scene (a sunlit sky, a white page, the light centre of a picture) comes through as a light patch near the
@@ -1228,6 +1278,8 @@ impl GlassParams {
                 } else {
                     REGULAR_EDGE_LINE_LIGHT
                 },
+                edge_line_sides: 0.0,
+                edge_line_even: false,
             },
             capture_scale: GLASS_BACKDROP_SCALE,
             veil: [0.0; 2],
@@ -1243,8 +1295,15 @@ impl GlassParams {
         p.blur.fill_radius *= LARGE_PANEL_BLUR_SCALE;
         p.face = large_panel_face(dark);
         p.refraction.height = p.refraction.height.min(LARGE_PANEL_REFRACTION_HEIGHT_MAX);
-        if !dark {
-            let h = &mut p.highlight;
+        let h = &mut p.highlight;
+        if dark {
+            (h.glow_amount, h.glow_height, h.glow_offset) = LARGE_PANEL_RIM_DARK;
+            h.spread = LARGE_PANEL_RIM_SPREAD_DARK;
+            h.curvature = LARGE_PANEL_RIM_CURVATURE_DARK;
+            h.glow_fill = 1.0;
+            h.diffuse = LARGE_PANEL_GLOW_DARK;
+            h.matrix = TOWARDS_WHITE_MATRIX;
+        } else {
             h.glow_amount = LARGE_PANEL_INNER_LINE_LIGHT;
             h.glow_height = LARGE_PANEL_INNER_LINE_WIDTH;
             h.glow_offset = LARGE_PANEL_INNER_LINE_DEPTH;
@@ -1295,7 +1354,7 @@ impl GlassParams {
     }
 
     /// The module glass, the same in both appearances: the dark clear glass of its size with the module's face,
-    /// refraction and rim, a line of light inside its top and bottom edges and a dark line outside its outline.
+    /// refraction and rim, a line of light inside its top and bottom edges and a dark line outside its sides.
     fn module(_dark: bool, s: f32) -> Self {
         let mut p = Self::clear(true, s);
         p.blur.radius = by_side(&MODULE_BLUR_BY_SIDE, s);
@@ -1317,10 +1376,12 @@ impl GlassParams {
         p.highlight.glow_offset = offset;
         p.highlight.glow_fill = MODULE_LINE_BOTTOM;
         p.highlight.spread = MENU_LINE_SPREAD;
-        p.highlight.curvature = 1.0;
+        p.highlight.curvature = MODULE_LINE_CURVATURE;
         p.highlight.diffuse = GlowDiffuse::NONE;
-        p.highlight.matrix = MENU_LINE_MATRIX;
+        p.highlight.matrix = MODULE_LINE_MATRIX;
         p.shadow.edge_line = MODULE_EDGE_LINE;
+        p.shadow.edge_line_sides = MODULE_EDGE_LINE_SIDES;
+        p.shadow.edge_line_even = true;
         p
     }
 
@@ -1365,9 +1426,21 @@ impl GlassParams {
             ring_stroke: 4.0,
             ring_offset: 8.0,
             ring_opacity: CARD_RING_OPACITY,
-            edge_line: if dark { 0.0 } else { CARD_EDGE_LINE_LIGHT },
+            edge_line: if dark {
+                CARD_EDGE_LINE_DARK
+            } else {
+                CARD_EDGE_LINE_LIGHT
+            },
+            edge_line_sides: if dark { MODULE_EDGE_LINE_SIDES } else { 0.0 },
+            edge_line_even: dark,
             ..p.shadow
         };
+        if dark {
+            let h = &mut p.highlight;
+            (h.glow_amount, h.glow_height, h.glow_offset) = CARD_LINE_DARK;
+            h.glow_fill = MODULE_LINE_BOTTOM;
+            h.matrix = MODULE_LINE_MATRIX;
+        }
         p.capture_scale = CARD_CAPTURE_SCALE;
         p
     }
@@ -1425,6 +1498,8 @@ impl GlassParams {
             } else {
                 TRACK_EDGE_LINE_LIGHT
             },
+            edge_line_sides: 0.0,
+            edge_line_even: false,
         };
         p.capture_scale = TRACK_CAPTURE_SCALE;
         p
@@ -1743,6 +1818,8 @@ impl GlassParams {
                 outline_opacity: 0.0,
                 outline_width: 0.0,
                 edge_line: 0.0,
+                edge_line_sides: 0.0,
+                edge_line_even: false,
             },
             capture_scale: GLASS_BACKDROP_SCALE,
             veil: [0.0; 2],
@@ -2128,8 +2205,9 @@ mod tests {
         for dark in [true, false] {
             let regular = with(dark, GlassStyle::Regular, false, false, false);
             let panel = with(dark, GlassStyle::LargePanel, false, false, false);
-            // the optics are the regular glass's, with the blur twice as wide, the bending band narrow and, in the
-            // light appearance, a bright line just inside the edge
+            // the optics are the regular glass's, with the blur twice as wide, the bending band narrow and a bright
+            // line just inside the edge: in the dark appearance a bevel all round, mixing the face towards white, over
+            // a soft band along the top and the bottom
             assert_eq!(
                 panel.refraction,
                 GlassRefraction {
@@ -2139,7 +2217,18 @@ mod tests {
             );
             assert_eq!(panel.bleed, regular.bleed);
             let line = if dark {
-                regular.highlight
+                let (glow_amount, glow_height, glow_offset) = LARGE_PANEL_RIM_DARK;
+                GlassHighlight {
+                    glow_amount,
+                    glow_height,
+                    glow_offset,
+                    spread: LARGE_PANEL_RIM_SPREAD_DARK,
+                    curvature: LARGE_PANEL_RIM_CURVATURE_DARK,
+                    glow_fill: 1.0,
+                    diffuse: LARGE_PANEL_GLOW_DARK,
+                    matrix: TOWARDS_WHITE_MATRIX,
+                    ..regular.highlight
+                }
             } else {
                 GlassHighlight {
                     glow_amount: LARGE_PANEL_INNER_LINE_LIGHT,
@@ -2512,15 +2601,25 @@ mod tests {
                 assert!(close(p.refraction.height, band), "{side}");
                 let h = p.highlight;
                 assert_eq!((h.amount, h.color_bias, h.height), (0.4, -0.3, 0.5));
-                // a white line a point wide just inside the top, a little over half as bright at the bottom
+                // a bright line about a point wide just inside the top, as bright at the bottom, that lights the
+                // face plus nearly half white, on arcs that keep most of their light round the corners
                 assert_eq!((h.glow_amount, h.glow_height, h.glow_offset), MODULE_LINE);
-                assert_eq!(h.glow_fill, MODULE_LINE_BOTTOM);
-                assert_eq!(h.matrix, MENU_LINE_MATRIX);
-                assert_eq!(p.shadow.edge_line, 0.55, "a dark line marks its sides");
+                assert_eq!((h.glow_fill, h.curvature), (1.0, 0.5));
+                assert_eq!(h.matrix, MODULE_LINE_MATRIX);
+                // a dark line outside the sides only, on arcs a right angle wide facing left and right, as dark over
+                // any backdrop
+                let s = p.shadow;
+                assert_eq!(
+                    (s.edge_line, s.edge_line_sides, s.edge_line_even),
+                    (0.64, std::f32::consts::FRAC_PI_2, true),
+                    "a dark line marks its sides"
+                );
                 assert_eq!(
                     (
                         GlassShadow {
                             edge_line: 0.0,
+                            edge_line_sides: 0.0,
+                            edge_line_even: false,
                             ..p.shadow
                         },
                         p.bleed
@@ -2569,13 +2668,30 @@ mod tests {
                 assert_eq!(b.fill_normal, 0.4602);
                 assert_eq!((p.refraction.amount, p.refraction.height), (-60.0, 20.0));
                 let h = p.highlight;
-                assert_eq!(
-                    (h.amount, h.color_bias, h.matrix),
-                    (0.4, -0.25, HIGHLIGHT_MATRIX_REGULAR)
-                );
+                assert_eq!((h.amount, h.color_bias), (0.4, -0.25));
                 let spread = if dark { 75f32 } else { 96.0 };
                 assert!((h.spread - spread.to_radians()).abs() < 1e-3, "{dark}");
                 let s = p.shadow;
+                if dark {
+                    // the module's edges: a line of light inside the top and the bottom, as bright at both, and a
+                    // dark line outside the sides only
+                    assert_eq!(
+                        (h.glow_amount, h.glow_height, h.glow_offset),
+                        CARD_LINE_DARK
+                    );
+                    assert_eq!((h.glow_fill, h.matrix), (1.0, MODULE_LINE_MATRIX));
+                    assert_eq!(
+                        (s.edge_line, s.edge_line_sides, s.edge_line_even),
+                        (0.62, MODULE_EDGE_LINE_SIDES, true)
+                    );
+                } else {
+                    assert_eq!((h.glow_amount, h.matrix), (0.0, HIGHLIGHT_MATRIX_REGULAR));
+                    assert_eq!(
+                        (s.edge_line, s.edge_line_sides, s.edge_line_even),
+                        (0.19, 0.0, false),
+                        "all round, following the backdrop"
+                    );
+                }
                 assert_eq!(
                     (s.ring_opacity, s.ring_blur, s.ring_stroke, s.ring_offset),
                     (0.06, 5.0, 4.0, 8.0),
@@ -2783,6 +2899,11 @@ mod tests {
         ] {
             for dark in [false, true] {
                 let h = GlassParams::new(mode(dark, style), 40.0).highlight;
+                if dark && style == GlassStyle::LargePanel {
+                    // the dark panel's bevel lights its top and its bottom alike
+                    assert_eq!(h.glow_fill, 1.0);
+                    continue;
+                }
                 assert_eq!(h.glow_fill, 1.0 + h.color_bias, "{style:?} dark={dark}");
             }
         }
@@ -2836,9 +2957,9 @@ mod tests {
             (GlassStyle::Dense, 0.31, 0.54),
             (GlassStyle::Track, 0.22, 0.24),
             (GlassStyle::Popover, 0.175, 0.0),
-            (GlassStyle::Card, 0.19, 0.0),
+            (GlassStyle::Card, 0.19, 0.62),
             (GlassStyle::Clear, 0.0, 0.0),
-            (GlassStyle::Module, 0.55, 0.55),
+            (GlassStyle::Module, 0.64, 0.64),
             (GlassStyle::Bar, 0.0, 0.0),
         ] {
             assert_eq!(
@@ -2846,6 +2967,24 @@ mod tests {
                 (light, dark),
                 "{style:?}"
             );
+        }
+        // only module tiles and dark cards keep it to their sides
+        for style in [
+            GlassStyle::Regular,
+            GlassStyle::LargePanel,
+            GlassStyle::Dense,
+            GlassStyle::Track,
+            GlassStyle::Popover,
+            GlassStyle::Card,
+            GlassStyle::Module,
+        ] {
+            for dark in [false, true] {
+                let sides = GlassParams::new(mode(dark, style), 60.0)
+                    .shadow
+                    .edge_line_sides;
+                let kept = style == GlassStyle::Module || (dark && style == GlassStyle::Card);
+                assert_eq!(sides > 0.0, kept, "{style:?} dark={dark}");
+            }
         }
         // the glass is drawn far enough past its outline for the line, even with nothing else outside it
         let mut p = GlassParams::new(mode(false, GlassStyle::Track), 24.0);

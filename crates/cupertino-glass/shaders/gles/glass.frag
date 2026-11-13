@@ -20,7 +20,8 @@ layout(std140) uniform Glass {
     vec4 highlight;   // rim strength, light angle, spread, rim depth
     vec4 highlight2;  // offset, colour bias, curvature, the soft band's far end
     vec4 glow;        // soft band: amount, half-width, offset
-    vec4 diffuse;     // diffuse band: half-width, arcs' width, strength, per unit of the soft band's
+    vec4 diffuse;     // diffuse band: half-width, arcs' width, strength, per unit of the soft band's; the edge
+                      // line's side arcs' width
     vec4 hm[3];
     vec4 shadow;      // offset x, offset y, alpha, blur
     vec4 shadow_color;// rgb, ring darkening
@@ -29,7 +30,7 @@ layout(std140) uniform Glass {
     vec4 shape_a[16]; // corner extent, refraction strength, refraction band, bleed fraction
     vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
     vec4 cut;         // the outline the container is cut to: x, y, w, h
-    vec4 cut_shape;   // its corner extent, corner exponent, 1 when cut, 0
+    vec4 cut_shape;   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
 } G;
 
 uniform sampler2D u_level0;
@@ -198,20 +199,43 @@ float outside_alpha(vec2 p, float d) {
     return min(drop + line, 1.0);
 }
 
-// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
-// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over black
-float edge_line(vec2 p, float d, float pos) {
-    float band = clamp(1.5 - d, 0.0, 1.0);
-    if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
-    vec3 b = blurred(uv_of(p), pos);
-    return min(G.levels.x, 1.0) * rim_brightness(dot(b, LUMA)) * band;
+// the outward normal of the field at p, (0, 0) where it has none
+vec2 field_normal(vec2 p) {
+    vec2 g = vec2(field_d(p + vec2(0.5, 0.0)) - field_d(p - vec2(0.5, 0.0)),
+                  field_d(p + vec2(0.0, 0.5)) - field_d(p - vec2(0.0, 0.5)));
+    float gl = length(g);
+    return gl > 1e-6 ? g / gl : vec2(0.0);
 }
 
-// stage 7: what the shape draws outside itself, the drop shadow and the outline in the shadow's colour with the edge
-// line over them in black: its colour and alpha
-vec4 outside(vec2 p, float d, float pos) {
+// how much of the edge line shows where the outward normal is n: with arcs facing left and right (their width in
+// diffuse.w), a raised cosine of the normal's angle from the horizontal, nothing LOBE_REACH of the width away; all of it
+// without arcs or without a normal
+float edge_line_side_share(vec2 n) {
+    float reach = G.diffuse.w * LOBE_REACH;
+    if (reach <= 0.0 || dot(n, n) < 1e-12) { return 1.0; }
+    float a = acos(clamp(abs(n.x) / length(n), 0.0, 1.0));
+    if (a >= reach) { return 0.0; }
+    return 0.5 + 0.5 * cos(a / reach * PI);
+}
+
+// the edge line: black one pixel wide just outside the outline, at its strength times the rim's response to the
+// brightness of what lies there as the shape's blur at `pos` reads it, so it shows over light content and not over
+// black (an even line skips that response), and times the share the outline's direction n keeps
+float edge_line(vec2 p, float d, float pos, vec2 n) {
+    float band = clamp(1.5 - d, 0.0, 1.0);
+    if (G.levels.x <= 0.0 || band <= 0.0) { return 0.0; }
+    float share = edge_line_side_share(n);
+    if (share <= 0.0) { return 0.0; }
+    // an even line keeps its strength over any backdrop
+    float response = G.cut_shape.w > 0.5 ? 1.0 : rim_brightness(dot(blurred(uv_of(p), pos), LUMA));
+    return min(G.levels.x, 1.0) * response * band * share;
+}
+
+// stage 7: what the shape draws outside itself where its outward normal is n, the drop shadow and the outline in the
+// shadow's colour with the edge line over them in black: its colour and alpha
+vec4 outside(vec2 p, float d, float pos, vec2 n) {
     float shadow = outside_alpha(p, d);
-    float line = edge_line(p, d, pos);
+    float line = edge_line(p, d, pos, n);
     float a = line + shadow * (1.0 - line);
     if (a <= 0.0) { return vec4(G.shadow_color.rgb, 0.0); }
     return vec4(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
@@ -231,7 +255,9 @@ void main() {
     vec4 fb;
     float d = field(p, fa, fb);
     if (d > 0.5) {
-        vec4 o = outside(p, d, fb.z);
+        // the normal only matters to an edge line kept to the sides, in its band
+        vec2 on = G.diffuse.w > 0.0 && G.levels.x > 0.0 && d < 1.5 ? field_normal(p) : vec2(0.0);
+        vec4 o = outside(p, d, fb.z, on);
         float a = o.a * G.info.w * kept;
         if (a <= 0.0) { discard; }
         frag_color = vec4(o.rgb, a);
@@ -307,7 +333,7 @@ void main() {
     }
     // an edge pixel: the glass over what lies outside it in the part it leaves uncovered
     float cov = clamp(0.5 - d / G.info.z, 0.0, 1.0);
-    vec4 o = outside(p, d, fb.z);
+    vec4 o = outside(p, d, fb.z, n);
     float under = (1.0 - cov) * o.a;
     float a = cov + under;
     c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + o.rgb * under) / a : c;

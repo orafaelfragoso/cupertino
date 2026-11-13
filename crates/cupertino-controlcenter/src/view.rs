@@ -86,9 +86,12 @@ const PRESSED_ON: Color = Color::new(0.0, 0.0, 0.0, 0.12);
 const PRESSED_OFF: f32 = 0.12;
 /// Under a list row the pointer is over.
 const HOVER_ROW: f32 = 0.1;
-/// A level: white over its track's glass, as high as the track. Without the glass the track is a veil.
+/// A level: white over its track's glass, as high as the track. Without the glass the track is a veil, over it a fainter
+/// one.
 const TRACK_FILL: Color = Color::new(1.0, 1.0, 1.0, 1.0);
 const TRACK_EMPTY: f32 = 0.2;
+/// The veil over the track's glass: as faint as an off badge's.
+const TRACK_ON_GLASS: f32 = 0.1;
 /// A disabled control's content is drawn at this opacity.
 const DISABLED_ALPHA: f32 = 0.4;
 /// The media tile's artwork placeholder and the separator of a detail view, as veils.
@@ -1481,9 +1484,13 @@ impl<M: 'static> Widget<M> for Level<M> {
         let glass = !reduce_transparency(cx)
             && !increase_contrast(cx)
             && cx.glass(Glass::track().capsule().alpha(finite_alpha(self.panel)));
-        if !glass {
-            fill(cx, track, radius, veil(cx, TRACK_EMPTY));
-        }
+        // over its glass the track keeps a faint veil, so its empty part still reads as a track
+        fill(
+            cx,
+            track,
+            radius,
+            veil(cx, if glass { TRACK_ON_GLASS } else { TRACK_EMPTY }),
+        );
         let level = self.value.unwrap_or(0.0).clamp(0.0, 1.0);
         if level > 0.0 {
             // the level runs over the reach the pointer is taken past the track's ends

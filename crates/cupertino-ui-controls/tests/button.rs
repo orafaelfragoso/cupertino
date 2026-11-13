@@ -613,20 +613,30 @@ fn a_glass_button_paints_its_body_over_content_with_reduce_transparency_and_with
 }
 
 #[test]
-fn a_glass_button_on_glass_with_increase_contrast_adds_its_rim_in_the_light_appearance() {
-    let mut theme = support::theme();
-    theme.preferences.appearance = cupertino_ui_theme::Appearance::LightHighContrast;
-    let h = Harness::<GlassButtonWindow<true>>::with_effects(theme);
-    let rect = h.rect("glass");
-    assert!(
-        glass_regions(&h).iter().any(|r| r.rect == rect),
-        "the glass stays"
-    );
-    assert!(
-        h.ops("glass")
+fn a_glass_button_on_glass_lays_its_rim_over_the_glass_in_the_light_appearance() {
+    use cupertino_ui_theme::Appearance;
+    for appearance in [
+        Appearance::Light,
+        Appearance::LightHighContrast,
+        Appearance::Dark,
+    ] {
+        let mut theme = support::theme();
+        theme.preferences.appearance = appearance;
+        let h = Harness::<GlassButtonWindow<true>>::with_effects(theme);
+        let rect = h.rect("glass");
+        assert!(
+            glass_regions(&h).iter().any(|r| r.rect == rect),
+            "the glass stays ({appearance:?})"
+        );
+        let rim = h
+            .ops("glass")
             .iter()
-            .any(|op| matches!(op, PaintOp::Stroke { .. })),
-        "a fine rim over the glass"
-    );
-    assert!(!paints_body(&h));
+            .any(|op| matches!(op, PaintOp::Stroke { .. }));
+        assert_eq!(
+            rim,
+            !appearance.is_dark(),
+            "a fine rim over the light glass, none over the dark ({appearance:?})"
+        );
+        assert!(!paints_body(&h));
+    }
 }

@@ -301,28 +301,17 @@ fn glass_edges(h: &Harness<Browser>) -> (Vec<Vec<cupertino_ui_theme::Color>>, us
     (rims, shades)
 }
 
-/// The compositor's glass marks each floating control's edge at rest; with Increase Contrast in the light appearance
-/// the toolkit adds a fine dark rim, stronger at its sides than at its top and bottom, and a faint shade below it that
-/// never dims the glass.
+/// In the light appearance the toolkit lays a fine dark rim over each floating control's glass, stronger at its sides
+/// than at its top and bottom, and a faint shade below it that never dims the glass; Increase Contrast strengthens the
+/// rim. The dark appearance's glass stands out by its face and gets neither.
 #[test]
-fn the_toolbar_glass_marks_its_own_edge_and_increase_contrast_adds_a_fine_dark_rim() {
+fn the_light_toolbar_glass_has_a_fine_dark_rim_and_a_shade_outside_it() {
     use cupertino_ui_theme::Appearance;
     let mut theme = support::theme();
-    for appearance in [Appearance::Light, Appearance::Dark] {
-        theme.preferences.appearance = appearance;
-        let mut h = Harness::<Browser>::with_effects(theme.clone());
-        h.settle();
-        assert_eq!(
-            glass_edges(&h),
-            (Vec::new(), 0),
-            "the glass marks its own edge at rest ({appearance:?})"
-        );
-    }
-
-    theme.preferences.appearance = Appearance::LightHighContrast;
-    let mut contrast = Harness::<Browser>::with_effects(theme);
-    contrast.settle();
-    let (rims, shades) = glass_edges(&contrast);
+    theme.preferences.appearance = Appearance::Light;
+    let mut h = Harness::<Browser>::with_effects(theme.clone());
+    h.settle();
+    let (rims, shades) = glass_edges(&h);
     // the choice, the menu button, the action group, the round button, and the resting search with the field under it
     assert_eq!(rims.len(), 6, "{rims:?}");
     assert_eq!(
@@ -341,5 +330,28 @@ fn the_toolbar_glass_marks_its_own_edge_and_increase_contrast_adds_a_fine_dark_r
             middle.a > top.a && top.a == bottom.a && top.a > 0.0,
             "{stops:?}"
         );
+        // a white face of 240 keeps its sides near 190 and its top and bottom near 218
+        let darkened = |a: f32| (240.0 * (1.0 - a)).round();
+        assert!((darkened(middle.a) - 190.0).abs() <= 2.0, "{stops:?}");
+        assert!((darkened(top.a) - 218.0).abs() <= 2.0, "{stops:?}");
     }
+
+    theme.preferences.appearance = Appearance::LightHighContrast;
+    let mut contrast = Harness::<Browser>::with_effects(theme.clone());
+    contrast.settle();
+    let (strong, strong_shades) = glass_edges(&contrast);
+    assert_eq!((strong.len(), strong_shades), (rims.len(), shades));
+    assert!(
+        strong[0][1].a > rims[0][1].a && strong[0][0].a > rims[0][0].a,
+        "Increase Contrast strengthens it"
+    );
+
+    theme.preferences.appearance = Appearance::Dark;
+    let mut dark = Harness::<Browser>::with_effects(theme);
+    dark.settle();
+    assert_eq!(
+        glass_edges(&dark),
+        (Vec::new(), 0),
+        "the dark glass stands out by its face"
+    );
 }

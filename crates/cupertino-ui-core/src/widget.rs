@@ -84,6 +84,11 @@ pub trait Widget<M>: 'static {
     fn grows_from_anchor(&self) -> bool {
         false
     }
+    /// Whether the popup whose root this widget is is a menu that draws its own material (one with a pointer, say):
+    /// it fades out as it closes, as a menu on the menu surface does, taking no input from the start of the fade.
+    fn closes_as_menu(&self) -> bool {
+        false
+    }
 }
 
 /// An immutable description of one widget and its children.
@@ -223,6 +228,7 @@ pub(crate) trait AnyWidget<M> {
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
     fn raised(&self, state: &dyn Any) -> bool;
     fn grows_from_anchor(&self) -> bool;
+    fn closes_as_menu(&self) -> bool;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -307,5 +313,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn grows_from_anchor(&self) -> bool {
         Widget::grows_from_anchor(self)
+    }
+
+    fn closes_as_menu(&self) -> bool {
+        Widget::closes_as_menu(self)
     }
 }

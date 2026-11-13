@@ -2189,6 +2189,11 @@ impl<M: Clone + 'static> Widget<M> for Callout<M> {
 
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
+    /// The menu draws its own glass, under its pointer too, and fades out as every menu does.
+    fn closes_as_menu(&self) -> bool {
+        true
+    }
+
     // the window around the menu: the panel under it is the menu assistive technology reads
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.name(self.name.clone());

@@ -29,6 +29,7 @@ pub mod icons;
 pub mod kit;
 pub mod magnify;
 pub mod menu;
+pub mod minimized;
 pub mod overview_kit;
 pub mod overview_ui;
 pub mod session;

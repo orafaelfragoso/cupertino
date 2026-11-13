@@ -23,6 +23,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cupertino_defaults::dock::DockSettings;
+use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods};
@@ -121,6 +122,11 @@ pub enum DockEvent {
         minimized: bool,
     },
     WindowIcon(WindowIcon),
+    /// The picture of a minimized window, or `None` once it is no longer minimized.
+    WindowThumbnail {
+        id: u32,
+        image: Option<ImageSource>,
+    },
     WindowClosed(u32),
     Launching(String),
     /// Whether a process of the application that showed a window is still connected, with or without windows now.
@@ -556,6 +562,8 @@ pub struct Model {
     edge: Option<(u32, f64)>,
     /// The icons loaded, by key and side in whole points.
     icons: HashMap<IconKey, BTreeMap<u32, IconSet>>,
+    /// The pictures of the minimized windows, by the server's window id.
+    thumbnails: HashMap<u32, ImageSource>,
     /// Whether the host loads icons in the background ([`Host::preload`]); `None` until it was first asked.
     background_icons: Option<bool>,
     /// The icons asked for in the background and not arrived yet, by key and side in whole points.
@@ -626,6 +634,7 @@ impl Model {
             opening: HashMap::new(),
             edge: None,
             icons: HashMap::new(),
+            thumbnails: HashMap::new(),
             background_icons: None,
             requested: HashSet::new(),
             recents_basis: None,
@@ -755,7 +764,16 @@ impl Model {
                         self.host.window_icon(apps, icon);
                     }
                 }
+                DockEvent::WindowThumbnail { id, image } => match image {
+                    Some(image) => {
+                        self.thumbnails.insert(id, image);
+                    }
+                    None => {
+                        self.thumbnails.remove(&id);
+                    }
+                },
                 DockEvent::WindowClosed(id) => {
+                    self.thumbnails.remove(&id);
                     if self.session.window_info(id).is_some() {
                         self.icons.retain(|k, _| !matches!(k, IconKey::App(_)));
                     }
@@ -2085,6 +2103,15 @@ impl Model {
     }
 
     /// The icon key of the tile with `id`.
+    /// The picture a minimized window's tile shows, once the server drew it.
+    fn tile_thumbnail(&self, id: TileId) -> Option<&ImageSource> {
+        let tile = self.session.dock.tile(id)?;
+        if tile.kind != TileKind::MinimizedWindow {
+            return None;
+        }
+        self.thumbnails.get(&u32::try_from(tile.window?.0).ok()?)
+    }
+
     fn tile_icon(&self, id: TileId) -> Option<IconKey> {
         let tile = self.session.dock.tile(id)?;
         Some(match tile.kind {
@@ -2808,6 +2835,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 },
                 name: model.tile_name(t.id),
                 badge: model.badge(t.id).map(crate::badge::text),
+                thumbnail: model.tile_thumbnail(t.id).cloned(),
                 description: tile_description(model, t.id, t.lifecycle),
             })
             .collect();

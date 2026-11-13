@@ -1,0 +1,4 @@
+title = "Dock: a count on a running application's tile, and its minimized window's tile"
+programs = ["cupertino-dock", "cupertino-files", "cupertino-server"]
+after = 6.5
+args = ["--spawn", "cupertino-files", "--spawn", "sh @ROOT@/scenarios/badge.sh", "--action", "4.5:minimize"]

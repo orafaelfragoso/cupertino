@@ -2626,6 +2626,91 @@ fn a_running_applications_count_shows_on_a_badge_over_its_tile() {
     assert_eq!(quit, plain, "gone once the application quit");
 }
 
+#[test]
+fn a_minimized_windows_tile_shows_its_picture_with_the_applications_icon_small_over_its_corner() {
+    use cupertino_kit::render::PaintOp;
+    let mut run = Run::start();
+    let bar = run.bar();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 9,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: true,
+        }],
+    });
+    run.advance(1.0);
+    let tile = run.bounds(bar, Role::Button, "notes");
+    let middle = centre(tile);
+    // the rectangles the tile's images are drawn at, in the tile's own points
+    let images = |run: &Run| -> Vec<cupertino_kit::geometry::Rect> {
+        let list = run.driver.runtime().snapshot(bar).unwrap().display_list;
+        list.nodes
+            .iter()
+            .filter(|n| n.bounds.contains(middle))
+            .flat_map(|n| n.ops.iter())
+            .filter_map(|op| match op {
+                PaintOp::Image { dst, .. } => Some(*dst),
+                _ => None,
+            })
+            .collect()
+    };
+    let k = tile.width() / 64.0;
+    let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+    let picture_drawn =
+        |rects: &[cupertino_kit::geometry::Rect]| rects.iter().any(|r| near(r.width(), 60.0 * k));
+    assert!(
+        !picture_drawn(&images(&run)),
+        "no picture yet: the icon alone"
+    );
+
+    // a 256 × 158 picture of the window
+    let picture = cupertino_dock::minimized::image(256, 158, &[200u8; 256 * 158 * 4]).unwrap();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowThumbnail {
+            id: 9,
+            image: Some(picture),
+        }],
+    });
+    run.settle();
+    let rects = images(&run);
+    let drawn = rects
+        .iter()
+        .find(|r| near(r.width(), 60.0 * k))
+        .unwrap_or_else(|| panic!("the picture across the tile: {rects:?}"));
+    assert!(
+        near(drawn.height(), 60.0 * k * 158.0 / 256.0),
+        "its shape kept: {drawn:?}"
+    );
+    assert!(
+        near(drawn.x() + drawn.width() / 2.0, tile.width() / 2.0),
+        "centred across the tile: {drawn:?}"
+    );
+    assert!(
+        near(
+            drawn.y() + drawn.height() / 2.0,
+            tile.height() / 2.0 - 1.25 * k
+        ),
+        "a little above the middle"
+    );
+    // the application's icon, when it has one, is drawn small over the picture's lower trailing corner
+    for icon in rects.iter().filter(|r| !near(r.width(), 60.0 * k)) {
+        assert!(near(icon.width(), 19.5 * k), "{icon:?}");
+        assert!(near(icon.x() + icon.width(), tile.width() - 3.25 * k));
+        assert!(near(icon.y() + icon.height(), tile.height() - 4.5 * k));
+    }
+
+    // restored, the picture goes with it
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowThumbnail { id: 9, image: None }],
+    });
+    run.settle();
+    assert!(!picture_drawn(&images(&run)));
+}
+
 /// The glass styles window `window` last asked for.
 fn glass_styles(run: &mut Run, window: WindowId) -> Vec<cupertino_kit::platform::GlassStyle> {
     let requests = run.driver.window_system_mut().requests(window).unwrap();

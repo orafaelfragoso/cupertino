@@ -6,6 +6,7 @@
 //! repaints only the nodes it moved. The tiles are one roving group: the arrows move the keyboard focus along the bar,
 //! Return or Space activates, the Menu key or Shift+F10 opens the tile's menu, Escape gives the keyboard back.
 
+use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Event, EventCx, FocusTarget, Key,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
@@ -14,7 +15,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
 use cupertino_kit::platform::{DecorationMode, Keysym, Mods, WindowSpec};
-use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Shape};
+use cupertino_kit::render::{FillRule, GradientStop, Paint, PaintOp, PathVerb, Sampling, Shape};
 use cupertino_kit::theme::{Surface, BAR_GLASS_MATERIAL, GLASS_MATERIAL};
 
 use super::paint::{self, Root};
@@ -101,6 +102,8 @@ pub struct TileView {
     pub description: String,
     /// The count on the application's badge, as drawn.
     pub badge: Option<String>,
+    /// A minimized window's picture: drawn across the tile with the application's icon small over its corner.
+    pub thumbnail: Option<ImageSource>,
 }
 
 /// What the bar shows.
@@ -759,6 +762,15 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
         let artwork = artwork_rect(bounds);
         if self.tile.chevron {
             paint_chevron(cx, artwork);
+        } else if let Some(picture) = &self.tile.thumbnail {
+            let image = &picture.image;
+            let rect = crate::minimized::picture_rect(
+                bounds,
+                f64::from(image.width),
+                f64::from(image.height),
+            );
+            cx.image(picture.id, image, rect, Sampling::Linear);
+            paint::image(cx, &self.tile.icon, crate::minimized::icon_rect(bounds));
         } else {
             paint::image(cx, &self.tile.icon, artwork);
         }

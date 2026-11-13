@@ -321,6 +321,12 @@ fn dock_event(change: &DockChange) -> DockEvent {
             name: icon.name,
             image: icon.image.map(|i| (i.size, i.argb)),
         }),
+        DockChange::WindowThumbnail(t) => DockEvent::WindowThumbnail {
+            id: t.id,
+            image: t
+                .image
+                .and_then(|i| cupertino_dock::minimized::image(i.width, i.height, &i.argb)),
+        },
         DockChange::WindowClosed(id) => DockEvent::WindowClosed(id),
         DockChange::Launching(app_id) => DockEvent::Launching(app_id),
         DockChange::ToggleAutoHide => DockEvent::ToggleAutoHide,

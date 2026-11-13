@@ -12,8 +12,8 @@ use std::fmt;
 use aes::Aes128;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use crypto_bigint::modular::runtime_mod::{DynResidue, DynResidueParams};
-use crypto_bigint::{Encoding, U1536};
+use crypto_bigint::modular::{FixedMontyForm, FixedMontyParams};
+use crypto_bigint::{Odd, U1536};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -121,8 +121,10 @@ impl fmt::Debug for Exchange {
     }
 }
 
-fn params() -> DynResidueParams<{ U1536::LIMBS }> {
-    DynResidueParams::new(&U1536::from_be_bytes(PRIME))
+fn params() -> FixedMontyParams<{ U1536::LIMBS }> {
+    // the group's prime is odd, as every modulus of the Montgomery form must be
+    let prime = Odd::new(U1536::from_be_slice(&PRIME)).expect("the group's prime is odd");
+    FixedMontyParams::new_vartime(prime)
 }
 
 /// The big-endian bytes of `value` without leading zeros, as the protocol writes a public key.
@@ -146,8 +148,8 @@ impl Exchange {
     pub fn with_private(private: &[u8]) -> Exchange {
         let mut padded = Zeroizing::new([0u8; GROUP_BYTES]);
         padded[GROUP_BYTES - private.len()..].copy_from_slice(private);
-        let private = Zeroizing::new(U1536::from_be_bytes(*padded));
-        let public = DynResidue::new(&U1536::from_u64(GENERATOR), params())
+        let private = Zeroizing::new(U1536::from_be_slice(padded.as_slice()));
+        let public = FixedMontyForm::new(&U1536::from_u64(GENERATOR), &params())
             .pow(&private)
             .retrieve();
         Exchange {
@@ -203,15 +205,15 @@ impl Exchange {
         }
         let mut padded = [0u8; GROUP_BYTES];
         padded[GROUP_BYTES - peer.len()..].copy_from_slice(peer);
-        let peer = U1536::from_be_bytes(padded);
-        let prime = U1536::from_be_bytes(PRIME);
+        let peer = U1536::from_be_slice(&padded);
+        let prime = U1536::from_be_slice(&PRIME);
         let last = prime.wrapping_sub(&U1536::ONE);
         // 1 < y < p - 1: anything else gives a shared value the peer's choice alone decides
         if peer <= U1536::ONE || peer >= last {
             return Err(ExchangeError::BadPublicKey);
         }
         let shared = Zeroizing::new(
-            DynResidue::new(&peer, params())
+            FixedMontyForm::new(&peer, &params())
                 .pow(&self.private)
                 .retrieve()
                 .to_be_bytes(),

@@ -1178,6 +1178,32 @@ mod tests {
         Caller::Unclassified(ProcessHandle::open(std::process::id()).unwrap())
     }
 
+    /// The threads of this process the bus connections' pool for blocking calls runs.
+    fn pool_threads() -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(|t| std::fs::read_to_string(t.ok()?.path().join("comm")).ok())
+            .filter(|name| name.starts_with("blocking-"))
+            .count()
+    }
+
+    /// A bus connection runs its connect and its socket's shutdown on a pool of threads. Once a call ends, the pool's
+    /// thread ends too: a thread kept idle would wake twice a second in every process with a bus connection, on a
+    /// desktop where nothing happens.
+    #[test]
+    fn the_blocking_pool_ends_its_threads_once_idle() {
+        async_io::block_on(blocking::unblock(|| ()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pool_threads() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} pool threads are still waiting for work",
+                pool_threads()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     /// A scratch `/proc` for this process. With `stall`, its AppArmor label is a FIFO nobody writes: reading it stalls
     /// until [`release`].
     fn scratch_proc(stall: bool) -> tempfile::TempDir {

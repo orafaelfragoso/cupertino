@@ -24,6 +24,7 @@
 //! applications in a few milliseconds) and selects the first result.
 
 use crate::engine::{Activation, ItemAction, Launcher, ResultItem, Results};
+use crate::refine;
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
 use cupertino_ui_text::TextBuffer;
 
@@ -185,7 +186,14 @@ pub struct Panel {
     /// Rows (headers included) shown at once; keep equal to the style's `max_rows`.
     pub max_rows: usize,
     pub spring: SpringParams,
+    /// The searches that opened something, the latest first, at most [`HISTORY_LEN`]; and which of them Up put in
+    /// the field, while it stands there unedited.
+    history: Vec<String>,
+    recalled: Option<usize>,
 }
+
+/// How many past searches Up can recall.
+pub const HISTORY_LEN: usize = 20;
 
 impl Default for Panel {
     fn default() -> Self {
@@ -206,7 +214,44 @@ impl Panel {
             appear: AnimatedValue::new(0.0),
             max_rows: 9,
             spring: SpringParams::from_perceptual(0.3, 0.0),
+            history: Vec::new(),
+            recalled: None,
         }
+    }
+
+    /// The searches Up recalls, the latest first.
+    pub fn history(&self) -> &[String] {
+        &self.history
+    }
+
+    /// Remember `query` as the latest search that opened something.
+    fn remember(&mut self, query: &str) {
+        let query = query.trim();
+        if query.is_empty() {
+            return;
+        }
+        self.history.retain(|q| q != query);
+        self.history.insert(0, query.to_owned());
+        self.history.truncate(HISTORY_LEN);
+    }
+
+    /// Up in the field with nothing typed: the latest search comes back, and each further Up the one before it.
+    /// `None` when there is nothing (more) to recall or something is typed.
+    fn recall(&mut self, launcher: &Launcher, now: Now) -> Option<PanelEvent> {
+        let shown = self
+            .recalled
+            .and_then(|i| self.history.get(i))
+            .map(String::as_str);
+        let next = match shown {
+            Some(q) if q == self.field.text() => self.recalled? + 1,
+            _ if self.field.text().is_empty() => 0,
+            _ => return None,
+        };
+        let query = self.history.get(next)?.clone();
+        self.set_query(&query, launcher, now);
+        self.field.select_all();
+        self.recalled = Some(next);
+        Some(PanelEvent::Changed)
     }
 
     pub fn query(&self) -> &str {
@@ -556,6 +601,8 @@ impl Panel {
             return PanelEvent::None;
         };
         let activation = launcher.activate_action(&item, action, self.field.text(), now.unix);
+        let query = self.field.text().to_owned();
+        self.remember(&query);
         self.hide(now.mono);
         PanelEvent::Activate(activation)
     }
@@ -566,6 +613,8 @@ impl Panel {
             return PanelEvent::None;
         };
         let activation = launcher.activate(&item, self.field.text(), now.unix);
+        let query = self.field.text().to_owned();
+        self.remember(&query);
         self.hide(now.mono);
         PanelEvent::Activate(activation)
     }
@@ -638,10 +687,23 @@ impl Panel {
                 self.focus = Focus::Field;
                 PanelEvent::Changed
             }
+            // a kind's name and Tab: the search is scoped to that kind, its token in the field
+            (Key::Tab, m) if !m.shift && self.focus == Focus::Field => {
+                match refine::scope_by_name(self.field.text()) {
+                    Some(token) => {
+                        self.set_query(&token, launcher, now);
+                        PanelEvent::Changed
+                    }
+                    None => self.step_action(1, true, launcher),
+                }
+            }
             (Key::Tab, m) => self.step_action(if m.shift { -1 } else { 1 }, true, launcher),
             (Key::Right, _) if self.focus == Focus::List => self.step_action(1, false, launcher),
             (Key::Left, _) if self.focus == Focus::List => self.step_action(-1, false, launcher),
             (Key::Down, _) => self.arrow(true),
+            (Key::Up, m) if self.focus == Focus::Field && m == Mods::NONE => self
+                .recall(launcher, now)
+                .unwrap_or_else(|| self.arrow(false)),
             (Key::Up, _) => self.arrow(false),
             (Key::PageDown, _) => self.move_selection(page, false),
             (Key::PageUp, _) => self.move_selection(-page, false),

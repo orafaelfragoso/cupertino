@@ -987,6 +987,64 @@ fn watch_trash(messages: async_channel::Sender<Message>) -> Option<notify::Recom
     }
 }
 
+/// Listen on the session bus, on a thread of its own, for the launcher entry signals with which applications set the count
+/// on their badges ([`cupertino_dock::badge`]). Without a session bus the tiles show no badges.
+fn listen_badges(messages: async_channel::Sender<Message>) {
+    use cupertino_dock::badge::{update, LAUNCHER_ENTRY_INTERFACE, LAUNCHER_ENTRY_UPDATE};
+    use std::collections::HashMap;
+    use zbus::message::Type;
+    use zbus::zvariant::{OwnedValue, Value};
+    let listen = move || -> zbus::Result<()> {
+        let session = zbus::blocking::Connection::session()?;
+        let rule = zbus::MatchRule::builder()
+            .msg_type(Type::Signal)
+            .interface(LAUNCHER_ENTRY_INTERFACE)?
+            .member(LAUNCHER_ENTRY_UPDATE)?
+            .build();
+        let signals = zbus::blocking::MessageIterator::for_match_rule(rule, &session, None)?;
+        let number = |v: &Value<'_>| match *v {
+            Value::I64(n) => Some(n),
+            Value::I32(n) => Some(i64::from(n)),
+            Value::U32(n) => Some(i64::from(n)),
+            Value::U64(n) => i64::try_from(n).ok(),
+            Value::I16(n) => Some(i64::from(n)),
+            Value::U16(n) => Some(i64::from(n)),
+            Value::U8(n) => Some(i64::from(n)),
+            _ => None,
+        };
+        for message in signals {
+            let Ok(message) = message else { break };
+            let Ok((uri, properties)) = message
+                .body()
+                .deserialize::<(String, HashMap<String, OwnedValue>)>()
+            else {
+                continue;
+            };
+            let count = properties.get("count").and_then(|v| number(v));
+            let visible = properties.get("count-visible").and_then(|v| match **v {
+                Value::Bool(b) => Some(b),
+                _ => None,
+            });
+            if let Some(update) = update(&uri, count, visible) {
+                if messages.send_blocking(Message::Badge(update)).is_err() {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    };
+    let spawned = std::thread::Builder::new()
+        .name("badges".into())
+        .spawn(move || {
+            if let Err(e) = listen() {
+                eprintln!("{PROCESS}: cannot hear the applications' badges: {e}");
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!("{PROCESS}: cannot listen for the applications' badges: {e}");
+    }
+}
+
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
@@ -1049,6 +1107,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let (messages, heard) = async_channel::unbounded();
     let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
+    listen_badges(messages.clone());
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,

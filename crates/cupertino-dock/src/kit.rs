@@ -385,6 +385,8 @@ pub enum Message {
     Wake(u64),
     /// `dock.conf` changed on disk.
     ConfChanged,
+    /// An application asked for its badge's count to change ([`crate::badge`]).
+    Badge(crate::badge::BadgeUpdate),
     /// Nothing will tell the model about the session any more: the process ends.
     Unheard,
 }
@@ -403,6 +405,7 @@ impl Message {
                 | Message::KeyboardLeft(_)
                 | Message::ConfChanged
                 | Message::TrashChanged
+                | Message::Badge(_)
         )
     }
 }
@@ -523,6 +526,8 @@ pub struct Model {
     /// The tile the left button is held on, and its icon darkened: the pressed tile shows it until the button comes up
     /// or the pointer leaves the tile.
     held: Option<(TileId, IconSet)>,
+    /// The counts the applications show on their tiles.
+    badges: crate::badge::Badges,
     /// The folders the host shows as stacks were asked for, and their icons' theme names by path.
     folders_asked: bool,
     folder_icons: HashMap<String, String>,
@@ -604,6 +609,7 @@ impl Model {
             confirm: None,
             stack: None,
             held: None,
+            badges: crate::badge::Badges::default(),
             folders_asked: false,
             folder_icons: HashMap::new(),
             engaged: false,
@@ -2416,6 +2422,20 @@ const KP_ENTER: Keysym = Keysym(0xff8d);
 
 impl Model {
     /// What assistive technology calls the tile with `id`.
+    /// The count tile `id` shows on its badge: an application's that runs and asked for one.
+    pub fn badge(&self, id: TileId) -> Option<u64> {
+        let tile = self.session.dock.tile(id)?;
+        if tile.kind != TileKind::App || !tile.running {
+            return None;
+        }
+        let app = self
+            .session
+            .desktop()
+            .find(&tile.key)
+            .map_or(tile.key.as_str(), |e| e.id.as_str());
+        self.badges.shown(app)
+    }
+
     pub fn tile_name(&self, id: TileId) -> String {
         let Some(tile) = self.session.dock.tile(id) else {
             return String::new();
@@ -2556,6 +2576,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             if generation == model.wake_generation {
                 model.wake_at = None;
             }
+            Vec::new()
+        }
+        Message::Badge(update) => {
+            model.badges.apply(&update);
             Vec::new()
         }
         Message::ConfChanged => {
@@ -2783,6 +2807,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                         .unwrap_or_default(),
                 },
                 name: model.tile_name(t.id),
+                badge: model.badge(t.id).map(crate::badge::text),
                 description: tile_description(model, t.id, t.lifecycle),
             })
             .collect();

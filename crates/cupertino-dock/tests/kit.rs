@@ -2577,6 +2577,55 @@ fn a_launch_bounces_its_tile_until_the_window_comes() {
     assert_eq!(y(&run), rest, "the window came: the tile rests");
 }
 
+/// A running application's count shows on a badge over its tile while it is visible and above zero, and goes when the
+/// application quits.
+#[test]
+fn a_running_applications_count_shows_on_a_badge_over_its_tile() {
+    use cupertino_dock::badge::update;
+    let mut run = Run::start();
+    let bar = run.bar();
+    let editor = centre(run.bounds(bar, Role::Button, "Editor"));
+    // the tile's paint: its icon, and the badge's capsule and count over it
+    let ops = |run: &Run| {
+        let list = run.driver.runtime().snapshot(bar).unwrap().display_list;
+        list.nodes
+            .iter()
+            .filter(|n| n.bounds.contains(editor) && !n.ops.is_empty())
+            .map(|n| n.ops.len())
+            .sum::<usize>()
+    };
+    let badge = |run: &mut Run, count: Option<i64>, visible: Option<bool>| {
+        let u = update(&format!("application://{EDITOR}.desktop"), count, visible).unwrap();
+        run.message(Message::Badge(u));
+        run.settle();
+    };
+    let plain = ops(&run);
+    badge(&mut run, Some(3), Some(true));
+    assert_eq!(ops(&run), plain, "no badge on a tile that does not run");
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 8,
+            app_id: EDITOR.to_owned(),
+            title: "notes".to_owned(),
+            minimized: false,
+        }],
+    });
+    run.advance(1.0);
+    assert!(ops(&run) > plain + 1, "the capsule and its count");
+    badge(&mut run, Some(0), None);
+    assert_eq!(ops(&run), plain, "no badge for no count");
+    badge(&mut run, Some(12), None);
+    assert!(ops(&run) > plain + 1);
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::WindowClosed(8)],
+    });
+    run.advance(2.0);
+    let quit = ops(&run);
+    assert_eq!(quit, plain, "gone once the application quit");
+}
+
 /// The glass styles window `window` last asked for.
 fn glass_styles(run: &mut Run, window: WindowId) -> Vec<cupertino_kit::platform::GlassStyle> {
     let requests = run.driver.window_system_mut().requests(window).unwrap();

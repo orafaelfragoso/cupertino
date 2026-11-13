@@ -99,6 +99,8 @@ pub struct TileView {
     /// What assistive technology calls it, and what it says about its state.
     pub name: String,
     pub description: String,
+    /// The count on the application's badge, as drawn.
+    pub badge: Option<String>,
 }
 
 /// What the bar shows.
@@ -421,6 +423,51 @@ fn paint_chevron(cx: &mut PaintCx<'_>, rect: Rect) {
     });
 }
 
+/// The application's badge with `count` over the top trailing corner of the icon at `artwork`, in a tile `tile` points
+/// wide.
+fn paint_badge(cx: &mut PaintCx<'_>, artwork: Rect, tile: f64, count: &str) {
+    use crate::badge;
+    let size = badge::FONT_PT * tile / 64.0;
+    let env = cx.env().clone();
+    let text = paint::line(&env, count, size, badge::FONT_WEIGHT, None);
+    let text_width = text.as_ref().map_or(0.0, |t| t.size().width);
+    let [x, y, w, h] = badge::rect(
+        [artwork.x(), artwork.y(), artwork.width(), artwork.height()],
+        tile,
+        text_width,
+    );
+    let rect = Rect::new(x, y, w, h);
+    cx.push(PaintOp::Fill {
+        shape: Shape::RoundedRect {
+            rect,
+            radius: h / 2.0,
+        },
+        paint: Paint::Linear {
+            start: Point::new(0.0, y),
+            end: Point::new(0.0, y + h),
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: paint::color(badge::RED_TOP),
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: paint::color(badge::RED_BOTTOM),
+                },
+            ],
+        },
+    });
+    if let Some(text) = text {
+        let s = text.size();
+        paint::glyphs(
+            cx,
+            &text,
+            Point::new(x + (w - s.width) / 2.0, y + (h - s.height) / 2.0),
+            paint::color(badge::TEXT),
+        );
+    }
+}
+
 /// What the bar draws under a tile.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Mark {
@@ -714,6 +761,9 @@ impl<M: Clone + 'static> Widget<M> for TileNode<M> {
             paint_chevron(cx, artwork);
         } else {
             paint::image(cx, &self.tile.icon, artwork);
+        }
+        if let Some(count) = &self.tile.badge {
+            paint_badge(cx, artwork, bounds.width().min(bounds.height()), count);
         }
         // the ring goes with the keyboard: a bar that gave it back keeps its focused tile but shows no ring
         if cx.focus_visible() && cx.window_active() {

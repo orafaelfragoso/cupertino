@@ -86,6 +86,7 @@ with amplitudes 1/0.5/0.25, repeating every 2000 ms with lift `len + 1` pt (info
 | Separator | a 26 pt slot (`SEPARATOR_RATIO`), so the tiles either side stand 34 pt apart, with a 1 pt line 62 pt long in its middle |
 | Bar | 84 pt deep: 10.5 pt of padding at its ends, 10 pt between the tiles and its screen-edge side and 11 pt on the other (`BAR_PADDING_RATIO`, `BAR_EDGE_PADDING_RATIO`); continuous corners of 19.6 pt reaching 30 pt along each side (`BAR_RADIUS`); 5 pt from the screen edge (`EDGE_MARGIN`) |
 | Running indicator | a 4 pt dot 2 pt below the tile, its middle 6 pt from the bar's edge; in the dark appearance over glass the compositor draws it (`Surface::DockIndicator`), lightening the glass behind it, and otherwise the dot paints itself |
+| Badge | an application's count, a 23 pt red circle (a capsule for more than one digit, 6.5 pt either side of the count) with white 13 pt medium figures, its middle 5.75 pt inside the icon's top trailing corner, so a quarter of it overhangs each side (`badge::rect`); counts above 9999 read 9999+ |
 | Edge and rim | over glass, the glass's own rim light, along the top and the bottom and fading around the corners; where the bar is not glass (Reduce Transparency, no desktop effects), a 0.5 pt dark hairline just inside the outline and inside it a 0.5 pt light rim that is brightest along the top and the bottom and fades out down the sides; Increase Contrast doubles the hairline and draws the rim all round, over glass too |
 
 The bar's material is `view::bar::BAR_SURFACE` (the `Dock` surface): glass in the bar's shape, with Reduce Transparency
@@ -386,7 +387,9 @@ Minimising into the application's tile, the launch bounce and the running indica
 ## Protocols / D-Bus it speaks
 
 The process speaks the server's dock protocol (version 19) and `cupertino_session_v1`. On the session bus it only calls
-`org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). The messages are named
+`org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). It listens for the launcher entry signal (`com.canonical.Unity.LauncherEntry.Update`): an application names its
+desktop file as `application://ID.desktop` and sets `count` and `count-visible`, and a running application's tile shows
+a visible count above zero on its badge (`badge.rs`). The messages are named
 where they are used above. In the Overview chrome a press on a window sends `overview_select` and on empty space
 `overview_close`. A press on a slot sends `switch_workspace` when released in place, or `move_workspace` when dragged past 4 pt
 to another slot (approximate slack). The add slot sends `add_workspace` and the remove button `remove_workspace`.

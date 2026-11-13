@@ -17,7 +17,7 @@ pub fn app(id: &str, name: &str, generic: &str, exec: &str) -> DesktopEntry {
         path: None,
         startup_wm_class: None,
         actions: vec![],
-        source: None,
+        source: Some(format!("/usr/share/applications/{id}.desktop").into()),
     }
 }
 

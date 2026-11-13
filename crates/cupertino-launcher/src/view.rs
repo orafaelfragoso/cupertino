@@ -222,6 +222,8 @@ pub enum Input {
     BrowseHover(usize),
     /// The application at this index was pressed, or activated by assistive technology.
     BrowseActivate(usize),
+    /// The application at this index was dragged out of the browser, held at this point of its icon.
+    BrowseDrag(usize, Point),
     /// A category filter was pressed.
     BrowseCategory(Category),
     /// The wheel over the browser, by this many points down.

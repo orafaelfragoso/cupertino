@@ -22,8 +22,8 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::Point;
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
-    semantics, Capabilities, KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp,
-    WindowEvent, WindowId, WindowStates,
+    semantics, Capabilities, DragProgress, KeyEvent, Keysym, Mods, MouseButton, PlatformEvent,
+    PointerEvent, Timestamp, WindowEvent, WindowId, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -310,6 +310,7 @@ impl Run {
         let driver = TestDriver::new(
             Capabilities {
                 app_effects,
+                drag_and_drop: true,
                 ..Capabilities::default()
             },
             options,
@@ -931,6 +932,109 @@ fn escape_clears_the_query_and_then_closes() {
     run.key("Escape", ESCAPE_CODE, ESCAPE);
     assert!(!run.model().panel.is_visible());
     assert!(run.hidden().is_some());
+}
+
+/// The first application of the browser's list, by its key, and the centre of its icon.
+fn first_listed(run: &Run) -> Point {
+    let model = run.model();
+    let browser = model.browser.as_ref().unwrap();
+    let index = browser.recents_shown();
+    let app = browser.item(index).unwrap();
+    run.centre(format!("item-{index}-{}", app.id))
+}
+
+#[test]
+fn a_press_on_an_application_that_moves_drags_its_desktop_file_out_and_a_drop_closes_the_panel() {
+    let mut run = Run::new();
+    run.deliver(Message::Browse);
+    run.settle_frames();
+    let at = first_listed(&run);
+    let panel = run.panel();
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    let button = |position, pressed| PointerEvent::Button {
+        position,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Mods::NONE,
+    };
+    run.send(panel, pointer(PointerEvent::Motion { position: at }));
+    run.send(panel, pointer(button(at, true)));
+    // a small slip still opens on release; past it, the press drags
+    let away = Point::new(at.x + 12.0, at.y + 6.0);
+    run.send(panel, pointer(PointerEvent::Motion { position: away }));
+    let drags = run.driver.runtime().window_system().drags().to_vec();
+    assert_eq!(drags.len(), 1, "{drags:?}");
+    let request = &drags[0].request;
+    assert_eq!(request.data[0].mime, "text/uri-list");
+    let uri = String::from_utf8(request.data[0].bytes.clone()).unwrap();
+    assert!(
+        uri.starts_with("file:///usr/share/applications/") && uri.ends_with(".desktop\r\n"),
+        "{uri}"
+    );
+    assert!(request.image.is_some());
+    run.send(panel, pointer(button(away, false)));
+    assert!(launches().is_empty(), "a drag opens nothing");
+    // while it is dragged nothing covers the dock and the desktop
+    assert!(run.model().dragging);
+    assert!(run.window("catcher").is_none());
+    let token = drags[0].token;
+    for progress in [DragProgress::Dropped, DragProgress::Finished] {
+        run.driver
+            .window_system_mut()
+            .enqueue(PlatformEvent::Drag { token, progress })
+            .unwrap();
+        run.settle();
+    }
+    assert!(!run.model().panel.is_visible(), "a drop closes the panel");
+}
+
+#[test]
+fn a_press_on_an_application_released_without_moving_opens_it_and_a_cancelled_drag_keeps_the_panel()
+{
+    let mut run = Run::new();
+    run.deliver(Message::Browse);
+    run.settle_frames();
+    let at = first_listed(&run);
+    let panel = run.panel();
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    let button = |position, pressed| PointerEvent::Button {
+        position,
+        button: MouseButton::Left,
+        pressed,
+        serial: 1,
+        mods: Mods::NONE,
+    };
+    // pressed and dragged, then given up: the panel stays and the catcher comes back
+    run.send(panel, pointer(button(at, true)));
+    let away = Point::new(at.x, at.y + 30.0);
+    run.send(panel, pointer(PointerEvent::Motion { position: away }));
+    run.send(panel, pointer(button(away, false)));
+    let token = run.driver.runtime().window_system().drags()[0].token;
+    run.driver
+        .window_system_mut()
+        .enqueue(PlatformEvent::Drag {
+            token,
+            progress: DragProgress::Cancelled,
+        })
+        .unwrap();
+    run.settle();
+    assert!(run.model().panel.is_visible() || run.model().nav.view == View::Browse);
+    assert!(!run.model().dragging);
+    assert!(run.window("catcher").is_some());
+    assert!(launches().is_empty());
+    // a press let go where it was opens the application
+    let at = first_listed(&run);
+    run.send(panel, pointer(PointerEvent::Motion { position: at }));
+    run.send(panel, pointer(button(at, true)));
+    run.send(
+        panel,
+        pointer(PointerEvent::Motion {
+            position: Point::new(at.x + 1.0, at.y),
+        }),
+    );
+    run.send(panel, pointer(button(at, false)));
+    assert_eq!(launches().len(), 1, "{:?}", launches());
 }
 
 #[test]

@@ -40,6 +40,8 @@ const FILTER_FILL_SHARE: f32 = 0.08;
 const THUMB_SHARE: f32 = 0.3;
 /// An application whose icon is not loaded: a rounded square of the label colour at this share, its corners this share
 /// of its side.
+/// How far a press on an application moves, in points, before it drags the application out instead of opening it.
+const DRAG_DISTANCE: f64 = 4.0;
 const ICON_PLACEHOLDER_SHARE: f32 = 0.08;
 const ICON_PLACEHOLDER_ROUNDING: f64 = 0.22;
 /// "No Results": its size.
@@ -582,15 +584,17 @@ struct ItemNode {
 }
 
 impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
-    type State = ();
+    type State = Option<Point>;
 
     fn layout(&self) -> LayoutSpec {
         placed(self.cell, ContainerKind::Leaf)
     }
 
-    fn state(&self) {}
+    fn state(&self) -> Option<Point> {
+        None
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
+    fn update(&self, old: &Self, _: &mut Option<Point>) -> Change {
         if self.cell != old.cell {
             Change::Layout
         } else if (
@@ -615,20 +619,46 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, _: &Option<Point>, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
         leaf_measure(&self.cell)
     }
 
-    fn hit(&self, _: &(), point: Point) -> bool {
+    fn hit(&self, _: &Option<Point>, point: Point) -> bool {
         let local = Rect::new(0.0, 0.0, self.cell.width(), self.cell.height());
         BrowseLayout::item_rect(&local).contains(point)
     }
 
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+    fn event(
+        &self,
+        pressed: &mut Option<Point>,
+        event: &Event,
+        cx: &mut EventCx<'_, M>,
+    ) -> Propagation {
         if cx.phase() == Phase::Capture {
             return Propagation::Continue;
         }
         match event {
+            // a press that moves far enough drags the application out, its icon under the pointer where it was held
+            Event::Pointer(PointerEvent::Motion { position }, _) if pressed.is_some() => {
+                let from = pressed.unwrap_or(*position);
+                if (position.x - from.x).hypot(position.y - from.y) >= DRAG_DISTANCE {
+                    *pressed = None;
+                    cx.release_pointer();
+                    let origin = cx.bounds().map_or(Point::new(0.0, 0.0), |b| b.origin);
+                    let local = Rect::new(0.0, 0.0, self.cell.width(), self.cell.height());
+                    let icon = if self.list {
+                        BrowseLayout::list_icon(&local)
+                    } else {
+                        BrowseLayout::grid_icon(&local)
+                    };
+                    let grab = Point::new(
+                        from.x - origin.x - icon.min_x(),
+                        from.y - origin.y - icon.min_y(),
+                    );
+                    cx.emit(M::from(Input::BrowseDrag(self.index, grab)));
+                }
+                Propagation::Stop
+            }
             Event::Pointer(PointerEvent::Motion { .. }, _) if !self.selected => {
                 cx.emit(M::from(Input::BrowseHover(self.index)));
                 Propagation::Continue
@@ -637,10 +667,26 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
                 PointerEvent::Button {
                     button: MouseButton::Left,
                     pressed: true,
+                    position,
                     ..
                 },
                 _,
             ) => {
+                *pressed = Some(*position);
+                cx.capture_pointer();
+                Propagation::Stop
+            }
+            // a press let go without dragging opens the application
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) if pressed.is_some() => {
+                *pressed = None;
+                cx.release_pointer();
                 cx.emit(M::from(Input::BrowseActivate(self.index)));
                 Propagation::Stop
             }
@@ -652,7 +698,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
         }
     }
 
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+    fn paint(&self, _: &Option<Point>, cx: &mut PaintCx<'_>) {
         let local = Rect::new(0.0, 0.0, self.cell.width(), self.cell.height());
         let item = BrowseLayout::item_rect(&local);
         if self.selected {
@@ -705,7 +751,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ItemNode {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn semantics(&self, _: &Option<Point>, cx: &mut SemanticsCx<'_>) {
         cx.role(if self.list {
             Role::ListItem
         } else {

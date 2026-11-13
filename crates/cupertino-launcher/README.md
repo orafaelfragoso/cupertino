@@ -97,7 +97,7 @@ back the scroll the unfiltered view had. The browser reopens at the top with not
 output it leaves 96 pt free below (`kit::BROWSE_BOTTOM_ROOM`, at least 300 pt tall). Icons load at 32, 60, 120 and 180 px,
 the generic application icon standing in for a missing one. They are looked up, read and decoded off the loop, on a
 thread of the host's with its own icon lookup (`Host::app_icon`, answered as `Message::AppIcon`), nearest the view
-first; at most 14 wait at once (`kit::MAX_APP_ICON_LOADS`), and each that arrives makes room for the next. It launches with an activation token like a search result.
+first; at most 14 wait at once (`kit::MAX_APP_ICON_LOADS`), and each that arrives makes room for the next. It launches with an activation token like a search result, when the press on it lets go. A press that moves 4 pt first drags the application out instead: its desktop file as a `text/uri-list`, its icon under the pointer where it was held. The dock keeps it where it lands and the desktop takes a copy; the catcher steps aside while it is dragged, and a drop something took closes the panel.
 
 **Mode buttons and the files scope.** Beside the plain search bar stand round buttons (`modes`, `view::modes`) that switch
 to a scope: the applications (Primary+1) and, while files are searched, the files (Primary+2). Each is a 55 pt circle of the

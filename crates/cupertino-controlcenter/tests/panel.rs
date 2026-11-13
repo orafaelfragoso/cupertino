@@ -11,7 +11,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_controlcenter::layout::{SURFACE, WINDOW_ORIGIN};
+use cupertino_controlcenter::layout::{
+    BAR_MARGIN, GRID_ORIGIN, SHADOW_TOP, SURFACE, WINDOW_ORIGIN,
+};
 use cupertino_controlcenter::model::{
     Controls, Detail, Device, MediaCommand, Module, Network, Output, Reading, Slider, VolumeState,
     WifiStatus,
@@ -130,7 +132,6 @@ const WIFI_OPEN: Presentation = Presentation {
         detail: Detail::WiFi,
         progress: 1.0,
         morph: true,
-        opening: true,
     }),
 };
 
@@ -496,7 +497,6 @@ fn the_tiles_are_glass_too_large_for_their_text_to_follow_the_backdrop() {
             detail: Detail::WiFi,
             progress,
             morph,
-            opening: true,
         }),
         ..Presentation::SHOWN
     };
@@ -587,8 +587,8 @@ fn glass_regions(run: &mut Run) -> Vec<Rect> {
         .expect("the panel asks for glass")
 }
 
-/// The glass styles of the regions the panel last asked for, but the levels' tracks, with their rectangles.
-fn glass_styles(run: &mut Run) -> Vec<(Rect, GlassStyle)> {
+/// The glass the panel last asked for, but the levels' tracks: each region's rectangle, style, container and opacity.
+fn glass_requests(run: &mut Run) -> Vec<(Rect, GlassStyle, u32, f64)> {
     let requests = run.driver.window_system_mut().requests(run.window).unwrap();
     requests
         .iter()
@@ -597,8 +597,9 @@ fn glass_styles(run: &mut Run) -> Vec<(Rect, GlassStyle)> {
             WindowRequest::Materials(regions) => Some(
                 regions
                     .iter()
-                    .filter_map(|r| r.glass.map(|g| (r.rect, g.style)))
-                    .filter(|(_, style)| *style != GlassStyle::Track)
+                    .filter_map(|r| r.glass.map(|g| (r.rect, r.alpha, g)))
+                    .filter(|(_, _, g)| g.style != GlassStyle::Track)
+                    .map(|(rect, alpha, g)| (rect, g.style, g.container, alpha))
                     .collect(),
             ),
             _ => None,
@@ -606,98 +607,141 @@ fn glass_styles(run: &mut Run) -> Vec<(Rect, GlassStyle)> {
         .expect("the panel asks for glass")
 }
 
-/// The tiles at rest take presses and lie on module glass. While a view opens or stays open, the tiles and Edit
-/// Controls behind it lie on subdued module glass as they fade, in a container of their own, and the growing tile
-/// stays on module glass; with Reduce Motion the tile fading out in place under the view lies on subdued glass too.
-/// While the view closes the tiles come back on module glass.
-#[test]
-fn the_tiles_behind_an_expanding_view_lie_on_subdued_glass() {
-    let opening = |progress, morph| Presentation {
+/// The Wi-Fi view `progress` of the way open, growing out of its tile (`morph`) or cross-fading with Reduce Motion.
+fn wifi_at(progress: f64, morph: bool) -> Presentation {
+    Presentation {
         detail: Some(Opened {
             detail: Detail::WiFi,
             progress,
             morph,
-            opening: true,
         }),
         ..Presentation::SHOWN
-    };
-    let count =
-        |styles: &[(Rect, GlassStyle)], style| styles.iter().filter(|(_, s)| *s == style).count();
-    for light in [false, true] {
-        let mut run = Run::start(
-            tokens(Appearance::Dark, false),
-            Presentation {
-                light,
-                ..Presentation::SHOWN
-            },
-        );
-        let styles = glass_styles(&mut run);
-        assert_eq!(styles.len(), Module::ALL.len() + 1);
-        assert_eq!(
-            count(&styles, GlassStyle::Module),
-            styles.len(),
-            "at rest: {styles:?}"
-        );
     }
+}
 
-    // early in the motion the others still show, behind the growing tile
-    let mut run = Run::start(tokens(Appearance::Dark, false), opening(0.1, true));
-    let styles = glass_styles(&mut run);
-    assert_eq!(
-        count(&styles, GlassStyle::Module),
-        1,
-        "the growing tile: {styles:?}"
-    );
-    assert_eq!(
-        count(&styles, GlassStyle::SubduedModule),
-        Module::ALL.len(),
-        "the other tiles and Edit Controls: {styles:?}"
-    );
-    let edit = Rect::new(107.0 + ORIGIN.x, 468.0 + ORIGIN.y, 94.0, 24.0);
-    assert!(
-        styles.contains(&(edit, GlassStyle::SubduedModule)),
-        "Edit Controls lies behind the view: {styles:?}"
-    );
-
-    // once they have faded only the view is left, on module glass
-    for scene in [opening(0.7, true), WIFI_OPEN] {
-        let mut run = Run::start(tokens(Appearance::Dark, false), scene);
-        let styles: Vec<GlassStyle> = glass_styles(&mut run).into_iter().map(|(_, s)| s).collect();
-        assert_eq!(styles, vec![GlassStyle::Module], "{scene:?}");
-    }
-
-    // with Reduce Motion the tile fades out in place under the view fading in at its own place
-    let mut run = Run::start(tokens(Appearance::Dark, false), opening(0.5, false));
-    let styles = glass_styles(&mut run);
-    assert_eq!(
-        count(&styles, GlassStyle::SubduedModule),
-        1,
-        "the Wi-Fi tile fading in place: {styles:?}"
-    );
-    assert_eq!(
-        count(&styles, GlassStyle::Module),
-        1,
-        "the view fading in: {styles:?}"
-    );
-
-    // closing, the tiles fade back in on module glass, joined with the view again
+/// Every tile, Edit Controls and the growing view keep the module glass of one container through a detail view's
+/// motion, only their opacity changing: nothing changes look the moment the press starts the motion, and the tiles
+/// fade back on the glass they left with.
+#[test]
+fn every_tile_keeps_its_glass_through_a_detail_views_motion() {
+    let mut run = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN);
+    let rest = glass_requests(&mut run);
+    assert_eq!(rest.len(), Module::ALL.len() + 1, "{rest:?}");
     for morph in [true, false] {
-        let closing = Presentation {
-            detail: Some(Opened {
-                detail: Detail::WiFi,
-                progress: 0.1,
-                morph,
-                opening: false,
-            }),
-            ..Presentation::SHOWN
-        };
-        let mut run = Run::start(tokens(Appearance::Dark, false), closing);
-        let styles = glass_styles(&mut run);
-        assert!(styles.len() > 1, "{closing:?}: the tiles show: {styles:?}");
-        assert_eq!(
-            count(&styles, GlassStyle::Module),
-            styles.len(),
-            "{closing:?}: {styles:?}"
+        let mut run = Run::start(tokens(Appearance::Dark, false), wifi_at(0.0, morph));
+        let mut started = glass_requests(&mut run);
+        if !morph {
+            // the view fades in at its own place from nothing
+            started.retain(|(_, _, _, alpha)| *alpha > 0.0);
+        }
+        let mut sorted = rest.clone();
+        let key = |r: &(Rect, GlassStyle, u32, f64)| (r.0.x(), r.0.y());
+        sorted.sort_by(|a, b| key(a).partial_cmp(&key(b)).unwrap());
+        started.sort_by(|a, b| key(a).partial_cmp(&key(b)).unwrap());
+        assert_eq!(started, sorted, "morph {morph}: the press changes no glass");
+        for progress in [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0] {
+            let mut run = Run::start(tokens(Appearance::Dark, false), wifi_at(progress, morph));
+            for (rect, style, container, _) in glass_requests(&mut run) {
+                assert_eq!(
+                    (style, container),
+                    (GlassStyle::Module, rest[0].2),
+                    "morph {morph}, {progress}: {rect:?}"
+                );
+            }
+        }
+    }
+}
+
+/// How far two frames of the panel differ: the largest difference of any channel.
+fn largest_difference(a: &Pixmap, b: &Pixmap) -> u8 {
+    a.data()
+        .iter()
+        .zip(b.data())
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap()
+}
+
+/// The soft shadow, between and around the tiles, does not change the moment a detail view starts to open or has
+/// closed, and changes only a little over a small step of the motion: it follows the tiles fading and the tile growing
+/// rather than dropping the darkening between the tiles while they move.
+#[test]
+fn the_shadow_follows_a_detail_views_motion_without_a_jump() {
+    let (rest, _) = Run::start(tokens(Appearance::Dark, false), Presentation::SHOWN).capture();
+    for morph in [true, false] {
+        let (started, _) =
+            Run::start(tokens(Appearance::Dark, false), wifi_at(0.0, morph)).capture();
+        assert!(
+            largest_difference(&rest, &started) <= 1,
+            "morph {morph}: the press changes the frame by {}",
+            largest_difference(&rest, &started)
+        );
+        let mut last = started;
+        for step in 1..=10 {
+            let progress = f64::from(step) * 0.01;
+            let (frame, _) =
+                Run::start(tokens(Appearance::Dark, false), wifi_at(progress, morph)).capture();
+            // a hundredth of the motion fades the other tiles by a 25th, and the darkening under them grows by as
+            // much of the 9 % between them; the gap between them keeps it
+            let alpha = |frame: &Pixmap, x: u32, y: u32| {
+                frame
+                    .pixel(x + ORIGIN.x as u32, y + ORIGIN.y as u32)
+                    .unwrap()
+                    .alpha()
+            };
+            // the gap between the two circles of the fourth row, and the middle of the Display tile under them
+            for (x, y, place) in [(78, 268, "a gap"), (154, 318, "a fading tile")] {
+                let (before, after) = (alpha(&last, x, y), alpha(&frame, x, y));
+                assert!(
+                    before.abs_diff(after) <= 2,
+                    "morph {morph}, {progress}: the darkening over {place} jumps from {before} to {after}"
+                );
+            }
+            last = frame;
+        }
+    }
+}
+
+/// The shadow above the tiles fades out by the menu bar's edge: nothing of the panel darkens the bar, and the
+/// darkening grows smoothly from nothing at the bar's edge to its strength at the tiles, with no step where the bar
+/// begins. At rest, with a view open and halfway through its motion.
+#[test]
+fn the_shadow_fades_out_before_the_menu_bar() {
+    let bar_edge = (SHADOW_TOP - f64::from(BAR_MARGIN)) as u32;
+    let grid_top = GRID_ORIGIN.y as u32;
+    for presentation in [Presentation::SHOWN, wifi_at(0.5, true), WIFI_OPEN] {
+        let (frame, _) = Run::start(tokens(Appearance::Dark, false), presentation).capture();
+        for y in 0..bar_edge {
+            for x in 0..frame.width() {
+                assert_eq!(
+                    frame.pixel(x, y).unwrap().alpha(),
+                    0,
+                    "{presentation:?}: the panel paints ({x}, {y}) in the menu bar"
+                );
+            }
+        }
+        // over the middle of the grid, and past its left edge where the shadow's corner lies
+        for x in [GRID_ORIGIN.x as u32 + 146, GRID_ORIGIN.x as u32 - 20] {
+            let alphas: Vec<u8> = (bar_edge..grid_top)
+                .map(|y| frame.pixel(x, y).unwrap().alpha())
+                .collect();
+            assert!(
+                alphas[0] <= 1,
+                "{presentation:?}: at the bar's edge above x {x} the shadow is {alphas:?}"
+            );
+            assert!(
+                // a band thinner than a pixel can come out a step lighter than the one above it
+                alphas.windows(2).all(|w| w[1] + 1 >= w[0] && w[1] <= w[0] + 3),
+                "{presentation:?}: the shadow above x {x} grows smoothly towards the tiles: {alphas:?}"
+            );
+        }
+        let at_grid = frame
+            .pixel(GRID_ORIGIN.x as u32 + 146, grid_top - 1)
+            .unwrap()
+            .alpha();
+        assert!(
+            at_grid >= 18,
+            "{presentation:?}: the shadow keeps its strength at the tiles: {at_grid}"
         );
     }
 }

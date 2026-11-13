@@ -381,8 +381,8 @@ pub enum Surface {
     /// The Dock's bar itself: bar glass, clear glass with only a little lift of white, in both appearances; with
     /// Reduce Transparency and in high contrast the same as [`Surface::Dock`].
     DockBar,
-    /// The name over a Dock tile: regular glass, light or dark by appearance; opaque with reduced transparency and in
-    /// high contrast.
+    /// The name over a Dock tile: regular glass, light or dark by appearance (with the contrast recipe in high
+    /// contrast); opaque with reduced transparency.
     Tooltip,
     /// A window's own background drawn by the compositor, so glass over it in the window reads the window rather than
     /// the desktop; opaque, so kept with reduced transparency and in high contrast.
@@ -436,22 +436,25 @@ impl ThemeTokens {
     /// The look of `surface`. Menus, popovers and the Dock are glass, which keeps its shape with reduced transparency
     /// and in high contrast (the compositor draws the glass recipe of those options, and the Dock its own body with
     /// Reduce Transparency); the application grid keeps its material too, whose recipe has variants of its own for
-    /// those options. The other surfaces then ask for no material and are opaque.
+    /// those options. The sidebar, the switcher, a tooltip and the heads-up display keep their glass in high contrast,
+    /// with the compositor's contrast recipe, and go opaque with Reduce Transparency. The other surfaces then ask for no
+    /// material and are opaque.
     pub fn surface(&self, surface: Surface) -> SurfaceLook {
         let prefs = &self.preferences;
         let opaque = prefs.reduce_transparency || prefs.appearance.is_high_contrast();
+        let contrast = prefs.appearance.is_high_contrast() && !prefs.reduce_transparency;
         let (material, kept) = match surface {
-            Surface::Sidebar => (SIDEBAR_GLASS_MATERIAL, false),
+            Surface::Sidebar => (SIDEBAR_GLASS_MATERIAL, contrast),
             Surface::Menu => (MENU_GLASS_MATERIAL, true),
             Surface::Popover => (DENSE_GLASS_MATERIAL, true),
-            Surface::Hud => ("LoginWindowControl", false),
+            Surface::Hud => ("LoginWindowControl", contrast),
             Surface::AppGrid => ("AppGrid", true),
-            Surface::Switcher => (SWITCHER_GLASS_MATERIAL, false),
+            Surface::Switcher => (SWITCHER_GLASS_MATERIAL, contrast),
             Surface::Dock if prefs.reduce_transparency => ("Dock", true),
             Surface::Dock => (GLASS_MATERIAL, true),
             Surface::DockBar if !opaque => (BAR_GLASS_MATERIAL, true),
             Surface::DockBar => return self.surface(Surface::Dock),
-            Surface::Tooltip => (GLASS_MATERIAL, false),
+            Surface::Tooltip => (GLASS_MATERIAL, contrast),
             Surface::DockIndicator => (
                 "RunningIndicator",
                 prefs.appearance.is_dark() && !prefs.appearance.is_high_contrast(),

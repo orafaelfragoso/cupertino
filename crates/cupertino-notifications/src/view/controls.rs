@@ -383,6 +383,7 @@ fn text(cx: &mut PaintCx<'_>, rect: Rect, label: &str, weight: FontWeight, role:
         align: TextAlign::Center,
         rect: None,
         hidden: true,
+        halo: false,
     };
     let Some(layout) = laid.laid_out(cx.env(), rect.width()) else {
         return;

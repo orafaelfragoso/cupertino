@@ -1,126 +1,84 @@
 #!/usr/bin/env python3
-"""Frame rate of the desktop's busiest moments, at 60 and 120 Hz, in a headless session on the real render path.
+"""The desktop's busiest moments and its rest, in a headless session on the real render path, every process measured.
 
-    scripts/dev/bench                   the release build of this checkout (built first)
-    NO_BUILD=1 scripts/dev/bench        what target/release holds
-    BIN_DIR=DIR scripts/dev/bench       the programs in DIR (another build, to compare)
-    scripts/dev/bench --out F.json      also write the figures as JSON
-    RATES=120 scripts/dev/bench         only some refresh rates (Hz, comma separated)
+    scripts/dev/bench                        the release build of this checkout (built first), the baseline scenarios
+    scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 5 --out F.json
+                                             the output's size in pixels and its scale, five sessions per scenario
+    scripts/dev/bench --scenario drag,idle   only these scenarios (`all`: every one, the extra ones too)
+    scripts/dev/bench --rate 60,120          refresh rates in Hz (default 60; RATES=... does the same)
+    scripts/dev/bench --idle-seconds 60      how long the idle scenario rests (default 30)
+    NO_BUILD=1 scripts/dev/bench             what target/release holds; BIN_DIR=DIR: the programs in DIR
+    BENCH_KEEP=DIR scripts/dev/bench         also keep each session's raw files (frame lines, frame timings, windows)
+    BENCH_SHOTS=DIR scripts/dev/bench        a screenshot in the middle of each scenario, to check what it drives
 
-The session runs at 2560 x 1600 pixels, scale 2, with Files (400 items in its folder) and Settings open. The server
-writes one line per frame shown (`--frame-stats`): the time composing and rendering it took, the GPU waited for, the
-time its glass passes and their backdrop blurs took, how many glass backdrops were blurred again or reused, and how many
-render targets the passes created. One
-session per refresh rate drives each scenario in turn, with input at the display's rate:
-  window drag    Settings dragged by its title bar under the dock, over Files' sidebar and up to the menu bar
-  dock sweep     the pointer sweeps along the dock and back (magnification)
-  overview       the overview opens and closes
-  launcher       the launcher opens and closes, twice
-  files scroll   Files is raised and its list scrolled with two fingers, down and up
-  context menu   the desktop's menu opens at a right click, the pointer slides down its rows onto Sort By and rests
-                 there until the submenu opens, and Escape closes both; twice
-For each scenario the table reports:
-  frames    frames shown in the scenario
-  fps       frames per second of the scenario
-  int p50/p95/max  the interval between frames shown, in ms (rests, where nothing changes, show here too)
-  missed    refreshes that passed while the output owed a frame (a change or an animation step was due) and showed
-            none: a frame shown more than a refresh after it was due; rests owe nothing and count as no miss
-  work p50/p95/max  compose + render time of a frame, GPU included, in ms
-  over      frames whose work exceeded the refresh budget (16.67 ms at 60 Hz, 8.33 ms at 120 Hz)
-  glass p95 GPU time of the glass passes in a frame, in ms (by GPU timer queries when the device has them)
-  blur/f    glass backdrops blurred again per frame; reuse/f backdrops reused per frame
-  alloc/f   render targets the material and glass passes created per frame: one that keeps blurring again (glass
-            that moves) reuses its targets, so this stays near 0
-  in lat    input to the next frame shown, p50/p95 ms (what the server moves itself)
-  app lat   input to the first frame after a client answered it, p50/p95 ms
-The device that rendered is printed above each table: a software rasteriser (llvmpipe) shows there when no GPU is used.
-Input latency counts scripted actions (the overview and launcher shortcuts) as inputs too.
+Each scenario runs in a session of its own with Files (400 items in its folder) and Settings open, after a short
+session that finds where the two windows are at this size and scale. The scenarios:
+  idle            nothing happens for --idle-seconds: which process wakes, how often and for what
+  drag            Settings dragged by its title bar over Files' sidebar, under the menu bar and back
+  hover           the pointer sweeps along Settings' title bar, over its window buttons and its title, and back
+  resize          Files raised, its lower right corner dragged out and back in
+  control-center  Control Center opened and closed, three times
+  launcher-typing the launcher opened, a word typed a letter at a time and erased, Escape; twice
+  files-scroll    Files raised and its list scrolled with two fingers, down and up
+and, with --scenario all or by name: dock-sweep (magnification), overview, launcher (open and close) and context-menu
+(the desktop's menu, down its rows onto a submenu).
+
+Everything is written as JSON with --out: per run, scenario and refresh rate, the figures below; and per scenario the
+median of the runs with their spread (max - min), which is the run-to-run noise. The table printed shows the medians.
+  compositor  frames, fps, frame interval p50/p99/max, missed refreshes (a frame owed and not shown within a refresh),
+              compose + render time p50/p99/max (GPU waited for), GPU time per frame p50/p99 (timestamps), glass GPU
+              p95, backdrops blurred again, blur passes, render targets made, title bar and HUD rasters and uploads
+              (and their bytes) per frame, input latency p50/p95 (to the next frame shown; `app`: to the first frame
+              after a client answered), and the compositor's CPU time per second and per frame
+  clients     per program: frames, frame time p50/p99/max, slow frames (longer than a refresh), and the p50 and p99
+              of each phase (update, view, layout, paint, raster, copy, commit), from the toolkit's own timing
+  processes   per program: CPU in percent of one core over the scenario, and at its end the private memory (clean +
+              dirty), the private dirty memory, Pss and Rss in MiB
+  idle        per thread: wakeups (voluntary context switches) per minute, the call it sleeps in and its timeout as
+              sampled, and the timers (timerfd) it armed with their period and how often they fired
+The device that rendered is in the JSON and above each table: a software rasteriser (llvmpipe) shows there when no
+GPU is used.
 """
+import argparse
 import json
 import os
 import pathlib
+import re
 import statistics
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-SIZE = (2560, 1600)
-SCALE = 2
-W, H = SIZE[0] // SCALE, SIZE[1] // SCALE
+TICK = os.sysconf("SC_CLK_TCK")
 SETTLE = 9.0
-DOCK_Y = 760
-SETTINGS_TITLE = (430, 50)
-FILES_VISIBLE = (1056, 400)
-FILES_LIST = (800, 350)
-DESKTOP_MENU = (40, 300)
-MENU_ROWS = ((80, 317), (80, 422))
+BASELINE = ["idle", "drag", "hover", "resize", "control-center", "launcher-typing", "files-scroll"]
+EXTRA = ["dock-sweep", "overview", "launcher", "context-menu"]
+PHASES = ["update", "view", "layout", "paint", "raster", "copy", "commit"]
+# the system calls a thread sleeps in, by number (x86_64), and the argument that holds the timeout
+SLEEPS = {7: ("poll", 2, "ms"), 23: ("select", 4, "ptr"), 35: ("nanosleep", 0, "ptr"), 202: ("futex", 3, "ptr"),
+          230: ("clock_nanosleep", 2, "ptr"), 232: ("epoll_wait", 3, "ms"), 270: ("pselect6", 4, "ptr"),
+          271: ("ppoll", 2, "ptr"), 281: ("epoll_pwait", 3, "ms"), 441: ("epoll_pwait2", 3, "ptr"),
+          0: ("read", None, None), 45: ("recvfrom", None, None), 47: ("recvmsg", None, None)}
 
 
-def scenarios(hz: float) -> tuple[list[str], list[tuple[str, float, float]], float]:
-    """The server flags of the whole script and each scenario's name and time span."""
-    dt = 1.0 / hz
-    flags: list[str] = []
-    spans = []
-    t = SETTLE
+# ---- where the windows are -----------------------------------------------------------------------------------------
 
-    def path(points: list[tuple[float, float]], start: float, seconds: float) -> float:
-        steps = max(1, round(seconds * hz))
-        legs = len(points) - 1
-        for i in range(steps + 1):
-            f = i / steps * legs
-            leg = min(int(f), legs - 1)
-            u = f - leg
-            (x0, y0), (x1, y1) = points[leg], points[leg + 1]
-            flags.extend(["--pointer", f"{start + i * dt:.4f}:{x0 + (x1 - x0) * u:.1f},{y0 + (y1 - y0) * u:.1f}"])
-        return start + steps * dt
+def session(bin_dir: pathlib.Path, size: tuple[int, int], scale: float, hz: float, flags: list[str], end: float,
+            env_extra: dict) -> subprocess.Popen:
+    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{size[0]}x{size[1]}", FIXTURE_DIR=str(fixture()), **env_extra)
+    w, h = logical(size, scale)
+    args = [str(ROOT / "crates/cupertino-server/scripts/session.sh"), "--scale", f"{scale:g}", "--appearance", "dark",
+            "--refresh", f"{hz:g}", "--spawn", "cupertino-files", "--spawn", "cupertino-settings",
+            "--pointer", f"0:{w - 1},{h / 2}", *flags, "--run-for", f"{end:.2f}"]
+    return subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
 
-    # window drag: Settings by its title bar
-    x0, y0 = SETTINGS_TITLE
-    flags += ["--press", f"{t:.4f}:{x0},{y0}"]
-    drag = [(x0, y0), (x0, y0 + 90), (x0 - 200, y0 + 90), (x0 - 200, y0 - 40), (x0, y0 - 40), (x0, y0)]
-    end = path(drag, t + 0.1, 3.0)
-    flags += ["--release", f"{end + dt:.4f}:{x0},{y0}"]
-    spans.append(("window drag", t + 0.1, end))
-    t = end + 1.0
-    # dock sweep
-    end = path([(W * 0.3, DOCK_Y), (W * 0.7, DOCK_Y), (W * 0.3, DOCK_Y)], t, 2.4)
-    flags += ["--pointer", f"{end + dt:.4f}:{W / 2},{H / 2}"]
-    spans.append(("dock sweep", t, end + 0.4))
-    t = end + 1.5
-    # overview
-    flags += ["--action", f"{t:.4f}:overview", "--action", f"{t + 1.2:.4f}:overview"]
-    spans.append(("overview", t, t + 1.9))
-    t += 2.8
-    # launcher, twice
-    for i in range(2):
-        s = t + i * 1.6
-        flags += ["--action", f"{s:.4f}:launcher", "--key", f"{s + 0.8:.4f}:Escape"]
-    spans.append(("launcher", t, t + 3.2))
-    t += 4.0
-    # files scroll: raise Files, then scroll its list down and up with two fingers
-    fx, fy = FILES_VISIBLE
-    flags += ["--click", f"{t:.4f}:{fx},{fy}"]
-    t += 0.8
-    lx, ly = FILES_LIST
-    steps = round(1.5 * hz)
-    for d, sign in ((0, 1), (1, -1)):
-        s = t + d * (steps + 1) * dt
-        for i in range(steps):
-            flags += ["--scroll", f"{s + i * dt:.4f}:{lx},{ly}:{sign * 1800 / steps:.2f}"]
-        flags += ["--scroll", f"{s + steps * dt:.4f}:{lx},{ly}:0"]
-    spans.append(("files scroll", t, t + 2 * (steps + 1) * dt))
-    t += 4.0
-    # context menu: the desktop's, then down its rows onto Sort By, a rest long enough for the submenu, Escape
-    start = t
-    for _ in range(2):
-        flags += ["--right-click", f"{t:.4f}:{DESKTOP_MENU[0]},{DESKTOP_MENU[1]}"]
-        end = path(list(MENU_ROWS), t + 0.4, 0.3)
-        flags += ["--key", f"{end + 0.8:.4f}:Escape", "--key", f"{end + 1.0:.4f}:Escape"]
-        t = end + 1.4
-    spans.append(("context menu", start, t))
-    t += 0.6
-    return flags, spans, t
+
+def logical(size: tuple[int, int], scale: float) -> tuple[float, float]:
+    return size[0] / scale, size[1] / scale
 
 
 def fixture() -> pathlib.Path:
@@ -131,101 +89,653 @@ def fixture() -> pathlib.Path:
     return folder
 
 
-def run(bin_dir: pathlib.Path, hz: float) -> tuple[str, float, list[list], list]:
-    flags, spans, end = scenarios(hz)
-    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{SIZE[0]}x{SIZE[1]}", FIXTURE_DIR=str(fixture()))
+def read_windows(path: pathlib.Path) -> list[dict]:
+    try:
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except OSError:
+        return []
+
+
+def find(windows: list[dict], word: str) -> dict | None:
+    for w in windows:
+        if word in w["app"].lower() or word in w["title"].lower():
+            return w
+    return None
+
+
+def layout(bin_dir: pathlib.Path, size: tuple[int, int], scale: float) -> dict:
+    """Where Files and Settings are once the session settled."""
     with tempfile.TemporaryDirectory() as tmp:
-        stats = pathlib.Path(tmp) / "frames.txt"
-        args = [str(ROOT / "crates/cupertino-server/scripts/session.sh"), "--scale", str(SCALE), "--appearance",
-                "dark", "--refresh", str(hz), "--frame-stats", str(stats), "--spawn", "cupertino-files",
-                "--spawn", "cupertino-settings", "--pointer", f"0:{W - 1},{H / 2}", *flags, "--run-for",
-                f"{end + 0.5:.2f}"]
-        if os.environ.get("BENCH_SHOTS"):
-            # a screenshot in the middle of each scenario, to check what it drives
-            shots = os.environ["BENCH_SHOTS"]
-            for name, a, b in spans:
-                slug = name.replace(" ", "-")
-                args += ["--shot", f"{(a + b) / 2:.2f}:{shots}/{hz:g}-{slug}.png"]
-        subprocess.run(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=end + 60,
-                       start_new_session=True)
-        if os.environ.get("BENCH_KEEP"):
-            # the raw lines, for a closer look
-            (pathlib.Path(os.environ["BENCH_KEEP"]) / f"frames-{hz:g}.txt").write_bytes(stats.read_bytes())
-        renderer, refresh, rows = "unknown", 1.0 / hz, []
-        for line in stats.read_text().splitlines():
-            if line.startswith("# renderer "):
-                renderer = line[len("# renderer "):]
-            elif line.startswith("# refresh_us "):
-                refresh = int(line.split()[2]) / 1e6
-            elif not line.startswith("#"):
-                rows.append([None if c == "-" else int(c) for c in line.split()])
-    return renderer, refresh, rows, spans
+        path = pathlib.Path(tmp) / "windows.json"
+        proc = session(bin_dir, size, scale, 60, ["--window-list", f"{SETTLE - 0.5}:{path}"], SETTLE, {})
+        proc.wait(timeout=SETTLE + 60)
+        windows = read_windows(path)
+    files, settings = find(windows, "files"), find(windows, "settings")
+    if not files or not settings:
+        sys.exit(f"bench: Files and Settings did not both open: {windows}")
+    return {"files": files, "settings": settings}
 
 
-def pct(vals: list[float], p: float) -> float:
+def inside(w: dict, x: float, y: float) -> bool:
+    return w["x"] <= x < w["x"] + w["width"] and w["y"] <= y < w["y"] + w["height"]
+
+
+def visible_point(w: dict, over: dict) -> tuple[float, float]:
+    """A point of `w`'s content that `over` does not cover, to raise it with a click: its middle, else a bottom corner
+    (below a sidebar's rows, clear of the resize band), else its left edge."""
+    inset = 24.0
+    points = [(w["x"] + w["width"] * fx, w["y"] + w["height"] * fy)
+              for fy in (0.5, 0.7, 0.3, 0.85) for fx in (0.85, 0.7, 0.5, 0.3, 0.15)]
+    points += [(w["x"] + w["width"] - inset, w["y"] + w["height"] - inset), (w["x"] + inset, w["y"] + w["height"] - inset)]
+    for x, y in points:
+        if not inside(over, x, y):
+            return x, y
+    return w["x"] + 5, w["y"] + w["height"] / 2
+
+
+# ---- the scenarios -------------------------------------------------------------------------------------------------
+
+class Script:
+    """Server flags of one scenario and its span, from the time the session settled."""
+
+    def __init__(self, hz: float):
+        self.dt = 1.0 / hz
+        self.hz = hz
+        self.flags: list[str] = []
+        self.t = SETTLE
+
+    def path(self, points: list[tuple[float, float]], seconds: float) -> None:
+        steps = max(1, round(seconds * self.hz))
+        legs = len(points) - 1
+        for i in range(steps + 1):
+            f = i / steps * legs
+            leg = min(int(f), legs - 1)
+            u = f - leg
+            (x0, y0), (x1, y1) = points[leg], points[leg + 1]
+            self.flags += ["--pointer", f"{self.t + i * self.dt:.4f}:{x0 + (x1 - x0) * u:.1f},{y0 + (y1 - y0) * u:.1f}"]
+        self.t += steps * self.dt
+
+    def at(self, flag: str, value: str, after: float = 0.0) -> None:
+        self.flags += [flag, f"{self.t + after:.4f}:{value}"]
+
+
+def script(name: str, hz: float, win: dict, size: tuple[int, int], scale: float, idle: float):
+    """The flags of scenario `name` and the span it is measured over."""
+    s = Script(hz)
+    w, h = logical(size, scale)
+    files, settings = win["files"], win["settings"]
+    title = (settings["x"] + settings["width"] / 2, settings["y"] + 14)
+    start = s.t
+    if name == "idle":
+        s.t += idle
+    elif name == "drag":
+        x0, y0 = title
+        left = max(120.0, min(x0 - (files["x"] + 110), w * 0.4))
+        s.at("--press", f"{x0:.1f},{y0:.1f}")
+        s.t += 0.1
+        start = s.t
+        s.path([(x0, y0), (x0, y0 + 90), (x0 - left, y0 + 90), (x0 - left, y0 - 40), (x0, y0 - 40), (x0, y0)], 3.0)
+        s.at("--release", f"{x0:.1f},{y0:.1f}", s.dt)
+    elif name == "hover":
+        # along the row of the window buttons, over each of them and on along the title bar
+        x, y = settings["x"], settings["y"] + 14
+        if settings.get("buttons"):
+            y = settings["buttons"][0][1]
+        for _ in range(3):
+            s.path([(x + 4, y), (x + min(settings["width"] * 0.6, 300), y), (x + 4, y)], 1.6)
+        s.flags += ["--pointer", f"{s.t + s.dt:.4f}:{w - 1},{h / 2}"]
+    elif name == "resize":
+        fx, fy = visible_point(files, settings)
+        s.at("--click", f"{fx:.1f},{fy:.1f}")
+        s.t += 0.8
+        start = s.t
+        cx, cy = files["x"] + files["width"] - 2, files["y"] + files["height"] - 2
+        grow = min(160.0, w - cx - 4, h - cy - 4)
+        s.at("--press", f"{cx:.1f},{cy:.1f}")
+        s.t += 0.1
+        s.path([(cx, cy), (cx + grow, cy + grow * 0.6), (cx - 200, cy - 120), (cx, cy)], 3.0)
+        s.at("--release", f"{cx:.1f},{cy:.1f}", s.dt)
+    elif name == "control-center":
+        for _ in range(3):
+            s.at("--action", "control-panel")
+            s.at("--action", "control-panel", 1.2)
+            s.t += 2.0
+    elif name == "launcher-typing":
+        for _ in range(2):
+            s.at("--action", "launcher")
+            s.t += 0.6
+            for ch in "settings":
+                s.at("--type", ch)
+                s.t += 0.12
+            for _ in "settings":
+                s.at("--key", "BackSpace")
+                s.t += 0.12
+            s.at("--key", "Escape")
+            s.t += 0.8
+    elif name == "files-scroll":
+        fx, fy = visible_point(files, settings)
+        s.at("--click", f"{fx:.1f},{fy:.1f}")
+        s.t += 0.8
+        start = s.t
+        lx, ly = files["x"] + files["width"] * 0.6, files["y"] + files["height"] * 0.5
+        steps = round(1.5 * hz)
+        for sign in (1, -1):
+            for i in range(steps):
+                s.at("--scroll", f"{lx:.1f},{ly:.1f}:{sign * 1800 / steps:.2f}", i * s.dt)
+            s.at("--scroll", f"{lx:.1f},{ly:.1f}:0", steps * s.dt)
+            s.t += (steps + 1) * s.dt
+    elif name == "dock-sweep":
+        dock_y = h - 40
+        s.path([(w * 0.3, dock_y), (w * 0.7, dock_y), (w * 0.3, dock_y)], 2.4)
+        s.flags += ["--pointer", f"{s.t + s.dt:.4f}:{w / 2},{h / 2}"]
+        s.t += 0.4
+    elif name == "overview":
+        s.at("--action", "overview")
+        s.at("--action", "overview", 1.2)
+        s.t += 1.9
+    elif name == "launcher":
+        for _ in range(2):
+            s.at("--action", "launcher")
+            s.at("--key", "Escape", 0.8)
+            s.t += 1.6
+    elif name == "context-menu":
+        mx, my = 40, h * 0.37
+        for _ in range(2):
+            s.at("--right-click", f"{mx},{my:.1f}")
+            s.t += 0.4
+            s.path([(mx + 40, my + 17), (mx + 40, my + 122)], 0.3)
+            s.at("--key", "Escape", 0.8)
+            s.at("--key", "Escape", 1.0)
+            s.t += 1.4
+    else:
+        sys.exit(f"bench: no scenario {name!r}")
+    return s.flags, (start, s.t)
+
+
+# ---- what the processes do -----------------------------------------------------------------------------------------
+
+def children(pid: int) -> list[int]:
+    out = []
+    for task in pathlib.Path(f"/proc/{pid}/task").glob("*"):
+        try:
+            out += [int(c) for c in (task / "children").read_text().split()]
+        except OSError:
+            pass
+    return out
+
+
+def tree(pid: int) -> list[int]:
+    seen, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        seen.append(p)
+        todo += children(p)
+    return seen
+
+
+def program(pid: int) -> str:
+    try:
+        exe = pathlib.Path(os.readlink(f"/proc/{pid}/exe")).name
+    except OSError:
+        return ""
+    if exe == "cupertino-files":
+        try:
+            if "--desktop" in pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0"):
+                return "cupertino-files --desktop"
+        except OSError:
+            pass
+    return exe
+
+
+def cpu_ticks(pid: int) -> int:
+    try:
+        f = pathlib.Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return int(f[11]) + int(f[12])
+    except (OSError, IndexError):
+        return 0
+
+
+def memory(pid: int) -> dict:
+    m = {"pss": 0.0, "rss": 0.0, "private": 0.0, "private_dirty": 0.0}
+    try:
+        for line in pathlib.Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+            key, _, rest = line.partition(":")
+            kib = int(rest.split()[0]) if rest.split() else 0
+            if key == "Pss":
+                m["pss"] = kib / 1024
+            elif key == "Rss":
+                m["rss"] = kib / 1024
+            elif key in ("Private_Clean", "Private_Dirty"):
+                m["private"] += kib / 1024
+                if key == "Private_Dirty":
+                    m["private_dirty"] = kib / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return m
+
+
+def measured(pid: int) -> bool:
+    name = program(pid)
+    return bool(name) and not name.endswith(".sh") and name not in ("bash", "sh", "python3")
+
+
+def sample(root: int) -> dict[int, dict]:
+    """CPU ticks of every measured process in the session."""
+    return {p: {"program": program(p), "cpu": cpu_ticks(p)} for p in tree(root) if measured(p)}
+
+
+def threads(pid: int) -> dict[int, dict]:
+    out = {}
+    for task in pathlib.Path(f"/proc/{pid}/task").glob("*"):
+        try:
+            status = (task / "status").read_text()
+            vol = int(re.search(r"voluntary_ctxt_switches:\s+(\d+)", status).group(1))
+            invol = int(re.search(r"nonvoluntary_ctxt_switches:\s+(\d+)", status).group(1))
+            out[int(task.name)] = {"name": (task / "comm").read_text().strip(), "wakeups": vol, "preempted": invol}
+        except (OSError, AttributeError, ValueError):
+            pass
+    return out
+
+
+def timerfds(pid: int) -> dict[int, dict]:
+    """The timerfds of `pid`: how often each fired so far and its period."""
+    out = {}
+    fds = pathlib.Path(f"/proc/{pid}/fd")
+    try:
+        entries = list(fds.iterdir())
+    except OSError:
+        return out
+    for fd in entries:
+        try:
+            if os.readlink(fd) != "anon_inode:[timerfd]":
+                continue
+            info = (pathlib.Path(f"/proc/{pid}/fdinfo") / fd.name).read_text()
+            ticks = int(re.search(r"ticks:\s+(\d+)", info).group(1))
+            ival = re.search(r"it_interval:\s+\((\d+),\s*(\d+)\)", info)
+            value = re.search(r"it_value:\s+\((\d+),\s*(\d+)\)", info)
+            out[int(fd.name)] = {"ticks": ticks,
+                                 "interval_ms": (int(ival.group(1)) * 1e3 + int(ival.group(2)) / 1e6) if ival else 0,
+                                 "armed": bool(value and (int(value.group(1)) or int(value.group(2))))}
+        except (OSError, AttributeError, ValueError):
+            pass
+    return out
+
+
+def sleeping_in(pid: int, tid: int) -> str | None:
+    """The call `tid` sleeps in and its timeout, as `/proc` shows it now."""
+    try:
+        return sleep_of(pathlib.Path(f"/proc/{pid}/task/{tid}/syscall").read_text())
+    except OSError:
+        return None
+
+
+def sleep_of(line: str) -> str | None:
+    """The call and timeout of a `/proc/PID/task/TID/syscall` line; `None` for a running thread."""
+    text = line.split()
+    if not text or text[0] in ("running", "-1"):
+        return None
+    nr = int(text[0])
+    name, arg, kind = SLEEPS.get(nr, (f"syscall {nr}", None, None))
+    if arg is None:
+        return name
+    value = int(text[1 + arg], 16)
+    if kind == "ms":
+        value = value - (1 << 64) if value >= 1 << 63 else value
+        value = value - (1 << 32) if value >= 1 << 31 and value < 1 << 32 else value
+        return f"{name} {'forever' if value < 0 else f'{value} ms'}"
+    return f"{name} {'forever' if value == 0 else 'with a timeout'}"
+
+
+class Sampler(threading.Thread):
+    """Samples the session at the scenario's start and end; during an idle scenario, also where every thread sleeps."""
+
+    def __init__(self, root: int, start_mono: float, span: tuple[float, float], idle: bool):
+        super().__init__(daemon=True)
+        self.root, self.start_mono, self.span, self.idle = root, start_mono, span, idle
+        self.marks: dict[str, tuple[float, dict]] = {}
+        self.threads: dict[str, dict] = {}
+        self.timers: dict[str, dict] = {}
+        self.sleeps: dict[tuple[int, int], dict[str, int]] = {}
+        self.stop = False
+
+    def wait_until(self, at: float) -> None:
+        while not self.stop and time.monotonic() < self.start_mono + at:
+            time.sleep(min(0.05, max(0.0, self.start_mono + at - time.monotonic())))
+
+    def run(self) -> None:
+        a, b = self.span
+        self.wait_until(a)
+        self.marks["start"] = (time.monotonic(), sample(self.root))
+        if self.idle:
+            self.threads["start"] = {p: threads(p) for p in self.marks["start"][1]}
+            self.timers["start"] = {p: timerfds(p) for p in self.marks["start"][1]}
+            while not self.stop and time.monotonic() < self.start_mono + b:
+                for p in self.marks["start"][1]:
+                    for tid in list(self.threads["start"].get(p, {})):
+                        where = sleeping_in(p, tid)
+                        if where:
+                            counts = self.sleeps.setdefault((p, tid), {})
+                            counts[where] = counts.get(where, 0) + 1
+                time.sleep(0.05)
+        self.wait_until(b)
+        end = sample(self.root)
+        self.marks["end"] = (time.monotonic(), end)
+        self.memory = {p: memory(p) for p in end}
+        if self.idle:
+            self.threads["end"] = {p: threads(p) for p in end}
+            self.timers["end"] = {p: timerfds(p) for p in end}
+
+
+# ---- reading the files ---------------------------------------------------------------------------------------------
+
+def pct(vals: list[float], p: float) -> float | None:
     if not vals:
-        return float("nan")
+        return None
     vals = sorted(vals)
     return vals[min(len(vals) - 1, round(p / 100 * (len(vals) - 1)))]
 
 
-def summarise(refresh: float, rows: list[list], spans: list) -> dict[str, dict]:
+def read_frames(path: pathlib.Path) -> tuple[dict, list[dict]]:
+    head, rows, names = {}, [], []
+    for line in path.read_text().splitlines():
+        if line.startswith("# shown_us"):
+            names = line[2:].split()
+        elif line.startswith("# "):
+            key, _, value = line[2:].partition(" ")
+            head[key] = value
+        elif line.strip():
+            cells = [None if c == "-" else int(c) for c in line.split()]
+            rows.append(dict(zip(names, cells)))
+    return head, rows
+
+
+def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], cpu_s: float | None) -> dict:
+    a, b = span
+    frames = [r for r in rows if a <= r["shown_us"] / 1e6 <= b]
+    n = max(1, len(frames))
+    shown = [r["shown_us"] / 1e3 for r in frames]
+    ints = [y - x for x, y in zip(shown, shown[1:])]
+    work = [(r["compose_us"] + r["render_us"]) / 1e3 for r in frames]
+    gpu = [r["gpu_us"] / 1e3 for r in frames if r.get("gpu_us") is not None]
+    per = lambda key: sum(r.get(key) or 0 for r in frames) / n
+    return {
+        "frames": len(frames), "fps": len(frames) / max(1e-9, b - a),
+        "interval_p50_ms": pct(ints, 50), "interval_p99_ms": pct(ints, 99), "interval_max_ms": max(ints, default=None),
+        "missed": sum(r["missed"] for r in frames),
+        "work_p50_ms": pct(work, 50), "work_p99_ms": pct(work, 99), "work_max_ms": max(work, default=None),
+        "over_budget": sum(x > refresh_ms for x in work),
+        "gpu_p50_ms": pct(gpu, 50), "gpu_p99_ms": pct(gpu, 99),
+        "glass_p95_ms": pct([r["glass_us"] / 1e3 for r in frames], 95),
+        "blurred_per_frame": per("blurred"), "reused_per_frame": per("reused"), "allocated_per_frame": per("allocated"),
+        "blur_passes_per_frame": per("blur_passes"),
+        "decoration_rasters": sum(r.get("deco_rasters") or 0 for r in frames),
+        "decoration_uploads": sum(r.get("deco_uploads") or 0 for r in frames),
+        "decoration_upload_kib": sum(r.get("deco_upload_bytes") or 0 for r in frames) / 1024,
+        "hud_rasters": sum(r.get("hud_rasters") or 0 for r in frames),
+        "hud_uploads": sum(r.get("hud_uploads") or 0 for r in frames),
+        "hud_upload_kib": sum(r.get("hud_upload_bytes") or 0 for r in frames) / 1024,
+        "input_latency_p50_ms": pct([r["input_lat_us"] / 1e3 for r in frames if r["input_lat_us"] is not None], 50),
+        "input_latency_p95_ms": pct([r["input_lat_us"] / 1e3 for r in frames if r["input_lat_us"] is not None], 95),
+        "app_latency_p50_ms": pct([r["app_lat_us"] / 1e3 for r in frames if r["app_lat_us"] is not None], 50),
+        "app_latency_p95_ms": pct([r["app_lat_us"] / 1e3 for r in frames if r["app_lat_us"] is not None], 95),
+        "cpu_ms_per_s": None if cpu_s is None else cpu_s * 1e3 / max(1e-9, b - a),
+        "cpu_ms_per_frame": None if cpu_s is None or not frames else cpu_s * 1e3 / len(frames),
+    }
+
+
+def clients(path: pathlib.Path, start_ns: int, span: tuple[float, float], refresh_ms: float) -> dict:
+    a, b = (start_ns + span[0] * 1e9, start_ns + span[1] * 1e9)
+    by: dict[str, list[dict]] = {}
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            t = json.loads(line)
+        except ValueError:
+            continue
+        if a <= t["start"] <= b:
+            by.setdefault(t["program"], []).append(t)
     out = {}
-    for name, a, b in spans:
-        frames = [r for r in rows if a <= r[0] / 1e6 <= b]
-        shown = [r[0] / 1e6 for r in frames]
-        ints = [(y - x) * 1e3 for x, y in zip(shown, shown[1:])]
-        missed = sum(r[8] for r in frames)
-        work = [(r[1] + r[2]) / 1e3 for r in frames]
-        lat_in = [r[9] / 1e3 for r in frames if r[9] is not None]
-        lat_app = [r[10] / 1e3 for r in frames if r[10] is not None]
-        n = max(1, len(frames))
-        out[name] = {
-            "frames": len(frames),
-            "fps": len(frames) / (b - a),
-            "int p50": pct(ints, 50), "int p95": pct(ints, 95), "int max": max(ints, default=float("nan")),
-            "missed": missed,
-            "work p50": pct(work, 50), "work p95": pct(work, 95), "work max": max(work, default=float("nan")),
-            "over": sum(w > refresh * 1e3 for w in work),
-            "glass p95": pct([r[3] / 1e3 for r in frames], 95),
-            "blur/f": sum(r[5] for r in frames) / n,
-            "reuse/f": sum(r[6] for r in frames) / n,
-            "alloc/f": sum(r[11] for r in frames if len(r) > 11) / n,
-            "in p50": pct(lat_in, 50), "in p95": pct(lat_in, 95),
-            "app p50": pct(lat_app, 50), "app p95": pct(lat_app, 95),
-        }
+    for name, frames in sorted(by.items()):
+        total = [f["total"] / 1e6 for f in frames]
+        entry = {"frames": len(frames), "frame_p50_ms": pct(total, 50), "frame_p99_ms": pct(total, 99),
+                 "frame_max_ms": max(total), "slow_frames": sum(t > refresh_ms for t in total)}
+        for phase in PHASES:
+            vals = [f[phase] / 1e6 for f in frames]
+            entry[f"{phase}_p50_ms"] = pct(vals, 50)
+            entry[f"{phase}_p99_ms"] = pct(vals, 99)
+        out[name] = entry
     return out
 
 
-def table(hz: float, renderer: str, s: dict[str, dict]) -> str:
-    head = (f"{'scenario':13} {'frames':>6} {'fps':>6} {'int p50':>7} {'p95':>6} {'max':>6} {'missed':>6} "
-            f"{'work p50':>8} {'p95':>6} {'max':>6} {'over':>4} {'glass95':>7} {'blur/f':>6} {'reuse/f':>7} {'alloc/f':>7} "
-            f"{'in lat':>11} {'app lat':>11}")
-    lines = [f"{hz:g} Hz (budget {1000 / hz:.2f} ms), rendered by {renderer}", head]
-    for name, v in s.items():
+def processes(sampler: Sampler) -> dict:
+    (ta, a), (tb, b) = sampler.marks["start"], sampler.marks["end"]
+    by: dict[str, dict] = {}
+    for pid, s in b.items():
+        e = by.setdefault(s["program"], {"count": 0, "cpu_percent": 0.0, "private_mib": 0.0, "private_dirty_mib": 0.0,
+                                         "pss_mib": 0.0, "rss_mib": 0.0})
+        e["count"] += 1
+        if pid in a:
+            e["cpu_percent"] += 100.0 * (s["cpu"] - a[pid]["cpu"]) / TICK / max(1e-9, tb - ta)
+        m = sampler.memory.get(pid, {})
+        e["private_mib"] += m.get("private", 0)
+        e["private_dirty_mib"] += m.get("private_dirty", 0)
+        e["pss_mib"] += m.get("pss", 0)
+        e["rss_mib"] += m.get("rss", 0)
+    return dict(sorted(by.items()))
+
+
+def wakeups(sampler: Sampler) -> list[dict]:
+    """Every thread that woke during the idle span: how often, and where it sleeps."""
+    seconds = max(1e-9, sampler.marks["end"][0] - sampler.marks["start"][0])
+    rows = []
+    for pid, end in sampler.threads.get("end", {}).items():
+        start = sampler.threads["start"].get(pid, {})
+        name = sampler.marks["end"][1].get(pid, {}).get("program", str(pid))
+        for tid, t in end.items():
+            before = start.get(tid, {"wakeups": 0, "preempted": 0})
+            woke = t["wakeups"] - before["wakeups"]
+            if woke <= 0:
+                continue
+            sleeps = sampler.sleeps.get((pid, tid), {})
+            rows.append({"program": name, "thread": t["name"], "wakeups": woke,
+                         "per_minute": round(woke * 60 / seconds, 1),
+                         "sleeps_in": sorted(sleeps, key=sleeps.get, reverse=True)[:3]})
+    for pid, end in sampler.timers.get("end", {}).items():
+        start = sampler.timers["start"].get(pid, {})
+        name = sampler.marks["end"][1].get(pid, {}).get("program", str(pid))
+        for fd, t in end.items():
+            fired = t["ticks"] - start.get(fd, {"ticks": t["ticks"]})["ticks"]
+            if fired > 0 or t["armed"]:
+                rows.append({"program": name, "timerfd": fd, "fired": fired,
+                             "per_minute": round(fired * 60 / seconds, 1), "period_ms": t["interval_ms"],
+                             "armed": t["armed"]})
+    return sorted(rows, key=lambda r: (-r["per_minute"], r["program"]))
+
+
+# ---- one session ---------------------------------------------------------------------------------------------------
+
+def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
+    flags, span = script(name, hz, win, size, scale, idle)
+    end = span[1] + 1.0
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = pathlib.Path(tmp)
+        stats, timing = tmp / "frames.txt", tmp / "frame-timing.jsonl"
+        before, after = tmp / "windows-before.json", tmp / "windows-after.json"
+        flags += ["--frame-stats", str(stats), "--window-list", f"{SETTLE - 0.5}:{before}",
+                  "--window-list", f"{span[1] + 0.5}:{after}"]
+        if os.environ.get("BENCH_SHOTS"):
+            shots = pathlib.Path(os.environ["BENCH_SHOTS"])
+            shots.mkdir(parents=True, exist_ok=True)
+            flags += ["--shot", f"{(span[0] + span[1]) / 2:.2f}:{shots}/{hz:g}-{name}.png"]
+        proc = session(bin_dir, size, scale, hz, flags, end, {"CUPERTINO_FRAME_TIMING": str(timing)})
+        # the frame statistics name where the server's clock starts
+        deadline = time.monotonic() + 30
+        head: dict = {}
+        while time.monotonic() < deadline and "start_monotonic_ns" not in head:
+            time.sleep(0.05)
+            if stats.exists():
+                head, _ = read_frames(stats)
+        if "start_monotonic_ns" not in head:
+            proc.kill()
+            sys.exit("bench: the server wrote no frame statistics (is the build current?)")
+        start_ns = int(head["start_monotonic_ns"])
+        sampler = Sampler(proc.pid, start_ns / 1e9, span, name == "idle")
+        sampler.start()
+        proc.wait(timeout=end + 60)
+        sampler.join(timeout=10)
+        sampler.stop = True
+        head, rows = read_frames(stats)
+        refresh_ms = int(head.get("refresh_us", round(1e6 / hz))) / 1e3
+        server = [p for p, s in sampler.marks.get("end", (0, {}))[1].items() if s["program"] == "cupertino-server"]
+        cpu_s = None
+        if server and server[0] in sampler.marks.get("start", (0, {}))[1]:
+            cpu_s = (sampler.marks["end"][1][server[0]]["cpu"] - sampler.marks["start"][1][server[0]]["cpu"]) / TICK
+        result = {"scenario": name, "rate": hz, "renderer": head.get("renderer", "unknown"), "span_s": span,
+                  "compositor": compositor(rows, refresh_ms, span, cpu_s),
+                  "clients": clients(timing, start_ns, span, refresh_ms),
+                  "processes": processes(sampler) if "end" in sampler.marks else {},
+                  "windows": {"before": read_windows(before), "after": read_windows(after)}}
+        if name == "idle":
+            result["idle"] = wakeups(sampler)
+        if keep:
+            keep.mkdir(parents=True, exist_ok=True)
+            for f in (stats, timing, before, after):
+                if f.exists():
+                    (keep / f"{hz:g}-{name}-{f.name}").write_bytes(f.read_bytes())
+    return result
+
+
+def check(name: str, r: dict) -> str | None:
+    """Whether the scenario drove what it should: a warning, or `None`."""
+    before, after = r["windows"]["before"], r["windows"]["after"]
+    if name == "drag":
+        a, b = find(before, "settings"), find(after, "settings")
+        if not a or not b or (abs(a["x"] - b["x"]) > 2 or abs(a["y"] - b["y"]) > 2):
+            return "Settings did not come back to where the drag started: the drag may not have held the title bar"
+        if r["compositor"]["frames"] < 30:
+            return "the drag drew few frames: it may not have held the title bar"
+    if name == "resize" and r["compositor"]["frames"] < 30:
+        return "the resize drew few frames: the press may have missed the corner"
+    if name == "hover" and not r["compositor"]["decoration_rasters"]:
+        return "the hover drew no title bar: the pointer may have missed the window buttons"
+    if name == "files-scroll" and r["clients"].get("cupertino-files", {}).get("frames", 0) < 30:
+        return "Files drew few frames: the scroll may have missed its list"
+    # the menu bar's clock turns once a minute, and draws a frame of the menu bar and one of the screen
+    minutes = (r["span_s"][1] - r["span_s"][0]) / 60
+    if name == "idle" and r["compositor"]["frames"] > 2 * (int(minutes) + 1):
+        return f"the idle desktop drew {r['compositor']['frames']} frames"
+    return None
+
+
+# ---- the report ----------------------------------------------------------------------------------------------------
+
+def flatten(prefix: str, value, out: dict) -> None:
+    if isinstance(value, dict):
+        for k, v in value.items():
+            flatten(f"{prefix}.{k}" if prefix else k, v, out)
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        out[prefix] = float(value)
+
+
+def summarise(runs: list[dict]) -> dict:
+    """Per rate and scenario, every figure's median over the runs and its spread."""
+    groups: dict[str, list[dict]] = {}
+    for r in runs:
+        groups.setdefault(f"{r['rate']:g} Hz {r['scenario']}", []).append(r)
+    out = {}
+    for key, rs in groups.items():
+        flat: dict[str, list[float]] = {}
+        for r in rs:
+            f: dict = {}
+            for part in ("compositor", "clients", "processes"):
+                flatten(part, r[part], f)
+            for k, v in f.items():
+                flat.setdefault(k, []).append(v)
+        out[key] = {k: {"median": statistics.median(v), "spread": max(v) - min(v), "runs": len(v)}
+                    for k, v in sorted(flat.items())}
+    return out
+
+
+def fmt(v, width=7, digits=2) -> str:
+    return f"{'-':>{width}}" if v is None else f"{v:{width}.{digits}f}"
+
+
+def table(summary: dict, renderer: str) -> str:
+    lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
+             f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'gpu99':>7} "
+             f"{'cpu/s':>7} {'blurP/f':>7} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7}"]
+    for key, s in summary.items():
+        g = lambda k: s.get(f"compositor.{k}", {}).get("median")
+        slow = sum(v["median"] for k, v in s.items() if k.endswith(".slow_frames"))
+        worst = max((v["median"] for k, v in s.items() if k.startswith("clients.") and k.endswith(".frame_p99_ms")),
+                    default=None)
         lines.append(
-            f"{name:13} {v['frames']:6} {v['fps']:6.1f} {v['int p50']:7.2f} {v['int p95']:6.2f} {v['int max']:6.2f} "
-            f"{v['missed']:6} {v['work p50']:8.2f} {v['work p95']:6.2f} {v['work max']:6.2f} {v['over']:4} "
-            f"{v['glass p95']:7.2f} {v['blur/f']:6.2f} {v['reuse/f']:7.2f} {v['alloc/f']:7.2f} "
-            f"{v['in p50']:5.1f}/{v['in p95']:<5.1f} {v['app p50']:5.1f}/{v['app p95']:<5.1f}")
+            f"{key:26} {fmt(g('frames'), 6, 0)} {fmt(g('interval_p99_ms'))} {fmt(g('missed'), 6, 0)} "
+            f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('gpu_p99_ms'))} {fmt(g('cpu_ms_per_s'))} "
+            f"{fmt(g('blur_passes_per_frame'))} {fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
+            f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)}")
+    return "\n".join(lines)
+
+
+def idle_table(rows: list[dict]) -> str:
+    lines = ["idle: what woke, per minute"]
+    for r in rows:
+        if "thread" in r:
+            lines.append(f"  {r['per_minute']:8.1f}  {r['program']:28} thread {r['thread']:18} sleeps in "
+                         f"{', '.join(r['sleeps_in']) or '?'}")
+        else:
+            lines.append(f"  {r['per_minute']:8.1f}  {r['program']:28} timerfd {r['timerfd']} every "
+                         f"{r['period_ms']:.0f} ms (fired {r['fired']}, armed {r['armed']})")
     return "\n".join(lines)
 
 
 def main() -> int:
-    args = sys.argv[1:]
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--size", default="2560x1600")
+    ap.add_argument("--scale", type=float, default=2.0)
+    ap.add_argument("--rate", default=os.environ.get("RATES", "60"))
+    ap.add_argument("--scenario", default=",".join(BASELINE))
+    ap.add_argument("--runs", type=int, default=1)
+    ap.add_argument("--idle-seconds", type=float, default=30.0)
+    ap.add_argument("--out", type=pathlib.Path)
+    args = ap.parse_args()
+    size = tuple(int(v) for v in args.size.split("x"))
+    names = BASELINE + EXTRA if args.scenario == "all" else args.scenario.split(",")
+    for n in names:
+        if n not in BASELINE + EXTRA:
+            ap.error(f"no scenario {n!r}; there are {', '.join(BASELINE + EXTRA)}")
     if not os.environ.get("NO_BUILD") and not os.environ.get("BIN_DIR"):
         subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
     bin_dir = pathlib.Path(os.environ.get("BIN_DIR", ROOT / "target/release"))
-    rates = [float(r) for r in os.environ.get("RATES", "60,120").split(",")]
-    result = {}
-    for hz in rates:
-        renderer, refresh, rows, spans = run(bin_dir, hz)
-        s = summarise(refresh, rows, spans)
-        result[f"{hz:g}"] = {"renderer": renderer, "scenarios": s}
-        print(table(hz, renderer, s))
-        print()
-    if "--out" in args:
-        pathlib.Path(args[args.index("--out") + 1]).write_text(json.dumps(result, indent=1))
+    keep = pathlib.Path(os.environ["BENCH_KEEP"]) if os.environ.get("BENCH_KEEP") else None
+    win = layout(bin_dir, size, args.scale)
+    runs = []
+    for hz in [float(r) for r in args.rate.split(",")]:
+        for name in names:
+            for i in range(args.runs):
+                r = run_one(bin_dir, size, args.scale, hz, name, win, args.idle_seconds, keep)
+                r["run"] = i
+                warning = check(name, r)
+                if warning:
+                    r["warning"] = warning
+                    print(f"bench: {hz:g} Hz {name} run {i}: {warning}", file=sys.stderr)
+                runs.append(r)
+    summary = summarise(runs)
+    renderer = runs[0]["renderer"] if runs else "unknown"
+    print(table(summary, renderer))
+    for r in runs:
+        if r["scenario"] == "idle":
+            print()
+            print(idle_table(r["idle"]))
+            break
+    if args.out:
+        result = {"config": {"size": args.size, "scale": args.scale, "rates": args.rate, "runs": args.runs,
+                             "scenarios": names, "bin_dir": str(bin_dir), "windows": win},
+                  "summary": summary, "runs": runs}
+        args.out.write_text(json.dumps(result, indent=1))
     return 0
 
 

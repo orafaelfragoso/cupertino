@@ -4,7 +4,7 @@ use crate::Error;
 use cupertino_geometry::Rect;
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1, WindowState};
 use cupertino_wayland_client::OutputId;
-use wayland_client::WEnum;
+use wayland_client::{Proxy, WEnum};
 
 pub use cupertino_protocols::client::cupertino_dock_v1::{AppCommand, Corner, Gesture};
 
@@ -43,6 +43,9 @@ pub struct DockWindowIcon {
 
 /// Largest side of a window's picture a dock accepts, in pixels: the server sends at most 256.
 pub const MAX_WINDOW_THUMBNAIL: u32 = 256;
+
+/// Shell version of the overview's drag, drop and workspace picture requests.
+const OVERVIEW_DRAG_VERSION: u32 = 23;
 
 /// A picture: `width` × `height` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +216,39 @@ impl Dock {
     pub fn overview_frame(&self, id: u32, rect: &Rect) -> Result<(), Error> {
         let (x, y, width, height) = whole_rect(rect)?;
         self.proxy.overview_frame(id, x, y, width, height);
+        Ok(())
+    }
+
+    /// Window `id` of the open overview follows the pointer at `rect` (output coordinates, rounded outwards to whole
+    /// points), drawn above the overview's surface; nothing is sent to a server older than shell version 23.
+    pub fn overview_drag(&self, id: u32, rect: &Rect) -> Result<(), Error> {
+        let (x, y, width, height) = whole_rect(rect)?;
+        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
+            self.proxy.overview_drag(id, x, y, width, height);
+        }
+        Ok(())
+    }
+
+    /// Window `id` of the open overview was dropped on `workspace`: it moves there; nothing is sent to a server older
+    /// than shell version 23.
+    pub fn overview_move_window(&self, id: u32, workspace: u32) {
+        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
+            self.proxy.overview_move_window(id, workspace);
+        }
+    }
+
+    /// Where the live picture of `workspace` is drawn while the overview is open (output coordinates, rounded outwards;
+    /// an empty rectangle for none); nothing is sent to a server older than shell version 23.
+    pub fn overview_workspace_frame(&self, workspace: u32, rect: &Rect) -> Result<(), Error> {
+        let (x, y, width, height) = if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            (0, 0, 0, 0)
+        } else {
+            whole_rect(rect)?
+        };
+        if self.proxy.version() >= OVERVIEW_DRAG_VERSION {
+            self.proxy
+                .overview_workspace_frame(workspace, x, y, width, height);
+        }
         Ok(())
     }
 

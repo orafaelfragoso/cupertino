@@ -130,6 +130,7 @@ const WIFI_OPEN: Presentation = Presentation {
         detail: Detail::WiFi,
         progress: 1.0,
         morph: true,
+        opening: true,
     }),
 };
 
@@ -485,15 +486,17 @@ fn a_tile_s_state_is_smaller_and_quieter_than_its_title() {
 
 /// The compositor measures the face of a glass container whose bounds are small and tells the window to draw its
 /// text light or dark to match; a larger container keeps the appearance's text. The panel's labels are white over its
-/// own tint in a light session, which the compositor does not see, so every tile joins one container that is never
-/// small: at rest, in a light session, while a view opens or cross-fades, and with it open.
+/// own tint in a light session, which the compositor does not see, so no container of the tiles is ever small: at rest,
+/// in a light session, while a view opens or cross-fades (the view and the tiles behind it, a container each), and with
+/// it open. A container is one glass of one style.
 #[test]
-fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
+fn the_tiles_are_glass_too_large_for_their_text_to_follow_the_backdrop() {
     let opening = |progress, morph| Presentation {
         detail: Some(Opened {
             detail: Detail::WiFi,
             progress,
             morph,
+            opening: true,
         }),
         ..Presentation::SHOWN
     };
@@ -508,6 +511,7 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
             ..Presentation::SHOWN
         },
         opening(0.0, true),
+        opening(0.1, true),
         opening(0.3, true),
         opening(0.7, true),
         opening(0.5, false),
@@ -525,29 +529,42 @@ fn the_tiles_are_one_glass_too_large_for_their_text_to_follow_the_backdrop() {
             })
             .expect("the panel asks for glass");
         assert!(!regions.is_empty(), "{presentation:?}: no glass");
-        // the levels' tracks are glass of their own over the tiles, apart from the container
+        // the levels' tracks are glass of their own over the tiles, apart from the containers
         let regions: Vec<_> = regions
             .iter()
             .filter(|r| r.glass.expect("every tile is glass").style != GlassStyle::Track)
             .collect();
-        let containers: Vec<u32> = regions
+        let mut containers: Vec<u32> = regions
             .iter()
             .map(|r| r.glass.expect("every tile is glass").container)
             .collect();
+        containers.sort_unstable();
+        containers.dedup();
         assert!(
-            containers.iter().all(|c| *c != 0 && *c == containers[0]),
-            "{presentation:?}: the tiles join one container: {containers:?}"
+            containers.iter().all(|c| *c != 0),
+            "{presentation:?}: every tile is in a container: {containers:?}"
         );
-        let bounds = regions
-            .iter()
-            .map(|r| r.rect)
-            .reduce(|a, b| a.union(&b))
-            .unwrap();
-        let short = bounds.width().min(bounds.height());
-        assert!(
-            !adapts_foreground(short as f32),
-            "{presentation:?}: the container's short side, {short} pt, lets its text follow the backdrop"
-        );
+        for container in containers {
+            let members: Vec<_> = regions
+                .iter()
+                .filter(|r| r.glass.unwrap().container == container)
+                .collect();
+            let style = members[0].glass.unwrap().style;
+            assert!(
+                members.iter().all(|r| r.glass.unwrap().style == style),
+                "{presentation:?}: container {container} mixes styles"
+            );
+            let bounds = members
+                .iter()
+                .map(|r| r.rect)
+                .reduce(|a, b| a.union(&b))
+                .unwrap();
+            let short = bounds.width().min(bounds.height());
+            assert!(
+                !adapts_foreground(short as f32),
+                "{presentation:?}: container {container}'s short side, {short} pt, lets its text follow the backdrop"
+            );
+        }
     }
 }
 
@@ -568,6 +585,121 @@ fn glass_regions(run: &mut Run) -> Vec<Rect> {
             _ => None,
         })
         .expect("the panel asks for glass")
+}
+
+/// The glass styles of the regions the panel last asked for, but the levels' tracks, with their rectangles.
+fn glass_styles(run: &mut Run) -> Vec<(Rect, GlassStyle)> {
+    let requests = run.driver.window_system_mut().requests(run.window).unwrap();
+    requests
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Materials(regions) => Some(
+                regions
+                    .iter()
+                    .filter_map(|r| r.glass.map(|g| (r.rect, g.style)))
+                    .filter(|(_, style)| *style != GlassStyle::Track)
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .expect("the panel asks for glass")
+}
+
+/// The tiles at rest take presses and lie on module glass. While a view opens or stays open, the tiles and Edit
+/// Controls behind it lie on subdued module glass as they fade, in a container of their own, and the growing tile
+/// stays on module glass; with Reduce Motion the tile fading out in place under the view lies on subdued glass too.
+/// While the view closes the tiles come back on module glass.
+#[test]
+fn the_tiles_behind_an_expanding_view_lie_on_subdued_glass() {
+    let opening = |progress, morph| Presentation {
+        detail: Some(Opened {
+            detail: Detail::WiFi,
+            progress,
+            morph,
+            opening: true,
+        }),
+        ..Presentation::SHOWN
+    };
+    let count =
+        |styles: &[(Rect, GlassStyle)], style| styles.iter().filter(|(_, s)| *s == style).count();
+    for light in [false, true] {
+        let mut run = Run::start(
+            tokens(Appearance::Dark, false),
+            Presentation {
+                light,
+                ..Presentation::SHOWN
+            },
+        );
+        let styles = glass_styles(&mut run);
+        assert_eq!(styles.len(), Module::ALL.len() + 1);
+        assert_eq!(
+            count(&styles, GlassStyle::Module),
+            styles.len(),
+            "at rest: {styles:?}"
+        );
+    }
+
+    // early in the motion the others still show, behind the growing tile
+    let mut run = Run::start(tokens(Appearance::Dark, false), opening(0.1, true));
+    let styles = glass_styles(&mut run);
+    assert_eq!(
+        count(&styles, GlassStyle::Module),
+        1,
+        "the growing tile: {styles:?}"
+    );
+    assert_eq!(
+        count(&styles, GlassStyle::SubduedModule),
+        Module::ALL.len(),
+        "the other tiles and Edit Controls: {styles:?}"
+    );
+    let edit = Rect::new(107.0 + ORIGIN.x, 468.0 + ORIGIN.y, 94.0, 24.0);
+    assert!(
+        styles.contains(&(edit, GlassStyle::SubduedModule)),
+        "Edit Controls lies behind the view: {styles:?}"
+    );
+
+    // once they have faded only the view is left, on module glass
+    for scene in [opening(0.7, true), WIFI_OPEN] {
+        let mut run = Run::start(tokens(Appearance::Dark, false), scene);
+        let styles: Vec<GlassStyle> = glass_styles(&mut run).into_iter().map(|(_, s)| s).collect();
+        assert_eq!(styles, vec![GlassStyle::Module], "{scene:?}");
+    }
+
+    // with Reduce Motion the tile fades out in place under the view fading in at its own place
+    let mut run = Run::start(tokens(Appearance::Dark, false), opening(0.5, false));
+    let styles = glass_styles(&mut run);
+    assert_eq!(
+        count(&styles, GlassStyle::SubduedModule),
+        1,
+        "the Wi-Fi tile fading in place: {styles:?}"
+    );
+    assert_eq!(
+        count(&styles, GlassStyle::Module),
+        1,
+        "the view fading in: {styles:?}"
+    );
+
+    // closing, the tiles fade back in on module glass, joined with the view again
+    for morph in [true, false] {
+        let closing = Presentation {
+            detail: Some(Opened {
+                detail: Detail::WiFi,
+                progress: 0.1,
+                morph,
+                opening: false,
+            }),
+            ..Presentation::SHOWN
+        };
+        let mut run = Run::start(tokens(Appearance::Dark, false), closing);
+        let styles = glass_styles(&mut run);
+        assert!(styles.len() > 1, "{closing:?}: the tiles show: {styles:?}");
+        assert_eq!(
+            count(&styles, GlassStyle::Module),
+            styles.len(),
+            "{closing:?}: {styles:?}"
+        );
+    }
 }
 
 /// Edit Controls is glass as the tiles are, in a dark and in a light session: the capsule takes its colour from what lies

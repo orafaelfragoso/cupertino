@@ -8,7 +8,7 @@
 //! | bare lines, `pin`, `pinned` | an application: desktop file ID, `app_id` or command | — |
 //! | `tile_size` | points; valid `0 < v < 257`, rounded up ([`sanitize_tile_size`]) | 64, 52 on displays at most 800 pt tall |
 //! | `large_size` | points; valid `0 < v < 513`, rounded up ([`sanitize_large_size`]) | 128 |
-//! | `magnification`, `autohide`, `recents` | `on`, `off` | off, off, on |
+//! | `magnification`, `autohide`, `recents` | `on`, `off` | off, off, off |
 //! | `position` | `bottom`, `left`, `right` | `bottom` |
 //! | `stack` | `auto`, `fan`, `grid` | `auto` |
 //! | `minimize_to_app`, `bounce`, `indicators` | `on`, `off` | off, on, on |

@@ -16,6 +16,7 @@ fn base_cfg() -> DockConfig {
         separator_ratio: 12.0 / 48.0,
         edge_margin: 4.0,
         magnification: true,
+        show_recents: true,
         ..DockConfig::default()
     }
 }
@@ -1240,7 +1241,11 @@ fn verified_defaults() {
         (c.tile_size, c.large_size, c.magnification),
         (64.0, 128.0, false)
     );
-    assert_eq!(c.autohide_delay, 0.2);
+    assert_eq!(c.autohide_delay, 0.22);
+    assert!(
+        !c.show_recents,
+        "the recents section is off until asked for"
+    );
     assert_eq!(c.autohide_time_modifier, 1.0);
     assert!(!c.autohide && c.launch_animation);
     assert_eq!(c.minimize_effect, MinimizeEffect::WarpMinimize);
@@ -1272,6 +1277,7 @@ fn minimize_durations_are_verified() {
 fn default_dock_hovers_exactly_the_large_size_with_the_verified_fisheye() {
     let mut d = dock_with(DockConfig {
         magnification: true,
+        show_recents: true,
         ..DockConfig::default()
     });
     let rest = d.layout(SCREEN, 0.0);

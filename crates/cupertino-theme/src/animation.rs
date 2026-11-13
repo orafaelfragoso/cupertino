@@ -324,8 +324,8 @@ mod tests {
         assert_eq!(d.fish_speed, 42.0);
         assert_eq!(d.ramp_while_dragging_ms, 270.0);
         assert_eq!(d.drop_speed, 350.0);
-        assert_eq!(d.autohide_delay_s, 0.15);
-        assert_eq!(d.autohide_duration_s, 0.24);
+        assert_eq!(d.autohide_delay_s, 0.22);
+        assert_eq!(d.autohide_duration_s, 0.22);
         assert_eq!(d.autohide_curve, Easing::CosineEase);
         assert_eq!(d.magnification_span, 3.0);
     }

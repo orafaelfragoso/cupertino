@@ -58,8 +58,8 @@
   "ramp_while_dragging_ms": 270.0,
   "drop_speed": 350.0,
   "autohide": {
-   "delay_s": 0.15,
-   "duration_s": 0.24,
+   "delay_s": 0.22,
+   "duration_s": 0.22,
    "curve": "cosine_ease"
   },
   "magnification_span": 3.0

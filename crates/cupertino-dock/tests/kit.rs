@@ -2036,8 +2036,9 @@ fn bar_row(run: &mut Run) -> Vec<String> {
         .collect()
 }
 
+/// A desktop with more applications and the recents turned on (`recents = on`; they are off by default).
 fn viewer_run() -> Run {
-    Run::on_desktop(
+    let mut run = Run::on_desktop(
         tokens(false),
         ActionMap::default(),
         true,
@@ -2047,7 +2048,13 @@ fn viewer_run() -> Run {
             entry_with("org.example.Music", "Music", ""),
             entry_with("org.example.Maps", "Maps", ""),
         ],
-    )
+    );
+    run.record.borrow_mut().conf = Some(DockSettings {
+        recents: Some(true),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    run
 }
 
 /// An application that quits, not pinned, comes into the recents: their own section after the applications, between

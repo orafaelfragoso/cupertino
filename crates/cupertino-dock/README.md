@@ -151,7 +151,7 @@ The bar follows Reduce Motion too:
   pointer, when the dock is on a side). It is a translucent fill with a 0.5 pt outline, light or dark with the
   appearance, and follows the pointer from tile to tile. It does not show over a separator, with a menu or a stack
   open, during a press or a drag, or while the session is locked. For assistive technology it is a tooltip.
-- **Recents.** With `recents` on (the default), the bar has a section of up to three recent applications
+- **Recents.** With `recents` on (off by default), the bar has a section of up to three recent applications
   (`RECENTS_MAX`) after the applications, between two separators, before the minimized windows and the trash. It holds
   the applications that quit since the dock started, the most recent first, then the launcher's frecency history, each
   once, each by its desktop entry, and none with a tile among the applications (pinned or running). It is worked out

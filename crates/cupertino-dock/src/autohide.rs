@@ -214,7 +214,7 @@ mod tests {
         let c = DockConfig::default();
         assert_eq!(autohide_hide_ms(&c, 0.0, 0.0), 240.0);
         assert_eq!(c.autohide_duration, 0.22);
-        assert_eq!(c.autohide_delay, 0.2);
+        assert_eq!(c.autohide_delay, 0.22);
     }
 
     #[test]

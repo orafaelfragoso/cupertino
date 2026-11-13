@@ -597,7 +597,7 @@ impl Settings {
         sanitize_large_size(self.dock.large_size)
     }
 
-    /// Defaults: magnification off, auto-hide off, recents shown, at the bottom.
+    /// Defaults: magnification off, auto-hide off, recents hidden, at the bottom.
     pub fn magnification(&self) -> bool {
         self.dock.magnification.unwrap_or(false)
     }
@@ -607,7 +607,7 @@ impl Settings {
     }
 
     pub fn recents(&self) -> bool {
-        self.dock.recents.unwrap_or(true)
+        self.dock.recents.unwrap_or(false)
     }
 
     pub fn position(&self) -> Position {

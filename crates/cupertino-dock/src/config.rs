@@ -121,7 +121,7 @@ pub struct DockConfig {
     pub launch_animation: bool,
     /// Hide the dock when the pointer is away (default off).
     pub autohide: bool,
-    /// Seconds before a hidden dock is revealed (default 0.2 s).
+    /// Seconds before a hidden dock is revealed (default 0.22 s).
     pub autohide_delay: f64,
     /// Show/hide duration in seconds. The default is 0.22 s.
     pub autohide_duration: f64,
@@ -156,14 +156,14 @@ impl Default for DockConfig {
             padding_ratio: BAR_PADDING_RATIO,
             edge_padding_ratio: BAR_EDGE_PADDING_RATIO,
             edge_margin: EDGE_MARGIN,
-            show_recents: true,
+            show_recents: false,
             recents_max: RECENTS_MAX,
             show_running_indicators: true,
             minimize_to_app: false,
             minimize_effect: MinimizeEffect::WarpMinimize,
             launch_animation: true,
             autohide: false,
-            autohide_delay: 0.2,
+            autohide_delay: 0.22,
             autohide_duration: 0.22,
             autohide_time_modifier: 1.0,
             distance_top: 6.0,

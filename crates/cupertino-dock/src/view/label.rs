@@ -436,6 +436,6 @@ mod tests {
     #[test]
     fn the_pointer_and_capsule_blend_over_no_more_than_a_third_of_the_pointer_so_it_still_tapers() {
         // a wider blend melts the pointer's narrowing layers into a blunt round blob under the capsule
-        assert!(GLASS_BLEND <= POINTER_WIDTH / 3.0, "{GLASS_BLEND}");
+        const { assert!(GLASS_BLEND <= POINTER_WIDTH / 3.0) };
     }
 }

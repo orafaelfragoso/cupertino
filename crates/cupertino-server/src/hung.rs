@@ -1,5 +1,8 @@
-//! Hung applications: every client that owns a mapped toplevel is pinged (`xdg_wm_base.ping`) once a second, and one that has
-//! not answered a ping for two seconds is unresponsive until it answers. The timing is [`Liveness`], pure and driven by the
+//! Hung applications: every client that owns a mapped toplevel is pinged (`xdg_wm_base.ping`) once a second while the
+//! person uses the desktop, and one that has not answered a ping for two seconds is unresponsive until it answers. A ping
+//! goes out only after input that came since the last one: on a desktop nobody touches, no event waits for an application
+//! to handle it, so nothing shows whether it hangs, and neither the server nor the applications wake for pings.
+//! The first input after a rest pings again at once. The timing is [`Liveness`], pure and driven by the
 //! model clock; [`Pings`] holds one per client and does the sending. What the person sees of it, the busy cursor over the
 //! windows and "Not Responding" in the dock, is built on [`Pings::unresponsive`].
 
@@ -22,9 +25,18 @@ pub struct Liveness {
 }
 
 impl Liveness {
-    /// A ping is due: none is outstanding and the interval has passed since the last.
-    pub fn ping_due(&self, now: f64) -> bool {
-        self.outstanding.is_none() && self.last_ping.is_none_or(|t| now - t >= PING_INTERVAL)
+    /// A ping is due: none is outstanding, the interval has passed since the last and input came after it (`input`: the
+    /// last input's time).
+    pub fn ping_due(&self, now: f64, input: Option<f64>) -> bool {
+        self.outstanding.is_none()
+            && self.last_ping.is_none_or(|t| now - t >= PING_INTERVAL)
+            && self.input_since_ping(input)
+    }
+
+    /// Whether input came since the last ping (or there was input and no ping yet). Input at the ping's own moment
+    /// counts, as the ping may have gone out before it: the last input is followed by one more ping.
+    fn input_since_ping(&self, input: Option<f64>) -> bool {
+        input.is_some_and(|i| self.last_ping.is_none_or(|t| i >= t))
     }
 
     pub fn pinged(&mut self, now: f64) {
@@ -54,11 +66,14 @@ impl Liveness {
     }
 
     /// When the clock next matters to this client: its next ping, or the moment an outstanding one makes it
-    /// unresponsive. `None` for a client never pinged (the next tick pings it) or already unresponsive.
-    pub fn next_deadline(&self) -> Option<f64> {
+    /// unresponsive. `None` for a client never pinged (the next tick pings it), one no input came for since its last
+    /// ping (input wakes the loop and pings it) or one already unresponsive.
+    pub fn next_deadline(&self, input: Option<f64>) -> Option<f64> {
         match (self.outstanding, self.last_ping) {
             (Some(sent), _) => (!self.unresponsive).then_some(sent + PONG_TIMEOUT),
-            (None, last) => last.map(|t| t + PING_INTERVAL),
+            (None, last) => last
+                .filter(|_| self.input_since_ping(input))
+                .map(|t| t + PING_INTERVAL),
         }
     }
 
@@ -81,9 +96,16 @@ pub struct Changed(pub bool);
 #[derive(Default)]
 pub struct Pings {
     watched: Vec<Watched>,
+    /// When the last input came (the model clock): pings go out only after it.
+    input: Option<f64>,
 }
 
 impl Pings {
+    /// Input came at `now` (any key, pointer or touch event): the clients are pinged again.
+    pub fn input(&mut self, now: f64) {
+        self.input = Some(now);
+    }
+
     /// Ping what is due among `clients` (those that own a mapped toplevel; duplicates are one) and forget the others.
     /// True when a client became unresponsive.
     pub fn tick(
@@ -109,7 +131,7 @@ impl Pings {
         }
         let mut changed = false;
         for w in &mut self.watched {
-            if w.liveness.ping_due(now) && w.client.send_ping(next_serial()).is_ok() {
+            if w.liveness.ping_due(now, self.input) && w.client.send_ping(next_serial()).is_ok() {
                 w.liveness.pinged(now);
             }
             changed |= w.liveness.check(now);
@@ -143,7 +165,7 @@ impl Pings {
     pub fn next_deadline(&self) -> Option<f64> {
         self.watched
             .iter()
-            .filter_map(|w| w.liveness.next_deadline())
+            .filter_map(|w| w.liveness.next_deadline(self.input))
             .reduce(f64::min)
     }
 
@@ -154,6 +176,13 @@ impl Pings {
 }
 
 impl crate::state::Cupertino {
+    /// Input came for the clients (a key, the pointer, a scroll; the person's, a script's or a controlling agent's):
+    /// they are pinged again.
+    pub fn input_came(&mut self) {
+        let now = self.now();
+        self.hung.input(now);
+    }
+
     /// Ping the clients that own a mapped toplevel and note those that do not answer (the model clock `now`).
     pub fn tick_hung(&mut self, now: f64) {
         let clients: Vec<ShellClient> = self
@@ -227,15 +256,20 @@ mod tests {
     #[test]
     fn the_clock_next_matters_at_the_next_ping_or_the_pong_timeout() {
         let mut l = Liveness::default();
-        assert_eq!(l.next_deadline(), None, "the next tick pings a new client");
+        let input = Some(10.0);
+        assert_eq!(
+            l.next_deadline(input),
+            None,
+            "the next tick pings a new client"
+        );
         l.pinged(10.0);
-        assert_eq!(l.next_deadline(), Some(10.0 + PONG_TIMEOUT));
+        assert_eq!(l.next_deadline(input), Some(10.0 + PONG_TIMEOUT));
         l.ponged();
-        assert_eq!(l.next_deadline(), Some(10.0 + PING_INTERVAL));
+        assert_eq!(l.next_deadline(input), Some(10.0 + PING_INTERVAL));
         l.pinged(11.0);
         assert!(l.check(11.0 + PONG_TIMEOUT));
         assert_eq!(
-            l.next_deadline(),
+            l.next_deadline(input),
             None,
             "an unresponsive client waits for its pong"
         );
@@ -244,16 +278,18 @@ mod tests {
     #[test]
     fn a_client_that_answers_is_pinged_every_second_and_never_unresponsive() {
         let mut l = Liveness::default();
-        assert!(l.ping_due(0.0), "the first ping is due at once");
+        // the person keeps using the desktop
+        let input = |now: f64| Some(now);
+        assert!(l.ping_due(0.0, input(0.0)), "the first ping is due at once");
         assert!(!l.awaiting_pong());
         l.pinged(0.0);
         assert!(l.awaiting_pong());
-        assert!(!l.ping_due(0.5), "one is outstanding");
+        assert!(!l.ping_due(0.5, input(0.5)), "one is outstanding");
         assert!(!l.check(1.9));
         assert!(!l.ponged());
         assert!(!l.awaiting_pong());
-        assert!(!l.ping_due(0.9), "the interval has not passed");
-        assert!(l.ping_due(1.0));
+        assert!(!l.ping_due(0.9, input(0.9)), "the interval has not passed");
+        assert!(l.ping_due(1.0, input(1.0)));
         l.pinged(1.0);
         assert!(!l.check(2.9) && !l.is_unresponsive());
         assert!(!l.ponged());
@@ -268,12 +304,33 @@ mod tests {
         assert!(!l.check(13.0), "reported once");
         assert!(l.is_unresponsive());
         assert!(
-            !l.ping_due(20.0),
+            !l.ping_due(20.0, Some(20.0)),
             "the ping is still outstanding: no second one"
         );
         assert!(l.ponged(), "it answered at last");
         assert!(!l.is_unresponsive());
         assert!(!l.ponged());
-        assert!(l.ping_due(20.0), "pinging goes on");
+        assert!(l.ping_due(20.0, Some(20.0)), "pinging goes on");
+    }
+
+    #[test]
+    fn a_desktop_nobody_touches_pings_no_one_and_the_first_input_pings_at_once() {
+        let mut l = Liveness::default();
+        assert!(!l.ping_due(5.0, None), "no input yet");
+        assert!(l.ping_due(5.0, Some(4.0)));
+        l.pinged(5.0);
+        l.ponged();
+        // the last input came before the ping: the desktop rests
+        for now in [6.0, 10.0, 600.0] {
+            assert!(!l.ping_due(now, Some(4.0)), "{now}");
+        }
+        assert_eq!(l.next_deadline(Some(4.0)), None, "nothing to wake for");
+        // the person comes back
+        assert!(l.ping_due(600.0, Some(600.0)));
+        assert_eq!(l.next_deadline(Some(600.0)), Some(5.0 + PING_INTERVAL));
+        l.pinged(600.0);
+        assert_eq!(l.next_deadline(Some(600.0)), Some(600.0 + PONG_TIMEOUT));
+        // an outstanding ping times out whether or not input comes
+        assert!(l.check(600.0 + PONG_TIMEOUT));
     }
 }

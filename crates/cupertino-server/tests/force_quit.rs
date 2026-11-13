@@ -94,9 +94,12 @@ impl Harness {
         self.advance_without_pong(seconds);
     }
 
-    /// Deliberately let unanswered pings time out when exercising an unresponsive client.
+    /// Deliberately let unanswered pings time out when exercising an unresponsive client; the person uses the desktop
+    /// meanwhile, so the pings go out.
     fn advance_without_pong(&mut self, seconds: f64) {
         self.now += seconds;
+        self.state.fixed_time = Some(self.now);
+        self.state.input_came();
         self.settle();
     }
 

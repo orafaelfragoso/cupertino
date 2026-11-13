@@ -127,6 +127,7 @@ impl Cupertino {
     /// Input arrived (any key, pointer or touch event): restart the idle countdowns and wake the display.
     pub fn input_activity(&mut self) {
         self.idle.notifier.notify_activity(&self.seat);
+        self.input_came();
         let now = self.now();
         let effects = self.power.policy.input(now);
         self.apply_power_effects(effects);

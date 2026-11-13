@@ -1,6 +1,6 @@
-//! Hung applications against a headless compositor and a client on its socket: the client is pinged, answers, goes silent,
-//! is unresponsive two seconds after the ping it does not answer (the busy cursor shows over its window) and is responsive
-//! again when it answers. The model clock stands still in these tests and moves where the test moves it. Tests skip (pass)
+//! Hung applications against a headless compositor and a client on its socket: the client is pinged while the desktop is
+//! used, answers, goes silent, is unresponsive two seconds after the ping it does not answer (the busy cursor shows over
+//! its window) and is responsive again when it answers; a desktop nobody uses pings no one. The model clock stands still in these tests and moves where the test moves it. Tests skip (pass)
 //! when no EGL device is available.
 
 use crate::common;
@@ -85,8 +85,16 @@ impl Harness {
         client
     }
 
-    /// Move the model clock on by `seconds`, a few steps so that every tick sees it.
+    /// Move the model clock on by `seconds`, a few steps so that every tick sees it, the person using the desktop.
     fn advance(&mut self, seconds: f64) {
+        self.now += seconds;
+        self.state.fixed_time = Some(self.now);
+        self.state.input_came();
+        self.settle();
+    }
+
+    /// Move the model clock on by `seconds` with nobody using the desktop.
+    fn rest(&mut self, seconds: f64) {
         self.now += seconds;
         self.settle();
     }
@@ -156,6 +164,32 @@ fn a_client_that_stops_answering_is_unresponsive_two_seconds_after_the_ping_and_
     client.mute(false);
     h.settle();
     assert!(!h.state.window_is_unresponsive(id), "it answers at last");
+}
+
+#[test]
+fn a_desktop_nobody_uses_pings_no_one_and_the_first_input_pings_at_once() {
+    let Some(mut h) = Harness::new() else { return };
+    let (client, id) = mapped_window(&mut h);
+    h.advance(1.1);
+    // the ping that follows the last input, answered
+    h.rest(1.1);
+    client.mute(true);
+    // nobody touches the desktop: no ping goes out, so none waits for an answer, and the clock has nothing to wake the
+    // server for
+    for _ in 0..4 {
+        h.rest(1.1);
+        assert!(!h.state.hung.awaiting_pong());
+        assert!(!h.state.window_is_unresponsive(id));
+    }
+    assert_eq!(h.state.hung.next_deadline(), None);
+    // the person comes back: a ping goes out at once, and the silent client is unresponsive two seconds later
+    h.advance(0.1);
+    assert!(h.state.hung.awaiting_pong());
+    h.rest(2.1);
+    assert!(h.state.window_is_unresponsive(id));
+    client.mute(false);
+    h.settle();
+    assert!(!h.state.window_is_unresponsive(id));
 }
 
 #[test]

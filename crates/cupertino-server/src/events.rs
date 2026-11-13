@@ -465,6 +465,7 @@ impl Cupertino {
         state: KeyState,
         time: u32,
     ) {
+        self.input_came();
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         let pressed = state == KeyState::Pressed;
@@ -971,6 +972,7 @@ impl Cupertino {
         rel: Option<RelativeMotionEvent>,
     ) {
         crate::frame_stats::note_input(self);
+        self.input_came();
         let pos = match self.constrain_motion(pos) {
             Some(Constrained::Locked) => {
                 // the pointer stays; the client gets the motion as relative motion only
@@ -1098,6 +1100,7 @@ impl Cupertino {
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         crate::frame_stats::note_input(self);
+        self.input_came();
         if !self.control_physical_transition(
             cupertino_control_model::Input::Button(button),
             state == ButtonState::Pressed,
@@ -1476,6 +1479,7 @@ impl Cupertino {
     /// `wl_pointer.frame`, with the scroll count of a touchpad scroll before the frame.
     pub fn pointer_axis(&mut self, input: &AxisInput) {
         crate::frame_stats::note_input(self);
+        self.input_came();
         self.key_filters.super_tap.disturb();
         // A wheel notch (120 v120 units) scrolls three lines. Finger scrolling of a
         // device with a scroll resolution (the touchpad's counts) is accelerated; other sources,

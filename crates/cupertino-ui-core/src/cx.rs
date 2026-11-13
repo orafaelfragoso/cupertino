@@ -356,6 +356,8 @@ pub struct PaintCx<'a> {
     pub(crate) reads_obscured: &'a mut bool,
     /// The window system draws raised nodes in a layer of their own, with their glass ([`PaintCx::raised_layer`]).
     pub(crate) layer: bool,
+    /// The node draws in that layer.
+    pub(crate) in_layer: bool,
     /// What nodes of the window told each other so far ([`PaintCx::page_scrolled`]).
     pub(crate) marks: crate::paint::WindowMarks,
     /// The appearance the node asked its subtree to draw in ([`PaintCx::pin_appearance`]).
@@ -439,6 +441,13 @@ impl PaintCx<'_> {
     /// place, and what scrolls under them is clipped away.
     pub fn raised_layer(&self) -> bool {
         self.layer
+    }
+
+    /// Whether the node draws in the window's raised layer ([`raised_layer`](Self::raised_layer)): it or an ancestor is
+    /// raised and the window system shows the layer, so the glass it asks for lies over the rest of the window and shows
+    /// the window's own content through it.
+    pub fn in_raised_layer(&self) -> bool {
+        self.in_layer
     }
 
     /// A scroll view tells the window whether its page is scrolled under the window's raised nodes. A node that does

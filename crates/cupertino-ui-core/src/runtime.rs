@@ -2730,6 +2730,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         })
     }
 
+    /// What `window`'s raised layer drew last: the raised nodes ([`Widget::raised`]) the window system shows over
+    /// the window's content; empty while it shows no layer.
+    pub fn layer_display_list(&self, window: WindowId) -> Option<DisplayList> {
+        let w = self.windows.iter().find(|w| w.id == window)?;
+        Some(w.layer.list.clone())
+    }
+
     /// The windows the application has open, in its view's order.
     pub fn windows(&self) -> Vec<(WindowKey, WindowId)> {
         self.windows

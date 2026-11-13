@@ -842,6 +842,7 @@ impl Painter {
                         obscured,
                         reads_obscured: &mut reads_obscured,
                         layer: input.layer,
+                        in_layer: raised && input.layer,
                         marks,
                         reads_marks: &mut reads_marks,
                         set_page_scrolled: &mut set_scrolled,

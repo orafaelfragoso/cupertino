@@ -18,7 +18,7 @@
 pub const TRACKING_INTERVAL: f64 = 0.5;
 
 /// How long a submenu's row stays highlighted before the submenu opens (seconds).
-pub const SUBMENU_OPEN_DELAY: f64 = 0.2;
+pub const SUBMENU_OPEN_DELAY: f64 = 0.35;
 
 /// The grace of the way into an open submenu: how long the pointer may rest on it, over any row, before the row under
 /// it takes over and the submenu closes (seconds). Off the way, another row takes over at once.
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn a_submenu_opens_after_a_short_dwell_and_the_way_into_it_holds_for_the_grace() {
-        assert_eq!(SUBMENU_OPEN_DELAY, 0.2);
+        assert_eq!(SUBMENU_OPEN_DELAY, 0.35);
         assert_eq!(SUBMENU_AIM_PAUSE, 0.375);
         let mut aim = SubmenuAim::default();
         aim.moved((60.0, 12.0), 0.0, Some(EDGE));

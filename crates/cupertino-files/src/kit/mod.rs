@@ -1104,11 +1104,14 @@ impl Model {
         if let Some(failure) = failure {
             session.jobs.failed(failure);
         }
+        let mut commands = Vec::new();
         if let Some(window) = self.windows.get_mut(&origin) {
             window.announcement.say(announce::About::Transfer, text);
             let here = |p: &Path| p.parent() == Some(window.browser.dir());
             match outcome.folder.clone() {
-                Some(folder) if here(&folder) => window.rename_new_folder(folder),
+                Some(folder) if here(&folder) => {
+                    commands = window.rename_new_folder(origin, folder)
+                }
                 Some(_) => {}
                 None => {
                     if let Some(path) = outcome.arrived().filter(|p| here(p)) {
@@ -1125,9 +1128,10 @@ impl Model {
             // the first item trashed makes the trash, and the last one deleted leaves it empty: its place comes at once
             session.follow_places();
         }
-        drop.map(|token| Command::FinishDrop(token, dropped(&transfer.work, &outcome)))
-            .into_iter()
-            .collect()
+        commands.extend(
+            drop.map(|token| Command::FinishDrop(token, dropped(&transfer.work, &outcome))),
+        );
+        commands
     }
 
     fn window_event(&mut self, id: u64, event: Event) -> Vec<Command<Message>> {
@@ -1611,7 +1615,7 @@ impl Model {
             MenuAction::MoveToTrash => window.trash_selection(session),
             MenuAction::PutBack => window.put_back(session),
             MenuAction::NewFolder => match operations::new_folder(window.browser.dir()) {
-                Ok(path) => window.rename_new_folder(path),
+                Ok(path) => return window.rename_new_folder(id, path),
                 Err(e) => session.failed(Action::NewFolder, &[], &e),
             },
             MenuAction::Rename => {
@@ -2753,10 +2757,12 @@ impl BrowserWindow {
         }
     }
 
-    /// A folder was made: the list selects it when it shows it, and its name is edited then.
-    fn rename_new_folder(&mut self, path: PathBuf) {
+    /// A folder was made in window `id`: the list selects it and its name is edited, at once when the list shows it
+    /// already (its folder was read again before the operation's end arrived) and otherwise when it does.
+    fn rename_new_folder(&mut self, id: u64, path: PathBuf) -> Vec<Command<Message>> {
         self.browser.select_when_appears(path.clone());
         self.rename_when_listed = Some(path);
+        self.listed(id)
     }
 
     /// Edit the name of item `index` in its row, if it is the only selected item. The field of the window `id` is

@@ -655,6 +655,48 @@ fn new_folder_with_selection_moves_the_items_beside_the_window_then_edits_the_fo
 }
 
 #[test]
+fn a_new_folder_with_selection_listed_before_its_move_ends_still_edits_its_name() {
+    // the move waits after its last item until the window lists the new folder, so the end arrives after the listing
+    let gate = Gate::new();
+    let (reached, waits) = mpsc::channel();
+    let held = Arc::clone(&gate);
+    let reached = Mutex::new(Some(reached));
+    let observer: Observer = Arc::new(move |progress| {
+        if progress.total_items == 0 || progress.items < progress.total_items {
+            return;
+        }
+        if let Some(reached) = reached.lock().unwrap().take() {
+            let _ = reached.send(());
+        }
+        let open = held.open.lock().unwrap();
+        let _open = held
+            .opened
+            .wait_timeout_while(open, Duration::from_secs(20), |open| !*open)
+            .unwrap();
+    });
+    let mut run = window(Notices::start(None), |start| {
+        start.with_transfer_observer(observer)
+    });
+    let documents = run.home().join("Documents");
+    std::fs::write(documents.join("a.txt"), "a").unwrap();
+    run.wait_until(|run| run.rows().len() == 3);
+    run.click_row("a.txt");
+    run.click_row_with("big.bin", Mods::SHIFT);
+    run.menu("new-folder-with-selection");
+    waits
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the move ended its last item");
+    run.wait_until(|run| run.rows() == ["Notes", "untitled folder"]);
+    gate.release();
+    run.wait_until(|run| {
+        let runtime = run.driver.runtime();
+        runtime
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some()
+    });
+}
+
+#[test]
 fn a_drop_of_the_windows_own_items_held_while_it_copies_does_not_make_other_drags_its_own() {
     use cupertino_kit::geometry::Point;
     use cupertino_kit::platform::{

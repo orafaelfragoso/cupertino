@@ -28,15 +28,15 @@ use smithay::wayland::shell::wlr_layer::{Anchor, Layer};
 
 use super::compose::SnapshotKeep;
 use super::compose::{
-    corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
-    Picture, Piece, Tree, TreeSlice,
+    corner_style, image_piece, item, logical_rect, output_rect, Composed, Composition, Material,
+    MeshPiece, Picture, Piece, Tree, TreeSlice,
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
 use super::material::glass::{
     backdrop_generation, BackdropRecord, Below, GlassContainer, ToneProbe,
 };
-use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
+use super::material::{GpuRecipe, MaterialMask, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{
     cross_fade_opacity, skips_frame_animation, skips_sheet_slide, WorkspaceTransition,
@@ -1147,19 +1147,31 @@ fn window_elements(
             cropped_backdrops(areas, visual_local)
         };
         let mut pieces = backdrop_elements(p, &areas, alpha, state);
-        for piece in &mut pieces {
-            if let Piece::Glass(g) = piece {
-                g.glass = Rc::new((*g.glass).clone().within(within));
-            }
-        }
         // a square backdrop follows the window's rounded corners where it reaches them, as the content does
-        if matches!(clip, Clip::Rounded { .. }) {
-            for piece in &mut pieces {
-                if let Piece::Material(m) = piece {
-                    if m.radius <= 0.0 {
-                        m.clip = clip;
-                    }
+        let outline = match clip {
+            Clip::Rounded {
+                rect,
+                radius,
+                style,
+                ..
+            } => Some(MaterialMask {
+                rect: logical_rect(rect),
+                radius_pt: radius,
+                continuous: !style.is_circular(),
+            }),
+            _ => None,
+        };
+        for piece in &mut pieces {
+            match piece {
+                Piece::Glass(g) => {
+                    let glass = (*g.glass).clone().within(within);
+                    g.glass = Rc::new(match outline {
+                        Some(mask) => glass.masked(mask),
+                        None => glass,
+                    });
                 }
+                Piece::Material(m) if outline.is_some() && m.radius <= 0.0 => m.clip = clip,
+                _ => {}
             }
         }
         pieces

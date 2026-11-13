@@ -28,6 +28,8 @@ layout(std140) uniform Glass {
     vec4 shapes[16];
     vec4 shape_a[16]; // corner extent, refraction strength, refraction band, bleed fraction
     vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
+    vec4 cut;         // the outline the container is cut to: x, y, w, h
+    vec4 cut_shape;   // its corner extent, corner exponent, 1 when cut, 0
 } G;
 
 uniform sampler2D u_level0;
@@ -215,14 +217,22 @@ vec4 outside(vec2 p, float d, float pos) {
     return vec4(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
 }
 
+// the share of the pixel inside the outline the container is cut to: all of it when it is not cut
+float cut_coverage(vec2 p) {
+    if (G.cut_shape.z <= 0.0) { return 1.0; }
+    return clamp(0.5 - rect_sdf(p, G.cut, G.cut_shape.x, G.cut_shape.y) / G.info.z, 0.0, 1.0);
+}
+
 void main() {
     vec2 p = v_px;
+    float kept = cut_coverage(p);
+    if (kept <= 0.0) { discard; }
     vec4 fa;
     vec4 fb;
     float d = field(p, fa, fb);
     if (d > 0.5) {
         vec4 o = outside(p, d, fb.z);
-        float a = o.a * G.info.w;
+        float a = o.a * G.info.w * kept;
         if (a <= 0.0) { discard; }
         frag_color = vec4(o.rgb, a);
         return;
@@ -301,5 +311,5 @@ void main() {
     float under = (1.0 - cov) * o.a;
     float a = cov + under;
     c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + o.rgb * under) / a : c;
-    frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), a * G.info.w);
+    frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), a * G.info.w * kept);
 }

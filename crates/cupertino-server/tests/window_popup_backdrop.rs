@@ -16,11 +16,14 @@ use std::time::{Duration, Instant};
 use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::{
     CupertinoAppEffectsV1, TitlebarStyle,
 };
-use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
+use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{
+    CupertinoBackdropV1, GlassStyle,
+};
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
+use cupertino_theme::recipe::WINDOW_BACKGROUND_MATERIAL;
 use cupertino_wm::{Command, Rect};
 use smithay::backend::input::ButtonState;
 use smithay::input::pointer::CursorImageStatus;
@@ -302,6 +305,13 @@ struct App {
 
 impl App {
     fn spawn(socket: PathBuf, sidebar: Option<f64>) -> App {
+        Self::spawn_with(socket, sidebar, false, None)
+    }
+
+    /// The same app whose sidebar backdrop is sidebar glass rather than the material when `glass`. With `split` (a width
+    /// in points) the sidebar covers only that much of the window's left and the content's window background backdrop
+    /// begins where it ends, as in a sidebar window.
+    fn spawn_with(socket: PathBuf, sidebar: Option<f64>, glass: bool, split: Option<i32>) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -316,7 +326,9 @@ impl App {
             let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=5, ()).unwrap();
             let decorations: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
                 globals.bind(&qh, 1..=1, ()).unwrap();
-            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals
+                .bind(&qh, if glass { 18..=18 } else { 1..=1 }, ())
+                .unwrap();
             let window = compositor.create_surface(&qh, ());
             let window_xdg = wm_base.get_xdg_surface(&window, &qh, ());
             let toplevel = window_xdg.get_toplevel(&qh, ());
@@ -328,8 +340,18 @@ impl App {
             effects.set_titlebar_style(&window, TitlebarStyle::Unified);
             let mut backdrop = sidebar.map(|radius| {
                 let b: CupertinoBackdropV1 = effects.get_backdrop(&window, &qh, ());
-                b.set_material("Sidebar".into());
-                b.set_shape(0, 0, SIZE.0 as i32, SIZE.1 as i32, radius);
+                if glass {
+                    b.set_glass(GlassStyle::Sidebar, 0, 0.0);
+                } else {
+                    b.set_material("Sidebar".into());
+                }
+                b.set_shape(0, 0, split.unwrap_or(SIZE.0 as i32), SIZE.1 as i32, radius);
+                b
+            });
+            let content = split.map(|w| {
+                let b: CupertinoBackdropV1 = effects.get_backdrop(&window, &qh, ());
+                b.set_material(WINDOW_BACKGROUND_MATERIAL.into());
+                b.set_shape(w, 0, SIZE.0 as i32 - w, SIZE.1 as i32, 0.0);
                 b
             });
             let sidebar = sidebar.is_some();
@@ -369,7 +391,7 @@ impl App {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if let Some(b) = backdrop {
+            for b in backdrop.into_iter().chain(content) {
                 b.destroy();
             }
         });
@@ -493,12 +515,23 @@ fn a_minimizing_window_keeps_its_material_where_it_is_otherwise_transparent() {
 
 #[test]
 fn a_square_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners() {
+    square_backdrop_follows_the_rounded_corners(false);
+}
+
+#[test]
+fn a_square_glass_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners() {
+    square_backdrop_follows_the_rounded_corners(true);
+}
+
+/// A square sidebar backdrop (`glass` or the material) over the whole window is cut to the window's rounded corners
+/// and drawn up to its edges past them.
+fn square_backdrop_follows_the_rounded_corners(glass: bool) {
     for scale in [1.0, 1.5] {
         let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
             return;
         };
         h.state.cursor_status = CursorImageStatus::Hidden;
-        let _app = App::spawn(h.socket_path(), Some(0.0));
+        let _app = App::spawn_with(h.socket_path(), Some(0.0), glass, None);
         h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
         let t = h.state.now() + 5.0;
         common::set_time(&mut h.state, &mut h.event_loop, t);
@@ -547,6 +580,48 @@ fn a_square_backdrop_over_the_whole_window_follows_the_window_s_rounded_corners(
                 differs(edge, beside) > 24,
                 "at {scale}x the material reaches the bottom edge past the corner: {edge:?} over {beside:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn a_window_s_sidebar_glass_meets_the_content_s_backdrop_with_no_line_between_them() {
+    // a sidebar 161 points wide ends half way across a device pixel at 1.5, and on whole pixels at 1 and 2
+    for (scale, width) in [(1.0, 161), (1.5, 160), (1.5, 161), (2.0, 161)] {
+        let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
+            return;
+        };
+        h.state.cursor_status = CursorImageStatus::Hidden;
+        let _app = App::spawn_with(h.socket_path(), Some(0.0), true, Some(width));
+        h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+        let t = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, t);
+        h.state.tick();
+        h.step(20);
+        let id = h.state.wm.key_window().expect("a key window");
+        let frame = h.state.wm.window(id).unwrap().geometry();
+        let shot = h.screenshot();
+        let edge = ((frame.x + f64::from(width)) * scale).round() as u32;
+        let luma = |x: u32, y: u32| {
+            let p = shot.get_pixel(x, y).0;
+            0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2])
+        };
+        // down the middle of the window, the pixels across the boundary: the glass's last two and the content's first
+        // two lie between the glass a little way in and the content a little way in
+        for y in [0.3, 0.5, 0.7] {
+            let y = ((frame.y + frame.h * y) * scale) as u32;
+            let row: Vec<f64> = (edge - 3..edge + 3).map(|x| luma(x, y)).collect();
+            let (glass, content) = (row[0], row[5]);
+            let (lo, hi) = (glass.min(content), glass.max(content));
+            eprintln!("{scale}x {width}: {row:.1?}");
+            for (i, l) in row[1..5].iter().enumerate() {
+                assert!(
+                    *l >= lo - 6.0 && *l <= hi + 6.0,
+                    "at {scale}x with a sidebar {width} points wide the pixel {} from the boundary is {l:.1}, \
+                     outside the glass's {glass:.1} and the content's {content:.1}: {row:.1?}",
+                    i as i32 - 2
+                );
+            }
         }
     }
 }

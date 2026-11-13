@@ -22,6 +22,8 @@ struct Glass {
   shapes: array<vec4<f32>, 16>,
   shape_a: array<vec4<f32>, 16>, // corner extent, refraction strength, refraction band, bleed fraction
   shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
+  cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
+  cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut, 0
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -226,14 +228,22 @@ fn outside(p: vec2<f32>, d: f32, pos: f32) -> vec4<f32> {
   return vec4<f32>(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
 }
 
+// the share of the pixel inside the outline the container is cut to: all of it when it is not cut
+fn cut_coverage(p: vec2<f32>) -> f32 {
+  if (G.cut_shape.z <= 0.0) { return 1.0; }
+  return clamp(0.5 - rect_sdf(p, G.cut, G.cut_shape.x, G.cut_shape.y) / G.info.z, 0.0, 1.0);
+}
+
 @fragment
 fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let p = fin.px;
+  let kept = cut_coverage(p);
+  if (kept <= 0.0) { discard; }
   let f = field(p);
   let d = f.d;
   if (d > 0.5) {
     let o = outside(p, d, f.b.z);
-    let a = o.a * G.info.w;
+    let a = o.a * G.info.w * kept;
     if (a <= 0.0) { discard; }
     return vec4<f32>(o.rgb, a);
   }
@@ -313,5 +323,5 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   let a = cov + under;
   var rgb = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
   if (a > 0.0) { rgb = (rgb * cov + o.rgb * under) / a; }
-  return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a * G.info.w);
+  return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a * G.info.w * kept);
 }

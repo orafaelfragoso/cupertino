@@ -570,8 +570,6 @@ const SIDEBAR_REFRACTION_HEIGHT: f32 = 12.0;
 const SIDEBAR_RIM: f32 = 0.5;
 const SIDEBAR_RIM_BIAS: f32 = -0.188;
 const SIDEBAR_RING_OPACITY: f32 = 0.06;
-/// The edge line of dark sidebar glass (the light one keeps regular glass's).
-const SIDEBAR_EDGE_LINE_DARK: f32 = 0.4;
 
 /// The face of sidebar glass. Light: the regular light face with white a little past 1, the luma compressed to 0.85,
 /// clamped at 1.07, under a white veil of 0.2. Dark: little colour (0.6), black 0.1 and white dimmed to 0.5, no veil.
@@ -1359,9 +1357,8 @@ impl GlassParams {
         p.highlight.color_bias = SIDEBAR_RIM_BIAS;
         p.highlight.glow_amount = 0.0;
         p.shadow.ring_opacity = SIDEBAR_RING_OPACITY;
-        if dark {
-            p.shadow.edge_line = SIDEBAR_EDGE_LINE_DARK;
-        }
+        // no line outside the outline: the sidebar meets the window's content there, which a line would mark
+        p.shadow.edge_line = 0.0;
         p
     }
 
@@ -2359,13 +2356,16 @@ mod tests {
                 (-24.0, 12.0)
             );
             assert_eq!(sidebar.shadow.ring_opacity, 0.06);
+            assert_eq!(
+                sidebar.shadow.edge_line, 0.0,
+                "no line where it meets the content"
+            );
             let f = sidebar.face;
             if dark {
                 assert_eq!(
                     (f.saturation, f.black, f.white, f.fill[3]),
                     (0.6, 0.1, 0.5, 0.0)
                 );
-                assert_eq!(sidebar.shadow.edge_line, 0.4);
             } else {
                 assert_eq!(
                     (f.saturation, f.black, f.white, f.max_luma),

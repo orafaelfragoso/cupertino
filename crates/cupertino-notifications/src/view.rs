@@ -1489,6 +1489,19 @@ fn centre_window<M: Clone + 'static>(
     // header or past the bottom edge
     let list_top = layout.top_inset + HEADER_HEIGHT;
     let slide = ui.slide.offset(now);
+    // where a card or a sheet lies in the halo layer: a halo is kept off every one of them, as their glass lies under
+    // the layer and the reading of a card's face must not depend on its neighbours
+    let in_layer = |rect: Rect| {
+        let top = list_top + rect.y() - scroll.offset.y;
+        Rect::new(rect.x() + slide, top, rect.width(), rect.height())
+    };
+    let spots: Vec<Rect> = cards
+        .iter()
+        .filter_map(|piece| match piece {
+            Piece::Card(c) | Piece::Sheet(c) if c.opacity > 0.0 => Some(in_layer(c.rect)),
+            _ => None,
+        })
+        .collect();
     let halos: Vec<Element<M>> = cards
         .iter()
         .filter_map(|piece| match piece {
@@ -1496,7 +1509,8 @@ fn centre_window<M: Clone + 'static>(
             _ => None,
         })
         .filter_map(|c| {
-            let top = list_top + c.rect.y() - scroll.offset.y;
+            let rect = in_layer(c.rect);
+            let top = rect.y();
             let bottom = top + c.rect.height();
             let viewport = scroll.viewport.height;
             let above = ((bottom - list_top) / HALO_FADE).clamp(0.0, 1.0);
@@ -1507,9 +1521,16 @@ fn centre_window<M: Clone + 'static>(
             };
             let visible = above.min(below) * c.opacity;
             (visible > 0.0).then(|| {
+                let reach = rect.outset(SHADOW_REACH);
+                let others = spots
+                    .iter()
+                    .filter(|r| **r != rect && r.intersects(&reach))
+                    .map(|r| r.translate(-rect.x(), -rect.y()))
+                    .collect();
                 Element::new(Halo {
-                    rect: Rect::new(c.rect.x() + slide, top, c.rect.width(), c.rect.height()),
+                    rect,
                     opacity: visible,
+                    others,
                 })
                 .key(format!("halo-{}", c.id))
             })
@@ -2528,6 +2549,8 @@ fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow
 struct Halo {
     rect: Rect,
     opacity: f64,
+    /// The other cards and sheets within its reach, from its corner: it is kept off them, as their glass lies under it.
+    others: Vec<Rect>,
 }
 
 impl<M: 'static> Widget<M> for Halo {
@@ -2548,7 +2571,7 @@ impl<M: 'static> Widget<M> for Halo {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.rect != old.rect {
             Change::Layout
-        } else if self.opacity != old.opacity {
+        } else if self.opacity != old.opacity || self.others != old.others {
             Change::Paint
         } else {
             Change::None
@@ -2570,6 +2593,15 @@ impl<M: 'static> Widget<M> for Halo {
         };
         let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
         cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
+        let radius_of = |r: &Rect| CORNER_RADIUS.min(r.height() / 2.0);
+        for other in &self.others {
+            let mut cut = rounded_path(rect.outset(SHADOW_REACH).union(other), 0.0);
+            cut.extend(rounded_path(*other, radius_of(other)));
+            cx.push(PaintOp::PushClip(Shape::Path {
+                verbs: cut,
+                fill_rule: FillRule::EvenOdd,
+            }));
+        }
         paint_halo(
             cx,
             rect,
@@ -2581,6 +2613,9 @@ impl<M: 'static> Widget<M> for Halo {
                 color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
             },
         );
+        for _ in &self.others {
+            cx.push(PaintOp::PopClip);
+        }
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

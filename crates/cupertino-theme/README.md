@@ -98,7 +98,9 @@ flag and its Increase Contrast option.
   4×5 matrix per appearance; `adapts_foreground` tells which controls (shorter side under 64 pt) take it. The bar
   (`GlassStyle::Bar`, the dock) blurs with a radius of 2.761 pt, bends 8.64 over a 3.84 pt band, and its face takes
   saturation 1.25, black 0.15 and white 0.9 (light) or black 0.05, white 0.92, a luma cap of 0.75 and a faint black veil
-  (dark), with a soft light along the ends of its long axis. Dense glass (`GlassStyle::Dense`, menus and popovers) is
+  (dark), with a thin line of light along its top and bottom edges over a wide faint glow and a dark hairline outside
+  its ends. Popover glass (`GlassStyle::Popover`, a floating bar's names and menus) has no blur of its own, only a
+  16 pt blur fill, bends 24 over a 5 pt band and lights its top and bottom as the bar does. Dense glass (`GlassStyle::Dense`, menus and popovers) is
   the regular recipe of its size over a face pressed to a mid grey veil (a bright backdrop comes out near 125 in the
   dark appearance, a pastel of the backdrop in the light one). Module glass (`GlassStyle::Module`, the control panel's
   tiles) is clear glass of its size bending by 80 over a band of 0.225 of its short side (at most 18 pt) with a rim

@@ -57,7 +57,7 @@ pub enum GlassStyle {
     /// the scene behind it, and a broad drop shadow of its own.
     LargePanel,
     /// The glass of a floating bar of icons (the dock): a narrow blur, a little more colour, a thin bending edge and a
-    /// soft light along the ends of its long axis, over a face that lifts black a little and dims white a little.
+    /// thin line of light along its top and bottom edges, over a face that lifts black a little and dims white a little.
     Bar,
     /// The glass of a dense floating surface with text on it (a menu, a popover): regular glass over a face pressed to
     /// a mid grey veil, so any backdrop reads as a quiet smoky pane under light text.

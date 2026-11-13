@@ -163,7 +163,7 @@
       <entry name="regular" value="0" summary="the frosted glass of bars, menus, panels and controls"/>
       <entry name="clear" value="1" summary="the clearer glass of controls over rich content, such as media"/>
       <entry name="large_panel" value="2" summary="the regular glass of a large floating panel: its face toned further towards the middle (a lower white, a lifted black, a little less colour), with a soft drop shadow below it" since="10"/>
-      <entry name="bar" value="3" summary="the glass of a floating bar of icons: a narrow blur, a thin bending edge and a soft light along the ends of its long axis, over a face with a little more colour, black lifted and white dimmed a little" since="12"/>
+      <entry name="bar" value="3" summary="the glass of a floating bar of icons: a narrow blur, a thin bending edge and a thin line of light along its top and bottom edges, over a face with a little more colour, black lifted and white dimmed a little" since="12"/>
       <entry name="dense" value="4" summary="the glass of a dense floating surface with text on it, a menu, a popover or a card: regular glass over a face pressed to a mid grey veil" since="13"/>
       <entry name="module" value="5" summary="the glass of the tiles of a panel of modules: the clear glass face, which keeps the scene's colour, under a wide blur and a strong bending edge, light in the light appearance and dark in the dark one" since="13"/>
       <entry name="card" value="6" summary="the glass of a notification card: the clear glass face over a wide blur and a blur fill, a bending edge and a faint ring shadow inside the outline" since="15"/>

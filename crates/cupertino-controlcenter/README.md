@@ -83,9 +83,11 @@ panel.
 **Detail views.** The tile grows into the view on a critically damped spring (response 0.35 s, settled by 0.6 s,
 `motion::spring`): its frame moves from its cell to the top of the grid, 292 pt wide and as high as its list (at most the
 grid's 444 pt), its corners go to 32 pt, the other tiles and Edit Controls fade out over the first quarter of the motion
-(the glass lies under all of the window's content, so the growing tile cannot hide what it passes over), and the tile's
+(the glass lies under all of the window's content, so the growing tile cannot hide what it passes over) on subdued
+module glass (`Glass::subdued_module`: twice the blur, a flat, quieter face), since they lie behind the view and take
+no presses while it is open, and the tile's
 content gives way to the view's at halfway. Closing runs the same way back, from wherever the motion is. With Reduce Motion the tile fades out
-in place and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
+in place on subdued glass and the view fades in at its place over 0.2 s. The view shows the module's switch or level, a heading, the list
 (Wi-Fi networks with a check on the connected one and a lock on secured ones; Bluetooth devices; the keyboard backlight;
 sound outputs with a check on the current one) and a row that opens the module's settings page. Escape or a press
 outside the view closes it; a second Escape dismisses the panel, also while the view is still closing. When the keyboard or assistive technology opened the

@@ -852,6 +852,9 @@ struct GlassTile<M> {
     panel: f64,
     /// The tile's own opacity, glass and content.
     alpha: f64,
+    /// Whether the tile lies behind an expanded module: its glass is the quieter subdued module glass then, flat
+    /// across its face, rather than the module glass of a tile that takes presses.
+    subdued: bool,
     light: bool,
     children: Vec<Element<M>>,
 }
@@ -943,10 +946,15 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
             });
             return;
         }
-        let shape = if self.capsule {
-            Glass::module().capsule()
+        let glass = if self.subdued {
+            Glass::subdued_module()
         } else {
-            Glass::module().radius(radius)
+            Glass::module()
+        };
+        let shape = if self.capsule {
+            glass.capsule()
+        } else {
+            glass.radius(radius)
         };
         let glass = shape
             .container(CONTAINER, BLEND)
@@ -1615,6 +1623,19 @@ impl<M: Clone + 'static> Builder<'_, M> {
         alpha: f64,
         children: Vec<Element<M>>,
     ) -> Element<M> {
+        self.glass_tile(label, frame, outline, alpha, false, children)
+    }
+
+    /// A glass tile at `frame` in the grid, on subdued module glass when `subdued`.
+    fn glass_tile(
+        &self,
+        label: &str,
+        frame: Rect,
+        outline: Outline,
+        alpha: f64,
+        subdued: bool,
+        children: Vec<Element<M>>,
+    ) -> Element<M> {
         let frame = frame.translate(GRID_ORIGIN.x, GRID_ORIGIN.y);
         Element::new(GlassTile {
             label: label.to_owned(),
@@ -1623,6 +1644,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
             capsule: outline == Outline::Capsule,
             panel: self.presentation.alpha,
             alpha,
+            subdued,
             light: self.presentation.light,
             children,
         })
@@ -2197,17 +2219,18 @@ impl<M: Clone + 'static> Builder<'_, M> {
         )
     }
 
-    /// The Edit Controls capsule under the grid.
-    fn edit(&self, alpha: f64) -> Element<M> {
+    /// The Edit Controls capsule under the grid, on subdued glass when `subdued`.
+    fn edit(&self, alpha: f64, subdued: bool) -> Element<M> {
         let frame = layout::edit_frame();
         let origin = frame.origin;
         let origin = Point::new(origin.x + GRID_ORIGIN.x, origin.y + GRID_ORIGIN.y);
         let size = frame.size;
-        self.tile(
+        self.glass_tile(
             "Edit Controls",
             frame,
             Outline::Capsule,
             alpha,
+            subdued,
             vec![self.pressable(
                 origin,
                 "edit-controls",
@@ -2264,9 +2287,11 @@ impl<M: Clone + 'static> Builder<'_, M> {
         Rect::new(0.0, 0.0, GRID_WIDTH, self.height())
     }
 
-    /// Every tile, with the detail view opening, open or closing.
+    /// Every tile, with the detail view opening, open or closing. While a view is opening, open or closing the other
+    /// tiles and Edit Controls lie behind it on subdued module glass as they fade.
     fn board(&self) -> Vec<Element<M>> {
         let opened = self.presentation.detail;
+        let behind = opened.is_some();
         let shown = opened.map_or(
             Visibility {
                 others: 1.0,
@@ -2288,18 +2313,19 @@ impl<M: Clone + 'static> Builder<'_, M> {
             let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
             let content = self.content(module, origin);
             children.push(
-                self.tile(
+                self.glass_tile(
                     module.title(),
                     frame,
                     layout::outline(module),
                     shown.others,
+                    behind,
                     content,
                 )
                 .key(format!("tile.{}", slug(module))),
             );
         }
         if shown.others > 0.0 {
-            children.push(self.edit(shown.others).key("tile.edit"));
+            children.push(self.edit(shown.others, behind).key("tile.edit"));
         }
         if let Some(opened) = opened {
             children.extend(self.opening(opened, shown));
@@ -2336,9 +2362,17 @@ impl<M: Clone + 'static> Builder<'_, M> {
             let p = opened.progress.clamp(0.0, 1.0);
             if p < 1.0 {
                 let content = self.content(module, at(tile_frame));
+                // the tile fading out in place lies behind the view fading in over it
                 tiles.push(
-                    self.tile(label, tile_frame, layout::outline(module), 1.0 - p, content)
-                        .key(format!("tile.{}", slug(module))),
+                    self.glass_tile(
+                        label,
+                        tile_frame,
+                        layout::outline(module),
+                        1.0 - p,
+                        true,
+                        content,
+                    )
+                    .key(format!("tile.{}", slug(module))),
                 );
             }
             if p > 0.0 {

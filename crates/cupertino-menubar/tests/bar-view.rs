@@ -586,8 +586,8 @@ fn a_screen_reader_opens_a_menu_by_its_title_and_chooses_a_row() {
     assert_eq!(run.window("menu-1-0"), None, "choosing closes the menu");
 }
 
-/// How many shadows the bar's items draw under their text and symbols, for `look`.
-fn shadows(look: Look) -> usize {
+/// The shadows the bar's items draw under their text and symbols, for `look`, as the inspector writes them.
+fn shadows(look: Look) -> Vec<String> {
     LOOK.set(look);
     let run = Run::start();
     LOOK.set(Look::default());
@@ -597,13 +597,15 @@ fn shadows(look: Look) -> usize {
         .dump(&snapshot)
         .lines()
         .filter(|l| l.contains("DropShadow"))
-        .count()
+        .map(str::to_owned)
+        .collect()
 }
 
-/// The session's Reduce Transparency alone shows the bar's solid strip (`tone::solid_bar`), and with it or without it,
-/// in either tone and whatever the theme's own option, no item draws a shadow or halo under its text and symbols.
+/// The session's Reduce Transparency alone shows the bar's solid strip (`tone::solid_bar`). With it or without it and
+/// whatever the theme's own option, no text, title or mark draws a shadow or halo; the one status glyph of this bar (the
+/// control panel's) draws one faint shadow below it when it is light, and none when it is dark.
 #[test]
-fn the_items_draw_no_shadow_with_or_without_the_solid_strip() {
+fn only_a_light_status_glyph_draws_a_shadow() {
     use cupertino_defaults::accessibility::DisplayOptions;
     use cupertino_menubar::tone::solid_bar;
     let reduced = DisplayOptions {
@@ -612,7 +614,12 @@ fn the_items_draw_no_shadow_with_or_without_the_solid_strip() {
     };
     assert!(solid_bar(reduced), "the strip shows");
     assert!(!solid_bar(DisplayOptions::default()), "the strip is hidden");
-    for tone in [BarTone::Appearance, BarTone::LightText, BarTone::DarkText] {
+    // the bar here is in the light appearance: its own tone has dark text
+    for (tone, light) in [
+        (BarTone::Appearance, false),
+        (BarTone::LightText, true),
+        (BarTone::DarkText, false),
+    ] {
         for solid in [false, true] {
             for theme_reduce_transparency in [false, true] {
                 let look = Look {
@@ -621,19 +628,63 @@ fn the_items_draw_no_shadow_with_or_without_the_solid_strip() {
                     tone,
                     ..Look::default()
                 };
+                let found = shadows(look);
                 assert_eq!(
-                    shadows(look),
-                    0,
+                    found.len(),
+                    usize::from(light),
                     "{tone:?}, solid {solid}, theme {theme_reduce_transparency}"
                 );
+                for line in found {
+                    assert!(
+                        line.contains("offset: Point { x: 0.0, y: 1.75 }")
+                            && line.contains("blur: 2.5")
+                            && line.contains("a: 0.3"),
+                        "{line}"
+                    );
+                }
             }
         }
     }
 }
 
-/// The bar's frame at 1x for `look`, with the File menu open when `open`, and the slot rectangles of the mark and of
-/// the File title.
-fn frame(look: Look, open: bool) -> (Pixmap, Rect, Rect) {
+/// An item of the status area with a tone of its own draws in it: over a light part of the wallpaper the control panel
+/// alone has dark text, and its shadow goes with its light tone.
+#[test]
+fn a_status_item_with_its_own_tone_draws_in_it() {
+    let mut slot_tones = SlotTones::default();
+    let run = Run::start();
+    let layout = run.model().controller.layout().clone();
+    drop(run);
+    // the right fifth of the bar light, the rest dark
+    let bands: Vec<[u16; 3]> = (0..100)
+        .map(|i| if i >= 80 { [u16::MAX; 3] } else { [0; 3] })
+        .collect();
+    slot_tones.update(
+        &layout.slots,
+        layout.bar,
+        &cupertino_menubar::tone::Backdrop::Bands(bands),
+        0.0,
+    );
+    assert_eq!(
+        slot_tones.tone(&SlotKey::ControlPanel),
+        Some(BarTone::DarkText)
+    );
+    let look = |slot_tones: SlotTones| Look {
+        tone: BarTone::LightText,
+        slot_tones,
+        ..Look::default()
+    };
+    assert_eq!(shadows(look(SlotTones::default())).len(), 1);
+    assert_eq!(
+        shadows(look(slot_tones)).len(),
+        0,
+        "the control panel over the light part is dark: no shadow"
+    );
+}
+
+/// The bar's frame at 1x for `look`, with the File menu open when `open`, and the slot rectangles of the mark, of the
+/// File title and of the control panel.
+fn frame(look: Look, open: bool) -> (Pixmap, Rect, Rect, Rect) {
     LOOK.set(look);
     let mut run = Run::start();
     LOOK.set(Look::default());
@@ -643,7 +694,8 @@ fn frame(look: Look, open: bool) -> (Pixmap, Rect, Rect) {
     let layout = run.model().controller.layout();
     let slot = |key: &SlotKey| layout.slot(key).unwrap().rect;
     let (mark, file) = (slot(&SlotKey::System), slot(&SlotKey::Menu(ItemId(FILE))));
-    (run.capture("bar-1").0, mark, file)
+    let panel = slot(&SlotKey::ControlPanel);
+    (run.capture("bar-1").0, mark, file, panel)
 }
 
 /// The sRGB luminance of the premultiplied pixel `px` taken alone, its colour without its coverage.
@@ -656,12 +708,13 @@ fn ink(px: &[u8; 4]) -> f64 {
 /// The bar's text, the mark and the open title lie straight on the wallpaper: every pixel the bar draws, the
 /// antialiased edges of the strokes included, is of the text's own tone, light under light text and dark under dark
 /// text, so no darker ring or lighter glow surrounds a stroke and the mark has no outline. The open title's highlight
-/// is the plain veil of the palette.
+/// is the plain veil of the palette. The control panel's glyph, a status glyph, keeps its faint shadow when light
+/// ([`only_a_light_status_glyph_draws_a_shadow`]) and is left out here.
 #[test]
 fn the_strokes_lie_on_the_wallpaper_with_no_ring_around_them() {
     for (tone, light) in [(BarTone::LightText, true), (BarTone::DarkText, false)] {
         for open in [false, true] {
-            let (pixmap, mark, file) = frame(
+            let (pixmap, mark, file, panel) = frame(
                 Look {
                     tone,
                     ..Look::default()
@@ -680,6 +733,7 @@ fn the_strokes_lie_on_the_wallpaper_with_no_ring_around_them() {
                 // the open title's veil reaches past its slot, over the room between titles; its own colour is checked below
                 if p[3] < 8
                     || (open && (file.x - 20.0..file.x + file.w + 20.0).contains(&(x as f64)))
+                    || inside(panel, x, y)
                 {
                     continue;
                 }

@@ -32,7 +32,7 @@ use cupertino_kit::platform::{
     DecorationMode, KeyEvent, MouseButton, PointerEvent, Timestamp, WindowSpec,
 };
 use cupertino_kit::render::{
-    FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
+    Effect, FillRule, ImageResource, Paint, PaintOp, PathVerb, PixelFormat, Sampling, Shape,
 };
 use cupertino_kit::text::{
     AttributedText, ContentPurpose, FontWeight, ParagraphLayout, ParagraphStyle, SecureBuffer,
@@ -566,6 +566,21 @@ enum SlotLook {
     Dot,
     ControlPanel,
     Nothing,
+}
+
+impl SlotLook {
+    /// Whether this is a status item's symbol in the bar's text colour: an extra's symbol, a template icon, the dot of an
+    /// item without one or the control panel's glyph. Text, the system mark, the privacy dot and coloured icons are not.
+    fn is_status_glyph(&self) -> bool {
+        match self {
+            SlotLook::Symbol(_) | SlotLook::Dot | SlotLook::ControlPanel => true,
+            SlotLook::Image(icon) => is_template(&icon.image.pixels),
+            SlotLook::SystemMark
+            | SlotLook::Text { .. }
+            | SlotLook::PrivacyDot
+            | SlotLook::Nothing => false,
+        }
+    }
 }
 
 fn slot_look(slot: &Slot, scene: &BarScene<'_>) -> SlotLook {
@@ -1206,9 +1221,27 @@ impl<M: Clone + 'static> Widget<M> for SlotNode<M> {
             let radius = m.selection_corner_radius.min(height / 2.0);
             fill(cx, rect, radius, palette.bar_highlight);
         }
-        // the text and symbols lie straight on the wallpaper, sharp, with no shadow or halo under them: their tone
-        // alone, dark or light for the wallpaper under the whole bar, keeps them readable
+        // the text and symbols lie straight on the wallpaper, sharp, with no halo under them: their tone, dark or light
+        // for the wallpaper under them, keeps them readable; a status symbol drawn light keeps one faint shadow below it
+        let shadow = self
+            .look
+            .is_status_glyph()
+            .then(|| crate::tone::status_shadow(self.tone, dark(cx.env())))
+            .flatten();
+        if let Some(c) = shadow {
+            cx.push(PaintOp::PushLayer {
+                opacity: 1.0,
+                effects: vec![Effect::DropShadow {
+                    offset: Point::new(0.0, crate::tone::STATUS_SHADOW_DROP),
+                    blur: crate::tone::STATUS_SHADOW_BLUR,
+                    color: color(c),
+                }],
+            });
+        }
         self.paint_look(cx, &palette);
+        if shadow.is_some() {
+            cx.push(PaintOp::PopLayer);
+        }
     }
 
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {

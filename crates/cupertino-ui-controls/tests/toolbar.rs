@@ -301,9 +301,9 @@ fn glass_edges(h: &Harness<Browser>) -> (Vec<Vec<cupertino_ui_theme::Color>>, us
     (rims, shades)
 }
 
-/// Over a light face the glass's rim light marks no edge, so in the light appearance the toolkit draws a fine dark
-/// rim on each floating control's glass, stronger at its sides than at its top and bottom where the light falls, and
-/// a faint shade below it that never dims the glass; the dark appearance's glass marks its own edge.
+/// The compositor's glass marks each floating control's edge at rest; with Increase Contrast in the light appearance
+/// the toolkit adds a fine dark rim, stronger at its sides than at its top and bottom, and a faint shade below it that
+/// never dims the glass.
 #[test]
 fn the_toolbar_glass_marks_its_own_edge_and_increase_contrast_adds_a_fine_dark_rim() {
     use cupertino_ui_theme::Appearance;

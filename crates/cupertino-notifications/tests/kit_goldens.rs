@@ -139,10 +139,14 @@ impl Application for Scripted {
     }
 }
 
-fn theme(reduce_transparency: bool) -> ThemeTokens {
+fn theme(reduce_transparency: bool, increase_contrast: bool) -> ThemeTokens {
     let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
     let preferences = ThemePreferences {
-        appearance: Appearance::Light,
+        appearance: if increase_contrast {
+            Appearance::LightHighContrast
+        } else {
+            Appearance::Light
+        },
         reduce_transparency,
         reduce_motion: false,
     };
@@ -174,6 +178,7 @@ struct Setup {
     /// The desktop draws materials under windows.
     effects: bool,
     reduce_transparency: bool,
+    increase_contrast: bool,
     /// The size the windows are configured at instead of the one they ask for.
     size: Option<Size>,
 }
@@ -188,7 +193,7 @@ impl Run {
         let mut fonts = FontIndex::new();
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
-        let theme = Arc::new(theme(setup.reduce_transparency));
+        let theme = Arc::new(theme(setup.reduce_transparency, setup.increase_contrast));
         STEPS.set(Some((
             receiver,
             CardMetrics::new(Arc::clone(&theme), Arc::clone(&text)),
@@ -1434,6 +1439,47 @@ fn the_keyboard_activates_and_clears_the_centre_s_cards_and_its_close_button_cle
         ),
     );
     assert!(!run.ui().centre_open);
+}
+
+/// The strokes along a card's edge in the banner's window: the outline and the rim the card lays over its glass.
+fn card_edge_strokes(effects: bool, increase_contrast: bool) -> usize {
+    let mut run = Run::with(Setup {
+        effects,
+        increase_contrast,
+        ..Setup::default()
+    });
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let snapshot = run.snapshot(window);
+    let card = rect(&snapshot, "card-1");
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter(|op| {
+            matches!(op, cupertino_kit::render::PaintOp::Stroke { shape: cupertino_kit::render::Shape::RoundedRect { rect, .. }, .. }
+                if (rect.size.width - card.size.width).abs() < 2.0 && (rect.size.height - card.size.height).abs() < 2.0)
+        })
+        .count()
+}
+
+#[test]
+fn a_card_on_glass_paints_no_edge_at_rest_and_its_rim_with_increase_contrast() {
+    assert_eq!(
+        card_edge_strokes(true, false),
+        0,
+        "the compositor's glass marks the card's edge at rest"
+    );
+    assert!(
+        card_edge_strokes(true, true) > 0,
+        "with Increase Contrast the card lays its rim over the glass"
+    );
+    assert!(
+        card_edge_strokes(false, false) > 0,
+        "without the desktop's glass the card strokes its outline"
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["crates/*"]
 # A path dependency inside the workspace directory would become a member; the vendored crates are plain dependencies.
-exclude = ["third-party/xkbcommon-rs", "third-party/smithay"]
+exclude = ["third-party/xkbcommon-rs", "third-party/smithay", "tools/gpu-probes"]
 
 [workspace.package]
 edition = "2021"

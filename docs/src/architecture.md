@@ -41,7 +41,7 @@ The server starts the shell processes listed in `/etc/cupertino/compositor.json`
 
 ## Rendering
 
-The server composites and draws its materials (backdrop blur, glass) on the GPU with OpenGL ES through Smithay's GLES renderer; with no hardware renderer, Mesa's software renderer draws instead ([Displays and GPUs](displays-and-gpus.md)). CupertinoKit applications and shell processes rasterize their windows on the CPU (`cupertino-ui-render`) and hand them to the server in shared memory, repainting only the damage. Drawing them on the GPU, with the CPU rasterizer kept as the fallback when no usable GPU is present, is planned ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications), [#155](https://github.com/orafaelfragoso/cupertino/issues/155)).
+The server composites and draws its materials (backdrop blur, glass) on the GPU with OpenGL ES through Smithay's GLES renderer; with no hardware renderer, Mesa's software renderer draws instead ([Displays and GPUs](displays-and-gpus.md)). CupertinoKit applications and shell processes rasterize their windows on the CPU (`cupertino-ui-render`) and hand them to the server in shared memory, repainting only the damage. Drawing large windows on the GPU, with the CPU rasterizer kept as the standard it is tested against and as the fallback, is planned: [GPU rendering](gpu-rendering.md) has the design, `docs/architecture/rendering.md` the rules every rendering change keeps, and `docs/plans/gpu-rendering.md` the steps and their checklist ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)).
 
 ## Rules
 

@@ -14,6 +14,7 @@
 - [CupertinoKit: getting started](kit-getting-started.md)
 - [What runs on CupertinoKit](apps-on-kit.md)
 - [Architecture](architecture.md)
+- [GPU rendering](gpu-rendering.md)
 - [Asset packs](asset-packs.md)
 - [Roadmap](roadmap.md)
 - [Desktop quality and open issues](desktop-quality.md)

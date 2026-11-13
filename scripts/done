@@ -25,7 +25,8 @@ import sys
 sys.path.insert(0, "ci")
 import affected
 paths = sys.argv[1:]
-print("\n".join(affected.affected(affected.workspace(), paths) if paths else []))
+# one line per crate and nothing at all for none, so an empty selection is an empty list
+sys.stdout.write("".join(c + "\n" for c in (affected.affected(affected.workspace(), paths) if paths else [])))
 EOF
 )
 

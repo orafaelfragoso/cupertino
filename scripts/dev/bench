@@ -20,8 +20,10 @@ session that finds where the two windows are at this size and scale. The scenari
   control-center  Control Center opened and closed, three times
   launcher-typing the launcher opened, a word typed a letter at a time and erased, Escape; twice
   files-scroll    Files raised and its list scrolled with two fingers, down and up
-and, with --scenario all or by name: dock-sweep (magnification), overview, launcher (open and close) and context-menu
-(the desktop's menu, down its rows onto a submenu).
+and, with --scenario all or by name: dock-sweep (magnification), overview, launcher (open and close), context-menu
+(the desktop's menu, down its rows onto a submenu), and Files full screen, so it fills the output: files-full-repaint
+(the appearance turned three times, each a repaint of the whole window) and files-full-scroll (as files-scroll); their
+folder holds 3000 files, so the list still scrolls full screen at scale 1.
 
 Everything is written as JSON with --out: per run, scenario and refresh rate, the figures below; and per scenario the
 median of the runs with their spread (max - min), which is the run-to-run noise. The table printed shows the medians.
@@ -55,7 +57,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 TICK = os.sysconf("SC_CLK_TCK")
 SETTLE = 9.0
 BASELINE = ["idle", "drag", "hover", "resize", "control-center", "launcher-typing", "files-scroll"]
-EXTRA = ["dock-sweep", "overview", "launcher", "context-menu"]
+EXTRA = ["dock-sweep", "overview", "launcher", "context-menu", "files-full-repaint", "files-full-scroll"]
+# the files in Files' folder, and in the full screen scenarios', whose window shows 400 whole at 3840 x 2160 and scale 1
+ITEMS = 400
+FULL_SCREEN_ITEMS = 3000
+# how long Files takes to settle full screen before a scenario measures it
+FULL_SCREEN_SETTLE = 2.5
 PHASES = ["update", "view", "layout", "paint", "raster", "copy", "commit"]
 # the system calls a thread sleeps in, by number (x86_64), and the argument that holds the timeout
 SLEEPS = {7: ("poll", 2, "ms"), 23: ("select", 4, "ptr"), 35: ("nanosleep", 0, "ptr"), 202: ("futex", 3, "ptr"),
@@ -67,8 +74,9 @@ SLEEPS = {7: ("poll", 2, "ms"), 23: ("select", 4, "ptr"), 35: ("nanosleep", 0, "
 # ---- where the windows are -----------------------------------------------------------------------------------------
 
 def session(bin_dir: pathlib.Path, size: tuple[int, int], scale: float, hz: float, flags: list[str], end: float,
-            env_extra: dict) -> subprocess.Popen:
-    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{size[0]}x{size[1]}", FIXTURE_DIR=str(fixture()), **env_extra)
+            env_extra: dict, items: int = None) -> subprocess.Popen:
+    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{size[0]}x{size[1]}",
+               FIXTURE_DIR=str(fixture(items or ITEMS)), **env_extra)
     w, h = logical(size, scale)
     args = [str(ROOT / "crates/cupertino-server/scripts/session.sh"), "--scale", f"{scale:g}", "--appearance", "dark",
             "--refresh", f"{hz:g}", "--spawn", "cupertino-files", "--spawn", "cupertino-settings",
@@ -81,12 +89,18 @@ def logical(size: tuple[int, int], scale: float) -> tuple[float, float]:
     return size[0] / scale, size[1] / scale
 
 
-def fixture() -> pathlib.Path:
-    folder = ROOT / "target/bench-fixture"
+def fixture(items: int) -> pathlib.Path:
+    """The home folder's contents: `items` files."""
+    folder = ROOT / ("target/bench-fixture" if items == ITEMS else f"target/bench-fixture-{items}")
     folder.mkdir(parents=True, exist_ok=True)
-    for i in range(1, 401):
+    for i in range(1, items + 1):
         (folder / f"Report {i:03}.txt").touch()
     return folder
+
+
+def items_of(name: str) -> int:
+    """The files in Files' folder for scenario `name`: full screen, enough that the list still scrolls at scale 1."""
+    return FULL_SCREEN_ITEMS if name.startswith("files-full") else ITEMS
 
 
 def read_windows(path: pathlib.Path) -> list[dict]:
@@ -159,6 +173,16 @@ class Script:
         self.flags += [flag, f"{self.t + after:.4f}:{value}"]
 
 
+def scroll(s: Script, x: float, y: float) -> None:
+    """Two fingers on (x, y): 1800 pt down over 1.5 s, let go, and back up."""
+    steps = round(1.5 * s.hz)
+    for sign in (1, -1):
+        for i in range(steps):
+            s.at("--scroll", f"{x:.1f},{y:.1f}:{sign * 1800 / steps:.2f}", i * s.dt)
+        s.at("--scroll", f"{x:.1f},{y:.1f}:0", steps * s.dt)
+        s.t += (steps + 1) * s.dt
+
+
 def script(name: str, hz: float, win: dict, size: tuple[int, int], scale: float, idle: float):
     """The flags of scenario `name` and the span it is measured over."""
     s = Script(hz)
@@ -217,13 +241,20 @@ def script(name: str, hz: float, win: dict, size: tuple[int, int], scale: float,
         s.at("--click", f"{fx:.1f},{fy:.1f}")
         s.t += 0.8
         start = s.t
-        lx, ly = files["x"] + files["width"] * 0.6, files["y"] + files["height"] * 0.5
-        steps = round(1.5 * hz)
-        for sign in (1, -1):
-            for i in range(steps):
-                s.at("--scroll", f"{lx:.1f},{ly:.1f}:{sign * 1800 / steps:.2f}", i * s.dt)
-            s.at("--scroll", f"{lx:.1f},{ly:.1f}:0", steps * s.dt)
-            s.t += (steps + 1) * s.dt
+        scroll(s, files["x"] + files["width"] * 0.6, files["y"] + files["height"] * 0.5)
+    elif name in ("files-full-repaint", "files-full-scroll"):
+        fx, fy = visible_point(files, settings)
+        s.at("--click", f"{fx:.1f},{fy:.1f}")
+        s.t += 0.8
+        s.at("--action", "toggle-fullscreen")
+        s.t += FULL_SCREEN_SETTLE
+        start = s.t
+        if name == "files-full-repaint":
+            for _ in range(3):
+                s.at("--action", "toggle-appearance")
+                s.t += 1.5
+        else:
+            scroll(s, w * 0.6, h * 0.5)
     elif name == "dock-sweep":
         dock_y = h - 40
         s.path([(w * 0.3, dock_y), (w * 0.7, dock_y), (w * 0.3, dock_y)], 2.4)
@@ -506,6 +537,10 @@ def clients(path: pathlib.Path, start_ns: int, span: tuple[float, float], refres
             vals = [f[phase] / 1e6 for f in frames]
             entry[f"{phase}_p50_ms"] = pct(vals, 50)
             entry[f"{phase}_p99_ms"] = pct(vals, 99)
+        # what neither layers nor a GPU speed up: the frame's update, view and layout together
+        logic = [(f["update"] + f["view"] + f["layout"]) / 1e6 for f in frames]
+        entry["logic_p50_ms"] = pct(logic, 50)
+        entry["logic_p99_ms"] = pct(logic, 99)
         out[name] = entry
     return out
 
@@ -570,7 +605,7 @@ def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
             shots = pathlib.Path(os.environ["BENCH_SHOTS"])
             shots.mkdir(parents=True, exist_ok=True)
             flags += ["--shot", f"{(span[0] + span[1]) / 2:.2f}:{shots}/{hz:g}-{name}.png"]
-        proc = session(bin_dir, size, scale, hz, flags, end, {"CUPERTINO_FRAME_TIMING": str(timing)})
+        proc = session(bin_dir, size, scale, hz, flags, end, {"CUPERTINO_FRAME_TIMING": str(timing)}, items_of(name))
         # the frame statistics name where the server's clock starts
         deadline = time.monotonic() + 30
         head: dict = {}
@@ -594,6 +629,7 @@ def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
         if server and server[0] in sampler.marks.get("start", (0, {}))[1]:
             cpu_s = (sampler.marks["end"][1][server[0]]["cpu"] - sampler.marks["start"][1][server[0]]["cpu"]) / TICK
         result = {"scenario": name, "rate": hz, "renderer": head.get("renderer", "unknown"), "span_s": span,
+                  "output": list(logical(size, scale)),
                   "compositor": compositor(rows, refresh_ms, span, cpu_s),
                   "clients": clients(timing, start_ns, span, refresh_ms),
                   "processes": processes(sampler) if "end" in sampler.marks else {},
@@ -621,8 +657,15 @@ def check(name: str, r: dict) -> str | None:
         return "the resize drew few frames: the press may have missed the corner"
     if name == "hover" and not r["compositor"]["decoration_rasters"]:
         return "the hover drew no title bar: the pointer may have missed the window buttons"
-    if name == "files-scroll" and r["clients"].get("cupertino-files", {}).get("frames", 0) < 30:
+    if name in ("files-scroll", "files-full-scroll") and r["clients"].get("cupertino-files", {}).get("frames", 0) < 30:
         return "Files drew few frames: the scroll may have missed its list"
+    if name.startswith("files-full"):
+        full = find(r["windows"]["after"], "files")
+        size = r.get("output")
+        if not full or (size and (abs(full["width"] - size[0]) > 1 or abs(full["height"] - size[1]) > 1)):
+            return "Files did not fill the output: full screen may not have taken"
+    if name == "files-full-repaint" and r["clients"].get("cupertino-files", {}).get("frames", 0) < 3:
+        return "Files drew fewer frames than appearance changes: the repaint may not have happened"
     # the menu bar's clock turns once a minute, and draws a frame of the menu bar and one of the screen
     minutes = (r["span_s"][1] - r["span_s"][0]) / 60
     if name == "idle" and r["compositor"]["frames"] > 2 * (int(minutes) + 1):

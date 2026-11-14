@@ -14,9 +14,10 @@ use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{Control, Value};
 use cupertino_settings::live::{Live, Reading};
 use cupertino_settings::panes::{change, sections, Call, ControlId, Effect, Section, Session};
-use cupertino_settings::services::{Bus, Services};
+use cupertino_settings::services::{Bus, Services, NETWORK_NAME, SESSION_NAME, SESSION_PATH};
 use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::sheet::{Answer, Prompt};
+use cupertino_settings::watch::{Changed, Which};
 use cupertino_settings::PaneId;
 use zbus::fdo;
 use zbus::message::Header;
@@ -1331,4 +1332,73 @@ fn use_my_settings_sends_the_allow_listed_values_and_a_refusal_gets_its_sentence
         );
     }
     assert_eq!(written.lock().unwrap().len(), 1);
+}
+
+/// Wait for the watch to tell `wanted`, whatever else it tells first.
+fn heard(rx: &mpsc::Receiver<Changed>, wanted: Changed) {
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    let mut told = Vec::new();
+    while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(changed) if changed == wanted => return,
+            Ok(changed) => told.push(changed),
+            Err(_) => break,
+        }
+    }
+    panic!("the watch did not tell {wanted:?}; it told {told:?}");
+}
+
+#[test]
+fn the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_signal() {
+    let Some(bus) = common::bus() else { return };
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let mut services = services(&bus);
+    services.watch(Arc::new(move |changed| {
+        let _ = tx.lock().unwrap().send(changed);
+    }));
+    assert!(services.watched(Which::Session) && services.watched(Which::System));
+
+    // the session interface starts and its appearance changes
+    let session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name(SESSION_NAME)
+        .unwrap()
+        .build()
+        .unwrap();
+    heard(&rx, Changed::Owner(Which::Session));
+    let changed: HashMap<&str, Variant> = HashMap::from([("Appearance", Variant::from("dark"))]);
+    session
+        .emit_signal(
+            None::<&str>,
+            SESSION_PATH,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(SESSION_NAME, changed, Vec::<&str>::new()),
+        )
+        .unwrap();
+    heard(&rx, Changed::Session);
+
+    // a service of the system bus starts and sends a signal
+    let network = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name(NETWORK_NAME)
+        .unwrap()
+        .build()
+        .unwrap();
+    heard(&rx, Changed::Owner(Which::System));
+    network
+        .emit_signal(
+            None::<&str>,
+            "/org/cupertino/Network1",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(
+                NETWORK_NAME,
+                HashMap::<&str, Variant>::new(),
+                Vec::<&str>::new(),
+            ),
+        )
+        .unwrap();
+    heard(&rx, Changed::System);
 }

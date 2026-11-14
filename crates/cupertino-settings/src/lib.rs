@@ -44,6 +44,8 @@ pub mod sheet;
 pub mod shell;
 pub mod sidebar;
 pub mod system;
+#[cfg(feature = "app")]
+pub mod watch;
 
 pub use geom::{Point, Rect, Size};
 pub use pane::PaneId;

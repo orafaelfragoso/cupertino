@@ -10,7 +10,7 @@ layer = "foundation"
 
 [dependencies]
 libc = "0.2"
-notify = "8"
+inotify = { version = "0.11", default-features = false }
 serde_json = "1"
 
 [dev-dependencies]

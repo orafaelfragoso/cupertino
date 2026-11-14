@@ -16,6 +16,7 @@ use crate::services::{self, Services, SESSION_NAME, SESSION_PATH};
 use crate::settings::{system_accessibility, File, Paths, Settings};
 use crate::sheet::{Answer, Outcome, Sheet};
 use crate::sidebar;
+use crate::watch::{Changed, Which};
 use crate::PaneId;
 use cupertino_assets::Assets;
 use cupertino_defaults::accessibility::{DisplayOptions, SYSTEM_ACCESSIBILITY};
@@ -38,6 +39,8 @@ pub(crate) enum Background {
     Paired(std::result::Result<(), String>),
     /// A settings file changed on disk.
     Files(WatchEvent),
+    /// A service the panes read sent a change signal ([`crate::watch`]).
+    Changed(Changed),
     /// A listing of the Wallpaper pane's pictures: group 0 the packs', then one per added folder.
     Pictures {
         key: ListingKey,
@@ -148,7 +151,10 @@ pub(crate) fn background_channel(
     let (sender, receiver) = std::sync::mpsc::sync_channel(BACKGROUND_QUEUE);
     let notify: Notify = std::sync::Arc::new(move |event| {
         let queued = match event {
-            Background::ShowPane(..) | Background::Agent(_) => sender.try_send(event).is_ok(),
+            // a change signal that finds the queue full is not needed: the changes queued read everything again
+            Background::ShowPane(..) | Background::Agent(_) | Background::Changed(_) => {
+                sender.try_send(event).is_ok()
+            }
             event => sender.send(event).is_ok(),
         };
         if queued {
@@ -162,6 +168,12 @@ pub(crate) fn background_channel(
 const SCAN: f64 = 10.0;
 /// How often the battery's recorded charge is read again while the Battery pane shows, in seconds.
 const HISTORY_REFRESH: f64 = 60.0;
+/// How often a pane reads again the readings that have no change signal, in seconds.
+pub(crate) const POLL: f64 = 1.0;
+/// How often the input level meter reads the level while it shows, in seconds.
+pub(crate) const METER_POLL: f64 = 0.1;
+/// How often the Focus pane reads again the durations it offers, which follow the time of day, in seconds.
+const LIFETIMES_POLL: f64 = 60.0;
 
 /// The level slider being dragged: its control, its writer, when it last moved and where its knob is.
 pub(crate) struct LevelDrag {
@@ -344,8 +356,86 @@ impl State {
             _answers: answers,
         };
         state.sync_accessibility();
+        let to_loop = state.notify.clone();
+        state.services.watch(std::sync::Arc::new(move |changed| {
+            to_loop(Background::Changed(changed))
+        }));
+        state.read_appearance();
         state.enter_pane(None, pane)?;
         Ok(state)
+    }
+
+    /// Read the appearance the session is in; it changes with the session interface's change signal.
+    fn read_appearance(&mut self) {
+        if let Some(dark) = self.services.dark() {
+            self.dark = dark;
+        }
+    }
+
+    /// How soon the shown pane reads its readings again when no change signal comes, in seconds; `None` when every
+    /// reading it shows has a change signal ([`crate::watch`]) or it shows none. Only these panes wake the window on
+    /// a timer:
+    /// * Sound: the volume and the outputs are read from the sound server, which sends no change signal; the input
+    ///   level meter reads the level ten times a second while it shows.
+    /// * Displays: the displays come from a fresh connection to the display server, which tells the window nothing
+    ///   when a display comes or goes.
+    /// * Wi-Fi and Network: the interfaces' addresses are read from the kernel, which sends no change signal; the
+    ///   Wi-Fi pane also scans every ten seconds.
+    /// * Notifications: a new notification's application has no change signal.
+    /// * Focus: the durations offered follow the time of day (once a minute).
+    /// * Battery: the charge history (once a minute; the rest has the power service's signals).
+    pub(crate) fn poll(&self) -> Option<f64> {
+        match self.content_pane {
+            PaneId::Sound if self.meter_running() => Some(METER_POLL),
+            PaneId::Sound
+            | PaneId::Displays
+            | PaneId::Wifi
+            | PaneId::Network
+            | PaneId::Notifications => Some(POLL),
+            PaneId::Focus => Some(LIFETIMES_POLL),
+            PaneId::Battery => Some(HISTORY_REFRESH),
+            _ => None,
+        }
+    }
+
+    /// Whether the shown pane shows a reading `changed` is about.
+    fn shows(&self, changed: Changed) -> bool {
+        match changed {
+            // the backends name the sidebar's rows, whatever the pane
+            Changed::Owner(_) => true,
+            Changed::Session => self.content_pane == PaneId::Mouse,
+            Changed::Centre => self.content_pane == PaneId::Focus,
+            Changed::System => matches!(
+                self.content_pane,
+                PaneId::Wifi
+                    | PaneId::Network
+                    | PaneId::Vpn
+                    | PaneId::Bluetooth
+                    | PaneId::Battery
+                    | PaneId::Keyboard
+                    | PaneId::Displays
+            ),
+            Changed::Ended(_) => false,
+        }
+    }
+
+    /// Services sent change signals: read again what they changed, once, if the window shows it.
+    pub(crate) fn changed(&mut self, changes: &[Changed]) -> Result<()> {
+        let mut appearance = false;
+        for changed in changes {
+            match changed {
+                Changed::Ended(bus) => self.services.watch_ended(*bus),
+                Changed::Owner(Which::Session) | Changed::Session => appearance = true,
+                _ => {}
+            }
+        }
+        if appearance {
+            self.read_appearance();
+        }
+        if changes.iter().any(|c| self.shows(*c)) {
+            self.refresh(self.now())?;
+        }
+        Ok(())
     }
 
     pub(crate) fn now(&self) -> f64 {
@@ -414,9 +504,6 @@ impl State {
         }
         if self.hidden.contains(&self.pane()) {
             return self.go(self.rows()[0]);
-        }
-        if let Some(dark) = self.services.dark() {
-            self.dark = dark;
         }
         self.display = self.settings.accessibility.display;
         if self.content_pane == PaneId::Battery
@@ -1110,6 +1197,7 @@ impl State {
     /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.
     pub(crate) fn background_event(&mut self, event: Background) -> Result<()> {
         match event {
+            Background::Changed(changed) => self.changed(&[changed])?,
             Background::ShowPane(pane, token) => {
                 self.go(pane)?;
                 if !token.is_empty() {

@@ -66,6 +66,37 @@ class ScriptTest(unittest.TestCase):
         f = WINDOWS["files"]
         self.assertGreater(y, f["y"] + f["height"] - 30)
 
+    def test_the_full_screen_files_scenarios_measure_only_after_files_fills_the_output(self):
+        for name in ("files-full-repaint", "files-full-scroll"):
+            flags, (a, b) = bench.script(name, 60, WINDOWS, (1280, 800), 1.0, 15)
+            actions = [flags[i + 1].split(":") for i, f in enumerate(flags) if f == "--action"]
+            self.assertEqual(actions[0][1], "toggle-fullscreen", name)
+            self.assertLessEqual(float(actions[0][0]) + bench.FULL_SCREEN_SETTLE, a, name)
+            if name == "files-full-repaint":
+                self.assertEqual([what for _, what in actions[1:]], ["toggle-appearance"] * 3)
+                self.assertTrue(all(a <= float(t) <= b for t, _ in actions[1:]))
+            else:
+                points = {flags[i + 1].split(":")[1] for i, f in enumerate(flags) if f == "--scroll"}
+                self.assertEqual(points, {"768.0,400.0"}, "the middle of the list, which fills the output")
+
+    def test_full_screen_files_lists_a_folder_long_enough_to_scroll_and_the_others_the_baselines_folder(self):
+        self.assertEqual(bench.items_of("files-full-scroll"), bench.FULL_SCREEN_ITEMS)
+        self.assertEqual(bench.items_of("files-full-repaint"), bench.FULL_SCREEN_ITEMS)
+        for name in bench.BASELINE:
+            self.assertEqual(bench.items_of(name), bench.ITEMS, name)
+        # 3840 x 2160 at scale 1 shows 32 icons a row and 36 rows: the scroll must not reach the folder's end
+        rows, row_pt, shown_pt = bench.FULL_SCREEN_ITEMS / 32, 59.0, 2160.0
+        self.assertGreater(rows * row_pt - shown_pt, 1800.0)
+
+    def test_a_full_screen_files_scenario_where_files_did_not_fill_the_output_is_flagged(self):
+        def run(width):
+            return {"windows": {"before": [], "after": [dict(WINDOWS["files"], width=width, height=800.0)]},
+                    "span_s": (9.0, 15.0), "output": [1280.0, 800.0], "compositor": {"frames": 200},
+                    "clients": {"cupertino-files": {"frames": 180}}}
+        self.assertIsNone(bench.check("files-full-scroll", run(1280.0)))
+        self.assertIsNotNone(bench.check("files-full-scroll", run(920.0)))
+        self.assertIsNotNone(bench.check("files-full-repaint", run(920.0)))
+
     def test_typing_in_the_launcher_types_each_letter_and_erases_it(self):
         flags, _ = bench.script("launcher-typing", 60, WINDOWS, (1280, 800), 1.0, 15)
         typed = [flags[i + 1].split(":", 1)[1] for i, f in enumerate(flags) if f == "--type"]
@@ -123,6 +154,19 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual(c["cupertino-dock"]["slow_frames"], 1)
         self.assertEqual(c["cupertino-dock"]["frame_max_ms"], 20.0)
         self.assertEqual(c["cupertino-dock"]["update_p50_ms"], 0.001)
+
+    def test_a_clients_update_view_and_layout_are_summed_per_frame(self):
+        path = pathlib.Path(tempfile.mkdtemp()) / "timing.jsonl"
+        start_ns = 1_000_000_000
+        # one frame heavy in view, the other in layout: the worst frame spends 5 ms, though the phases' p99s add to 8
+        frames = [(1_000_000, 4_000_000, 0), (1_000_000, 0, 3_000_000)]
+        path.write_text("".join(json.dumps(
+            {"pid": 1, "program": "cupertino-files", "start": start_ns + 10_000_000_000 + i, "update": u, "view": v,
+             "layout": l, "paint": 0, "raster": 0, "copy": 0, "commit": 0, "total": u + v + l, "frames": 1}) + "\n"
+            for i, (u, v, l) in enumerate(frames)))
+        c = bench.clients(path, start_ns, (9.0, 11.0), 16.666)["cupertino-files"]
+        self.assertEqual(c["logic_p50_ms"], 4.0)
+        self.assertEqual(c["logic_p99_ms"], 5.0)
 
     def test_a_sleeping_thread_shows_its_call_and_timeout(self):
         self.assertEqual(bench.sleep_of("232 0x5 0x7ffd 0x400 0xffffffffffffffff 0x0 0x0 0x7ffd 0x7f"),

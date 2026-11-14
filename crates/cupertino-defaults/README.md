@@ -3,7 +3,7 @@
 The settings store shared by the Cupertino processes. Every settings file lives in `$XDG_CONFIG_HOME/cupertino/` (default
 `~/.config/cupertino/`), and each file has its own environment variable that redirects it, so tests and fixtures never
 touch the user's files. For each file the crate has one typed reader and writer, used by the process that applies the
-file and by the settings application, an atomic write, and change notification. Dependencies: `notify` (inotify) and
+file and by the settings application, an atomic write, and change notification. Dependencies: `inotify`, `libc` and
 `serde_json` (for `compositor.json`).
 
 ## Public API
@@ -52,13 +52,13 @@ to unset is removed. Comments, blank lines, unknown keys, the dock's pin lines a
 result is written with `write_atomic`. `compositor.json` keeps unknown keys too; JSON has no comments, and a write orders
 the keys alphabetically (`serde_json` without `preserve_order`, which would change the map type for the whole workspace).
 
-**Change notification.** `ConfigWatcher` watches the directory of each file (inotify through `notify`, non-recursive), so an
+**Change notification.** `ConfigWatcher` watches the directory of each file (inotify, non-recursive), so an
 atomic replacement, an editor's save, a creation and a removal are seen, also for a file an environment variable moved
 elsewhere. Events are coalesced until a burst is quiet for `watch::COALESCE` (50 ms, approximate); then each watched file
 whose contents changed since the last report is reported once. A write of the same contents, other files and the
 temporary files report nothing. After a notification error (an overflowing queue) every file is compared again, so a
 change in that window is not lost. The parents of the watched directories are watched too: a settings directory that is
-removed and created again is watched again. A file is read without waiting for a writer, so a FIFO put at a watched
+removed and created again is watched again. The directories are watched for creation, writes, attribute changes, removal and renames, their parents only for entries appearing and going: never for opens or reads, so another process reading a file there or in a busy parent such as `/etc` or `~/.config` wakes no watch. A file is read without waiting for a writer, so a FIFO put at a watched
 path reads as empty instead of holding the watch. A panic in the callback ends the watch and is written to stderr. The callback runs on the watcher's thread: the server forwards it to a calloop channel,
 a shell process to its client's waker.
 

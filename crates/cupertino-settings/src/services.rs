@@ -26,6 +26,7 @@ use crate::live::{
     Focus, KnownNetwork, Monitor, Mouse, Network, Output, Reading, Volume, Vpn, Wifi,
 };
 use crate::panes::Call;
+use crate::watch::{Changed, Which};
 
 pub const NETWORK_NAME: &str = "org.cupertino.Network1";
 pub const NETWORK_PATH: &str = "/org/cupertino/Network1";
@@ -48,7 +49,7 @@ const LOGIN_ERROR: &str = "org.cupertino.LoginManager1.Error.";
 const AGENT_EXISTS: &str = "org.cupertino.Bluetooth1.AgentExists";
 
 /// The power profiles service, whose power-saver profile is the Battery pane's low power mode.
-const PROFILES_NAME: &str = "net.hadess.PowerProfiles";
+pub const PROFILES_NAME: &str = "net.hadess.PowerProfiles";
 const PROFILES_PATH: &str = "/net/hadess/PowerProfiles";
 /// The keyboard backlight of the power service.
 const KEYBOARD_BACKLIGHT_NAME: &str = "org.freedesktop.UPower.KbdBacklight";
@@ -343,6 +344,10 @@ pub struct Services {
     hardware: Option<Sources>,
     /// Listens to the input while the Sound pane shows it, to draw its level.
     meter: Option<crate::meter::Meter>,
+    /// Hears the change signals of the services, once [`Services::watch`] is called.
+    on_change: Option<Arc<dyn Fn(Changed) + Send + Sync>>,
+    /// Whether the session bus and the system bus are watched now.
+    watching: [bool; 2],
 }
 
 impl Services {
@@ -359,6 +364,8 @@ impl Services {
             pairing: Arc::default(),
             hardware: Some(Sources::default()),
             meter: None,
+            on_change: None,
+            watching: [false; 2],
         }
     }
 
@@ -376,6 +383,8 @@ impl Services {
             pairing: Arc::default(),
             hardware: None,
             meter: None,
+            on_change: None,
+            watching: [false; 2],
         }
     }
 
@@ -406,7 +415,48 @@ impl Services {
 
     /// Look up which services are on the system bus, running or activatable. `org.cupertino.Network1` comes before
     /// NetworkManager, whose name the network daemon also claims. When the bus does not answer the last answer stays.
+    /// Watch the change signals of the services the panes read, on each bus once it connects ([`crate::watch`]);
+    /// `on` hears what changed. A bus that does not connect now is watched at a later [`Services::detect`].
+    pub fn watch(&mut self, on: Arc<dyn Fn(Changed) + Send + Sync>) {
+        self.on_change = Some(on);
+        self.keep_watching();
+    }
+
+    /// The watch of `bus` ended with its connection: the next [`Services::detect`] watches its new one.
+    pub fn watch_ended(&mut self, bus: Which) {
+        self.watching[bus as usize] = false;
+    }
+
+    /// Whether `bus` is watched now.
+    pub fn watched(&self, bus: Which) -> bool {
+        self.watching[bus as usize]
+    }
+
+    fn keep_watching(&mut self) {
+        let Some(on) = self.on_change.clone() else {
+            return;
+        };
+        for bus in [Which::Session, Which::System] {
+            if self.watching[bus as usize] {
+                continue;
+            }
+            let side = match bus {
+                Which::Session => &mut self.session,
+                Which::System => &mut self.system,
+            };
+            let Ok(connection) = side.connection() else {
+                continue;
+            };
+            match crate::watch::start(bus, connection, on.clone()) {
+                Ok(()) => self.watching[bus as usize] = true,
+                Err(e) => log_once(&format!("cannot watch the services' change signals: {e}")),
+            }
+        }
+    }
+
+    /// Which services back the panes, and the hardware facts; the buses are watched again if their watch ended.
     pub fn detect(&mut self) -> Backends {
+        self.keep_watching();
         self.backends.hardware = self
             .hardware
             .as_ref()

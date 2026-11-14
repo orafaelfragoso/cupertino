@@ -87,9 +87,19 @@ impl Bounds {
     }
 }
 
-/// Merges overlapping or touching rectangles until none remain, then orders the rest by row and column.
+/// The most separate rectangles a frame repaints. Every rectangle walks the whole display list, so a damage of many
+/// small pieces (each item of a scrolled grid, say) costs the list's length times their number; past this many, one
+/// rectangle around them all is repainted instead, which costs at most a repaint of the whole frame.
+pub(crate) const MAX_DAMAGE_RECTS: usize = 16;
+
+/// Merges overlapping or touching rectangles until none remain, then orders the rest by row and column; more than
+/// [`MAX_DAMAGE_RECTS`] become the one rectangle around them.
 pub(crate) fn merge(mut rects: Vec<Bounds>) -> Vec<Bounds> {
     rects.retain(|r| !r.is_empty());
+    if rects.len() > MAX_DAMAGE_RECTS * MAX_DAMAGE_RECTS {
+        // so many that pairing them up costs more than the repaint they could save
+        return around(&rects);
+    }
     loop {
         let pair = (0..rects.len()).find_map(|i| {
             (i + 1..rects.len())
@@ -100,8 +110,21 @@ pub(crate) fn merge(mut rects: Vec<Bounds>) -> Vec<Bounds> {
         let other = rects.swap_remove(j);
         rects[i] = rects[i].union(&other);
     }
+    if rects.len() > MAX_DAMAGE_RECTS {
+        return around(&rects);
+    }
     rects.sort_by_key(|r| (r.y0, r.x0, r.y1, r.x1));
     rects
+}
+
+/// The one rectangle around `rects`; none when there are none.
+fn around(rects: &[Bounds]) -> Vec<Bounds> {
+    rects
+        .iter()
+        .copied()
+        .reduce(|a, b| a.union(&b))
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn transform(t: &Transform) -> tiny_skia::Transform {
@@ -302,6 +325,41 @@ mod tests {
 
     fn px(x0: i32, y0: i32, x1: i32, y1: i32) -> Bounds {
         Bounds { x0, y0, x1, y1 }
+    }
+
+    /// `n` squares of 10 pixels, 20 apart in a row of 32: none touches another.
+    fn grid(n: i32) -> Vec<Bounds> {
+        (0..n)
+            .map(|i| {
+                let (x, y) = (i % 32 * 20, i / 32 * 20);
+                px(x, y, x + 10, y + 10)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn touching_damage_merges_and_a_few_separate_pieces_stay_apart_in_reading_order() {
+        assert_eq!(
+            merge(vec![px(0, 0, 10, 10), px(10, 0, 20, 10), px(0, 50, 5, 55)]),
+            vec![px(0, 0, 20, 10), px(0, 50, 5, 55)]
+        );
+        let few = grid(MAX_DAMAGE_RECTS as i32);
+        assert_eq!(merge(few.clone()).len(), MAX_DAMAGE_RECTS);
+        assert_eq!(
+            merge(vec![px(5, 5, 5, 9)]),
+            vec![],
+            "an empty rectangle is no damage"
+        );
+    }
+
+    #[test]
+    fn many_separate_pieces_become_the_one_rectangle_around_them() {
+        // a scrolled grid damages each of its items: each rectangle would walk the whole display list again
+        for n in [MAX_DAMAGE_RECTS as i32 + 1, 700] {
+            let merged = merge(grid(n));
+            let all = grid(n).into_iter().reduce(|a, b| a.union(&b)).unwrap();
+            assert_eq!(merged, vec![all], "{n} pieces");
+        }
     }
 
     #[test]

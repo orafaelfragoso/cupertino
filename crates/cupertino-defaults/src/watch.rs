@@ -1,6 +1,7 @@
-//! Change notification for the settings files: a [`ConfigWatcher`] watches the directory of each file (inotify through
-//! `notify`), so an atomic replacement (temporary file and rename, [`crate::atomic`]), an editor's save and the file's
+//! Change notification for the settings files: a [`ConfigWatcher`] watches the directory of each file with inotify,
+//! so an atomic replacement (temporary file and rename, [`crate::atomic`]), an editor's save and the file's
 //! creation or removal are all seen, also for a file an environment variable moved out of the settings directory.
+//! Opening and reading a file wakes no watch: the directories are not watched for that.
 //!
 //! The events of one change come in bursts (create, write and rename of the temporary file; an editor's backup and
 //! write). The watcher waits until events touching watched files or their directories are quiet for [`COALESCE`],
@@ -9,17 +10,42 @@
 //! a process forwards them to its event loop
 //! (the server's calloop channel, a shell process's waker).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use notify::{RecursiveMode, Watcher};
+use inotify::{EventMask, Inotify, WatchMask};
 
 /// How long a burst of file events must be quiet before it is reported. Ours (approximate): long enough for a rename
 /// and an editor's save sequence, short enough to feel immediate.
 pub const COALESCE: Duration = Duration::from_millis(50);
+
+/// What a settings directory is watched for: its entries being created, written, changed in their attributes, removed
+/// or renamed, and the directory itself going. Not opens, reads or closes after reading: they change nothing, and
+/// every process that read a file there would wake the watch.
+const DIR_EVENTS: WatchMask = WatchMask::CREATE
+    .union(WatchMask::DELETE)
+    .union(WatchMask::MODIFY)
+    .union(WatchMask::CLOSE_WRITE)
+    .union(WatchMask::ATTRIB)
+    .union(WatchMask::MOVED_FROM)
+    .union(WatchMask::MOVED_TO)
+    .union(WatchMask::DELETE_SELF)
+    .union(WatchMask::MOVE_SELF);
+
+/// What the parent of a settings directory is watched for: its entries appearing and going, so a settings directory
+/// that is removed and made again is seen. A parent is a busy shared directory (the configuration directory, `/etc`):
+/// what its other files go through is none of the watch's business.
+const PARENT_EVENTS: WatchMask = WatchMask::CREATE
+    .union(WatchMask::DELETE)
+    .union(WatchMask::MOVED_FROM)
+    .union(WatchMask::MOVED_TO)
+    .union(WatchMask::DELETE_SELF)
+    .union(WatchMask::MOVE_SELF);
 
 /// What the callback of a [`ConfigWatcher`] is told.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,19 +58,22 @@ pub enum WatchEvent {
 
 /// Watches settings files while it lives; dropping it stops the watch and its thread.
 pub struct ConfigWatcher {
-    stop: mpsc::Sender<Msg>,
-}
-
-impl Drop for ConfigWatcher {
-    fn drop(&mut self) {
-        // the thread is gone already when its callback panicked; then there is nothing to stop
-        let _ = self.stop.send(Msg::Stop);
-    }
+    /// Closing it wakes the watch thread, which then ends.
+    _stop: UnixStream,
 }
 
 /// What the watch thread receives.
+#[derive(Debug)]
 enum Msg {
-    Event(notify::Result<notify::Event>),
+    /// `path`, a watched directory or an entry of one, changed; `appeared` when it was created or moved there.
+    Changed {
+        path: PathBuf,
+        appeared: bool,
+    },
+    /// Events were lost (the kernel's queue overflowed): every file is compared.
+    Lost,
+    /// The notification failed.
+    Failed(String),
     Stop,
 }
 
@@ -75,6 +104,21 @@ fn dir_of(file: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+/// What each watched directory is watched for: the settings directories for [`DIR_EVENTS`], their parents for
+/// [`PARENT_EVENTS`], and a directory that is both for both.
+fn masks(dirs: &BTreeSet<PathBuf>) -> BTreeMap<PathBuf, WatchMask> {
+    let mut masks: BTreeMap<PathBuf, WatchMask> = BTreeMap::new();
+    for dir in dirs {
+        *masks.entry(dir.clone()).or_insert(WatchMask::empty()) |= DIR_EVENTS;
+        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            *masks
+                .entry(parent.to_path_buf())
+                .or_insert(WatchMask::empty()) |= PARENT_EVENTS;
+        }
+    }
+    masks
+}
+
 impl ConfigWatcher {
     /// Watch `files` and call `report` from the watcher's thread for each quiet burst that changed some of them. The
     /// directories of the files are created when missing (they are the settings directories). Their parents are
@@ -89,111 +133,231 @@ impl ConfigWatcher {
             last.insert(f.clone(), snapshot(f)?);
         }
         let dirs: BTreeSet<PathBuf> = files.iter().map(|f| dir_of(f)).collect();
-        let (tx, rx) = mpsc::channel::<Msg>();
-        let events = tx.clone();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            // the receiver is gone only once the thread ended, when no event matters any more
-            let _ = events.send(Msg::Event(event));
-        })
-        .map_err(io::Error::other)?;
         for dir in &dirs {
             std::fs::create_dir_all(dir)?;
-            watcher
-                .watch(dir, RecursiveMode::NonRecursive)
-                .map_err(|e| io::Error::other(format!("{}: {e}", dir.display())))?;
-            if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
-                watcher
-                    .watch(parent, RecursiveMode::NonRecursive)
-                    .map_err(|e| io::Error::other(format!("{}: {e}", parent.display())))?;
-            }
         }
+        let (stop, stopped) = UnixStream::pair()?;
+        let mut inbox = Inotified::new(masks(&dirs), stopped)?;
         let mut report = report;
         std::thread::Builder::new().name("cupertino-defaults-watch".into()).spawn(move || {
-            let run = std::panic::AssertUnwindSafe(|| watch_loop(watcher, &rx, &files, &dirs, &mut last, &mut report));
+            let run = std::panic::AssertUnwindSafe(|| watch_loop(&mut inbox, &files, &dirs, &mut last, &mut report));
             if let Err(panic) = std::panic::catch_unwind(run) {
                 let what = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_default();
                 eprintln!("cupertino-defaults: the settings watch callback panicked ({what}); the settings files are no longer watched");
             }
         })?;
-        Ok(Self { stop: tx })
+        Ok(Self { _stop: stop })
     }
 }
 
-/// Whether a file event of `kind` may have changed a file. Opening, reading and closing a file change nothing; the
-/// watcher's own reads, and every other process's watcher's reads of the same directory, would otherwise wake it
-/// again without end.
-fn may_change(kind: &notify::EventKind) -> bool {
-    !kind.is_access()
-}
-
-/// Where the watch thread's messages come from, and the clock their quiet is timed on: the channel and the monotonic
-/// clock, or in tests a script of messages and quiet spans on a clock of its own.
+/// Where the watch thread's messages come from, and the clock their quiet is timed on: the kernel's file
+/// notification and the monotonic clock, or in tests a script of messages and quiet spans on a clock of its own.
 trait Inbox {
     /// The next message, waiting as long as it takes; `None` once no more can come.
-    fn recv(&self) -> Option<Msg>;
+    fn recv(&mut self) -> Option<Msg>;
     /// The next message if one comes within `timeout`.
-    fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError>;
+    fn recv_timeout(&mut self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError>;
     fn now(&self) -> Instant;
+    /// Watch `dir` again: it was made anew.
+    fn watch_again(&mut self, dir: &Path) -> io::Result<()>;
 }
 
-impl Inbox for mpsc::Receiver<Msg> {
-    fn recv(&self) -> Option<Msg> {
-        mpsc::Receiver::recv(self).ok()
+/// The kernel's file notification for the watched directories, and the end of a socket whose other end the
+/// [`ConfigWatcher`] holds: it closing is [`Msg::Stop`].
+struct Inotified {
+    inotify: Inotify,
+    stop: UnixStream,
+    masks: BTreeMap<PathBuf, WatchMask>,
+    /// The directory each watch descriptor (by its number) watches.
+    watching: HashMap<i32, PathBuf>,
+    pending: VecDeque<Msg>,
+    /// The notification failed; the watch ends once that is told.
+    broken: bool,
+}
+
+impl Inotified {
+    fn new(masks: BTreeMap<PathBuf, WatchMask>, stop: UnixStream) -> io::Result<Self> {
+        let mut inbox = Self {
+            inotify: Inotify::init()?,
+            stop,
+            masks,
+            watching: HashMap::new(),
+            pending: VecDeque::new(),
+            broken: false,
+        };
+        let dirs: Vec<PathBuf> = inbox.masks.keys().cloned().collect();
+        for dir in dirs {
+            inbox
+                .add(&dir)
+                .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", dir.display())))?;
+        }
+        Ok(inbox)
     }
 
-    fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
-        mpsc::Receiver::recv_timeout(self, timeout)
+    fn add(&mut self, dir: &Path) -> io::Result<()> {
+        let mask = self.masks.get(dir).copied().unwrap_or(DIR_EVENTS);
+        let wd = self.inotify.watches().add(dir, mask)?;
+        self.watching
+            .insert(wd.get_watch_descriptor_id(), dir.to_path_buf());
+        Ok(())
+    }
+
+    /// Wait up to `timeout` (forever when `None`) for events or the stop, and queue what came.
+    fn wait(&mut self, timeout: Option<Duration>) {
+        let ms = timeout.map_or(-1, |t| {
+            t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32
+        });
+        let mut fds = [
+            libc::pollfd {
+                fd: self.inotify.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: self.stop.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // Safety: `fds` is an array of two initialised pollfd that outlives the call.
+        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                self.pending
+                    .push_back(Msg::Failed(format!("waiting for file events: {e}")));
+                self.broken = true;
+            }
+            return;
+        }
+        if fds[1].revents != 0 {
+            self.pending.push_back(Msg::Stop);
+            return;
+        }
+        if fds[0].revents != 0 {
+            self.read();
+        }
+    }
+
+    /// Queue every event the kernel has.
+    fn read(&mut self) {
+        let mut buffer = [0u8; 4096];
+        loop {
+            let events = match self.inotify.read_events(&mut buffer) {
+                Ok(events) => events,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    self.pending
+                        .push_back(Msg::Failed(format!("reading file events: {e}")));
+                    self.broken = true;
+                    return;
+                }
+            };
+            for event in events {
+                let id = event.wd.get_watch_descriptor_id();
+                if event.mask.contains(EventMask::Q_OVERFLOW) {
+                    self.pending.push_back(Msg::Lost);
+                } else if event.mask.contains(EventMask::IGNORED) {
+                    // the directory went, and its watch with it
+                    self.watching.remove(&id);
+                } else if let Some(dir) = self.watching.get(&id) {
+                    let path = event
+                        .name
+                        .map_or_else(|| dir.clone(), |name| dir.join(name));
+                    let appeared = event
+                        .mask
+                        .intersects(EventMask::CREATE | EventMask::MOVED_TO);
+                    self.pending.push_back(Msg::Changed { path, appeared });
+                }
+            }
+        }
+    }
+}
+
+impl Inbox for Inotified {
+    fn recv(&mut self) -> Option<Msg> {
+        loop {
+            if let Some(msg) = self.pending.pop_front() {
+                return Some(msg);
+            }
+            if self.broken {
+                return None;
+            }
+            self.wait(None);
+        }
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(msg) = self.pending.pop_front() {
+                return Ok(msg);
+            }
+            if self.broken {
+                return Err(mpsc::RecvTimeoutError::Disconnected);
+            }
+            let Some(left) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+            else {
+                return Err(mpsc::RecvTimeoutError::Timeout);
+            };
+            self.wait(Some(left));
+        }
     }
 
     fn now(&self) -> Instant {
         Instant::now()
     }
+
+    fn watch_again(&mut self, dir: &Path) -> io::Result<()> {
+        self.add(dir)
+    }
+}
+
+/// Whether `msg` may have changed a watched file; a settings directory that appears again is watched again. `None`
+/// for the stop.
+fn handle(
+    msg: Msg,
+    inbox: &mut impl Inbox,
+    watched: &BTreeSet<&PathBuf>,
+    dirs: &BTreeSet<PathBuf>,
+    report: &mut dyn FnMut(WatchEvent),
+) -> Option<bool> {
+    match msg {
+        Msg::Stop => None,
+        Msg::Changed { path, appeared } => {
+            if appeared && dirs.contains(&path) {
+                if let Err(e) = inbox.watch_again(&path) {
+                    report(WatchEvent::Error(format!("{}: {e}", path.display())));
+                }
+            }
+            Some(watched.contains(&path) || dirs.contains(&path))
+        }
+        Msg::Lost => Some(true),
+        // A notification error may have lost events: compare every file.
+        Msg::Failed(e) => {
+            report(WatchEvent::Error(e));
+            Some(true)
+        }
+    }
 }
 
 /// The watch thread: waits for a burst, lets it go quiet, then reports the files whose contents changed.
 fn watch_loop(
-    mut watcher: notify::RecommendedWatcher,
-    rx: &impl Inbox,
+    rx: &mut impl Inbox,
     files: &[PathBuf],
     dirs: &BTreeSet<PathBuf>,
     last: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
     report: &mut impl FnMut(WatchEvent),
 ) {
     let watched: BTreeSet<&PathBuf> = files.iter().collect();
-    // whether `msg` may have changed a watched file; a settings directory that appears again is watched again
-    let mut handle = |msg: Msg, report: &mut dyn FnMut(WatchEvent)| -> Option<bool> {
-        match msg {
-            Msg::Stop => None,
-            Msg::Event(Ok(event)) if !may_change(&event.kind) => Some(false),
-            Msg::Event(Ok(event)) => {
-                for dir in event.paths.iter().filter(|p| dirs.contains(*p)) {
-                    if event.kind.is_create() {
-                        if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
-                            report(WatchEvent::Error(format!("{}: {e}", dir.display())));
-                        }
-                    }
-                }
-                Some(
-                    event.need_rescan()
-                        || event
-                            .paths
-                            .iter()
-                            .any(|p| watched.contains(p) || dirs.contains(p)),
-                )
-            }
-            // A notification error may have lost events: compare every file.
-            Msg::Event(Err(e)) => {
-                report(WatchEvent::Error(e.to_string()));
-                Some(true)
-            }
-        }
-    };
     // the files were read before the watch began: a change in between shows now
     compare(files, last, report);
     loop {
         // wait for the first event of a burst, then until the burst is quiet
         let Some(first) = rx.recv() else { return };
-        let Some(touched) = handle(first, report) else {
+        let Some(touched) = handle(first, rx, &watched, dirs, report) else {
             return;
         };
         if !touched {
@@ -202,7 +366,7 @@ fn watch_loop(
         let mut deadline = rx.now() + COALESCE;
         while let Some(left) = deadline.checked_duration_since(rx.now()) {
             match rx.recv_timeout(left) {
-                Ok(msg) => match handle(msg, report) {
+                Ok(msg) => match handle(msg, rx, &watched, dirs, report) {
                     Some(true) => deadline = rx.now() + COALESCE,
                     Some(false) => (),
                     None => return,
@@ -322,32 +486,26 @@ mod tests {
         let path = root.path().join("dock.conf");
         std::fs::write(&path, "tile_size = 48\n").unwrap();
         let mut last = BTreeMap::from([(path.clone(), snapshot(&path).unwrap())]);
-        std::fs::write(&path, "tile_size = 64\n").unwrap();
-        let (tx, rx) = mpsc::channel();
-        let (report_tx, report_rx) = mpsc::channel();
-        tx.send(Msg::Event(Ok(
-            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan)
-        )))
-        .unwrap();
-        let received = std::thread::scope(|scope| {
-            let files = [path.clone()];
-            let worker = scope.spawn(move || {
-                let watcher = notify::recommended_watcher(|_| {}).unwrap();
-                watch_loop(
-                    watcher,
-                    &rx,
-                    &files,
-                    &BTreeSet::new(),
-                    &mut last,
-                    &mut |event| report_tx.send(event).unwrap(),
-                );
-            });
-            let received = report_rx.recv_timeout(WINDOW);
-            tx.send(Msg::Stop).unwrap();
-            worker.join().unwrap();
-            received
-        });
-        assert_eq!(received, Ok(WatchEvent::Changed(vec![path])));
+        let mut reports = Vec::new();
+        let file = path.clone();
+        watch_loop(
+            &mut Script::new(vec![
+                Step::Do(Box::new(move || {
+                    std::fs::write(file, "tile_size = 64\n").unwrap()
+                })),
+                Step::Msg(Msg::Lost),
+                Step::Quiet(COALESCE * 2),
+            ]),
+            std::slice::from_ref(&path),
+            &BTreeSet::new(),
+            &mut last,
+            &mut |event| reports.push(event),
+        );
+        assert_eq!(
+            reports,
+            vec![WatchEvent::Changed(vec![path])],
+            "a change whose event was lost is found by comparing"
+        );
     }
 
     /// The files are read before the watch begins; a change made in between is reported once the watch runs, not
@@ -358,13 +516,9 @@ mod tests {
         let path = root.path().join("dock.conf");
         std::fs::write(&path, "tile_size = 48\n").unwrap();
         let mut last = BTreeMap::from([(path.clone(), Some(b"tile_size = 64\n".to_vec()))]);
-        let (tx, rx) = mpsc::channel();
-        tx.send(Msg::Stop).unwrap();
-        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         let mut reports = Vec::new();
         watch_loop(
-            watcher,
-            &rx,
+            &mut Script::new(vec![Step::Msg(Msg::Stop)]),
             std::slice::from_ref(&path),
             &BTreeSet::new(),
             &mut last,
@@ -373,27 +527,50 @@ mod tests {
         assert_eq!(reports, vec![WatchEvent::Changed(vec![path])]);
     }
 
+    /// Opening, reading and listing the settings directory and its parent, as every other process may, sends the
+    /// watch nothing, so it does not wake; a write still comes through.
     #[test]
-    fn opening_and_reading_a_watched_file_is_not_a_change() {
-        use notify::event::{
-            AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind,
-        };
-        use notify::EventKind;
-        for kind in [
-            AccessKind::Open(AccessMode::Any),
-            AccessKind::Read,
-            AccessKind::Close(AccessMode::Read),
-        ] {
-            assert!(!may_change(&EventKind::Access(kind)), "{kind:?}");
+    fn opening_and_reading_files_in_the_watched_directories_wakes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("cupertino");
+        let path = dir.join("dock.conf");
+        let beside = root.path().join("other.conf");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(&path, "tile_size = 48\n").unwrap();
+        std::fs::write(&beside, "x = 1\n").unwrap();
+        let (_stop, stopped) = UnixStream::pair().unwrap();
+        let mut inbox = Inotified::new(masks(&BTreeSet::from([dir.clone()])), stopped).unwrap();
+        for _ in 0..3 {
+            std::fs::read(&path).unwrap();
+            std::fs::read(&beside).unwrap();
+            std::fs::read_dir(&dir).unwrap().for_each(drop);
+            std::fs::read_dir(root.path()).unwrap().for_each(drop);
         }
-        for kind in [
-            EventKind::Create(CreateKind::File),
-            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
-            EventKind::Remove(RemoveKind::File),
-            EventKind::Other,
-        ] {
-            assert!(may_change(&kind), "{kind:?}");
+        let woke = inbox.recv_timeout(Duration::from_millis(200));
+        assert!(
+            matches!(woke, Err(mpsc::RecvTimeoutError::Timeout)),
+            "{woke:?}"
+        );
+        std::fs::write(&path, "tile_size = 64\n").unwrap();
+        assert!(matches!(
+            inbox.recv_timeout(WINDOW),
+            Ok(Msg::Changed { path: changed, appeared: false }) if changed == path
+        ));
+        for mask in masks(&BTreeSet::from([dir])).values() {
+            assert!(
+                !mask.intersects(WatchMask::OPEN | WatchMask::ACCESS | WatchMask::CLOSE_NOWRITE)
+            );
         }
+    }
+
+    #[test]
+    fn dropping_the_watcher_ends_its_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let (stop, stopped) = UnixStream::pair().unwrap();
+        let mut inbox =
+            Inotified::new(masks(&BTreeSet::from([dir.path().to_path_buf()])), stopped).unwrap();
+        drop(stop);
+        assert!(matches!(inbox.recv(), Some(Msg::Stop)));
     }
 
     #[test]
@@ -440,7 +617,7 @@ mod tests {
     }
 
     impl Inbox for Script {
-        fn recv(&self) -> Option<Msg> {
+        fn recv(&mut self) -> Option<Msg> {
             loop {
                 let step = self.steps.borrow_mut().pop_front()?;
                 match step {
@@ -451,7 +628,7 @@ mod tests {
             }
         }
 
-        fn recv_timeout(&self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
+        fn recv_timeout(&mut self, timeout: Duration) -> Result<Msg, mpsc::RecvTimeoutError> {
             let mut steps = self.steps.borrow_mut();
             match steps.pop_front() {
                 Some(Step::Msg(msg)) => Ok(msg),
@@ -477,25 +654,25 @@ mod tests {
         fn now(&self) -> Instant {
             self.now.get()
         }
+
+        fn watch_again(&mut self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     fn written(path: &Path) -> Step {
-        Step::Msg(Msg::Event(Ok(notify::Event::new(
-            notify::EventKind::Modify(notify::event::ModifyKind::Data(
-                notify::event::DataChange::Any,
-            )),
-        )
-        .add_path(path.to_path_buf()))))
+        Step::Msg(Msg::Changed {
+            path: path.to_path_buf(),
+            appeared: false,
+        })
     }
 
     /// The reports of a watch of `path`, begun as the file is now, playing `steps`.
     fn played(path: &Path, steps: Vec<Step>) -> Vec<WatchEvent> {
         let mut last = BTreeMap::from([(path.to_path_buf(), snapshot(path).unwrap())]);
-        let watcher = notify::recommended_watcher(|_| {}).unwrap();
         let mut reports = Vec::new();
         watch_loop(
-            watcher,
-            &Script::new(steps),
+            &mut Script::new(steps),
             &[path.to_path_buf()],
             &BTreeSet::new(),
             &mut last,

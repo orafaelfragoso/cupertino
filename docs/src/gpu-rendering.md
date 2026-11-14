@@ -25,7 +25,8 @@ Three facts decide most of the plan:
 - **A toolkit frame has phases**: update, view, layout, paint, raster, copy, commit. A GPU speeds up raster and copy.
   Retained layers remove paint and raster of content that did not change. Update, view and layout are touched by
   neither, so they are measured first and handled on their own where they dominate.
-- **A full-window repaint is expensive on the CPU** (about 10 ns per pixel, so tens of milliseconds for a 4K window).
+- **A full-window repaint is expensive on the CPU**: Files filling a 3840 x 2160 output takes 57–83 ms (p50) to
+  repaint whole and 34–59 ms a frame to scroll, most of it raster (the plan's step 0 measurements).
   Layers do not help a resize, which repaints everything; a GPU does.
 - **A GPU context is expensive per process.** On the NVIDIA driver a GLES context plus its first program costs about
   70 MiB of private memory and about 90 ms before the first frame, and tearing it down returns almost none of it. Many
@@ -212,17 +213,17 @@ reviewed change that records the reason.
 | Measure | Budget | Gate |
 |---|---|---|
 | Any frame, compositor or client | inside one refresh (16.7 ms at 60 Hz); no missed refreshes in the bench scenarios, and no client frame longer than a refresh | every step: no scenario worse than its baseline beyond the recorded run-to-run noise (step 1: within its 10% budget); absolute from the step that owns the scenario (scroll 4, drag 2, resize and animation 7) |
-| Files wheel scroll, p99 client frame CPU | under 8 ms at scale 1 and 1.5; paint and raster cover only the exposed strip | 4 |
+| Files wheel scroll with the window filling the output, p99 client frame CPU | under 8 ms at scale 1 and 1.5; paint and raster cover only the exposed strip | 4 |
 | Files live resize | client CPU excluding raster under 8 ms; client GPU under 4 ms | 7 |
 | Toolkit animation frame (Control Center opening, launcher typing), client CPU | under 4 ms | 7 |
 | Client GPU time per frame (timer queries) | under 4 ms | 6 |
 | Compositor frame while a window is dragged over glass | under 4 ms GPU, under 2 ms CPU | 2 |
 | First frame of a GPU process | no later than the CPU path; the switch to the GPU within 150 ms with a warm program cache | 6 |
 | Added private memory per GPU process | under 80 MiB; CPU-class processes unchanged | 7 |
-| GPU memory per GPU window | at most two buffers and one window-sized layer (width x height x 4 bytes each) plus 32 MiB of atlases and pools, measured as the change in total GPU memory with the window open and closed | 7 |
-| Client CPU after the look freeze | no bench scenario's client CPU p99 more than 10% above its baseline | 1 |
+| GPU memory per GPU window | at most two buffers and one window-sized layer (width x height x 4 bytes each) plus 32 MiB of atlases and pools, measured as the change in total GPU memory with the window open and closed; a process's first render target adds the one more target's size the driver reserves with it | 7 |
+| Client CPU after the look freeze | no bench scenario's client CPU p99 more than 10% above its baseline, or more than its recorded run-to-run spread where that is larger | 1 |
 | Fence overhead | resident-memory slope with fences minus the slope without, under 1 byte per frame over 10 million frames | 3 |
-| Idle desktop | no frames drawn and no GPU work; processes wake only by the timers recorded and justified in step 0 (the clock's minute tick, for example), listed in the plan's measurements | 7 |
+| Idle desktop | no frames drawn and no GPU work but the clock's minute (one menu bar frame and its composite); processes wake only by the timers recorded and justified in step 0, listed in the plan's measurements | 7 |
 | Pointer motion to screen | input-to-flip latency from the DRM backend's log, below the baseline; the cursor on the cursor plane | 11 |
 
 ## Testing

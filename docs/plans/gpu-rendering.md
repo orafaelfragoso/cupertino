@@ -39,12 +39,13 @@ Instruments:
 
 Baseline:
 
-- [ ] Every bench scenario at scale 1.5 and 2: frame time p50/p99, missed refreshes, slow client frames, compositor CPU
+- [x] Every bench scenario at scale 1.5 and 2: frame time p50/p99, missed refreshes, slow client frames, compositor CPU
       and GPU time, per-phase client split, per-process CPU and private memory.
-- [ ] Each scenario run five times; the run-to-run spread of every figure recorded as its noise.
-- [ ] One measured table for Files replacing the two figures in the docs (full repaint at 3840 x 2160, wheel scroll
+- [x] Each scenario run five times; the run-to-run spread of every figure recorded as its noise.
+- [x] One measured table for Files replacing the two figures in the docs (full repaint at 3840 x 2160, wheel scroll
       p99 at scales 1, 1.5 and 2).
-- [ ] Presentation-time branch and plane assignment on the target driver recorded.
+- [ ] Presentation-time branch and plane assignment on the target driver recorded. BLOCKED (owner action): it needs
+      the session server on the display ("Measurements").
 
 Probes (small programs outside the product; results recorded here):
 
@@ -52,14 +53,16 @@ Probes (small programs outside the product; results recorded here):
 - [x] Render-target texture cost in total GPU memory, the first one in a process and later ones.
 - [x] A saved program binary as the first program of a fresh process: time and memory against compiling.
 - [x] Native fence soak: resident-memory slope with and without the fence over 10 million frames.
-- [ ] 10-bit (`Abgr2101010`) gradient on the primary plane with the driver's dithering off, against 8-bit.
+- [ ] 10-bit (`Abgr2101010`) gradient on the primary plane with the driver's dithering off, against 8-bit. BLOCKED
+      (owner action): it needs the display to itself ("Measurements").
 
 Gate:
 
-- [ ] All of the above recorded under "Measurements"; if update, view and layout exceed 4 ms in a Files scroll frame,
-      step 4 gains the incremental view and layout item.
-- [ ] Each budget in the design confirmed or revised once against the baseline, in a reviewed change, with the reason
-      recorded.
+- [x] All of the above recorded under "Measurements" (the two owner-action items as BLOCKED); if update, view and
+      layout exceed 4 ms in a Files scroll frame, step 4 gains the incremental view and layout item. They do in the
+      worst frame of a full-screen scroll (5.5–6.1 ms at scales 1 and 1.5), so it does.
+- [x] Each budget in the design confirmed or revised once against the baseline, in a reviewed change, with the reason
+      recorded ("Measurements", "Budgets against the baseline").
 
 ## Step 1: shared maths and the look freeze
 
@@ -138,8 +141,8 @@ Works with the CPU renderer; no GPU needed.
 - [ ] Opacity and transform animations change layer properties, not pixels.
 - [ ] Minimized and fully covered windows drop their layers.
 - [ ] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2.
-- [ ] (Only if step 0 found update, view and layout above 4 ms in a scroll frame) incremental view and layout for the
-      Files listing.
+- [ ] Incremental view and layout for the Files listing: step 0 found update, view and layout above 4 ms in the worst
+      frame of a full-screen scroll of 3000 files (5.5–6.1 ms at scales 1 and 1.5; 0.6–1.2 ms at p50).
 
 Gate:
 
@@ -354,6 +357,151 @@ control-center, launcher-typing and files-scroll.
 
 The resize already shows what step 8 removes: a title bar raster and upload on every frame.
 
+**The baseline** (`96034ac4`, release build; 3840 x 2160 at 60 Hz, five runs a scenario, `--idle-seconds 60`; no
+build ran during the runs). Each figure is the median of the five runs, with the run-to-run spread (max - min, the
+noise) in brackets where it is not zero. "Compositor work" is the CPU time of a compositor frame, "Client" the
+program whose frames the scenario drives, "Slow client frames" those of every program longer than a refresh. No
+scenario missed a refresh at either scale.
+
+Scale 1.5:
+
+| Scenario | Frames | Missed | Compositor work p50 / p99 ms | Compositor GPU p50 / p99 ms | Server CPU ms/s | Slow client frames | Client | Client frame p50 / p99 ms |
+|---|---|---|---|---|---|---|---|---|
+| idle | 1 | 0 | 1.28 (0.13) / 1.28 (0.13) | 0.74 (0.01) / 0.74 (0.01) | 0.0 | 0 | menu bar (1 frame) | 0.46 (0.10) / 0.46 (0.10) |
+| drag | 180 | 0 | 1.32 (0.04) / 2.38 (0.28) | 1.01 / 2.07 (1.13) | 90.0 (3.3) | 0 | Settings (2 frames) | 0.59 (0.06) / 0.64 (0.06) |
+| hover | 288 | 0 | 1.14 (0.05) / 1.54 (0.03) | 0.69 / 0.78 | 77.1 (4.2) | 0 | Settings (12 frames) | 0.49 (0.05) / 1.09 (0.16) |
+| resize | 181 | 0 | 4.33 (0.15) / 7.41 (0.36) | 2.83 (0.20) / 4.35 (0.42) | 332.3 (12.9) | 2 (4) | Files (203 frames) | 9.63 (0.46) / 16.44 (0.83) |
+| control-center | 85 (2) | 0 | 1.95 (0.02) / 2.60 (0.55) | 1.51 / 1.83 (0.21) | 31.7 (3.3) | 0 | Control Center (102 frames) | 12.84 (0.86) / 14.55 (0.54) |
+| launcher-typing | 242 (1) | 0 | 1.69 (0.06) / 2.98 (0.25) | 1.17 (0.04) / 1.64 (0.02) | 72.3 (1.5) | 0 | launcher (372 frames) | 1.67 (0.13) / 6.44 (0.05) |
+| files-scroll | 182 | 0 | 1.57 (0.01) / 2.47 (0.11) | 1.19 / 1.51 (0.01) | 105.5 (6.6) | 0 | Files (184 frames) | 5.44 (0.05) / 6.23 (0.40) |
+
+| Scenario | Client | update | view | layout | paint | raster | copy | commit |
+|---|---|---|---|---|---|---|---|---|
+| idle | menu bar | 0.17 / 0.17 | 0.02 / 0.02 | 0.03 / 0.03 | 0.04 / 0.04 | 0.15 / 0.15 | 0.03 / 0.03 | 0.02 / 0.02 |
+| drag | Settings | 0.01 / 0.02 | 0.00 / 0.00 | 0.09 / 0.09 | 0.18 / 0.19 | 0.26 / 0.26 | 0.02 / 0.07 | 0.02 / 0.02 |
+| hover | Settings | 0.02 / 0.02 | 0.00 / 0.00 | 0.09 / 0.13 | 0.16 / 0.24 | 0.18 / 0.22 | 0.01 / 0.58 | 0.02 / 0.03 |
+| resize | Files | 0.02 / 0.03 | 0.39 / 0.61 | 0.22 / 0.41 | 0.20 / 0.38 | 4.67 / 8.59 | 3.95 / 6.49 | 0.27 / 0.85 |
+| control-center | Control Center | 0.01 / 0.02 | 0.03 / 0.11 | 0.02 / 0.11 | 0.07 / 0.35 | 12.09 / 13.05 | 0.61 / 1.75 | 0.01 / 0.05 |
+| launcher-typing | launcher | 0.01 / 0.11 | 0.01 / 0.07 | 0.03 / 0.10 | 0.03 / 0.21 | 1.18 / 6.19 | 0.28 / 2.20 | 0.01 / 0.28 |
+| files-scroll | Files | 0.00 / 0.01 | 0.00 / 0.38 | 0.08 / 0.19 | 0.20 / 0.30 | 4.66 / 5.02 | 0.47 / 0.61 | 0.01 / 0.02 |
+
+| Program | idle | drag | hover | resize | control-center | launcher-typing | files-scroll | private MiB | private dirty MiB |
+|---|---|---|---|---|---|---|---|---|---|
+| Control Center | 0 | 0 | 0 | 0 | 20.7 (0.3) | 0 | 0 | 13.3 (0.4) | 4.3 |
+| dock | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 52.0 (1.6) | 41.2 (1.6) |
+| Files | 0 | 0 | 0 | 67.7 (1.6) | 0 | 0 | 37.6 (0.7) | 36.9 (3.6) | 33.8 (3.6) |
+| launcher | 0 | 0 | 0 | 0 | 0 | 12.0 (0.5) | 0 | 15.3 (0.2) | 4.9 |
+| menu bar | 0 | 0 | 0 | 0 | 0.2 (0.2) | 0 | 0 | 20.1 (0.1) | 5.9 |
+| notifications | 0 | 0 | 0 | 0 | 0.0 (0.2) | 0 | 0 | 13.6 (0.2) | 4.2 |
+| OSD | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 12.9 (0.3) | 4.3 (0.3) |
+| server | 0 | 9.0 (0.3) | 7.7 (0.4) | 33.2 (1.3) | 3.2 (0.3) | 7.2 (0.2) | 10.5 (0.7) | 179.3 (5.7) | 118.1 (6.0) |
+| Settings | 0 | 0.3 (0.7) | 0.4 (0.4) | 0 | 0 | 0 | 0 | 38.6 (5.6) | 22.4 (5.7) |
+| window manager | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1.0 | 0.2 |
+| bus daemon | 0 | 0 | 0 | 0 | 0.0 (0.2) | 0 | 0 | 0.8 | 0.6 |
+
+Scale 2:
+
+| Scenario | Frames | Missed | Compositor work p50 / p99 ms | Compositor GPU p50 / p99 ms | Server CPU ms/s | Slow client frames | Client | Client frame p50 / p99 ms |
+|---|---|---|---|---|---|---|---|---|
+| idle | 1 | 0 | 1.89 (0.19) / 1.89 (0.19) | 1.30 (0.07) / 1.30 (0.07) | 0.0 (0.2) | 0 | menu bar (1 frame) | 0.57 (0.06) / 0.57 (0.06) |
+| drag | 180 | 0 | 1.60 (0.02) / 1.97 (0.40) | 1.37 (0.01) / 1.43 (0.63) | 103.3 (3.3) | 0 | Settings (2 frames) | 0.62 (0.10) / 0.77 (0.22) |
+| hover | 288 | 0 | 1.35 (0.11) / 1.96 (0.11) | 1.03 / 1.14 (0.14) | 93.8 | 0 | Settings (12 frames) | 0.53 (0.03) / 1.44 (0.35) |
+| resize | 181 | 0 | 5.90 (0.44) / 10.48 (0.41) | 4.02 (0.12) / 6.80 (0.26) | 483.9 (12.9) | 61 (3) | Files (175 frames) | 13.55 (0.33) / 22.14 (1.27) |
+| control-center | 81 (5) | 0 | 2.74 (0.04) / 3.73 (1.41) | 2.18 / 2.63 (0.64) | 40.0 (3.3) | 64 (57) | Control Center (76 frames) | 17.34 (1.20) / 19.58 (1.28) |
+| launcher-typing | 240 | 0 | 2.32 (0.06) / 5.15 (0.29) | 1.78 (0.04) / 2.83 (0.09) | 97.9 | 0 | launcher (362 frames) | 2.49 (0.13) / 10.94 (0.08) |
+| files-scroll | 182 | 0 | 2.25 (0.04) / 3.30 (0.09) | 1.77 / 2.05 (0.37) | 141.8 (9.9) | 0 | Files (184 frames) | 5.78 (0.17) / 6.98 (0.68) |
+
+| Scenario | Client | update | view | layout | paint | raster | copy | commit |
+|---|---|---|---|---|---|---|---|---|
+| idle | menu bar | 0.18 / 0.18 | 0.02 / 0.02 | 0.03 / 0.03 | 0.03 / 0.03 | 0.24 / 0.24 | 0.05 / 0.05 | 0.02 / 0.02 |
+| drag | Settings | 0.01 / 0.01 | 0.00 / 0.00 | 0.06 / 0.08 | 0.13 / 0.17 | 0.31 / 0.35 | 0.03 / 0.14 | 0.01 / 0.02 |
+| hover | Settings | 0.02 / 0.03 | 0.00 / 0.00 | 0.09 / 0.11 | 0.16 / 0.17 | 0.21 / 0.24 | 0.01 / 0.97 | 0.02 / 0.03 |
+| resize | Files | 0.02 / 0.04 | 0.41 / 0.63 | 0.22 / 0.44 | 0.21 / 0.35 | 5.27 / 8.89 | 7.08 / 11.62 | 0.43 / 1.22 |
+| control-center | Control Center | 0.02 / 0.03 | 0.05 / 0.11 | 0.03 / 0.11 | 0.10 / 0.41 | 16.05 / 17.03 | 1.08 / 2.89 | 0.02 / 0.05 |
+| launcher-typing | launcher | 0.01 / 0.11 | 0.01 / 0.07 | 0.03 / 0.10 | 0.03 / 0.13 | 1.66 / 10.56 | 0.49 / 3.95 | 0.01 / 0.32 |
+| files-scroll | Files | 0.00 / 0.01 | 0.00 / 0.38 | 0.09 / 0.18 | 0.24 / 0.35 | 4.56 / 5.08 | 0.86 / 0.97 | 0.01 / 0.03 |
+
+| Program | idle | drag | hover | resize | control-center | launcher-typing | files-scroll | private MiB | private dirty MiB |
+|---|---|---|---|---|---|---|---|---|---|
+| Control Center | 0 | 0 | 0 | 0 | 21.2 (0.3) | 0 | 0 | 13.2 (0.2) | 4.3 |
+| dock | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 54.4 (0.7) | 43.8 (0.7) |
+| Files | 0 | 0 | 0 | 83.2 (1.3) | 0 | 0 | 39.5 (2.0) | 44.7 (2.2) | 41.7 (1.8) |
+| launcher | 0 | 0 | 0 | 0 | 0 | 16.3 (0.3) | 0 | 15.4 (0.2) | 4.9 |
+| menu bar | 0 | 0 | 0 | 0 | 0.2 (0.2) | 0 | 0 | 20.2 (0.3) | 6.1 |
+| notifications | 0 | 0 | 0 | 0 | 0.0 (0.2) | 0 | 0 | 13.6 (0.1) | 4.2 |
+| OSD | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 12.8 (0.1) | 4.3 |
+| server | 0 | 10.3 (0.3) | 9.4 | 48.4 (1.3) | 4.0 (0.3) | 9.8 | 14.2 (1.0) | 191.8 (8.3) | 130.7 (8.1) |
+| Settings | 0 | 0.3 (0.3) | 0.4 (0.2) | 0 | 0 | 0 | 0 | 40.8 (1.2) | 24.6 (1.1) |
+| window manager | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1.0 | 0.2 |
+| bus daemon | 0 | 0 | 0 | 0 | 0.0 (0.2) | 0 | 0 | 0.8 | 0.6 |
+
+The tables above are, in order: the frames; the per-phase client split (p50 / p99 ms) of the scenario's client; each
+program's CPU (% of one core over the scenario) and its private memory at the end of the idle scenario.
+
+What the baseline shows:
+
+- **Control Center at scale 2** (slow frames 64, spread 57): its frames take 17.3 ms at p50, at the refresh's edge, so
+  the count swings between runs. Nearly all of it is raster (16.1 / 17.0 ms; 12.1 / 13.1 at 1.5): the card and its
+  soft shadow, redrawn whole on every frame of the opening. Its full-output click catcher is not repainted. No plain bug:
+  this is the work layers (step 4), the shared shadow (step 1) and the compositor's layers (step 9) remove.
+- **Resize at scale 2** (61 slow Files frames): raster 5.3 / 8.9 ms and copy 7.1 / 11.6 ms. The copy costs more than
+  the raster because every frame is a buffer of a new size, copied whole. Steps 6 and 7 remove it (size-stepped GPU
+  buffers, no copy).
+- **The drag** let go 7.5 pt from where it began at 3840 x 2160: the server anchored a move a client asks for after
+  its drag-start box at the pointer's position then, not at the press. A move or resize asked for past the drag
+  start is now anchored at the press
+  (`a_move_and_a_resize_asked_for_past_the_drag_start_keep_the_pressed_point_under_the_pointer`).
+- **A scroll of a full-screen grid** damaged 641–673 separate rectangles a frame at scale 1, each walking the whole
+  display list: 530–600 ms frames. More than 16 separate rectangles are now repainted as the one around them
+  (`many_separate_pieces_become_the_one_rectangle_around_them`); the worst frame went to about 80 ms.
+
+**Files at 3840 x 2160** (`--scenario files-full-repaint,files-full-scroll,files-scroll`, five runs a scale;
+`96034ac4`). Full screen: Files fills the output (`toggle-fullscreen`) on a folder of 3000 files; the repaint is
+three appearance switches, each repainting the whole window; the scroll is the wheel over the grid. Default size:
+the baseline's `files-scroll` (a 400-file folder, the window at its default size). Client frame p50 / p99 ms, spread
+in brackets:
+
+| Scale | Full repaint, full screen | Raster / copy p50 | Wheel scroll, full screen | Frames over a refresh | Wheel scroll, default size |
+|---|---|---|---|---|---|
+| 1 | 82.5 (1.4) / 106.5 (1.4) | 52.0 / 13.6 | 56.7 (1.4) / 79.2 (5.1) | all (41 of 41) | 2.26 / 3.25 (0.32) |
+| 1.5 | 81.0 (2.0) / 106.2 (3.3) | 56.6 / 16.0 | 59.1 (6.9) / 77.9 (8.9) | all (42 of 42) | 5.44 / 6.23 (0.40) |
+| 2 | 57.4 (1.0) / 83.7 (2.1) | 36.0 / 18.5 | 34.0 (0.2) / 53.1 (0.6) | all (60 of 60) | 5.78 / 6.98 (0.68) |
+
+The full-screen scroll is raster (45 / 50 / 26 ms at p50) and copy (6.4 ms at p50, 19–25 ms at p99). A frame's cost
+follows the items in view, not the pixels: scale 2 shows a quarter of the items scale 1 does on the same pixels and is
+the fastest. The full-screen frames take so long that Files draws one frame in three refreshes (41 frames in 3 s).
+
+**Gate: update, view and layout in a Files scroll frame** (summed per frame, `logic_p50_ms` / `logic_p99_ms` of the
+bench; `scroll-*.json`, five runs a scale, the runs the machine disturbed left out):
+
+| Scale | Default size p50 / p99 ms | Full screen p50 / p99 ms |
+|---|---|---|
+| 1 | 0.09 / 0.48–0.96 | 1.0–1.2 / 5.6–6.1 |
+| 1.5 | 0.09 / 0.78–1.21 | 0.6–0.7 / 5.5–5.8 |
+| 2 | 0.09 / 0.57–0.72 | 0.33–0.36 / 0.43–2.53 |
+
+At the default size the three phases take 0.1 ms at p50 and under 1.3 ms at p99 (the 0.6 ms read earlier holds). With
+Files full screen on 3000 files the worst frame of the scroll spends 5.5–6.1 ms in them at scales 1 and 1.5 (view and
+layout about 3 ms each): above 4 ms, so step 4 gains the incremental view and layout item.
+
+**Budgets against the baseline** (the design's budgets table, each checked once):
+
+| Budget | Baseline | Verdict |
+|---|---|---|
+| Any frame inside one refresh; no missed refreshes or slow client frames | no missed refresh in any scenario; slow client frames only in resize and Control Center at scale 2 and in full-screen Files | confirmed: the scenarios that miss are the ones the owning steps fix |
+| Files wheel scroll, p99 client CPU under 8 ms at scales 1 and 1.5 | default size 3.25 / 6.23 ms; full screen 79.2 / 77.9 ms | revised: the budget now names the window filling the output. At its default size Files meets it today, so only the full-screen scroll measures what step 4 must do |
+| Files live resize: client CPU excluding raster under 8 ms, GPU under 4 ms | p99 at 1.5: raster 8.6 ms, copy 6.5 ms, the other phases 2.3 ms together | confirmed: the copy is what the GPU path removes; the rest is a quarter of the budget |
+| Toolkit animation frame under 4 ms client CPU | Control Center 12.8 / 14.6 ms (raster 12.1 / 13.1); launcher p99 6.4 ms (raster 6.2) | confirmed: outside raster the phases' p99s add to 2.4 ms (Control Center) and 3.0 ms (launcher) at 1.5, most of it the copy the GPU path removes |
+| Client GPU time per frame under 4 ms | no client draws on the GPU yet; the compositor's whole output takes 0.7–6.8 ms of GPU at p99 | confirmed, checked from step 6 |
+| Compositor frame during a drag over glass: under 4 ms GPU, under 2 ms CPU | GPU p99 2.07 ms (1.5) / 1.43 ms (2); CPU p50 1.32 / 1.60 ms, p99 2.38 / 1.97 ms | confirmed: the CPU p99 at 1.5 is over, which step 2 fixes; the GPU room is for the compositor's own drawing that steps 8 and 9 move there |
+| First frame of a GPU process; switch within 150 ms on a warm cache | context 57 ms, first program 0.4 ms from the driver's cache | confirmed |
+| Added private memory per GPU process under 80 MiB | 68.8 MiB after a context and a compiled first program; 21 MiB with the driver's cache | confirmed |
+| GPU memory per GPU window | a process's first 3840 x 2160 target adds 63.5 MiB for 31.6 MiB of pixels and keeps it | revised: the driver reserves one more target's size with a process's first one; the 32 MiB of atlases and pools cannot hold that at 4K, so the budget names it |
+| Client CPU after the look freeze: no scenario's client p99 more than 10% above its baseline | client p99 spreads: 1–10% for resize, Control Center, the launcher and the scrolls; 9–29% for the sub-millisecond drag and hover frames | revised: 10% or the recorded spread, whichever is larger, since 10% of a 0.6 ms frame is inside its noise |
+| Fence overhead under 1 byte a frame | -0.25 bytes a frame | confirmed |
+| Idle desktop: no frames, no GPU work; listed timers only | one menu bar frame and its composite a minute (the clock); wakeups as listed below | revised: the clock's one frame a minute is named as the exception |
+| Pointer motion to screen below the baseline; cursor on the cursor plane | BLOCKED (owner action): the traced live session gives the baseline | confirmed as written; its baseline comes with the owner's trace |
+
 **Context, first program, later programs, teardown** (`gpu-probes context --runs 5`, median of five fresh processes,
 spread in brackets; private memory is clean + dirty, after each stage):
 
@@ -419,10 +567,10 @@ resize a window, scroll in Files, play a video full screen), let it end, then
 `grep drm_trace ~/.local/state/cupertino/server.log`. The lines name the branch, missed flips, planes and latencies.
 
 **Timers that wake an idle desktop.** The bench's idle scenario counts, per thread, its voluntary context switches,
-samples where it sleeps (the call and its timeout) and reads each timerfd's period and count. Headless, 1280 x 800,
-Files and Settings open, nobody touching the desktop for 60 s. Before this step's changes (30 s): every process with a
-bus connection woke twice a second in its pool thread (120 a minute each, 10 processes), the server's main loop woke
-242 times a minute, Settings drew a frame a second.
+samples where it sleeps (the call and its timeout) and reads each timerfd's period and count. Headless, Files and
+Settings open (Settings on its first pane, Account), nobody touching the desktop for 60 s. Before this step's changes
+(1280 x 800, 30 s): every process with a bus connection woke twice a second in its pool thread (120 a minute each,
+10 processes), the server's main loop woke 242 times a minute, Settings drew a frame a second.
 
 Removed:
 
@@ -438,18 +586,39 @@ Removed:
   control, so they shared one key and were mounted again at every refresh. Each row now has a key of its own and a
   refresh that changes no reading draws nothing (`the_rows_of_a_section_have_keys_of_their_own_though_readings_share_their_control`,
   `a_turn_that_changes_no_reading_presents_nothing_on_a_pane_of_readings`).
+- Settings re-read every pane once a second, whatever it showed: the appearance from the session service over the
+  bus (which woke the server and the bus daemon each time), and on a machine without a system bus (the headless runs)
+  a connect attempt and a listing of the bus's names a second. Settings now listens: one thread holds a match rule
+  per service it reads (the session and notification services' owner and property changes; for the network, Wi-Fi,
+  Bluetooth, power and power-profile services on the system bus, their owner and every signal they send) and wakes
+  the window only when one comes and the shown pane shows what it is about. The appearance is read when the session
+  service starts or says it changed. A pane whose readings all have a change signal, or that shows none, arms no
+  timer (`a_pane_whose_readings_have_change_signals_or_that_shows_none_arms_no_timer_and_a_polling_pane_one`,
+  `the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_signal`).
+- The settings file watch of every process woke whenever any process opened or read a file beside the settings or in
+  the folder above them (`~/.config`, `/etc`; `/tmp` in the headless runs): its library always asks the kernel for
+  open events and drops them only after waking. The watch now asks only for changes, and the folder above only for
+  entries appearing and going (`opening_and_reading_files_in_the_watched_directories_wakes_nothing`).
 
-Kept, with what they cost per minute after the changes:
+At 3840 x 2160 before these last two changes, a minute of rest woke Settings 480–1140 times over its threads (its
+async-io thread 240–780, its main thread 180, its bus thread 60–180), the server's async-io thread 145–216 times and
+its bus thread 60, and the bus daemon 129. After them (`idle-1.5.json`, `idle-2.json`, five runs a scale): Settings 0,
+the server 1, the bus daemon 9, and no settings watch thread in any run.
+
+Kept, with what they cost per minute after the changes (Settings open on Account, 60 s, both scales):
 
 | Who | Every | Why | Wakeups a minute |
 |---|---|---|---|
-| Settings, while its window is open | 1 s (100 ms while the input level meter shows) | re-reads the shown pane's live readings: some services send no change signal | Settings about 1200 over its threads, the server about 250 (its bus threads, and its file watches as Settings reads watched files), the bus daemon about 120; headless runs add a system bus connect attempt a pass, as there is none |
-| menu bar clock | at each minute | the clock; it reads do-not-disturb and the control panel's state with it | menu bar 22, notifications 15, control panel 2, bus daemon 9 |
+| Settings, while Sound, Displays, Wi-Fi, Network or Notifications shows | 1 s (100 ms while the input level meter shows) | readings without a change signal: the sound server's volume and outputs, the display list (a fresh connection to the display server), the kernel's interface addresses (Wi-Fi also scans every 10 s), a new notification's application | Settings one refresh a period; no other pane arms a timer |
+| Settings, while Focus or Battery shows | 60 s | the durations offered follow the time of day; the charge history | Settings 1 |
+| menu bar clock | at each minute | the clock; it reads do-not-disturb and the control panel's state with it | menu bar 21–26 over its threads, notifications 8–17, Control Center 2, bus daemon 9 |
 | session and headless main loop | 60 s | backstop for a deadline left unnamed | server 1 |
+| Files' folder watches and the dock's trash watch | on activity only | their file watch library asks for open events too; they wake only when a process opens a file in the shown folder or the trash, which nothing does on an idle desktop | 0 |
 
-Without Settings open the whole desktop wakes about 50 times a minute, all of it the clock's minute and the backstop.
-Three timerfds stay armed without firing in a minute (one each in the server, the menu bar and Settings): long
-deadlines, not periods.
+The whole desktop at rest wakes about 50 times a minute, all of it the clock's minute and the backstop. Two timerfds
+stay armed without firing in a minute (one in the server, one in the menu bar): long deadlines, not periods. The
+headless sessions keep the server's settings in a folder of their own, as a machine does (`/etc/cupertino`): beside
+`/tmp` every file another process made there woke the settings watch.
 
 ## Decisions taken
 

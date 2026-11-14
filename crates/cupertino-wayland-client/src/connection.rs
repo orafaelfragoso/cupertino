@@ -26,7 +26,7 @@ use wayland_client::protocol::wl_pointer::{self, Axis, ButtonState, WlPointer};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
-use wayland_client::protocol::wl_shm::WlShm;
+use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
 use wayland_client::protocol::wl_subsurface::WlSubsurface;
@@ -68,7 +68,7 @@ use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
-use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
+use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, Spare, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
@@ -87,6 +87,29 @@ use crate::{
     OutputInfo, PixelRect, PointerEvent, Presented, ReadId, Scale, TextInputEvent, TextInputState,
     WindowConfigure, WindowStates, WmCapabilities,
 };
+
+/// The longest pause between a surface's frames for it to count as drawing frame after frame: a few refreshes.
+const ANIMATION_GAP: Duration = Duration::from_millis(100);
+
+/// What becomes of a surface's spare buffer memory as it leases a buffer: `Some(true)` to start making one,
+/// `Some(false)` to let it go, `None` to keep what there is. A surface drawing frame after frame (`animating`) whose
+/// buffers of the layout (`of_layout` with the one leased) are all in use, none `free` besides it and the compositor
+/// holding the others, will want one more soon, so its memory is made meanwhile, unless a `fitting` spare is there
+/// already. The first buffer of a layout (`created` alone) makes none, so a resize, whose every frame is of a new size,
+/// makes no memory it does not use; a surface that draws again after a pause lets an unused spare go.
+fn spare_wanted(
+    animating: bool,
+    created: bool,
+    of_layout: usize,
+    free: bool,
+    fitting: bool,
+) -> Option<bool> {
+    if !animating {
+        return Some(false);
+    }
+    let wanted = of_layout < MAX_SLOTS && !(created && of_layout == 1) && !free && !fitting;
+    wanted.then_some(true)
+}
 
 /// A surface of this connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -416,6 +439,10 @@ struct Surface {
     serials: Serials,
     slots: Vec<Slot>,
     next_slot: u64,
+    /// The memory of the next buffer, made while the surface draws into the ones it has.
+    spare: Option<Spare>,
+    /// When the surface last presented a buffer.
+    presented_at: Option<Instant>,
     /// The surface's `wp_linux_drm_syncobj_surface_v1` while it shows dmabufs with explicit sync.
     syncobj: Option<wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1>,
 }
@@ -426,6 +453,8 @@ pub struct State {
     capabilities: CapabilitySet,
     compositor: WlCompositor,
     shm: WlShm,
+    /// The formats `wl_shm` lists.
+    shm_formats: Vec<wl_shm::Format>,
     wm_base: XdgWmBase,
     subcompositor: Option<WlSubcompositor>,
     seat: Option<WlSeat>,
@@ -560,6 +589,7 @@ impl Connection {
             themed_cursor: ThemedCursor::new(compositor.clone(), shm.clone()),
             compositor,
             shm,
+            shm_formats: Vec::new(),
             // version 4 adds `configure_bounds`, version 6 the suspended state
             wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
             subcompositor: bind(&globals, &qh, 1..=1),
@@ -634,6 +664,11 @@ impl Connection {
     /// The optional protocols the compositor offers.
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.state.capabilities
+    }
+
+    /// Whether the compositor takes buffers of `format`: the two every compositor takes, and those it lists.
+    pub fn offers(&self, format: BufferFormat) -> bool {
+        format.required() || self.state.shm_formats.contains(&format.wire())
     }
 
     pub fn waker(&self) -> Waker {
@@ -1516,8 +1551,9 @@ impl Connection {
             .zip(scale.to_physical(logical.1))
             .and_then(|(w, h)| BufferLayout::new(w, h, format))
             .ok_or(Error::InvalidScale)?;
-        let slot = match pick_slot(surf.slots.iter().map(|s| (s.busy, s.layout)), layout) {
-            SlotChoice::Reuse(i) => i,
+        let (slot, created) = match pick_slot(surf.slots.iter().map(|s| (s.busy, s.layout)), layout)
+        {
+            SlotChoice::Reuse(i) => (i, false),
             SlotChoice::AllBusy => return Err(Error::NoFreeBuffer),
             SlotChoice::Create => {
                 surf.slots.retain(|s| s.busy);
@@ -1526,10 +1562,30 @@ impl Connection {
                     surface: surface.0,
                     slot: surf.next_slot,
                 };
-                surf.slots.push(Slot::new(&shm, &qh, tag, layout)?);
-                surf.slots.len() - 1
+                let memory = surf
+                    .spare
+                    .take()
+                    .filter(|spare| spare.fits(layout))
+                    .and_then(Spare::take);
+                surf.slots.push(Slot::new(&shm, &qh, tag, layout, memory)?);
+                (surf.slots.len() - 1, true)
             }
         };
+        let animating = surf
+            .presented_at
+            .is_some_and(|at| at.elapsed() < ANIMATION_GAP);
+        let of_layout = surf.slots.iter().filter(|s| s.layout == layout).count();
+        let free = surf
+            .slots
+            .iter()
+            .enumerate()
+            .any(|(i, s)| i != slot && !s.busy && s.layout == layout);
+        let fitting = surf.spare.as_ref().is_some_and(|s| s.fits(layout));
+        match spare_wanted(animating, created, of_layout, free, fitting) {
+            Some(true) => surf.spare = Spare::start(layout),
+            Some(false) => surf.spare = None,
+            None => {}
+        }
         Ok(BufferLease {
             connection: self,
             surface,
@@ -1864,6 +1920,7 @@ impl BufferLease<'_> {
                 slot.missed.forget();
             }
         }
+        surf.presented_at = Some(Instant::now());
         let slot = &mut surf.slots[self.slot];
         slot.busy = true;
         surf.wl.attach(Some(&slot.buffer), 0, 0);
@@ -2093,6 +2150,8 @@ impl State {
             serials: Serials::default(),
             slots: Vec::new(),
             next_slot: 0,
+            spare: None,
+            presented_at: None,
             syncobj: None,
         });
     }
@@ -2230,8 +2289,25 @@ delegate_noop!(State: WlCompositor);
 delegate_noop!(State: WlRegion);
 delegate_noop!(State: WlSubcompositor);
 delegate_noop!(State: WlSubsurface);
-delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore WlShmPool);
+
+impl Dispatch<WlShm, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlShm,
+        event: wl_shm::Event,
+        _: &(),
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_shm::Event::Format {
+            format: WEnum::Value(format),
+        } = event
+        {
+            state.shm_formats.push(format);
+        }
+    }
+}
 delegate_noop!(State: XdgPositioner);
 delegate_noop!(State: WpFractionalScaleManagerV1);
 delegate_noop!(State: WpViewporter);
@@ -3202,6 +3278,52 @@ mod tests {
             single_pixel([2.0, -1.0, 0.0, 3.0]),
             [u32::MAX, 0, 0, u32::MAX],
             "components outside 0 to 1 are clamped"
+        );
+    }
+
+    #[test]
+    fn a_surface_drawing_frame_after_frame_makes_its_next_buffer_ahead_and_lets_it_go_after_a_pause(
+    ) {
+        // (animating, created, of the layout with the one leased, another free, a spare that fits)
+        assert_eq!(
+            spare_wanted(true, false, 2, false, false),
+            Some(true),
+            "both in use"
+        );
+        assert_eq!(
+            spare_wanted(true, false, 1, false, false),
+            Some(true),
+            "its one buffer reused while drawing on"
+        );
+        assert_eq!(
+            spare_wanted(true, true, 2, false, false),
+            Some(true),
+            "a second made, the third ahead"
+        );
+        assert_eq!(
+            spare_wanted(true, true, 1, false, false),
+            None,
+            "the first of a new size, as a resize draws"
+        );
+        assert_eq!(
+            spare_wanted(true, false, 2, true, false),
+            None,
+            "another one is free"
+        );
+        assert_eq!(
+            spare_wanted(true, false, 2, false, true),
+            None,
+            "one is made already"
+        );
+        assert_eq!(
+            spare_wanted(true, false, MAX_SLOTS, false, false),
+            None,
+            "as many as a surface keeps"
+        );
+        assert_eq!(
+            spare_wanted(false, false, 2, false, true),
+            Some(false),
+            "after a pause"
         );
     }
 }

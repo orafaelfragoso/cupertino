@@ -36,7 +36,7 @@ use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
 use crate::gpu_path::{GpuPath, GpuRenderers, Presented};
-use crate::pixels::{convert_rects, disjoint, rgba_to_argb8888};
+use crate::pixels::{convert_rects, copy_rects, disjoint, rgba_to_argb8888};
 use crate::presentations::Presentations;
 use crate::roles::{RoleEvent, SurfaceRoles};
 
@@ -2054,7 +2054,13 @@ fn copy_and_present(
         return Ok(Err(None));
     };
     let frame = &*frame;
-    let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
+    // in the renderer's byte order where the compositor takes it, so the frame's bytes are copied as they are
+    let format = if conn.offers(BufferFormat::Abgr8888) {
+        BufferFormat::Abgr8888
+    } else {
+        BufferFormat::Argb8888
+    };
+    let mut lease = match conn.lease(surface, size, format) {
         Ok(lease) => lease,
         Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),
         Err(Error::NotConfigured) => return Ok(Err(Some(Stall::Configure))),
@@ -2080,7 +2086,12 @@ fn copy_and_present(
         height: frame.height,
     }];
     let copying = copy_time.is_some().then(Instant::now);
-    convert_rects(
+    let into = if format == BufferFormat::Abgr8888 {
+        copy_rects
+    } else {
+        convert_rects
+    };
+    into(
         &frame.pixels,
         frame.stride as usize,
         lease.pixels_mut(),

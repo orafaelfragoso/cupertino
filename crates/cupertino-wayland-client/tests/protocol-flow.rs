@@ -119,6 +119,8 @@ struct Globals {
     single_pixel: bool,
     /// `wl_subcompositor`.
     subcompositor: bool,
+    /// `wl_shm` lists `abgr8888` besides the two formats it must take.
+    abgr: bool,
 }
 
 impl Globals {
@@ -461,7 +463,6 @@ macro_rules! plain_global {
 
 plain_global!(
     WlCompositor,
-    WlShm,
     XdgWmBase,
     ZxdgDecorationManagerV1,
     WpFractionalScaleManagerV1,
@@ -803,6 +804,25 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// `wl_shm` lists the two formats every compositor takes, and `abgr8888` when its data says so.
+impl GlobalDispatch<WlShm, bool> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlShm>,
+        abgr: &bool,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let shm = init.init(r, ());
+        shm.format(wl_shm::Format::Argb8888);
+        shm.format(wl_shm::Format::Xrgb8888);
+        if *abgr {
+            shm.format(wl_shm::Format::Abgr8888);
         }
     }
 }
@@ -1525,7 +1545,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         let mut display = Display::<Mock>::new().unwrap();
         let dh = display.handle();
         dh.create_global::<Mock, WlCompositor, _>(6, ());
-        dh.create_global::<Mock, WlShm, _>(1, ());
+        dh.create_global::<Mock, WlShm, _>(1, globals.abgr);
         if globals.xdg_wm_base {
             dh.create_global::<Mock, XdgWmBase, _>(6, ());
         }
@@ -2177,6 +2197,72 @@ fn a_leased_buffer_names_what_it_missed_of_the_frames_shown_in_the_others() {
         None,
         "back at the old size, after frames of another"
     );
+}
+
+#[test]
+fn abgr8888_is_offered_where_the_compositor_lists_it_and_its_buffers_are_committed_so() {
+    for listed in [false, true] {
+        let (mut conn, _control, seen) = connect(Globals {
+            abgr: listed,
+            ..Globals::core()
+        });
+        assert!(conn.offers(BufferFormat::Argb8888) && conn.offers(BufferFormat::Xrgb8888));
+        assert_eq!(conn.offers(BufferFormat::Abgr8888), listed);
+        if !listed {
+            continue;
+        }
+        let mut stash = Stash::new();
+        let w = window(&mut conn, Decorations::Client);
+        configured(&mut conn, &mut stash, w);
+        conn.lease(w.surface(), (64, 64), BufferFormat::Abgr8888)
+            .unwrap()
+            .present()
+            .unwrap();
+        let format = std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+            .find_map(|s| match s {
+                Seen::Commit { format, .. } => Some(format),
+                _ => None,
+            });
+        assert_eq!(format, Some(wl_shm::Format::Abgr8888));
+    }
+}
+
+#[test]
+fn a_buffer_that_missed_many_frames_misses_their_bounds_and_knows_its_other_pixels() {
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let s = w.surface();
+    conn.lease(s, (64, 64), BufferFormat::Xrgb8888)
+        .unwrap()
+        .present()
+        .unwrap();
+    conn.roundtrip().unwrap();
+    // the second buffer shows a frame of 40 rows, each a rectangle of its own, and one past the buffer; the first misses
+    // them all
+    let rows: Vec<PixelRect> = (0..40)
+        .chain([70])
+        .map(|i| PixelRect {
+            x: 2,
+            y: 2 + i,
+            width: 3,
+            height: 1,
+        })
+        .collect();
+    conn.lease(s, (64, 64), BufferFormat::Xrgb8888)
+        .unwrap()
+        .present_damage(Some(&rows))
+        .unwrap();
+    conn.roundtrip().unwrap();
+    let lease = conn.lease(s, (64, 64), BufferFormat::Xrgb8888).unwrap();
+    let around = PixelRect {
+        x: 2,
+        y: 2,
+        width: 3,
+        height: 40,
+    };
+    assert_eq!(lease.missed(), Some(&[around][..]));
 }
 
 #[test]

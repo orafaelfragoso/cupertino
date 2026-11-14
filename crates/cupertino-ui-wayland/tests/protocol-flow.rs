@@ -77,6 +77,7 @@ struct Committed {
     /// The protocol id of the committed `wl_buffer`.
     buffer: u32,
     buffer_scale: i32,
+    format: wl_shm::Format,
     first_pixel: [u8; 4],
     pixels: Pixels,
     /// The `damage_buffer` rectangles of the commit (x, y, width, height).
@@ -211,6 +212,7 @@ struct BufferData {
     width: i32,
     height: i32,
     stride: i32,
+    format: wl_shm::Format,
 }
 
 /// The window of the test client.
@@ -263,7 +265,6 @@ macro_rules! plain_global {
 }
 plain_global!(
     WlCompositor,
-    WlShm,
     WlDataDeviceManager,
     CupertinoAppEffectsV1,
     WpViewporter,
@@ -561,6 +562,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                             stride: b.stride,
                             buffer: buffer.id().protocol_id(),
                             buffer_scale: s.scale,
+                            format: b.format,
                             first_pixel,
                             pixels: Pixels(
                                 b.map[start..start + (b.stride * b.height) as usize].to_vec(),
@@ -627,6 +629,25 @@ impl Dispatch<WpPresentationFeedback, ()> for Mock {
     }
 }
 
+/// `wl_shm` lists the two formats every compositor takes, and `abgr8888` when its data says so.
+impl GlobalDispatch<WlShm, bool> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlShm>,
+        abgr: &bool,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let shm = init.init(r, ());
+        shm.format(wl_shm::Format::Argb8888);
+        shm.format(wl_shm::Format::Xrgb8888);
+        if *abgr {
+            shm.format(wl_shm::Format::Abgr8888);
+        }
+    }
+}
+
 impl Dispatch<WlShm, ()> for Mock {
     fn request(
         _: &mut Self,
@@ -663,7 +684,11 @@ impl Dispatch<WlShmPool, Arc<Mmap>> for Mock {
             format,
         } = request
         {
-            assert_eq!(format.into_result().ok(), Some(wl_shm::Format::Argb8888));
+            let format = format.into_result().unwrap();
+            assert!(
+                [wl_shm::Format::Argb8888, wl_shm::Format::Abgr8888].contains(&format),
+                "{format:?}"
+            );
             init.init(
                 id,
                 BufferData {
@@ -672,6 +697,7 @@ impl Dispatch<WlShmPool, Arc<Mmap>> for Mock {
                     width,
                     height,
                     stride,
+                    format,
                 },
             );
         }
@@ -968,14 +994,16 @@ fn spawn_server_with(
     stream: UnixStream,
     effects: Option<u32>,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
-    spawn_server_offering(stream, effects, false)
+    spawn_server_offering(stream, effects, false, false)
 }
 
-/// [`spawn_server_with`], offering `wp_viewporter` and `wp_single_pixel_buffer_manager_v1` when `solid`.
+/// [`spawn_server_with`], offering `wp_viewporter` and `wp_single_pixel_buffer_manager_v1` when `solid`, and with
+/// `wl_shm` listing `abgr8888` when `abgr`.
 fn spawn_server_offering(
     stream: UnixStream,
     effects: Option<u32>,
     solid: bool,
+    abgr: bool,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
@@ -984,7 +1012,7 @@ fn spawn_server_offering(
         let mut display = Display::<Mock>::new().unwrap();
         let dh = display.handle();
         dh.create_global::<Mock, WlCompositor, _>(6, ());
-        dh.create_global::<Mock, WlShm, _>(1, ());
+        dh.create_global::<Mock, WlShm, _>(1, abgr);
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
@@ -1294,6 +1322,7 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
             stride: 800,
             buffer: first.buffer,
             buffer_scale: 2,
+            format: wl_shm::Format::Argb8888,
             first_pixel: [30, 20, 10, 40],
             pixels: first.pixels.clone(),
             damage: vec![[0, 0, i32::MAX, i32::MAX]],
@@ -1328,7 +1357,7 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
 fn a_solid_colour_is_one_stretched_pixel_or_where_the_compositor_cannot_a_filled_frame() {
     for offered in [true, false] {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_offering(server_stream, None, offered);
+        let (control, committed, seen) = spawn_server_offering(server_stream, None, offered, false);
         let mut app = App::connect(client_stream);
         app.wait_for_draw();
         // straight half-transparent red
@@ -1691,7 +1720,12 @@ mod window_system {
 
     /// A window mapped at the output's scale 2, so its frames are 200 × 100.
     fn mapped() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
-        let (mut kit, control, committed, seen) = created();
+        mapped_listing(false)
+    }
+
+    /// [`mapped`] on a server whose `wl_shm` lists `abgr8888` when `abgr`.
+    fn mapped_listing(abgr: bool) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        let (mut kit, control, committed, seen) = created_listing(None, abgr);
         let configure = kit.window_event(|e| match e {
             WindowEvent::Configure(c) => Some(*c),
             _ => None,
@@ -1719,8 +1753,16 @@ mod window_system {
     fn created_with(
         effects: Option<u32>,
     ) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        created_listing(effects, false)
+    }
+
+    /// [`created_with`] on a server whose `wl_shm` lists `abgr8888` when `abgr`.
+    fn created_listing(
+        effects: Option<u32>,
+        abgr: bool,
+    ) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_with(server_stream, effects);
+        let (control, committed, seen) = spawn_server_offering(server_stream, effects, false, abgr);
         let mut ws = WaylandWindowSystem::new(
             Connection::from_stream(client_stream).unwrap(),
             Profile::cupertino(),
@@ -2138,6 +2180,82 @@ mod window_system {
         assert_eq!(reused.buffer, shown.buffer);
         assert_eq!(reused.damage, vec![[40, 30, 5, 5], [10, 10, 2, 2]]);
         assert_eq!(reused.first_pixel, [1, 1, 1, 1]);
+    }
+
+    /// Frames of changing damage shown through buffers that take turns, new ones among them (whose pixels are
+    /// unknown), hold the whole frame in every buffer shown, whether the buffers are in the renderer's byte order
+    /// (`abgr8888`, where the compositor lists it) or converted (`argb8888`), and the two show the same pixels.
+    #[test]
+    fn every_buffer_shown_holds_the_whole_frame_in_either_byte_order() {
+        let (width, height) = (200usize, 100usize);
+        let mut shown_in = Vec::new();
+        for abgr in [false, true] {
+            let (mut kit, control, committed, _seen) = mapped_listing(abgr);
+            let w = kit.window;
+            let mut image: Vec<u8> = (0..width * height * 4)
+                .map(|i| (i * 7 % 253) as u8)
+                .collect();
+            let frames: [&[PixelRect]; 7] = [
+                &[],
+                &[rect(1, 1, 4, 3)],
+                &[rect(50, 20, 30, 10), rect(0, 0, 2, 2)],
+                &[],
+                &[rect(180, 80, 20, 20), rect(0, 50, 200, 1)],
+                &[rect(10, 7, 3, 12)],
+                &[rect(1, 1, 4, 3)],
+            ];
+            let mut rgba = Vec::new();
+            for (i, damage) in frames.iter().enumerate() {
+                for r in *damage {
+                    for y in r.y..r.y + r.height {
+                        for x in r.x..r.x + r.width {
+                            let at = (y as usize * width + x as usize) * 4;
+                            image[at..at + 4].copy_from_slice(&[
+                                i as u8 * 30,
+                                255 - x as u8,
+                                y as u8,
+                                255,
+                            ]);
+                        }
+                    }
+                }
+                let mut f = frame(i as u64 + 1, [0; 4], damage);
+                f.pixels.copy_from_slice(&image);
+                if i > 0 {
+                    kit.ws.request_frame(w);
+                    control.send(Control::FrameDone).unwrap();
+                    kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+                }
+                assert_eq!(
+                    kit.ws.present(w, &f, None).unwrap(),
+                    PresentOutcome::Presented
+                );
+                kit.pump();
+                let c = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+                let want = if abgr {
+                    wl_shm::Format::Abgr8888
+                } else {
+                    wl_shm::Format::Argb8888
+                };
+                assert_eq!(c.format, want);
+                let mut bytes = c.pixels.0.clone();
+                if !abgr {
+                    let mut back = vec![0; bytes.len()];
+                    rgba_to_argb8888(&bytes, &mut back);
+                    bytes = back;
+                }
+                assert!(
+                    bytes == image,
+                    "frame {i}: the buffer differs from the frame"
+                );
+                rgba.push(bytes);
+            }
+            shown_in.push(rgba);
+        }
+        assert!(
+            shown_in[0] == shown_in[1],
+            "the two byte orders show the same pixels"
+        );
     }
 
     #[test]
@@ -2968,7 +3086,7 @@ mod window_system {
     #[test]
     fn a_solid_window_is_one_pixel_stretched_over_its_configured_size_and_keeps_its_input_region() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_offering(server_stream, None, true);
+        let (control, committed, seen) = spawn_server_offering(server_stream, None, true, false);
         let ws = WaylandWindowSystem::new(
             Connection::from_stream(client_stream).unwrap(),
             Profile::cupertino(),

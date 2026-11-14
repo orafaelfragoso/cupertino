@@ -144,9 +144,8 @@ struct Extensions {
     destroy_image: DestroyImage,
     image_target_texture: ImageTargetTexture,
     query_modifiers: Option<QueryModifiers>,
-    create_sync: CreateSync,
-    destroy_sync: DestroySync,
-    dup_native_fence: DupNativeFence,
+    /// Native fences (`EGL_ANDROID_native_fence_sync`): create, destroy, export.
+    fences: Option<(CreateSync, DestroySync, DupNativeFence)>,
     export_query: Option<ExportQuery>,
     export: Option<Export>,
 }
@@ -278,15 +277,22 @@ impl Gpu {
                 destroy_image: std::mem::transmute(need("eglDestroyImageKHR")?),
                 image_target_texture: std::mem::transmute(need("glEGLImageTargetTexture2DOES")?),
                 query_modifiers: proc("eglQueryDmaBufModifiersEXT").map(|p| std::mem::transmute(p)),
-                create_sync: std::mem::transmute(need("eglCreateSyncKHR")?),
-                destroy_sync: std::mem::transmute(need("eglDestroySyncKHR")?),
-                dup_native_fence: std::mem::transmute(need("eglDupNativeFenceFDANDROID")?),
+                fences: match (
+                    has("EGL_ANDROID_native_fence_sync"),
+                    proc("eglCreateSyncKHR"),
+                    proc("eglDestroySyncKHR"),
+                    proc("eglDupNativeFenceFDANDROID"),
+                ) {
+                    (true, Some(c), Some(d), Some(e)) => Some((
+                        std::mem::transmute(c),
+                        std::mem::transmute(d),
+                        std::mem::transmute(e),
+                    )),
+                    _ => None,
+                },
                 export_query: proc("eglExportDMABUFImageQueryMESA").map(|p| std::mem::transmute(p)),
                 export: proc("eglExportDMABUFImageMESA").map(|p| std::mem::transmute(p)),
             };
-            if !has("EGL_ANDROID_native_fence_sync") {
-                return Err("the driver has no native fences".into());
-            }
             let renderer = text((gl.glGetString)(GL_RENDERER).cast());
             let allocator = if gbm.is_some() {
                 Allocator::Gbm
@@ -613,11 +619,19 @@ impl Gpu {
         }
     }
 
+    /// Whether the driver exports native fences; without them neither explicit sync nor a fence wait is possible, and
+    /// the work is waited for on the CPU ([`Gpu::finish`]) before a commit.
+    pub fn has_fences(&self) -> bool {
+        self.ext.fences.is_some()
+    }
+
     /// A native fence after the work so far, flushed: a sync file that signals when the GPU has finished it.
     pub fn fence(&self) -> Result<OwnedFd, String> {
+        let (create_sync, destroy_sync, dup_native_fence) =
+            self.ext.fences.ok_or("the driver has no native fences")?;
         unsafe {
             let attribs = [EGL_NONE];
-            let sync = (self.ext.create_sync)(
+            let sync = (create_sync)(
                 self.display,
                 EGL_SYNC_NATIVE_FENCE_ANDROID,
                 attribs.as_ptr(),
@@ -626,8 +640,8 @@ impl Gpu {
                 return Err(format!("eglCreateSync: {:#x}", (self.egl.eglGetError)()));
             }
             (self.gl.glFlush)();
-            let fd = (self.ext.dup_native_fence)(self.display, sync);
-            (self.ext.destroy_sync)(self.display, sync);
+            let fd = (dup_native_fence)(self.display, sync);
+            (destroy_sync)(self.display, sync);
             if fd == EGL_NO_NATIVE_FENCE_FD_ANDROID {
                 return Err(format!(
                     "eglDupNativeFenceFD: {:#x}",

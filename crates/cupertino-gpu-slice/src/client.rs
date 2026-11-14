@@ -254,8 +254,8 @@ pub fn run(connection: Connection, options: &Options) -> Result<Report, String> 
     } else if !options.shm_only {
         report.fallback = Some("no zwp_linux_dmabuf_v1".into());
     }
-    let explicit =
-        matches!((&syncobj_manager, &node), (Some(_), Some(node)) if node.supports_eventfd());
+    let explicit = gpu.as_ref().is_some_and(|g| g.has_fences())
+        && matches!((&syncobj_manager, &node), (Some(_), Some(node)) if node.supports_eventfd());
     report.explicit_sync = explicit && gpu.is_some();
     report.buffers = if report.explicit_sync { 2 } else { 3 };
 
@@ -369,9 +369,13 @@ pub fn run(connection: Connection, options: &Options) -> Result<Report, String> 
             }
             let slot = &mut state.slots[index];
             gpu.draw(&slot.image, &model::frame_rects(n, slot.image.size));
-            let fence = gpu.fence()?;
-            if let (Some((timeline, object)), Some(sync_surface), Some(node)) =
-                (&slot.timeline, &syncobj_surface, &node)
+            let fence = if gpu.has_fences() {
+                Some(gpu.fence()?)
+            } else {
+                None
+            };
+            if let (Some((timeline, object)), Some(sync_surface), Some(node), Some(fence)) =
+                (&slot.timeline, &syncobj_surface, &node, &fence)
             {
                 slot.uses += 1;
                 let (acquire, release) = (2 * slot.uses - 1, 2 * slot.uses);
@@ -386,7 +390,13 @@ pub fn run(connection: Connection, options: &Options) -> Result<Report, String> 
                 slot.reuse = Reuse::ReleasePoint;
             } else {
                 // without explicit sync the compositor must not sample a buffer still being drawn
-                syncobj::wait_readable(fence.as_fd(), -1);
+                match &fence {
+                    Some(fence) => {
+                        syncobj::wait_readable(fence.as_fd(), -1);
+                    }
+                    // a driver without native fences: the CPU waits for the GPU
+                    None => gpu.finish(),
+                }
                 report.fence_waits += 1;
                 slot.reuse = Reuse::Release;
             }

@@ -647,7 +647,21 @@ impl Motion {
         }
         (self.alpha.start + self.alpha.duration - now).max(0.0)
     }
+
+    /// How long from `now` until nothing moves, to the next [`MOVING_STEP`]; 0 when nothing does, and at most
+    /// [`MOVING_MOST`].
+    pub fn moving_left(&self, now: f64) -> f64 {
+        let steps = (MOVING_MOST / MOVING_STEP) as usize;
+        (0..=steps)
+            .map(|i| i as f64 * MOVING_STEP)
+            .find(|&t| !self.animating(now + t))
+            .unwrap_or(MOVING_MOST)
+    }
 }
+
+/// The step and the bound of [`Motion::moving_left`]'s search, in seconds.
+const MOVING_STEP: f64 = 1.0 / 120.0;
+const MOVING_MOST: f64 = 4.0;
 
 /// What `value` presents at `now`: its target once it no longer moves. A spring past its settling time is a hair off
 /// its target for ever; presenting that hair would leave the panel's place and the text in it a little off the

@@ -590,6 +590,9 @@ pub struct PanelView<'a> {
     pub layered: bool,
     /// The compositor runs the panel's close on its layers: the panel takes every key, so nothing in it draws again.
     pub handed: bool,
+    /// The compositor runs the panel's open on its layers: the field holds its caret, which would draw the content's
+    /// layer again.
+    pub opening: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -888,7 +891,7 @@ where
         },
         size: QUERY_SIZE,
         // while the compositor runs the close, the caret's blink would draw the content's layer again
-        hold_caret: view.handed,
+        hold_caret: view.handed || view.opening,
     })
     .key("query")
     .fill();

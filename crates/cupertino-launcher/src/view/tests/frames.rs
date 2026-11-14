@@ -248,6 +248,7 @@ impl Application for MeteredApp {
         let launcher = APPS.get().map_or_else(test_launcher, launcher_of);
         let mut model = Model::new(launcher, Box::new(MeteredHost));
         model.compositor_layers = LAYERS.get();
+        model.hand_scope_opens = LAYERS.get();
         (model, vec![listen()])
     }
 

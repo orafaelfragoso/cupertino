@@ -265,7 +265,10 @@ content blurs and fades, all on the close's ease-out, with no frame of the appli
 under Reduce Motion, it draws itself. The compositor can draw the panel's edge along its glass itself
 (`layers::glass_edge` in a glass layer's look): along the search field and its mode buttons, capsules all, and along
 every straight side it is the panel's own edge within 4 of 255, while at a scope's continuous corners it follows the
-glass, where the panel strokes circular arcs that stand up to 0.57 points off it.
+glass, where the panel strokes circular arcs that stand up to 0.57 points off it. A scope's open from hidden can be
+handed over the same way (`layers::open_changes`): the layers drawn once at rest in the open's first frame, then the
+glass, the edge layer's scale and the content's place on the open's spring from where it starts and all of it faded
+in, with no frame of the application's; it stays off in the process until its look part way is the panel's own.
 
 ### 10. The compositor
 

@@ -22,7 +22,9 @@ use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
     edge_alpha, edge_outside, enclosure_radius, enclosure_rect, mode_rects_of, Input, EDGE_WIDTH,
 };
-use crate::motion::{Frame, Motion, CLOSE_BLUR, CLOSE_DURATION};
+use crate::motion::{
+    Frame, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_DAMPING, OPEN_FADE, OPEN_RESPONSE,
+};
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
     SurfaceLayerMark, Widget,
@@ -443,6 +445,76 @@ pub fn close_changes(
         ));
     }
     out
+}
+
+/// The changes of the panel's layers for an open from hidden the compositor runs: from `first`, the motion's first
+/// frame of the open, to `rest`, the panel at rest that the layers are drawn at, in a window `extent` large, for a
+/// panel with no mode buttons (a scope). The open only scales the enclosure about its centre (on the open's spring)
+/// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale, so
+/// each property starts where the first frame has it and springs to its rest on the same spring: the glass's place,
+/// size and corner, the edge's scale about the enclosure's middle, and the content's place, which keeps its size.
+pub fn open_changes(extent: Size, first: &Frame, rest: &Frame) -> Vec<(u64, Vec<LayerChange>)> {
+    let spring = Some(LayerCurve::Spring {
+        response: OPEN_RESPONSE,
+        damping: OPEN_DAMPING,
+    });
+    let fade = Some(LayerCurve::Timed {
+        duration: OPEN_FADE,
+        bezier: CubicBezier::LINEAR,
+    });
+    // a property set where the open starts and moved to where it rests along `curve`
+    let from_to = |out: &mut Vec<LayerChange>, property, a: f64, b: f64, curve| {
+        if a != b {
+            out.push(LayerChange::new(property, a, None));
+            out.push(LayerChange::new(property, b, curve));
+        }
+    };
+    let opacity = |out: &mut Vec<LayerChange>| {
+        out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
+        out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
+    };
+    let (a, b) = (enclosure_rect(extent, first), enclosure_rect(extent, rest));
+    let mut glass = Vec::new();
+    for (property, x, y) in [
+        (LayerProperty::X, a.x(), b.x()),
+        (LayerProperty::Y, a.y(), b.y()),
+        (LayerProperty::Width, a.width(), b.width()),
+        (LayerProperty::Height, a.height(), b.height()),
+        (
+            LayerProperty::CornerRadius,
+            enclosure_radius(first),
+            enclosure_radius(rest),
+        ),
+    ] {
+        from_to(&mut glass, property, x, y, spring);
+    }
+    opacity(&mut glass);
+    let mut edge = Vec::new();
+    from_to(
+        &mut edge,
+        LayerProperty::Scale,
+        first.scale.max(first.scale_y),
+        rest.scale.max(rest.scale_y),
+        spring,
+    );
+    opacity(&mut edge);
+    // the content keeps its size, centred across the enclosure and from its top edge
+    let content_at = |frame: &Frame, rect: Rect| {
+        Point::new(
+            rect.x() + (rect.width() - frame.shape.width) / 2.0,
+            rect.y(),
+        )
+    };
+    let (p, q) = (content_at(first, a), content_at(rest, b));
+    let mut content = Vec::new();
+    from_to(&mut content, LayerProperty::X, p.x, q.x, spring);
+    from_to(&mut content, LayerProperty::Y, p.y, q.y, spring);
+    opacity(&mut content);
+    vec![
+        (GLASS_LAYER, glass),
+        (EDGE_LAYER, edge),
+        (CONTENT_LAYER, content),
+    ]
 }
 
 /// The edge's blur through the close in the edge layer's points: the close's deviation over the layer's scale, at

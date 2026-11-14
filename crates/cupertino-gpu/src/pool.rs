@@ -66,6 +66,7 @@ pub struct TargetPool<T> {
     free: Vec<Free<T>>,
     in_use: u64,
     free_bytes: u64,
+    made: u64,
 }
 
 impl<T> TargetPool<T> {
@@ -75,12 +76,18 @@ impl<T> TargetPool<T> {
             free: Vec::new(),
             in_use: 0,
             free_bytes: 0,
+            made: 0,
         }
     }
 
     /// Bytes of targets in use and free.
     pub fn bytes(&self) -> (u64, u64) {
         (self.in_use, self.free_bytes)
+    }
+
+    /// Targets made in all, not taken from the free ones.
+    pub fn made(&self) -> u64 {
+        self.made
     }
 
     /// A target of `size` and `format`: a free one of that size and format, or a new one.
@@ -121,6 +128,7 @@ impl<T> TargetPool<T> {
             });
         }
         let target = source.create(size, format)?;
+        self.made += 1;
         self.in_use += c;
         Ok(Pooled {
             target,
@@ -193,10 +201,12 @@ mod tests {
             .acquire(&mut src, (64, 64), TextureFormat::Rgba8)
             .unwrap();
         assert_eq!(b.target, id);
+        assert_eq!(pool.made(), 1);
         let c = pool
             .acquire(&mut src, (64, 64), TextureFormat::Rgba16Float)
             .unwrap();
         assert_ne!(c.target, id);
+        assert_eq!(pool.made(), 2);
         assert_eq!(pool.bytes(), (4 << 20, 0));
         pool.release(b, 1);
         pool.release(c, 1);

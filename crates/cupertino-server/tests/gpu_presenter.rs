@@ -285,15 +285,16 @@ fn the_presenter_warms_up_beside_its_first_frames_then_attaches_dmabufs_with_syn
     );
 }
 
-/// The first start compiles the programs and saves them; the next start of the same user loads them.
+/// The first start compiles the programs and saves them; the next start of the same user loads them. Each start runs
+/// long enough for its warm-up, which makes the presenter's programs and the GPU renderer's, to end.
 #[test]
 fn the_presenter_loads_the_programs_it_saved_on_its_next_start() {
     let Some(mut s) = Session::start(true) else {
         return;
     };
     let home = s.home.path().to_path_buf();
-    let (cold, _) = s.run(&home, &["--frames", "30"], |_, _| {});
-    let (warm, _) = s.run(&home, &["--frames", "30"], |_, _| {});
+    let (cold, _) = s.run(&home, &["--frames", "90"], |_, _| {});
+    let (warm, _) = s.run(&home, &["--frames", "90"], |_, _| {});
     let (cold_up, warm_up) = (warm_ups(&cold)[0], warm_ups(&warm)[0]);
     eprintln!(
         "first frame {} ms ({}) and {} ms ({}); cold warm-up: GPU after {:.1} ms (context {:.1} ms, programs {:.1} ms); \
@@ -310,10 +311,15 @@ fn the_presenter_loads_the_programs_it_saved_on_its_next_start() {
         warm_up.2,
     );
     assert!(cold_up.4 > 0, "the first start compiles: {cold_up:?}");
-    assert_eq!(cold_up.3, 0, "nothing is saved before the first start");
+    // the first start loads only what it saved itself a moment before: the fill program made a second time, without
+    // blending
+    assert!(
+        cold_up.3 < cold_up.4,
+        "the first start compiles what it has not saved: {cold_up:?}"
+    );
     assert_eq!(
         (warm_up.3, warm_up.4),
-        (cold_up.4, 0),
+        (cold_up.3 + cold_up.4, 0),
         "the next start loads every program and compiles none"
     );
     assert!(home.join(".cache/cupertino/programs").is_dir());
@@ -490,4 +496,111 @@ fn the_presenter_keeps_its_fences_in_step_through_a_short_soak() {
     assert_eq!(report["allocations"], "2");
     assert_eq!(report["fence_waits"], "0");
     assert_eq!(shown.modifiers, [modifier(&report)]);
+}
+
+/// The colours and the mark the window draws with `--renderer` (`gpu-window`'s constants), at scale 1.
+const RENDERER_COLOUR: [u8; 4] = [51, 115, 217, 255];
+const MARK_COLOUR: [u8; 4] = [230, 64, 26, 255];
+const MARK_AT: (u32, u32) = (16, 24);
+const MARK_SIZE: (u32, u32) = (40, 20);
+
+impl Session {
+    fn screenshot(&mut self) -> image::RgbaImage {
+        let path = self.home.path().join("shot.png");
+        self.state.screenshot_requests.push(path.clone());
+        self.state.request_redraw();
+        let end = Instant::now() + common::HANG_GUARD;
+        while !path.exists() {
+            self.pump();
+            assert!(Instant::now() < end, "the screenshot was not taken");
+        }
+        let img = image::open(&path).unwrap().to_rgba8();
+        let _ = std::fs::remove_file(path);
+        img
+    }
+
+    /// The window's mark on screen once the window shows it at its size (past the opening animation): its first
+    /// pixel relative to the window's frame, and its size; `None` while it is not yet shown so.
+    fn mark(&mut self) -> Option<((i64, i64), (u32, u32))> {
+        let shot = self.screenshot();
+        let window = self.state.windows.iter().find(|w| w.mapped)?;
+        let frame = self.state.wm.window(window.id)?.geometry();
+        let near = |px: [u8; 4], c: [u8; 4]| px.iter().zip(c).all(|(a, b)| a.abs_diff(b) <= 1);
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for (x, y, px) in shot.enumerate_pixels() {
+            if near(px.0, MARK_COLOUR) {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+        if x0 >= x1 || (x1 - x0, y1 - y0) != MARK_SIZE {
+            return None;
+        }
+        // the window's own colour all around the mark, so the mark lies where it was drawn, the right way up
+        for (x, y) in [
+            (x0 - 4, y0 + 4),
+            (x1 + 4, y0 + 4),
+            (x0 + 4, y0 - 4),
+            (x0 + 4, y1 + 4),
+        ] {
+            if !near(shot.get_pixel(x, y).0, RENDERER_COLOUR) {
+                return None;
+            }
+        }
+        Some((
+            (
+                i64::from(x0) - frame.x as i64,
+                i64::from(y0) - frame.y as i64,
+            ),
+            (x1 - x0, y1 - y0),
+        ))
+    }
+}
+
+/// A window on the GPU is drawn by the toolkit's GPU renderer on the presenter's device: every frame after the switch
+/// is copied from the renderer's texture into a dmabuf, nothing uploaded, and the screen shows what it drew where it
+/// drew it, also at a size between the buffers' size steps (the buffer larger than the frame, cropped).
+#[test]
+fn the_presenter_shows_what_the_gpu_renderer_drew_from_its_texture_in_dmabufs() {
+    let Some(mut s) = Session::start(true) else {
+        return;
+    };
+    let home = s.home.path().to_path_buf();
+    let mut marks = Vec::new();
+    let mut resized = false;
+    let end = Instant::now() + common::HANG_GUARD;
+    let (report, shown) = s.run(&home, &["--frames", "600", "--renderer"], |s, shown| {
+        if shown.dmabuf < 30 || marks.len() >= 2 || Instant::now() > end {
+            return;
+        }
+        if let Some(mark) = s.mark() {
+            marks.push(mark);
+            if !resized {
+                resized = true;
+                s.resize((333, 251));
+            }
+        }
+    });
+    assert_eq!(report["renderer"], "gpu");
+    let gpu_frames = number(&report, "gpu_frames");
+    assert!(gpu_frames > 100, "{gpu_frames} frames from dmabufs");
+    assert_eq!(
+        number(&report, "from_texture"),
+        gpu_frames,
+        "every frame on the GPU came from the renderer's texture"
+    );
+    assert!(number(&report, "renderer_frames") >= gpu_frames);
+    assert_eq!(shown.modifiers, [modifier(&report)]);
+    assert_eq!(
+        marks.len(),
+        2,
+        "the mark at the window's two sizes: {marks:?}"
+    );
+    // the mark keeps its place in the window at both sizes
+    assert_eq!(marks[0], marks[1]);
+    let (at, size) = marks[0];
+    assert_eq!(size, MARK_SIZE);
+    assert!(
+        at.0 >= i64::from(MARK_AT.0) - 1 && at.1 >= i64::from(MARK_AT.1) - 1,
+        "the mark at {at:?} of the window's frame"
+    );
 }

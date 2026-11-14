@@ -97,6 +97,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 format: PixelFormat::Rgba8Premultiplied,
                 pixels: Vec::new(),
                 damage: Vec::new(),
+                device: None,
             },
             config,
             rasterizer,

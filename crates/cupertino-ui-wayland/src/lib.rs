@@ -24,6 +24,7 @@ mod window_system;
 pub use cupertino_wayland_client::PixelRect;
 pub use damage::Damage;
 pub use error::Error;
+pub use gpu_path::GpuRenderers;
 pub use pixels::rgba_to_argb8888;
 pub use presenter::{copy_rects, Ready, ShmPresenter};
 pub use roles::{RoleEvent, SurfaceRoles};

@@ -5,13 +5,15 @@ MPL-2.0. It binds no protocol beyond the
 transport's standard set and never reaches the private protocols (`cupertino-layers` denies `cupertino-protocols` and
 `cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-modifiers`,
 `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus`,
-`cupertino-gpu` (the graphics layer, for the GPU presenter) and `tiny-skia`.
+`cupertino-gpu` (the graphics layer, for the GPU presenter), `cupertino-ui-gpu` (the GPU renderer the presenter's
+windows draw with) and `tiny-skia`.
 
 ## Public API
 
 | Item | Contents |
 |---|---|
 | `WaylandWindowSystem` | `cupertino-ui-platform`'s `WindowSystem` on one transport `Connection` (`connect(profile)`, `new(connection, profile)`); `connection` and `surface(window)` reach the transport for an extension protocol; on a compositor with `cupertino_app_effects_v1` it learns the session's appearance and display options before the first window (`appearance()`) and reports them as `PlatformEvent::Appearance`; it reports how scroll views show their bars as `PlatformEvent::ScrollBars` after each display options; it takes a steady caret (version 9) into `SystemAppearance::steady_caret` and reports `PlatformEvent::Appearance` only when it changed; it reports the lock state as `PlatformEvent::SessionLock`, and `SessionLock(false)` once at start on a compositor that can't tell (below version 5); `WindowRequest::Backdrop` puts that protocol's material under the whole window at the backdrop's alpha, shaped to the window's size and corner radius on each present, and a new alpha or radius for the same material changes the one shown; `WindowRequest::Materials` puts one more backdrop of that protocol under each region of the list (shape, radius, alpha; a region with `glass`, or a backdrop of a glass material name, is sent as `set_glass` with its style, container and spacing; the tone the compositor tells a glass backdrop, version 7, arrives as `WindowEvent::GlassTone` with the region's index, or none for the window's own backdrop), reuses the backdrops already shown and takes away the ones left over, and an empty list takes them all away; a list or a backdrop past the protocol's limits (64 backdrops on a surface, 128 for the client), which the compositor would answer by ending the connection, is refused before any backdrop is asked for, and a refused list leaves the window without its materials; `WindowRequest::Menus` publishes a toplevel's menus through `cupertino-ui-menus` once it is configured, keeps their items' enabled states, reports chosen items as `WindowEvent::MenuActivated` and withdraws them with `None` or when the window goes; without the effects at version 2 or a session bus the menus are not shown; a window opened with `DecorationMode::{Unified, UnifiedCompact, Sidebar}` asks the effects for that window style at creation, and is titled where the compositor has no effects; `request_activation_token` asks `xdg_activation_v1` for a token naming the application and answers `None` when it can't ask |
+| `GpuRenderers` | from `WaylandWindowSystem::gpu_renderers`: `renderer(config, rasterizer)` makes a window's GPU renderer (`cupertino_ui_gpu::WindowRenderer`) on the process's device while it draws on the GPU, `None` otherwise; a renderer factory holds a clone and asks it each time |
 | `SurfaceRoles`, `RoleEvent` | `with_roles` gives windows roles from protocols outside the window system (a desktop shell's layer and lock surfaces): `create` makes a window's surface by its `app_id`, `event` turns the transport's extension events into configures and closes, `destroyed`, `keyboard_focus` and `outputs_changed` follow the windows and outputs, and `prepare`, called at the start of every dispatch, sends the requests the application asked for since and reads the transport's state; a role's configure has no activated state, so its `WindowStates::activated` says whether the window or a popup of its chain has the keyboard (between `wl_keyboard.enter` and `leave`), and a configure never turns inactive a window that keys still reach |
 | `ShmPresenter`, `Ready` | one per surface, owned by the application, holding no protocol object: `configured(size)` after a configure, `frame_done` on the surface's `Event::Frame`, `request_redraw`; `poll(&Connection)` until `Ready::Idle` reports a new scale (`Ready::ScaleChanged`) first and then `Ready::Draw` once the surface is configured, a frame is asked for, none is in flight and the transport has a free buffer; `draw(&mut Connection, damage, paint)` paints and presents a frame; `draw_solid(&mut Connection, rgba)` shows the surface as one colour, a stretched single pixel (`Connection::present_solid`), or where the compositor has no one-pixel buffers a frame filled with it |
 | `popup::placement` | the `PopupPlacement` of a popup covering a parent-local rectangle, rounded outwards to whole points, its top-left corner at the rectangle's; an empty or non-finite rectangle is `Error::InvalidShape` |
@@ -92,22 +94,31 @@ so do three resets within a minute; purges never count. The current renderer and
 `renderer: <cpu|gpu> (<reason>)` on each change and recorded in `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`.
 
 `gpu_path::GpuPath`, owned by the window system, makes the device on the feedback's render node and links the
-programs on a worker thread (saved per driver in `$XDG_CACHE_HOME/cupertino/programs`) while the first frames go out
-in shared memory, then takes the device over and reports `PlatformEvent::RendererChanged`: the runtime drops every
-window's renderer and draws whole frames with a new one. On a loss it frees every surface's buffers, reports the
+presenter's and the GPU renderer's programs on a worker thread (saved per driver in
+`$XDG_CACHE_HOME/cupertino/programs`) while the first frames go out in shared memory, then takes the device over and
+reports `PlatformEvent::RendererChanged`: the runtime drops every window's renderer (the CPU renderer's frame, layers
+and caches go with it) and draws whole frames with a new one. The new ones come from `GpuRenderers`
+(`WaylandWindowSystem::gpu_renderers`), which the kit's renderer factory holds: while the process is on the GPU it
+makes a `cupertino_ui_gpu::WindowRenderer` on the presenter's device (shared through an `Rc`) with the programs made
+in the warm-up, and the CPU renderer otherwise. On a loss it frees every surface's buffers, reports the
 change back to the CPU and warms up again (or stays on the CPU after the third reset). `buffers_lost` from the
 compositor checks the device and makes every surface's next upload whole.
 
 `gpu_present::GpuSurface` keeps one surface's dmabufs, allocated in `SIZE_STEP` (128 pixel) steps and cropped by the
-viewport, in a modifier the compositor offers and the driver renders to. Each frame's damage is uploaded into a
-staging texture and drawn into a free buffer. With `linux-drm-syncobj-v1` the frame's native fence is the buffer's
+viewport, in a modifier the compositor offers and the driver renders to. A frame the GPU renderer drew on the same
+device carries its texture (`CpuFrame::device`) and is copied from it into a free buffer texel for texel
+(`blit_texels`), nothing uploaded; a CPU frame has its damage uploaded into a staging texture and drawn into a free
+buffer. The raised layer's subsurface has buffers of its own and is presented as its window is. A surface that falls
+back to shared memory and a drag image read a GPU frame back (`CpuFrame::in_memory`). With
+`linux-drm-syncobj-v1` the frame's native fence is the buffer's
 acquire point and its release point is waited for through an eventfd (two buffers); without it the commit waits for
 the own fence and a buffer is reused one commit after its release (three buffers). A buffer that cannot be allocated
 or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj
 surface object before the first shared-memory attach.
 
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`'s `tests/gpu_presenter.rs`:
-`--frames`, `--reset-every`, `--purge-every`, `--losses`, and a `key value` report of what it did.
+`--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied
+from its texture), and a `key value` report of what it did.
 
 ## Tests
 

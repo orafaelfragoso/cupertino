@@ -1,6 +1,6 @@
 # What runs on CupertinoKit
 
-CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says what each of them draws with it and what is still open. Assessed on 2026-11-07 at the end of the Phase 4 work. A program counts as migrated only when its normal entry point draws through Kit. A dependency or a parallel implementation alone does not complete migration. Kit rasterizes every window on the CPU and hands it to the compositor in shared memory; rendering on the GPU is planned ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)).
+CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says what each of them draws with it and what is still open. Assessed on 2026-11-07 at the end of the Phase 4 work. A program counts as migrated only when its normal entry point draws through Kit. A dependency or a parallel implementation alone does not complete migration. Kit rasterizes every window on the CPU and hands it to the compositor in shared memory; rendering on the GPU is planned ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)): a process started with `CUPERTINO_RENDERER=gpu` already draws its windows with the GPU renderer and hands them over as dmabufs, but no app does so by default yet.
 
 | Program | On Kit today | Still open |
 |---|---|---|

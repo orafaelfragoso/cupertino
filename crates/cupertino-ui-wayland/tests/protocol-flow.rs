@@ -1781,6 +1781,7 @@ mod window_system {
             format: PixelFormat::Rgba8Premultiplied,
             pixels,
             damage: damage.to_vec(),
+            device: None,
         }
     }
 

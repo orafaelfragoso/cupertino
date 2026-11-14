@@ -3078,7 +3078,11 @@ fn drag_image<M: 'static>(
             damage: &DamageRegion::Full,
         })
         .map_err(UiError::Render)?;
-    let frame = renderer.frame(id).map_err(UiError::Render)?;
+    // a frame drawn on a GPU is read back: the image goes to the compositor as pixels
+    let frame = renderer
+        .frame(id)
+        .and_then(CpuFrame::in_memory)
+        .map_err(UiError::Render)?;
     let row = width as usize * 4;
     if (frame.width, frame.height) != (width, height)
         || (frame.stride as usize) < row

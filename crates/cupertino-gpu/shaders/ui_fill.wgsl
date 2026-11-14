@@ -25,7 +25,8 @@ struct Draw {
     shape: vec4<f32>,
     // The solid colour, premultiplied, in bytes.
     color: vec4<f32>,
-    // Paint kind (0 solid, 1 linear, 2 radial), stop count, whether it is dithered.
+    // Paint kind (0 solid, 1 linear, 2 radial), stop count, whether it is dithered, and how far the dither's
+    // pattern is moved (x + 8 y, each modulo 8: a kept scroll layer's content is dithered by its own pixel).
     paint: vec4<f32>,
     // Window pixel to node coordinates: a b c d, then e f.
     paint_linear: vec4<f32>,
@@ -162,7 +163,8 @@ fn paint_bytes(p: vec2<f32>, frag: vec2<f32>) -> vec4<u32> {
     let alpha = quantize(c.a);
     var step = 0.0;
     if (draw.paint.z > 0.5) {
-        step = dither_offset(frag) / 255.0;
+        let shift = u32(draw.paint.w);
+        step = dither_offset(frag + vec2<f32>(f32(shift % 8u), f32(shift / 8u))) / 255.0;
     }
     let r = min(quantize(c.r + step), alpha);
     let gr = min(quantize(c.g + step), alpha);

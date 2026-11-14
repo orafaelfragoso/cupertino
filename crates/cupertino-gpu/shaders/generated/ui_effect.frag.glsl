@@ -358,32 +358,34 @@ void main() {
     vec2 window = ((x_6 + _e5.xy) + vec2(0.5));
     float _e16 = _group_0_binding_0_fs.flags.x;
     if ((_e16 > 0.5)) {
-        float _e19 = dither_offset(window);
-        step_ = (_e19 / 255.0);
+        float _e22 = _group_0_binding_0_fs.flags.y;
+        uint shift = uint(_e22);
+        float _e32 = dither_offset((window + vec2(float((shift % 8u)), float((shift / 8u)))));
+        step_ = (_e32 / 255.0);
     }
-    vec4 _e22 = blurred(x_6);
-    float _e26 = _group_0_binding_0_fs.info.x;
-    int mode = int(_e26);
+    vec4 _e35 = blurred(x_6);
+    float _e39 = _group_0_binding_0_fs.info.x;
+    int mode = int(_e39);
     if ((mode == 0)) {
-        uint _e31 = quantize(_e22.w);
-        float _e33 = step_;
-        uint _e35 = quantize((_e22.x + _e33));
-        float _e38 = step_;
-        uint _e40 = quantize((_e22.y + _e38));
-        float _e43 = step_;
-        uint _e45 = quantize((_e22.z + _e43));
-        uvec3 c_1 = uvec3(min(_e35, _e31), min(_e40, _e31), min(_e45, _e31));
-        _fs2p_location0 = (vec4(uvec4(c_1, _e31)) / vec4(255.0));
+        uint _e44 = quantize(_e35.w);
+        float _e46 = step_;
+        uint _e48 = quantize((_e35.x + _e46));
+        float _e51 = step_;
+        uint _e53 = quantize((_e35.y + _e51));
+        float _e56 = step_;
+        uint _e58 = quantize((_e35.z + _e56));
+        uvec3 c_1 = uvec3(min(_e48, _e44), min(_e53, _e44), min(_e58, _e44));
+        _fs2p_location0 = (vec4(uvec4(c_1, _e44)) / vec4(255.0));
         return;
     }
-    vec4 _e56 = texelFetch(_group_0_binding_2_fs, ivec2(x_6), 0);
-    uvec4 c_2 = uvec4(((_e56 * 255.0) + vec4(0.5)));
-    vec4 _e65 = _group_0_binding_0_fs.tint;
-    uvec4 tint = uvec4(_e65);
+    vec4 _e69 = texelFetch(_group_0_binding_2_fs, ivec2(x_6), 0);
+    uvec4 c_2 = uvec4(((_e69 * 255.0) + vec4(0.5)));
+    vec4 _e78 = _group_0_binding_0_fs.tint;
+    uvec4 tint = uvec4(_e78);
     if ((mode == 1)) {
-        float _e70 = step_;
-        uint _e72 = quantize((_e22.w + _e70));
-        if (((_e72 == 0u) || (c_2.w == 255u))) {
+        float _e83 = step_;
+        uint _e85 = quantize((_e35.w + _e83));
+        if (((_e85 == 0u) || (c_2.w == 255u))) {
             _fs2p_location0 = (vec4(c_2) / vec4(255.0));
             return;
         }
@@ -392,76 +394,76 @@ void main() {
         bool loop_init_3 = true;
         while(true) {
             if (!loop_init_3) {
-                int _e105 = i;
-                i = (_e105 + 1);
+                int _e118 = i;
+                i = (_e118 + 1);
             }
             loop_init_3 = false;
-            int _e89 = i;
-            if ((_e89 < 4)) {
+            int _e102 = i;
+            if ((_e102 < 4)) {
             } else {
                 break;
             }
             {
-                int _e92 = i;
-                int _e94 = i;
-                int _e96 = i;
-                uint _e99 = div255_((tint[_e96] * _e72));
-                uint _e101 = div255_((_e99 * keep));
-                out_[_e92] = min((c_2[_e94] + _e101), 255u);
+                int _e105 = i;
+                int _e107 = i;
+                int _e109 = i;
+                uint _e112 = div255_((tint[_e109] * _e85));
+                uint _e114 = div255_((_e112 * keep));
+                out_[_e105] = min((c_2[_e107] + _e114), 255u);
             }
         }
-        uvec4 _e108 = out_;
-        _fs2p_location0 = (vec4(_e108) / vec4(255.0));
+        uvec4 _e121 = out_;
+        _fs2p_location0 = (vec4(_e121) / vec4(255.0));
         return;
     }
-    float _e119 = step_;
-    uint _e121 = quantize((clamp((1.0 - _e22.w), 0.0, 1.0) + _e119));
-    uint _e124 = div255_((_e121 * c_2.w));
+    float _e132 = step_;
+    uint _e134 = quantize((clamp((1.0 - _e35.w), 0.0, 1.0) + _e132));
+    uint _e137 = div255_((_e134 * c_2.w));
     bool loop_init_4 = true;
     while(true) {
         if (!loop_init_4) {
-            int _e139 = i_1;
-            i_1 = (_e139 + 1);
+            int _e152 = i_1;
+            i_1 = (_e152 + 1);
         }
         loop_init_4 = false;
-        int _e130 = i_1;
-        if ((_e130 < 4)) {
+        int _e143 = i_1;
+        if ((_e143 < 4)) {
         } else {
             break;
         }
         {
-            int _e133 = i_1;
-            int _e135 = i_1;
-            uint _e138 = div255_((tint[_e135] * _e124));
-            s[_e133] = _e138;
+            int _e146 = i_1;
+            int _e148 = i_1;
+            uint _e151 = div255_((tint[_e148] * _e137));
+            s[_e146] = _e151;
         }
     }
-    uint _e144 = s.w;
-    uint keep_1 = (255u - _e144);
+    uint _e157 = s.w;
+    uint keep_1 = (255u - _e157);
     out_1 = c_2;
     bool loop_init_5 = true;
     while(true) {
         if (!loop_init_5) {
-            int _e164 = i_2;
-            i_2 = (_e164 + 1);
+            int _e177 = i_2;
+            i_2 = (_e177 + 1);
         }
         loop_init_5 = false;
-        int _e149 = i_2;
-        if ((_e149 < 4)) {
+        int _e162 = i_2;
+        if ((_e162 < 4)) {
         } else {
             break;
         }
         {
-            int _e152 = i_2;
-            int _e154 = i_2;
-            uint _e156 = s[_e154];
-            int _e157 = i_2;
-            uint _e160 = div255_((c_2[_e157] * keep_1));
-            out_1[_e152] = min((_e156 + _e160), 255u);
+            int _e165 = i_2;
+            int _e167 = i_2;
+            uint _e169 = s[_e167];
+            int _e170 = i_2;
+            uint _e173 = div255_((c_2[_e170] * keep_1));
+            out_1[_e165] = min((_e169 + _e173), 255u);
         }
     }
-    uvec4 _e167 = out_1;
-    _fs2p_location0 = (vec4(_e167) / vec4(255.0));
+    uvec4 _e180 = out_1;
+    _fs2p_location0 = (vec4(_e180) / vec4(255.0));
     return;
 }
 

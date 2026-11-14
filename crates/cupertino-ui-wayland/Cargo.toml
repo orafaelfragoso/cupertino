@@ -17,6 +17,7 @@ cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }
+cupertino-ui-gpu = { path = "../cupertino-ui-gpu" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }

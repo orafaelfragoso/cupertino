@@ -7,7 +7,7 @@
 struct Resolve {
     // 0 blur, 1 drop shadow, 2 inner shadow; the level's texels per layer pixel; the offset in layer pixels.
     info: vec4<f32>,
-    // Whether the stores are dithered.
+    // Whether the stores are dithered, and how far the dither's pattern is moved (x + 8 y, each modulo 8).
     flags: vec4<f32>,
     // The window pixel of the layer's first pixel.
     origin: vec4<f32>,
@@ -61,7 +61,8 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let window = x + resolve.origin.xy + vec2<f32>(0.5);
     var step = 0.0;
     if (resolve.flags.x > 0.5) {
-        step = dither_offset(window) / 255.0;
+        let shift = u32(resolve.flags.y);
+        step = dither_offset(window + vec2<f32>(f32(shift % 8u), f32(shift / 8u))) / 255.0;
     }
     let v = blurred(x);
     let mode = i32(resolve.info.x);

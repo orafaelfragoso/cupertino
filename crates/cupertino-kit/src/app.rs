@@ -10,6 +10,7 @@ use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{
     Application, Command, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
 };
+use cupertino_ui_gpu::GpuConfig;
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
@@ -17,7 +18,7 @@ use cupertino_ui_text::{
     FontIndex, FontStyle, FontWeight, GlyphRaster, InstalledFonts, TextSystem,
 };
 use cupertino_ui_theme::{Appearance, ColorTokens, ThemePreferences, ThemeTokens};
-use cupertino_ui_wayland::WaylandWindowSystem;
+use cupertino_ui_wayland::{GpuRenderers, WaylandWindowSystem};
 use std::cell::Cell;
 use std::fmt;
 use std::fs::File;
@@ -78,6 +79,7 @@ pub fn run_on_with_appearance<A: Application>(
 ) -> Result<(), AppError> {
     let first = appearance(system.appearance().unwrap_or_default());
     let (mut options, theme) = options_and_theme(preferences(&first))?;
+    renderers_on_gpu(&mut options, system.gpu_renderers());
     keep_caret(Arc::make_mut(&mut options.theme), &first);
     let personal = Personal::follow(system.waker(), theme, &options.theme, first);
     options.theme = personal.theme();
@@ -99,6 +101,7 @@ pub fn run_on_with<A: Application>(
 ) -> Result<(), AppError> {
     // the first frame already has the session's appearance
     let (mut options, theme) = options_and_theme(start_preferences(system.appearance()))?;
+    renderers_on_gpu(&mut options, system.gpu_renderers());
     let first = system.appearance().unwrap_or_default();
     keep_caret(Arc::make_mut(&mut options.theme), &first);
     let personal = Personal::follow(system.waker(), theme, &options.theme, first);
@@ -472,6 +475,23 @@ fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<The
             .map(|theme| (theme, None))
             .map_err(AppError::Theme)
     })
+}
+
+/// The windows' renderers drawn on the process's GPU while it draws there (the window system's GPU path chose it and
+/// its device is ready), with the CPU renderer otherwise: before the switch, after a loss, and for a renderer the
+/// device cannot make.
+fn renderers_on_gpu(options: &mut RuntimeOptions, gpu: GpuRenderers) {
+    let text = Arc::clone(&options.text);
+    let mut cpu = std::mem::replace(
+        &mut options.renderers,
+        Box::new(|| unreachable!("replaced below")),
+    );
+    options.renderers = Box::new(move || {
+        match gpu.renderer(GpuConfig::default(), GlyphRaster::new(Arc::clone(&text))) {
+            Some(renderer) => Box::new(renderer),
+            None => cpu(),
+        }
+    });
 }
 
 fn options_and_theme(

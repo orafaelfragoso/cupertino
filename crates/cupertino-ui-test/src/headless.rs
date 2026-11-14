@@ -1110,6 +1110,7 @@ mod tests {
                 width: 2,
                 height: 1,
             }],
+            device: None,
         }
     }
 

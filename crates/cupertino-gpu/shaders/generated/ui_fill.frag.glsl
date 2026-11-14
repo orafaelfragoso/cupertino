@@ -462,18 +462,20 @@ uvec4 paint_bytes(vec2 p_9, vec2 frag_4) {
     uint _e82 = quantize(_e80.w);
     float _e88 = _group_0_binding_0_fs.paint.z;
     if ((_e88 > 0.5)) {
-        float _e91 = dither_offset(frag_4);
-        step_ = (_e91 / 255.0);
+        float _e94 = _group_0_binding_0_fs.paint.w;
+        uint shift = uint(_e94);
+        float _e104 = dither_offset((frag_4 + vec2(float((shift % 8u)), float((shift / 8u)))));
+        step_ = (_e104 / 255.0);
     }
-    float _e95 = step_;
-    uint _e97 = quantize((_e80.x + _e95));
-    uint r_1 = min(_e97, _e82);
-    float _e100 = step_;
-    uint _e102 = quantize((_e80.y + _e100));
-    uint gr = min(_e102, _e82);
-    float _e105 = step_;
-    uint _e107 = quantize((_e80.z + _e105));
-    uint b_2 = min(_e107, _e82);
+    float _e108 = step_;
+    uint _e110 = quantize((_e80.x + _e108));
+    uint r_1 = min(_e110, _e82);
+    float _e113 = step_;
+    uint _e115 = quantize((_e80.y + _e113));
+    uint gr = min(_e115, _e82);
+    float _e118 = step_;
+    uint _e120 = quantize((_e80.z + _e118));
+    uint b_2 = min(_e120, _e82);
     return uvec4(r_1, gr, b_2, _e82);
 }
 

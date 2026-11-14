@@ -20,6 +20,7 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-atspi = { path = "../cupertino-ui-atspi" }
 cupertino-ui-controls = { path = "../cupertino-ui-controls" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
+cupertino-ui-gpu = { path = "../cupertino-ui-gpu" }
 cupertino-ui-layout = { path = "../cupertino-ui-layout" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }

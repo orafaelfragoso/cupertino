@@ -35,7 +35,7 @@ use cupertino_wayland_client::{
 use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
-use crate::gpu_path::{GpuPath, Presented};
+use crate::gpu_path::{GpuPath, GpuRenderers, Presented};
 use crate::pixels::{convert_rects, disjoint, rgba_to_argb8888};
 use crate::roles::{RoleEvent, SurfaceRoles};
 
@@ -518,6 +518,12 @@ impl WaylandWindowSystem {
     /// without the desktop's effects.
     pub fn appearance(&self) -> Option<SystemAppearance> {
         self.effects.as_ref().map(|_| self.appearance)
+    }
+
+    /// What makes the windows' renderers on the process's GPU once it draws there: a renderer factory holds it
+    /// (`cupertino-kit`'s does).
+    pub fn gpu_renderers(&self) -> GpuRenderers {
+        self.gpu.renderers()
     }
 
     /// The transport, for an extension protocol such as the desktop's effects.
@@ -1415,6 +1421,13 @@ impl WindowSystem for WaylandWindowSystem {
             parents.push(child.id);
             gone_surfaces.push(child.surface);
         }
+        // and the subsurfaces of their raised layers
+        gone_surfaces.extend(
+            self.windows
+                .iter()
+                .filter(|w| parents.contains(&w.id))
+                .filter_map(|w| w.layer.as_ref().map(|l| l.surface)),
+        );
         for s in gone_surfaces {
             self.gpu.forget(&mut self.conn, s);
         }
@@ -1804,16 +1817,33 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        let copy_time = self.copy_time.as_mut();
-        match copy_and_present(
-            &mut self.conn,
-            surface,
-            size,
-            frame,
-            &damage,
-            resized,
-            copy_time,
-        )? {
+        // on the GPU the layer's frame is drawn into the subsurface's own buffers from its texture, as a window's is
+        let copying = self.copy_time.is_some().then(Instant::now);
+        let on_gpu = self
+            .gpu
+            .present(&mut self.conn, surface, size, frame, &damage, resized)
+            .map_err(platform_error)?;
+        if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
+            *total += since.elapsed();
+        }
+        let shown = match on_gpu {
+            Presented::Gpu => Ok(()),
+            Presented::Busy => Err(Some(Stall::Buffer)),
+            Presented::Resized => Err(None),
+            Presented::Shm => {
+                let copy_time = self.copy_time.as_mut();
+                copy_and_present(
+                    &mut self.conn,
+                    surface,
+                    size,
+                    frame,
+                    &damage,
+                    resized,
+                    copy_time,
+                )?
+            }
+        };
+        match shown {
             Ok(()) => {
                 let state = self.window_mut(window)?.layer.as_mut().expect("made above");
                 state.shown = Some((frame.width, frame.height));
@@ -1983,6 +2013,12 @@ fn copy_and_present(
     resized: bool,
     copy_time: Option<&mut Duration>,
 ) -> Result<Result<(), Option<Stall>>, PlatformError> {
+    // a frame drawn on a GPU is read back; one that cannot be (its device lost) is not shown, and the frames after
+    // the switch back to the CPU replace it
+    let Ok(frame) = frame.in_memory() else {
+        return Ok(Err(None));
+    };
+    let frame = &*frame;
     let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
         Ok(lease) => lease,
         Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),

@@ -12,7 +12,8 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Glass and materials | the compositor on the GPU: backdrop captured at half scale, blur pyramid, every glass stage in one shader pass | n/a |
 | Window shadows, outlines, the shell's rounded rectangles, the procedural wallpaper | the compositor: passes generated from WGSL, drawn by a `cupertino-gpu` device borrowed from its context into the framebuffer it has bound | n/a |
 | Rounded clips of window content, reduced copies | the compositor, texture programs compiled through Smithay's shader interface | n/a |
-| Title bars, window buttons, keyboard HUDs, the procedural cursor | the compositor, rasterized on the CPU (tiny-skia, swash), cached, uploaded on change | memory buffers |
+| Title bars, window buttons, rims, keyboard HUDs | the compositor: each recorded as a list of draws, drawn by the borrowed device with the toolkit's coverage program into a texture of the renderer when its state changes (glyphs and button glyph paths kept in an atlas); painted on the CPU from the same list where the device cannot draw it | n/a |
+| The procedural cursor | the compositor, rasterized on the CPU (tiny-skia), cached, uploaded on change: the cursor plane's buffer is filled on the CPU | memory buffers |
 | Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles, copied byte for byte as `abgr8888` where the compositor lists it, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
@@ -82,6 +83,12 @@ array of its own. A borrowed device draws either into textures of its own or, in
 `begin_owner_pass`, into the framebuffer its owner has bound, at the owner's viewport and in the owner's orientation:
 its programs place their vertices through the projection the owner hands them, and its scissor regions are the
 framebuffer's pixels as the owner counts them. That is how the compositor's own passes draw among Smithay's draws.
+Within one frame of its owner the device reads the owner's state once: `Device::pause` puts back only the groups of
+state the device's calls changed since entering (it notes them as it goes) without reading anything, and
+`Device::resume` enters again on what the first enter read, so a frame of many passes costs one read of the state.
+The owner keeps to its side: between passes it changes no framebuffer, viewport, scissor or blending, and sets its
+own program, textures and buffers before each draw. A borrowed device also draws into a texture its owner made
+(`Device::wrap_texture`), which stays the owner's.
 
 Orientation is the same on every backend: a target's first row (the top of the image handed to the compositor) is at
 clip y = -1 and fragment row 0, texture coordinate v = 0 is a texture's first row, and pixels are written and read
@@ -228,8 +235,14 @@ The compositor stays on Smithay's GLES renderer. Its own work, in order:
 4. Windows shown below half their size (overview, app switcher, minimize, zoom transitions) are sampled from a reduced
    copy kept per window, since textures imported from client buffers cannot hold mipmaps; integer-scale clients shown
    at a fractional scale get a better minification filter.
-5. Title bars, window buttons and keyboard HUDs are drawn with the toolkit renderer's rectangle and glyph pipelines in
-   borrowed-context mode, once those exist. The cursor stays a cursor-plane element and is converted last.
+5. Title bars, window buttons, rims and the keyboard HUDs are recorded as lists of draws and drawn in
+   borrowed-context mode into a texture per image, redrawn when its state changes. The shapes take the shared
+   distance with per-corner radii and the corner exponent, as `ui_fill` does (its block, `cupertino_gpu::FillBlock`,
+   carries both); glyphs and glyph paths are coverage images in an atlas. The chrome has a program of its own,
+   which lays each draw over what the ones before it made with the CPU painter's arithmetic (reading the image below
+   from a second texture, blending off), so the GPU image is the CPU painting whatever the driver's blending
+   precision. The cursor stays a cursor-plane element drawn on the CPU: the DRM compositor fills the cursor plane's
+   buffer on the CPU, from a mapped buffer, so a GPU image would come back to the CPU to reach it.
 6. Vibrant foreground, lifted thumbs and lenses as glass, the pointer-lit highlight and variable blur, through the
    layer protocol.
 

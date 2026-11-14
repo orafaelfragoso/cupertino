@@ -57,9 +57,22 @@ pub struct TreeSlice {
     pub index: u64,
 }
 
-/// CPU pixels to draw, shown through `src` (buffer pixels) at `size` logical points.
+/// What an image's pixels are: CPU pixels the renderer uploads, or chrome its GPU draws from a list of draws.
+#[derive(Clone, Debug)]
+pub enum ImageBuffer {
+    Memory(MemoryRenderBuffer),
+    Chrome(Rc<super::chrome::ChromeImage>),
+}
+
+impl From<MemoryRenderBuffer> for ImageBuffer {
+    fn from(buffer: MemoryRenderBuffer) -> ImageBuffer {
+        ImageBuffer::Memory(buffer)
+    }
+}
+
+/// Pixels to draw, shown through `src` (buffer pixels) at `size` logical points.
 pub struct Picture {
-    pub buffer: MemoryRenderBuffer,
+    pub buffer: ImageBuffer,
     pub kind: SceneKind,
     pub index: u64,
     pub role: ImageRole,
@@ -155,7 +168,7 @@ pub struct FrameResources {
     pub surfaces: Vec<WlSurface>,
     /// For each of `surfaces`, the slice of its tree the item draws; `None` for all of it.
     pub slices: Vec<Option<TreeSlice>>,
-    pub images: Vec<MemoryRenderBuffer>,
+    pub images: Vec<ImageBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub glass: Vec<Rc<GlassContainer>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
@@ -413,6 +426,27 @@ pub fn item(kind: SceneKind, index: u64, source: Source, opacity: f64) -> SceneI
     }
 }
 
+/// The image of a list of draws, drawn on the GPU ([`super::chrome`]), placed as [`image_piece`] places a buffer.
+pub fn list_piece(
+    image: &Rc<super::chrome::ChromeImage>,
+    kind: SceneKind,
+    px: (i32, i32),
+    x: f64,
+    y: f64,
+    scale: f64,
+    alpha: f32,
+) -> Piece {
+    picture_piece(
+        ImageBuffer::Chrome(image.clone()),
+        kind,
+        px,
+        x,
+        y,
+        scale,
+        alpha,
+    )
+}
+
 /// `buffer` of `px` device pixels with its top-left corner at output-local logical `(x, y)`; its logical size
 /// is the pixel size divided by `scale`.
 pub fn image_piece(
@@ -424,8 +458,20 @@ pub fn image_piece(
     scale: f64,
     alpha: f32,
 ) -> Piece {
+    picture_piece(buffer.clone().into(), kind, px, x, y, scale, alpha)
+}
+
+fn picture_piece(
+    buffer: ImageBuffer,
+    kind: SceneKind,
+    px: (i32, i32),
+    x: f64,
+    y: f64,
+    scale: f64,
+    alpha: f32,
+) -> Piece {
     Piece::Image(Box::new(Picture {
-        buffer: buffer.clone(),
+        buffer,
         kind,
         index: 0,
         role: ImageRole::Standalone,

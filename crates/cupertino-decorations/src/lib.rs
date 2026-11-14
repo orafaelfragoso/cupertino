@@ -11,6 +11,8 @@
 //! * [`field`]: the inside of a single-line text field (selection band, text, composition underline, caret), clipped
 //!   and scrolled, for the apps' fields.
 //! * [`coverage`]: the title bar's and the buttons' shapes from the shared distance function.
+//! * [`draws`]: a title bar, its buttons and the rim as a list of draws, which the CPU paints and a GPU renderer can
+//!   draw.
 //! * [`edge`]: the edge of a window or a menu: a fine dark outline outside the shape and a faint light rim inside.
 //! * [`shadow`]: window shadow parameters from the verified table (all 32 rows live in
 //!   `cupertino_theme::window_shadow`), GPU parameters and a nine-slice cached CPU rasteriser.
@@ -28,6 +30,7 @@
 pub mod buttons;
 pub mod chrome;
 pub mod coverage;
+pub mod draws;
 pub mod edge;
 pub mod field;
 pub use cupertino_glyph as glyph;
@@ -46,6 +49,7 @@ pub use chrome::{
     button_presence, Accessory, AccessoryEdge, ButtonPlacement, Capabilities, ChromeLayout,
     ChromeStyle, Direction, FrameKind, Presence, TitleArrangement, ToolbarStyle,
 };
+pub use draws::{Draw, DrawList, PlacedGlyph};
 pub use edge::{Edge, EdgeKind, Hairline, OutlineFalloff};
 pub use hit::{resize_hit, Hit, ResizeEdge};
 pub use layout::{ButtonLayout, FrameLayout};

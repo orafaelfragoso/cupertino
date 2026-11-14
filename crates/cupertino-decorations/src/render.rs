@@ -1,8 +1,9 @@
 //! The decoration façade: configuration, state, layout, hit-testing and rasterisation of the
 //! titlebar and rim into premultiplied RGBA buffers.
 
-use crate::buttons::{draw_button, ButtonState};
-use crate::coverage::{self, Outline, Shade};
+use crate::buttons::{button_draws, ButtonState};
+use crate::coverage::{Outline, Shade};
+use crate::draws::{Draw, DrawList};
 use crate::edge::{edge, Edge, EdgeKind};
 use crate::hit::{double_click, hit_test, in_button_group, input_region, Hit};
 use crate::layout::{title_slot, FrameLayout};
@@ -16,7 +17,7 @@ use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_geometry::{CornerStyle, Point, Radii, Rect, Size};
 use cupertino_theme::window_shadow::ShadowOption;
 use cupertino_theme::{Appearance, Theme, Typography, WindowCornerSize};
-use tiny_skia::{Paint, Pixmap, Transform};
+use tiny_skia::Pixmap;
 
 #[derive(Clone, Debug)]
 pub struct DecorationConfig {
@@ -131,23 +132,6 @@ impl DecorationState {
 pub struct Decorations {
     pub config: DecorationConfig,
     text: TextRenderer,
-}
-
-fn paint(c: [f32; 4]) -> Paint<'static> {
-    let mut p = Paint {
-        anti_alias: true,
-        ..Paint::default()
-    };
-    p.set_color(
-        tiny_skia::Color::from_rgba(
-            c[0].clamp(0.0, 1.0),
-            c[1].clamp(0.0, 1.0),
-            c[2].clamp(0.0, 1.0),
-            c[3].clamp(0.0, 1.0),
-        )
-        .expect("clamped"),
-    );
-    p
 }
 
 impl Decorations {
@@ -285,7 +269,8 @@ impl Decorations {
         scale: f64,
         state: &DecorationState,
     ) -> Pixmap {
-        self.titlebar_pixmap(frame_width, scale, state, false)
+        self.titlebar_draws(frame_width, scale, state, false)
+            .paint()
     }
 
     /// The standard titlebar strip of [`Decorations::render_titlebar`] edge to edge across an output: square corners
@@ -296,16 +281,19 @@ impl Decorations {
         scale: f64,
         state: &DecorationState,
     ) -> Pixmap {
-        self.titlebar_pixmap(frame_width, scale, state, true)
+        self.titlebar_draws(frame_width, scale, state, true).paint()
     }
 
-    fn titlebar_pixmap(
+    /// The draws of the title bar strip [`Decorations::render_titlebar`] paints (`flush`: of
+    /// [`Decorations::render_flush_titlebar`]), in device pixels of the strip: the bar, its separator, the rim along
+    /// its top, the buttons and the title.
+    pub fn titlebar_draws(
         &mut self,
         frame_width: f64,
         scale: f64,
         state: &DecorationState,
         flush: bool,
-    ) -> Pixmap {
+    ) -> DrawList {
         self.text.set_scale(scale as f32);
         let cfg = &self.config;
         let layout = self.layout(Size::new(frame_width, 0.0));
@@ -314,11 +302,11 @@ impl Decorations {
             (tb.width() * scale).round().max(1.0) as u32,
             (tb.height() * scale).round().max(1.0) as u32,
         );
-        let mut pm = Pixmap::new(w, h).expect("non-zero size");
+        let mut list = DrawList::new(w, h);
         if cfg.style.client_drawn() {
             for b in &layout.buttons {
-                draw_button(
-                    &mut pm,
+                button_draws(
+                    &mut list.draws,
                     b.kind,
                     b.center,
                     scale,
@@ -327,7 +315,7 @@ impl Decorations {
                     state.button_state(b.kind),
                 );
             }
-            return pm;
+            return list;
         }
         let r = if flush { 0.0 } else { cfg.corner_radius() };
         let fill = cfg.palette.titlebar(cfg.style, state.active);
@@ -338,22 +326,29 @@ impl Decorations {
             cfg.corner_style,
             scale,
         );
-        coverage::fill(&mut pm, &bar, &Shade::Solid(fill), None);
+        list.draws.push(Draw::Shape {
+            outline: bar,
+            shade: Shade::Solid(fill),
+            stroke: None,
+        });
         if cfg.style == TitlebarStyle::Standard {
             let sep = (scale.round().max(1.0)) as f32;
-            if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, h as f32 - sep, w as f32, sep) {
-                let mut p = paint(cfg.palette.separator);
-                p.anti_alias = false;
-                pm.fill_rect(rect, &p, Transform::identity(), None);
-            }
+            list.draws.push(Draw::Rect {
+                x: 0.0,
+                y: h as f32 - sep,
+                width: w as f32,
+                height: sep,
+                color: cfg.palette.separator,
+            });
         }
         if !flush {
-            self.stroke_rim(&mut pm, Size::new(pw, ph + 4.0 * r), scale);
+            list.draws
+                .extend(self.rim_stroke(Size::new(pw, ph + 4.0 * r), scale));
         }
         let cfg = &self.config;
         for b in &layout.buttons {
-            draw_button(
-                &mut pm,
+            button_draws(
+                &mut list.draws,
                 b.kind,
                 b.center,
                 scale,
@@ -374,8 +369,7 @@ impl Decorations {
                 cfg.palette.title_inactive
             };
             let weight = cfg.metrics.title_weight;
-            self.text.draw(
-                &mut pm,
+            let glyphs = self.text.place(
                 &text,
                 (left * scale) as f32,
                 baseline,
@@ -384,8 +378,9 @@ impl Decorations {
                 ls,
                 color,
             );
+            list.draws.push(Draw::Glyphs { glyphs, color });
         }
-        pm
+        list
     }
 
     /// The edge of the window, active or not: the outline the compositor draws just outside the frame and the inner
@@ -412,13 +407,11 @@ impl Decorations {
         )
     }
 
-    /// Stroke the inner rim of the edge ([`Decorations::edge`]) just inside the outline of a frame of `size` logical
-    /// points: whole device pixels, at least one.
-    fn stroke_rim(&self, pm: &mut Pixmap, size: Size, scale: f64) {
+    /// The stroke of the inner rim of the edge ([`Decorations::edge`]) just inside the outline of a frame of `size`
+    /// logical points: whole device pixels, at least one.
+    fn rim_stroke(&self, size: Size, scale: f64) -> Option<Draw> {
         let cfg = &self.config;
-        let Some(inner) = self.edge(true).inner else {
-            return;
-        };
+        let inner = self.edge(true).inner?;
         let (px, color) = inner.device(scale);
         let frame = Outline::rounded(
             Rect::new(0.0, 0.0, size.width, size.height),
@@ -426,23 +419,29 @@ impl Decorations {
             cfg.corner_style,
             scale,
         );
-        coverage::fill(pm, &frame, &Shade::Solid(color), Some(px as f32));
+        Some(Draw::Shape {
+            outline: frame,
+            shade: Shade::Solid(color),
+            stroke: Some(px as f32),
+        })
     }
 
     /// The inner rim of the edge around the whole frame (premultiplied RGBA, transparent inside), whole device pixels
     /// wide. Meant to be drawn over the client content; the outline outside the frame is the compositor's.
     pub fn render_rim(&self, frame_size: Size, scale: f64) -> Pixmap {
+        self.rim_draws(frame_size, scale).paint()
+    }
+
+    /// The draws of the rim [`Decorations::render_rim`] paints, in device pixels of the frame.
+    pub fn rim_draws(&self, frame_size: Size, scale: f64) -> DrawList {
         let (w, h) = (
             (frame_size.width * scale).round().max(1.0) as u32,
             (frame_size.height * scale).round().max(1.0) as u32,
         );
-        let mut pm = Pixmap::new(w, h).expect("non-zero size");
-        self.stroke_rim(
-            &mut pm,
-            Size::new(w as f64 / scale, h as f64 / scale),
-            scale,
-        );
-        pm
+        let mut list = DrawList::new(w, h);
+        list.draws
+            .extend(self.rim_stroke(Size::new(w as f64 / scale, h as f64 / scale), scale));
+        list
     }
 
     /// Mask path of the window shape (all four corners rounded) for clipping client content.
@@ -476,6 +475,58 @@ mod tests {
 
     fn near(a: [u8; 4], b: [f32; 4], tol: f32) -> bool {
         (0..3).all(|i| (a[i] as f32 / 255.0 - b[i]).abs() <= tol)
+    }
+
+    #[test]
+    fn a_titlebar_is_its_list_of_draws_the_bar_its_separator_rim_buttons_and_title() {
+        let mut d = decorations(TitlebarStyle::Standard, Appearance::Light);
+        let state = DecorationState {
+            title: "Documents".into(),
+            group_hovered: true,
+            ..DecorationState::default()
+        };
+        let list = d.titlebar_draws(800.0, 1.5, &state, false);
+        assert_eq!((list.width, list.height), (1200, 48));
+        let kinds: Vec<&str> = list
+            .draws
+            .iter()
+            .map(|d| match d {
+                Draw::Shape { stroke: None, .. } => "fill",
+                Draw::Shape { .. } => "stroke",
+                Draw::Rect { .. } => "rect",
+                Draw::Path { .. } => "path",
+                Draw::Glyphs { .. } => "glyphs",
+            })
+            .collect();
+        // the bar, the separator and the rim along the top; each hovered button a face, two rings and its glyph
+        // (the zoom glyph two triangles); the title last
+        assert_eq!(&kinds[..3], ["fill", "rect", "stroke"]);
+        assert_eq!(kinds.iter().filter(|k| **k == "path").count(), 2 + 1 + 2);
+        assert_eq!(kinds.iter().filter(|k| **k == "stroke").count(), 1 + 3 * 2);
+        assert_eq!(kinds.last(), Some(&"glyphs"));
+        // what the list paints is the title bar
+        let painted = list.paint();
+        assert_eq!(painted.data(), d.render_titlebar(800.0, 1.5, &state).data());
+        // the title's glyphs keep their identity from one list to the next, for an atlas to keep them
+        let keys = |list: &DrawList| match list.draws.last() {
+            Some(Draw::Glyphs { glyphs, .. }) => {
+                glyphs.iter().map(|g| (g.key, g.x, g.y)).collect::<Vec<_>>()
+            }
+            _ => Vec::new(),
+        };
+        let again = d.titlebar_draws(800.0, 1.5, &state, false);
+        assert!(!keys(&list).is_empty());
+        assert_eq!(keys(&list), keys(&again));
+        // the rim alone is one stroke over the whole frame
+        let rim = d.rim_draws(Size::new(800.0, 600.0), 1.5);
+        assert_eq!((rim.width, rim.height, rim.draws.len()), (1200, 900, 1));
+        assert!(matches!(
+            rim.draws[0],
+            Draw::Shape {
+                stroke: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

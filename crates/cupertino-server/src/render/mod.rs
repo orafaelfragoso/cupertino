@@ -7,9 +7,11 @@
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
+use smithay::backend::renderer::element::texture::TextureRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 
+pub mod chrome;
 pub mod clip;
 pub mod compose;
 pub mod gles;
@@ -60,6 +62,12 @@ render_elements! {
     Decoration = RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
     /// Title bars and rims of a stage placement, masked to its animated corner radius.
     ClippedDecoration = RescaleRenderElement<ClipElement<MemoryRenderBufferRenderElement<GlesRenderer>>>,
+    /// The keyboard HUDs drawn on the GPU ([`chrome`]).
+    Drawn = TextureRenderElement<GlesTexture>,
+    /// Title bars and rims drawn on the GPU ([`chrome`]), rescaled together with their window.
+    Chrome = RescaleRenderElement<TextureRenderElement<GlesTexture>>,
+    /// Title bars and rims drawn on the GPU of a stage placement, masked to its animated corner radius.
+    ClippedChrome = RescaleRenderElement<ClipElement<TextureRenderElement<GlesTexture>>>,
     /// Window snapshot drawn through an effect mesh (minimize, closing).
     Mesh = MeshElement,
 }

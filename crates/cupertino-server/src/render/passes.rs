@@ -3,15 +3,20 @@
 //! `cupertino-gpu` device borrowed from the renderer's context draws it into the framebuffer the renderer has bound
 //! for the frame, one quad per damage rectangle of the element, under the borrowed device's state-restore contract,
 //! so the renderer's own drawing around it sees its state as it left it.
+//!
+//! Inside a frame the renderer draws ([`Passes::frame`]) the context's state is read once, at the frame's first
+//! pass; each pass after it resumes the device with what that read and pauses it again, which puts back only what the
+//! pass changed. The renderer keeps to the device's side of that: its framebuffer, viewport, scissor and blending
+//! stay as it set them when the frame began, and it sets its program, textures and buffers before each of its draws.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use cupertino_gpu::shaders::ShaderSource;
 use cupertino_gpu::{
-    BindGroup, BindGroupEntry, BindingKind, BindingLayout, BindingResource, Blend, Buffer,
-    BufferDesc, BufferUsage, Device, Pipeline, PipelineDesc, StepMode, Topology, VertexAttribute,
-    VertexFormat, VertexLayout,
+    BindGroup, BindGroupEntry, BindingKind, BindingLayout, BindingResource, Blend, BorrowedState,
+    Buffer, BufferDesc, BufferUsage, Device, Pipeline, PipelineDesc, StepMode, Topology,
+    VertexAttribute, VertexFormat, VertexLayout,
 };
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
 use smithay::utils::{Physical, Rectangle};
@@ -43,6 +48,12 @@ pass!(
     /// The procedural desktop background.
     WALLPAPER,
     "wallpaper"
+);
+
+pass!(
+    /// The chrome's draws, each laid over the image below it with the CPU painter's arithmetic ([`super::chrome`]).
+    CHROME,
+    "chrome"
 );
 
 /// Every rectangle pass, in the order of [`RectPass`].
@@ -148,6 +159,16 @@ struct Made {
     instances: Option<(Buffer, u64)>,
 }
 
+/// Whether a frame is being drawn, and the context's state its first pass read.
+#[derive(Default)]
+enum FrameEntry {
+    /// No frame: each draw reads the state and puts it back.
+    #[default]
+    Closed,
+    /// Inside [`Passes::frame`]: what the frame's first pass read, once it has.
+    Open(Option<BorrowedState>),
+}
+
 /// The device borrowed from one renderer's context, with the three pipelines and their buffers.
 pub struct Passes {
     device: Device,
@@ -157,6 +178,20 @@ pub struct Passes {
     dither: bool,
     /// A draw failed once already (logged once, not again every frame).
     failed: Cell<bool>,
+    frame: RefCell<FrameEntry>,
+    /// Times the context's state was read on entering the device (diagnostics and tests).
+    state_reads: Cell<u64>,
+    /// What draws the chrome's lists, made when the first is drawn ([`super::chrome`]).
+    chrome: RefCell<Option<super::chrome::ChromePainter>>,
+}
+
+/// While it lives, the passes draw inside one frame of the renderer ([`Passes::frame`]).
+pub struct FrameScope<'a>(&'a Passes);
+
+impl Drop for FrameScope<'_> {
+    fn drop(&mut self) {
+        *self.0.frame.borrow_mut() = FrameEntry::Closed;
+    }
 }
 
 impl std::fmt::Debug for Passes {
@@ -260,7 +295,50 @@ impl Passes {
             made: RefCell::new(Some(made)),
             dither,
             failed: Cell::new(false),
+            frame: RefCell::new(FrameEntry::Closed),
+            state_reads: Cell::new(0),
+            chrome: RefCell::new(None),
         }))
+    }
+
+    /// The passes drawn until the scope is dropped belong to one frame of the renderer: one framebuffer bound for
+    /// all of them, with the viewport, scissor and blending the renderer set when it began the frame. The first
+    /// reads the context's state; the others only put back what they changed.
+    pub fn frame(&self) -> FrameScope<'_> {
+        *self.frame.borrow_mut() = FrameEntry::Open(None);
+        FrameScope(self)
+    }
+
+    /// How many times entering the device read the context's state.
+    pub fn state_reads(&self) -> u64 {
+        self.state_reads.get()
+    }
+
+    /// `f` between entering and leaving the device: inside a frame, the state its first pass read resumed and
+    /// paused again; outside one, read and put back.
+    fn within<T>(&self, f: impl FnOnce() -> cupertino_gpu::Result<T>) -> cupertino_gpu::Result<T> {
+        let device = &self.device;
+        let mut frame = self.frame.borrow_mut();
+        match &mut *frame {
+            FrameEntry::Open(Some(saved)) => {
+                device.resume(saved)?;
+                let result = f();
+                device.pause(saved);
+                result
+            }
+            FrameEntry::Open(slot @ None) => {
+                self.state_reads.set(self.state_reads.get() + 1);
+                let saved = device.enter()?;
+                let result = f();
+                device.pause(&saved);
+                *slot = Some(saved);
+                result
+            }
+            FrameEntry::Closed => {
+                self.state_reads.set(self.state_reads.get() + 1);
+                entered(device, f)
+            }
+        }
     }
 
     /// Whether `pass` dithers its result by its pixel.
@@ -308,7 +386,7 @@ impl Passes {
         let Some(made) = made.as_mut() else {
             return Ok(());
         };
-        entered(device, || {
+        self.within(|| {
             device.write_buffer(&made.place, 0, bytemuck::bytes_of(place))?;
             device.write_buffer(&made.params, 0, bytemuck::cast_slice(params))?;
             let need = rects.len() as u64;
@@ -336,6 +414,34 @@ impl Passes {
         })
     }
 
+    /// Draw the chrome's `list` into the renderer's texture `name` (`size` texels, 8-bit RGBA), cleared first. The
+    /// renderer's context is current (inside its `with_context`), and no frame of it is being drawn.
+    pub fn draw_list(
+        &self,
+        name: u32,
+        size: (u32, u32),
+        list: &cupertino_decorations::DrawList,
+    ) -> cupertino_gpu::Result<()> {
+        if self.made.borrow().is_none() {
+            return Err(cupertino_gpu::Error::Invalid(
+                "the passes were released".into(),
+            ));
+        }
+        let device = &self.device;
+        let mut chrome = self.chrome.borrow_mut();
+        self.within(|| {
+            if chrome.is_none() {
+                *chrome = Some(super::chrome::ChromePainter::new(device)?);
+            }
+            let painter = chrome.as_mut().expect("made above");
+            // Safety: the renderer's texture of the current context, `size` texels of 8-bit RGBA, alive for the call.
+            let target = unsafe { device.wrap_texture(name, size) }?;
+            let drawn = painter.draw(device, &target, list);
+            device.destroy_texture(target);
+            drawn
+        })
+    }
+
     /// Release the device's objects (before the renderer is dropped); the passes draw nothing afterwards.
     pub fn destroy(&self, renderer: &mut GlesRenderer) {
         let Some(made) = self.made.borrow_mut().take() else {
@@ -351,6 +457,9 @@ impl Passes {
                 device.destroy_buffer(made.place);
                 if let Some((buffer, _)) = made.instances {
                     device.destroy_buffer(buffer);
+                }
+                if let Some(chrome) = self.chrome.borrow_mut().take() {
+                    chrome.destroy(device);
                 }
                 Ok(())
             })

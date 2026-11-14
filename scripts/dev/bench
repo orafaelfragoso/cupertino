@@ -159,7 +159,9 @@ class Script:
         self.flags: list[str] = []
         self.t = SETTLE
 
-    def path(self, points: list[tuple[float, float]], seconds: float) -> None:
+    def path(self, points: list[tuple[float, float]], seconds: float, on: str | None = None) -> None:
+        """The pointer along `points` in `seconds`: global points, or with `on` points of the frame of the window whose
+        application or title holds that word, wherever the window is in the session."""
         steps = max(1, round(seconds * self.hz))
         legs = len(points) - 1
         for i in range(steps + 1):
@@ -167,7 +169,11 @@ class Script:
             leg = min(int(f), legs - 1)
             u = f - leg
             (x0, y0), (x1, y1) = points[leg], points[leg + 1]
-            self.flags += ["--pointer", f"{self.t + i * self.dt:.4f}:{x0 + (x1 - x0) * u:.1f},{y0 + (y1 - y0) * u:.1f}"]
+            at = f"{x0 + (x1 - x0) * u:.1f},{y0 + (y1 - y0) * u:.1f}"
+            if on:
+                self.flags += ["--pointer-on", f"{self.t + i * self.dt:.4f}:{on}:{at}"]
+            else:
+                self.flags += ["--pointer", f"{self.t + i * self.dt:.4f}:{at}"]
         self.t += steps * self.dt
 
     def at(self, flag: str, value: str, after: float = 0.0) -> None:
@@ -202,12 +208,13 @@ def script(name: str, hz: float, win: dict, size: tuple[int, int], scale: float,
         s.path([(x0, y0), (x0, y0 + 90), (x0 - left, y0 + 90), (x0 - left, y0 - 40), (x0, y0 - 40), (x0, y0)], 3.0)
         s.at("--release", f"{x0:.1f},{y0:.1f}", s.dt)
     elif name == "hover":
-        # along the row of the window buttons, over each of them and on along the title bar
-        x, y = settings["x"], settings["y"] + 14
+        # along the row of the window buttons, over each of them and on along the title bar: points of Settings' frame,
+        # so the path finds the buttons wherever the window was placed in this session
+        y = 14.0
         if settings.get("buttons"):
-            y = settings["buttons"][0][1]
+            y = settings["buttons"][0][1] - settings["y"]
         for _ in range(3):
-            s.path([(x + 4, y), (x + min(settings["width"] * 0.6, 300), y), (x + 4, y)], 1.6)
+            s.path([(4.0, y), (min(settings["width"] * 0.6, 300), y), (4.0, y)], 1.6, on="settings")
         s.flags += ["--pointer", f"{s.t + s.dt:.4f}:{w - 1},{h / 2}"]
     elif name == "resize":
         fx, fy = visible_point(files, settings)
@@ -505,6 +512,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
         "blurred_per_frame": per("blurred"), "reused_per_frame": per("reused"), "allocated_per_frame": per("allocated"),
         "blur_passes_per_frame": per("blur_passes"), "blur_texels_per_frame": per("blur_texels"),
         "decoration_rasters": sum(r.get("deco_rasters") or 0 for r in frames),
+        "decoration_draws": sum(r.get("deco_draws") or 0 for r in frames),
         "decoration_uploads": sum(r.get("deco_uploads") or 0 for r in frames),
         "decoration_upload_kib": sum(r.get("deco_upload_bytes") or 0 for r in frames) / 1024,
         "hud_rasters": sum(r.get("hud_rasters") or 0 for r in frames),
@@ -663,7 +671,7 @@ def check(name: str, r: dict) -> str | None:
             return "the drag drew few frames: it may not have held the title bar"
     if name == "resize" and r["compositor"]["frames"] < 30:
         return "the resize drew few frames: the press may have missed the corner"
-    if name == "hover" and not r["compositor"]["decoration_rasters"]:
+    if name == "hover" and not (r["compositor"]["decoration_rasters"] or r["compositor"].get("decoration_draws")):
         return "the hover drew no title bar: the pointer may have missed the window buttons"
     if name in ("files-scroll", "files-full-scroll") and r["clients"].get("cupertino-files", {}).get("frames", 0) < 30:
         return "Files drew few frames: the scroll may have missed its list"
@@ -721,7 +729,7 @@ def kilo(v):
 def table(summary: dict, renderer: str) -> str:
     lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
              f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'cpu99':>7} {'gpu99':>7} "
-             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7} "
+             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u/g':>14} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7} "
              f"{'ptr95':>7}"]
     for key, s in summary.items():
         g = lambda k: s.get(f"compositor.{k}", {}).get("median")
@@ -733,7 +741,7 @@ def table(summary: dict, renderer: str) -> str:
             f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('submit_p99_ms'))} {fmt(g('gpu_p99_ms'))} "
             f"{fmt(g('cpu_ms_per_s'))} "
             f"{fmt(g('blur_passes_per_frame'))} {fmt(kilo(g('blur_texels_per_frame')), 8, 1)} "
-            f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
+            f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)}/{fmt(g('decoration_draws'), 4, 0)} "
             f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)} "
             f"{fmt(g('pointer_latency_p95_ms'))}")
     return "\n".join(lines)

@@ -22,6 +22,7 @@
 
 use std::collections::HashSet;
 
+use cupertino_decorations::{Draw, DrawList};
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
 use cupertino_keyboard::accent::{
     layout_popup, AccentEvent, AccentPicker, AccentTable, KeyDown, PickerKey, PopupMetrics,
@@ -32,7 +33,6 @@ use cupertino_modifiers::Mods as KMods;
 use smithay::backend::input::KeyState;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};
 use smithay::utils::{Logical, Rectangle};
-use tiny_skia::{FillRule, Paint, Pixmap, Transform};
 
 use crate::input::{Action, KeyBindings, Mods};
 use crate::kbd::{hud_size, AccentSettings, CapsStep, HudView};
@@ -40,7 +40,7 @@ use crate::overlays::OverlayKey;
 use crate::render::image::debug_sig;
 use cupertino_scene::SceneKind;
 
-use crate::render::compose::{image_piece, Piece};
+use crate::render::compose::{list_piece, Piece};
 use crate::render::scene::{material_layer, rrect_item, shadow_item, SceneParams, WindowPlan};
 use crate::state::Cupertino;
 
@@ -55,38 +55,19 @@ const MATERIAL: &str = "Menu";
 
 type Rgba = [f32; 4];
 
-fn paint(c: Rgba) -> Paint<'static> {
-    let mut p = Paint {
-        anti_alias: true,
-        ..Paint::default()
-    };
-    p.set_color(
-        tiny_skia::Color::from_rgba(
-            c[0].clamp(0.0, 1.0),
-            c[1].clamp(0.0, 1.0),
-            c[2].clamp(0.0, 1.0),
-            c[3].clamp(0.0, 1.0),
-        )
-        .unwrap_or(tiny_skia::Color::TRANSPARENT),
-    );
-    p
-}
-
-fn fill_rounded(pm: &mut Pixmap, r: GRect, radius: f64, scale: f64, color: Rgba) {
-    if let Some(path) = cupertino_decorations::shape::rounded_path(
+/// The draw of `r` (points) filled in `color` with continuous corners of `radius`, at `scale`.
+fn rounded(r: GRect, radius: f64, scale: f64, color: Rgba) -> Option<Draw> {
+    let path = cupertino_decorations::shape::rounded_path(
         r,
         Radii::uniform(radius),
         CornerStyle::continuous(),
         scale,
-    ) {
-        pm.fill_path(
-            &path,
-            &paint(color),
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
+    )?;
+    Some(Draw::Path {
+        path,
+        stroke: None,
+        color,
+    })
 }
 
 /// A text edit the accent picker asks the focused client to make. The edits are meant for
@@ -848,12 +829,12 @@ fn render_hud(
     scale: f64,
     dark: bool,
     text: &mut crate::overlays::OverlayText,
-) -> Option<(Pixmap, [u32; 4])> {
-    let (w, h) = (
+) -> Option<DrawList> {
+    let mut list = DrawList::new(
         (size.0 * scale).round().max(1.0) as u32,
         (size.1 * scale).round().max(1.0) as u32,
     );
-    let mut pm = Pixmap::new(w, h)?;
+    let draws = &mut list.draws;
     let pal = palette(dark);
     let pad = switcher::HUD_PADDING;
     for (i, label) in view.labels.iter().enumerate() {
@@ -861,13 +842,12 @@ fn render_hud(
         let row = GRect::new(pad, y, size.0 - 2.0 * pad, switcher::HUD_ROW_HEIGHT);
         let hot = i == view.selection;
         if hot {
-            fill_rounded(
-                &mut pm,
+            draws.extend(rounded(
                 row,
                 switcher::HUD_BACKGROUND_PATTERN_RADIUS,
                 scale,
                 pal.row_highlight,
-            );
+            ));
         }
         let color = if hot {
             pal.row_highlight_text
@@ -886,7 +866,7 @@ fn render_hud(
         } else {
             [color[0], color[1], color[2], 0.14]
         };
-        fill_rounded(&mut pm, icon, 6.0, scale, icon_fill);
+        draws.extend(rounded(icon, 6.0, scale, icon_fill));
         let code = view
             .order
             .get(i)
@@ -894,30 +874,28 @@ fn render_hud(
             .unwrap_or_default();
         let px = (10.0 * scale) as f32;
         let cw = text.width(&code, px, 600);
-        text.draw_centered(
-            &mut pm,
+        draws.push(text.centered(
             &code,
             ((icon.x() + icon.width() / 2.0) * scale) as f32 - cw / 2.0,
             ((icon.y() + icon.height() / 2.0) * scale) as f32,
             px,
             600,
             color,
-        );
+        ));
         let tx = icon.x() + HUD_ICON_PT + 10.0;
         let avail = (row.x() + row.width() - 10.0 - tx) * scale;
         let px = FONT_PT * scale as f32;
         let fitted = text.fit(label, px, 400, avail as f32);
-        text.draw_centered(
-            &mut pm,
+        draws.push(text.centered(
             &fitted,
             (tx * scale) as f32,
             ((y + switcher::HUD_ROW_HEIGHT / 2.0) * scale) as f32,
             px,
             400,
             color,
-        );
+        ));
     }
-    Some((pm, [0; 4]))
+    Some(list)
 }
 
 /// Padding of the notice that an application holds the shortcuts, in points: horizontal and vertical.
@@ -939,35 +917,32 @@ fn render_notice(
     scale: f64,
     dark: bool,
     renderer: &mut crate::overlays::OverlayText,
-) -> Option<(Pixmap, [u32; 4])> {
-    let (w, h) = (
+) -> Option<DrawList> {
+    let mut list = DrawList::new(
         (size.0 * scale).round().max(1.0) as u32,
         (size.1 * scale).round().max(1.0) as u32,
     );
-    let mut pm = Pixmap::new(w, h)?;
     let pal = palette(dark);
     let fill = if dark {
         [0.16, 0.16, 0.18, 0.92]
     } else {
         [0.97, 0.97, 0.98, 0.94]
     };
-    fill_rounded(
-        &mut pm,
+    list.draws.extend(rounded(
         GRect::new(0.0, 0.0, size.0, size.1),
         size.1 / 2.0,
         scale,
         fill,
-    );
-    renderer.draw_centered(
-        &mut pm,
+    ));
+    list.draws.push(renderer.centered(
         &setting.text,
         (setting.pad * scale) as f32,
         (size.1 / 2.0 * scale) as f32,
         setting.pt * scale as f32,
         400,
         pal.text,
-    );
-    Some((pm, [0; 4]))
+    ));
+    Some(list)
 }
 
 /// The narrowest output (in logical points) the notice is made for. No display is narrower. From this width up, at any
@@ -1075,9 +1050,9 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
     let cut = overlays.images.get(("shortcut-notice", 0), sig, || {
         render_notice(&setting, size, scale, dark, text)
     });
-    cut.map(|(buf, px, _)| {
-        vec![image_piece(
-            &buf,
+    cut.map(|(image, px)| {
+        vec![list_piece(
+            &image,
             SceneKind::ShortcutNotice,
             px,
             x,
@@ -1124,9 +1099,9 @@ pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
         render_hud(&view, (w, h), scale, dark, text)
     });
     let mut els: Vec<Piece> = Vec::new();
-    if let Some((buf, px, _)) = cut {
-        els.push(image_piece(
-            &buf,
+    if let Some((image, px)) = cut {
+        els.push(list_piece(
+            &image,
             SceneKind::InputHud,
             px,
             x,
@@ -1214,12 +1189,13 @@ fn render_accent(
     scale: f64,
     dark: bool,
     text: &mut crate::overlays::OverlayText,
-) -> Option<(Pixmap, [u32; 4])> {
+) -> Option<DrawList> {
     let r = layout.rect;
-    let mut pm = Pixmap::new(
+    let mut list = DrawList::new(
         (r.w * scale).round().max(1.0) as u32,
         (r.h * scale).round().max(1.0) as u32,
-    )?;
+    );
+    let draws = &mut list.draws;
     let pal = palette(dark);
     for (i, cell) in layout.cells.iter().enumerate() {
         let Some(cand) = popup.candidates.get(i) else {
@@ -1228,7 +1204,7 @@ fn render_accent(
         let c = GRect::new(cell.x - r.x, cell.y - r.y, cell.w, cell.h);
         let hot = popup.focused == Some(i);
         if hot {
-            fill_rounded(&mut pm, c, 8.0, scale, pal.row_highlight);
+            draws.extend(rounded(c, 8.0, scale, pal.row_highlight));
         }
         let color = if hot {
             pal.row_highlight_text
@@ -1237,31 +1213,29 @@ fn render_accent(
         };
         let px = ACCENT_FONT_PT * scale as f32;
         let w = text.width(cand, px, 400);
-        text.draw_centered(
-            &mut pm,
+        draws.push(text.centered(
             cand,
             ((c.x() + c.width() / 2.0) * scale) as f32 - w / 2.0,
             ((c.y() + c.height() * 0.42) * scale) as f32,
             px,
             400,
             color,
-        );
+        ));
         // the number key that picks the candidate directly (1 to 9)
         let num = (i + 1).to_string();
         let npx = 9.0 * scale as f32;
         let nw = text.width(&num, npx, 400);
         let dim = [color[0], color[1], color[2], color[3] * 0.6];
-        text.draw_centered(
-            &mut pm,
+        draws.push(text.centered(
             &num,
             ((c.x() + c.width() / 2.0) * scale) as f32 - nw / 2.0,
             ((c.y() + c.height() - 8.0) * scale) as f32,
             npx,
             400,
             dim,
-        );
+        ));
     }
-    Some((pm, [0; 4]))
+    Some(list)
 }
 
 /// The accent popup next to its anchor.
@@ -1309,9 +1283,9 @@ pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
     });
     let r = layout.rect;
     let mut els: Vec<Piece> = Vec::new();
-    if let Some((buf, px, _)) = cut {
-        els.push(image_piece(
-            &buf,
+    if let Some((image, px)) = cut {
+        els.push(list_piece(
+            &image,
             SceneKind::AccentPopup,
             px,
             r.x,

@@ -1,77 +1,77 @@
-//! CPU-drawn images as scene elements: a cache of premultiplied pixmaps turned into memory buffers
-//! (re-uploaded only when their signature changes) and the element constructor that places one at a
-//! logical position. Shared by the input-source HUD and the accent popup.
+//! Images of the keyboard HUDs (the input-source HUD, the shortcut notice, the accent popup) as scene elements: a
+//! cache of their lists of draws, recorded again only when their signature changes and drawn on the GPU like the
+//! chrome ([`super::chrome`]); and the element constructor that places a CPU-drawn buffer at a logical position.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use smithay::backend::allocator::Fourcc;
+use cupertino_decorations::DrawList;
+
+use super::chrome::ChromeImage;
+use super::uploads::Drawer;
+use super::CupertinoElement;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
-use tiny_skia::Pixmap;
-
-use super::CupertinoElement;
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 
 struct Cached {
     sig: u64,
-    buffer: MemoryRenderBuffer,
-    px: (i32, i32),
-    extra: [u32; 4],
+    image: Rc<ChromeImage>,
     used: bool,
 }
 
-/// A cached image: buffer, size in device pixels, margins.
-pub type Cut = (MemoryRenderBuffer, (i32, i32), [u32; 4]);
+/// A cached image and its size in device pixels.
+pub type Cut = (Rc<ChromeImage>, (i32, i32));
 
-/// Memory buffers by key; entries not used during a frame are dropped by [`ImageCache::end_frame`].
+/// HUD images by key; entries not used during a frame are dropped by [`ImageCache::end_frame`].
 #[derive(Default)]
 pub struct ImageCache {
     map: HashMap<(&'static str, u64), Cached>,
-    /// Images drawn on the CPU so far (the frame statistics count them per frame).
-    pub rasters: u64,
+    /// Lists of draws recorded so far (diagnostics and tests).
+    pub records: u64,
 }
 
 impl ImageCache {
-    /// Buffer for `key`; `render` runs only when `sig` differs from the cached one. It returns the pixmap and
-    /// four device-pixel margins (left, top, right, bottom: space around the content that is not part of
-    /// it, e.g. shadow room), handed back unchanged.
+    /// The image of `key`; `record` runs only when `sig` differs from the cached one, and the image there takes its
+    /// list (keeping the textures it was drawn into).
     pub fn get(
         &mut self,
         key: (&'static str, u64),
         sig: u64,
-        render: impl FnOnce() -> Option<(Pixmap, [u32; 4])>,
+        record: impl FnOnce() -> Option<DrawList>,
     ) -> Option<Cut> {
         if let Some(c) = self.map.get_mut(&key) {
             if c.sig == sig {
                 c.used = true;
-                return Some((c.buffer.clone(), c.px, c.extra));
+                return Some((c.image.clone(), c.image.size()));
             }
         }
-        let (pm, extra) = render()?;
-        self.rasters += 1;
-        let px = (pm.width() as i32, pm.height() as i32);
-        let buffer = MemoryRenderBuffer::from_slice(
-            pm.data(),
-            Fourcc::Abgr8888,
-            px,
-            1,
-            Transform::Normal,
-            None,
-        );
-        self.map.insert(
-            key,
-            Cached {
-                sig,
-                buffer: buffer.clone(),
-                px,
-                extra,
-                used: true,
-            },
-        );
-        Some((buffer, px, extra))
+        let list = record()?;
+        self.records += 1;
+        let image = match self.map.get_mut(&key) {
+            Some(c) => {
+                c.image.set(list);
+                c.sig = sig;
+                c.used = true;
+                c.image.clone()
+            }
+            None => {
+                let image = ChromeImage::new(list, Drawer::Hud);
+                self.map.insert(
+                    key,
+                    Cached {
+                        sig,
+                        image: image.clone(),
+                        used: true,
+                    },
+                );
+                image
+            }
+        };
+        Some((image.clone(), image.size()))
     }
 
     pub fn end_frame(&mut self) {
@@ -149,12 +149,9 @@ mod tests {
         let mut get = |c: &mut ImageCache, sig| {
             c.get(("t", 0), sig, || {
                 renders += 1;
-                Pixmap::new(4, 3).map(|p| (p, [1, 2, 3, 4]))
+                Some(DrawList::new(4, 3))
             })
-            .map(|(_, px, extra)| {
-                assert_eq!(extra, [1, 2, 3, 4]);
-                px
-            })
+            .map(|(_, px)| px)
         };
         assert_eq!(get(&mut c, 1), Some((4, 3)));
         assert_eq!(get(&mut c, 1), Some((4, 3)));

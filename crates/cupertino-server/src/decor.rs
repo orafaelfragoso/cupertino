@@ -1,27 +1,26 @@
 //! Server-side window decorations: the glue between `cupertino-decorations` (layout, hit
 //! testing, rasterisation) and the compositor (textures, pointer interaction).
 //!
-//! Title bars and rims are rasterised on the CPU into premultiplied RGBA buffers, wrapped in
-//! `MemoryRenderBuffer`s and cached per window; a buffer is rendered again only when its state key
-//! (size, scale, active, hover, pressed, title, appearance) changes.
+//! Title bars and rims are recorded as lists of draws ([`cupertino_decorations::DrawList`]) in images cached per
+//! window ([`ChromeImage`]), which the renderer draws on its GPU (or paints on the CPU when it cannot); a list is
+//! recorded again only when its state key (size, scale, active, hover, pressed, title, appearance) changes.
 
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use cupertino_assets::{AssetError, Assets};
 use cupertino_decorations::{
     button_presence, ButtonKind, Capabilities, DecorationConfig, DecorationState, Decorations,
-    DoubleClickAction, Edge, FrameKind, Hit, ResizeEdge, ShadowParams, TitlebarStyle,
+    DoubleClickAction, DrawList, Edge, FrameKind, Hit, ResizeEdge, ShadowParams, TitlebarStyle,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_wm::WindowId;
-use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::input::pointer::CursorIcon;
-use smithay::utils::Transform;
 
 use crate::config::Insets;
+use crate::render::chrome::ChromeImage;
 
 /// Seconds within which a second press on the title bar is a double click (default
 /// 0.5 s).
@@ -35,15 +34,15 @@ struct Cached<T> {
 
 #[derive(Default)]
 struct WindowBuffers {
-    titlebar: Option<Cached<MemoryRenderBuffer>>,
-    rim: Option<Cached<MemoryRenderBuffer>>,
+    titlebar: Option<Cached<Rc<ChromeImage>>>,
+    rim: Option<Cached<Rc<ChromeImage>>>,
 }
 
 /// What the scene needs to draw one window's decorations.
 pub struct DecorationBuffers {
-    pub titlebar: MemoryRenderBuffer,
+    pub titlebar: Rc<ChromeImage>,
     pub titlebar_px: (i32, i32),
-    pub rim: MemoryRenderBuffer,
+    pub rim: Rc<ChromeImage>,
     pub rim_px: (i32, i32),
     pub titlebar_pt: f64,
 }
@@ -80,7 +79,7 @@ pub struct Decor {
     /// What a double click on a title bar does; kept across a change of appearance, which rebuilds the configuration.
     double_click: DoubleClickAction,
     pub cursor: Option<CursorIcon>,
-    /// Rasterisations performed (diagnostics and tests).
+    /// Lists of draws recorded: a title bar or rim whose state changed (diagnostics and tests).
     pub renders: u64,
 }
 
@@ -440,46 +439,24 @@ impl Decor {
         }
         if render_tb {
             self.renders += 1;
-            let pm = match input.style {
+            let list = match input.style {
                 TitlebarStyle::Standard if input.flush => {
-                    self.deco.render_flush_titlebar(fw, scale, &state)
+                    self.deco.titlebar_draws(fw, scale, &state, true)
                 }
-                style => self.for_style_mut(style).render_titlebar(fw, scale, &state),
+                style => self
+                    .for_style_mut(style)
+                    .titlebar_draws(fw, scale, &state, false),
             };
-            let size = (pm.width() as i32, pm.height() as i32);
-            let buf = MemoryRenderBuffer::from_slice(
-                pm.data(),
-                Fourcc::Abgr8888,
-                size,
-                1,
-                Transform::Normal,
-                None,
-            );
-            self.cache.get_mut(&input.id).unwrap().titlebar = Some(Cached {
-                key: tb_key,
-                buffer: buf,
-                used: true,
-            });
+            let slot = &mut self.cache.get_mut(&input.id).unwrap().titlebar;
+            Self::keep(slot, tb_key, list);
         }
         if render_rim {
             self.renders += 1;
-            let pm = self
+            let list = self
                 .for_style(input.style)
-                .render_rim(Size::new(fw, fh), scale);
-            let size = (pm.width() as i32, pm.height() as i32);
-            let buf = MemoryRenderBuffer::from_slice(
-                pm.data(),
-                Fourcc::Abgr8888,
-                size,
-                1,
-                Transform::Normal,
-                None,
-            );
-            self.cache.get_mut(&input.id).unwrap().rim = Some(Cached {
-                key: rim_key,
-                buffer: buf,
-                used: true,
-            });
+                .rim_draws(Size::new(fw, fh), scale);
+            let slot = &mut self.cache.get_mut(&input.id).unwrap().rim;
+            Self::keep(slot, rim_key, list);
         }
         let entry = &self.cache[&input.id];
         let tb = entry.titlebar.as_ref().unwrap();
@@ -499,6 +476,25 @@ impl Decor {
             rim: rim.buffer.clone(),
             rim_px,
             titlebar_pt: tb_h,
+        }
+    }
+
+    /// `list` as the image of `slot` under `key`: the image already there takes it (and keeps the textures it was
+    /// drawn into), or a new one.
+    fn keep(slot: &mut Option<Cached<Rc<ChromeImage>>>, key: u64, list: DrawList) {
+        match slot {
+            Some(c) => {
+                c.buffer.set(list);
+                c.key = key;
+                c.used = true;
+            }
+            None => {
+                *slot = Some(Cached {
+                    key,
+                    buffer: ChromeImage::new(list, crate::render::uploads::Drawer::Decoration),
+                    used: true,
+                })
+            }
         }
     }
 

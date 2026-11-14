@@ -5,8 +5,8 @@
 
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::text::TextRenderer;
+use cupertino_decorations::Draw;
 use smithay::input::keyboard::keysyms;
-use tiny_skia::Pixmap;
 
 use crate::config::Config;
 use crate::input::Mods;
@@ -53,21 +53,23 @@ impl OverlayText {
         self.text.measure(text, px, w, 0.0)
     }
 
-    /// Draw with the text vertically centred on `mid_y` (device pixels) using the cap height.
+    /// The draw of `text` vertically centred on `mid_y` (device pixels) using the cap height, its left edge at `x`.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_centered(
+    pub fn centered(
         &mut self,
-        pm: &mut Pixmap,
         text: &str,
         x: f32,
         mid_y: f32,
         px: f32,
         weight: u16,
         color: [f32; 4],
-    ) {
+    ) -> Draw {
         let w = self.text.effective_weight(weight);
         let baseline = mid_y + self.cap_height * px / 2.0;
-        self.text.draw(pm, text, x, baseline, px, w, 0.0, color);
+        Draw::Glyphs {
+            glyphs: self.text.place(text, x, baseline, px, w, 0.0, color),
+            color,
+        }
     }
 
     pub fn fit(&mut self, text: &str, px: f32, weight: u16, max_px: f32) -> String {

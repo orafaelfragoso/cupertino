@@ -16,8 +16,13 @@
 //! the device. [`BorrowedState`] compares equal when the context holds the same state, which is how the contract
 //! is tested.
 //!
+//! The device marks which of those groups ([`Touched`]) its calls changed since it was entered, and puts back only
+//! those: state it never changed is not written again, so a pause between two of the owner's draws
+//! ([`Device::pause`]) costs the few calls of what a pass set, and nothing is read.
+//!
 //! [`Device::enter`]: super::Device::enter
 //! [`Device::leave`]: super::Device::leave
+//! [`Device::pause`]: super::Device::pause
 
 use glow::HasContext;
 
@@ -117,6 +122,40 @@ pub(super) fn capture(gl: &glow::Context) -> BorrowedState {
     }
 }
 
+/// The groups of [`BorrowedState`] a device call may change, as bits: what [`restore`] puts back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Touched(pub(super) u16);
+
+impl Touched {
+    pub(super) const NONE: Touched = Touched(0);
+    pub(super) const PROGRAM: Touched = Touched(1);
+    /// The draw and read framebuffers.
+    pub(super) const FRAMEBUFFERS: Touched = Touched(1 << 1);
+    pub(super) const VIEWPORT: Touched = Touched(1 << 2);
+    /// The scissor box and test.
+    pub(super) const SCISSOR: Touched = Touched(1 << 3);
+    /// Blending on or off, its equations and factors.
+    pub(super) const BLEND: Touched = Touched(1 << 4);
+    /// The colour write mask and the clear colour.
+    pub(super) const MASKS: Touched = Touched(1 << 5);
+    /// The depth and stencil tests and face culling.
+    pub(super) const TESTS: Touched = Touched(1 << 6);
+    /// The active unit and each unit's texture and sampler.
+    pub(super) const TEXTURES: Touched = Touched(1 << 7);
+    /// The generic array and uniform buffer bindings and the uniform buffer ranges.
+    pub(super) const BUFFERS: Touched = Touched(1 << 8);
+    /// Pack and unpack alignment and the unpack row length.
+    pub(super) const PIXELS: Touched = Touched(1 << 9);
+
+    pub(super) fn with(self, other: Touched) -> Touched {
+        Touched(self.0 | other.0)
+    }
+
+    pub(super) fn has(self, other: Touched) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
 fn set(gl: &glow::Context, cap: u32, on: bool) {
     // Safety: a plain enable of the current context.
     unsafe {
@@ -128,48 +167,76 @@ fn set(gl: &glow::Context, cap: u32, on: bool) {
     }
 }
 
-pub(super) fn restore(gl: &glow::Context, s: &BorrowedState) {
+/// Put back the groups `touched` of `s`, and the vertex array, which the device always binds its own of.
+pub(super) fn restore(gl: &glow::Context, s: &BorrowedState, touched: Touched) {
     // Safety: the values were read from this context by `capture`, so each names an object of it or none.
     unsafe {
         gl.bind_vertex_array(s.vertex_array);
-        gl.use_program(s.program);
-        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, s.draw_framebuffer);
-        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, s.read_framebuffer);
-        let [x, y, w, h] = s.viewport;
-        gl.viewport(x, y, w, h);
-        let [x, y, w, h] = s.scissor_box;
-        gl.scissor(x, y, w, h);
-        set(gl, glow::SCISSOR_TEST, s.scissor_test);
-        set(gl, glow::BLEND, s.blend);
-        gl.blend_equation_separate(s.blend_equation[0] as u32, s.blend_equation[1] as u32);
-        let [a, b, c, d] = s.blend_factors.map(|f| f as u32);
-        gl.blend_func_separate(a, b, c, d);
-        let [r, g, b, a] = s.color_mask;
-        gl.color_mask(r, g, b, a);
-        let [r, g, b, a] = s.clear_color;
-        gl.clear_color(r, g, b, a);
-        set(gl, glow::DEPTH_TEST, s.depth_test);
-        set(gl, glow::STENCIL_TEST, s.stencil_test);
-        set(gl, glow::CULL_FACE, s.cull_face);
-        for (unit, (texture, sampler)) in s.textures.iter().enumerate() {
-            gl.active_texture(glow::TEXTURE0 + unit as u32);
-            gl.bind_texture(glow::TEXTURE_2D, *texture);
-            gl.bind_sampler(unit as u32, *sampler);
+        if touched.has(Touched::PROGRAM) {
+            gl.use_program(s.program);
         }
-        gl.active_texture(s.active_texture as u32);
-        for (i, &(buffer, start, size)) in s.uniform_ranges.iter().enumerate() {
-            let buffer = std::num::NonZeroU32::new(buffer as u32).map(glow::NativeBuffer);
-            if buffer.is_some() && size > 0 {
-                gl.bind_buffer_range(glow::UNIFORM_BUFFER, i as u32, buffer, start, size);
-            } else {
-                gl.bind_buffer_base(glow::UNIFORM_BUFFER, i as u32, buffer);
+        if touched.has(Touched::FRAMEBUFFERS) {
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, s.draw_framebuffer);
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, s.read_framebuffer);
+        }
+        if touched.has(Touched::VIEWPORT) {
+            let [x, y, w, h] = s.viewport;
+            gl.viewport(x, y, w, h);
+        }
+        if touched.has(Touched::SCISSOR) {
+            let [x, y, w, h] = s.scissor_box;
+            gl.scissor(x, y, w, h);
+            set(gl, glow::SCISSOR_TEST, s.scissor_test);
+        }
+        if touched.has(Touched::BLEND) {
+            set(gl, glow::BLEND, s.blend);
+            gl.blend_equation_separate(s.blend_equation[0] as u32, s.blend_equation[1] as u32);
+            let [a, b, c, d] = s.blend_factors.map(|f| f as u32);
+            gl.blend_func_separate(a, b, c, d);
+        }
+        if touched.has(Touched::MASKS) {
+            let [r, g, b, a] = s.color_mask;
+            gl.color_mask(r, g, b, a);
+            let [r, g, b, a] = s.clear_color;
+            gl.clear_color(r, g, b, a);
+        }
+        if touched.has(Touched::TESTS) {
+            set(gl, glow::DEPTH_TEST, s.depth_test);
+            set(gl, glow::STENCIL_TEST, s.stencil_test);
+            set(gl, glow::CULL_FACE, s.cull_face);
+        }
+        if touched.has(Touched::TEXTURES) {
+            for (unit, (texture, sampler)) in s.textures.iter().enumerate() {
+                gl.active_texture(glow::TEXTURE0 + unit as u32);
+                gl.bind_texture(glow::TEXTURE_2D, *texture);
+                gl.bind_sampler(unit as u32, *sampler);
             }
+            gl.active_texture(s.active_texture as u32);
         }
-        // after the indexed bindings, which set the generic one too
-        gl.bind_buffer(glow::UNIFORM_BUFFER, s.uniform_buffer);
-        gl.bind_buffer(glow::ARRAY_BUFFER, s.array_buffer);
-        gl.pixel_store_i32(glow::PACK_ALIGNMENT, s.pack_alignment);
-        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, s.unpack_alignment);
-        gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, s.unpack_row_length);
+        if touched.has(Touched::BUFFERS) {
+            for (i, &(buffer, start, size)) in s.uniform_ranges.iter().enumerate() {
+                let buffer = std::num::NonZeroU32::new(buffer as u32).map(glow::NativeBuffer);
+                if buffer.is_some() && size > 0 {
+                    gl.bind_buffer_range(glow::UNIFORM_BUFFER, i as u32, buffer, start, size);
+                } else {
+                    gl.bind_buffer_base(glow::UNIFORM_BUFFER, i as u32, buffer);
+                }
+            }
+            // after the indexed bindings, which set the generic one too
+            gl.bind_buffer(glow::UNIFORM_BUFFER, s.uniform_buffer);
+            gl.bind_buffer(glow::ARRAY_BUFFER, s.array_buffer);
+        }
+        if touched.has(Touched::PIXELS) {
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, s.pack_alignment);
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, s.unpack_alignment);
+            gl.pixel_store_i32(glow::UNPACK_ROW_LENGTH, s.unpack_row_length);
+        }
+    }
+}
+
+impl BorrowedState {
+    /// The owner's draw framebuffer and viewport, as they were read.
+    pub(super) fn target(&self) -> (Option<glow::Framebuffer>, [i32; 4]) {
+        (self.draw_framebuffer, self.viewport)
     }
 }

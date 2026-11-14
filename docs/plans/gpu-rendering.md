@@ -487,35 +487,50 @@ in `cupertino-gpu` (the `ui_fill` and `ui_texture` programs, the coverage and pa
 buttons have continuous corners, per-corner radii (the bar's top corners alone), linear gradients (button faces and
 rings) and strokes (the rim, the rings). Split (open at the end of step 10's third session):
 
-- [ ] Title bars and window buttons through the renderer's rectangle and glyph pipelines in borrowed-context mode.
+- [x] Title bars and window buttons through the renderer's rectangle and glyph pipelines in borrowed-context mode.
       Split:
-  - [ ] `cupertino-decorations` records a title bar, its buttons and the rim as a list of draws (an outline with
+  - [x] `cupertino-decorations` records a title bar, its buttons and the rim as a list of draws (an outline with
         per-corner extents and an exponent, a solid or linear shade, a stroke width; a coverage image of a glyph run
         or a button glyph) and its CPU path paints that list, the same pixels as today (its tests and the server
         goldens unchanged).
-  - [ ] The `ui_fill` block carries the corner exponent in a lane unused today (zero, circular, for every draw the
-        toolkit records), so a continuous corner is the shared distance on both renderers; per-corner extents by a
-        shape taller than the strip, held to it by the scissor.
-  - [ ] The block layout of `ui_fill` and `ui_texture` as one Rust type in `cupertino-gpu`, which
+  - [x] The `ui_fill` block carries the corner exponent in a lane unused today (zero, circular, for every draw the
+        toolkit records), so a continuous corner is the shared distance on both renderers; and per-corner radii
+        (`FillBlock::corners`, used when the clips' fourth lane is set), so the bar's top corners alone are round
+        without a taller shape and a scissor.
+  - [x] The block layout of `ui_fill` and `ui_texture` as one Rust type in `cupertino-gpu`, which
         `cupertino-ui-gpu` and the compositor both fill, so neither keeps a copy.
-  - [ ] The compositor draws a title bar's list into a texture of its own through those pipelines on the borrowed
-        device (title glyphs and button glyphs rasterized once into the coverage and path mask atlases, kept across
-        frames), when its state changes, and lays the texture over the window as the uploaded buffer was; the frame
-        statistics count GPU draws apart from CPU rasters.
-- [ ] Keyboard HUDs the same way (the input-source HUD, the accent popup, the shortcut notice: rounded fills and
-      centred text).
-- [ ] The procedural cursor last, kept a cursor-plane element: on the GPU into the plane's buffer where the plane
-      takes a GPU buffer, else the CPU image kept for the plane, the choice recorded here.
-- [ ] The rectangle passes of a frame (shadows, outlines, rounded rectangles, title bars) drawn inside one enter and
+  - [x] The compositor draws a title bar's list into a texture of its own on the borrowed device (title glyphs and
+        button glyphs rasterized once into an 8-bit atlas, kept across frames), when its state changes, and lays the
+        texture over the window as the uploaded buffer was; the frame statistics count GPU draws apart from CPU
+        rasters (`deco_draws`). The shapes take the shared distance as `ui_fill` does, but through a program of the
+        compositor's own (`shaders/passes/chrome.wgsl`): `ui_fill`'s results go through the driver's blending, whose
+        precision on the target driver (about 16-bit floats) rounds a pixel of a stack of four button layers three
+        steps away from the CPU painter. The chrome program lays each draw over what the draws before it made with
+        the painter's own arithmetic, reading the image below from a second texture, blending off, so the GPU image
+        is the CPU painting byte for byte on the target driver (every title bar and rim of the four appearances,
+        standard and unified, at scales 1, 1.5 and 2). The rim is drawn the same way. Where the device cannot draw,
+        the list is painted on the CPU and uploaded as before.
+- [x] Keyboard HUDs the same way (the input-source HUD, the accent popup, the shortcut notice: rounded fills and
+      centred text). Each is recorded as a list of draws (its rounded fills as paths, its text as glyph runs) in the
+      overlay image cache and drawn by the chrome program; the frame statistics count them as `hud_draws`.
+- [x] The procedural cursor last, kept a cursor-plane element: on the GPU into the plane's buffer where the plane
+      takes a GPU buffer, else the CPU image kept for the plane, the choice recorded here. Kept on the CPU: the DRM
+      compositor fills the cursor plane's buffer on the CPU, with its software renderer into a mapped buffer, so a
+      GPU image of the cursor would have to come back to the CPU to reach the plane.
+- [x] The rectangle passes of a frame (shadows, outlines, rounded rectangles, title bars) drawn inside one enter and
       leave of the borrowed device instead of one each, so the state is read and put back once a frame
-      ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today).
-- [ ] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
+      ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today). The device notes the groups of state its
+      calls change and `Device::pause` puts back only those, without reading; `Device::resume` enters on what the
+      frame's first enter read.
+- [x] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
       it reports that the hover drew no title bar (the window's place differs between runs), so its median counts
       none. The baseline from the run that hit them, before step 8: 36 decoration rasters and 36 uploads, 12 MiB.
+      The hover now moves relative to Settings' frame (`--pointer-on`), wherever the session placed it.
 
 Gate:
 
-- [ ] The hover scenario shows no CPU raster and no upload.
+- [x] The hover scenario shows no CPU raster and no upload ("Measurements", step 8: 0 rasters, 0 uploads, 36 GPU
+      draws).
 
 ## Step 9: layers and animation in the compositor
 
@@ -1298,6 +1313,35 @@ warms (step 6's presenter), so the first-frame budget holds; a switch with a war
 its first frame, about 33 ms on the NVIDIA GPU, within the 150 ms. Under heavy load from other builds the GPU
 renderer's whole frame once took 420 ms on the CPU side, the driver's threads starved; the CPU renderer's did not
 move.
+
+### Step 8: the compositor's own drawing
+
+`scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 3 --scenario drag,hover`, release builds, NVIDIA RTX 3060,
+medians of three sessions. The baseline is a release build of main before step 8 (`37c9d374c`); its hover cannot run
+with the bench of this step (it moves the pointer with `--pointer-on`, which that server does not know), so its hover
+row is the run that found the window buttons before step 8 (above). Load averages (1, 5, 15 minutes) at the start
+and end of each bench.
+
+| Scenario, build | Load | work p50 | work p99 | CPU p99 | GPU p99 | Title bars: rasters / uploads / GPU draws |
+|---|---|---|---|---|---|---|
+| drag, baseline | 1.23 3.97 6.41 to 1.35 3.56 6.12 | 1.43 ms | 2.52 ms | 2.42 ms | 2.23 ms | 0 / 0 / - |
+| drag, step 8 before its HUD part | 1.79 5.09 7.24 to 1.38 4.14 6.50 | 1.41 ms | 2.46 ms | 1.81 ms | 1.61 ms | 0 / 0 / 0 |
+| drag, baseline | 3.27 5.60 6.47 to 4.88 5.69 6.45 | 1.65 ms | 3.14 ms | 2.68 ms | 2.44 ms | 0 / 0 / - |
+| drag, step 8 (`2f67e576e`) | 4.88 5.69 6.45 to 6.10 5.87 6.47 | 1.64 ms | 2.90 ms | 2.76 ms | 2.42 ms | 0 / 0 / 0 |
+| hover, baseline | (before step 8) | 1.31 ms | 1.99 ms | 1.44 ms | 1.09 ms | 36 / 36 (12 MiB) / - |
+| hover, step 8 (`2f67e576e`) | 4.13 6.61 6.86 to 3.12 5.61 6.48 | 1.28 ms | 1.66 ms | 0.92 ms | 1.19 ms | 0 / 0 / 36 |
+
+The second pair ran back to back while other builds loaded the machine. CPU p99 is the compositor's compose and
+submit time without the wait for the GPU. The drag's p99 is set by a stall of about 2 ms inside the driver about once
+a second, in which the submit time follows the GPU time, so it moves with the machine's load more than with the
+compositor: at a load of 1 to 2 it is under 2 ms with step 8 and 2.4 ms without; at a load of 5 the two are the same
+within the noise. Reading the state once a frame (`4ee84aeb3`) took the passes' own share away: each element's read
+and restore of the context's state had cost 4 to 6 µs, about 25 µs a frame of five passes. One session each,
+alternating builds, at a load of about 10 (5 to 7 for the last pair): baseline 2.45 and 2.66 ms, `4ee84aeb3` 2.34 and
+2.37 ms.
+
+Gate: the hover draws its 36 title bars on the GPU with no CPU raster and no upload (`deco r/u/g 0/0/36`).
+The keyboard HUDs are not in these scenarios; `coverage_gl` checks them as it checks the chrome.
 
 ### Step 9: layers and animation in the compositor
 

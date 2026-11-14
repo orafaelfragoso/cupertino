@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use cupertino_gpu::atlas::Atlas;
-use cupertino_gpu::{Error as GpuError, Region, Texture, TextureDesc, TextureFormat, TextureUsage};
+use cupertino_gpu::{
+    ClipBlock, ClipsBlock, Error as GpuError, FillBlock, Region, Texture, TextureBlock,
+    TextureDesc, TextureFormat, TextureUsage,
+};
 use cupertino_raster_math::blur::{plan_blur, MAX_BLUR_RADIUS};
 use cupertino_raster_math::coverage::{coverage, rect_distance, rounded_distance};
 use cupertino_raster_math::dither;
@@ -30,9 +33,8 @@ const MAX_GLYPH_PX: f64 = 8192.0;
 /// Analytic clips one draw takes; more are rasterized into its clip mask.
 const MAX_ANALYTIC_CLIPS: usize = 4;
 
-/// Floats of each program's uniform block.
-pub(crate) const FILL_FLOATS: usize = 136;
-pub(crate) const TEXTURE_FLOATS: usize = 96;
+/// Floats of the uniform blocks of the programs that have no block type of their own ([`FillBlock`] and
+/// [`TextureBlock`] are the fill and texture programs').
 pub(crate) const RESOLVE_FLOATS: usize = 16;
 pub(crate) const LEVEL_FLOATS: usize = 4;
 pub(crate) const KERNEL_FLOATS: usize = 40;
@@ -49,10 +51,6 @@ const EVERYWHERE: Bounds = Bounds {
 /// The most pixels a scratch image or layer of a kept scroll layer's node covers before it is cut to what the
 /// pixels being painted need of it (with its effects' reach around them), as a frame cuts it.
 const SCRATCH_PIXELS: u64 = 1 << 22;
-
-/// Where a clip block starts in each program's uniforms.
-const FILL_CLIPS: usize = 76;
-const TEXTURE_CLIPS: usize = 36;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetId(pub usize);
@@ -382,25 +380,24 @@ struct ClipDraw {
 }
 
 impl ClipDraw {
-    fn write(&self, u: &mut [f32], base: usize) {
-        u[base] = self.shapes.len() as f32;
+    fn write(&self, c: &mut ClipsBlock) {
+        c.info[0] = self.shapes.len() as f32;
         if let Some(m) = &self.mask {
-            u[base + 1] = 1.0;
-            u[base + 4..base + 8].copy_from_slice(&[
+            c.info[1] = 1.0;
+            c.mask_rect = [
                 m.rect.x0 as f32,
                 m.rect.y0 as f32,
                 m.rect.x1 as f32,
                 m.rect.y1 as f32,
-            ]);
-            u[base + 8] = m.at.0 as f32;
-            u[base + 9] = m.at.1 as f32;
+            ];
+            c.mask_at = [m.at.0 as f32, m.at.1 as f32, 0.0, 0.0];
         }
-        for (i, o) in self.shapes.iter().enumerate() {
-            let at = base + 12 + i * 12;
-            u[at..at + 4].copy_from_slice(&o.inv[..4]);
-            u[at + 4..at + 8].copy_from_slice(&[o.inv[4], o.inv[5], o.half[0], o.half[1]]);
-            u[at + 8] = o.corner;
-            u[at + 9] = o.px;
+        for (clip, o) in c.clips.iter_mut().zip(&self.shapes) {
+            *clip = ClipBlock {
+                linear: [o.inv[0], o.inv[1], o.inv[2], o.inv[3]],
+                moved: [o.inv[4], o.inv[5], o.half[0], o.half[1]],
+                corner: [o.corner, o.px, 0.0, 0.0],
+            };
         }
     }
 
@@ -672,17 +669,23 @@ impl PaintData {
         Some(data)
     }
 
-    fn write(&self, u: &mut [f32]) {
-        u[16..20].copy_from_slice(&self.color);
-        u[20] = self.kind;
-        u[21] = self.count;
-        u[22] = if dither::BY_DEFAULT { 1.0 } else { 0.0 };
-        u[24..28].copy_from_slice(&self.inv[..4]);
-        u[28] = self.inv[4];
-        u[29] = self.inv[5];
-        u[32..36].copy_from_slice(&self.geometry);
-        u[36..44].copy_from_slice(&self.offsets);
-        u[44..76].copy_from_slice(&self.colors);
+    fn write(&self, b: &mut FillBlock) {
+        b.color = self.color;
+        b.paint = [
+            self.kind,
+            self.count,
+            if dither::BY_DEFAULT { 1.0 } else { 0.0 },
+            0.0,
+        ];
+        b.paint_linear = [self.inv[0], self.inv[1], self.inv[2], self.inv[3]];
+        b.paint_moved = [self.inv[4], self.inv[5], 0.0, 0.0];
+        b.paint_geometry = self.geometry;
+        for (i, v) in b.offsets.iter_mut().enumerate() {
+            v.copy_from_slice(&self.offsets[i * 4..i * 4 + 4]);
+        }
+        for (i, v) in b.colors.iter_mut().enumerate() {
+            v.copy_from_slice(&self.colors[i * 4..i * 4 + 4]);
+        }
     }
 }
 
@@ -721,16 +724,19 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
 
     /// The pixels `rect` of `ctx`'s target made transparent.
     fn clear(&mut self, ctx: &Ctx, rect: Bounds) {
-        let mut u = [0.0f32; FILL_FLOATS];
-        u[..4].copy_from_slice(&ctx.frame(self.rec));
-        u[4] = 1.0;
-        u[7] = 1.0;
-        u[8] = -(rect.x0 as f32 + rect.x1 as f32) / 2.0;
-        u[9] = -(rect.y0 as f32 + rect.y1 as f32) / 2.0;
-        u[10] = rect.width() as f32 / 2.0 + 1.0;
-        u[11] = rect.height() as f32 / 2.0 + 1.0;
-        u[13] = 1.0;
-        let uniform = self.rec.uniform(&u);
+        let mut b = FillBlock {
+            frame: ctx.frame(self.rec),
+            shape_linear: [1.0, 0.0, 0.0, 1.0],
+            shape_moved: [
+                -(rect.x0 as f32 + rect.x1 as f32) / 2.0,
+                -(rect.y0 as f32 + rect.y1 as f32) / 2.0,
+                rect.width() as f32 / 2.0 + 1.0,
+                rect.height() as f32 / 2.0 + 1.0,
+            ],
+            ..FillBlock::default()
+        };
+        b.shape[1] = 1.0;
+        let uniform = self.rec.uniform(b.floats());
         let first = self.rec.instance_count();
         self.rec.quad(ctx.local(&rect), (0.0, 0.0));
         self.rec.cmds.push(Cmd::Quads {
@@ -1247,17 +1253,17 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         if shown.is_empty() {
             return Ok(());
         }
-        let mut u = [0.0f32; TEXTURE_FLOATS];
-        u[..4].copy_from_slice(&ctx.frame(self.rec));
-        u[4] = 1.0;
-        u[5] = k as f32;
-        u[12] = area.x0 as f32;
-        u[13] = area.y0 as f32;
-        c.write(&mut u, TEXTURE_CLIPS);
+        let mut b = TextureBlock {
+            frame: ctx.frame(self.rec),
+            mode: [1.0, k as f32, 0.0, 0.0],
+            source: [area.x0 as f32, area.y0 as f32, 0.0, 0.0],
+            ..TextureBlock::default()
+        };
+        c.write(&mut b.clips);
         let local = ctx.local(&shown);
         self.push_texture(
             ctx,
-            &u,
+            b.floats(),
             shown,
             [Tex::Target(layer), c.mask_tex(), Tex::Empty],
             &[(local, (0.0, 0.0))],
@@ -1282,17 +1288,19 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         if shown.is_empty() {
             return Ok(());
         }
-        let mut u = [0.0f32; TEXTURE_FLOATS];
-        u[..4].copy_from_slice(&ctx.frame(self.rec));
-        u[8..12].copy_from_slice(&[255.0; 4]);
-        c.write(&mut u, TEXTURE_CLIPS);
+        let mut b = TextureBlock {
+            frame: ctx.frame(self.rec),
+            tint: [255.0; 4],
+            ..TextureBlock::default()
+        };
+        c.write(&mut b.clips);
         let atlas = (
             (at.0 as i32 + shown.x0 - rect.x0) as f32,
             (at.1 as i32 + shown.y0 - rect.y0) as f32,
         );
         self.push_texture(
             ctx,
-            &u,
+            b.floats(),
             shown,
             [tex, c.mask_tex(), Tex::Empty],
             &[(ctx.local(&shown), atlas)],
@@ -1530,19 +1538,19 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         if shown.is_empty() {
             return Ok(());
         }
-        let mut u = [0.0f32; FILL_FLOATS];
-        u[..4].copy_from_slice(&ctx.frame(self.rec));
+        let mut b = FillBlock {
+            frame: ctx.frame(self.rec),
+            ..FillBlock::default()
+        };
         let (coverage_tex, atlas) = match &cover {
             Cover::Shape(o) => {
-                u[4..8].copy_from_slice(&o.inv[..4]);
-                u[8..12].copy_from_slice(&[o.inv[4], o.inv[5], o.half[0], o.half[1]]);
-                u[12] = o.corner;
-                u[13] = o.px;
-                u[14] = o.stroke.unwrap_or(0.0);
+                b.shape_linear = [o.inv[0], o.inv[1], o.inv[2], o.inv[3]];
+                b.shape_moved = [o.inv[4], o.inv[5], o.half[0], o.half[1]];
+                b.shape = [o.corner, o.px, o.stroke.unwrap_or(0.0), 0.0];
                 (Tex::Empty, (0.0, 0.0))
             }
             Cover::Image { tex, at } => {
-                u[15] = 1.0;
+                b.shape[3] = 1.0;
                 // the quad's first pixel is `shown`'s; the texel of the image's first pixel is `at`, at `reach`
                 (
                     *tex,
@@ -1553,10 +1561,10 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
                 )
             }
         };
-        data.write(&mut u);
-        u[23] = ctx.dither_shift();
-        c.write(&mut u, FILL_CLIPS);
-        let uniform = self.rec.uniform(&u);
+        data.write(&mut b);
+        b.paint[3] = ctx.dither_shift();
+        c.write(&mut b.clips);
+        let uniform = self.rec.uniform(b.floats());
         let first = self.rec.instance_count();
         self.rec.quad(ctx.local(&shown), atlas);
         self.rec.cmds.push(Cmd::Quads {
@@ -1726,12 +1734,14 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         for (tex, format, quads) in batches {
             match format {
                 GlyphFormat::Coverage => {
-                    let mut u = [0.0f32; FILL_FLOATS];
-                    u[..4].copy_from_slice(&ctx.frame(self.rec));
-                    u[15] = 1.0;
-                    PaintData::solid(tinted).write(&mut u);
-                    clip.write(&mut u, FILL_CLIPS);
-                    let uniform = self.rec.uniform(&u);
+                    let mut b = FillBlock {
+                        frame: ctx.frame(self.rec),
+                        ..FillBlock::default()
+                    };
+                    b.shape[3] = 1.0;
+                    PaintData::solid(tinted).write(&mut b);
+                    clip.write(&mut b.clips);
+                    let uniform = self.rec.uniform(b.floats());
                     let first = self.rec.instance_count();
                     for (rect, at) in &quads {
                         self.rec.quad(*rect, *at);
@@ -1746,11 +1756,19 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
                     });
                 }
                 GlyphFormat::ColorPremultiplied => {
-                    let mut u = [0.0f32; TEXTURE_FLOATS];
-                    u[..4].copy_from_slice(&ctx.frame(self.rec));
-                    u[8..12].copy_from_slice(&tinted);
-                    clip.write(&mut u, TEXTURE_CLIPS);
-                    self.push_texture(ctx, &u, limit, [tex, clip.mask_tex(), Tex::Empty], &quads);
+                    let mut b = TextureBlock {
+                        frame: ctx.frame(self.rec),
+                        tint: tinted,
+                        ..TextureBlock::default()
+                    };
+                    clip.write(&mut b.clips);
+                    self.push_texture(
+                        ctx,
+                        b.floats(),
+                        limit,
+                        [tex, clip.mask_tex(), Tex::Empty],
+                        &quads,
+                    );
                 }
             }
             self.r.stats.draws += 1;
@@ -1871,20 +1889,20 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         if shown.is_empty() {
             return Ok(());
         }
-        let mut u = [0.0f32; TEXTURE_FLOATS];
-        u[..4].copy_from_slice(&ctx.frame(self.rec));
-        u[4] = 2.0;
-        u[5] = 255.0;
-        u[6] = if sampling == Sampling::Linear {
+        let linear = if sampling == Sampling::Linear {
             1.0
         } else {
             0.0
         };
-        u[16..20].copy_from_slice(&[x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-        // window pixel to the crop's texels, then to the image's
-        u[20..24].copy_from_slice(&inv[..4]);
-        u[24] = inv[4] + x0 as f32;
-        u[25] = inv[5] + y0 as f32;
+        let mut b = TextureBlock {
+            frame: ctx.frame(self.rec),
+            mode: [2.0, 255.0, linear, 0.0],
+            crop: [x0 as f32, y0 as f32, x1 as f32, y1 as f32],
+            // window pixel to the crop's texels, then to the image's
+            image_linear: [inv[0], inv[1], inv[2], inv[3]],
+            image_moved: [inv[4] + x0 as f32, inv[5] + y0 as f32, 0.0, 0.0],
+            ..TextureBlock::default()
+        };
         let mut cover = Tex::Empty;
         if let Some(edges) = aligned(&Shape::Rect(*dst), ts) {
             // edges on whole pixels: every pixel inside is covered
@@ -1892,11 +1910,11 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             if inside.is_empty() {
                 return Ok(());
             }
-            c.write(&mut u, TEXTURE_CLIPS);
+            c.write(&mut b.clips);
             let local = ctx.local(&inside);
             self.push_texture(
                 ctx,
-                &u,
+                b.floats(),
                 inside,
                 [Tex::Image(id), c.mask_tex(), cover],
                 &[(local, (0.0, 0.0))],
@@ -1912,23 +1930,22 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             area,
         )? {
             cover = tex;
-            u[7] = 1.0;
-            u[28..32].copy_from_slice(&[
+            b.mode[3] = 1.0;
+            b.cover_rect = [
                 rect.x0 as f32,
                 rect.y0 as f32,
                 rect.x1 as f32,
                 rect.y1 as f32,
-            ]);
-            u[32] = at.0 as f32;
-            u[33] = at.1 as f32;
+            ];
+            b.cover_at = [at.0 as f32, at.1 as f32, 0.0, 0.0];
         } else {
             return Ok(());
         }
-        c.write(&mut u, TEXTURE_CLIPS);
+        c.write(&mut b.clips);
         let local = ctx.local(&shown);
         self.push_texture(
             ctx,
-            &u,
+            b.floats(),
             shown,
             [Tex::Image(id), c.mask_tex(), cover],
             &[(local, (0.0, 0.0))],

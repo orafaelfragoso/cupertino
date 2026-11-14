@@ -103,6 +103,11 @@ pub struct Cli {
     /// Move the pointer at a time, `SECONDS:X,Y` (logical coordinates); repeatable.
     #[arg(long = "pointer", value_name = "SECONDS:X,Y", value_parser = parse_timed_point)]
     pub pointers: Vec<(f64, (f64, f64))>,
+    /// Move the pointer at a time to a point of a window, `SECONDS:WINDOW:X,Y`: X,Y logical points from the top left
+    /// corner of the frame of the first window whose application or title holds WINDOW (in any case), wherever the
+    /// window was placed; nothing when there is none. Repeatable.
+    #[arg(long = "pointer-on", value_name = "SECONDS:WINDOW:X,Y", value_parser = parse_timed_window_point)]
+    pub window_pointers: Vec<(f64, String, (f64, f64))>,
     /// Click (press and release) the left button at a time and position, `SECONDS:X,Y`; repeatable.
     #[arg(long = "click", value_name = "SECONDS:X,Y", value_parser = parse_timed_point)]
     pub clicks: Vec<(f64, (f64, f64))>,
@@ -218,6 +223,31 @@ pub fn parse_timed_point(s: &str) -> Result<(f64, (f64, f64)), String> {
     let (x, y) = p.split_once(',').ok_or("expected SECONDS:X,Y")?;
     let n = |v: &str| v.trim().parse::<f64>().map_err(|e| e.to_string());
     Ok((n(t)?, (n(x)?, n(y)?)))
+}
+
+pub fn parse_timed_window_point(s: &str) -> Result<(f64, String, (f64, f64)), String> {
+    let (t, rest) = s.split_once(':').ok_or("expected SECONDS:WINDOW:X,Y")?;
+    let (window, p) = rest.rsplit_once(':').ok_or("expected SECONDS:WINDOW:X,Y")?;
+    if window.is_empty() {
+        return Err("expected SECONDS:WINDOW:X,Y".into());
+    }
+    let (t, point) = parse_timed_point(&format!("{t}:{p}"))?;
+    Ok((t, window.to_lowercase(), point))
+}
+
+/// The top left corner of the frame of the first window whose application or title holds `word` (lower case).
+fn window_origin(state: &Cupertino, word: &str) -> Option<(f64, f64)> {
+    state.wm.windows().find_map(|w| {
+        let app = state
+            .wm
+            .app(w.app)
+            .map(|a| a.identity.to_lowercase())
+            .unwrap_or_default();
+        (app.contains(word) || w.title.to_lowercase().contains(word)).then(|| {
+            let frame = w.geometry();
+            (frame.x, frame.y)
+        })
+    })
 }
 
 pub fn parse_timed_scroll(s: &str) -> Result<(f64, (f64, f64), f64), String> {
@@ -385,6 +415,16 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     for (t, (x, y)) in cli.pointers.iter().copied() {
         schedule(event_loop, t, move |state| {
             state.pointer_moved_to((x, y).into(), input_millis(state), None);
+        })?;
+    }
+    for (t, window, (x, y)) in cli.window_pointers.iter().cloned() {
+        schedule(event_loop, t, move |state| {
+            match window_origin(state, &window) {
+                Some((ox, oy)) => {
+                    state.pointer_moved_to((ox + x, oy + y).into(), input_millis(state), None)
+                }
+                None => tracing::warn!(%window, "no window to move the pointer onto"),
+            }
         })?;
     }
     for (t, (x, y)) in cli.clicks.iter().copied() {
@@ -1300,6 +1340,12 @@ mod tests {
         );
         assert!(parse_timed_point("2:100").is_err());
         assert!(parse_timed_point("x:1,2").is_err());
+        assert_eq!(
+            parse_timed_window_point("9.5:Settings:26,14.5").unwrap(),
+            (9.5, "settings".to_string(), (26.0, 14.5))
+        );
+        assert!(parse_timed_window_point("9.5:26,14.5").is_err());
+        assert!(parse_timed_window_point("9.5::26,14.5").is_err());
     }
 
     #[test]

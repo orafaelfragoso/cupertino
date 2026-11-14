@@ -27,10 +27,13 @@
 //! left to right (no bidirectional reordering) and a character missing from the
 //! family is taken from the first other loaded face that has it.
 
+use crate::draws::{composite_glyphs, PlacedGlyph as PlacedImage};
 use crate::glyph::{self, Mask, Smoothing};
 use crate::palette::Rgba;
 use cupertino_assets::{AssetError, Assets, FontRole, FontSource};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 use swash::scale::ScaleContext;
 use swash::shape::ShapeContext;
@@ -234,7 +237,7 @@ pub struct TextRenderer {
     smoothing: Smoothing,
     /// The text is the design's declarative toolkit's: its dilation size is floored.
     declarative: bool,
-    images: HashMap<GlyphKey, Option<Mask>>,
+    images: HashMap<GlyphKey, Option<(u64, Rc<Mask>)>>,
     /// Glyph images rasterized into `images`.
     rasterized: u64,
 }
@@ -576,8 +579,26 @@ impl TextRenderer {
         letter_spacing_px: f32,
         color: Rgba,
     ) {
+        let glyphs = self.place(text, x, baseline, px, weight, letter_spacing_px, color);
+        composite_glyphs(pm, &glyphs, color);
+    }
+
+    /// The coverage images of `text` with its left edge at `x` and its baseline at `baseline` (device pixels), each at
+    /// the whole pixel [`TextRenderer::draw`] lays it, rasterized once per glyph, size, weight and subpixel position:
+    /// what drawing the text in `color` (which sets the dilation) lays down.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place(
+        &mut self,
+        text: &str,
+        x: f32,
+        baseline: f32,
+        px: f32,
+        weight: u16,
+        letter_spacing_px: f32,
+        color: Rgba,
+    ) -> Vec<PlacedImage> {
         let line = self.shape(text, px, weight);
-        let (w, h) = (pm.width() as i32, pm.height() as i32);
+        let mut placed = Vec::with_capacity(line.glyphs.len());
         // the whole-pixel origin is truncated and its fraction quantised to the size's positions (truncating
         // the fraction too is ours, approximate)
         let (qx, qy) = glyph::quantization(px);
@@ -643,41 +664,28 @@ impl TextRenderer {
                     f32::from(x_bin) / f32::from(qx),
                     -f32::from(y_bin) / f32::from(qy),
                 );
-                glyph::rasterize(
+                let mask = glyph::rasterize(
                     outline.points(),
                     outline.verbs(),
                     offset,
                     (dilation, dilation),
-                )
+                )?;
+                // the face by its cache key, which no other loaded face shares
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (f.key.value(), key).hash(&mut h);
+                Some((h.finish(), Rc::new(mask)))
             });
-            let Some(img) = img.as_ref() else { continue };
-            let (gx, gy) = (whole + img.left, whole_y - img.top);
-            let (iw, ih) = (img.width as i32, img.height as i32);
-            let data = pm.data_mut();
-            for yy in 0..ih {
-                for xx in 0..iw {
-                    let (dx, dy) = (gx + xx, gy + yy);
-                    if dx < 0 || dy < 0 || dx >= w || dy >= h {
-                        continue;
-                    }
-                    let cov = img.data[(yy * iw + xx) as usize] as f32 / 255.0 * color[3];
-                    if cov <= 0.0 {
-                        continue;
-                    }
-                    // premultiplied source-over on the stored (device-encoded) values: no linearisation, contrast or
-                    // lookup table
-                    let px = &mut data[((dy * w + dx) * 4) as usize..][..4];
-                    for (c, v) in px.iter_mut().zip([color[0], color[1], color[2]]) {
-                        *c = ((v * cov * 255.0) + *c as f32 * (1.0 - cov))
-                            .round()
-                            .clamp(0.0, 255.0) as u8;
-                    }
-                    px[3] = ((cov * 255.0) + px[3] as f32 * (1.0 - cov))
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
-                }
-            }
+            let Some((id, img)) = img.as_ref() else {
+                continue;
+            };
+            placed.push(PlacedImage {
+                x: whole + img.left,
+                y: whole_y - img.top,
+                key: *id,
+                mask: img.clone(),
+            });
         }
+        placed
     }
 }
 

@@ -29,7 +29,7 @@ class ScriptTest(unittest.TestCase):
             flags, (a, b) = bench.script(name, 60, WINDOWS, (1280, 800), 1.0, 15)
             self.assertGreaterEqual(a, bench.SETTLE, name)
             self.assertGreater(b, a, name)
-            steps = [t for f in ("--pointer", "--press", "--release", "--click", "--action", "--key", "--type",
+            steps = [t for f in ("--pointer", "--pointer-on", "--press", "--release", "--click", "--action", "--key", "--type",
                                  "--scroll", "--right-click") for t in times(flags, f)]
             if name == "idle":
                 self.assertEqual(steps, [], "an idle desktop gets no input")
@@ -48,11 +48,15 @@ class ScriptTest(unittest.TestCase):
         s = WINDOWS["settings"]
         self.assertTrue(s["x"] < x < s["x"] + s["width"] and s["y"] < y < s["y"] + 28)
 
-    def test_the_hover_crosses_every_window_button_of_settings(self):
+    def test_the_hover_crosses_every_window_button_of_settings_wherever_settings_is(self):
         flags, _ = bench.script("hover", 60, WINDOWS, (1280, 800), 1.0, 15)
-        points = [tuple(float(v) for v in flags[i + 1].split(":")[1].split(","))
-                  for i, f in enumerate(flags) if f == "--pointer"][:-1]
-        (close_x, row), (zoom_x, _) = WINDOWS["settings"]["buttons"]
+        on = [flags[i + 1].split(":") for i, f in enumerate(flags) if f == "--pointer-on"]
+        self.assertTrue(on and all(window == "settings" for _, window, _ in on))
+        s = WINDOWS["settings"]
+        # points of Settings' frame, as the layout session placed it
+        points = [tuple(float(v) for v in p.split(",")) for _, _, p in on]
+        points = [(s["x"] + x, s["y"] + y) for x, y in points]
+        (close_x, row), (zoom_x, _) = s["buttons"]
         self.assertTrue(all(y == row for _, y in points))
         xs = [x for x, _ in points]
         self.assertLess(min(xs), close_x - 6)
@@ -114,8 +118,8 @@ class ReadingTest(unittest.TestCase):
             "# renderer test\n# refresh_us 16666\n# start_monotonic_ns 1000000000\n"
             "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us "
             "allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads "
-            "hud_upload_bytes blur_passes blur_texels pointer_lat_us submit_us\n"
-            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000 3000 500\n"
+            "hud_upload_bytes blur_passes blur_texels pointer_lat_us submit_us deco_draws\n"
+            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000 3000 500 2\n"
             "10016000 300 19000 0 0 0 1 0 1 - 9000 0 0 - 0 0 0 0 0 0 0 0 - 1700\n"
             "30000000 300 1000 0 0 0 0 0 0 - - 0 0 900 0 0 0 0 0 0 0 0 - 600\n")
         return path
@@ -130,6 +134,7 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual(c["missed"], 1)
         self.assertEqual(c["over_budget"], 1, "19.3 ms of work is over a 60 Hz refresh")
         self.assertEqual(c["decoration_rasters"], 1)
+        self.assertEqual(c["decoration_draws"], 2, "title bars drawn on the GPU")
         self.assertEqual(c["decoration_upload_kib"], 2.0)
         self.assertEqual(c["blur_passes_per_frame"], 2.0)
         self.assertEqual(c["blur_texels_per_frame"], 3000.0)

@@ -4,20 +4,20 @@
 use cupertino_scene::{
     Clip, ImageRole, OutputPoint, RoundedRect, SceneFrame, SceneItem, Shadow, Source, SurfaceRole,
 };
-use smithay::backend::renderer::element::memory::{
-    MemoryRenderBuffer, MemoryRenderBufferRenderElement,
-};
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
+use smithay::backend::renderer::element::texture::TextureRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
+use super::chrome::Resolved;
 use super::clip::{ClipElement, ClipShape};
-use super::compose::{logical_rect, FrameResources, TreeSlice};
+use super::compose::{logical_rect, FrameResources, ImageBuffer, TreeSlice};
 use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
@@ -558,7 +558,7 @@ pub(super) fn id_hash(id: &smithay::backend::renderer::element::Id) -> u64 {
 #[allow(clippy::too_many_arguments)]
 fn picture(
     ctx: &mut Lowering<'_>,
-    buffer: &MemoryRenderBuffer,
+    buffer: &ImageBuffer,
     role: ImageRole,
     item: &SceneItem,
     src: Rectangle<f64, Logical>,
@@ -573,12 +573,44 @@ fn picture(
         ImageRole::Cursor => Kind::Cursor,
         ImageRole::Standalone | ImageRole::Decoration => Kind::Unspecified,
     };
+    let memory = match buffer {
+        ImageBuffer::Memory(memory) => memory.clone(),
+        ImageBuffer::Chrome(chrome) => match chrome.resolve(ctx.renderer, &ctx.programs.passes) {
+            Resolved::Texture(texture) => {
+                let element = TextureRenderElement::from_texture_render_buffer(
+                    loc,
+                    &texture,
+                    Some(item.opacity as f32),
+                    Some(src),
+                    Some(Size::from(size)),
+                    kind,
+                );
+                if role != ImageRole::Decoration {
+                    out.push(element.into());
+                    return;
+                }
+                let pivot = physical(place.pivot, ctx.scale);
+                let rescale = Scale::from((place.scale_x, place.scale_y));
+                match mask(ctx, item.clip, viewport) {
+                    Some(shape) => {
+                        let clip = clipped(ctx, element, shape);
+                        out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
+                    }
+                    None => {
+                        out.push(RescaleRenderElement::from_element(element, pivot, rescale).into())
+                    }
+                }
+                return;
+            }
+            Resolved::Memory(memory) => memory,
+        },
+    };
     // the renderer counts what it uploads; an image it already holds costs nothing
     let before = ctx.renderer.memory_uploads();
     let element = MemoryRenderBufferRenderElement::from_buffer(
         ctx.renderer,
         loc,
-        buffer,
+        &memory,
         Some(item.opacity as f32),
         Some(src),
         Some(Size::from(size)),

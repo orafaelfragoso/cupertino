@@ -9,6 +9,8 @@
 //! * Explicit render passes ([`Device::begin_pass`]: a target, a load operation, then pipelines, bind groups and
 //!   draws; a borrowed device's [`Device::begin_owner_pass`] draws into the framebuffer its owner has bound) and
 //!   [`Fence`]s after a submission, with native sync files where the driver has them.
+//! * [`blocks`]: the uniform blocks of the toolkit's fill and texture programs as Rust types, which every renderer
+//!   drawing with those programs fills.
 //! * [`atlas`]: 8-bit coverage, colour glyph and path mask atlases with least-recently-used eviction and caps;
 //!   [`pool`]: pooled render targets with a cap.
 //!
@@ -27,6 +29,7 @@
 //! the caller makes a new device.
 
 pub mod atlas;
+pub mod blocks;
 mod gles;
 pub mod pool;
 pub mod program_cache;
@@ -34,6 +37,7 @@ pub mod shaders;
 pub mod syncobj;
 mod types;
 
+pub use blocks::{ClipBlock, ClipsBlock, FillBlock, TextureBlock};
 pub use gles::{
     wait_sync_file, BindGroup, BindGroupEntry, BindGroupLayout, BindingResource, BorrowedState,
     Buffer, DetachedDevice, Device, ExternalImage, Fence, Pass, Pipeline, PipelineDesc, Sampler,

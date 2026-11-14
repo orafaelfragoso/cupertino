@@ -19,6 +19,7 @@ use crate::shaders::{NamedBinding, ShaderSource};
 use crate::types::*;
 
 pub use state::BorrowedState;
+use state::Touched;
 
 /// Groups a pipeline may have.
 pub const MAX_GROUPS: u32 = 2;
@@ -88,6 +89,8 @@ pub struct Texture {
     image: Option<egl::EGLImage>,
     bo: Option<*mut c_void>,
     id: u64,
+    /// Its storage is the device's owner's ([`Device::wrap_texture`]): destroying it keeps the texture.
+    foreign: bool,
 }
 
 impl Texture {
@@ -209,6 +212,10 @@ pub struct Device {
     injected: Cell<Option<u32>>,
     borrowed: bool,
     entered: Cell<bool>,
+    /// The groups of the owner's state the device changed since it was entered or resumed (borrowed devices).
+    touched: Cell<Touched>,
+    /// The owner's draw framebuffer and viewport, as entering read them (borrowed devices).
+    owner_target: Cell<(Option<glow::Framebuffer>, [i32; 4])>,
     /// Saved program binaries, when the caller named a cache directory.
     program_cache: Option<ProgramCache>,
     /// The driver's vendor, renderer and version strings, which a saved binary is valid for.
@@ -346,6 +353,8 @@ impl Device {
             injected: Cell::new(None),
             borrowed,
             entered: Cell::new(false),
+            touched: Cell::new(Touched::NONE),
+            owner_target: Cell::new((None, [0; 4])),
             program_cache: None,
             driver_key: driver,
         };
@@ -415,26 +424,59 @@ impl Device {
             return Err(Error::Invalid("the device is entered already".into()));
         }
         let saved = self.capture_state();
-        // Safety: the owner's context is current (the borrow's contract); its state was saved above.
-        unsafe { self.gl.bind_vertex_array(Some(self.vao)) };
-        self.entered.set(true);
+        self.enter_with(&saved);
         Ok(saved)
     }
 
-    /// Put back the state [`Device::enter`] saved.
+    /// Put back the state [`Device::enter`] saved: the groups of it the device changed.
     pub fn leave(&self, saved: BorrowedState) {
+        self.pause(&saved);
+    }
+
+    /// Put back what the device changed since it was entered or resumed, as `saved` (what [`Device::enter`] read)
+    /// holds it, and keep `saved` for [`Device::resume`]: how a device draws among many of its owner's draws with
+    /// the owner's state read once. Nothing is read; only the groups of state the device's calls changed are
+    /// written.
+    pub fn pause(&self, saved: &BorrowedState) {
         if self.entered.replace(false) {
-            self.restore_state(&saved);
+            state::restore(&self.gl, saved, self.touched.replace(Touched::NONE));
         }
+    }
+
+    /// Enter again after [`Device::pause`] without reading the owner's state: `saved` is what the first
+    /// [`Device::enter`] read, and the next pause puts back what the device changes to it.
+    ///
+    /// The owner keeps to its side of this: between the pause and the resume it may change any state, but what it
+    /// relies on keeping from one of its draws to the next (its framebuffer, viewport, scissor and blending, say) is
+    /// as `saved` holds it, since that is what a pause puts back; state it sets before each of its draws (its
+    /// program, textures and buffers) may differ.
+    pub fn resume(&self, saved: &BorrowedState) -> Result<()> {
+        if !self.borrowed {
+            return Err(Error::Invalid("resume is for borrowed devices".into()));
+        }
+        if self.entered.get() {
+            return Err(Error::Invalid("the device is entered already".into()));
+        }
+        self.enter_with(saved);
+        Ok(())
+    }
+
+    fn enter_with(&self, saved: &BorrowedState) {
+        // Safety: the owner's context is current (the borrow's contract); its state is in `saved`.
+        unsafe { self.gl.bind_vertex_array(Some(self.vao)) };
+        self.owner_target.set(saved.target());
+        self.touched.set(Touched::NONE);
+        self.entered.set(true);
+    }
+
+    /// Note that a call changes the groups `groups` of the owner's state, which leaving puts back.
+    fn touch(&self, groups: Touched) {
+        self.touched.set(self.touched.get().with(groups));
     }
 
     /// The state a borrowed device restores, as the context holds it now.
     pub fn capture_state(&self) -> BorrowedState {
         state::capture(&self.gl)
-    }
-
-    fn restore_state(&self, saved: &BorrowedState) {
-        state::restore(&self.gl, saved)
     }
 
     /// Before every call: not lost, current, entered when borrowed.
@@ -488,6 +530,7 @@ impl Device {
     pub fn create_buffer(&self, desc: &BufferDesc) -> Result<Buffer> {
         self.ready()?;
         let target = buffer_target(desc.usage);
+        self.touch(Touched::BUFFERS);
         // Safety: a current context; the buffer is bound and sized.
         unsafe {
             let raw = self.gl.create_buffer().map_err(Error::Driver)?;
@@ -513,6 +556,7 @@ impl Device {
             )));
         }
         let target = buffer_target(buffer.usage);
+        self.touch(Touched::BUFFERS);
         // Safety: a buffer of this device, written inside its size.
         unsafe {
             self.gl.bind_buffer(target, Some(buffer.raw));
@@ -551,6 +595,7 @@ impl Device {
                 )));
             }
         }
+        self.touch(Touched::TEXTURES.with(Touched::FRAMEBUFFERS));
         // Safety: a current context; the texture is made, bound and given storage.
         unsafe {
             let raw = self.gl.create_texture().map_err(Error::Driver)?;
@@ -570,6 +615,7 @@ impl Device {
                 image: None,
                 bo: None,
                 id: next_id(),
+                foreign: false,
             };
             if desc.usage.render_target {
                 match self.framebuffer_of(raw) {
@@ -582,6 +628,56 @@ impl Device {
             }
             Ok(texture)
         }
+    }
+
+    /// A render target over `name`, a 2D texture of `size` texels in 8-bit RGBA the device's owner made in the
+    /// context it lent: drawn into, sampled and read like the device's own textures (its filtering set to theirs,
+    /// one level, nearest). Destroying the result
+    /// ([`Device::destroy_texture`]) releases only the framebuffer the device made for it; the texture stays the
+    /// owner's. Only a borrowed device wraps.
+    ///
+    /// # Safety
+    ///
+    /// `name` is a texture of the current context with storage of `size` in a colour-renderable 8-bit RGBA format,
+    /// and it outlives the result.
+    pub unsafe fn wrap_texture(&self, name: u32, size: (u32, u32)) -> Result<Texture> {
+        self.ready()?;
+        if !self.is_borrowed() {
+            return Err(Error::Invalid(
+                "only a borrowed device wraps its owner's textures".into(),
+            ));
+        }
+        let raw = std::num::NonZeroU32::new(name)
+            .map(glow::NativeTexture)
+            .ok_or_else(|| Error::Invalid("texture name 0".into()))?;
+        let (w, h) = size;
+        if w == 0 || h == 0 {
+            return Err(Error::Invalid(format!("a texture of {w} x {h}")));
+        }
+        self.touch(Touched::FRAMEBUFFERS.with(Touched::TEXTURES));
+        // Safety: the caller's texture of the current context; it reads its one level, as the device's own do (its
+        // owner sets its own filtering when it samples it)
+        let framebuffer = unsafe {
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(raw));
+            self.texture_defaults();
+            self.framebuffer_of(raw)
+        }?;
+        Ok(Texture {
+            raw,
+            desc: TextureDesc {
+                size,
+                format: TextureFormat::Rgba8,
+                usage: TextureUsage {
+                    sampled: true,
+                    render_target: true,
+                },
+            },
+            framebuffer: Some(framebuffer),
+            image: None,
+            bo: None,
+            id: next_id(),
+            foreign: true,
+        })
     }
 
     /// Without a sampler bound, a texture reads its single level, nearest, clamped: complete without mipmaps.
@@ -651,6 +747,7 @@ impl Device {
             ));
         }
         let (format, ty) = upload_format(texture.desc.format);
+        self.touch(Touched::TEXTURES.with(Touched::PIXELS));
         // Safety: a texture of this device; the data is as large as the region.
         unsafe {
             self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
@@ -687,6 +784,7 @@ impl Device {
         if region.x + region.width > w || region.y + region.height > h {
             return Err(Error::Invalid(format!("{region:?} of a {w} x {h} texture")));
         }
+        self.touch(Touched::FRAMEBUFFERS.with(Touched::PIXELS));
         // Safety: a complete framebuffer of this device; `out` holds the region in the format asked for.
         unsafe {
             self.gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fb));
@@ -752,7 +850,9 @@ impl Device {
             if let Some(fb) = texture.framebuffer {
                 self.gl.delete_framebuffer(fb);
             }
-            self.gl.delete_texture(texture.raw);
+            if !texture.foreign {
+                self.gl.delete_texture(texture.raw);
+            }
             if let Some(image) = texture.image {
                 self.ctx.destroy_image(image);
             }
@@ -873,6 +973,7 @@ impl Device {
         let target = self
             .image_target_texture
             .ok_or_else(|| Error::Unsupported("no glEGLImageTargetTexture2DOES".into()))?;
+        self.touch(Touched::TEXTURES.with(Touched::FRAMEBUFFERS));
         // Safety: a current context; the image is valid and becomes the texture's storage.
         unsafe {
             let raw = self.gl.create_texture().map_err(Error::Driver)?;
@@ -890,6 +991,7 @@ impl Device {
                 image: Some(image),
                 bo,
                 id: next_id(),
+                foreign: false,
             };
             match self.framebuffer_of(raw) {
                 Ok(fb) => texture.framebuffer = Some(fb),
@@ -1003,6 +1105,7 @@ impl Device {
     pub fn create_pipeline(&self, desc: &PipelineDesc<'_>) -> Result<Pipeline> {
         self.ready()?;
         let gl = &self.gl;
+        self.touch(Touched::PROGRAM);
         // Safety: a current context; shaders compiled and linked, names looked up in the linked program.
         unsafe {
             let program = self.link(desc.shader)?;
@@ -1152,6 +1255,14 @@ impl Device {
             .ok_or_else(|| Error::Invalid("the target is not a render target".into()))?;
         let (w, h) = target.desc.size;
         let gl = &self.gl;
+        self.touch(
+            Touched::FRAMEBUFFERS
+                .with(Touched::VIEWPORT)
+                .with(Touched::SCISSOR)
+                .with(Touched::TESTS)
+                .with(Touched::BLEND)
+                .with(Touched::MASKS),
+        );
         // Safety: a complete framebuffer of this device; the pass's fixed state set before any draw.
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
@@ -1194,19 +1305,34 @@ impl Device {
         }
         self.ready()?;
         let gl = &self.gl;
+        // the framebuffer and viewport entering read: the owner's, bound again if a pass of the device's own
+        // changed them since
+        let (framebuffer, viewport) = self.owner_target.get();
+        let moved = self
+            .touched
+            .get()
+            .has(Touched::FRAMEBUFFERS.with(Touched::VIEWPORT));
+        self.touch(
+            Touched::SCISSOR
+                .with(Touched::TESTS)
+                .with(Touched::BLEND)
+                .with(Touched::MASKS),
+        );
         // Safety: the owner's context is current and entered; its framebuffer stays bound, the pass's fixed state is
         // set before any draw and restored on leave.
-        let viewport = unsafe {
-            let mut v = [0; 4];
-            gl.get_parameter_i32_slice(glow::VIEWPORT, &mut v);
+        unsafe {
+            if moved {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, framebuffer);
+                let [x, y, w, h] = viewport;
+                gl.viewport(x, y, w, h);
+            }
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::STENCIL_TEST);
             gl.disable(glow::CULL_FACE);
             gl.disable(glow::BLEND);
             gl.color_mask(true, true, true, true);
-            v
-        };
+        }
         Ok(Pass {
             device: self,
             size: (viewport[2].max(0) as u32, viewport[3].max(0) as u32),
@@ -1395,6 +1521,7 @@ pub struct Pass<'a> {
 impl<'a> Pass<'a> {
     pub fn set_pipeline(&mut self, pipeline: &'a Pipeline) {
         let gl = &self.device.gl;
+        self.device.touch(Touched::PROGRAM.with(Touched::BLEND));
         // Safety: a program of this device; blending as the pipeline holds it.
         unsafe {
             gl.use_program(Some(pipeline.program));
@@ -1429,6 +1556,7 @@ impl<'a> Pass<'a> {
             return Err(Error::Invalid(format!("the pipeline has no group {index}")));
         }
         let gl = &self.device.gl;
+        self.device.touch(Touched::BUFFERS.with(Touched::TEXTURES));
         for &(binding, bound) in &group.entries {
             let slot = binding_index(index, binding)?;
             // Safety: resources of this device bound at the points the pipeline's program reads.
@@ -1478,6 +1606,7 @@ impl<'a> Pass<'a> {
             .get(slot as usize)
             .ok_or_else(|| Error::Invalid(format!("the pipeline has no vertex buffer {slot}")))?;
         let gl = &self.device.gl;
+        self.device.touch(Touched::BUFFERS);
         // Safety: the device's own vertex array is bound; attributes point into a buffer of this device.
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.raw));
@@ -1540,6 +1669,7 @@ impl<'a> Pass<'a> {
     /// the owner's context counts them), or everywhere.
     pub fn set_scissor(&mut self, region: Option<Region>) {
         let gl = &self.device.gl;
+        self.device.touch(Touched::SCISSOR);
         // Safety: plain state of the pass; fragment row 0 is the target's first row, so no flip.
         unsafe {
             match region {

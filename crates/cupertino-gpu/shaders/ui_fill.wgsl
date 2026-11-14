@@ -35,12 +35,17 @@ struct Draw {
     paint_geometry: vec4<f32>,
     offsets: array<vec4<f32>, 2>,
     colors: array<vec4<f32>, 8>,
-    // Analytic clips in force, whether the path clip mask is.
+    // Analytic clips in force, whether the path clip mask is, the shape's corner exponent (0: circular corners, as
+    // every draw of the toolkit's has; above 2 a continuous corner of the shared distance), and whether the shape's
+    // corners each have their own radius (`corners`) instead of the one in `shape`.
     clip_info: vec4<f32>,
     // The path clip mask's window pixels (x0 y0 x1 y1) and the atlas texel of its first pixel.
     mask_rect: vec4<f32>,
     mask_at: vec4<f32>,
     clips: array<Clip, 4>,
+    // The shape's corner radii when `clip_info.w` is set: top left, top right, bottom right, bottom left (each held to
+    // the half size).
+    corners: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> draw: Draw;
@@ -99,12 +104,27 @@ fn place(linear: vec4<f32>, moved: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(linear.x * p.x + linear.z * p.y + moved.x, linear.y * p.x + linear.w * p.y + moved.y);
 }
 
-// Distance to a rectangle (corner 0) or rounded rectangle (circular corner), its outline moved out by `grow`.
-fn outline_distance(p: vec2<f32>, half: vec2<f32>, corner: f32, grow: f32) -> f32 {
+// Distance to a rectangle (corner 0) or rounded rectangle, its corners circular (exponent 0) or of exponent `n`, its
+// outline moved out by `grow`.
+fn outline_distance(p: vec2<f32>, half: vec2<f32>, corner: f32, n: f32, grow: f32) -> f32 {
     if (corner > 0.0) {
-        return rounded_distance(p, half, corner, 2.0) - grow;
+        return rounded_distance(p, half, corner, select(2.0, n, n > 0.0)) - grow;
     }
     return rect_distance(p, half + vec2<f32>(grow));
+}
+
+// The radius of the corner of the shape's quadrant `q` lies in, from `corners` (top left, top right, bottom right,
+// bottom left), held to the half size.
+fn corner_of(corners: vec4<f32>, q: vec2<f32>, half: vec2<f32>) -> f32 {
+    var e = corners.x;
+    if (q.x >= 0.0 && q.y < 0.0) {
+        e = corners.y;
+    } else if (q.x >= 0.0 && q.y >= 0.0) {
+        e = corners.z;
+    } else if (q.x < 0.0 && q.y >= 0.0) {
+        e = corners.w;
+    }
+    return min(e, min(half.x, half.y));
 }
 
 // The clips' coverage at window pixel centre `p`, 0 to 255: each clip's byte multiplied in turn.
@@ -117,7 +137,7 @@ fn clip_coverage(p: vec2<f32>, wp: vec2<i32>) -> u32 {
         }
         let clip = draw.clips[i];
         let q = place(clip.linear, clip.moved.xy, p);
-        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x, 0.0), clip.corner.y));
+        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x, 0.0, 0.0), clip.corner.y));
         if (c == 0u) {
             m = 0u;
         } else if (c != 255u) {
@@ -186,11 +206,16 @@ fn fs_main(in: Varyings) -> @location(0) vec4<f32> {
         let q = place(draw.shape_linear, draw.shape_moved.xy, p);
         let half = draw.shape_moved.zw;
         let width = draw.shape.z;
+        let n = draw.clip_info.z;
+        var corner = draw.shape.x;
+        if (draw.clip_info.w > 0.5) {
+            corner = corner_of(draw.corners, q, half);
+        }
         if (width > 0.0) {
-            let outer = outline_distance(q, half, draw.shape.x, width * 0.5);
+            let outer = outline_distance(q, half, corner, n, width * 0.5);
             k = coverage_byte(stroke_coverage(outer, width, draw.shape.y));
         } else {
-            k = coverage_byte(coverage(outline_distance(q, half, draw.shape.x, 0.0), draw.shape.y));
+            k = coverage_byte(coverage(outline_distance(q, half, corner, n, 0.0), draw.shape.y));
         }
     }
     if (draw.clip_info.x > 0.5 || draw.clip_info.y > 0.5) {

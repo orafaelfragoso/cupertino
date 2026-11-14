@@ -1078,10 +1078,13 @@ fn tree_items(outline: &[RowSpec]) -> Vec<TreeItem> {
 /// change that keeps both builds the grid's cells near the viewport alone, not the layout of every item again.
 const KEPT_ICON_LAYOUTS: usize = 4;
 
+/// An icon layout kept for the views to come: the viewport width (its bits) and item count it was made for, its
+/// parameters and the layout.
+type KeptIconLayout = ((u64, usize), IconParams, Rc<IconLayout>);
+
 thread_local! {
-    /// The icon layouts made last, by viewport width (its bits) and item count, the latest last.
-    static ICON_LAYOUTS: std::cell::RefCell<Vec<((u64, usize), IconParams, Rc<IconLayout>)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    /// The icon layouts made last, the latest last.
+    static ICON_LAYOUTS: std::cell::RefCell<Vec<KeptIconLayout>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The icon grid's parameters at the icon view's default settings, and its layout as wide as the viewport: the same
@@ -1126,46 +1129,6 @@ fn kept_icon_layout(params: &IconParams, width: f64, count: usize) -> Rc<IconLay
         kept.push((key, *params, Rc::clone(&layout)));
         layout
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_view_of_the_same_width_and_items_takes_the_icon_layout_it_made_before() {
-        let settings = IconViewSettings::default();
-        let params = IconParams::new(
-            settings.icon_size,
-            settings.grid_spacing,
-            settings.text_size,
-            settings.label_on_bottom,
-            settings.show_item_info,
-            FontMetrics::estimate(f64::from(settings.text_size)),
-        );
-        let first = kept_icon_layout(&params, 800.0, 3000);
-        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
-        let wider = kept_icon_layout(&params, 1200.0, 3000);
-        assert!(!Rc::ptr_eq(&first, &wider));
-        assert_eq!(
-            *wider,
-            icon::layout(
-                &params,
-                1200.0,
-                &[SectionSpec {
-                    title: None,
-                    count: 3000
-                }],
-                Flow::Leading
-            )
-        );
-        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
-        // past the layouts kept, the oldest is made again
-        for width in [300.0, 400.0, 500.0, 600.0] {
-            kept_icon_layout(&params, width, 3000);
-        }
-        assert!(!Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
-    }
 }
 
 /// The items in view or near it, the topmost first, and the side of their icons in points.
@@ -1495,4 +1458,44 @@ fn selection(selected: &crate::Selection) -> Selection {
         }
     }
     Selection::new(ranges, selected.focus(), selected.anchor())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_view_of_the_same_width_and_items_takes_the_icon_layout_it_made_before() {
+        let settings = IconViewSettings::default();
+        let params = IconParams::new(
+            settings.icon_size,
+            settings.grid_spacing,
+            settings.text_size,
+            settings.label_on_bottom,
+            settings.show_item_info,
+            FontMetrics::estimate(f64::from(settings.text_size)),
+        );
+        let first = kept_icon_layout(&params, 800.0, 3000);
+        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+        let wider = kept_icon_layout(&params, 1200.0, 3000);
+        assert!(!Rc::ptr_eq(&first, &wider));
+        assert_eq!(
+            *wider,
+            icon::layout(
+                &params,
+                1200.0,
+                &[SectionSpec {
+                    title: None,
+                    count: 3000
+                }],
+                Flow::Leading
+            )
+        );
+        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+        // past the layouts kept, the oldest is made again
+        for width in [300.0, 400.0, 500.0, 600.0] {
+            kept_icon_layout(&params, width, 3000);
+        }
+        assert!(!Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+    }
 }

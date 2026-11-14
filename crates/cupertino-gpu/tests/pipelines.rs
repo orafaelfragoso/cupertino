@@ -183,3 +183,139 @@ fn a_straight_colour_blends_over_and_keeps_the_targets_alpha() {
     device.destroy_pipeline(pipeline);
     device.destroy_texture(target);
 }
+
+/// Draw one shape of the fill program, `block` its block, over the rectangle `rect` (target pixels) of a cleared
+/// target of `size`; the target's bytes.
+fn fill(device: &Device, size: (u32, u32), block: &FillBlock, rect: [f32; 4]) -> Vec<u8> {
+    let target = common::target(device, size, TextureFormat::Rgba8);
+    let layout = common::layout(device, &shaders::UI_FILL);
+    let pipeline = device
+        .create_pipeline(&PipelineDesc {
+            shader: &shaders::UI_FILL,
+            layouts: &[&layout],
+            vertex_buffers: &[VertexLayout {
+                stride: 32,
+                step: StepMode::Instance,
+                attributes: vec![
+                    VertexAttribute {
+                        location: 0,
+                        format: VertexFormat::Float32x4,
+                        offset: 0,
+                    },
+                    VertexAttribute {
+                        location: 1,
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                    },
+                ],
+            }],
+            blend: Blend::PremultipliedOver,
+            topology: Topology::TriangleStrip,
+        })
+        .unwrap();
+    let uniform = common::uniform(device, block.bytes(), block.bytes().len() as u64);
+    let instance = [rect[0], rect[1], rect[2], rect[3], 0.0, 0.0, 0.0, 0.0];
+    let instances = device
+        .create_buffer(&BufferDesc {
+            size: 32,
+            usage: BufferUsage::Vertex,
+        })
+        .unwrap();
+    device
+        .write_buffer(&instances, 0, &common::bytes(&instance))
+        .unwrap();
+    let empty = device
+        .create_texture(&TextureDesc {
+            size: (1, 1),
+            format: TextureFormat::R8,
+            usage: TextureUsage::SAMPLED,
+        })
+        .unwrap();
+    let group = device
+        .create_bind_group(
+            &layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: &uniform,
+                        offset: 0,
+                        size: uniform.size(),
+                    },
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Texture(&empty),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Texture(&empty),
+                },
+            ],
+        )
+        .unwrap();
+    let mut pass = device.begin_pass(&target, LoadOp::Clear([0.0; 4])).unwrap();
+    pass.set_pipeline(&pipeline);
+    pass.set_bind_group(0, &group).unwrap();
+    pass.set_vertex_buffer(0, &instances, 0).unwrap();
+    pass.draw(0..4, 1).unwrap();
+    pass.end();
+    let pixels = device
+        .read_bytes(&target, Region::new(0, 0, size.0, size.1))
+        .unwrap();
+    for t in [target, empty] {
+        device.destroy_texture(t);
+    }
+    device.destroy_buffer(uniform);
+    device.destroy_buffer(instances);
+    device.destroy_pipeline(pipeline);
+    pixels
+}
+
+#[test]
+fn the_fill_program_draws_a_corner_of_the_exponent_its_block_carries_and_a_circular_one_without() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let size = (48, 40);
+    // a rounded rectangle centred in the target, its half size and corner extent in pixels, one unit a pixel
+    let (centre, half, extent) = ([24.0f32, 20.0], [19.0f32, 15.5], 11.0f32);
+    for (exponent, drawn) in [(0.0f32, 2.0f32), (3.4, 3.4), (5.0, 5.0)] {
+        let mut block = FillBlock {
+            frame: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+            shape_linear: [1.0, 0.0, 0.0, 1.0],
+            shape_moved: [-centre[0], -centre[1], half[0], half[1]],
+            shape: [extent, 1.0, 0.0, 0.0],
+            color: [255.0; 4],
+            ..FillBlock::default()
+        };
+        block.clips.info[2] = exponent;
+        let pixels = fill(
+            &device,
+            size,
+            &block,
+            [0.0, 0.0, size.0 as f32, size.1 as f32],
+        );
+        let mut edge = 0;
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let p = [x as f32 + 0.5 - centre[0], y as f32 + 0.5 - centre[1]];
+                let want = coverage(rounded_distance(p, half, extent, drawn), 1.0);
+                let got = f32::from(pixels[((y * size.0 + x) * 4 + 3) as usize]) / 255.0;
+                assert!(
+                    (got - want).abs() <= 1.0 / 255.0 + 1e-4,
+                    "exponent {exponent}, pixel {x} {y}: drawn {got}, defined {want}"
+                );
+                edge += usize::from(want > 0.02 && want < 0.98);
+            }
+        }
+        assert!(edge > 60, "the corners are anti-aliased ({edge})");
+    }
+    // the exponents draw different corners: the definition's distance differs between them along the diagonal
+    let corner = [-half[0] + 1.0, -half[1] + 1.0];
+    assert!(
+        (rounded_distance(corner, half, extent, 2.0) - rounded_distance(corner, half, extent, 5.0))
+            .abs()
+            > 0.5
+    );
+}

@@ -355,13 +355,13 @@ vec2 place(vec4 linear, vec2 moved, vec2 p_6) {
     return vec2((((linear.x * p_6.x) + (linear.z * p_6.y)) + moved.x), (((linear.y * p_6.x) + (linear.w * p_6.y)) + moved.y));
 }
 
-float outline_distance(vec2 p_7, vec2 half_4, float corner_2, float grow) {
+float outline_distance(vec2 p_7, vec2 half_4, float corner_2, float n_1, float grow) {
     if ((corner_2 > 0.0)) {
-        float _e7 = rounded_distance(p_7, half_4, corner_2, 2.0);
-        return (_e7 - grow);
+        float _e11 = rounded_distance(p_7, half_4, corner_2, ((n_1 > 0.0) ? n_1 : 2.0));
+        return (_e11 - grow);
     }
-    float _e11 = rect_distance(p_7, (half_4 + vec2(grow)));
-    return _e11;
+    float _e15 = rect_distance(p_7, (half_4 + vec2(grow)));
+    return _e15;
 }
 
 uvec4 paint_bytes(vec2 p_9, vec2 frag_4) {

@@ -358,13 +358,13 @@ vec2 place(vec4 linear, vec2 moved, vec2 p_6) {
     return vec2((((linear.x * p_6.x) + (linear.z * p_6.y)) + moved.x), (((linear.y * p_6.x) + (linear.w * p_6.y)) + moved.y));
 }
 
-float outline_distance(vec2 p_7, vec2 half_4, float corner_2, float grow) {
+float outline_distance(vec2 p_7, vec2 half_4, float corner_2, float n_1, float grow) {
     if ((corner_2 > 0.0)) {
-        float _e7 = rounded_distance(p_7, half_4, corner_2, 2.0);
-        return (_e7 - grow);
+        float _e11 = rounded_distance(p_7, half_4, corner_2, ((n_1 > 0.0) ? n_1 : 2.0));
+        return (_e11 - grow);
     }
-    float _e11 = rect_distance(p_7, (half_4 + vec2(grow)));
-    return _e11;
+    float _e15 = rect_distance(p_7, (half_4 + vec2(grow)));
+    return _e15;
 }
 
 uint clip_coverage(vec2 p_8, ivec2 wp) {
@@ -376,8 +376,8 @@ uint clip_coverage(vec2 p_8, ivec2 wp) {
     bool loop_init_3 = true;
     while(true) {
         if (!loop_init_3) {
-            int _e43 = i_3;
-            i_3 = (_e43 + 1);
+            int _e44 = i_3;
+            i_3 = (_e44 + 1);
         }
         loop_init_3 = false;
         int _e11 = i_3;
@@ -393,38 +393,38 @@ uint clip_coverage(vec2 p_8, ivec2 wp) {
             int _e18 = i_3;
             Clip clip = _group_0_binding_0_fs.clips[_e18];
             vec2 _e24 = place(clip.linear, clip.moved.xy, p_8);
-            float _e30 = outline_distance(_e24, clip.moved.zw, clip.corner.x, 0.0);
-            float _e33 = coverage(_e30, clip.corner.y);
-            uint _e34 = coverage_byte(_e33);
-            if ((_e34 == 0u)) {
+            float _e31 = outline_distance(_e24, clip.moved.zw, clip.corner.x, 0.0, 0.0);
+            float _e34 = coverage(_e31, clip.corner.y);
+            uint _e35 = coverage_byte(_e34);
+            if ((_e35 == 0u)) {
                 m = 0u;
             } else {
-                if ((_e34 != 255u)) {
-                    uint _e40 = m;
-                    uint _e42 = div255_((_e40 * _e34));
-                    m = _e42;
+                if ((_e35 != 255u)) {
+                    uint _e41 = m;
+                    uint _e43 = div255_((_e41 * _e35));
+                    m = _e43;
                 }
             }
         }
     }
-    float _e49 = _group_0_binding_0_fs.clip_info.y;
-    if ((_e49 > 0.5)) {
-        vec4 _e54 = _group_0_binding_0_fs.mask_rect;
-        ivec4 r = ivec4(_e54);
+    float _e50 = _group_0_binding_0_fs.clip_info.y;
+    if ((_e50 > 0.5)) {
+        vec4 _e55 = _group_0_binding_0_fs.mask_rect;
+        ivec4 r = ivec4(_e55);
         if (((((wp.x >= r.x) && (wp.y >= r.y)) && (wp.x < r.z)) && (wp.y < r.w))) {
-            vec4 _e75 = _group_0_binding_0_fs.mask_at;
-            ivec2 t_3 = ((ivec2(_e75.xy) + wp) - r.xy);
-            vec4 _e83 = texelFetch(_group_0_binding_2_fs, t_3, 0);
-            uint _e85 = byte_of(_e83.x);
-            c_1 = _e85;
+            vec4 _e76 = _group_0_binding_0_fs.mask_at;
+            ivec2 t_3 = ((ivec2(_e76.xy) + wp) - r.xy);
+            vec4 _e84 = texelFetch(_group_0_binding_2_fs, t_3, 0);
+            uint _e86 = byte_of(_e84.x);
+            c_1 = _e86;
         }
-        uint _e86 = m;
-        uint _e87 = c_1;
-        uint _e89 = div255_((_e86 * _e87));
-        m = _e89;
+        uint _e87 = m;
+        uint _e88 = c_1;
+        uint _e90 = div255_((_e87 * _e88));
+        m = _e90;
     }
-    uint _e90 = m;
-    return _e90;
+    uint _e91 = m;
+    return _e91;
 }
 
 uvec4 paint_bytes(vec2 p_9, vec2 frag_4) {
@@ -500,44 +500,45 @@ void main() {
         vec4 _e43 = _group_0_binding_0_fs.shape_moved;
         vec2 half_5 = _e43.zw;
         float width_1 = _group_0_binding_0_fs.shape.z;
+        float n_2 = _group_0_binding_0_fs.clip_info.z;
         if ((width_1 > 0.0)) {
-            float _e54 = _group_0_binding_0_fs.shape.x;
-            float _e57 = outline_distance(_e40, half_5, _e54, (width_1 * 0.5));
-            float _e61 = _group_0_binding_0_fs.shape.y;
-            float _e62 = stroke_coverage(_e57, width_1, _e61);
-            uint _e63 = coverage_byte(_e62);
-            k = _e63;
+            float _e58 = _group_0_binding_0_fs.shape.x;
+            float _e61 = outline_distance(_e40, half_5, _e58, n_2, (width_1 * 0.5));
+            float _e65 = _group_0_binding_0_fs.shape.y;
+            float _e66 = stroke_coverage(_e61, width_1, _e65);
+            uint _e67 = coverage_byte(_e66);
+            k = _e67;
         } else {
-            float _e67 = _group_0_binding_0_fs.shape.x;
-            float _e69 = outline_distance(_e40, half_5, _e67, 0.0);
-            float _e73 = _group_0_binding_0_fs.shape.y;
-            float _e74 = coverage(_e69, _e73);
-            uint _e75 = coverage_byte(_e74);
-            k = _e75;
+            float _e71 = _group_0_binding_0_fs.shape.x;
+            float _e73 = outline_distance(_e40, half_5, _e71, n_2, 0.0);
+            float _e77 = _group_0_binding_0_fs.shape.y;
+            float _e78 = coverage(_e73, _e77);
+            uint _e79 = coverage_byte(_e78);
+            k = _e79;
         }
     }
-    float _e79 = _group_0_binding_0_fs.clip_info.x;
-    float _e85 = _group_0_binding_0_fs.clip_info.y;
-    if (((_e79 > 0.5) || (_e85 > 0.5))) {
-        uint _e89 = clip_coverage(p_11, wp_1);
-        uint _e90 = k;
-        uint _e92 = div255_((_e89 * _e90));
-        k = _e92;
+    float _e83 = _group_0_binding_0_fs.clip_info.x;
+    float _e89 = _group_0_binding_0_fs.clip_info.y;
+    if (((_e83 > 0.5) || (_e89 > 0.5))) {
+        uint _e93 = clip_coverage(p_11, wp_1);
+        uint _e94 = k;
+        uint _e96 = div255_((_e93 * _e94));
+        k = _e96;
     }
-    uint _e93 = k;
-    if ((_e93 == 0u)) {
+    uint _e97 = k;
+    if ((_e97 == 0u)) {
         discard;
     }
-    uvec4 _e99 = paint_bytes(p_11, (window + vec2(0.5)));
-    uint _e101 = k;
-    uint _e103 = div255_((_e99.x * _e101));
+    uvec4 _e103 = paint_bytes(p_11, (window + vec2(0.5)));
     uint _e105 = k;
-    uint _e107 = div255_((_e99.y * _e105));
+    uint _e107 = div255_((_e103.x * _e105));
     uint _e109 = k;
-    uint _e111 = div255_((_e99.z * _e109));
+    uint _e111 = div255_((_e103.y * _e109));
     uint _e113 = k;
-    uint _e115 = div255_((_e99.w * _e113));
-    uvec4 out_1 = uvec4(_e103, _e107, _e111, _e115);
+    uint _e115 = div255_((_e103.z * _e113));
+    uint _e117 = k;
+    uint _e119 = div255_((_e103.w * _e117));
+    uvec4 out_1 = uvec4(_e107, _e111, _e115, _e119);
     _fs2p_location0 = (vec4(out_1) / vec4(255.0));
     return;
 }

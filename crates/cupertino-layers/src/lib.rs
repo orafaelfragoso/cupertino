@@ -20,6 +20,8 @@ pub use workspace::{check_workspace, check_workspace_with, Findings, LayersError
 pub enum Layer {
     /// Dependency-free building blocks: geometry, animation, design tokens, settings, toolkit-facing models.
     Foundation,
+    /// Shared drawing maths every renderer and shader implements: coverage, blur, shadows, gradients, dithering.
+    Graphics,
     /// Pure desktop policy without I/O.
     Models,
     /// Kernel interfaces: devices, input events, seat.
@@ -47,15 +49,16 @@ pub enum Layer {
 use Layer::*;
 
 impl Layer {
-    pub const ALL: [Layer; 12] = [
-        Foundation, Models, Platform, Protocol, Transport, Render, Ui, Core, Shell, Services, Apps,
-        Tools,
+    pub const ALL: [Layer; 13] = [
+        Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui, Core, Shell,
+        Services, Apps, Tools,
     ];
 
     /// The value of `package.metadata.cupertino.layer`.
     pub fn name(self) -> &'static str {
         match self {
             Foundation => "foundation",
+            Graphics => "graphics",
             Models => "models",
             Platform => "platform",
             Protocol => "protocol",
@@ -114,32 +117,40 @@ impl fmt::Display for Kind {
 /// The layers each layer may depend on. A crate may only declare a layer that has a row.
 pub type Rules = &'static [(Layer, &'static [Layer])];
 
-/// Twelve layers: dependencies point down the stack, same-layer dependencies only inside the library layers,
-/// `services` and `tools`.
+/// Thirteen layers: dependencies point down the stack, same-layer dependencies only inside the library layers,
+/// `services` and `tools`. The graphics layer sits on the foundation alone, so the toolkit, the render layer and the
+/// compositor draw from one definition of the maths without reaching each other.
 pub const RULES: Rules = &[
     (Foundation, &[Foundation]),
+    (Graphics, &[Foundation, Graphics]),
     (Models, &[Foundation, Models]),
     (Platform, &[Foundation, Platform]),
     (Protocol, &[Foundation, Protocol]),
     (Transport, &[Foundation, Platform, Protocol, Transport]),
-    (Render, &[Foundation, Platform, Render]),
-    (Ui, &[Foundation, Protocol, Transport, Ui]),
-    (Core, &[Foundation, Models, Platform, Protocol, Render]),
+    (Render, &[Foundation, Graphics, Platform, Render]),
+    (Ui, &[Foundation, Graphics, Protocol, Transport, Ui]),
+    (
+        Core,
+        &[Foundation, Graphics, Models, Platform, Protocol, Render],
+    ),
     (
         Shell,
         &[
-            Foundation, Models, Platform, Protocol, Transport, Render, Ui,
+            Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui,
         ],
     ),
     (
         Services,
         &[Foundation, Models, Platform, Protocol, Services],
     ),
-    (Apps, &[Foundation, Models, Protocol, Transport, Ui]),
+    (
+        Apps,
+        &[Foundation, Graphics, Models, Protocol, Transport, Ui],
+    ),
     (
         Tools,
         &[
-            Foundation, Models, Platform, Protocol, Transport, Render, Ui, Tools,
+            Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui, Tools,
         ],
     ),
 ];
@@ -658,6 +669,35 @@ mod tests {
             Problem::Forbidden(renderer).to_string(),
             "files (apps) must not depend on glass (render), normal dependency"
         );
+    }
+
+    #[test]
+    fn the_graphics_layer_serves_the_toolkit_the_render_layer_and_the_compositor_and_needs_only_the_foundation(
+    ) {
+        let users = [
+            edge("kit", Ui, "maths", Graphics),
+            edge("glass", Render, "maths", Graphics),
+            edge("server", Core, "maths", Graphics),
+            edge("dock", Shell, "maths", Graphics),
+            edge("maths", Graphics, "geometry", Foundation),
+        ];
+        assert_eq!(check(RULES, &users, &[], DENIED_PATHS), vec![]);
+        let up = [
+            edge("maths", Graphics, "glass", Render),
+            edge("maths", Graphics, "kit", Ui),
+            edge("maths", Graphics, "wm", Models),
+            edge("maths", Graphics, "seat", Platform),
+            edge("wm", Models, "maths", Graphics),
+            edge("btd", Services, "maths", Graphics),
+        ];
+        assert_eq!(
+            check(RULES, &up, &[], DENIED_PATHS),
+            up.iter()
+                .cloned()
+                .map(Problem::Forbidden)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(Layer::from_name("graphics"), Some(Graphics));
     }
 
     #[test]

@@ -1041,6 +1041,129 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
     assert_eq!((&glass, &inside), (&on_glass, &on_glass));
 }
 
+/// A node on glass its surface layer draws ([`PaintCx::layer_glass`]), with text in it.
+struct LayerGlassPanel {
+    children: Vec<Element<M>>,
+}
+
+impl Widget<M> for LayerGlassPanel {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(0.0, 0.0),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.layer_glass(crate::Glass::large_panel());
+        text_fills(cx);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Glass a surface layer draws puts the text on and in its node on glass, as the window's own glass does, and the
+/// window shows no region for it.
+#[test]
+fn text_on_glass_a_layer_draws_lies_on_glass_and_the_window_shows_none() {
+    use cupertino_ui_theme::{Appearance, ColorTokens};
+    let label = Color::new(1.0, 1.0, 1.0, 0.85);
+    let secondary = Color::new(1.0, 1.0, 1.0, 0.55);
+    let mut env = env();
+    let mut theme = (*env.theme).clone();
+    theme.preferences.appearance = Appearance::Dark;
+    theme.colors = ColorTokens::new([
+        ((ColorRole::Text, StateVariant::NORMAL), label),
+        ((ColorRole::SecondaryText, StateVariant::NORMAL), secondary),
+    ]);
+    env.theme = Arc::new(theme);
+    let mut tree = Tree::<M>::new(8);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(LayerGlassPanel {
+                children: vec![Element::new(TextSwatch)],
+            }),
+        )
+        .unwrap();
+    let inner = tree.get(root).unwrap().children[0];
+    let mut geometry = Geometry::default();
+    for (id, rect) in [
+        (root, Rect::new(0.0, 0.0, 200.0, 60.0)),
+        (inner, Rect::new(20.0, 10.0, 60.0, 20.0)),
+    ] {
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                target: rect,
+                clip: None,
+                own_clip: None,
+                raised: Default::default(),
+            },
+        );
+    }
+    let painting = Painter::default().paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env,
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            background: WindowBackground::None,
+            backdrop: false,
+            materials: true,
+            now: Timestamp(0),
+            raised: &[],
+            obscuring: &[],
+            layer: false,
+            pinned: &[None, None],
+        },
+    );
+    let of = |id: NodeId| {
+        painting
+            .list
+            .nodes
+            .iter()
+            .find(|n| n.id == id.into())
+            .map(fills)
+            .unwrap()
+    };
+    assert!(
+        painting.materials.is_empty(),
+        "the layer draws the glass, not the window"
+    );
+    let white = |a: f32| Color::new(1.0, 1.0, 1.0, a);
+    let on_glass = vec![
+        white(cupertino_ui_theme::VIBRANT_PRIMARY),
+        white(secondary.a.max(cupertino_ui_theme::vibrant_secondary(true))),
+    ];
+    assert_eq!(of(root), on_glass, "the glass node's own text");
+    assert_eq!(of(inner), on_glass, "the text inside it");
+}
+
 #[test]
 fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
     use cupertino_ui_platform::GlassTone;

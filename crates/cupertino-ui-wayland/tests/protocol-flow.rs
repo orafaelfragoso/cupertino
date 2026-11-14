@@ -84,6 +84,8 @@ struct Committed {
     damage: Vec<[i32; 4]>,
     /// The input region set since the last commit, when one was: its rectangles, or `None` for the whole surface.
     input_region: Option<Option<Vec<[i32; 4]>>>,
+    /// The opaque region set since the last commit, when one was: its rectangles, or `None` for none.
+    opaque_region: Option<Option<Vec<[i32; 4]>>>,
 }
 
 /// The bytes of a committed buffer.
@@ -196,6 +198,7 @@ struct SurfaceState {
     scale: i32,
     frames: Vec<WlCallback>,
     input_region: Option<Option<Vec<[i32; 4]>>>,
+    opaque_region: Option<Option<Vec<[i32; 4]>>>,
     offset: (i32, i32),
     /// The destination of the surface's viewport.
     destination: Option<(i32, i32)>,
@@ -521,6 +524,15 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         .clone()
                 }));
             }
+            wl_surface::Request::SetOpaqueRegion { region } => {
+                s.opaque_region = Some(region.map(|r| {
+                    r.data::<Mutex<Vec<[i32; 4]>>>()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .clone()
+                }));
+            }
             wl_surface::Request::Commit => {
                 let unbuffered = s.buffer.is_none();
                 if let Some(t) = state
@@ -569,6 +581,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                             ),
                             damage: std::mem::take(&mut s.damage),
                             input_region: s.input_region.take(),
+                            opaque_region: s.opaque_region.take(),
                         })
                         .unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
@@ -1327,6 +1340,7 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
             pixels: first.pixels.clone(),
             damage: vec![[0, 0, i32::MAX, i32::MAX]],
             input_region: None,
+            opaque_region: None,
         }
     );
 
@@ -3018,6 +3032,79 @@ mod window_system {
         assert_eq!(present(&mut kit, 3), Some(Some(Vec::new())));
         kit.ws
             .request(w, WindowRequest::SetInputRegion(None))
+            .unwrap();
+        assert_eq!(present(&mut kit, 4), Some(None));
+    }
+
+    /// A window's opaque region goes to its surface with the next frame it presents, its rectangles rounded inwards to
+    /// whole points, and an empty one takes it away; nothing is sent while it does not change.
+    #[test]
+    fn a_windows_opaque_region_reaches_its_surface_with_the_next_present() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (control, committed, _seen) = spawn_server(server_stream);
+        let ws = WaylandWindowSystem::new(
+            Connection::from_stream(client_stream).unwrap(),
+            Profile::cupertino(),
+        )
+        .with_roles(role::Roles::default());
+        let mut kit = Kit {
+            ws,
+            window: WindowId(0),
+            stash: VecDeque::new(),
+        };
+        let w = kit
+            .ws
+            .create_window(&WindowSpec {
+                title: "Notes".into(),
+                app_id: "test.notes".into(),
+                size: Size::new(120.0, 40.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: None,
+            })
+            .unwrap();
+        kit.window = w;
+        kit.window_event(|e| matches!(e, WindowEvent::Configure(_)).then_some(()));
+        let present = |kit: &mut Kit, id: u64| {
+            kit.ws.request_frame(w);
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+            let outcome = kit
+                .ws
+                .present(w, &frame_sized(id, (240, 80), [0; 4], &[]), None)
+                .unwrap();
+            assert_eq!(outcome, PresentOutcome::Presented);
+            kit.pump();
+            control.send(Control::FrameDone).unwrap();
+            committed
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .opaque_region
+        };
+
+        assert_eq!(present(&mut kit, 1), None, "none said, none sent");
+        kit.ws
+            .request(
+                w,
+                WindowRequest::SetOpaqueRegion(vec![
+                    Rect::new(1.0, 1.0, 118.0, 38.0),
+                    Rect::new(10.5, 2.25, 20.0, 0.5),
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            present(&mut kit, 2),
+            Some(Some(vec![[1, 1, 118, 38]])),
+            "a rectangle with no whole point in it is left out"
+        );
+        assert_eq!(
+            present(&mut kit, 3),
+            None,
+            "an unchanged region is not sent again"
+        );
+        kit.ws
+            .request(w, WindowRequest::SetOpaqueRegion(Vec::new()))
             .unwrap();
         assert_eq!(present(&mut kit, 4), Some(None));
     }

@@ -8,8 +8,8 @@ use crate::tree::Tree;
 use crate::{Environment, NodeId};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{
-    Constraints, ContainerKind, Generation, LayoutDirection, LayoutResult, LayoutSpec, LayoutTree,
-    Measured,
+    Constraints, ContainerKind, Generation, IdMap, LayoutDirection, LayoutResult, LayoutSpec,
+    LayoutTree, Measured,
 };
 
 pub(crate) struct TreeView<'a, M> {
@@ -76,17 +76,88 @@ pub(crate) fn placements<M: 'static>(
     env: &Environment,
     cut: &[(NodeId, Rect)],
 ) -> Geometry {
+    placements_kept(tree, root, layout, env, cut, &mut KeptPlacements::default())
+}
+
+/// What a kept subtree's nodes were placed from, by [`placements_kept`]: each node in the order it was placed, with its
+/// parent in the run, its rect and clip as layout gave them (relative to its parent) and its least hit size. Placed
+/// again, the run gives each node the placement placing it from the layout would, by the same sums, without looking
+/// the node up in the layout or the tree.
+struct Run {
+    /// The kept node's subtree revision and size when the run was made.
+    revision: u64,
+    size: Size,
+    nodes: Vec<RunNode>,
+}
+
+struct RunNode {
+    id: NodeId,
+    /// The node's parent: an earlier node of the run, or [`ROOT`] for the kept node itself.
+    parent: usize,
+    rect: Rect,
+    clip: Option<Rect>,
+    least: Size,
+}
+
+/// The kept node a run hangs from, as a [`RunNode::parent`].
+const ROOT: usize = usize::MAX;
+
+/// The runs of a window's kept subtrees ([`Element::kept`](crate::Element::kept)) between frames: a kept node whose
+/// subtree revision and size are those of its run has its descendants placed from the run, unwalked. Only subtrees
+/// with no scroll container and no raised node are kept, since their placements follow scroll offsets and the raised
+/// nodes over them, neither of which the subtree revision covers. Good for one environment: the window clears it when
+/// the environment changes, as it clears its layout cache.
+#[derive(Default)]
+pub(crate) struct KeptPlacements {
+    runs: IdMap<NodeId, Run>,
+    /// How many nodes the last placements placed from runs.
+    pub(crate) laid: usize,
+}
+
+impl KeptPlacements {
+    pub(crate) fn clear(&mut self) {
+        self.runs.clear();
+    }
+}
+
+/// A run being made by the walk: its kept node, and whether it can still be kept.
+struct Recording {
+    root: NodeId,
+    run: Run,
+    keepable: bool,
+}
+
+/// [`placements`], placing the descendants of kept subtrees that did not change from `kept`'s runs and keeping a run
+/// for every other kept subtree it walks. The placements are those of walking every node.
+pub(crate) fn placements_kept<M: 'static>(
+    tree: &Tree<M>,
+    root: NodeId,
+    layout: &LayoutResult<NodeId>,
+    env: &Environment,
+    cut: &[(NodeId, Rect)],
+    kept: &mut KeptPlacements,
+) -> Geometry {
     let mut geometry = Geometry::with_capacity_and_hasher(layout.nodes.len(), Default::default());
-    let mut stack = vec![(root, Point::new(0.0, 0.0), None::<Rect>, false)];
-    while let Some((id, parent_origin, clip, raised)) = stack.pop() {
+    let mut old = std::mem::take(&mut kept.runs);
+    kept.laid = 0;
+    let mut recordings: Vec<Recording> = Vec::new();
+    // per node to place: its parent's origin and clip, whether it is raised, and the recording and parent in it of the
+    // run it is placed into
+    let mut stack = vec![(
+        root,
+        Point::new(0.0, 0.0),
+        None::<Rect>,
+        false,
+        None::<(usize, usize)>,
+    )];
+    while let Some((id, parent_origin, clip, raised, recording)) = stack.pop() {
         let Some(node) = layout.nodes.get(&id) else {
             continue;
         };
         let rect = node.rect.translate(parent_origin.x, parent_origin.y);
-        let raised = raised || tree.get(id).is_some_and(|n| n.widget.raised(&*n.state));
-        let scrolls = tree
-            .get(id)
-            .is_some_and(|n| matches!(n.spec.kind, ContainerKind::Scroll { .. }));
+        let n = tree.get(id);
+        let raised = raised || n.is_some_and(|n| n.widget.raised(&*n.state));
+        let scrolls = n.is_some_and(|n| matches!(n.spec.kind, ContainerKind::Scroll { .. }));
         let own_clip = node
             .clip
             .map(|c| c.translate(rect.origin.x, rect.origin.y))
@@ -103,9 +174,7 @@ pub(crate) fn placements<M: 'static>(
                     c
                 }
             });
-        let least = tree
-            .get(id)
-            .map_or(Size::ZERO, |n| n.widget.target(&*n.state, env));
+        let least = n.map_or(Size::ZERO, |n| n.widget.target(&*n.state, env));
         geometry.insert(
             id,
             Placement {
@@ -116,38 +185,71 @@ pub(crate) fn placements<M: 'static>(
                 raised: if raised { Raised::In } else { Raised::No },
             },
         );
-        let inner = match own_clip {
-            Some(own) => Some(match clip {
-                Some(outer) => outer.intersection(&own).unwrap_or(Rect::new(
-                    own.origin.x,
-                    own.origin.y,
-                    0.0,
-                    0.0,
-                )),
-                None => own,
-            }),
-            None => clip,
-        };
-        if let Some(n) = tree.get(id) {
-            let mut origin = rect.origin;
-            if let ContainerKind::Scroll {
-                horizontal,
-                vertical,
-            } = n.spec.kind
+        let inner = inner_clip(clip, own_clip);
+        // the run this node is placed into, if one is being made: its descendants go into it too
+        let placed_into = recording.map(|(r, parent)| {
+            let rec = &mut recordings[r];
+            rec.keepable &= !scrolls && !raised;
+            rec.run.nodes.push(RunNode {
+                id,
+                parent,
+                rect: node.rect,
+                clip: node.clip,
+                least,
+            });
+            (r, rec.run.nodes.len() - 1)
+        });
+        let Some(n) = n else { continue };
+        let candidate =
+            recording.is_none() && n.kept.is_some() && id != root && !raised && !scrolls;
+        if candidate {
+            if let Some(run) = old
+                .remove(&id)
+                .filter(|run| run.revision == n.subtree_revision && run.size == rect.size)
             {
-                let offset = drawn_offset(n.widget.scroll_offset(&*n.state), env.scale);
-                if horizontal {
-                    origin.x += match env.direction {
-                        LayoutDirection::Ltr => -offset.x,
-                        LayoutDirection::Rtl => offset.x,
-                    };
-                }
-                if vertical {
-                    origin.y -= offset.y;
-                }
+                lay_run(&run, rect.origin, inner, &mut geometry);
+                kept.laid += run.nodes.len();
+                kept.runs.insert(id, run);
+                continue;
             }
-            stack.extend(n.children.iter().map(|&c| (c, origin, inner, raised)));
         }
+        let mut origin = rect.origin;
+        if let ContainerKind::Scroll {
+            horizontal,
+            vertical,
+        } = n.spec.kind
+        {
+            let offset = drawn_offset(n.widget.scroll_offset(&*n.state), env.scale);
+            if horizontal {
+                origin.x += match env.direction {
+                    LayoutDirection::Ltr => -offset.x,
+                    LayoutDirection::Rtl => offset.x,
+                };
+            }
+            if vertical {
+                origin.y -= offset.y;
+            }
+        }
+        let into = match placed_into {
+            Some(into) => Some(into),
+            None if candidate => {
+                recordings.push(Recording {
+                    root: id,
+                    run: Run {
+                        revision: n.subtree_revision,
+                        size: rect.size,
+                        nodes: Vec::new(),
+                    },
+                    keepable: true,
+                });
+                Some((recordings.len() - 1, ROOT))
+            }
+            None => None,
+        };
+        stack.extend(n.children.iter().map(|&c| (c, origin, inner, raised, into)));
+    }
+    for rec in recordings.into_iter().filter(|r| r.keepable) {
+        kept.runs.insert(rec.root, rec.run);
     }
     // the nodes above a raised one, which hit-testing goes through to reach it first
     let roots: Vec<NodeId> = geometry
@@ -171,6 +273,47 @@ pub(crate) fn placements<M: 'static>(
         }
     }
     geometry
+}
+
+/// The clip a node leaves its descendants: its own met with the one it is under.
+fn inner_clip(clip: Option<Rect>, own: Option<Rect>) -> Option<Rect> {
+    match own {
+        Some(own) => Some(match clip {
+            Some(outer) => {
+                outer
+                    .intersection(&own)
+                    .unwrap_or(Rect::new(own.origin.x, own.origin.y, 0.0, 0.0))
+            }
+            None => own,
+        }),
+        None => clip,
+    }
+}
+
+/// Places `run`'s nodes under a kept node placed at `origin` that leaves its descendants `clip`, by the sums the walk
+/// makes: none of them scrolls or is raised.
+fn lay_run(run: &Run, origin: Point, clip: Option<Rect>, geometry: &mut Geometry) {
+    // each node's origin and the clip it leaves its descendants, as its children read them
+    let mut placed: Vec<(Point, Option<Rect>)> = Vec::with_capacity(run.nodes.len());
+    for n in &run.nodes {
+        let (parent_origin, clip) = match n.parent {
+            ROOT => (origin, clip),
+            p => placed[p],
+        };
+        let rect = n.rect.translate(parent_origin.x, parent_origin.y);
+        let own_clip = n.clip.map(|c| c.translate(rect.origin.x, rect.origin.y));
+        geometry.insert(
+            n.id,
+            Placement {
+                rect,
+                target: grown(rect, n.least),
+                clip,
+                own_clip,
+                raised: Raised::No,
+            },
+        );
+        placed.push((rect.origin, inner_clip(clip, own_clip)));
+    }
 }
 
 /// `rect` grown evenly about its centre to at least `least`.
@@ -282,6 +425,142 @@ mod tests {
             &[],
         );
         (tree, root, geometry)
+    }
+
+    /// A row `width` points wide and 30 tall that clips its children.
+    struct Clipped {
+        width: f64,
+        children: Vec<Element<String>>,
+    }
+
+    impl crate::Widget<String> for Clipped {
+        type State = ();
+
+        fn layout(&self) -> LayoutSpec {
+            LayoutSpec {
+                width: cupertino_ui_layout::SizeSpec::Fixed(self.width),
+                height: cupertino_ui_layout::SizeSpec::Fixed(30.0),
+                overflow: cupertino_ui_layout::Overflow::Clip,
+                ..LayoutSpec::new(ContainerKind::Stack {
+                    axis: cupertino_ui_layout::Axis::Vertical,
+                    spacing: 3.0,
+                    align: cupertino_ui_layout::Align::Start,
+                    justify: cupertino_ui_layout::Justify::Start,
+                })
+            }
+        }
+
+        fn take_children(&mut self) -> Vec<Element<String>> {
+            std::mem::take(&mut self.children)
+        }
+
+        fn state(&self) {}
+
+        fn update(&self, old: &Self, _: &mut ()) -> crate::Change {
+            if self.width == old.width {
+                crate::Change::None
+            } else {
+                crate::Change::Layout
+            }
+        }
+
+        fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+            Measured {
+                size: Size::ZERO,
+                baseline: None,
+            }
+        }
+
+        fn event(
+            &self,
+            _: &mut (),
+            _: &crate::Event,
+            _: &mut crate::cx::EventCx<'_, String>,
+        ) -> crate::Propagation {
+            crate::Propagation::Continue
+        }
+
+        fn paint(&self, _: &(), _: &mut crate::cx::PaintCx<'_>) {}
+
+        fn semantics(&self, _: &(), _: &mut crate::cx::SemanticsCx<'_>) {}
+    }
+
+    /// Twelve kept rows, row `i` of width `widths[i]` (its mark), each a clipping row over two leaves, in a view
+    /// scrolled down by `offset`.
+    fn kept_rows(widths: &[f64], offset: f64) -> Element<String> {
+        let rows = widths
+            .iter()
+            .enumerate()
+            .map(|(i, &width)| {
+                Element::kept(i as u64, width.to_bits(), move || {
+                    Element::new(Clipped {
+                        width,
+                        children: vec![Element::new(leaf("a")), Element::new(leaf("b"))],
+                    })
+                })
+            })
+            .collect();
+        Element::new(Scroller {
+            children: vec![Element::new(group(rows))],
+            offset: Point::new(0.0, offset),
+        })
+    }
+
+    /// A kept subtree that did not change is placed from its run, unwalked, and the placements after scrolls at whole
+    /// and fractional offsets, a row made anew, a row dropped and a resize are those of placing every node.
+    #[test]
+    fn a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it() {
+        let env = env();
+        let mut widths = vec![90.0; 12];
+        let mut tree = Tree::<String>::new(100);
+        let root = tree.reconcile(None, kept_rows(&widths, 0.0)).unwrap();
+        let mut kept = KeptPlacements::default();
+        let place = |tree: &Tree<String>, kept: &mut KeptPlacements, size: Size| {
+            let result = cupertino_ui_layout::layout(
+                &TreeView { tree, env: &env },
+                root,
+                Constraints::tight(size).unwrap(),
+                &cupertino_ui_layout::LayoutOptions {
+                    direction: env.direction,
+                    node_limit: 1000,
+                },
+            )
+            .unwrap();
+            let got = placements_kept(tree, root, &result, &env, &[], kept);
+            let whole = placements(tree, root, &result, &env, &[]);
+            (got, whole)
+        };
+        let window = Size::new(100.0, 70.5);
+        let (got, whole) = place(&tree, &mut kept, window);
+        assert_eq!(got, whole);
+        assert_eq!(kept.laid, 0, "nothing kept yet");
+        // each row's two leaves come from its run
+        let descendants = 12 * 2;
+        for offset in [7.0, 13.5, 40.25, 0.0] {
+            tree.reconcile(Some(root), kept_rows(&widths, offset))
+                .unwrap();
+            let (got, whole) = place(&tree, &mut kept, window);
+            assert_eq!(got, whole, "at {offset}");
+            assert_eq!(kept.laid, descendants, "at {offset}");
+        }
+        // a row made anew is walked, the others placed from their runs
+        widths[3] = 60.0;
+        tree.reconcile(Some(root), kept_rows(&widths, 13.5))
+            .unwrap();
+        let (got, whole) = place(&tree, &mut kept, window);
+        assert_eq!(got, whole);
+        assert_eq!(kept.laid, descendants - 2);
+        // a row dropped: its run goes with it
+        widths.pop();
+        tree.reconcile(Some(root), kept_rows(&widths, 20.0))
+            .unwrap();
+        let (got, whole) = place(&tree, &mut kept, window);
+        assert_eq!(got, whole);
+        assert_eq!(kept.laid, 11 * 2);
+        // the window resized: the rows keep their size, so their runs still hold
+        let (got, whole) = place(&tree, &mut kept, Size::new(97.0, 50.0));
+        assert_eq!(got, whole);
+        assert_eq!(kept.laid, 11 * 2);
     }
 
     #[test]

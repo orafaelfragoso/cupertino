@@ -1115,6 +1115,30 @@ impl Connection {
         Ok(())
     }
 
+    /// Say the parts of `surface` its pixels cover whole, `rects` in surface-local logical points rounded inwards, so
+    /// the compositor may leave out what lies under them and tell a window they cover that it is not seen; an empty
+    /// slice says none is. Applies with the next present.
+    pub fn set_opaque_region(&mut self, surface: SurfaceId, rects: &[Rect]) -> Result<(), Error> {
+        let wl = &self.state.surface(surface)?.wl;
+        if rects.is_empty() {
+            wl.set_opaque_region(None);
+            return Ok(());
+        }
+        let region = self
+            .state
+            .compositor
+            .create_region(&self.queue.handle(), ());
+        for r in rects {
+            let (x, y, width, height) = round_in(r);
+            if width > 0 && height > 0 {
+                region.add(x, y, width, height);
+            }
+        }
+        wl.set_opaque_region(Some(&region));
+        region.destroy();
+        Ok(())
+    }
+
     /// Ask for an activation token to hand to another client, such as an application this one launches (in
     /// `XDG_ACTIVATION_TOKEN`), with the latest input event on `surface` as the reason; `app_id` names that application
     /// when known. The token arrives as [`Event::ActivationToken`].
@@ -2064,6 +2088,18 @@ pub(crate) fn round_out(r: &Rect) -> (i32, i32, i32, i32) {
         top,
         right.saturating_sub(left),
         bottom.saturating_sub(top),
+    )
+}
+
+/// The whole points inside `r`: its edges rounded inwards, as `(x, y, width, height)`.
+pub(crate) fn round_in(r: &Rect) -> (i32, i32, i32, i32) {
+    let (left, top) = (r.min_x().ceil() as i32, r.min_y().ceil() as i32);
+    let (right, bottom) = (r.max_x().floor() as i32, r.max_y().floor() as i32);
+    (
+        left,
+        top,
+        right.saturating_sub(left).max(0),
+        bottom.saturating_sub(top).max(0),
     )
 }
 
@@ -3285,6 +3321,25 @@ mod tests {
         waker.wake();
         drop(wake);
         waker.wake();
+    }
+
+    /// An opaque region is sent as the whole points inside each rectangle, so it never claims a point it only part
+    /// covers.
+    #[test]
+    fn an_opaque_rectangle_is_sent_as_the_whole_points_inside_it() {
+        assert_eq!(round_in(&Rect::new(1.0, 2.0, 30.0, 40.0)), (1, 2, 30, 40));
+        assert_eq!(
+            round_in(&Rect::new(0.5, 1.25, 10.0, 10.5)),
+            (1, 2, 9, 9),
+            "fractional edges round inwards"
+        );
+        assert_eq!(
+            round_in(&Rect::new(-3.5, -0.5, 4.0, 2.0)),
+            (-3, 0, 3, 1),
+            "inwards on either side of zero"
+        );
+        let (.., width, height) = round_in(&Rect::new(4.2, 4.2, 0.6, 20.0));
+        assert_eq!((width, height), (0, 19), "narrower than a point: empty");
     }
 
     #[test]

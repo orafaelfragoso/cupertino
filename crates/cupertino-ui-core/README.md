@@ -35,6 +35,11 @@ all on one thread.
   layout reused); otherwise `build` makes the element, which updates or replaces the node as any other. The mark stands for
   everything `build` reads. A long list or grid builds only the rows near its viewport this way and keeps each one
   while it only scrolls.
+- **Kept placements.** The window keeps, for each kept node's subtree with no scroll container and no raised node,
+  what its descendants were placed from (each node's parent in the run, its rect and clip from layout and its least
+  hit size) with the subtree's revision and size. A kept node of the same revision and size next frame has its
+  descendants placed from the run by the sums placing them from the layout makes, met with the clip the node gets
+  from above, unwalked; the placements are those of placing every node (`layout_view.rs`).
 - **Kept paint.** The painter keeps the paint nodes of each kept node's subtree with the subtree's revision (which
   changes when it or any descendant is marked or built again) and the ground it was painted on (what lies under it,
   its layer, the window's state). A kept node whose subtree revision and ground are the same next frame has its paint
@@ -121,7 +126,11 @@ all on one thread.
   whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A scroll container
   that clips marks its content as a scroll layer with its drawn offset, its scroll bars beside it; a node in a layer
   the renderer keeps is compared in the layer's content, so a scroll damages nothing it only moved, and what changed
-  in it damages where it shows now. A window told it is suspended drops its renderers' kept layers. A frame that
+  in it damages where it shows now. A window told it is suspended drops its renderers' kept layers. A toplevel
+  declares its opaque region with the frame that changes it (`WindowRequest::SetOpaqueRegion`, `opaque.rs`): the
+  large solid fills at full alpha its paint tree lays outside any translucent group, under clips that are rectangles,
+  placed by a move alone, a rounded one less its corners, without the materials under its content, each pulled in by a
+  point and rounded inwards; so a Kit window that covers another lets the compositor suspend it. A frame that
   repainted nothing sends no buffer; one that repainted a node but no pixel commits with no damage, as an
   animation's next frame and the state an application sets on its surface outside the frame wait for a commit. The
   CPU renderer's partial redraw can sample an anti-aliased curved or fractional edge cut by a damaged rectangle's

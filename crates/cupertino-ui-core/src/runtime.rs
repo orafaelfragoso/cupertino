@@ -8,7 +8,7 @@ use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::frame_timing::{handed_over, lap, mark, Phase};
-use crate::layout_view::{placements, TreeView};
+use crate::layout_view::{placements, placements_kept, KeptPlacements, TreeView};
 use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
@@ -253,6 +253,8 @@ struct WindowState<M> {
     /// measured in only.
     layout_cache: LayoutCache<NodeId>,
     measured_in: Option<Environment>,
+    /// The kept subtrees' placements, good for the environment the layout cache is.
+    placements: KeptPlacements,
     painter: Painter,
     damage: DamageTracker,
     /// The raised nodes ([`Widget::raised`]) of the last layout with their rects, in window coordinates.
@@ -288,6 +290,8 @@ struct WindowState<M> {
     grow: Option<morph::Grow>,
     /// When the window last became active, while its colours still cross from the inactive ones.
     activated_at: Option<Timestamp>,
+    /// The opaque region the window system was last asked to show the window with ([`WindowRequest::SetOpaqueRegion`]).
+    opaque: Vec<Rect>,
 }
 
 /// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
@@ -1043,6 +1047,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             held_paints: 0,
             layout: LayoutStats::default(),
             layout_cache: LayoutCache::new(),
+            placements: KeptPlacements::default(),
             measured_in: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
@@ -1063,6 +1068,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             grows_from: None,
             grow: None,
             activated_at: None,
+            opaque: Vec::new(),
         }
     }
 
@@ -2316,6 +2322,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         .is_some_and(|env| same_environment(env, &w.env))
                     {
                         w.layout_cache.clear();
+                        w.placements.clear();
                         w.measured_in = Some(w.env.clone());
                     }
                     let result = layout_cached(
@@ -2337,7 +2344,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             };
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
-            w.geometry = placements(&self.tree, root, &result, &w.env, &[]);
+            w.geometry = placements_kept(&self.tree, root, &result, &w.env, &[], &mut w.placements);
             w.raised = raised_nodes(&self.tree, root, &w.geometry);
             w.obscuring = w
                 .raised
@@ -2351,7 +2358,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .collect();
             // raised nodes that draw in place leave what scrolls under them out: it would cover the glass under them
             if !w.obscuring.is_empty() && !self.system.capabilities().raised_layer {
-                w.geometry = placements(&self.tree, root, &result, &w.env, &w.obscuring);
+                w.geometry = placements_kept(
+                    &self.tree,
+                    root,
+                    &result,
+                    &w.env,
+                    &w.obscuring,
+                    &mut w.placements,
+                );
             }
             // In a layer every node's paint lies over every material of the layer, so a raised node a floating one
             // lies across would show through the floating one's glass: it draws with the content instead, under that
@@ -2661,6 +2675,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .as_ref()
                 .is_some_and(|d| !matches!(d, DamageRegion::Rects(r) if r.is_empty()))
             || (painting.layer.is_some() && w.layer.damage.repainted());
+        // a toplevel says which of its parts its pixels cover whole, with the next frame: the compositor leaves out what lies
+        // under them and tells a window they cover all of that it is not seen
+        if w.popup.is_none() {
+            let opaque = crate::opaque::region(&w.display_list, w.size, &w.materials);
+            if opaque != w.opaque
+                && self
+                    .system
+                    .request(w.id, WindowRequest::SetOpaqueRegion(opaque.clone()))
+                    .is_ok()
+            {
+                w.opaque = opaque;
+            }
+        }
         lap(&mut self.frame_timing, Phase::Paint, painting_since);
         // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
         // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage

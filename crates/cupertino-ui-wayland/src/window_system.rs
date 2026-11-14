@@ -117,6 +117,8 @@ struct Window {
     menus: Option<ShownMenus>,
     /// An input region to send with the next present; `Some(None)` gives the whole surface back.
     input_region: Option<Option<Vec<Rect>>>,
+    /// An opaque region to send with the next present of a frame.
+    opaque_region: Option<Vec<Rect>>,
     /// The surface has the keyboard focus, between its `wl_keyboard.enter` and `leave`.
     keyboard: bool,
     /// A toplevel's activated state as its latest configure stated it; `None` before one, and for other surfaces.
@@ -631,6 +633,7 @@ impl WaylandWindowSystem {
             configured: false,
             menus: None,
             input_region: None,
+            opaque_region: None,
             keyboard: false,
             activated: None,
             layer: None,
@@ -1534,6 +1537,10 @@ impl WindowSystem for WaylandWindowSystem {
                 self.window_mut(window)?.input_region = Some(region);
                 return Ok(());
             }
+            WindowRequest::SetOpaqueRegion(region) => {
+                self.window_mut(window)?.opaque_region = Some(region);
+                return Ok(());
+            }
             WindowRequest::Present(changes) => return self.present_changes(window, &changes),
             WindowRequest::Layer { key, changes } => {
                 return self.change_surface_layer(window, key, changes)
@@ -1816,9 +1823,15 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
+        let opaque = w.opaque_region.take();
         if let Some(region) = w.input_region.take() {
             self.conn
                 .set_input_region(surface, region.as_deref())
+                .map_err(platform_error)?;
+        }
+        if let Some(region) = opaque {
+            self.conn
+                .set_opaque_region(surface, &region)
                 .map_err(platform_error)?;
         }
         let copying = self.copy_time.is_some().then(Instant::now);

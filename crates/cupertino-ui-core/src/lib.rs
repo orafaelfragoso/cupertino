@@ -13,6 +13,7 @@ mod frame_timing;
 mod icons;
 pub mod kinetic;
 mod layout_view;
+mod opaque;
 mod paint;
 mod personal;
 mod pointer;

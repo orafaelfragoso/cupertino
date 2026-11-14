@@ -41,6 +41,33 @@ impl ClipShape {
     }
 }
 
+/// The opaque regions of a masked element: those of its inner element (relative to its location `at`, in output
+/// pixels) inside the mask's opaque cross, less what the backdrops below it read (`read_below`, output pixels), so
+/// what the damage tracker leaves undrawn under the element is never what glass or a material reads. Relative to `at`.
+pub fn opaque_pieces(
+    inner: &[Rectangle<i32, Physical>],
+    at: smithay::utils::Point<i32, Physical>,
+    cross: &[Rectangle<i32, Physical>],
+    read_below: &[Rectangle<i32, Physical>],
+) -> Vec<Rectangle<i32, Physical>> {
+    let mut out = Vec::new();
+    for r in inner {
+        let abs = Rectangle::new(r.loc + at, r.size);
+        for c in cross {
+            if let Some(i) = abs.intersection(*c) {
+                out.push(i);
+            }
+        }
+    }
+    if !read_below.is_empty() {
+        out = Rectangle::subtract_rects_many(out, read_below.iter().copied());
+    }
+    out.into_iter()
+        .filter(|r| r.size.w > 0 && r.size.h > 0)
+        .map(|r| Rectangle::new(r.loc - at, r.size))
+        .collect()
+}
+
 /// Bits of a commit that carry the inner element's commit; the rest carry the shape generation.
 const HALF: u32 = usize::BITS / 2;
 const LOW: usize = (1 << HALF) - 1;
@@ -133,6 +160,8 @@ pub struct ClipElement<E> {
     generation: usize,
     /// Drawn as a vibrant layer: its coverage alone, blended with what lies behind it.
     vibrant: Option<cupertino_scene::VibrantBlend>,
+    /// What the backdrops below it read of the framebuffer (output pixels), left out of its opaque regions.
+    read_below: Vec<Rectangle<i32, Physical>>,
 }
 
 impl<E> ClipElement<E> {
@@ -151,7 +180,14 @@ impl<E> ClipElement<E> {
             shape,
             generation: count(generation) & LOW,
             vibrant: None,
+            read_below: Vec::new(),
         }
+    }
+
+    /// The parts of the framebuffer (output pixels) the backdrops below the element read as they draw: what lies there
+    /// under the element is drawn for them, so its opaque regions leave them out.
+    pub fn keep_read_below(&mut self, areas: Vec<Rectangle<i32, Physical>>) {
+        self.read_below = areas;
     }
 
     /// Draw an inner texture smaller than its texels through `program`, the clip program with the minifying filter.
@@ -232,17 +268,13 @@ impl<E: Element> Element for ClipElement<E> {
             return OpaqueRegions::default();
         }
         let geo = self.inner.geometry(scale);
-        let cross = self.shape.opaque_cross();
-        let mut out = Vec::new();
-        for r in self.inner.opaque_regions(scale).iter() {
-            let abs = Rectangle::new(r.loc + geo.loc, r.size);
-            for c in &cross {
-                if let Some(i) = abs.intersection(*c) {
-                    out.push(Rectangle::new(i.loc - geo.loc, i.size));
-                }
-            }
-        }
-        OpaqueRegions::from_slice(&out)
+        let inner = self.inner.opaque_regions(scale);
+        OpaqueRegions::from_slice(&opaque_pieces(
+            &inner,
+            geo.loc,
+            &self.shape.opaque_cross(),
+            &self.read_below,
+        ))
     }
 
     fn alpha(&self) -> f32 {
@@ -383,6 +415,47 @@ mod tests {
             inner_since(1, None),
             Some(None),
             "a first draw asks the inner element for everything"
+        );
+    }
+
+    /// A window's opaque regions are those its client declares inside the mask's cross, so the damage tracker leaves
+    /// out what lies under them but the corners; where a backdrop below reads the framebuffer, they leave it out too, so
+    /// what lies there is drawn for the backdrop to read.
+    #[test]
+    fn a_window_is_opaque_where_its_client_says_inside_its_corners_and_not_over_what_a_backdrop_reads(
+    ) {
+        let s = shape(200, 100, 12.0);
+        let at = s.rect.loc;
+        let rect = |x, y, w, h| Rectangle::<i32, Physical>::new((x, y).into(), (w, h).into());
+        let area = |rs: &[Rectangle<i32, Physical>]| -> i32 {
+            // the bars overlap: count each pixel once
+            let mut px = std::collections::HashSet::new();
+            for r in rs {
+                for x in r.loc.x..r.loc.x + r.size.w {
+                    for y in r.loc.y..r.loc.y + r.size.h {
+                        px.insert((x, y));
+                    }
+                }
+            }
+            px.len() as i32
+        };
+        // the client says all of it is opaque: all but the corner squares
+        let whole = [rect(0, 0, 200, 100)];
+        let cut = opaque_pieces(&whole, at, &s.opaque_cross(), &[]);
+        assert_eq!(area(&cut), 200 * 100 - 4 * 12 * 12);
+        // a client that says nothing covers nothing
+        assert!(opaque_pieces(&[], at, &s.opaque_cross(), &[]).is_empty());
+        // glass below it reads a band across its middle (output pixels): that band is drawn under it
+        let band = rect(at.x + 50, at.y + 40, 60, 20);
+        let left = opaque_pieces(&whole, at, &s.opaque_cross(), &[band]);
+        assert_eq!(area(&left), 200 * 100 - 4 * 12 * 12 - 60 * 20);
+        let inside = Rectangle::new(band.loc - at, band.size);
+        assert!(left.iter().all(|r| !r.overlaps(inside)), "{left:?}");
+        // and a backdrop elsewhere leaves it as it was
+        let away = rect(at.x + 400, at.y, 50, 50);
+        assert_eq!(
+            area(&opaque_pieces(&whole, at, &s.opaque_cross(), &[away])),
+            area(&cut)
         );
     }
 

@@ -254,11 +254,16 @@ Works with the CPU renderer; no GPU needed.
 - [x] Opacity animations change layer properties, not pixels: a group marked as fading or moving is kept as the image
       of its subtree within the same cap and laid over from it at each opacity while its subtree is the same and lies
       where it was painted (`a_fading_group_is_laid_over_from_its_kept_image_and_a_moved_one_painted_again`).
-- [ ] Transform animations change layer properties, not pixels. On the CPU path a kept image laid at another place or
-      scale does not have the bytes of its subtree painted there (dithering follows the pixel, paths are rasterized at
-      their place), so a group whose transform changed is painted again and the pixels stay those of painting in
-      place. Laying the kept image over at its transform goes with the GPU renderer's layers (step 6); on the CPU it
-      needs the owner to accept a moving popover's pixels differing from painting in place.
+- [x] Transform animations change layer properties, not pixels: moot on the CPU path, closed. The one transform that
+      animates in a window's paint is a popover growing out of its anchor or shrinking into it, and where the
+      compositor presents popups (the layer protocol's version 3) that runs as the popup's presentation, so the popover
+      draws no frame while it grows and no frame marks a transform layer; only under a compositor without it does
+      the application draw the growth (under Reduce Motion there is none)
+      (`only_a_popover_drawn_growing_marks_a_transform_layer_and_one_presented_grows_without_it`). There the CPU
+      renderer keeps painting a group whose transform changed, since a kept image laid at another place or scale does
+      not have the bytes of its subtree painted there (dithering follows the pixel, paths are rasterized at their
+      place), and the pixels stay those of painting in place. Laying the kept image over at its transform goes with
+      the GPU renderer's layers (step 6).
 - [x] A window told it is suspended drops its renderers' layers and keeps its frame
       (`a_window_told_it_is_suspended_lets_its_layers_go`).
 - [x] The server tells minimized and fully covered windows they are suspended (`xdg_toplevel` state `suspended`), so
@@ -267,8 +272,21 @@ Works with the CPU renderer; no GPU needed.
       (`a_minimized_window_is_told_it_is_suspended_and_no_longer_once_restored`,
       `a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again`,
       `a_window_under_covers_that_leave_no_point_of_it_does_not_show`, `a_rounded_window_covers_all_but_its_corners`).
-- [ ] Kit windows declare their opaque region (the window less its material and glass regions and its corners), so a
-      Kit window covering another suspends it: today only clients that declare one cover.
+- [x] Kit windows declare their opaque region (the window less its material and glass regions and its corners), so a
+      Kit window covering another suspends it: a toplevel sends it with the frame that changes it, the large solid fills
+      at full alpha its paint tree lays outside any translucent group, under clips that are rectangles and placed by a
+      move alone, a rounded one less its corners, less the materials under its content, each pulled in by a point and
+      rounded inwards (`an_opaque_background_less_its_edges_is_the_region_and_a_translucent_one_none`,
+      `rounded_corners_clips_fractional_edges_and_materials_are_left_out`,
+      `small_fills_and_small_subtrees_are_not_looked_at_and_the_region_keeps_its_largest`,
+      `a_window_declares_its_opaque_background_and_takes_it_back_on_none`,
+      `a_windows_opaque_region_reaches_its_surface_with_the_next_present`); the server suspends a window under it as
+      under any client's (`a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again`). The compositor's
+      damage tracker takes the same regions through the window's clip element, the corners cut, and leaves undrawn what
+      lies under them; a glass or material backdrop below reads the framebuffer as it draws, so the element now leaves
+      out of its opaque regions what the backdrops below it read, and culling never hands a backdrop pixels of an
+      earlier frame (`a_window_is_opaque_where_its_client_says_inside_its_corners_and_not_over_what_a_backdrop_reads`;
+      before, a terminal declaring its whole surface opaque over a window's sidebar did).
 - [x] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2
       (`a_frame_drawn_over_the_last_has_the_bytes_of_one_drawn_whole` at 1, 1.25, 1.5 and 2, and, through kept
       layers, `a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset` at 1, 1.5 and 2).
@@ -288,14 +306,32 @@ Works with the CPU renderer; no GPU needed.
       frame however little changed; timed inside the client at scale 1 (about 3700 nodes, load about 4), the cached
       solve and the placement of every node take 0.8 ms p50, the window's placements 0.5 and its semantics 0.6, the
       worst frames those that lay out a new row's names. Split in two:
-  - [ ] Placements and semantics kept for a subtree that did not change: a kept node of the same subtree revision
-        moves its subtree's placements by its own offset and keeps its semantics nodes, as paint does.
-  - [ ] The names of a row measured before it comes into view, so the frame that brings a row in does not shape its
-        text.
-  - Neither was taken up in the round that made damage incremental and the shared-memory copy cheaper (its time went
-    to those and to scene 910). The first can keep a kept node's placements and semantics nodes as one run, as the
-    damage tracker keeps its paint nodes, moved by the node's own offset while its subtree revision and size are the
-    same.
+  - [x] Placements kept for a subtree that did not change: a kept node of the same subtree revision and size has its
+        descendants placed from a run, unwalked. A placement's clip is the meeting of every ancestor's clip, those
+        outside the subtree (the viewport's, which stays while the rows move) and those inside it (which move with
+        them), so the run keeps what each descendant was placed from (its parent in the run, its rect and clip as
+        layout gave them and its least hit size) and a frame places them again by the same sums from the kept node's
+        origin and the clip it gets from above, so the placements are the same to the bit without looking a node up
+        in the layout or the tree. A subtree with a scroll container or a raised node keeps no run (their placements
+        follow scroll offsets and what lies over them, which the subtree revision does not cover)
+        (`a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it`: scrolls at
+        whole and fractional offsets, a row made anew, a row dropped and a resize, against placing every node).
+  - [ ] Semantics nodes kept for the same subtrees: a node's semantics take its size and whether it can scroll, both
+        the same while its subtree is, and its bounds, moved by the kept node's offset; the runs of focusable nodes,
+        scopes, roving groups and items, the descriptions handed down and the keyed relations are kept with it and
+        laid in in order. Test: the semantics, the focus order and the accessibility diff are those of a full build
+        after the same frames.
+  - [ ] The names of a row measured before it comes into view. Files' grid already builds the cells 200 points past
+        the viewport (`OVERSCAN` in `crates/cupertino-files/src/kit/grid.rs`), so a row's names are shaped in the frame
+        it enters that band, not the frame it shows; what is left is to shape them outside any frame: the runtime
+        handing a window's idle time between a presented frame and the next frame event to work its widgets ask for
+        (the names of the cells past the band, in the direction of the scroll), shaped into the text system's cache
+        (two generations of 512 paragraphs) so the frame that builds them finds them there. Test: a scroll whose
+        frames build new rows shapes no paragraph inside a frame once the idle work ran.
+  - Kept semantics and names shaped between frames were not taken up in the rounds that made paint and damage
+    incremental, the shared-memory copy cheaper and the opaque region declared; their time went to those. At the
+    fifth round the layout p99 is 3.2–3.9 ms on the GPU path at both scales and 1.6–13.8 on the CPU path at loads of
+    7 to 11, so not under 4 ms in every run ("Measurements", "Step 4", "Fifth round").
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints
@@ -337,14 +373,21 @@ Works with the CPU renderer; no GPU needed.
         `a_spare_buffer_s_memory_is_made_whole_and_zeroed_on_its_own_thread`). A buffer that missed more than 32
         rectangles misses their bounds rather than all of it
         (`a_buffer_that_missed_many_frames_misses_their_bounds_and_knows_its_other_pixels`).
-  - [ ] The renderer drawing into the leased buffer rather than its own pixmap, what the buffer missed repainted by
-        its age: removes the copy that is left, the moved viewport of every scroll frame. It needs the window system
-        to lease the buffer before the frame is drawn and hand the renderer its memory and what it missed, and the CPU
-        renderer to draw the frame's damage and the missed rectangles into memory it does not own; a buffer new to the
-        window is then drawn whole. Not taken up in this round's time. With the two items above the copy's p50 is
-        3.1–5.3 ms and its p99 still 19–20 ms; at the loads measured the slow copies are not only those of new
-        buffers but frames in the middle of a scroll, all three buffers made, whose copy of the moved viewport took
-        6–25 ms ("Measurements", "Step 4", "Fourth round").
+  - The renderer drawing into the leased buffer rather than its own pixmap, what the buffer missed repainted by its
+    age: removes the copy that is left, the moved viewport of every scroll frame. With the two items above the copy's
+    p50 is 3.1–5.3 ms and its p99 still 19–20 ms; at the loads measured the slow copies are not only those of new
+    buffers but frames in the middle of a scroll, all three buffers made, whose copy of the moved viewport took 6–25
+    ms ("Measurements", "Step 4", "Fourth round"). Only a buffer in the renderer's byte order (`abgr8888`) can be
+    drawn into; elsewhere the copy converts as now. Split, none taken up yet:
+    - [ ] The window system leases the buffer before the frame is drawn (a `WindowSystem` call that hands the runtime
+          the buffer's memory, its stride and the rectangles it missed, or that it is new or its pixels unknown) and
+          presents that lease; a lease the frame does not use is given back unattached.
+    - [ ] The CPU renderer draws a frame into memory it does not own: the frame's damage and the leased buffer's
+          missed rectangles into the buffer, whole when the buffer is new or its pixels unknown, its kept layers and
+          scratch images still its own, and its own pixmap kept only while something reads it (the raised layer's
+          read back, a drag image, captures, the switch to the GPU).
+    - [ ] Test: frames of changing damage through buffers taking turns, new ones and ones whose pixels are unknown
+          among them, have the bytes of the copy path's at scales 1, 1.5 and 2, and a scroll frame copies nothing.
   - On the GPU path (`CUPERTINO_RENDERER=gpu`) the frame is copied from the renderer's texture into the dmabuf on
     the GPU: 0.07–0.12 ms p50 and 0.6–0.75 ms p99 at 1.5 ("Measurements", "Step 6: Files on the GPU path").
 - [x] The CPU renderer's kept image of content with a blur or shadow is its picture in place. Scene 910 of
@@ -369,7 +412,12 @@ Gate:
       scale 1 (load 7.9 to 4.6) and 8.5 at 1.5 (load 4.6 to 5.3), frame p50 3.2 and 2.6 ("Measurements", "Step 4",
       "Fourth round"). So the GPU path meets the budget at scale 1 in two runs of three (5.6, 5.9; the third 11.7) and
       at 1.5 in one of three (7.2; 8.5, 10.0), at these loads only; the CPU path misses it at both, its copy's p99
-      alone over the budget. The unticked items above are what remains of it.
+      alone over the budget. After the fifth round (`1f7756f80`), at loads of 4.7 to 11.3: GPU p99 12.3 ms at scale 1
+      (11.5–18.8) and 12.3 at 1.5 (10.4–14.9), frame p50 5.0 and 2.8, no run under 8 ms; CPU p99 41.2 at scale 1 and
+      36.7 at 1.5, copy p99 21.3 and 22.4. The merge the round started from, measured again on the GPU at scale 1,
+      gives 10.8 (9.9–11.5) with the same phases, so the round moved none of them and the fourth round's 5.9 is not
+      met at today's loads ("Measurements", "Step 4", "Fifth round"). The unticked items above are what remains of
+      it.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1967,6 +2015,49 @@ bring its second under 19 ms at that load. The frame p99s follow the load more t
 No pixel changed: the byte copy writes the bytes the conversion wrote in the compositor's other order
 (`every_buffer_shown_holds_the_whole_frame_in_either_byte_order`), the damage runs damage and commit what comparing every
 node apart does, and the scene 910 change makes the kept image the picture painted in place. No golden is re-recorded.
+
+#### Fifth round: the opaque region and kept placements
+
+The same scenario and machine, release builds, three runs per configuration, other agents building and testing beside
+it; the load average is recorded before and after each configuration's runs. Before is the merge the round started
+from (`bdbc354b7`, measured again on the GPU path at scale 1 only, after the round's runs); after is `1f7756f80`. The
+round's commits are `dfd7cffbc` (transform animations closed as moot), `b5962a7a4` and `904037c85` (the opaque region,
+and its pass looking only at large nodes and fills) and `1f7756f80` (kept placements). Medians of the three runs, the
+frame p99's range across them in brackets.
+
+| Files two-finger scroll, client frame ms | Before | After |
+|---|---|---|
+| CPU, scale 1: load | – | 7.0 to 9.1 |
+| CPU, scale 1: frames, frame p50, p99 | – | 86, 16.1, 41.2 (41.1–51.4) |
+| CPU, scale 1: layout, paint, raster, copy p50 | – | 1.2, 2.6, 7.4, 4.8 |
+| CPU, scale 1: raster, copy p99 | – | 16.6, 21.3 |
+| CPU, scale 1.5: load | – | 9.1 to 11.3 |
+| CPU, scale 1.5: frames, frame p50, p99 | – | 92, 13.5, 36.7 (33.8–78.0) |
+| CPU, scale 1.5: layout, paint, raster, copy p50 | – | 0.5, 1.1, 7.7, 3.9 |
+| CPU, scale 1.5: raster, copy p99 | – | 13.2, 22.4 |
+| GPU, scale 1: load | 10.7 to 7.6 | 4.7 to 5.5 |
+| GPU, scale 1: frames, frame p50, p99 | 183, 4.7, 10.8 (9.9–11.5) | 181, 5.0, 12.3 (11.5–18.8) |
+| GPU, scale 1: layout, paint, raster, copy p50 | 1.1, 2.3, 1.1, 0.2 | 1.1, 2.4, 1.1, 0.2 |
+| GPU, scale 1.5: load | – | 5.5 to 7.0 |
+| GPU, scale 1.5: frames, frame p50, p99 | – | 181, 2.8, 12.3 (10.4–14.9) |
+| GPU, scale 1.5: layout, paint, raster, copy p50 | – | 0.4, 1.1, 0.9, 0.2 |
+
+The after runs' phase p99s: CPU at scale 1 update 1.1, view 4.6, layout 13.8, paint 7.8; at 1.5 0.3, 1.8, 1.6, 1.8;
+GPU at scale 1 view 2.9, layout 3.9, paint 3.8, raster 3.2, copy 0.7; at 1.5 3.2, 3.2, 3.5, 3.1, 0.8. Before, GPU at
+scale 1: view 2.2, layout 3.3, paint 3.1, raster 2.3, copy 0.6.
+
+The budget is not met on either path at these loads: the GPU path's frame p99 is 10.4–18.8 ms at both scales, no run
+under 8 ms, so the three more runs at a load under 4 were not taken; the CPU path's copy p99 alone is over it. At the
+same scale and renderer the round's commits leave every phase where the merge it started from has it: the opaque
+region's pass takes about 16 microseconds of the paint phase on Files' list of about 3700 nodes (265 before it looked
+only at nodes and fills of 128 points a side or more), and kept placements spare the walk of a cell's descendants,
+a part of the layout phase too small to show in its p50 beside the solve and the semantics. Both renderers' p50s at
+scale 1 are above the fourth round's (frame 4.7–5.0 against 3.2 ms on the GPU, paint 2.3–2.4 against 1.5) before the
+round's commits as after them.
+
+No pixel changed: the opaque region is a request beside the frame, kept placements are those of placing every node
+(`a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it`), and the compositor's
+culling leaves drawn what a backdrop reads. No golden is re-recorded.
 
 ## Decisions taken
 

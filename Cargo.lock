@@ -1193,8 +1193,8 @@ dependencies = [
 name = "cupertino-defaults"
 version = "0.1.0"
 dependencies = [
+ "inotify",
  "libc",
- "notify",
  "serde_json",
  "tempfile",
 ]

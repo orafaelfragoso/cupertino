@@ -30,6 +30,7 @@ const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bu
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
+  <!-- the daemon needs one; the bus listens in a directory of its own instead -->
   <listen>unix:tmpdir=/tmp</listen>
   <auth>EXTERNAL</auth>
   <policy context="default">
@@ -46,7 +47,8 @@ pub fn private_bus() -> cupertino_test_bus::PrivateBus {
     let config = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(config.path(), BUS_CONFIG).unwrap();
     // the daemon has read its configuration once it prints its address
-    cupertino_test_bus::PrivateBus::start_with_config(config.path())
+    // it listens in a directory of its own, removed with it
+    cupertino_test_bus::PrivateBus::start_with_config_in_own_dir(config.path())
         .expect("goldens need dbus-daemon")
 }
 

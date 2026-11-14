@@ -842,13 +842,13 @@ mod tests {
         std::fs::write(parent.join("32x32/apps/inherited.png"), png(32)).unwrap();
     }
 
-    /// An asset directory without application icons.
+    /// An asset directory without application icons. It lists no file, so nothing reads the directory once it is
+    /// loaded, and it goes at once.
     fn no_assets() -> Assets {
-        fixture::assets(
-            &tmp(&format!("no-assets-{:?}", std::thread::current().id())),
-            &[],
-            &[],
-        )
+        let dir = tmp(&format!("no-assets-{:?}", std::thread::current().id()));
+        let assets = fixture::assets(&dir, &[], &[]);
+        let _ = std::fs::remove_dir_all(dir);
+        assets
     }
 
     #[test]

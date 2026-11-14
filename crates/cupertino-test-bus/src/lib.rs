@@ -1,4 +1,4 @@
-//! A private session bus for integration tests (`dbus-daemon --session`). The daemon is a child of the test, started
+//! A private session bus for integration tests (`dbus-daemon --session`, listening in a directory of its own). The daemon is a child of the test, started
 //! with `PR_SET_PDEATHSIG`: it is killed when the bus is dropped, and with the thread that started it when the test is
 //! killed first, so a test that times out or is killed leaves no daemon behind. The daemon's address, the handshake of
 //! [`PrivateBus::connect`] and [`PrivateBus::connect_async`], and each method call of a connection made here have a
@@ -56,13 +56,25 @@ pub fn missing_tool(tool: &str) {
 pub struct PrivateBus {
     pub address: String,
     daemon: Child,
+    /// The directory the daemon listens in when the bus chose it, removed with the bus: the daemon is killed, so it
+    /// never removes its socket itself.
+    dir: Option<std::path::PathBuf>,
+}
+
+/// A new directory of this process for one bus's socket.
+fn socket_dir() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("cupertino-bus-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("making the bus's socket directory");
+    dir
 }
 
 impl PrivateBus {
     /// Start a daemon with the session bus's configuration; `None` when `dbus-daemon` cannot be run. Call it on the
     /// test's own thread: the daemon dies with the thread that started it.
     pub fn start() -> Option<PrivateBus> {
-        Self::start_with("--session".into())
+        Self::start_with("--session".into(), true)
     }
 
     /// Start a daemon with the configuration file `config` (a policy or a listening address of the test's own), which
@@ -70,13 +82,38 @@ impl PrivateBus {
     pub fn start_with_config(config: &Path) -> Option<PrivateBus> {
         let mut arg = OsString::from("--config-file=");
         arg.push(config);
-        Self::start_with(arg)
+        Self::start_with(arg, false)
     }
 
-    fn start_with(config: OsString) -> Option<PrivateBus> {
+    /// Like [`PrivateBus::start_with_config`], listening in a directory of the bus's own, which goes with the bus, instead
+    /// of where `config`'s `<listen>` says (the daemon still needs one).
+    pub fn start_with_config_in_own_dir(config: &Path) -> Option<PrivateBus> {
+        let mut arg = OsString::from("--config-file=");
+        arg.push(config);
+        Self::start_with(arg, true)
+    }
+
+    /// `own_dir`: listen in a new directory of the bus's own instead of where the configuration says.
+    fn start_with(config: OsString, own_dir: bool) -> Option<PrivateBus> {
+        // the directory goes when the daemon does not start, as when the bus is dropped
+        struct Unused(Option<std::path::PathBuf>);
+        impl Drop for Unused {
+            fn drop(&mut self) {
+                if let Some(dir) = &self.0 {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
+        }
+        let mut unused = Unused(own_dir.then(socket_dir));
+        let dir = unused.0.clone();
         let mut command = Command::new("dbus-daemon");
+        command.arg(config);
+        if let Some(dir) = &dir {
+            let mut address = OsString::from("--address=unix:dir=");
+            address.push(dir);
+            command.arg(address);
+        }
         command
-            .arg(config)
             .args(["--nofork", "--print-address=1"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -111,7 +148,11 @@ impl PrivateBus {
             .expect("dbus-daemon printed no address within 5 s");
         let address = address.trim().to_owned();
         assert!(!address.is_empty(), "dbus-daemon exited before it listened");
-        Some(PrivateBus { address, daemon })
+        Some(PrivateBus {
+            address,
+            daemon,
+            dir: unused.0.take(),
+        })
     }
 
     /// Whether the daemon has exited.
@@ -189,6 +230,9 @@ impl Drop for PrivateBus {
     fn drop(&mut self) {
         let _ = self.daemon.kill();
         let _ = self.daemon.wait();
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -217,6 +261,33 @@ mod tests {
         )
         .unwrap();
         config
+    }
+
+    #[test]
+    fn a_session_bus_listens_in_a_directory_of_its_own_that_goes_with_it() {
+        let Some(bus) = PrivateBus::start() else {
+            eprintln!("skipping: dbus-daemon is not available");
+            return;
+        };
+        let dir = bus
+            .dir
+            .clone()
+            .expect("the session bus chose its directory");
+        assert!(
+            bus.address.contains(&*dir.to_string_lossy()),
+            "{}",
+            bus.address
+        );
+        assert!(bus.connect().unique_name().is_some());
+        assert!(
+            std::fs::read_dir(&dir).unwrap().next().is_some(),
+            "its socket is in it"
+        );
+        drop(bus);
+        assert!(
+            !dir.exists(),
+            "the socket and its directory went with the bus"
+        );
     }
 
     #[test]

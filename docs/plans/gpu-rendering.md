@@ -1013,6 +1013,11 @@ later frames find again (`material::tests::the_parts_of_a_drag_are_made_in_targe
 drag still matches a whole blur within 1 of 255). Targets created per frame fall by 92 %; the CPU p99 does not move,
 so the wait for the GPU inside the drawing is what holds it over.
 
+A last run of the committed build (one run; the machine is shared all night, so its times are taken under load:
+load average 2.7 to 3.2, no compiler at that moment): 561 017 texels written by the blurs per frame against the
+baseline's 1 221 263 (54 % fewer), 9.33 blur passes per frame, 0.04 targets created per frame, CPU p99 2.31 ms,
+GPU p99 2.10 ms, no missed refresh. The texel count does not depend on the load.
+
 The gate stays open. Next: find which call in the drawing waits for the GPU (timing the glass and material passes'
 GL calls on the CPU, as was done for the textures) and remove the wait, then bench again on a quiet machine.
 

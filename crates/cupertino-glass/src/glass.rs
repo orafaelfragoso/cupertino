@@ -31,9 +31,11 @@
 //! 7. **Drop shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at `amount` percent
 //!    of its fill's alpha, and an outline hairline. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
 //!    A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
-//! 8. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside the outline of the
-//!    union, drawn over all of the above as a stroke around the shape is: over what lies there and over the glass's own
-//!    antialiased edge ([`edge_share`], [`over_edge`]), its band in the field's units as the glass's own coverage is.
+//! 8. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside each shape's own
+//!    outline, left out inside the container's other shapes ([`Container::edge_alpha_at`]), so where the shapes overlap
+//!    only the outline of the whole shows, as a stroke around each shape cut by the others draws it; drawn over all of
+//!    the above: over what lies there and over the glass's own antialiased edge ([`edge_share`], [`over_edge`]), its
+//!    band in the field's units as the glass's own coverage is.
 //!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
@@ -749,13 +751,31 @@ impl Container {
         self
     }
 
-    /// The share of a pixel (one unit wide) the edge covers where the union's field is `d`: the band from the outline
-    /// to the edge's width outside it, in the field's units as the glass's own coverage is.
-    pub fn edge_share_at(&self, d: f32) -> f32 {
+    /// The opacity of the edge over the pixel (one unit wide) centred at `p`: each shape's band from its outline to the
+    /// edge's width outside it ([`edge_share`]) at the edge's opacity, left out by the share of the pixel each other
+    /// shape covers, the bands laid over each other. Where the shapes overlap, a shape's outline inside another draws
+    /// nothing, and where they only blend (the glass's neck between two shapes close to each other) each keeps its own
+    /// outline: the edge is a stroke around each shape cut by the others, not the outline of the blended union.
+    pub fn edge_alpha_at(&self, p: [f32; 2]) -> f32 {
         if !self.edge.shows() {
             return 0.0;
         }
-        edge_share(d, self.edge.width)
+        let d: Vec<f32> = self.shapes.iter().map(|s| s.sdf(p)).collect();
+        let mut keep = 1.0;
+        for (i, di) in d.iter().enumerate() {
+            let band = edge_share(*di, self.edge.width);
+            if band <= 0.0 {
+                continue;
+            }
+            let outside: f32 = d
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, dj)| 1.0 - (0.5 - dj).clamp(0.0, 1.0))
+                .product();
+            keep *= 1.0 - self.edge.color[3] * band * outside;
+        }
+        (1.0 - keep).clamp(0.0, 1.0)
     }
 
     /// The container whose blur fades by `ramp` from its top to its bottom ([`Container::blur_ramp`]): a ramp below 1
@@ -864,8 +884,7 @@ impl Container {
     pub fn shade(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
         let (c, a) = self.shade_shapes(p, sample);
         let (c, a) = if self.edge.shows() {
-            let d = self.field(p).0;
-            over_edge(c, a, &self.edge, self.edge_share_at(d))
+            over_edge(c, a, &self.edge, self.edge_alpha_at(p) / self.edge.color[3])
         } else {
             (c, a)
         };
@@ -2384,7 +2403,7 @@ mod tests {
         assert!(close(a, 0.5, 1e-5), "{a}");
     }
 
-    /// The edge is a stroke of its width just outside the union's outline, laid over the pixel: across a straight
+    /// The edge is a stroke of its width just outside the outline, laid over the pixel: across a straight
     /// edge each pixel takes the share of the band it covers, over the glass's own antialiased edge too, and darkens
     /// what the pixel lets through; inside the glass and past the band it draws nothing.
     #[test]
@@ -2441,10 +2460,12 @@ mod tests {
         assert!(x <= -(0.75 + 1.0));
     }
 
-    /// In a container of joined shapes the edge runs along the outline of the union: none where one shape lies inside
-    /// the other, and across the neck where they blend.
+    /// In a container of joined shapes the edge is each shape's outline cut by the others, as a stroke round each shape
+    /// left out inside the others draws it: none where one shape's outline lies inside the other, all of it along the
+    /// outer outlines, and where two shapes only blend (a neck of glass between them) each keeps its own outline and
+    /// the neck's outline draws none.
     #[test]
-    fn a_joined_container_s_edge_follows_the_union_and_not_each_shape() {
+    fn a_joined_container_s_edge_is_each_shape_s_outline_cut_by_the_others() {
         let edge = GlassEdge {
             width: 1.0,
             color: [0.0, 0.0, 0.0, 1.0],
@@ -2459,10 +2480,10 @@ mod tests {
             GlassMode::default(),
         )
         .with_edge(edge);
-        let at = |p: [f32; 2]| c.edge_share_at(c.field(p).0);
+        let at = |p: [f32; 2]| c.edge_alpha_at(p);
         // the button's outline inside the field, and the field's inside the button, draw no edge
         assert_eq!(
-            at([185.0, 28.0]),
+            at([179.5, 28.0]),
             0.0,
             "the button's left edge inside the field"
         );
@@ -2471,15 +2492,35 @@ mod tests {
             0.0,
             "the field's right end inside the button"
         );
-        // the union's outline does, on the field's top and the button's right
+        // the outer outlines do, on the field's top and the button's right
         assert!(at([100.0, -0.5]) > 0.99, "{}", at([100.0, -0.5]));
         assert!(at([216.5, 28.0]) > 0.99, "{}", at([216.5, 28.0]));
-        // where the two blend the line runs on across the neck, outside the joined glass
-        let neck = (0..80)
-            .map(|i| [196.0, 10.0 - 0.1 * i as f32])
-            .find(|&p| at(p) > 0.5)
-            .expect("an edge across the neck");
-        assert!(c.field(neck).0 > -0.5, "outside the glass: {neck:?}");
+        // a pixel both bands reach where the outlines cross is the stroke of each cut by the other, laid over each other
+        let p = [190.0, 0.0];
+        let (a, b) = (c.shapes[0].sdf(p), c.shapes[1].sdf(p));
+        let cut = |d: f32, other: f32| edge_share(d, 1.0) * (1.0 - (0.5 - other).clamp(0.0, 1.0));
+        let want = 1.0 - (1.0 - cut(a, b)) * (1.0 - cut(b, a));
+        assert!(close(at(p), want, 1e-6), "{} vs {want}", at(p));
+        // two shapes 3 points apart blend into one glass, and each keeps its own outline across the gap
+        let apart = Container::new(
+            vec![
+                GlassShape::new([0.0, 0.0, 200.0, 56.0], 28.0),
+                GlassShape::new([203.0, 0.0, 56.0, 56.0], 28.0),
+            ],
+            8.0,
+            GlassMode::default(),
+        )
+        .with_edge(edge);
+        assert!(apart.field([201.5, 28.0]).0 < 0.0, "a neck of glass");
+        assert!(apart.edge_alpha_at([200.5, 28.0]) > 0.99);
+        assert!(apart.edge_alpha_at([202.5, 28.0]) > 0.99);
+        assert_eq!(apart.edge_alpha_at([201.5, 28.0]), 0.0);
+        // the neck's own outline, off both shapes' outlines, draws none
+        let neck = (0..200)
+            .map(|i| [201.5, 28.0 - 0.2 * i as f32])
+            .find(|&p| apart.field(p).0 > 0.0)
+            .expect("the neck's outline");
+        assert_eq!(apart.edge_alpha_at(neck), 0.0, "{neck:?}");
     }
 
     /// The rim adds `amount · color_bias` (darker for a negative bias) to every channel, scaled by the face's

@@ -231,11 +231,11 @@ float inner_shadow(vec2 p_4, Caster caster_1, Shadow shadow_1, float px_3) {
     float _e15 = rounded_box_blur(q_3, caster_1.half_, shadow_1.sigma, radius_1);
     float _e17 = blur_mass(shadow_1.sigma);
     float blurred_1 = (_e15 / _e17);
-    float outside_1 = max((1.0 - blurred_1), 0.0);
+    float outside_2 = max((1.0 - blurred_1), 0.0);
     float extent_1 = min(caster_1.extent, min(caster_1.half_.x, caster_1.half_.y));
     float _e32 = rounded_distance(p_4, caster_1.half_, extent_1, caster_1.exponent);
     float _e33 = coverage(_e32, px_3);
-    return (clamp((outside_1 * shadow_1.density), 0.0, 1.0) * _e33);
+    return (clamp((outside_2 * shadow_1.density), 0.0, 1.0) * _e33);
 }
 
 vec4 gradient_at(vec4 offsets[2], vec4 colors[8], int count, float t_in) {
@@ -322,10 +322,10 @@ uint dither_pair(uvec2 p_5, uint k_1) {
 }
 
 uint dither_matrix(vec2 frag) {
-    uvec2 p_15 = uvec2(floor(frag));
-    uint _e5 = dither_pair(p_15, 0u);
-    uint _e9 = dither_pair(p_15, 1u);
-    uint _e13 = dither_pair(p_15, 2u);
+    uvec2 p_17 = uvec2(floor(frag));
+    uint _e5 = dither_pair(p_17, 0u);
+    uint _e9 = dither_pair(p_17, 1u);
+    uint _e13 = dither_pair(p_17, 2u);
     return (((16u * _e5) + (4u * _e9)) + _e13);
 }
 
@@ -429,11 +429,11 @@ void main() {
     vec2 corner_2 = vec2(float((i & 1u)), float(((i >> 1u) & 1u)));
     vec4 _e12 = _group_1_binding_0_vs.quad;
     vec4 _e16 = _group_1_binding_0_vs.quad;
-    vec2 p_16 = (_e12.xy + (corner_2 * _e16.zw));
+    vec2 p_18 = (_e12.xy + (corner_2 * _e16.zw));
     mat3x3 _e22 = _group_1_binding_0_vs.proj;
-    vec3 c_8 = (_e22 * vec3(p_16, 1.0));
+    vec3 c_8 = (_e22 * vec3(p_18, 1.0));
     o.pos = vec4(c_8.xy, 0.0, 1.0);
-    o.px = p_16;
+    o.px = p_18;
     o.uv = ((c_8.xy * 0.5) + vec2(0.5));
     VsOut _e40 = o;
     gl_Position = _e40.pos;

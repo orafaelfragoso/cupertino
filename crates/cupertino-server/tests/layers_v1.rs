@@ -1113,7 +1113,7 @@ fn a_glass_edge_runs_outside_the_group_s_joined_outline_at_its_width_whatever_th
             at2(&scaled, top, (0, dy))
         );
     }
-    // a button budding out of the field's right end, in one glass group: the line follows the joined outline, left
+    // a button budding out of the field's right end, in one glass group: the line follows each shape's outline, left
     // out where each shape's own outline lies inside the other, and the group draws the edge of its first layer
     client.send(|c, qh| {
         c.l(0).set_value(Property::Scale, 1.0);

@@ -261,12 +261,37 @@ fn edge_share(d: f32, w: f32) -> f32 {
   return clamp(min(d + 0.5, w) - max(d - 0.5, 0.0), 0.0, 1.0);
 }
 
-// stage 8: the edge over what the pixel shows (straight colour c at coverage c.a), as a stroke drawn over it; its band
-// in the field's units, as the glass's own coverage is
-fn with_edge(c: vec4<f32>, d: f32) -> vec4<f32> {
+// stage 8's opacity at p: each shape's band from its outline to w outside it at the edge's opacity, left out by the
+// share of the pixel each other shape covers, the bands laid over each other; a stroke round each shape cut by the
+// others, so where the shapes overlap only the outline of the whole shows
+fn edge_alpha(p: vec2<f32>) -> f32 {
   let w = G.lens.w;
-  if (w <= 0.0 || G.edge.a <= 0.0) { return c; }
-  let e = clamp(G.edge.a * edge_share(d, w), 0.0, 1.0);
+  if (w <= 0.0 || G.edge.a <= 0.0) { return 0.0; }
+  let n = i32(G.info.x);
+  var d: array<f32, 16>;
+  var near = false;
+  for (var i = 0; i < n; i++) {
+    d[i] = rect_sdf(p, G.shapes[i], G.shape_a[i].x, G.shape_b[i].w);
+    near = near || (d[i] > -0.5 && d[i] < w + 0.5);
+  }
+  if (!near) { return 0.0; }
+  var keep = 1.0;
+  for (var i = 0; i < n; i++) {
+    let band = edge_share(d[i], w);
+    if (band <= 0.0) { continue; }
+    var outside = 1.0;
+    for (var j = 0; j < n; j++) {
+      if (j != i) { outside *= 1.0 - clamp(0.5 - d[j], 0.0, 1.0); }
+    }
+    keep *= 1.0 - G.edge.a * band * outside;
+  }
+  return clamp(1.0 - keep, 0.0, 1.0);
+}
+
+// stage 8: the edge over what the pixel at p shows (straight colour c at coverage c.a), as a stroke drawn over it; its
+// band in the field's units, as the glass's own coverage is
+fn with_edge(c: vec4<f32>, p: vec2<f32>) -> vec4<f32> {
+  let e = edge_alpha(p);
   if (e <= 0.0) { return c; }
   let a = c.a + e - c.a * e;
   return vec4<f32>((c.rgb * c.a * (1.0 - e) + G.edge.rgb * e) / a, a);
@@ -289,7 +314,7 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
     // the normal only matters to an edge line kept to the sides, in its band
     var on = vec2<f32>(0.0);
     if (G.diffuse.w > 0.0 && G.levels.x > 0.0 && d < 1.5) { on = field_normal(p); }
-    let o = with_edge(outside(p, d, f.b.z, on), d);
+    let o = with_edge(outside(p, d, f.b.z, on), p);
     let a = o.a * G.info.w * kept;
     if (a <= 0.0) { discard; }
     return placed(vec4<f32>(o.rgb, a), fin.pos.xy);
@@ -381,6 +406,6 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
   let a = cov + under;
   var rgb = c;
   if (a > 0.0) { rgb = (clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * cov + o.rgb * under) / a; }
-  let edged = with_edge(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a), d);
+  let edged = with_edge(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a), p);
   return placed(vec4<f32>(clamp(edged.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), edged.a * G.info.w * kept), fin.pos.xy);
 }

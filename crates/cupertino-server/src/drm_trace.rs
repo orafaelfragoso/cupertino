@@ -203,7 +203,7 @@ impl DrmTrace {
                 self.flips, self.missed
             ));
         }
-        if self.flips % COUNT_EVERY == 0 {
+        if self.flips.is_multiple_of(COUNT_EVERY) {
             lines.push(format!(
                 "count flips={} missed_total={}",
                 self.flips, self.missed

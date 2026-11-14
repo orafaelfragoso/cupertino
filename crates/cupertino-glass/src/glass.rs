@@ -31,6 +31,9 @@
 //! 7. **Drop shadow.** Outside the shape: a drop shadow offset by `offset`, blurred by `height` at `amount` percent
 //!    of its fill's alpha, and an outline hairline. Ring and drop shadow are drawn at their opacity, which is 0 at rest.
 //!    A pixel the shape's edge crosses shows the glass over this in the part the glass leaves uncovered.
+//! 8. **Edge.** Where the container carries one ([`GlassEdge`]), a line of its width just outside the outline of the
+//!    union, drawn over all of the above as a stroke around the shape is: over what lies there and over the glass's own
+//!    antialiased edge ([`edge_share`], [`over_edge`]), its band in the field's units as the glass's own coverage is.
 //!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
@@ -53,6 +56,43 @@ pub const MAX_SHAPES: usize = 16;
 /// Widest blend between the shapes of a container, in points. The union bulges up to a quarter of the blend width
 /// past the shapes, so this bounds how far a container's glass reaches beyond them.
 pub const MAX_SPACING: f32 = 64.0;
+
+/// The line a container draws along the outside of its outline ([`Container::edge`]): its width in the container's
+/// units (points; pixels in the uniform) and its straight colour and opacity. A width of 0 draws none.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlassEdge {
+    pub width: f32,
+    pub color: [f32; 4],
+}
+
+impl GlassEdge {
+    /// Whether the edge draws anything.
+    pub fn shows(&self) -> bool {
+        self.width > 0.0 && self.color[3] > 0.0
+    }
+}
+
+/// The share of a pixel one unit wide whose centre lies `d` units outside an outline (negative inside) that the band
+/// from the outline to `width` outside it covers: the stroke's coverage across a straight edge.
+pub fn edge_share(d: f32, width: f32) -> f32 {
+    if width <= 0.0 {
+        return 0.0;
+    }
+    ((d + 0.5).min(width) - (d - 0.5).max(0.0)).clamp(0.0, 1.0)
+}
+
+/// The colour and coverage `(c, a)` of what a pixel shows with `edge` over it at `share` of the pixel (straight
+/// colours): the stroke drawn over the pixel, which darkens or tints what the pixel lets through and adds its own
+/// coverage.
+pub fn over_edge(c: Rgb, a: f32, edge: &GlassEdge, share: f32) -> (Rgb, f32) {
+    let e = (edge.color[3] * share).clamp(0.0, 1.0);
+    if e <= 0.0 {
+        return (c, a);
+    }
+    let out = a + e - a * e;
+    let c = std::array::from_fn(|i| (c[i] * a * (1.0 - e) + edge.color[i] * e) / out);
+    (c, out)
+}
 
 /// Rec. 709 luminance weights of linear light.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
@@ -663,6 +703,8 @@ pub struct Container {
     pub blur_ramp: [f32; 2],
     /// How much the glass magnifies what lies behind it about its first shape's centre: 1 for none, more for a lens.
     pub lens: f32,
+    /// The line along the outside of the union's outline ([`GlassEdge`]); none by default.
+    pub edge: GlassEdge,
 }
 
 impl Container {
@@ -697,7 +739,23 @@ impl Container {
             cut: None,
             blur_ramp: [1.0, 1.0],
             lens: 1.0,
+            edge: GlassEdge::default(),
         }
+    }
+
+    /// The container with `edge` along the outside of its outline.
+    pub fn with_edge(mut self, edge: GlassEdge) -> Self {
+        self.edge = edge;
+        self
+    }
+
+    /// The share of a pixel (one unit wide) the edge covers where the union's field is `d`: the band from the outline
+    /// to the edge's width outside it, in the field's units as the glass's own coverage is.
+    pub fn edge_share_at(&self, d: f32) -> f32 {
+        if !self.edge.shows() {
+            return 0.0;
+        }
+        edge_share(d, self.edge.width)
     }
 
     /// The container whose blur fades by `ramp` from its top to its bottom ([`Container::blur_ramp`]): a ramp below 1
@@ -777,7 +835,12 @@ impl Container {
         } else {
             0.0
         };
-        let r = self.params.reach() + bulge;
+        let edge = if self.edge.shows() {
+            self.edge.width + 2.0
+        } else {
+            0.0
+        };
+        let r = self.params.reach().max(edge) + bulge;
         Some([x - r, y - r, w + 2.0 * r, h + 2.0 * r])
     }
 
@@ -800,6 +863,12 @@ impl Container {
     /// outline the container is cut to.
     pub fn shade(&self, p: [f32; 2], sample: &dyn Fn(usize, [f32; 2]) -> Rgb) -> (Rgb, f32) {
         let (c, a) = self.shade_shapes(p, sample);
+        let (c, a) = if self.edge.shows() {
+            let d = self.field(p).0;
+            over_edge(c, a, &self.edge, self.edge_share_at(d))
+        } else {
+            (c, a)
+        };
         (c, a * self.cut.map_or(1.0, |cut| cut.coverage(p)))
     }
 
@@ -953,8 +1022,10 @@ pub struct GlassUniform {
     /// 0 when not, and 1 when the edge line keeps its strength over any backdrop (0 when it follows its brightness).
     pub cut_shape: [f32; 4],
     /// The blur's weight at the top and at the bottom of the shapes ([`Container::blur_ramp`]), the magnification
-    /// about the first shape's centre ([`Container::lens`]), unused.
+    /// about the first shape's centre ([`Container::lens`]), and the width of the edge ([`Container::edge`]).
     pub lens: [f32; 4],
+    /// The edge's straight colour and opacity.
+    pub edge: [f32; 4],
 }
 
 impl GlassUniform {
@@ -1053,8 +1124,13 @@ impl GlassUniform {
             container.blur_ramp[0].clamp(0.0, 1.0),
             container.blur_ramp[1].clamp(0.0, 1.0),
             container.lens.max(1.0),
-            0.0,
+            if container.edge.shows() {
+                container.edge.width * scale
+            } else {
+                0.0
+            },
         ];
+        u.edge = container.edge.color;
         u
     }
 
@@ -2308,6 +2384,104 @@ mod tests {
         assert!(close(a, 0.5, 1e-5), "{a}");
     }
 
+    /// The edge is a stroke of its width just outside the union's outline, laid over the pixel: across a straight
+    /// edge each pixel takes the share of the band it covers, over the glass's own antialiased edge too, and darkens
+    /// what the pixel lets through; inside the glass and past the band it draws nothing.
+    #[test]
+    fn the_edge_is_a_stroke_of_its_width_outside_the_outline_over_the_glass_s_own_edge() {
+        let edge = GlassEdge {
+            width: 0.75,
+            color: [0.0, 0.0, 0.0, 0.93],
+        };
+        // a pixel centred d outside the outline: the band [0, 0.75] covers what of [d - ½, d + ½] it reaches
+        for (d, share) in [
+            (-1.0, 0.0),
+            (-0.5, 0.0),
+            (-0.25, 0.25),
+            (0.0, 0.5),
+            (0.3, 0.75),
+            (0.5, 0.75),
+            (1.0, 0.25),
+            (1.25, 0.0),
+        ] {
+            assert!(
+                close(edge_share(d, 0.75), share, 1e-6),
+                "{d}: {}",
+                edge_share(d, 0.75)
+            );
+        }
+        assert_eq!(edge_share(0.0, 0.0), 0.0, "no width, no edge");
+        // laid over a pixel: black at 0.93 of its share darkens what the pixel shows and adds its coverage
+        let (c, a) = over_edge([0.8, 0.6, 0.4], 0.5, &edge, 0.5);
+        let e = 0.93 * 0.5;
+        assert!(close(a, 0.5 + e - 0.5 * e, 1e-6));
+        for (got, was) in c.iter().zip([0.8f32, 0.6, 0.4]) {
+            assert!(close(got * a, was * 0.5 * (1.0 - e), 1e-6));
+        }
+        // the container shades its edge over its glass and over the open part outside it
+        let plain = Container::new(
+            vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+            0.0,
+            GlassMode::default(),
+        );
+        let edged = plain.clone().with_edge(edge);
+        let grey = |_: usize, _: [f32; 2]| [0.5f32; 3];
+        for y in [99.0, 99.75, 100.0, 100.5, 101.0, 102.0] {
+            let p = [100.0, y];
+            let (c0, a0) = plain.shade(p, &grey);
+            let (c1, a1) = edged.shade(p, &grey);
+            let (want_c, want_a) = over_edge(c0, a0, &edge, edge_share(y - 100.0, 0.75));
+            assert!(close(a1, want_a, 1e-5), "{y}: {a1} vs {want_a}");
+            for i in 0..3 {
+                assert!(close(c1[i], want_c[i], 1e-4), "{y}");
+            }
+        }
+        // the glass draws far enough out for the edge
+        let [x, ..] = edged.sample_area().unwrap();
+        assert!(x <= -(0.75 + 1.0));
+    }
+
+    /// In a container of joined shapes the edge runs along the outline of the union: none where one shape lies inside
+    /// the other, and across the neck where they blend.
+    #[test]
+    fn a_joined_container_s_edge_follows_the_union_and_not_each_shape() {
+        let edge = GlassEdge {
+            width: 1.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+        // a field and a button budding out of its right end
+        let c = Container::new(
+            vec![
+                GlassShape::new([0.0, 0.0, 200.0, 56.0], 28.0),
+                GlassShape::new([180.0, 10.0, 36.0, 36.0], 18.0),
+            ],
+            8.0,
+            GlassMode::default(),
+        )
+        .with_edge(edge);
+        let at = |p: [f32; 2]| c.edge_share_at(c.field(p).0);
+        // the button's outline inside the field, and the field's inside the button, draw no edge
+        assert_eq!(
+            at([185.0, 28.0]),
+            0.0,
+            "the button's left edge inside the field"
+        );
+        assert_eq!(
+            at([200.5, 28.0]),
+            0.0,
+            "the field's right end inside the button"
+        );
+        // the union's outline does, on the field's top and the button's right
+        assert!(at([100.0, -0.5]) > 0.99, "{}", at([100.0, -0.5]));
+        assert!(at([216.5, 28.0]) > 0.99, "{}", at([216.5, 28.0]));
+        // where the two blend the line runs on across the neck, outside the joined glass
+        let neck = (0..80)
+            .map(|i| [196.0, 10.0 - 0.1 * i as f32])
+            .find(|&p| at(p) > 0.5)
+            .expect("an edge across the neck");
+        assert!(c.field(neck).0 > -0.5, "outside the glass: {neck:?}");
+    }
+
     /// The rim adds `amount · color_bias` (darker for a negative bias) to every channel, scaled by the face's
     /// brightness (0, 0.63, 1, 1.13, 1 at luma 0, ¼, ½, ¾, 1) and the edge's direction (0.15 + 0.85·sin²(2φ)), in a band
     /// 1.7 times its height deep.
@@ -2554,7 +2728,7 @@ mod tests {
     fn uniform_layout_and_scaling() {
         assert_eq!(
             std::mem::size_of::<GlassUniform>(),
-            (22 + 3 * MAX_SHAPES) * 16
+            (23 + 3 * MAX_SHAPES) * 16
         );
         let c = Container::new(
             vec![GlassShape::capsule([10.0, 20.0, 100.0, 40.0])],
@@ -2585,6 +2759,21 @@ mod tests {
         assert_eq!(c.levels()[0].0, 4.0);
         assert_eq!(u.shape_b[0][2], 0.0);
         assert_eq!(c.fill_sigma(), Some(16.0));
+        assert_eq!((u.lens[3], u.edge), (0.0, [0.0; 4]), "no edge");
+        // an edge's width is in pixels in the uniform, its colour as given
+        let edge = GlassEdge {
+            width: 0.5,
+            color: [0.0, 0.0, 0.0, 0.93],
+        };
+        let u = GlassUniform::new(
+            &c.with_edge(edge),
+            1.5,
+            [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
+            [0.0; 4],
+            [100.0; 2],
+            1.0,
+        );
+        assert_eq!((u.lens[3], u.edge), (0.75, edge.color));
     }
 
     #[test]

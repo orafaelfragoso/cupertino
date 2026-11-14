@@ -48,6 +48,7 @@ struct Glass {
     vec4 cut;
     vec4 cut_shape;
     vec4 lens;
+    vec4 edge;
 };
 struct Field {
     float d;
@@ -95,8 +96,8 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     float v_1 = max((qy / e), 1e-6);
     float g = pow((pow(u, n_1) + pow(v_1, n_1)), (1.0 / n_1));
     float grad = (sqrt((pow(u, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
-    float d_7 = (((g - 1.0) / grad) * e);
-    return max(d_7, (max(qx, qy) - e));
+    float d_9 = (((g - 1.0) / grad) * e);
+    return max(d_9, (max(qx, qy) - e));
 }
 
 float rect_distance(vec2 p_1, vec2 half_1) {
@@ -383,8 +384,8 @@ vec3 saturate_encoded(vec3 c_3, float s) {
 }
 
 float angle_between(float a_1, float b) {
-    float d_8 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
-    return min(d_8, (6.2831855 - d_8));
+    float d_10 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
+    return min(d_10, (6.2831855 - d_10));
 }
 
 float shadow_coverage(float d_3, float r_1) {
@@ -418,6 +419,10 @@ float normal_cdf(float x_3) {
     return (1.0 / (1.0 + exp((-1.702 * x_3))));
 }
 
+float edge_share(float d_7, float w_2) {
+    return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+}
+
 void main() {
     uint i = uint(gl_VertexID);
     VsOut o = VsOut(vec4(0.0), vec2(0.0), vec2(0.0));
@@ -426,10 +431,10 @@ void main() {
     vec4 _e16 = _group_1_binding_0_vs.quad;
     vec2 p_16 = (_e12.xy + (corner_2 * _e16.zw));
     mat3x3 _e22 = _group_1_binding_0_vs.proj;
-    vec3 c_7 = (_e22 * vec3(p_16, 1.0));
-    o.pos = vec4(c_7.xy, 0.0, 1.0);
+    vec3 c_8 = (_e22 * vec3(p_16, 1.0));
+    o.pos = vec4(c_8.xy, 0.0, 1.0);
     o.px = p_16;
-    o.uv = ((c_7.xy * 0.5) + vec2(0.5));
+    o.uv = ((c_8.xy * 0.5) + vec2(0.5));
     VsOut _e40 = o;
     gl_Position = _e40.pos;
     _vs2fs_location0 = _e40.px;

@@ -15,7 +15,7 @@ pub use cupertino_modifiers::Mods;
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};
 pub use cupertino_ui_render::Color;
-pub use surface_layers::{LayerChange, LayerProperty, SurfaceLayer, SurfaceLayerLook};
+pub use surface_layers::{LayerChange, LayerEdge, LayerProperty, SurfaceLayer, SurfaceLayerLook};
 
 /// A toplevel window or a popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,6 +51,9 @@ pub struct Capabilities {
     /// A window may draw marked subtrees into surfaces of its own that the compositor places and animates
     /// ([`WindowSystem::present_surface_layers`], [`WindowRequest::Layer`]).
     pub surface_layers: bool,
+    /// A surface layer's glass may carry an edge the compositor draws ([`SurfaceLayerLook::edge`]); without it the
+    /// edge is not drawn.
+    pub surface_layer_edges: bool,
 }
 
 /// A property of a window's presentation ([`WindowRequest::Present`]).

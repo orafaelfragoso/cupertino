@@ -3,7 +3,8 @@
 //! scaling and fading with it. Raised layers come in front of the flat ones and lift their glass with a soft shadow; a
 //! vibrant layer draws its coverage blended with the glass behind it ([`SurfaceRole::Vibrant`]). The glass of the layers
 //! of one glass group is one container of their shapes as shown, drawn below the content of its first layer
-//! ([`glass_anchors`]). A layer of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`],
+//! ([`glass_anchors`]), and the edge of that layer (`set_glass_edge`) runs along the outside of the container's outline at
+//! its width in points, whatever the layers' scale. A layer of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`],
 //! `super::content_blur`).
 
 use cupertino_scene::{Clip, ContentBlur, SceneKind, SurfaceRole, VibrantBlend};
@@ -125,6 +126,15 @@ pub fn content_role(sigma: f64) -> SurfaceRole {
         SurfaceRole::WindowContent
     } else {
         SurfaceRole::Blurred(blur)
+    }
+}
+
+/// The edge a layer's glass carries, in points: drawn by the glass at the output's scale and not the layer's, so its
+/// width stays what the client asked as the layer scales.
+pub fn glass_edge(l: &LayerDraw) -> cupertino_glass::glass::GlassEdge {
+    cupertino_glass::glass::GlassEdge {
+        width: l.edge.width as f32,
+        color: l.edge.color,
     }
 }
 
@@ -286,6 +296,7 @@ pub fn layer_pieces(
                 if let Some(angle) = light {
                     gc.container.params.highlight.angle = angle;
                 }
+                gc.container.edge = glass_edge(l);
                 if l.raised {
                     let s = &mut gc.container.params.shadow;
                     (s.offset, s.amount, s.height) = RAISED_SHADOW;
@@ -299,6 +310,11 @@ pub fn layer_pieces(
                     .f(f64::from(l.blur_ramp[1]))
                     .f(light.map_or(-10.0, f64::from))
                     .u(u64::from(l.raised))
+                    .f(l.edge.width)
+                    .f(f64::from(l.edge.color[0]))
+                    .f(f64::from(l.edge.color[1]))
+                    .f(f64::from(l.edge.color[2]))
+                    .f(f64::from(l.edge.color[3]))
                     .finish();
                 g.glass = std::rc::Rc::new(gc);
                 // a group's shapes carry their layers' opacities

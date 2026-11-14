@@ -235,6 +235,10 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 - geometry in fixed point, applied atomically with the parent surface's commit;
 - glass attached to a layer, so a moving panel and its glass never separate, and the glass of several layers joined
   into one shape from their bounds as shown, so a button buds out of a field's glass as both move;
+- a thin line along the outside of a layer's glass, or of a glass group's joined shape, at a width in points that
+  stays as the layer scales, drawn by the glass over what lies there as a stroke around the shape is; it follows the
+  joined outline as the shapes move, so it is left out where they join (a client cannot draw this itself: a layer's
+  frame is cut only to its own shape);
 - a blur of a layer's own content, a Gaussian in points animated like any property, which the compositor draws from an
   offscreen copy of the content through the backdrop blur's pyramid and passes (keeping the content's alpha), so a
   panel's text softens as it closes without a frame of the application's;
@@ -266,7 +270,13 @@ grid around the enclosure with room for the stroke, centred on the point the pan
 layer of glass at its rect and a face (edge, focus ring and symbol) above it. The window itself shows no glass. Its
 close is then the compositor's: the glass grows to its end rect and fades, the edge scales with it and blurs, the
 content blurs and fades, all on the close's ease-out, with no frame of the application's. While the panel moves, and
-under Reduce Motion, it draws itself.
+under Reduce Motion, it draws itself. The compositor can draw the panel's edge along its glass itself
+(`layers::glass_edge` in a glass layer's look): along the search field and its mode buttons, capsules all, and along
+every straight side it is the panel's own edge within 4 of 255, while at a scope's continuous corners it follows the
+glass, where the panel strokes circular arcs that stand up to 0.57 points off it. A scope's open from hidden can be
+handed over the same way (`layers::open_changes`): the layers drawn once at rest in the open's first frame, then the
+glass, the edge layer's scale and the content's place on the open's spring from where it starts and all of it faded
+in, with no frame of the application's; it stays off in the process until its look part way is the panel's own.
 
 ### 10. The compositor
 

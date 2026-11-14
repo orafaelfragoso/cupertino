@@ -48,6 +48,7 @@ struct Glass {
     vec4 cut;
     vec4 cut_shape;
     vec4 lens;
+    vec4 edge;
 };
 struct Field {
     float d;
@@ -108,8 +109,8 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     float v_1 = max((qy / e), 1e-6);
     float g = pow((pow(u, n_1) + pow(v_1, n_1)), (1.0 / n_1));
     float grad = (sqrt((pow(u, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
-    float d_7 = (((g - 1.0) / grad) * e);
-    return max(d_7, (max(qx, qy) - e));
+    float d_9 = (((g - 1.0) / grad) * e);
+    return max(d_9, (max(qx, qy) - e));
 }
 
 float rect_distance(vec2 p_1, vec2 half_1) {
@@ -483,26 +484,26 @@ vec3 tap(highp sampler2D t_3, vec2 uv) {
 
 vec3 blurred(vec2 uv_1, float pos) {
     vec3 c_4 = vec3(0.0);
-    vec4 w_2 = max((vec4(1.0) - abs((vec4(clamp(pos, 0.0, 3.0)) - vec4(0.0, 1.0, 2.0, 3.0)))), vec4(0.0));
-    if ((w_2.x > 0.0)) {
+    vec4 w_3 = max((vec4(1.0) - abs((vec4(clamp(pos, 0.0, 3.0)) - vec4(0.0, 1.0, 2.0, 3.0)))), vec4(0.0));
+    if ((w_3.x > 0.0)) {
         vec3 _e27 = tap(_group_0_binding_1_fs, uv_1);
         vec3 _e29 = c_4;
-        c_4 = (_e29 + (w_2.x * _e27));
+        c_4 = (_e29 + (w_3.x * _e27));
     }
-    if ((w_2.y > 0.0)) {
+    if ((w_3.y > 0.0)) {
         vec3 _e36 = tap(_group_0_binding_2_fs, uv_1);
         vec3 _e38 = c_4;
-        c_4 = (_e38 + (w_2.y * _e36));
+        c_4 = (_e38 + (w_3.y * _e36));
     }
-    if ((w_2.z > 0.0)) {
+    if ((w_3.z > 0.0)) {
         vec3 _e45 = tap(_group_0_binding_3_fs, uv_1);
         vec3 _e47 = c_4;
-        c_4 = (_e47 + (w_2.z * _e45));
+        c_4 = (_e47 + (w_3.z * _e45));
     }
-    if ((w_2.w > 0.0)) {
+    if ((w_3.w > 0.0)) {
         vec3 _e54 = tap(_group_0_binding_4_fs, uv_1);
         vec3 _e56 = c_4;
-        c_4 = (_e56 + (w_2.w * _e54));
+        c_4 = (_e56 + (w_3.w * _e54));
     }
     vec3 _e58 = c_4;
     return _e58;
@@ -555,8 +556,8 @@ vec3 face_at(vec2 q_1, float pos_1, float max_luma, float w_1) {
 }
 
 float angle_between(float a_1, float b) {
-    float d_8 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
-    return min(d_8, (6.2831855 - d_8));
+    float d_10 = ((a_1 - b) - (floor(((a_1 - b) / 6.2831855)) * 6.2831855));
+    return min(d_10, (6.2831855 - d_10));
 }
 
 float lobe(float normal_angle, float light, float spread_scale) {
@@ -697,6 +698,27 @@ vec4 outside(vec2 p_13, float d_6, float pos_3, vec2 n_6) {
     return vec4((_e20.xyz * ((_e4 * (1.0 - _e5)) / a_6)), a_6);
 }
 
+float edge_share(float d_7, float w_2) {
+    return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+}
+
+vec4 with_edge(vec4 c_7, float d_8) {
+    float w_4 = _group_0_binding_0_fs.lens.w;
+    float _e11 = _group_0_binding_0_fs.edge.w;
+    if (((w_4 <= 0.0) || (_e11 <= 0.0))) {
+        return c_7;
+    }
+    float _e18 = _group_0_binding_0_fs.edge.w;
+    float _e19 = edge_share(d_8, w_4);
+    float e_3 = clamp((_e18 * _e19), 0.0, 1.0);
+    if ((e_3 <= 0.0)) {
+        return c_7;
+    }
+    float a_7 = ((c_7.w + e_3) - (c_7.w * e_3));
+    vec4 _e39 = _group_0_binding_0_fs.edge;
+    return vec4(((((c_7.xyz * c_7.w) * (1.0 - e_3)) + (_e39.xyz * e_3)) / vec3(a_7)), a_7);
+}
+
 float cut_coverage(vec2 p_14) {
     float _e4 = _group_0_binding_0_fs.cut_shape.z;
     if ((_e4 <= 0.0)) {
@@ -730,230 +752,232 @@ void main() {
         discard;
     }
     Field _e5 = field(p_16);
-    float d_9 = _e5.d;
-    if ((d_9 > 0.5)) {
+    float d_11 = _e5.d;
+    if ((d_11 > 0.5)) {
         float _e15 = _group_0_binding_0_fs.diffuse.w;
         float _e21 = _group_0_binding_0_fs.levels.x;
-        if ((((_e15 > 0.0) && (_e21 > 0.0)) && (d_9 < 1.5))) {
+        if ((((_e15 > 0.0) && (_e21 > 0.0)) && (d_11 < 1.5))) {
             vec2 _e28 = field_normal(p_16);
             on = _e28;
         }
         vec2 _e31 = on;
-        vec4 _e32 = outside(p_16, d_9, _e5.b.z, _e31);
-        float _e37 = _group_0_binding_0_fs.info.w;
-        float a_7 = ((_e32.w * _e37) * _e2);
-        if ((a_7 <= 0.0)) {
+        vec4 _e32 = outside(p_16, d_11, _e5.b.z, _e31);
+        vec4 _e33 = with_edge(_e32, d_11);
+        float _e38 = _group_0_binding_0_fs.info.w;
+        float a_8 = ((_e33.w * _e38) * _e2);
+        if ((a_8 <= 0.0)) {
             discard;
         }
-        vec4 _e46 = placed(vec4(_e32.xyz, a_7), fin.pos.xy);
-        _fs2p_location0 = _e46;
+        vec4 _e47 = placed(vec4(_e33.xyz, a_8), fin.pos.xy);
+        _fs2p_location0 = _e47;
         return;
     }
-    float _e51 = field_d((p_16 + vec2(0.5, 0.0)));
-    float _e56 = field_d((p_16 - vec2(0.5, 0.0)));
-    float _e62 = field_d((p_16 + vec2(0.0, 0.5)));
-    float _e67 = field_d((p_16 - vec2(0.0, 0.5)));
-    vec2 g_3 = vec2((_e51 - _e56), (_e62 - _e67));
+    float _e52 = field_d((p_16 + vec2(0.5, 0.0)));
+    float _e57 = field_d((p_16 - vec2(0.5, 0.0)));
+    float _e63 = field_d((p_16 + vec2(0.0, 0.5)));
+    float _e68 = field_d((p_16 - vec2(0.0, 0.5)));
+    vec2 g_3 = vec2((_e52 - _e57), (_e63 - _e68));
     float grad_len_1 = length(g_3);
     if ((grad_len_1 > 1e-6)) {
         n = (g_3 / vec2(grad_len_1));
     }
-    if (((_e5.a.z > 0.0) && (d_9 <= 0.0))) {
-        vec2 _e88 = n;
-        float _e98 = refraction_profile(max((-(d_9) / _e5.a.z), 0.0));
-        off = ((_e88 * _e5.a.y) * _e98);
+    if (((_e5.a.z > 0.0) && (d_11 <= 0.0))) {
+        vec2 _e89 = n;
+        float _e99 = refraction_profile(max((-(d_11) / _e5.a.z), 0.0));
+        off = ((_e89 * _e5.a.y) * _e99);
     }
-    vec2 _e100 = off;
-    q = (p_16 + _e100);
-    float _e106 = _group_0_binding_0_fs.lens.z;
-    if ((_e106 > 1.0)) {
-        vec4 _e112 = _group_0_binding_0_fs.shapes[0];
-        vec4 _e117 = _group_0_binding_0_fs.shapes[0];
-        vec2 lc = (_e112.xy + (0.5 * _e117.zw));
-        vec2 _e122 = q;
-        float _e127 = _group_0_binding_0_fs.lens.z;
-        q = (lc + ((_e122 - lc) / vec2(_e127)));
+    vec2 _e101 = off;
+    q = (p_16 + _e101);
+    float _e107 = _group_0_binding_0_fs.lens.z;
+    if ((_e107 > 1.0)) {
+        vec4 _e113 = _group_0_binding_0_fs.shapes[0];
+        vec4 _e118 = _group_0_binding_0_fs.shapes[0];
+        vec2 lc = (_e113.xy + (0.5 * _e118.zw));
+        vec2 _e123 = q;
+        float _e128 = _group_0_binding_0_fs.lens.z;
+        q = (lc + ((_e123 - lc) / vec2(_e128)));
     }
-    float _e136 = _group_0_binding_0_fs.lens.x;
-    float _e142 = _group_0_binding_0_fs.lens.y;
-    if (((_e136 < 1.0) || (_e142 < 1.0))) {
-        float _e151 = _group_0_binding_0_fs.shapes[0].y;
-        float _e157 = _group_0_binding_0_fs.shapes[0].w;
-        float rt = clamp(((p_16.y - _e151) / max(_e157, 0.001)), 0.0, 1.0);
-        float _e167 = _group_0_binding_0_fs.lens.x;
-        float _e171 = _group_0_binding_0_fs.lens.y;
-        blur_weight = mix(_e167, _e171, smoothstep(0.0, 1.0, rt));
+    float _e137 = _group_0_binding_0_fs.lens.x;
+    float _e143 = _group_0_binding_0_fs.lens.y;
+    if (((_e137 < 1.0) || (_e143 < 1.0))) {
+        float _e152 = _group_0_binding_0_fs.shapes[0].y;
+        float _e158 = _group_0_binding_0_fs.shapes[0].w;
+        float rt = clamp(((p_16.y - _e152) / max(_e158, 0.001)), 0.0, 1.0);
+        float _e168 = _group_0_binding_0_fs.lens.x;
+        float _e172 = _group_0_binding_0_fs.lens.y;
+        blur_weight = mix(_e168, _e172, smoothstep(0.0, 1.0, rt));
     }
-    vec2 _e176 = q;
-    float _e181 = blur_weight;
-    vec3 _e182 = face_at(_e176, _e5.b.z, _e5.b.y, _e181);
-    c = _e182;
+    vec2 _e177 = q;
+    float _e182 = blur_weight;
+    vec3 _e183 = face_at(_e177, _e5.b.z, _e5.b.y, _e182);
+    c = _e183;
     if (((_e5.a.w > 0.0) && (_e5.b.x > 0.0))) {
-        float t_5 = clamp((-(d_9) / _e5.b.x), 0.0, 1.0);
-        float w_3 = ((_e5.a.w * (1.0 - t_5)) * (1.0 - t_5));
-        float _e211 = _group_0_binding_0_fs.bleed.y;
-        float _e216 = _group_0_binding_0_fs.bleed.x;
-        float _e220 = _group_0_binding_0_fs.bleed.y;
-        vec2 _e223 = uv_of(p_16);
-        vec3 _e224 = tap(_group_0_binding_5_fs, _e223);
-        float _e228 = _group_0_binding_0_fs.bleed.z;
-        vec3 _e229 = saturate_encoded(_e224, _e228);
-        vec3 tone = (vec3(_e211) + ((_e216 - _e220) * min(_e229, vec3(1.0))));
-        vec3 _e235 = c;
-        vec3 _e237 = c;
-        float _e242 = _group_0_binding_0_fs.bleed.w;
-        vec3 b_3 = ((_e242 > 0.5) ? min(_e237, tone) : max(_e235, tone));
-        vec3 _e246 = c;
-        c = mix(_e246, b_3, w_3);
+        float t_5 = clamp((-(d_11) / _e5.b.x), 0.0, 1.0);
+        float w_5 = ((_e5.a.w * (1.0 - t_5)) * (1.0 - t_5));
+        float _e212 = _group_0_binding_0_fs.bleed.y;
+        float _e217 = _group_0_binding_0_fs.bleed.x;
+        float _e221 = _group_0_binding_0_fs.bleed.y;
+        vec2 _e224 = uv_of(p_16);
+        vec3 _e225 = tap(_group_0_binding_5_fs, _e224);
+        float _e229 = _group_0_binding_0_fs.bleed.z;
+        vec3 _e230 = saturate_encoded(_e225, _e229);
+        vec3 tone = (vec3(_e212) + ((_e217 - _e221) * min(_e230, vec3(1.0))));
+        vec3 _e236 = c;
+        vec3 _e238 = c;
+        float _e243 = _group_0_binding_0_fs.bleed.w;
+        vec3 b_3 = ((_e243 > 0.5) ? min(_e238, tone) : max(_e236, tone));
+        vec3 _e247 = c;
+        c = mix(_e247, b_3, w_5);
     }
-    float _e251 = _group_0_binding_0_fs.highlight.x;
-    float _e255 = _group_0_binding_0_fs.highlight2_.y;
-    float _e262 = _group_0_binding_0_fs.highlight.w;
-    bool rim_on = (((_e251 * _e255) != 0.0) && (_e262 > 0.0));
-    float _e269 = _group_0_binding_0_fs.glow.x;
-    float _e275 = _group_0_binding_0_fs.glow.y;
-    bool glow_on = ((_e269 > 0.0) && (_e275 > 0.0));
+    float _e252 = _group_0_binding_0_fs.highlight.x;
+    float _e256 = _group_0_binding_0_fs.highlight2_.y;
+    float _e263 = _group_0_binding_0_fs.highlight.w;
+    bool rim_on = (((_e252 * _e256) != 0.0) && (_e263 > 0.0));
+    float _e270 = _group_0_binding_0_fs.glow.x;
+    float _e276 = _group_0_binding_0_fs.glow.y;
+    bool glow_on = ((_e270 > 0.0) && (_e276 > 0.0));
     if (((rim_on || glow_on) && (grad_len_1 > 1e-6))) {
-        float de = (d_9 / max(grad_len_1, MIN_FIELD_SLOPE));
+        float de = (d_11 / max(grad_len_1, MIN_FIELD_SLOPE));
         if (glow_on) {
-            float _e287 = n.y;
-            float _e290 = n.x;
-            float na = atan(-(_e287), _e290);
-            float _e295 = _group_0_binding_0_fs.highlight2_.w;
-            float fill = max(_e295, 0.0);
-            float _e301 = _group_0_binding_0_fs.highlight.y;
-            float _e303 = lobe(na, _e301, 1.0);
-            float _e307 = _group_0_binding_0_fs.highlight.y;
-            float _e311 = lobe(na, (_e307 + PI), 1.0);
-            float ends = (_e303 + (_e311 * fill));
-            float _e317 = _group_0_binding_0_fs.glow.z;
-            float _e322 = _group_0_binding_0_fs.glow.y;
-            float xg = ((de - _e317) / _e322);
-            float _e327 = _group_0_binding_0_fs.glow.x;
-            w = ((_e327 * exp((-(xg) * xg))) * ends);
-            float _e337 = _group_0_binding_0_fs.diffuse.z;
-            float _e343 = _group_0_binding_0_fs.diffuse.x;
-            if (((_e337 > 0.0) && (_e343 > 0.0))) {
-                float _e350 = _group_0_binding_0_fs.glow.z;
-                float _e355 = _group_0_binding_0_fs.glow.y;
-                float _e359 = _group_0_binding_0_fs.diffuse.x;
-                float xd = ((de - _e350) / (_e355 * _e359));
-                float _e365 = _group_0_binding_0_fs.highlight.y;
-                float _e369 = _group_0_binding_0_fs.diffuse.y;
-                float _e370 = lobe(na, _e365, _e369);
-                float _e374 = _group_0_binding_0_fs.highlight.y;
-                float _e380 = _group_0_binding_0_fs.diffuse.y;
-                float _e381 = lobe(na, (_e374 + PI), _e380);
-                float wide = (_e370 + (_e381 * fill));
-                float _e384 = w;
-                float _e388 = _group_0_binding_0_fs.glow.x;
-                float _e392 = _group_0_binding_0_fs.diffuse.z;
-                w = (_e384 + (((_e388 * _e392) * exp((-(xd) * xd))) * wide));
+            float _e288 = n.y;
+            float _e291 = n.x;
+            float na = atan(-(_e288), _e291);
+            float _e296 = _group_0_binding_0_fs.highlight2_.w;
+            float fill = max(_e296, 0.0);
+            float _e302 = _group_0_binding_0_fs.highlight.y;
+            float _e304 = lobe(na, _e302, 1.0);
+            float _e308 = _group_0_binding_0_fs.highlight.y;
+            float _e312 = lobe(na, (_e308 + PI), 1.0);
+            float ends = (_e304 + (_e312 * fill));
+            float _e318 = _group_0_binding_0_fs.glow.z;
+            float _e323 = _group_0_binding_0_fs.glow.y;
+            float xg = ((de - _e318) / _e323);
+            float _e328 = _group_0_binding_0_fs.glow.x;
+            w = ((_e328 * exp((-(xg) * xg))) * ends);
+            float _e338 = _group_0_binding_0_fs.diffuse.z;
+            float _e344 = _group_0_binding_0_fs.diffuse.x;
+            if (((_e338 > 0.0) && (_e344 > 0.0))) {
+                float _e351 = _group_0_binding_0_fs.glow.z;
+                float _e356 = _group_0_binding_0_fs.glow.y;
+                float _e360 = _group_0_binding_0_fs.diffuse.x;
+                float xd = ((de - _e351) / (_e356 * _e360));
+                float _e366 = _group_0_binding_0_fs.highlight.y;
+                float _e370 = _group_0_binding_0_fs.diffuse.y;
+                float _e371 = lobe(na, _e366, _e370);
+                float _e375 = _group_0_binding_0_fs.highlight.y;
+                float _e381 = _group_0_binding_0_fs.diffuse.y;
+                float _e382 = lobe(na, (_e375 + PI), _e381);
+                float wide = (_e371 + (_e382 * fill));
+                float _e385 = w;
+                float _e389 = _group_0_binding_0_fs.glow.x;
+                float _e393 = _group_0_binding_0_fs.diffuse.z;
+                w = (_e385 + (((_e389 * _e393) * exp((-(xd) * xd))) * wide));
             }
-            vec3 _e400 = c;
             vec3 _e401 = c;
-            vec3 _e402 = key_color(_e401);
-            float _e403 = w;
-            c = min((_e400 + (_e402 * _e403)), vec3(1.0));
+            vec3 _e402 = c;
+            vec3 _e403 = key_color(_e402);
+            float _e404 = w;
+            c = min((_e401 + (_e403 * _e404)), vec3(1.0));
         }
         if (rim_on) {
-            float _e412 = _group_0_binding_0_fs.highlight.w;
-            float band_1 = clamp(((_e412 + 0.5) - max(-(de), 0.0)), 0.0, 1.0);
-            float _e425 = _group_0_binding_0_fs.highlight.x;
-            float _e429 = _group_0_binding_0_fs.highlight2_.y;
-            vec3 _e431 = c;
-            float _e434 = rim_brightness(dot(_e431, LUMA));
-            vec2 _e436 = n;
-            float _e437 = rim_direction(_e436);
-            float shift = ((((_e425 * _e429) * _e434) * _e437) * band_1);
-            vec3 _e440 = c;
-            c = clamp((_e440 + vec3(shift)), vec3(0.0), vec3(1.0));
+            float _e413 = _group_0_binding_0_fs.highlight.w;
+            float band_1 = clamp(((_e413 + 0.5) - max(-(de), 0.0)), 0.0, 1.0);
+            float _e426 = _group_0_binding_0_fs.highlight.x;
+            float _e430 = _group_0_binding_0_fs.highlight2_.y;
+            vec3 _e432 = c;
+            float _e435 = rim_brightness(dot(_e432, LUMA));
+            vec2 _e437 = n;
+            float _e438 = rim_direction(_e437);
+            float shift = ((((_e426 * _e430) * _e435) * _e438) * band_1);
+            vec3 _e441 = c;
+            c = clamp((_e441 + vec3(shift)), vec3(0.0), vec3(1.0));
         }
     }
-    float _e451 = _group_0_binding_0_fs.fill.w;
-    float _e457 = _group_0_binding_0_fs.levels.y;
-    if (((_e451 > 0.0) || (_e457 > 0.0))) {
-        float _e464 = _group_0_binding_0_fs.info.x;
-        int vn = int(_e464);
-        float _e470 = _group_0_binding_0_fs.shapes[0].y;
-        top = _e470;
-        float _e476 = _group_0_binding_0_fs.shapes[0].y;
-        float _e481 = _group_0_binding_0_fs.shapes[0].w;
-        bottom = (_e476 + _e481);
+    float _e452 = _group_0_binding_0_fs.fill.w;
+    float _e458 = _group_0_binding_0_fs.levels.y;
+    if (((_e452 > 0.0) || (_e458 > 0.0))) {
+        float _e465 = _group_0_binding_0_fs.info.x;
+        int vn = int(_e465);
+        float _e471 = _group_0_binding_0_fs.shapes[0].y;
+        top = _e471;
+        float _e477 = _group_0_binding_0_fs.shapes[0].y;
+        float _e482 = _group_0_binding_0_fs.shapes[0].w;
+        bottom = (_e477 + _e482);
         bool loop_init_4 = true;
         while(true) {
             if (!loop_init_4) {
-                int _e512 = i_1;
-                i_1 = (_e512 + 1);
+                int _e513 = i_1;
+                i_1 = (_e513 + 1);
             }
             loop_init_4 = false;
-            int _e486 = i_1;
-            if ((_e486 < vn)) {
+            int _e487 = i_1;
+            if ((_e487 < vn)) {
             } else {
                 break;
             }
             {
-                float _e488 = top;
-                int _e491 = i_1;
-                float _e494 = _group_0_binding_0_fs.shapes[_e491].y;
-                top = min(_e488, _e494);
-                float _e496 = bottom;
-                int _e499 = i_1;
-                float _e502 = _group_0_binding_0_fs.shapes[_e499].y;
-                int _e505 = i_1;
-                float _e508 = _group_0_binding_0_fs.shapes[_e505].w;
-                bottom = max(_e496, (_e502 + _e508));
+                float _e489 = top;
+                int _e492 = i_1;
+                float _e495 = _group_0_binding_0_fs.shapes[_e492].y;
+                top = min(_e489, _e495);
+                float _e497 = bottom;
+                int _e500 = i_1;
+                float _e503 = _group_0_binding_0_fs.shapes[_e500].y;
+                int _e506 = i_1;
+                float _e509 = _group_0_binding_0_fs.shapes[_e506].w;
+                bottom = max(_e497, (_e503 + _e509));
             }
         }
-        float _e515 = top;
-        float _e517 = bottom;
-        float _e518 = top;
-        float vt = clamp(((p_16.y - _e515) / max((_e517 - _e518), 0.001)), 0.0, 1.0);
-        vec3 _e526 = c;
-        float _e530 = _group_0_binding_0_fs.fill.w;
-        float _e534 = _group_0_binding_0_fs.levels.y;
-        c = (_e526 * (1.0 - clamp(mix(_e530, _e534, vt), 0.0, 1.0)));
+        float _e516 = top;
+        float _e518 = bottom;
+        float _e519 = top;
+        float vt = clamp(((p_16.y - _e516) / max((_e518 - _e519), 0.001)), 0.0, 1.0);
+        vec3 _e527 = c;
+        float _e531 = _group_0_binding_0_fs.fill.w;
+        float _e535 = _group_0_binding_0_fs.levels.y;
+        c = (_e527 * (1.0 - clamp(mix(_e531, _e535, vt), 0.0, 1.0)));
     }
-    float _e545 = _group_0_binding_0_fs.shadow_color.w;
-    float _e551 = _group_0_binding_0_fs.ring.y;
-    if (((_e545 > 0.0) && (_e551 > 0.0))) {
-        float _e558 = _group_0_binding_0_fs.ring.x;
-        float _e562 = field_d((p_16 + vec2(0.0, _e558)));
-        float _e568 = _group_0_binding_0_fs.ring.z;
-        if ((_e568 > 0.0)) {
-            float _e575 = _group_0_binding_0_fs.ring.z;
-            float _e577 = normal_cdf((-(_e562) / _e575));
-            float _e581 = _group_0_binding_0_fs.ring.y;
-            float _e587 = _group_0_binding_0_fs.ring.z;
-            float _e589 = normal_cdf(((-(_e581) - _e562) / _e587));
-            m = (_e577 - _e589);
+    float _e546 = _group_0_binding_0_fs.shadow_color.w;
+    float _e552 = _group_0_binding_0_fs.ring.y;
+    if (((_e546 > 0.0) && (_e552 > 0.0))) {
+        float _e559 = _group_0_binding_0_fs.ring.x;
+        float _e563 = field_d((p_16 + vec2(0.0, _e559)));
+        float _e569 = _group_0_binding_0_fs.ring.z;
+        if ((_e569 > 0.0)) {
+            float _e576 = _group_0_binding_0_fs.ring.z;
+            float _e578 = normal_cdf((-(_e563) / _e576));
+            float _e582 = _group_0_binding_0_fs.ring.y;
+            float _e588 = _group_0_binding_0_fs.ring.z;
+            float _e590 = normal_cdf(((-(_e582) - _e563) / _e588));
+            m = (_e578 - _e590);
         } else {
-            float _e596 = _group_0_binding_0_fs.ring.y;
-            if (((_e562 <= 0.0) && (_e562 >= -(_e596)))) {
+            float _e597 = _group_0_binding_0_fs.ring.y;
+            if (((_e563 <= 0.0) && (_e563 >= -(_e597)))) {
                 m = 1.0;
             }
         }
-        vec3 _e601 = c;
-        float _e605 = _group_0_binding_0_fs.shadow_color.w;
-        float _e608 = m;
-        c = (_e601 * (1.0 - (min(_e605, 1.0) * max(_e608, 0.0))));
+        vec3 _e602 = c;
+        float _e606 = _group_0_binding_0_fs.shadow_color.w;
+        float _e609 = m;
+        c = (_e602 * (1.0 - (min(_e606, 1.0) * max(_e609, 0.0))));
     }
-    float _e618 = _group_0_binding_0_fs.info.z;
-    float cov = clamp((0.5 - (d_9 / _e618)), 0.0, 1.0);
-    vec2 _e627 = n;
-    vec4 _e628 = outside(p_16, d_9, _e5.b.z, _e627);
-    float under = ((1.0 - cov) * _e628.w);
-    float a_8 = (cov + under);
-    vec3 _e634 = c;
-    rgb = _e634;
-    if ((a_8 > 0.0)) {
-        vec3 _e638 = c;
-        rgb = (((clamp(_e638, vec3(0.0), vec3(1.0)) * cov) + (_e628.xyz * under)) / vec3(a_8));
+    float _e619 = _group_0_binding_0_fs.info.z;
+    float cov = clamp((0.5 - (d_11 / _e619)), 0.0, 1.0);
+    vec2 _e628 = n;
+    vec4 _e629 = outside(p_16, d_11, _e5.b.z, _e628);
+    float under = ((1.0 - cov) * _e629.w);
+    float a_9 = (cov + under);
+    vec3 _e635 = c;
+    rgb = _e635;
+    if ((a_9 > 0.0)) {
+        vec3 _e639 = c;
+        rgb = (((clamp(_e639, vec3(0.0), vec3(1.0)) * cov) + (_e629.xyz * under)) / vec3(a_9));
     }
-    vec3 _e650 = rgb;
-    float _e659 = _group_0_binding_0_fs.info.w;
-    vec4 _e665 = placed(vec4(clamp(_e650, vec3(0.0), vec3(1.0)), ((a_8 * _e659) * _e2)), fin.pos.xy);
-    _fs2p_location0 = _e665;
+    vec3 _e651 = rgb;
+    vec4 _e658 = with_edge(vec4(clamp(_e651, vec3(0.0), vec3(1.0)), a_9), d_11);
+    float _e669 = _group_0_binding_0_fs.info.w;
+    vec4 _e675 = placed(vec4(clamp(_e658.xyz, vec3(0.0), vec3(1.0)), ((_e658.w * _e669) * _e2)), fin.pos.xy);
+    _fs2p_location0 = _e675;
     return;
 }
 

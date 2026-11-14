@@ -12,7 +12,8 @@
     carry glass that moves with it, a blend role that mixes its pixels with the glass behind it,
     a raised elevation that lifts it above its siblings, a pointer-lit rim and a blur that varies
     across it; the glass of several layers may join into one shape that moves as they do, and a
-    layer's own content may blur as it goes. A popup,
+    layer's own content may blur as it goes, and glass may carry a thin line along the outside of
+    its outline that keeps its width as the layer scales. A popup,
     like a panel, may be moved, faded and scaled as a whole. Scrolling and other motion that follows the pointer stay with the client: it moves
     layers with a cheap commit per frame and no repaint.
 
@@ -20,7 +21,7 @@
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="4">
+  <interface name="cupertino_layers_v1" version="5">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -98,7 +99,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="4">
+  <interface name="cupertino_layer_v1" version="5">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it
@@ -148,7 +149,7 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens below 1, or a glass group spacing outside 0 to 64"/>
+      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens below 1, a glass group spacing outside 0 to 64, or a glass edge wider than 4 or of a channel outside 0 to 1"/>
       <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>
@@ -321,8 +322,8 @@
         union of their rounded bounds, as the scene shows them at each frame, whose outlines blend
         into each other over spacing logical points (0 joins them with a hard edge). So a shape that
         grows out of another (a button budding out of a field) comes out of its glass as the layers
-        move, scale and resize. The joined glass takes the style, lens, highlight, blur ramp and
-        elevation of the group's first layer in drawing order and the highest opacity of its
+        move, scale and resize. The joined glass takes the style, lens, highlight, blur ramp,
+        elevation and (from version 5) edge of the group's first layer in drawing order and the highest opacity of its
         layers, and is drawn below the content of that layer. 0, the initial group, keeps the
         layer's glass alone; a layer without glass adds nothing to its group. Posts invalid_value
         for a negative spacing or one above 64.
@@ -353,6 +354,27 @@
       <arg name="property" type="uint" enum="property"/>
       <arg name="duration" type="uint" summary="milliseconds, 1 to 10000"/>
       <arg name="samples" type="array"/>
+    </request>
+
+    <!-- Version 5 additions -->
+
+    <request name="set_glass_edge" since="5">
+      <description summary="draw a line along the outside of the layer's glass">
+        A line width logical points wide just outside the outline of the layer's glass, of the
+        straight colour red, green, blue at alpha, drawn over what lies there and over the glass's
+        own antialiased edge, as a stroke the client would draw around its shape. Its width stays
+        width points whatever the layer's scale, and in a glass group the line runs along the
+        outline of the group's joined shape as the scene shows it at each frame, so it is left out
+        where the shapes join and follows them as they move, scale and resize; the group takes the
+        edge of its first layer in drawing order. The line fades with the glass. 0, the initial
+        width, draws none; a layer without glass draws no edge. Posts invalid_value for a width
+        below 0 or above 4, or a channel outside 0 to 1.
+      </description>
+      <arg name="width" type="fixed"/>
+      <arg name="red" type="fixed"/>
+      <arg name="green" type="fixed"/>
+      <arg name="blue" type="fixed"/>
+      <arg name="alpha" type="fixed"/>
     </request>
 
     <event name="finished">

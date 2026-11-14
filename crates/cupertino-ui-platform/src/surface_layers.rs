@@ -95,6 +95,28 @@ pub struct SurfaceLayerLook {
     pub radius: f64,
     /// Cuts the frame to the layer's shape (its size and corner radius as shown).
     pub masks: bool,
+    /// The line the compositor draws along the outside of the layer's glass, or of its group's joined glass when the
+    /// layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
+    /// ([`Capabilities::surface_layer_edges`](crate::Capabilities::surface_layer_edges)).
+    pub edge: LayerEdge,
+}
+
+/// A line along the outside of a layer's glass: `width` points wide whatever the layer's scale, of the straight colour
+/// `color` (red, green, blue and opacity, 0 to 1), drawn over what lies there and over the glass's own edge as a stroke
+/// around the shape is. In a glass group it follows the outline of the group's joined shape as it is shown, so it is
+/// left out where the shapes join. A width of 0 draws none.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayerEdge {
+    pub width: f64,
+    pub color: [f32; 4],
+}
+
+impl LayerEdge {
+    /// No edge.
+    pub const NONE: LayerEdge = LayerEdge {
+        width: 0.0,
+        color: [0.0; 4],
+    };
 }
 
 #[cfg(test)]

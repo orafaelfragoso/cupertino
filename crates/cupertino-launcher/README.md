@@ -69,7 +69,11 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   again. At each frame the panel draws of its own close, the compositor's layers at the same moment, from the curves it
   sent, are its pixels (`view::tests::frames::layers`, which writes the pairs out with `CUPERTINO_LAUNCHER_MOMENTS`
   set to a directory). While the panel moves, under Reduce Motion and
-  without the capability it draws its own close;
+  without the capability it draws its own close. The compositor can also draw the edge along the glass itself
+  (`view::layers::glass_edge` in a glass layer's look, `SurfaceLayerLook::edge`), the panel's own edge along capsules and
+  straight sides; a scope's open from hidden can be handed over (`view::layers::open_changes`, the layers drawn once at
+  rest and moved on the open's spring from where it starts), off in the process (`Model::hand_scope_opens`) until its
+  look part way is the panel's own;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);

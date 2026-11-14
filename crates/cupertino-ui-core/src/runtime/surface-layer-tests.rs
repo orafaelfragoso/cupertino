@@ -27,6 +27,7 @@ const LOOK: SurfaceLayerLook = SurfaceLayerLook {
     group: (0, 0.0),
     radius: 12.0,
     masks: true,
+    edge: cupertino_ui_platform::LayerEdge::NONE,
 };
 
 /// The colours of the window's block and of the block inside the marked panel.

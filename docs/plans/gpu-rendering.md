@@ -822,6 +822,27 @@ Gate:
             samples while it fades, and the server sees the blur reach 7.96 of its 8 points with no window buffer
             (`a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer`).
             Every value the launcher draws can now be carried exactly, on the compositor's clock.
+      - [x] The edge drawn by the compositor (version 5, `set_glass_edge(width, red, green, blue, alpha)`): a line up
+            to 4 points wide just outside a layer's glass, or along the outline of its glass group's joined shape with
+            the group's first layer's edge, drawn by the glass composite over what lies there and over the glass's own
+            antialiased edge as a stroke is, at the output's scale so its width stays as the layer scales, and left out
+            where the group's shapes join (`cupertino_glass::glass::GlassEdge`, stage 10 of the glass; the toolkit's
+            `SurfaceLayerLook::edge` under `Capabilities::surface_layer_edges`). On the server it runs two device
+            pixels wide at scale 2 along a capsule's top, keeps them scaled by 1.5, and runs round a button budding out
+            of a field's end but not inside either shape
+            (`a_glass_edge_runs_outside_the_group_s_joined_outline_at_its_width_whatever_the_scale`); the glass's model
+            covers each pixel by the band's overlap with it and lays it over the glass's edge pixel
+            (`the_edge_is_a_stroke_of_its_width_outside_the_outline_over_the_glass_s_own_edge`,
+            `a_joined_container_s_edge_follows_the_union_and_not_each_shape`). Against the launcher's own edge at rest
+            (`layers::glass_edge` in the glass layers' looks), at 1, 1.5 and 2 in both appearances: within 4 of 255
+            along the search field and its mode button (capsules) and along every straight side
+            (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). At a scope's corners it is
+            not: the glass's corners are continuous, and the launcher strokes its edge along circular arcs that stand
+            up to 0.57 points off the glass where each corner starts to curve, so there the two part by up to the
+            line's own opacity (32 of 255 at 1 and 52 at 1.5 in the light appearance, 109 and 178 in the dark, 67 and
+            230 at 2). OWNER DECISION: a scope's edge following its glass's corner is a change of the launcher's look
+            at its corners (and of the goldens), so the scopes' rest and close keep the edge layer, and the compositor's
+            edge is used where the outline changes shape while the shapes are capsules.
       - [x] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
             the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
             (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it. The panel at rest is
@@ -855,12 +876,25 @@ Gate:
             unscaled, its fade on the content's curve; the files scope's width dip as samples. Not reached in this
             run; split by what each needs:
         - [ ] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
-              only the scale moves (1.1 to 1 on the open spring, both ways), so the glass's place and size are that
-              spring per property and its corner the radius times the scale where it is under 1 (samples); the
-              content is unscaled at the enclosure's opacity on the linear 0.1 s fade; the edge scales about the
-              pivot as in the close. The edge layer's scale also widens its stroke (by a tenth at the first frame),
-              where the drawing keeps its 0.5 pt: the drawing would stroke the edge at the enclosure's scale while it
-              opens (a change of the open's own pixels, named), or the edge needs drawing by the compositor (below).
+              only the scale moves (1.1 to 1 on the open spring, both ways), and every value the open draws is affine
+              in that scale, so each property is the open spring from where the first frame has it: the glass's place,
+              size and corner, the edge layer's scale about the pivot, the content's place (it keeps its size), all
+              faded in on the linear 0.1 s (`layers::open_changes`, `Model::hand_scope_opens`). The edge stays the
+              edge layer, scaled, not the compositor's: a scope's corners are continuous, and the compositor's edge
+              would follow them where the panel strokes circular arcs (above), so the scaled layer is the nearer of
+              the two (its stroke a tenth wider at the first frame). Done: the panel draws its layers once, at rest,
+              in the open's first frame (1 window frame and 3 layer frames), then no frame of its window or a layer
+              and asks for none until the open is over, the browser's scroll indicator kept meanwhile
+              (`a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame`, the browser and the files
+              scope); under Reduce Motion nothing is handed over
+              (`under_reduce_motion_a_scope_s_open_is_the_panel_s_own`). At the same moments its glass is the
+              panel's own (rect, corner, opacity) at every frame and its first frame is the panel's pixels within 0,
+              but part way the pixels differ by up to 255 of 255 in both scopes and appearances
+              (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, run with
+              `CUPERTINO_LAUNCHER_MOMENTS` for the pairs), not yet located (the content's layer moved onto whole
+              device pixels where the panel lays its grid and text at fractional places is the likely part). So the
+              handover is off in the process (`hand_scope_opens` false; the tests turn it on) until it is. Left: locate
+              and close the mid-way difference, then turn it on, and the real process's count against the server.
         - [ ] The fold and the unfold: the header switches part way (the query row's symbol and placeholder), a frame
               of the content's layer, and the content's body fades on its own curve while the query row does not, so
               the row and the body are layers of their own; the shape changes both ways with its corner held to half

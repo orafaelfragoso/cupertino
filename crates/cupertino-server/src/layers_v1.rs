@@ -55,7 +55,7 @@ pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
 /// The version of the global this server offers.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
 /// Widest blend between the joined shapes of a glass group, in logical points.
@@ -64,6 +64,10 @@ pub const MAX_GROUP_SPACING: f64 = 64.0;
 pub const CONTENT_BLUR_VERSION: u32 = 4;
 /// The widest blur of a layer's content: the standard deviation of its Gaussian, in the layer's logical points.
 pub const MAX_CONTENT_BLUR: f64 = 64.0;
+/// The version from which a layer's glass carries an edge (`set_glass_edge`).
+pub const GLASS_EDGE_VERSION: u32 = 5;
+/// The widest edge along a layer's glass, in logical points.
+pub const MAX_GLASS_EDGE: f64 = 4.0;
 
 /// The number of animatable properties ([`Property`]).
 pub const PROPERTIES: usize = 8;
@@ -157,6 +161,15 @@ enum Op {
     Masks(bool),
     Placeholder([f32; 4]),
     Group(u32, f64),
+    Edge(GlassEdge),
+}
+
+/// The line along the outside of a layer's glass (`set_glass_edge`): its width in logical points, constant whatever
+/// the layer's scale, and its straight colour and opacity; a width of 0 draws none.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlassEdge {
+    pub width: f64,
+    pub color: [f32; 4],
 }
 
 /// The layer requests queued on a parent surface, by layer serial, in request order.
@@ -221,6 +234,8 @@ pub struct LayerModel {
     /// The glass group (0 for none) and how far its shapes blend into each other, in points.
     pub group: u32,
     pub spacing: f64,
+    /// The line along the outside of its glass.
+    pub edge: GlassEdge,
 }
 
 impl LayerModel {
@@ -247,6 +262,7 @@ impl LayerModel {
             placeholder: [0.0; 4],
             group: 0,
             spacing: 0.0,
+            edge: GlassEdge::default(),
         }
     }
 
@@ -372,6 +388,7 @@ impl LayerModel {
             Op::Masks(m) => self.masks = m,
             Op::Placeholder(c) => self.placeholder = c,
             Op::Group(group, spacing) => (self.group, self.spacing) = (group, spacing),
+            Op::Edge(edge) => self.edge = edge,
         }
     }
 }
@@ -505,6 +522,8 @@ pub struct LayerDraw {
     /// The glass group, 0 for the layer's glass alone, and how far the group's shapes blend, in points.
     pub group: u32,
     pub spacing: f64,
+    /// The line along the outside of its glass, or of its group's joined glass when it is the group's first layer.
+    pub edge: GlassEdge,
     /// The standard deviation of the blur of the layer's content, in the layer's points; 0 draws it sharp.
     pub content_blur: f64,
 }
@@ -538,6 +557,7 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
                     placeholder: l.placeholder,
                     group: l.group,
                     spacing: l.spacing,
+                    edge: l.edge,
                     content_blur: l.value(CONTENT_BLUR, now).clamp(0.0, MAX_CONTENT_BLUR),
                 }
             })
@@ -840,7 +860,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 }
             }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 4 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 5 has no other request"),
         }
     }
 }
@@ -1085,7 +1105,26 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 }
                 data.queue(Op::Group(group, spacing));
             }
-            _ => unreachable!("cupertino_layer_v1 version 4 has no other request"),
+            R::SetGlassEdge {
+                width,
+                red,
+                green,
+                blue,
+                alpha,
+            } => {
+                if !(0.0..=MAX_GLASS_EDGE).contains(&width) {
+                    return bad_value("a glass edge wider than 4 or below 0");
+                }
+                let c = [red, green, blue, alpha];
+                if c.iter().any(|v| !(0.0..=1.0).contains(v)) {
+                    return bad_value("a glass edge channel outside 0 to 1");
+                }
+                data.queue(Op::Edge(GlassEdge {
+                    width,
+                    color: c.map(|v| v as f32),
+                }));
+            }
+            _ => unreachable!("cupertino_layer_v1 version 5 has no other request"),
         }
     }
 

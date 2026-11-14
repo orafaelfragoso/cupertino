@@ -383,7 +383,7 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=4, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=5, ()).unwrap();
             let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let ls = shell.get_layer_surface(
@@ -1031,6 +1031,126 @@ fn a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move() {
     );
     // a spacing past the most the server blends is refused
     client.send(|c, _| c.l(0).set_glass_group(1, 65.0));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
+    );
+}
+
+/// The channel of `shot` at the parent's point `(x, y)` plus `(dx, dy)` device pixels, at scale 2.
+fn at2(shot: &image::RgbaImage, (x, y): (f64, f64), (dx, dy): (i32, i32)) -> [u8; 4] {
+    let px = ((f64::from(MARGIN.0) + x) * 2.0) as i32 + dx;
+    let py = ((f64::from(MARGIN.1) + y) * 2.0) as i32 + dy;
+    shot.get_pixel(px as u32, py as u32).0
+}
+
+fn black(c: [u8; 4]) -> bool {
+    c[..3].iter().all(|&v| v <= 3)
+}
+
+#[test]
+fn a_glass_edge_runs_outside_the_group_s_joined_outline_at_its_width_whatever_the_scale() {
+    let Some(mut h) = Harness::new(2.0, false) else {
+        return;
+    };
+    let client = TestClient::spawn(h.socket_path(), grey);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    // a capsule of glass with an edge a point wide, black
+    client.send(|c, qh| {
+        let i = c.layer(qh, (0, 0), &red);
+        let l = c.l(i);
+        l.set_value(Property::X, 100.0);
+        l.set_value(Property::Y, 100.0);
+        l.set_value(Property::Width, 200.0);
+        l.set_value(Property::Height, 56.0);
+        l.set_value(Property::CornerRadius, 28.0);
+        l.set_glass(0, 1.0);
+        l.set_glass_edge(1.0, 0.0, 0.0, 0.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the edge", |h| {
+        h.layers().first().is_some_and(|l| l.edge.width == 1.0)
+    });
+    assert_eq!(h.layers()[0].edge.color, [0.0, 0.0, 0.0, 1.0]);
+    let shot = h.screenshot("edge");
+    // along the top at the middle: the two device pixels above the outline are the line, the glass below it and the
+    // parent above it are not
+    let top = (200.0, 100.0);
+    for dy in [-2, -1] {
+        assert!(
+            black(at2(&shot, top, (0, dy))),
+            "{dy}: {:?}",
+            at2(&shot, top, (0, dy))
+        );
+    }
+    for dy in [-4, -3, 0, 1] {
+        assert!(
+            !black(at2(&shot, top, (0, dy))),
+            "{dy}: {:?}",
+            at2(&shot, top, (0, dy))
+        );
+    }
+    // scaled by 1.5 about its centre the outline moves out to 86 points and the line keeps its two pixels
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Scale, 1.5);
+        c.parent.commit();
+    });
+    h.wait_until("the scale", |h| h.layers()[0].scale == 1.5);
+    let scaled = h.screenshot("edge-scaled");
+    let top = (200.0, 86.0);
+    for dy in [-2, -1] {
+        assert!(
+            black(at2(&scaled, top, (0, dy))),
+            "scaled {dy}: {:?}",
+            at2(&scaled, top, (0, dy))
+        );
+    }
+    for dy in [-4, -3, 0, 1] {
+        assert!(
+            !black(at2(&scaled, top, (0, dy))),
+            "scaled {dy}: {:?}",
+            at2(&scaled, top, (0, dy))
+        );
+    }
+    // a button budding out of the field's right end, in one glass group: the line follows the joined outline, left
+    // out where each shape's own outline lies inside the other, and the group draws the edge of its first layer
+    client.send(|c, qh| {
+        c.l(0).set_value(Property::Scale, 1.0);
+        let i = c.layer(qh, (0, 0), &red);
+        let l = c.l(i);
+        l.set_value(Property::X, 280.0);
+        l.set_value(Property::Y, 100.0);
+        l.set_value(Property::Width, 56.0);
+        l.set_value(Property::Height, 56.0);
+        l.set_value(Property::CornerRadius, 28.0);
+        l.set_glass(0, 1.0);
+        c.l(0).set_glass_group(7, 8.0);
+        c.l(1).set_glass_group(7, 8.0);
+        c.parent.commit();
+    });
+    h.wait_until("the group", |h| {
+        h.layers().len() == 2
+            && h.layers().iter().all(|l| l.group == 7)
+            && h.layers()[0].scale == 1.0
+    });
+    let joined = h.screenshot("edge-joined");
+    let middle = 128.0;
+    for (what, x) in [
+        ("the field's end inside the button", 300.0),
+        ("the button's side inside the field", 280.0),
+    ] {
+        for dx in [-2, -1, 0, 1] {
+            let c = at2(&joined, (x, middle), (dx, 0));
+            assert!(!black(c), "{what} {dx}: {c:?}");
+        }
+    }
+    for dx in [0, 1] {
+        let c = at2(&joined, (336.0, middle), (dx, 0));
+        assert!(black(c), "the button's outer side {dx}: {c:?}");
+    }
+    // an edge wider than the server draws is refused
+    client.send(|c, _| c.l(0).set_glass_edge(4.5, 0.0, 0.0, 0.0, 1.0));
     h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
     assert_eq!(
         client.heard(|e| e.error.clone()).unwrap().1,

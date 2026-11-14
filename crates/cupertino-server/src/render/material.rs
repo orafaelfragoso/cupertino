@@ -156,9 +156,17 @@ struct CachedBackdrop {
     key: BackdropKey,
     generation: u64,
     target: Target,
+    /// The last level of the pyramid the backdrop was filtered from, when it was filtered.
+    pyramid: Option<Target>,
     /// The part of the framebuffer the backdrop was captured and blurred from.
     crop: Crop,
     last_used: u64,
+}
+
+impl CachedBackdrop {
+    fn targets(self) -> impl Iterator<Item = Target> {
+        std::iter::once(self.target).chain(self.pyramid)
+    }
 }
 
 /// A rectangle of the framebuffer, in its pixels (row 0 where the framebuffer has it).
@@ -206,11 +214,39 @@ fn backdrop_crop(
         return whole;
     }
     let margin = (radius as i32 + 2) * factor;
-    let (x0, y0) = (area.loc.x - margin, area.loc.y - margin);
-    let (x1, y1) = (
-        area.loc.x + area.size.w + margin,
-        area.loc.y + area.size.h + margin,
+    let grown = Rectangle::new(
+        (area.loc.x - margin, area.loc.y - margin).into(),
+        (area.size.w + 2 * margin, area.size.h + 2 * margin).into(),
     );
+    let Some((min_x, min_y, max_x, max_y)) = framebuffer_bounds(size, grown, projection) else {
+        return whole;
+    };
+    let down = |v: f32, max: i32| ((v.floor() as i32).clamp(0, max) / factor) * factor;
+    let up = |v: f32, max: i32| {
+        (((v.ceil() as i32).clamp(0, max) + factor - 1) / factor * factor).min(max)
+    };
+    let (cx0, cy0) = (down(min_x, size.0), down(min_y, size.1));
+    let (cx1, cy1) = (up(max_x, size.0), up(max_y, size.1));
+    if cx1 <= cx0 || cy1 <= cy0 {
+        return whole;
+    }
+    Crop {
+        x: cx0,
+        y: cy0,
+        w: cx1 - cx0,
+        h: cy1 - cy0,
+    }
+}
+
+/// Where `rect` (output pixels) lands in a `size` framebuffer through `projection`: its least and greatest x and y in
+/// framebuffer pixels, unclamped; none when the projection sends it nowhere.
+fn framebuffer_bounds(
+    size: (i32, i32),
+    rect: Rectangle<i32, Physical>,
+    projection: &[f32; 9],
+) -> Option<(f32, f32, f32, f32)> {
+    let (x0, y0) = (rect.loc.x, rect.loc.y);
+    let (x1, y1) = (rect.loc.x + rect.size.w, rect.loc.y + rect.size.h);
     // the corners in framebuffer pixels, through the projection the composite draws with
     let m = projection;
     let corner = |x: i32, y: i32| {
@@ -238,26 +274,177 @@ fn backdrop_crop(
         .iter()
         .map(|c| c.1)
         .fold(f32::NEG_INFINITY, f32::max);
-    if !(min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite()) {
-        return whole;
+    (min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite())
+        .then_some((min_x, min_y, max_x, max_y))
+}
+
+/// A rectangle of texels of a blur's last level, in the framebuffer's texel grid: from `x0`, `y0` up to, not
+/// including, `x1`, `y1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Texels {
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+}
+
+impl Texels {
+    /// The texels of `crop`, whose edges lie on the grid of `factor` pixels.
+    fn of(crop: Crop, factor: i32) -> Self {
+        Texels {
+            x0: crop.x / factor,
+            y0: crop.y / factor,
+            x1: (crop.x + crop.w) / factor,
+            y1: (crop.y + crop.h) / factor,
+        }
     }
-    let down = |v: f32, max: i32| ((v.floor() as i32).clamp(0, max) / factor) * factor;
-    let up = |v: f32, max: i32| {
-        (((v.ceil() as i32).clamp(0, max) + factor - 1) / factor * factor).min(max)
-    };
-    let (cx0, cy0) = (down(min_x, size.0), down(min_y, size.1));
-    let (cx1, cy1) = (up(max_x, size.0), up(max_y, size.1));
-    if cx1 <= cx0 || cy1 <= cy0 {
-        return whole;
+
+    fn is_empty(&self) -> bool {
+        self.x1 <= self.x0 || self.y1 <= self.y0
     }
-    Crop {
-        x: cx0,
-        y: cy0,
-        w: cx1 - cx0,
-        h: cy1 - cy0,
+
+    fn count(&self) -> i64 {
+        if self.is_empty() {
+            0
+        } else {
+            i64::from(self.x1 - self.x0) * i64::from(self.y1 - self.y0)
+        }
+    }
+
+    fn meet(&self, o: &Texels) -> Option<Texels> {
+        let t = Texels {
+            x0: self.x0.max(o.x0),
+            y0: self.y0.max(o.y0),
+            x1: self.x1.min(o.x1),
+            y1: self.y1.min(o.y1),
+        };
+        (!t.is_empty()).then_some(t)
+    }
+
+    fn join(&self, o: &Texels) -> Texels {
+        Texels {
+            x0: self.x0.min(o.x0),
+            y0: self.y0.min(o.y0),
+            x1: self.x1.max(o.x1),
+            y1: self.y1.max(o.y1),
+        }
+    }
+
+    /// These texels but those of `o`: up to four rectangles, the rows above and below `o` and the columns beside it.
+    fn minus(&self, o: &Texels) -> Vec<Texels> {
+        let Some(o) = self.meet(o) else {
+            return vec![*self];
+        };
+        [
+            Texels { y1: o.y0, ..*self },
+            Texels { y0: o.y1, ..*self },
+            Texels {
+                x1: o.x0,
+                y0: o.y0,
+                y1: o.y1,
+                ..*self
+            },
+            Texels {
+                x0: o.x1,
+                y0: o.y0,
+                y1: o.y1,
+                ..*self
+            },
+        ]
+        .into_iter()
+        .filter(|t| !t.is_empty())
+        .collect()
+    }
+
+    /// The part of the framebuffer (pixels) these texels are made from.
+    fn crop(&self, factor: i32) -> Crop {
+        Crop {
+            x: self.x0 * factor,
+            y: self.y0 * factor,
+            w: (self.x1 - self.x0) * factor,
+            h: (self.y1 - self.y0) * factor,
+        }
     }
 }
 
+/// How a backdrop's pyramid is brought up to date: which of its last level's texels it keeps and which are made again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Reblur {
+    /// The texels taken from the pyramid as it was.
+    kept: Option<Texels>,
+    /// The texels made again, each part from its own pixels of the framebuffer.
+    parts: Vec<Texels>,
+}
+
+/// The most parts a pyramid is made again in: each runs the capture and the pyramid's passes.
+const REBLUR_PARTS: usize = 8;
+
+/// `parts` with those that overlap or lie close joined, while the joined rectangle holds little more than the two, and
+/// all of them joined in one when they stay many.
+fn merged(mut parts: Vec<Texels>) -> Vec<Texels> {
+    'joining: loop {
+        for i in 0..parts.len() {
+            for j in i + 1..parts.len() {
+                let join = parts[i].join(&parts[j]);
+                if join.count() * 4 <= (parts[i].count() + parts[j].count()) * 5 {
+                    parts[i] = join;
+                    parts.swap_remove(j);
+                    continue 'joining;
+                }
+            }
+        }
+        break;
+    }
+    if parts.len() > REBLUR_PARTS {
+        let all = parts.iter().copied().reduce(|a, b| a.join(&b));
+        return all.into_iter().collect();
+    }
+    parts
+}
+
+/// How to bring the pyramid of `old` (framebuffer pixels) up to date for `new`, in a `size` framebuffer halved
+/// `levels` times (none: a copy of the pixels, for a recipe of colour operations alone), given the rectangles where
+/// the framebuffer changed since (`changed`, framebuffer pixels: least and greatest x and y). Each texel of the last
+/// level is the mean of the pixels of its own square, so a texel of `new`
+/// is kept when `old` had it and no change touches its square, and made again from its square otherwise; the
+/// Gaussian then runs over the whole level, as it would after a whole capture. None when the parts made again cover
+/// most of `new`, which is then captured whole.
+fn plan_reblur(
+    size: (i32, i32),
+    levels: usize,
+    old: Crop,
+    new: Crop,
+    changed: &[(f32, f32, f32, f32)],
+) -> Option<Reblur> {
+    let factor = 1i32 << levels.min(16);
+    if size.0 % factor != 0 || size.1 % factor != 0 {
+        return None;
+    }
+    let (new_t, old_t) = (Texels::of(new, factor), Texels::of(old, factor));
+    let kept = old_t.meet(&new_t);
+    let mut parts = match kept {
+        Some(k) => new_t.minus(&k),
+        None => vec![new_t],
+    };
+    if let Some(k) = kept {
+        // the squares a change touches
+        let touched: Vec<Texels> = changed
+            .iter()
+            .filter_map(|&(x0, y0, x1, y1)| {
+                Texels {
+                    x0: (x0.floor() as i32).div_euclid(factor),
+                    y0: (y0.floor() as i32).div_euclid(factor),
+                    x1: (x1.ceil() as i32 + factor - 1).div_euclid(factor),
+                    y1: (y1.ceil() as i32 + factor - 1).div_euclid(factor),
+                }
+                .meet(&k)
+            })
+            .collect();
+        parts.extend(merged(touched));
+    }
+    let made: i64 = parts.iter().map(Texels::count).sum();
+    (made * 4 < new_t.count() * 3).then_some(Reblur { kept, parts })
+}
 /// Counters for tests and diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MaterialStats {
@@ -269,6 +456,10 @@ pub struct MaterialStats {
     pub allocations: u64,
     /// Passes of a backdrop blur: the pyramid's downsamples and the Gaussian's two directions.
     pub blur_passes: u64,
+    /// Texels the backdrop blurs wrote: the capture's first level, the pyramid's and the Gaussian's two directions.
+    pub blur_texels: u64,
+    /// Backdrops brought up to date by blurring again only where they changed or newly reach.
+    pub reblurs: u64,
 }
 
 /// GL objects of the material pipeline. Created through [`MaterialGl::new`] on a renderer.
@@ -482,6 +673,9 @@ pub struct DrawParams<'a> {
     pub tint: [f32; 3],
     /// Rectangles (absolute output pixels) to draw.
     pub damage: &'a [Rectangle<i32, Physical>],
+    /// A generation the backdrop had before and the rectangles (output pixels) where it changed since: a backdrop
+    /// kept from then is blurred again only around them.
+    pub changed: Option<(u64, &'a [Rectangle<i32, Physical>])>,
 }
 
 impl MaterialGl {
@@ -733,7 +927,148 @@ impl MaterialGl {
             .is_some_and(|p| program == p.downsample || program == p.blur)
         {
             self.stats.blur_passes += 1;
+            self.stats.blur_texels += (dst.size.0 as u64) * (dst.size.1 as u64);
         }
+    }
+
+    /// The last level of the pyramid of the `crop` part of the bound framebuffer (`src_fbo`) for `p`'s recipe: the
+    /// first level a linear blit (a 2x2 box average at half size), each next one a 2x2 box average of the one before.
+    unsafe fn pyramid(
+        &mut self,
+        gl: &ffi::Gles2,
+        p: &DrawParams<'_>,
+        src_fbo: GLuint,
+        crop: Crop,
+    ) -> Option<Target> {
+        let (w, h) = p.output_px;
+        let mut plan: BlurPlan = self.plan(p);
+        if crop != Crop::whole((w, h)) {
+            // the same halvings of the part: its edges lie on the grid of the last level
+            for (i, level) in plan.levels.iter_mut().enumerate() {
+                *level = ((crop.w >> (i + 1)) as u32, (crop.h >> (i + 1)) as u32);
+            }
+        }
+        gl.Disable(ffi::SCISSOR_TEST);
+        gl.Disable(ffi::BLEND);
+        let first = plan
+            .levels
+            .first()
+            .map(|l| (l.0 as i32, l.1 as i32))
+            .unwrap_or((crop.w, crop.h));
+        let mut cur = self.take_target(gl, first)?;
+        gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
+        gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, cur.fbo);
+        let filter = if plan.levels.is_empty() {
+            ffi::NEAREST
+        } else {
+            ffi::LINEAR
+        };
+        gl.BlitFramebuffer(
+            crop.x,
+            crop.y,
+            crop.x + crop.w,
+            crop.y + crop.h,
+            0,
+            0,
+            first.0,
+            first.1,
+            ffi::COLOR_BUFFER_BIT,
+            filter,
+        );
+        self.stats.passes += 1;
+        self.stats.blur_texels += (first.0 as u64) * (first.1 as u64);
+        let (ds, ds_loc) = {
+            let progs = self.progs.as_ref()?;
+            (progs.downsample, progs.src_loc[0])
+        };
+        for lvl in plan.levels.iter().skip(1) {
+            let size = (lvl.0 as i32, lvl.1 as i32);
+            let next = self.take_target(gl, size)?;
+            let params = PassParams::new(
+                (cur.size.0 as u32, cur.size.1 as u32),
+                (size.0 as u32, size.1 as u32),
+            );
+            self.pass(gl, ds, ds_loc, cur.tex, &next, &params);
+            self.free.push(cur);
+            cur = next;
+        }
+        Some(cur)
+    }
+
+    /// Whether `p`'s recipe filters its pyramid (a Gaussian or colour operations) or shows it as it is.
+    fn filters(&self, p: &DrawParams<'_>) -> bool {
+        let ops = p.recipe.backdrop.as_ref().is_some_and(|b| !b.2.is_empty());
+        ops || self.plan(p).weights.len() > 1
+    }
+
+    /// `pyramid` filtered into a new target for `p`'s recipe: the separable Gaussian, then the colour operations. The
+    /// pyramid is left as it is. Only for a recipe that [`filters`](Self::filters).
+    unsafe fn filtered(
+        &mut self,
+        gl: &ffi::Gles2,
+        p: &DrawParams<'_>,
+        pyramid: &Target,
+    ) -> Option<Target> {
+        let plan = self.plan(p);
+        let ops = p
+            .recipe
+            .backdrop
+            .as_ref()
+            .map_or(&[][..], |b| b.2.as_slice());
+        let (bl, bl_loc, co, co_loc) = {
+            let progs = self.progs.as_ref()?;
+            (progs.blur, progs.src_loc[1], progs.color, progs.src_loc[2])
+        };
+        let size = pyramid.size;
+        let dims = (size.0 as u32, size.1 as u32);
+        let mut cur: Option<Target> = None;
+        gl.Disable(ffi::SCISSOR_TEST);
+        gl.Disable(ffi::BLEND);
+        // separable Gaussian
+        if plan.weights.len() > 1 {
+            let mut params = PassParams::new(dims, dims);
+            params.set_weights(&plan.weights);
+            let radius = (plan.weights.len() - 1) as i32;
+            let tmp = self.take_target(gl, size)?;
+            let out = self.take_target(gl, size)?;
+            params.dir_radius = [1, 0, radius, 0];
+            self.pass(gl, bl, bl_loc, pyramid.tex, &tmp, &params);
+            params.dir_radius = [0, 1, radius, 0];
+            self.pass(gl, bl, bl_loc, tmp.tex, &out, &params);
+            self.free.push(tmp);
+            cur = Some(out);
+        }
+        // colour operations
+        if !ops.is_empty() {
+            let mut params = PassParams::new(dims, dims);
+            params.set_ops(ops);
+            let out = self.take_target(gl, size)?;
+            let src = cur.as_ref().map_or(pyramid.tex, |c| c.tex);
+            self.pass(gl, co, co_loc, src, &out, &params);
+            if let Some(c) = cur {
+                self.free.push(c);
+            }
+            cur = Some(out);
+        }
+        cur
+    }
+
+    /// Process the backdrop for `recipe`: capture the `crop` part of the bound framebuffer and filter it. The
+    /// backdrop, and the pyramid it was filtered from when it was ([`filters`](Self::filters)), kept so a later
+    /// change makes again only the part of it that changed.
+    unsafe fn process_backdrop(
+        &mut self,
+        gl: &ffi::Gles2,
+        p: &DrawParams<'_>,
+        src_fbo: GLuint,
+        crop: Crop,
+    ) -> Option<(Target, Option<Target>)> {
+        let pyramid = self.pyramid(gl, p, src_fbo, crop)?;
+        if !self.filters(p) {
+            return Some((pyramid, None));
+        }
+        let out = self.filtered(gl, p, &pyramid)?;
+        Some((out, Some(pyramid)))
     }
 
     /// The blur of `p`'s recipe over its whole framebuffer.
@@ -764,105 +1099,118 @@ impl MaterialGl {
         )
     }
 
-    /// Process the backdrop for `recipe`: capture the `crop` part of the bound framebuffer and filter it.
-    unsafe fn process_backdrop(
+    /// How the backdrop `old` kept for `p`'s key is brought up to date for `crop`: when its pyramid was made from the
+    /// framebuffer as it is now, or as it was at the generation `p` knows the changes since, its pyramid is made again
+    /// only where those changes or `crop` reach past it. None to make it whole.
+    fn reblur_plan(&self, p: &DrawParams<'_>, old: &CachedBackdrop, crop: Crop) -> Option<Reblur> {
+        // a backdrop that is not filtered is its own pyramid
+        if old.pyramid.is_none() && self.filters(p) {
+            return None;
+        }
+        let changed: Vec<(f32, f32, f32, f32)> = if old.generation == p.generation {
+            Vec::new()
+        } else {
+            let (_, rects) = p.changed.filter(|(since, _)| *since == old.generation)?;
+            rects
+                .iter()
+                .map(|r| framebuffer_bounds(p.output_px, *r, &p.projection))
+                .collect::<Option<_>>()?
+        };
+        plan_reblur(
+            p.output_px,
+            self.plan(p).levels.len(),
+            old.crop,
+            crop,
+            &changed,
+        )
+    }
+
+    /// One texel rectangle `at` of `from` (whose first texel is `from_at`) into `to` (first texel `to_at`).
+    unsafe fn copy_texels(
+        &mut self,
+        gl: &ffi::Gles2,
+        from: &Target,
+        from_at: (i32, i32),
+        to: &Target,
+        to_at: (i32, i32),
+        at: Texels,
+    ) {
+        gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, from.fbo);
+        gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, to.fbo);
+        let (w, h) = (at.x1 - at.x0, at.y1 - at.y0);
+        let (sx, sy) = (at.x0 - from_at.0, at.y0 - from_at.1);
+        let (dx, dy) = (at.x0 - to_at.0, at.y0 - to_at.1);
+        gl.BlitFramebuffer(
+            sx,
+            sy,
+            sx + w,
+            sy + h,
+            dx,
+            dy,
+            dx + w,
+            dy + h,
+            ffi::COLOR_BUFFER_BIT,
+            ffi::NEAREST,
+        );
+        self.stats.passes += 1;
+    }
+
+    /// The backdrop for `crop` made from `old`'s: its pyramid's texels `plan` keeps copied, each of its parts made
+    /// again from its own pixels of the framebuffer, and the whole filtered as after a whole capture (when the recipe
+    /// filters it; otherwise the pyramid is the backdrop).
+    unsafe fn reblur(
         &mut self,
         gl: &ffi::Gles2,
         p: &DrawParams<'_>,
         src_fbo: GLuint,
+        old: CachedBackdrop,
         crop: Crop,
-    ) -> Option<Target> {
-        let (w, h) = p.output_px;
-        let ops = p
-            .recipe
-            .backdrop
-            .as_ref()
-            .map_or(&[][..], |b| b.2.as_slice());
-        let mut plan: BlurPlan = self.plan(p);
-        if crop != Crop::whole((w, h)) {
-            // the same halvings of the part: its edges lie on the grid of the last level
-            for (i, level) in plan.levels.iter_mut().enumerate() {
-                *level = ((crop.w >> (i + 1)) as u32, (crop.h >> (i + 1)) as u32);
+        plan: &Reblur,
+    ) -> Option<(Target, Option<Target>)> {
+        let factor = 1i32 << self.plan(p).levels.len().min(16);
+        let (new_t, old_t) = (Texels::of(crop, factor), Texels::of(old.crop, factor));
+        let at = (new_t.x0, new_t.y0);
+        let old_pyramid = match old.pyramid {
+            Some(pyramid) => {
+                self.free.push(old.target);
+                pyramid
             }
-        }
+            None => old.target,
+        };
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
-        // capture: the first level is a linear blit (a 2x2 box average at half size)
-        let first = plan
-            .levels
-            .first()
-            .map(|l| (l.0 as i32, l.1 as i32))
-            .unwrap_or((crop.w, crop.h));
-        let mut cur = self.take_target(gl, first)?;
-        gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
-        gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, cur.fbo);
-        let filter = if plan.levels.is_empty() {
-            ffi::NEAREST
+        let pyramid = if old.crop == crop {
+            old_pyramid
         } else {
-            ffi::LINEAR
+            let Some(pyramid) = self.take_target(gl, (new_t.x1 - new_t.x0, new_t.y1 - new_t.y0))
+            else {
+                self.free.push(old_pyramid);
+                return None;
+            };
+            if let Some(kept) = plan.kept {
+                self.copy_texels(gl, &old_pyramid, (old_t.x0, old_t.y0), &pyramid, at, kept);
+            }
+            self.free.push(old_pyramid);
+            pyramid
         };
-        gl.BlitFramebuffer(
-            crop.x,
-            crop.y,
-            crop.x + crop.w,
-            crop.y + crop.h,
-            0,
-            0,
-            first.0,
-            first.1,
-            ffi::COLOR_BUFFER_BIT,
-            filter,
-        );
-        self.stats.passes += 1;
-        let progs = self.progs.as_ref()?;
-        let (ds, ds_loc, bl, bl_loc, co, co_loc) = (
-            progs.downsample,
-            progs.src_loc[0],
-            progs.blur,
-            progs.src_loc[1],
-            progs.color,
-            progs.src_loc[2],
-        );
-        // pyramid
-        for lvl in plan.levels.iter().skip(1) {
-            let size = (lvl.0 as i32, lvl.1 as i32);
-            let next = self.take_target(gl, size)?;
-            let params = PassParams::new(
-                (cur.size.0 as u32, cur.size.1 as u32),
-                (size.0 as u32, size.1 as u32),
-            );
-            self.pass(gl, ds, ds_loc, cur.tex, &next, &params);
-            self.free.push(cur);
-            cur = next;
+        for &part in &plan.parts {
+            let Some(made) = self.pyramid(gl, p, src_fbo, part.crop(factor)) else {
+                self.free.push(pyramid);
+                return None;
+            };
+            self.copy_texels(gl, &made, (part.x0, part.y0), &pyramid, at, part);
+            self.free.push(made);
         }
-        // separable Gaussian
-        if plan.weights.len() > 1 {
-            let mut params = PassParams::new(
-                (cur.size.0 as u32, cur.size.1 as u32),
-                (cur.size.0 as u32, cur.size.1 as u32),
-            );
-            params.set_weights(&plan.weights);
-            let radius = (plan.weights.len() - 1) as i32;
-            let tmp = self.take_target(gl, cur.size)?;
-            params.dir_radius = [1, 0, radius, 0];
-            self.pass(gl, bl, bl_loc, cur.tex, &tmp, &params);
-            params.dir_radius = [0, 1, radius, 0];
-            self.pass(gl, bl, bl_loc, tmp.tex, &cur, &params);
-            self.free.push(tmp);
+        if !self.filters(p) {
+            self.stats.reblurs += 1;
+            return Some((pyramid, None));
         }
-        // colour operations
-        if !ops.is_empty() {
-            let mut params = PassParams::new(
-                (cur.size.0 as u32, cur.size.1 as u32),
-                (cur.size.0 as u32, cur.size.1 as u32),
-            );
-            params.set_ops(ops);
-            let out = self.take_target(gl, cur.size)?;
-            self.pass(gl, co, co_loc, cur.tex, &out, &params);
-            self.free.push(cur);
-            cur = out;
-        }
-        Some(cur)
+        let Some(out) = self.filtered(gl, p, &pyramid) else {
+            self.free.push(pyramid);
+            return None;
+        };
+        self.stats.reblurs += 1;
+        Some((out, Some(pyramid)))
     }
 
     /// Composite one region. The target framebuffer must be bound as draw framebuffer.
@@ -910,19 +1258,29 @@ impl MaterialGl {
             }
             None => {
                 self.stats.backdrop_misses += 1;
-                if let Some(i) = self.cache.iter().position(|c| c.key == key) {
-                    let old = self.cache.swap_remove(i);
-                    self.free.push(old.target);
-                }
+                let old = self
+                    .cache
+                    .iter()
+                    .position(|c| c.key == key)
+                    .map(|i| self.cache.swap_remove(i));
+                let reblur = old.as_ref().and_then(|old| self.reblur_plan(p, old, crop));
                 let blurring = (self.timing && !self.gpu_timers).then(std::time::Instant::now);
                 self.timer_begin(gl, true);
-                let processed = self.process_backdrop(gl, p, src_fbo, crop);
+                let processed = match (old, reblur) {
+                    (Some(old), Some(plan)) => self.reblur(gl, p, src_fbo, old, crop, &plan),
+                    (old, _) => {
+                        if let Some(old) = old {
+                            self.free.extend(old.targets());
+                        }
+                        self.process_backdrop(gl, p, src_fbo, crop)
+                    }
+                };
                 self.timer_end(gl);
                 if let Some(blurring) = blurring {
                     gl.Finish();
                     self.glass_time.blur += blurring.elapsed();
                 }
-                let Some(target) = processed else {
+                let Some((target, pyramid)) = processed else {
                     saved.restore(gl);
                     let msg = "backdrop processing failed (framebuffer incomplete?)".to_string();
                     self.failure = Some(msg.clone());
@@ -935,12 +1293,13 @@ impl MaterialGl {
                         .min_by_key(|i| (self.cache[*i].key.4.is_some(), self.cache[*i].last_used))
                         .unwrap();
                     let old = self.cache.swap_remove(oldest);
-                    self.free.push(old.target);
+                    self.free.extend(old.targets());
                 }
                 self.cache.push(CachedBackdrop {
                     key,
                     generation: p.generation,
                     target,
+                    pyramid,
                     crop,
                     last_used: self.tick,
                 });
@@ -1084,7 +1443,10 @@ impl MaterialGl {
         let progs = self.progs.take();
         let bufs = [self.ubo_pass, self.ubo_region];
         let _ = renderer.with_context(|gl| unsafe {
-            for t in free.into_iter().chain(cache.into_iter().map(|c| c.target)) {
+            for t in free
+                .into_iter()
+                .chain(cache.into_iter().flat_map(CachedBackdrop::targets))
+            {
                 gl.DeleteFramebuffers(1, &t.fbo);
                 gl.DeleteTextures(1, &t.tex);
             }
@@ -1136,6 +1498,8 @@ pub struct MaterialElement {
     output_px: (i32, i32),
     scale: f64,
     mask: Option<MaterialMask>,
+    /// The last frame's backdrop generation and where the backdrop changed since (output pixels), when known.
+    changed: Option<(u64, Vec<Rectangle<i32, Physical>>)>,
 }
 
 impl std::fmt::Debug for MaterialElement {
@@ -1179,6 +1543,7 @@ impl MaterialElement {
             output_px,
             scale,
             mask: None,
+            changed: None,
         };
         // the id until `finalize`, which sets the commit once a frame: asking with a provisional signature would
         // advance it on every frame, and the damage tracker would repaint the whole region each time
@@ -1204,8 +1569,46 @@ impl MaterialElement {
         self.stage
     }
 
+    /// The key its id, commit and backdrop record are kept under.
+    pub fn key(&self) -> ElementKey {
+        self.key
+    }
+
+    /// The part of the output (output pixels) whose pixels reach what the region shows: its rectangle with the reach
+    /// of its blur around it ([`backdrop_crop`]'s margin) for a region that blurs what is under it, the whole output
+    /// for a backdrop captured below the windows.
+    pub fn sampled_area(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        let whole = Rectangle::from_size(Size::from(self.output_px));
+        if !matches!(self.stage, MaterialStage::Full) {
+            return whole;
+        }
+        let own = to_physical_rect(self.area, scale);
+        let Some((capture, sigma, _)) = self.recipe.backdrop.as_ref() else {
+            return own;
+        };
+        let (w, h) = self.output_px;
+        let plan = plan_blur(
+            w.max(0) as u32,
+            h.max(0) as u32,
+            *capture,
+            *sigma,
+            self.scale as f32,
+        );
+        let factor = 1i32 << plan.levels.len().min(16);
+        let margin = (plan.weights.len().saturating_sub(1) as i32 + 2) * factor;
+        Rectangle::new(
+            (own.loc.x - margin, own.loc.y - margin).into(),
+            (own.size.w + 2 * margin, own.size.h + 2 * margin).into(),
+        )
+    }
+
     /// Set the backdrop generation (a signature of everything drawn below) and refresh the id and
     /// commit counter from the cache.
+    /// Where the backdrop changed since the last frame's generation, so the pass blurs again only that part of it.
+    pub fn changed_since(&mut self, since: Option<(u64, Vec<Rectangle<i32, Physical>>)>) {
+        self.changed = since;
+    }
+
     pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {
         self.generation = generation;
         let (id, commit) = cache.slot(self.key, self.sig(generation));
@@ -1318,6 +1721,7 @@ impl RenderElement<GlesRenderer> for MaterialElement {
             opacity: self.opacity,
             tint: self.tint,
             damage: &abs,
+            changed: self.changed.as_ref().map(|(g, r)| (*g, r.as_slice())),
         };
         let shared = self.shared.clone();
         let res = frame.with_context(move |gl| unsafe { shared.borrow_mut().draw(gl, &params) })?;
@@ -1515,6 +1919,152 @@ mod tests {
             w: 64,
             h: 32
         }));
+    }
+
+    /// A framebuffer of noise, different for each `seed`.
+    fn noise(size: (i32, i32), mut seed: u32) -> Vec<f32> {
+        (0..size.0 * size.1)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed % 1000) as f32 / 1000.0
+            })
+            .collect()
+    }
+
+    /// The last pyramid level of the `crop` part of `img` (a `size` framebuffer) after `levels` halvings, as the pass
+    /// makes it.
+    fn pyramid_of(img: &[f32], size: (i32, i32), crop: Crop, levels: usize) -> Vec<f32> {
+        let part: Vec<f32> = (crop.y..crop.y + crop.h)
+            .flat_map(|y| (crop.x..crop.x + crop.w).map(move |x| (x, y)))
+            .map(|(x, y)| img[(y * size.0 + x) as usize])
+            .collect();
+        blur(&part, (crop.w as usize, crop.h as usize), levels, &[1.0]).0
+    }
+
+    #[test]
+    fn a_backdrop_made_again_where_it_changed_or_newly_reaches_is_the_blur_of_the_whole() {
+        let size = (1536, 960);
+        let plan = plan_blur(size.0 as u32, size.1 as u32, 0.5, 20.0, 2.0);
+        let (levels, radius) = (plan.levels.len(), plan.weights.len() - 1);
+        let factor = 1i32 << levels;
+        let projection = ortho(size, false);
+        let at = |x: i32, y: i32, w: i32, h: i32| Rectangle::new((x, y).into(), (w, h).into());
+        // a region moved over a still framebuffer, a framebuffer that changed under a still region, and both
+        let before = noise(size, 0x9e37_79b9);
+        let mut changed = before.clone();
+        let window = at(603, 401, 117, 83);
+        for y in window.loc.y..window.loc.y + window.size.h {
+            for x in window.loc.x..window.loc.x + window.size.w {
+                changed[(y * size.0 + x) as usize] = 1.0 - changed[(y * size.0 + x) as usize];
+            }
+        }
+        let bounds = framebuffer_bounds(size, window, &projection).unwrap();
+        let region = at(400, 240, 640, 480);
+        type Case<'a> = (
+            Rectangle<i32, Physical>,
+            &'a [f32],
+            &'a [(f32, f32, f32, f32)],
+        );
+        let cases: [Case<'_>; 3] = [
+            (
+                at(400 + 3 * factor, 240 - 2 * factor, 640, 480),
+                &before,
+                &[],
+            ),
+            (region, &changed, &[bounds]),
+            (
+                at(400 - 2 * factor, 240 + factor, 640, 480),
+                &changed,
+                &[bounds],
+            ),
+        ];
+        let old = backdrop_crop(size, levels, radius, region, &projection);
+        let old_t = Texels::of(old, factor);
+        let held = pyramid_of(&before, size, old, levels);
+        for (moved, now, changes) in cases {
+            let new = backdrop_crop(size, levels, radius, moved, &projection);
+            let new_t = Texels::of(new, factor);
+            let reblur = plan_reblur(size, levels, old, new, changes)
+                .unwrap_or_else(|| panic!("{moved:?} is made again in part"));
+            // the pass's steps on the model: the kept texels copied, each part made from its own pixels
+            let w = new_t.x1 - new_t.x0;
+            let mut made = vec![f32::NAN; new_t.count() as usize];
+            if let Some(k) = reblur.kept {
+                for ty in k.y0..k.y1 {
+                    for tx in k.x0..k.x1 {
+                        let from = (ty - old_t.y0) * (old_t.x1 - old_t.x0) + tx - old_t.x0;
+                        made[((ty - new_t.y0) * w + tx - new_t.x0) as usize] = held[from as usize];
+                    }
+                }
+            }
+            for part in &reblur.parts {
+                let cut = pyramid_of(now, size, part.crop(factor), levels);
+                for ty in part.y0..part.y1 {
+                    for tx in part.x0..part.x1 {
+                        let from = (ty - part.y0) * (part.x1 - part.x0) + tx - part.x0;
+                        made[((ty - new_t.y0) * w + tx - new_t.x0) as usize] = cut[from as usize];
+                    }
+                }
+            }
+            let again: i64 = reblur.parts.iter().map(Texels::count).sum();
+            assert!(
+                again * 4 < new_t.count(),
+                "{moved:?}: {again} of {} texels made again",
+                new_t.count()
+            );
+            // the pyramid is the one a whole capture makes, texel for texel, so the Gaussian over it is too
+            let whole = pyramid_of(now, size, new, levels);
+            for (i, (m, w)) in made.iter().zip(&whole).enumerate() {
+                assert!(
+                    m.to_bits() == w.to_bits(),
+                    "{moved:?}: texel {i}: {m} vs {w}"
+                );
+            }
+        }
+        // a change over most of the backdrop, or a part far from the last, is captured whole
+        let everywhere = framebuffer_bounds(size, at(300, 100, 900, 800), &projection).unwrap();
+        assert_eq!(plan_reblur(size, levels, old, old, &[everywhere]), None);
+        let far = backdrop_crop(size, levels, radius, at(1300, 760, 200, 150), &projection);
+        assert_eq!(plan_reblur(size, levels, old, far, &[]), None);
+        // a framebuffer that does not halve exactly is captured whole
+        assert_eq!(plan_reblur((1022, 640), levels, old, old, &[]), None);
+        // a copy without halvings keeps every pixel no change touches
+        let copy = Crop {
+            x: 101,
+            y: 50,
+            w: 300,
+            h: 200,
+        };
+        let moved = Crop { x: 99, ..copy };
+        let pixels = plan_reblur(size, 0, copy, moved, &[(150.0, 60.0, 160.5, 70.0)]).unwrap();
+        assert_eq!(
+            pixels.kept,
+            Some(Texels {
+                x0: 101,
+                y0: 50,
+                x1: 399,
+                y1: 250
+            })
+        );
+        assert_eq!(
+            pixels.parts,
+            [
+                Texels {
+                    x0: 99,
+                    y0: 50,
+                    x1: 101,
+                    y1: 250
+                },
+                Texels {
+                    x0: 150,
+                    y0: 60,
+                    x1: 161,
+                    y1: 70
+                }
+            ]
+        );
     }
 
     #[test]

@@ -18,6 +18,9 @@ use cupertino_server::render::gles::{Gles, GlesResources};
 const LARGE: usize = 64 * 1024;
 
 thread_local! {
+    /// Allocations of exactly [`WATCHED_SIZE`] bytes are counted in [`WATCHED_COUNT`] (0: none watched).
+    static WATCHED_SIZE: Cell<usize> = const { Cell::new(0) };
+    static WATCHED_COUNT: Cell<usize> = const { Cell::new(0) };
     static SMALL_COUNT: Cell<usize> = const { Cell::new(0) };
     static LARGE_COUNT: Cell<usize> = const { Cell::new(0) };
     static LARGE_BYTES: Cell<usize> = const { Cell::new(0) };
@@ -27,6 +30,9 @@ struct Counting;
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() == WATCHED_SIZE.with(Cell::get) {
+            WATCHED_COUNT.with(|c| c.set(c.get() + 1));
+        }
         if layout.size() >= LARGE {
             LARGE_COUNT.with(|c| c.set(c.get() + 1));
             LARGE_BYTES.with(|c| c.set(c.get() + layout.size()));
@@ -131,6 +137,54 @@ fn a_steady_frame_makes_no_pixel_sized_allocation() {
             "{windows} windows at {scale}x: a frame allocated pixel-buffer sized memory"
         );
     }
+}
+
+/// The cursor's image is drawn from the buffer made of it once, so a steady frame copies none of its pixels.
+#[test]
+fn a_steady_frame_copies_no_cursor_image() {
+    for scale in [1.0, 2.0] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(5000);
+        // the image the frame draws: the theme's default cursor at the pointer's size on this output
+        let size = f64::from(d.state.cursor_loader.size()) * d.state.cursor_scale();
+        let frame = d.state.cursor_loader.frame(
+            smithay::input::pointer::CursorIcon::Default,
+            (size * scale).ceil() as u32,
+            std::time::Duration::ZERO,
+        );
+        let bytes = frame.pixels.0 as usize * frame.pixels.1 as usize * 4;
+        d.at(5016);
+        frame_costs(&mut d, 1);
+        WATCHED_SIZE.with(|s| s.set(bytes));
+        let before = WATCHED_COUNT.with(Cell::get);
+        frame_costs(&mut d, 3);
+        WATCHED_SIZE.with(|s| s.set(0));
+        assert_eq!(
+            WATCHED_COUNT.with(Cell::get) - before,
+            0,
+            "at {scale}x a steady frame copied the cursor's {bytes}-byte image"
+        );
+    }
+}
+
+/// The signature an overlay image is cached under is hashed from its description as it is written, never kept as text.
+#[test]
+fn an_overlay_signature_allocates_nothing() {
+    let labels: Vec<String> = ["ABC", "Pinyin - Simplified", "Dvorak"]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    let view = (
+        &labels,
+        Some(1usize),
+        (240f64.to_bits(), 96f64.to_bits()),
+        true,
+    );
+    let cost = measure(|| {
+        std::hint::black_box(cupertino_server::render::image::debug_sig(&view));
+    });
+    assert_eq!((cost.small, cost.large), (0, 0));
 }
 
 #[test]

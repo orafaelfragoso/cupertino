@@ -267,6 +267,22 @@ impl Client {
         self.commit_asked(&self.wall, qh);
     }
 
+    /// The wall turns a grey rising from `top` to `bottom`, each row a value of its own rounded to the nearest.
+    fn gradient_wall(&self, qh: &QueueHandle<Client>, top: u8, bottom: u8) {
+        let (w, h) = OUTPUT;
+        let pixels: Vec<u8> = (0..h)
+            .flat_map(|y| {
+                let t = f64::from(y) / f64::from(h - 1);
+                let v = (f64::from(top) + (f64::from(bottom) - f64::from(top)) * t).round() as u8;
+                [v, v, v, 255].repeat(w as usize)
+            })
+            .collect();
+        let buffer = pixels_buffer(&self.shm, qh, OUTPUT, &pixels);
+        self.wall.attach(Some(&buffer), 0, 0);
+        self.wall.damage_buffer(0, 0, w, h);
+        self.commit_asked(&self.wall, qh);
+    }
+
     /// The small control's backdrop becomes the material `name`, which is not glass.
     fn plain_small(&self, qh: &QueueHandle<Client>, name: &str) {
         self.small.set_material(name.to_string());
@@ -286,6 +302,8 @@ impl Client {
 /// sent before it.
 enum Ask {
     Wall([u8; 3]),
+    /// A grey wall rising from the first value at the top to the second at the bottom.
+    Gradient(u8, u8),
     Labels(Labels),
     Plain(&'static str),
     Sync,
@@ -475,6 +493,7 @@ fn spawn_late(socket: PathBuf, version: u32, heard: Heard, late: Duration) -> As
                 std::thread::sleep(late);
                 match ask {
                     Ask::Wall(rgb) => client.repaint_wall(&qh, rgb),
+                    Ask::Gradient(top, bottom) => client.gradient_wall(&qh, top, bottom),
                     Ask::Labels(labels) => client.draw_labels(&qh, &labels),
                     Ask::Plain(name) => client.plain_small(&qh, name),
                     Ask::Sync => syncs += 1,
@@ -554,6 +573,65 @@ fn a_small_dark_glass_control_is_told_its_face_turned_light_and_a_large_panel_is
     h.wait_until("the small control's dark face again", move |_| {
         small(&seen) == [Tone::Dark, Tone::Light, Tone::Dark]
     });
+}
+
+/// The runs of equal values down `column` of `shot` from row `rows.0` to `rows.1` (green channel): the longest run, the
+/// largest step between neighbouring rows and the levels the column spans.
+fn runs(shot: &image::RgbaImage, column: u32, rows: (u32, u32)) -> (u32, u32, u32) {
+    let values: Vec<u8> = (rows.0..rows.1)
+        .map(|y| shot.get_pixel(column, y).0[1])
+        .collect();
+    let (mut longest, mut run, mut step) = (1, 1, 0);
+    for pair in values.windows(2) {
+        if pair[0] == pair[1] {
+            run += 1;
+        } else {
+            run = 1;
+            step = step.max(u32::from(pair[0].abs_diff(pair[1])));
+        }
+        longest = longest.max(run);
+    }
+    let span = u32::from(values.iter().max().unwrap() - values.iter().min().unwrap());
+    (longest, step, span)
+}
+
+/// A smooth gradient under a large glass panel keeps its steps: down the panel the value never jumps by more than a
+/// level, and no run of one value is much longer than the gradient's own under the same span of levels, so the blur
+/// and the colour operations add no bands of their own.
+#[test]
+fn a_gradient_under_glass_shows_no_bands() {
+    let Some(mut h) = Harness::new(Appearance::Light) else {
+        return;
+    };
+    let heard = Heard::default();
+    let wall = spawn(h.socket_path(), 7, heard.clone());
+    h.wait_until("the glass backdrops", |s| {
+        layer_backdrops(&s.outputs[0].output).len() == 2
+    });
+    wall.send(Ask::Gradient(64, 96)).unwrap();
+    settle(&mut h, &wall);
+    let shot = h.screenshot();
+    // down the middle of the large panel, clear of its rim, and down the bare wall beside it
+    let x = (PANEL_AT.0 + LARGE.0 + LARGE.2 / 2) as u32;
+    let rows = (
+        (PANEL_AT.1 + LARGE.1 + 15) as u32,
+        (PANEL_AT.1 + LARGE.1 + LARGE.3 - 15) as u32,
+    );
+    let (longest, step, span) = runs(&shot, x, rows);
+    let (bare_longest, bare_step, bare_span) = runs(&shot, 20, rows);
+    eprintln!(
+        "down the glass: longest run {longest} rows, largest step {step}, {span} levels; \
+         down the bare wall: {bare_longest} rows, step {bare_step}, {bare_span} levels"
+    );
+    assert!(span > 0, "the gradient shows through the glass");
+    assert!(step <= 1, "the value jumps by {step} levels down the glass");
+    // the rows a level of the glass's span takes, with the gradient's own unevenness
+    let even = (rows.1 - rows.0) / span;
+    assert!(
+        longest <= 2 * even + 2,
+        "a band of {longest} rows where {even} a level are even ({span} levels over {} rows)",
+        rows.1 - rows.0
+    );
 }
 
 #[test]

@@ -22,6 +22,7 @@ use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
+use super::reduce::{self, ReducedElement};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::snapshots::Snapshots;
 use super::ui::{rounded_rect, RoundedRectSpec};
@@ -241,6 +242,7 @@ pub fn lower(
             }
         }
     }
+    ctx.programs.reduced.end_lowering();
     elements
 }
 
@@ -254,7 +256,23 @@ fn rounded(ctx: &mut Lowering<'_>, key: ElementKey, rect: &RoundedRect, alpha: f
         border_falloff: rect.border_falloff,
         alpha,
     };
-    rounded_rect(ctx.programs, ctx.cache, ctx.scale, key, &spec)
+    let shape = rounded_rect(ctx.programs, ctx.cache, ctx.scale, key, &spec);
+    match rect.border {
+        // a ring: nothing inside its border, the corners' curves but half the radius in
+        Some((width, _)) if rect.fill[3] <= 0.0 => {
+            let r = logical_rect(rect.rect);
+            let inset = width + rect.radius * rect.style.expansion() * 0.5;
+            shape.with_hole(smithay::utils::Rectangle::new(
+                (r.loc.x + inset, r.loc.y + inset).into(),
+                (
+                    (r.size.w - 2.0 * inset).max(0.0),
+                    (r.size.h - 2.0 * inset).max(0.0),
+                )
+                    .into(),
+            ))
+        }
+        _ => shape,
+    }
 }
 
 pub fn shadow_rect(
@@ -305,7 +323,7 @@ pub fn shadow_rect(
         .u(shadow.cutout as u64)
         .finish();
     let (id, commit) = cache.slot(key, sig);
-    ShaderRect::new(
+    let rect = ShaderRect::new(
         programs.shadow.clone(),
         id,
         commit,
@@ -313,7 +331,21 @@ pub fn shadow_rect(
         alpha as f32,
         uniforms,
         false,
-    )
+    );
+    if !shadow.cutout {
+        return rect;
+    }
+    // cut out under the window's shape: nothing drawn inside it, the corners' curves but half their extent in
+    let window = logical_rect(shadow.caster);
+    let inset = extent * 0.5;
+    rect.with_hole(smithay::utils::Rectangle::new(
+        (window.loc.x + inset, window.loc.y + inset).into(),
+        (
+            (window.size.w - 2.0 * inset).max(0.0),
+            (window.size.h - 2.0 * inset).max(0.0),
+        )
+            .into(),
+    ))
 }
 
 fn wallpaper(
@@ -420,13 +452,54 @@ fn surface_tree(
                 SurfaceRole::WindowContent => mask(ctx, item.clip, viewport),
                 _ => None,
             };
+            // a surface drawn at half its size or less is drawn from a reduced copy, made at full opacity
+            let halvings = reduce::halvings(place.scale_x.min(place.scale_y));
+            let mut opaque: Option<Vec<WaylandSurfaceRenderElement<GlesRenderer>>> = None;
             for e in els {
+                let reduced = if halvings == 0 {
+                    None
+                } else {
+                    let g = e.geometry(scale);
+                    let size = reduce::copy_size((g.size.w, g.size.h), halvings);
+                    let reductions = ctx.programs.reduced.clone();
+                    reductions.kept(&e, size).or_else(|| {
+                        if e.alpha() >= 1.0 {
+                            return reductions.make(
+                                ctx.renderer,
+                                &ctx.programs.clip_minify,
+                                &e,
+                                size,
+                            );
+                        }
+                        let all = opaque.get_or_insert_with(|| {
+                            surface_elements(
+                                ctx,
+                                surface,
+                                only.as_ref(),
+                                origin,
+                                scale,
+                                1.0,
+                                Kind::Unspecified,
+                            )
+                        });
+                        let full = all.iter().find(|f| f.id() == e.id())?;
+                        reductions.make(ctx.renderer, &ctx.programs.clip_minify, full, size)
+                    })
+                };
+                let e = match reduced {
+                    Some((copy, of)) => ReducedElement::reduced(e, copy, of),
+                    None => ReducedElement::direct(e),
+                };
                 match shape {
                     Some(shape) => {
-                        let clip = clipped(ctx, e, shape);
+                        let clip =
+                            clipped(ctx, e, shape).minified(ctx.programs.clip_minify.clone());
                         out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
                     }
-                    None => out.push(RescaleRenderElement::from_element(e, pivot, rescale).into()),
+                    None => {
+                        let e = e.minified(ctx.programs.clip_minify.clone());
+                        out.push(RescaleRenderElement::from_element(e, pivot, rescale).into())
+                    }
                 }
             }
         }

@@ -142,24 +142,20 @@ Gate:
 
 ## Step 2: compositor wins
 
-- [ ] Non-glass materials use the overlap-limited backdrop generation glass uses.
-- [ ] The minimize effect reuses one captured texture.
-- [ ] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
-- [ ] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
+- [x] Non-glass materials use the overlap-limited backdrop generation glass uses.
+- [x] The minimize effect reuses one captured texture.
+- [x] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
+- [x] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
       hand-written texture program with the external-sampler variant.
-- [ ] A better minification filter for integer-scale clients shown at a fractional scale.
-- [ ] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
+- [x] A better minification filter for integer-scale clients shown at a fractional scale.
+- [x] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
       gradient under glass (banding).
 
 Gate:
 
-- [ ] Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
-      checks pass.
-
-## Step 3: vertical slice of the GPU path
-
-The risk is the handoff, so it is proven first with the smallest renderer possible.
-
+- [ ] Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
+      the shimmer and banding checks pass. (Revised from "fewer blur passes": every frame of a drag uncovers
+      something, so every frame needs a blur; the work the blur does is what can fall. See Measurements, step 2.)
 - [x] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
 - [x] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
       offered modifiers, never adding linear on a hardware driver.
@@ -890,6 +886,79 @@ in the runtime are fast tests.
 | short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
 
 8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
+
+### Step 2: compositor wins
+
+Taken on the target machine's GPU, release builds, `scripts/dev/bench --scenario drag --size 3840x2160 --scale 1.5
+--runs 3`, no build running. Before is `2b119fa4` with only the counter of texels the blurs write added; after is the
+step's last commit. Medians of the three runs, spread in brackets where it is not zero.
+
+| Drag over glass | Before | After |
+|---|---|---|
+| Blur passes per frame | 9.36 | 9.33 |
+| Texels the blurs write per frame | 1 221 263 | 561 017 |
+| Backdrops blurred again / reused per frame | 4.69 / 4.31 | 2.79 / 6.21 |
+| Compositor work p50 / p99 ms | 1.25 (0.02) / 2.33 (0.11) | 1.39 (1.12) / 2.42 (0.24) |
+| Compositor GPU p50 / p99 ms | 1.01 / 2.09 (1.03) | 1.06 (0.37) / 1.49 (0.76) |
+| Server CPU ms/s | 86.7 (3.3) | 93.3 (53.3) |
+| Missed refreshes | 0 | 0 |
+
+The GPU p99 is not the overlap-limited generation's. It moves between runs of one build by more than any change of
+the step: `2b119fa4` measured 0.94 ms one session, 1.53 to 5.55 ms and 1.16 to 2.19 ms on two later ones, and a build
+of the step without the overlap-limited generation 2.11 to 5.89 ms. The frames past 2 ms are one to three a run,
+where the blur passes alone take 1.65 to 1.8 ms of GPU time against 0.23 ms in the frames around them, with the same
+passes, crops and backdrops made again, at full clocks, in every build. The GPU is shared with the desktop session
+while the bench runs, and the slow frames come with it, not with a build.
+
+Every frame of the drag uncovers something under the backdrops the window passes or carries, so every frame runs the
+passes of a blur for them: 9.33 passes a frame is the drag's own, and making a backdrop again in parts adds passes
+(a capture and a pyramid a part) while each covers less. What the step cuts is how much the passes cover: a
+backdrop whose region moved, or whose scene changed in part, keeps its pyramid's last level and makes again only the
+texels whose squares changed or newly lie under it, then filters the whole level as after a whole capture. Since
+each texel of the last level is the mean of its own square of pixels, the result is the whole capture's texel for
+texel (`material::tests::a_backdrop_made_again_where_it_changed_or_newly_reaches_is_the_blur_of_the_whole`, and on the
+GPU `window_popup_backdrop::a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole`,
+worst difference 1 of 255). A window's shadow and outline draw nothing under the window, so their move changes only
+the ring around it. The texels written fall by 54 %; the glass containers, whose passes are most of the count, still
+blur their whole sampled area.
+
+The gate is not met as written: the passes are inherent to the drag, and the compositor work p99 stays over the
+2 ms budget (2.33 ms before, 2.42 ms after, which includes waiting for the GPU). Proposed revision of the gate, for
+the lead:
+
+- Old: "Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
+  checks pass."
+- New: "Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
+  the shimmer and banding checks pass."
+- Reason: each frame of a drag uncovers new backdrop, so the pass count is set by how many backdrops the window
+  touches, not by how they are made; the texels written are what a cheaper blur saves, and are measured per frame by
+  the bench (`blurKt/f`).
+
+Even revised, the budget half stays open: the work p99 at 1.5 is over 2 ms before and after.
+
+Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
+the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a
+window drawn below half its size. Nothing is re-recorded.
+
+**Checks of our own output** (headless, GPU tier):
+
+- A window of one-pixel stripes shown at 0.27 of its size in the overview, against its box-filtered picture computed in
+  Rust: mean difference 6.0, worst 10.7 of 255 (plain filtered lookups: 37.5 and 112). While it moves into place, the
+  stripes stray 0.5 of 255 from their average on every frame (plain lookups: 63), so nothing shimmers
+  (`headless::a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_not_shimmer`). The copy is
+  made once and kept while the window does not commit.
+- A scale 2 window on a scale 1.5 output against its box-filtered picture: mean 0.29, worst 0.5 of 255 (plain lookups:
+  9.4 and 20.8) (`headless::a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture`).
+- A grey gradient (64 to 96 over the output's height) under a large glass panel: down the panel the value steps one
+  level at a time, the longest run 35 rows where its 3 levels over 90 rows give 30 a level; the bare wall beside it
+  runs 16 rows over 6 levels (`backdrop_tone::a_gradient_under_glass_shows_no_bands`). The check passes without
+  dithering: the glass adds no bands of its own. The glass halves the gradient's contrast, so its 8-bit steps are
+  twice as tall as the wall's; dithering is what breaks those up.
+- One snapshot a minimize and one a restore, whatever the frames in between
+  (`headless::a_minimize_captures_the_window_once_and_a_restore_once_more`); a steady frame copies no cursor image
+  (`scene_cost::a_steady_frame_copies_no_cursor_image`), an overlay's signature allocates nothing
+  (`scene_cost::an_overlay_signature_allocates_nothing`) and a frame that changes nothing copies no wallpaper path
+  (`wallpaper::tests::a_frame_that_changes_nothing_copies_no_wallpaper_path`).
 
 ## Decisions taken
 

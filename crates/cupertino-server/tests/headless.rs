@@ -60,6 +60,11 @@ impl Harness {
     }
 
     fn with_config(tweak: impl FnOnce(&mut Config)) -> Option<Harness> {
+        Self::at_scale(tweak, 1.0)
+    }
+
+    /// [`Self::with_config`] on an output of `scale`.
+    fn at_scale(tweak: impl FnOnce(&mut Config), scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -74,7 +79,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        match headless::init(&mut state, OUTPUT, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -145,6 +150,9 @@ struct ClientState {
     size: (i32, i32),
     margin: i32,
     color: [u8; 4],
+    /// Draw [`stripes`] in place of `color`.
+    stripes: bool,
+    buffer_scale: i32,
     buffer: Option<wl_buffer::WlBuffer>,
     /// The popup, once requested: its surfaces and size.
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface, (i32, i32))>,
@@ -166,19 +174,39 @@ enum Sizing {
     Grow,
 }
 
-/// An opaque buffer of `size` in `color`, attached to `surface` and committed.
+/// The test pattern of a buffer `h` pixels tall, at pixel (`x`, `y`), red, green, blue: red in one-pixel columns, blue
+/// in one-pixel rows, green rising from top to bottom, so any average over two pixels or more is mid red and blue and
+/// the green of its height, and a picture upside down shows.
+fn stripes(x: i32, y: i32, h: i32) -> [u8; 3] {
+    let on = |v: i32| if v % 2 == 0 { 255 } else { 0 };
+    [on(x), (y * 255 / (h - 1).max(1)) as u8, on(y)]
+}
+
+/// An opaque buffer of `size` in `color` (or [`stripes`]), attached to `surface` and committed.
 fn attach_buffer(
     shm: &wl_shm::WlShm,
     surface: &wl_surface::WlSurface,
     size: (i32, i32),
     color: [u8; 4],
+    striped: bool,
     qh: &QueueHandle<ClientState>,
 ) -> wl_buffer::WlBuffer {
     let (w, h) = size;
     let mut file = tempfile_like(w as usize * h as usize * 4);
     let row: Vec<u8> = color.iter().copied().cycle().take(w as usize * 4).collect();
-    for _ in 0..h {
-        file.write_all(&row).unwrap();
+    for y in 0..h {
+        if striped {
+            // little-endian ARGB: blue, green, red, alpha
+            let row: Vec<u8> = (0..w)
+                .flat_map(|x| {
+                    let [r, g, b] = stripes(x, y, h);
+                    [b, g, r, 255]
+                })
+                .collect();
+            file.write_all(&row).unwrap();
+        } else {
+            file.write_all(&row).unwrap();
+        }
     }
     let pool = shm.create_pool(file.as_fd(), w * h * 4, qh, ());
     let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
@@ -193,11 +221,16 @@ impl ClientState {
     fn attach(&mut self, qh: &QueueHandle<ClientState>) {
         let (w, h) = self.size;
         let m = self.margin;
+        let k = self.buffer_scale;
+        if k > 1 {
+            self.surface.set_buffer_scale(k);
+        }
         self.buffer = Some(attach_buffer(
             &self.shm,
             &self.surface,
-            (w + 2 * m, h + 2 * m),
+            ((w + 2 * m) * k, (h + 2 * m) * k),
             self.color,
+            self.stripes,
             qh,
         ));
         self.status.lock().unwrap().committed = true;
@@ -278,6 +311,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
                             popup_surface,
                             *size,
                             [0, 255, 0, 255],
+                            false,
                             qh,
                         ));
                     }
@@ -340,6 +374,10 @@ struct Options {
     /// KDE appmenu address (service, path) announced before the first commit.
     menu_address: Option<(String, String)>,
     sizing: Sizing,
+    /// Draw [`stripes`] in place of the colour.
+    stripes: bool,
+    /// Draw at this buffer scale (`wl_surface.set_buffer_scale`; 0 is 1).
+    buffer_scale: i32,
 }
 
 struct TestClient {
@@ -430,6 +468,8 @@ impl TestClient {
                 size,
                 margin: options.margin,
                 color,
+                stripes: options.stripes,
+                buffer_scale: options.buffer_scale.max(1),
                 buffer: None,
                 popup: None,
                 popup_buffer: None,
@@ -2058,6 +2098,274 @@ fn every_minimize_effect_draws_a_mesh_and_restore_runs_it_backwards() {
         );
         drop(client);
     }
+}
+
+#[test]
+fn a_minimize_captures_the_window_once_and_a_restore_once_more() {
+    use cupertino_effects::MinimizeKind;
+    let kind = MinimizeKind::Warp;
+    let Some(mut h) = Harness::with_config(|c| {
+        c.effects.minimize = Some(kind);
+    }) else {
+        return;
+    };
+    let client = TestClient::spawn(
+        h.socket_path(),
+        "org.example.fx",
+        (420, 300),
+        [0, 255, 0, 255],
+    );
+    let (id, _) = h.mapped_window(1);
+    let captures = |h: &Harness| h.state.render.as_ref().unwrap().minimize_captures();
+    assert_eq!(captures(&h), 0);
+    let duration = kind.duration_s(false);
+    // the animation's frames, from its start to past its end
+    let animate = |h: &mut Harness| {
+        let t0 = h.state.now();
+        for step in 1..=8 {
+            let time = t0 + duration * f64::from(step) / 8.0;
+            common::set_time(&mut h.state, &mut h.event_loop, time);
+            h.state.tick();
+            h.step();
+        }
+        common::set_time(&mut h.state, &mut h.event_loop, t0 + duration + 1.0);
+        h.state.tick();
+        h.step();
+    };
+    h.state.command(Command::Minimize {
+        window: id,
+        target: Some(DOCK_SLOT),
+    });
+    animate(&mut h);
+    assert!(h.state.wm.window(id).unwrap().state().is_minimized());
+    assert_eq!(
+        captures(&h),
+        1,
+        "every frame of the minimize draws one snapshot"
+    );
+    h.state.command(Command::Restore { window: id });
+    animate(&mut h);
+    assert!(!h.state.wm.window(id).unwrap().state().is_minimized());
+    assert_eq!(captures(&h), 2, "the restore captures the window once more");
+    drop(client);
+}
+
+// ---- windows drawn well below their size ------------------------------------------------------------------------
+
+/// The picture of [`stripes`] (`size` pixels) drawn into the output rectangle `at` (output pixels, fractional), each
+/// output pixel the average of the source pixels it covers, weighted by how much of each it covers.
+fn box_filtered_stripes(size: (i32, i32), at: Rect, px: (u32, u32)) -> [f64; 3] {
+    let (sx, sy) = (f64::from(size.0) / at.w, f64::from(size.1) / at.h);
+    let x0 = (f64::from(px.0) - at.x) * sx;
+    let x1 = (f64::from(px.0) + 1.0 - at.x) * sx;
+    let y0 = (f64::from(px.1) - at.y) * sy;
+    let y1 = (f64::from(px.1) + 1.0 - at.y) * sy;
+    let mut sum = [0.0; 3];
+    let mut area = 0.0;
+    let mut y = y0.floor() as i32;
+    while f64::from(y) < y1 {
+        let hy = (f64::from(y + 1).min(y1) - f64::from(y).max(y0)).max(0.0);
+        let mut x = x0.floor() as i32;
+        while f64::from(x) < x1 {
+            let wx = (f64::from(x + 1).min(x1) - f64::from(x).max(x0)).max(0.0);
+            let c = stripes(x.clamp(0, size.0 - 1), y.clamp(0, size.1 - 1), size.1);
+            for i in 0..3 {
+                sum[i] += f64::from(c[i]) * wx * hy;
+            }
+            area += wx * hy;
+            x += 1;
+        }
+        y += 1;
+    }
+    sum.map(|s| s / area.max(f64::MIN_POSITIVE))
+}
+
+/// The mean absolute difference, a channel, between the window drawn in `shot` at `at` and the box-filtered
+/// picture, over its pixels at least `inset` pixels inside its edges (past its rounded corners), and the largest.
+fn against_box_filter(
+    shot: &image::RgbaImage,
+    size: (i32, i32),
+    at: Rect,
+    inset: f64,
+) -> (f64, f64) {
+    let (mut sum, mut worst, mut n) = (0.0f64, 0.0f64, 0.0f64);
+    let (x0, y0) = ((at.x + inset).ceil() as u32, (at.y + inset).ceil() as u32);
+    let (x1, y1) = (
+        (at.right() - inset).floor() as u32,
+        (at.bottom() - inset).floor() as u32,
+    );
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let want = box_filtered_stripes(size, at, (x, y));
+            let got = shot.get_pixel(x, y).0;
+            for i in 0..3 {
+                let d = (f64::from(got[i]) - want[i]).abs();
+                sum += d;
+                worst = worst.max(d);
+                n += 1.0;
+            }
+        }
+    }
+    (sum / n.max(1.0), worst)
+}
+
+/// A window of one-pixel stripes shown in the overview at well below half its size is drawn from a reduced copy, each
+/// pixel the average of those it covers: it matches its box-filtered picture, and while it moves into place the
+/// stripes' average stays put from frame to frame instead of flickering between them.
+#[test]
+fn a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_not_shimmer() {
+    let Some(mut h) = Harness::new() else { return };
+    let size = (900, 600);
+    let clients: Vec<TestClient> = (0..1)
+        .map(|_| {
+            TestClient::spawn_with(
+                h.socket_path(),
+                "org.example.stripes",
+                size,
+                [0, 0, 0, 255],
+                Options {
+                    stripes: true,
+                    ..Options::default()
+                },
+            )
+        })
+        .collect();
+    let (id, _) = h.mapped_window(clients.len());
+    let made = |h: &Harness| h.state.render.as_ref().unwrap().programs.reduced.made();
+    h.state.toggle_overview(false);
+    assert!(h.state.shell.overview_open());
+    let t0 = h.state.now();
+    // a slot of a little over a quarter of the window's size, off the pixel grid
+    let slot = Rect::new(100.3, 120.7, 243.0, 162.0);
+    assert!(h
+        .state
+        .shell
+        .overview
+        .as_mut()
+        .unwrap()
+        .set_target(id, slot, t0));
+    let placed = |h: &Harness, now: f64| {
+        h.state
+            .shell
+            .overview
+            .as_ref()
+            .unwrap()
+            .frames(now)
+            .into_iter()
+            .find(|f| f.id == id)
+            .unwrap()
+            .frame
+    };
+    // while the window moves into place, a frame after another
+    let mut strays: Vec<f64> = Vec::new();
+    for step in 1..=12 {
+        let now = t0 + 0.6 * f64::from(step) / 12.0;
+        common::set_time(&mut h.state, &mut h.event_loop, now);
+        h.state.tick();
+        let at = placed(&h, now);
+        if at.w / f64::from(size.0) > 0.5 {
+            continue;
+        }
+        let shot = h.screenshot("stripes-moving");
+        let (x0, y0) = ((at.x + 3.0).ceil() as u32, (at.y + 3.0).ceil() as u32);
+        let (x1, y1) = (
+            (at.right() - 3.0).floor() as u32,
+            (at.bottom() - 3.0).floor() as u32,
+        );
+        // how far the stripes stray from their average, a pixel: what flickers as the window moves
+        let (mut stray, mut n) = (0.0, 0.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = shot.get_pixel(x, y).0;
+                stray += (f64::from(p[0]) - 127.5).abs() + (f64::from(p[2]) - 127.5).abs();
+                n += 2.0;
+            }
+        }
+        strays.push(stray / n);
+    }
+    eprintln!("the stripes' stray from their average while the window moves: {strays:.1?}");
+    assert!(
+        strays.len() >= 3,
+        "the window is drawn below half its size while it moves: {strays:?}"
+    );
+    for pair in strays.windows(2) {
+        assert!(
+            pair[0] < 8.0 && pair[1] < 8.0 && (pair[0] - pair[1]).abs() < 4.0,
+            "every frame shows the stripes' average, and the next as well: {strays:?}"
+        );
+    }
+    // at rest: against the box-filtered picture, drawn from copies made once
+    let now = t0 + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, now);
+    h.state.tick();
+    for _ in 0..3 {
+        h.step();
+    }
+    let at = placed(&h, now);
+    assert!(
+        at.w / f64::from(size.0) <= 0.5,
+        "the overview shows the window at {at:?}"
+    );
+    let shot = h.screenshot("stripes-rest");
+    let (mean, worst) = against_box_filter(&shot, size, at, 3.0);
+    eprintln!(
+        "reduced window against the box-filtered picture: mean {mean:.2}, worst {worst:.1} of 255"
+    );
+    // the exact box of a footprint 3.7 texels wide swings with its phase over the stripes; the reduced copy's is a
+    // little wider and steadier
+    assert!(
+        mean < 8.0 && worst < 24.0,
+        "mean {mean:.2}, worst {worst:.1} at {at:?}"
+    );
+    let copies = made(&h);
+    for _ in 0..5 {
+        common::set_time(&mut h.state, &mut h.event_loop, now + 0.1);
+        h.state.request_redraw();
+        h.step();
+    }
+    assert_eq!(
+        made(&h),
+        copies,
+        "a window that does not commit keeps its copy"
+    );
+    drop(clients);
+}
+
+/// A client drawing at scale 2 on an output of scale 1.5 shows each pixel the average of the four-thirds of a texel a
+/// side it covers, as a box filter gives it, not the two texels a filtered lookup happens to fall between.
+#[test]
+fn a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture() {
+    let Some(mut h) = Harness::at_scale(|_| {}, 1.5) else {
+        return;
+    };
+    let size = (300, 200);
+    let client = TestClient::spawn_with(
+        h.socket_path(),
+        "org.example.stripes",
+        size,
+        [0, 0, 0, 255],
+        Options {
+            stripes: true,
+            buffer_scale: 2,
+            ..Options::default()
+        },
+    );
+    let (_, frame) = h.mapped_window(1);
+    let shot = h.screenshot("stripes-scale-2");
+    // the window's corner lands on the nearest device pixel
+    let at = Rect::new(
+        (frame.x * 1.5).round(),
+        (frame.y * 1.5).round(),
+        frame.w * 1.5,
+        frame.h * 1.5,
+    );
+    let (mean, worst) = against_box_filter(&shot, (size.0 * 2, size.1 * 2), at, 24.0);
+    eprintln!("a scale-2 window at scale 1.5 against the box-filtered picture: mean {mean:.2}, worst {worst:.1} of 255");
+    assert!(
+        mean < 2.0 && worst < 4.0,
+        "mean {mean:.2}, worst {worst:.1} at {at:?}"
+    );
+    drop(client);
 }
 
 // ---- resize band (3 pt inside, 4 pt outside the frame, corner zones 12 / 15 pt) -------------------------------

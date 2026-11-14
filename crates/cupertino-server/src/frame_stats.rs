@@ -121,6 +121,8 @@ pub struct DrawCounts {
     pub hud_uploads: u64,
     pub hud_upload_bytes: u64,
     pub blur_passes: u64,
+    /// Texels the blur passes wrote.
+    pub blur_texels: u64,
 }
 
 /// The running totals [`DrawCounts`] are taken from.
@@ -159,6 +161,7 @@ impl Totals {
             hud_uploads: self.uploads.hud - before.uploads.hud,
             hud_upload_bytes: self.uploads.hud_bytes - before.uploads.hud_bytes,
             blur_passes: self.material.blur_passes - before.material.blur_passes,
+            blur_texels: self.material.blur_texels - before.material.blur_texels,
         }
     }
 }
@@ -170,7 +173,7 @@ impl FrameRecord {
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         let c = &self.counts;
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -192,6 +195,7 @@ impl FrameRecord {
             c.hud_uploads,
             c.hud_upload_bytes,
             c.blur_passes,
+            c.blur_texels,
         )
     }
 }
@@ -285,7 +289,7 @@ pub struct FrameStats {
 /// The first line of the file: the column names.
 pub const HEADER: &str = "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us \
 app_lat_us allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads hud_upload_bytes \
-blur_passes";
+blur_passes blur_texels";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -548,7 +552,7 @@ mod tests {
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0"));
+        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0"));
     }
 
     #[test]
@@ -563,11 +567,12 @@ mod tests {
                 hud_uploads: 5,
                 hud_upload_bytes: 6000,
                 blur_passes: 7,
+                blur_texels: 8000,
             },
             ..Default::default()
         };
         assert!(
-            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7"),
+            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000"),
             "{}",
             r.line()
         );
@@ -583,6 +588,7 @@ mod tests {
         before.uploads.decoration = 4;
         before.uploads.decoration_bytes = 100;
         before.material.blur_passes = 20;
+        before.material.blur_texels = 5000;
         let mut after = before;
         after.decoration_rasters = 12;
         after.uploads.decoration = 6;
@@ -590,6 +596,7 @@ mod tests {
         after.uploads.hud = 1;
         after.uploads.hud_bytes = 64;
         after.material.blur_passes = 26;
+        after.material.blur_texels = 7500;
         assert_eq!(
             after.since(&before),
             DrawCounts {
@@ -600,6 +607,7 @@ mod tests {
                 hud_uploads: 1,
                 hud_upload_bytes: 64,
                 blur_passes: 6,
+                blur_texels: 2500,
             }
         );
     }

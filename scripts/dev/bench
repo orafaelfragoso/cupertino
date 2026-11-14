@@ -29,7 +29,7 @@ Everything is written as JSON with --out: per run, scenario and refresh rate, th
 median of the runs with their spread (max - min), which is the run-to-run noise. The table printed shows the medians.
   compositor  frames, fps, frame interval p50/p99/max, missed refreshes (a frame owed and not shown within a refresh),
               compose + render time p50/p99/max (GPU waited for), GPU time per frame p50/p99 (timestamps), glass GPU
-              p95, backdrops blurred again, blur passes, render targets made, title bar and HUD rasters and uploads
+              p95, backdrops blurred again, blur passes and the texels they wrote, render targets made, title bar and HUD rasters and uploads
               (and their bytes) per frame, input latency p50/p95 (to the next frame shown; `app`: to the first frame
               after a client answered), and the compositor's CPU time per second and per frame
   clients     per program: frames, frame time p50/p99/max, slow frames (longer than a refresh), and the p50 and p99
@@ -498,7 +498,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
         "gpu_p50_ms": pct(gpu, 50), "gpu_p99_ms": pct(gpu, 99),
         "glass_p95_ms": pct([r["glass_us"] / 1e3 for r in frames], 95),
         "blurred_per_frame": per("blurred"), "reused_per_frame": per("reused"), "allocated_per_frame": per("allocated"),
-        "blur_passes_per_frame": per("blur_passes"),
+        "blur_passes_per_frame": per("blur_passes"), "blur_texels_per_frame": per("blur_texels"),
         "decoration_rasters": sum(r.get("deco_rasters") or 0 for r in frames),
         "decoration_uploads": sum(r.get("deco_uploads") or 0 for r in frames),
         "decoration_upload_kib": sum(r.get("deco_upload_bytes") or 0 for r in frames) / 1024,
@@ -708,10 +708,14 @@ def fmt(v, width=7, digits=2) -> str:
     return f"{'-':>{width}}" if v is None else f"{v:{width}.{digits}f}"
 
 
+def kilo(v):
+    return None if v is None else v / 1000
+
+
 def table(summary: dict, renderer: str) -> str:
     lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
              f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'gpu99':>7} "
-             f"{'cpu/s':>7} {'blurP/f':>7} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7}"]
+             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7}"]
     for key, s in summary.items():
         g = lambda k: s.get(f"compositor.{k}", {}).get("median")
         slow = sum(v["median"] for k, v in s.items() if k.endswith(".slow_frames"))
@@ -720,7 +724,8 @@ def table(summary: dict, renderer: str) -> str:
         lines.append(
             f"{key:26} {fmt(g('frames'), 6, 0)} {fmt(g('interval_p99_ms'))} {fmt(g('missed'), 6, 0)} "
             f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('gpu_p99_ms'))} {fmt(g('cpu_ms_per_s'))} "
-            f"{fmt(g('blur_passes_per_frame'))} {fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
+            f"{fmt(g('blur_passes_per_frame'))} {fmt(kilo(g('blur_texels_per_frame')), 8, 1)} "
+            f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
             f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)}")
     return "\n".join(lines)
 

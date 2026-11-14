@@ -103,8 +103,17 @@ impl Listener {
             }
             std::fs::remove_file(&path)?;
         }
-        let socket = UnixListener::bind(&path)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        // Bound under a name of its own, made private and listening, then moved into place: a client finds the
+        // socket only once a connection to it is accepted, never between the bind and the listen.
+        let staging = path.with_extension(format!("{}.new", std::process::id()));
+        let _ = std::fs::remove_file(&staging);
+        let socket = UnixListener::bind(&staging)?;
+        let placed = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
+            .and_then(|()| std::fs::rename(&staging, &path));
+        if let Err(e) = placed {
+            let _ = std::fs::remove_file(&staging);
+            return Err(e);
+        }
         let inode = std::fs::symlink_metadata(&path)?.ino();
         Ok(Self {
             socket,

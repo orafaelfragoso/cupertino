@@ -50,3 +50,42 @@ fn the_peer_start_time_is_field_22_of_its_process() {
     assert_eq!(start_of("4242 (x) S 1 2"), None);
     assert!(start_time(std::process::id()).is_some_and(|start| start > 0));
 }
+#[test]
+fn the_socket_appears_only_private_and_listening_and_leaves_no_staging_name() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let runtime = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = socket_path(runtime.path(), "wayland-98").unwrap();
+    for _ in 0..200 {
+        // a client that connects the moment the name exists, as a bridge started beside the controller does
+        let watched = path.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let client = std::thread::spawn(move || loop {
+            if let Ok(meta) = std::fs::symlink_metadata(&watched) {
+                let mode = meta.mode() & 0o777;
+                return Some((
+                    mode,
+                    std::os::unix::net::UnixStream::connect(&watched).map(drop),
+                ));
+            }
+            if stopped.load(Ordering::Relaxed) {
+                return None;
+            }
+            std::hint::spin_loop();
+        });
+        let listener = Listener::bind(runtime.path(), "wayland-98").unwrap();
+        stop.store(true, Ordering::Relaxed);
+        if let Some((mode, connected)) = client.join().unwrap() {
+            assert_eq!(mode, 0o600, "the socket showed before it was private");
+            connected.expect("the socket showed before it listened");
+        }
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(!names.iter().any(|n| n.ends_with(".new")), "{names:?}");
+        drop(listener);
+    }
+}

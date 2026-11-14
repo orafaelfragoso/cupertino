@@ -1034,7 +1034,16 @@ fn descendants(conn: &Connection, peer: &str, path: &str) -> Vec<(OwnedObjectPat
     let mut out = Vec::new();
     for (_, child) in found.unwrap_or_default() {
         let node = accessible(conn, peer, child.as_str());
-        let role: u32 = node.call("GetRole", &()).unwrap();
+        // the tree is live: a node listed a moment ago may be gone by the time it is asked
+        let role: u32 = match node.call("GetRole", &()) {
+            Ok(role) => role,
+            Err(zbus::Error::MethodError(name, _, _))
+                if name.as_str() == "org.freedesktop.DBus.Error.UnknownObject" =>
+            {
+                continue
+            }
+            Err(e) => panic!("GetRole of {child}: {e}"),
+        };
         let name: String = node.get_property("Name").unwrap_or_default();
         out.push((child.clone(), role, name));
         out.extend(descendants(conn, peer, child.as_str()));

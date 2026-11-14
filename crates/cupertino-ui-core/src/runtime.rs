@@ -1199,6 +1199,24 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 return Ok(());
             }
+            PlatformEvent::BuffersLost => {
+                // the window system holds nothing of what it showed: every window presents a whole frame
+                for w in &mut self.windows {
+                    w.invalidate();
+                    w.invalidate_damage();
+                }
+                return Ok(());
+            }
+            PlatformEvent::RendererChanged(_) => {
+                // the factory makes renderers of the new kind; the old ones go with their frames, layers and caches
+                for w in &mut self.windows {
+                    w.renderer = (self.options.renderers)();
+                    w.layer.renderer = None;
+                    w.invalidate();
+                    w.invalidate_damage();
+                }
+                return Ok(());
+            }
         };
         let Some(i) = self.windows.iter().position(|w| w.id == window) else {
             return Ok(());

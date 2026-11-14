@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 92 crates, 446 internal dependencies
+// 92 crates, 449 internal dependencies
 // per layer: foundation 23, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -159,6 +159,7 @@ digraph "layers" {
   "cupertino-control" -> "cupertino-shell-client";
   "cupertino-control" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa";
+  "cupertino-controlcenter" -> "cupertino-animation";
   "cupertino-controlcenter" -> "cupertino-assets" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-defaults";
   "cupertino-controlcenter" -> "cupertino-diagnostic-events";
@@ -403,6 +404,7 @@ digraph "layers" {
   "cupertino-powerd" -> "cupertino-evdev";
   "cupertino-powerd" -> "cupertino-seat";
   "cupertino-powerd" -> "cupertino-test-bus" [label="dev"];
+  "cupertino-protocol-app" -> "cupertino-animation";
   "cupertino-protocol-app" -> "cupertino-app-protocols";
   "cupertino-protocol-app" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-protocol-app" -> "cupertino-defaults";
@@ -538,6 +540,7 @@ digraph "layers" {
   "cupertino-ui-menus" -> "cupertino-protocol-app";
   "cupertino-ui-menus" -> "cupertino-test-bus" [label="dev"];
   "cupertino-ui-menus" -> "cupertino-wayland-client";
+  "cupertino-ui-platform" -> "cupertino-animation";
   "cupertino-ui-platform" -> "cupertino-geometry";
   "cupertino-ui-platform" -> "cupertino-menu-model";
   "cupertino-ui-platform" -> "cupertino-modifiers";

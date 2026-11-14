@@ -58,19 +58,15 @@ impl Presentations {
         changes: &[PresentChange],
     ) -> Result<(), PlatformError> {
         let layers = self.layers.as_ref().ok_or(PlatformError::Unsupported)?;
-        if !self.shown.contains_key(&window) {
-            let layer = layers
-                .presentation(conn, surface)
-                .ok_or(PlatformError::Unsupported)?;
-            self.shown.insert(
-                window,
-                Presentation {
-                    layer,
-                    running: HashMap::new(),
-                },
-            );
-        }
-        let p = self.shown.get_mut(&window).expect("made above");
+        let p = match self.shown.entry(window) {
+            std::collections::hash_map::Entry::Occupied(p) => p.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => v.insert(Presentation {
+                layer: layers
+                    .presentation(conn, surface)
+                    .ok_or(PlatformError::Unsupported)?,
+                running: HashMap::new(),
+            }),
+        };
         for change in changes {
             let prop = property(change.property);
             let sent = match change.curve {

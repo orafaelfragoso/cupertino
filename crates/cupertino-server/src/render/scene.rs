@@ -335,6 +335,11 @@ pub struct RenderResources {
     pub mesh: Option<SharedMesh>,
     /// The retained window snapshots (closing ghosts).
     pub snapshots: super::snapshots::Snapshots,
+    /// The snapshot each minimizing or restoring window is drawn from, by window and output: captured on the
+    /// animation's first frame and drawn through the mesh until a frame of that output no longer shows it.
+    minimizing: RefCell<HashMap<(WindowId, OutputId), MinimizeCapture>>,
+    /// How many window snapshots minimize and restore animations have captured for the output's frames.
+    minimize_captures: std::cell::Cell<u64>,
     theme: Option<Theme>,
     recipes: RefCell<RecipeCache>,
     /// How much denser every material is made, in percent ([`Config::material_density`](crate::config::Config)).
@@ -343,7 +348,27 @@ pub struct RenderResources {
     tint_windows: std::cell::Cell<bool>,
 }
 
+/// The snapshot a minimizing or restoring window is drawn from, at the size in pixels it was captured at.
+struct MinimizeCapture {
+    owner: super::snapshots::SnapshotOwner,
+    size_px: (i32, i32),
+    used: bool,
+}
+
 impl RenderResources {
+    /// How many window snapshots minimize and restore animations have captured for the outputs' frames (a
+    /// screenshot's own are not counted): one an animation.
+    pub fn minimize_captures(&self) -> u64 {
+        self.minimize_captures.get()
+    }
+
+    /// Forget the minimize snapshots of `output` that its last frame did not draw: their animation ended.
+    fn end_minimize_frame(&self, output: OutputId) {
+        self.minimizing
+            .borrow_mut()
+            .retain(|(_, o), c| *o != output || std::mem::replace(&mut c.used, false));
+    }
+
     pub fn new(renderer: &mut GlesRenderer) -> anyhow::Result<Self> {
         let programs =
             Programs::compile(renderer).map_err(|e| anyhow::anyhow!("compiling shaders: {e}"))?;
@@ -374,6 +399,8 @@ impl RenderResources {
             material_error,
             mesh,
             snapshots: super::snapshots::Snapshots::default(),
+            minimizing: RefCell::new(HashMap::new()),
+            minimize_captures: std::cell::Cell::new(0),
             theme,
             recipes: RefCell::new(HashMap::new()),
             density: std::cell::Cell::new(0),
@@ -1834,17 +1861,56 @@ fn minimize_elements(
     if natural.w < 1.0 || natural.h < 1.0 {
         return None;
     }
-    let (texture, _) = capture_window(
-        renderer,
-        p,
-        entry,
-        natural,
-        active,
-        0.0,
-        false,
-        SnapshotBackdrop::Fills,
-    )?;
-    let owner = p.res.snapshots.insert(texture);
+    let size_px = (
+        ((natural.w * p.scale).round() as i32).max(1),
+        ((natural.h * p.scale).round() as i32).max(1),
+    );
+    // a capture for a screenshot takes its own snapshot, so a protected window is left out of it
+    let key = (!p.for_capture).then_some((entry.id, p.output_id));
+    let kept = key.and_then(|key| {
+        let mut minimizing = p.res.minimizing.borrow_mut();
+        let c = minimizing.get_mut(&key).filter(|c| c.size_px == size_px)?;
+        c.used = true;
+        p.res.snapshots.pin(c.owner.id()).ok()
+    });
+    let keep = match kept {
+        Some(lease) => SnapshotKeep::Pinned(lease),
+        None => {
+            let (texture, _) = capture_window(
+                renderer,
+                p,
+                entry,
+                natural,
+                active,
+                0.0,
+                false,
+                SnapshotBackdrop::Fills,
+            )?;
+            let owner = p.res.snapshots.insert(texture);
+            match key {
+                Some(key) => {
+                    p.res
+                        .minimize_captures
+                        .set(p.res.minimize_captures.get() + 1);
+                    let lease = p.res.snapshots.pin(owner.id()).ok()?;
+                    p.res.minimizing.borrow_mut().insert(
+                        key,
+                        MinimizeCapture {
+                            owner,
+                            size_px,
+                            used: true,
+                        },
+                    );
+                    SnapshotKeep::Pinned(lease)
+                }
+                None => SnapshotKeep::Owned(owner),
+            }
+        }
+    };
+    let snapshot = match &keep {
+        SnapshotKeep::Pinned(lease) => lease.id(),
+        SnapshotKeep::Owned(owner) => owner.id(),
+    };
     let effect = MinimizeEffect::new(
         kind,
         natural.into_geom(),
@@ -1868,8 +1934,8 @@ fn minimize_elements(
     Some(vec![Piece::Mesh(Box::new(MeshPiece {
         kind: SceneKind::MinimizeMesh,
         index: entry.id.0,
-        snapshot: owner.id(),
-        keep: SnapshotKeep::Owned(owner),
+        snapshot,
+        keep,
         mesh: local_mesh,
         opacity: (pres.opacity * super::motion::minimize_opacity(pres.minimize_progress, p.display))
             as f32,
@@ -2899,6 +2965,9 @@ pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Co
     // what the composition used this frame is all it keeps for the next one
     p.decor.end_frame();
     p.overlays.images.end_frame();
+    if !p.for_capture {
+        p.res.end_minimize_frame(p.output_id);
+    }
     stack.finish(p)
 }
 

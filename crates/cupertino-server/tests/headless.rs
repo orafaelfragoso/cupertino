@@ -2060,6 +2060,56 @@ fn every_minimize_effect_draws_a_mesh_and_restore_runs_it_backwards() {
     }
 }
 
+#[test]
+fn a_minimize_captures_the_window_once_and_a_restore_once_more() {
+    use cupertino_effects::MinimizeKind;
+    let kind = MinimizeKind::Warp;
+    let Some(mut h) = Harness::with_config(|c| {
+        c.effects.minimize = Some(kind);
+    }) else {
+        return;
+    };
+    let client = TestClient::spawn(
+        h.socket_path(),
+        "org.example.fx",
+        (420, 300),
+        [0, 255, 0, 255],
+    );
+    let (id, _) = h.mapped_window(1);
+    let captures = |h: &Harness| h.state.render.as_ref().unwrap().minimize_captures();
+    assert_eq!(captures(&h), 0);
+    let duration = kind.duration_s(false);
+    // the animation's frames, from its start to past its end
+    let mut animate = |h: &mut Harness| {
+        let t0 = h.state.now();
+        for step in 1..=8 {
+            let time = t0 + duration * f64::from(step) / 8.0;
+            common::set_time(&mut h.state, &mut h.event_loop, time);
+            h.state.tick();
+            h.step();
+        }
+        common::set_time(&mut h.state, &mut h.event_loop, t0 + duration + 1.0);
+        h.state.tick();
+        h.step();
+    };
+    h.state.command(Command::Minimize {
+        window: id,
+        target: Some(DOCK_SLOT),
+    });
+    animate(&mut h);
+    assert!(h.state.wm.window(id).unwrap().state().is_minimized());
+    assert_eq!(
+        captures(&h),
+        1,
+        "every frame of the minimize draws one snapshot"
+    );
+    h.state.command(Command::Restore { window: id });
+    animate(&mut h);
+    assert!(!h.state.wm.window(id).unwrap().state().is_minimized());
+    assert_eq!(captures(&h), 2, "the restore captures the window once more");
+    drop(client);
+}
+
 // ---- resize band (3 pt inside, 4 pt outside the frame, corner zones 12 / 15 pt) -------------------------------
 
 use cupertino_server::state::WindowTarget;

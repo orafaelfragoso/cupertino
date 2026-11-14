@@ -30,7 +30,7 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_kit::platform::{
-    CubicBezier, GlassStyle, LayerChange, LayerCurve, LayerProperty, SurfaceLayerLook,
+    CubicBezier, GlassStyle, LayerChange, LayerCurve, LayerEdge, LayerProperty, SurfaceLayerLook,
 };
 use std::sync::Arc;
 
@@ -122,6 +122,7 @@ pub fn glass_look(frame: &Frame) -> SurfaceLayerLook {
         },
         radius: enclosure_radius(frame),
         masks: false,
+        edge: LayerEdge::NONE,
     }
 }
 
@@ -133,6 +134,18 @@ pub fn button_glass_look(side: f64) -> SurfaceLayerLook {
         group: (JOIN_CONTAINER, JOIN_SPACING),
         radius: side / 2.0,
         masks: false,
+        edge: LayerEdge::NONE,
+    }
+}
+
+/// The thin dark edge outside the panel's glass as the compositor draws it along a glass layer's outline (the look's
+/// [`SurfaceLayerLook::edge`]): [`EDGE_WIDTH`] wide in black at the opacity of the edge the panel draws over glass, in
+/// the `dark` or light appearance. In a glass group it runs along the outline of the joined shape, as the panel's own
+/// edges are left out where its shapes join.
+pub fn glass_edge(dark: bool) -> LayerEdge {
+    LayerEdge {
+        width: EDGE_WIDTH,
+        color: [0.0, 0.0, 0.0, edge_alpha(dark, true)],
     }
 }
 

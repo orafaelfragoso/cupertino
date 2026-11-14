@@ -772,6 +772,27 @@ Gate:
             samples while it fades, and the server sees the blur reach 7.96 of its 8 points with no window buffer
             (`a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer`).
             Every value the launcher draws can now be carried exactly, on the compositor's clock.
+      - [x] The edge drawn by the compositor (version 5, `set_glass_edge(width, red, green, blue, alpha)`): a line up
+            to 4 points wide just outside a layer's glass, or along the outline of its glass group's joined shape with
+            the group's first layer's edge, drawn by the glass composite over what lies there and over the glass's own
+            antialiased edge as a stroke is, at the output's scale so its width stays as the layer scales, and left out
+            where the group's shapes join (`cupertino_glass::glass::GlassEdge`, stage 10 of the glass; the toolkit's
+            `SurfaceLayerLook::edge` under `Capabilities::surface_layer_edges`). On the server it runs two device
+            pixels wide at scale 2 along a capsule's top, keeps them scaled by 1.5, and runs round a button budding out
+            of a field's end but not inside either shape
+            (`a_glass_edge_runs_outside_the_group_s_joined_outline_at_its_width_whatever_the_scale`); the glass's model
+            covers each pixel by the band's overlap with it and lays it over the glass's edge pixel
+            (`the_edge_is_a_stroke_of_its_width_outside_the_outline_over_the_glass_s_own_edge`,
+            `a_joined_container_s_edge_follows_the_union_and_not_each_shape`). Against the launcher's own edge at rest
+            (`layers::glass_edge` in the glass layers' looks), at 1, 1.5 and 2 in both appearances: within 4 of 255
+            along the search field and its mode button (capsules) and along every straight side
+            (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). At a scope's corners it is
+            not: the glass's corners are continuous, and the launcher strokes its edge along circular arcs that stand
+            up to 0.57 points off the glass where each corner starts to curve, so there the two part by up to the
+            line's own opacity (32 of 255 at 1 and 52 at 1.5 in the light appearance, 109 and 178 in the dark, 67 and
+            230 at 2). OWNER DECISION: a scope's edge following its glass's corner is a change of the launcher's look
+            at its corners (and of the goldens), so the scopes' rest and close keep the edge layer, and the compositor's
+            edge is used where the outline changes shape while the shapes are capsules.
       - [x] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
             the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
             (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it. The panel at rest is

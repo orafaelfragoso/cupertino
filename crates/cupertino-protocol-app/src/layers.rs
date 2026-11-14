@@ -2,6 +2,8 @@
 //! presentation of a layer shell surface as a whole, so a panel opens and closes without drawing a frame. Version 3
 //! presents popups as a whole too, so a popover grows and a menu fades without one, and joins the glass of layers into
 //! one shape ([`Layer::set_glass_group`]). Version 4 blurs a layer's own content ([`LayerProperty::ContentBlur`]).
+//! Version 5 draws a line along the outside of a layer's glass, or of its group's joined glass, at a width that keeps
+//! as the layer scales ([`Layer::set_glass_edge`]).
 
 use crate::{AppEvent, Error, Quiet};
 use cupertino_animation::LayerCurve;
@@ -19,6 +21,10 @@ const PRESENTATION_VERSION: u32 = 2;
 const POPUP_VERSION: u32 = 3;
 /// The version that blurs a layer's content ([`Layers::blurs_content`], [`LayerProperty::ContentBlur`]).
 const CONTENT_BLUR_VERSION: u32 = 4;
+/// The version that draws an edge along a layer's glass ([`Layers::draws_glass_edges`], [`Layer::set_glass_edge`]).
+const GLASS_EDGE_VERSION: u32 = 5;
+/// Widest edge along a layer's glass the server takes, in points.
+pub const MAX_GLASS_EDGE: f64 = 4.0;
 /// Widest blend between the joined shapes of a glass group the server takes, in points.
 pub const MAX_GROUP_SPACING: f64 = 64.0;
 /// Widest blur of a layer's content the server takes: the standard deviation of its Gaussian, in points.
@@ -117,7 +123,7 @@ pub struct Layers(CupertinoLayersV1);
 impl Layers {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<Layers> {
-        conn.bind_extension(1..=CONTENT_BLUR_VERSION, Quiet)
+        conn.bind_extension(1..=GLASS_EDGE_VERSION, Quiet)
             .map(Layers)
     }
 
@@ -134,6 +140,11 @@ impl Layers {
     /// Whether the server blurs a layer's own content ([`LayerProperty::ContentBlur`], version 4).
     pub fn blurs_content(&self) -> bool {
         self.0.version() >= CONTENT_BLUR_VERSION
+    }
+
+    /// Whether the server draws an edge along a layer's glass ([`Layer::set_glass_edge`], version 5).
+    pub fn draws_glass_edges(&self) -> bool {
+        self.0.version() >= GLASS_EDGE_VERSION
     }
 
     /// Make `surface` a layer of `parent`: it shows with the parent's next commit. `None` when either surface is
@@ -295,6 +306,23 @@ impl Layer {
             return Err(Error::InvalidGlass);
         }
         self.0.set_glass_group(group, spacing);
+        Ok(())
+    }
+
+    /// Draw a line `width` points wide (0 for none, at most [`MAX_GLASS_EDGE`]) of the straight `color` along the
+    /// outside of the layer's glass, or of its group's joined glass when it is the group's first layer; its width stays
+    /// as the layer scales. Refused below version 5.
+    pub fn set_glass_edge(&self, width: f64, color: [f64; 4]) -> Result<(), Error> {
+        if self.0.version() < GLASS_EDGE_VERSION {
+            return Err(Error::Unsupported("cupertino_layer_v1.set_glass_edge"));
+        }
+        if !(0.0..=MAX_GLASS_EDGE).contains(&width)
+            || color.iter().any(|c| !(0.0..=1.0).contains(c))
+        {
+            return Err(Error::InvalidGlass);
+        }
+        let [r, g, b, a] = color;
+        self.0.set_glass_edge(width, r, g, b, a);
         Ok(())
     }
 }

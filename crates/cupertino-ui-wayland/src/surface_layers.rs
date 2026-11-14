@@ -2,7 +2,7 @@
 //! of the window's surface, its frame copied into buffers of its own, its rect and look sent as the layer's values,
 //! and the application's changes ([`WindowRequest::Layer`]) sent as the layer's requests, so they apply with the
 //! window's next commit. Layers need version 4 of the global (content blur): below it a window has none and the
-//! runtime paints marked subtrees in place.
+//! runtime paints marked subtrees in place. From version 5 a layer's look carries the edge along its glass.
 //!
 //! [`WindowSystem::present_surface_layers`]: cupertino_ui_platform::WindowSystem::present_surface_layers
 //! [`WindowRequest::Layer`]: cupertino_ui_platform::WindowRequest
@@ -161,6 +161,12 @@ impl SurfaceLayers {
                 }
                 if look.masks != s.look.masks {
                     s.layer.set_masks_to_bounds(look.masks);
+                }
+                if look.edge != s.look.edge && layers.draws_glass_edges() {
+                    let e = look.edge;
+                    s.layer
+                        .set_glass_edge(e.width, e.color.map(f64::from))
+                        .map_err(protocol_error)?;
                 }
                 s.look = look;
             }

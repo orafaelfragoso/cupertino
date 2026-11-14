@@ -379,6 +379,177 @@ fn a_close_in_the_caret_s_fade_draws_no_frame() {
     assert_eq!(m.presents(), shown, "no frame of the window or its layers");
 }
 
+/// The panel at rest in the search field, its results and the browser, drawn as layers at `scale` in the `dark` or
+/// light appearance: each view's name, window size and the layers it shows with their frames.
+fn resting_layers(
+    scale: f64,
+    dark: bool,
+) -> Vec<(&'static str, (u32, u32), Vec<PresentedSurfaceLayer>)> {
+    let mut m = drawn(scale, dark, true);
+    let mut out = Vec::new();
+    let take = |m: &mut Metered, what| {
+        m.repaint_whole();
+        let (w, h, _) = m.window_pixels();
+        (what, (w, h), m.shown_layers())
+    };
+    m.settle_on(Message::Toggle);
+    out.push(take(&mut m, "the search field"));
+    for c in "te".chars() {
+        m.step(|s, w| key(s, w, c as u32, Some(c), Mods::NONE));
+    }
+    m.until_quiet(4, 200);
+    out.push(take(&mut m, "the results"));
+    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    m.until_quiet(4, 200);
+    m.step(|s, w| key(s, w, '1' as u32, Some('1'), Mods::PRIMARY));
+    m.until_quiet(4, 200);
+    out.push(take(&mut m, "the browser"));
+    out
+}
+
+/// The edge a compositor draws along the glass of `layers` with `edge` in each glass group's first layer's look, in a
+/// window `size` pixels large at `scale`: for each pixel, its alpha and how far its centre lies outside the glass, in
+/// pixels, as the glass's own model of the edge works them out in device pixels.
+fn compositor_edge(
+    size: (u32, u32),
+    scale: f64,
+    layers: &[PresentedSurfaceLayer],
+    edge: cupertino_kit::platform::LayerEdge,
+) -> Vec<(f32, f32)> {
+    use cupertino_glass::glass::{Container, GlassEdge, GlassMode, GlassShape};
+    let s = scale as f32;
+    let glass: Vec<&PresentedSurfaceLayer> =
+        layers.iter().filter(|l| l.look.glass.is_some()).collect();
+    let mut groups: Vec<(u32, f64, Vec<GlassShape>)> = Vec::new();
+    for l in &glass {
+        let r = l.rect;
+        let shape = GlassShape::new(
+            [
+                r.x() as f32 * s,
+                r.y() as f32 * s,
+                r.width() as f32 * s,
+                r.height() as f32 * s,
+            ],
+            l.look.radius as f32 * s,
+        );
+        let (group, spacing) = l.look.group;
+        match groups.iter_mut().find(|g| group != 0 && g.0 == group) {
+            Some(g) => g.2.push(shape),
+            None => groups.push((group, spacing, vec![shape])),
+        }
+    }
+    let containers: Vec<Container> = groups
+        .into_iter()
+        .map(|(_, spacing, shapes)| {
+            Container::new(shapes, spacing as f32 * s, GlassMode::default()).with_edge(GlassEdge {
+                width: edge.width as f32 * s,
+                color: edge.color,
+            })
+        })
+        .collect();
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut out = vec![(0.0, f32::INFINITY); w * h];
+    for (i, px) in out.iter_mut().enumerate() {
+        let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
+        for c in &containers {
+            let d = c.field(p).0;
+            let a = c.edge.color[3] * c.edge_share_at(d);
+            *px = (1.0 - (1.0 - px.0) * (1.0 - a), px.1.min(d));
+        }
+    }
+    out
+}
+
+/// The alpha the panel's own edges draw at each pixel of a window `size` pixels large at `scale`: its edge layer's and
+/// its mode buttons' faces' frames laid where they stand.
+fn drawn_edges(size: (u32, u32), scale: f64, layers: &[PresentedSurfaceLayer]) -> Vec<f32> {
+    let (w, h) = (size.0 as i64, size.1 as i64);
+    let mut out = vec![0.0f32; (w * h) as usize];
+    for l in layers
+        .iter()
+        .filter(|l| l.key == EDGE_LAYER || (l.key >= 16 && l.key % 2 == 1))
+    {
+        let frame = l.frame.as_ref().expect("an edge layer drew a frame");
+        let (x0, y0) = (
+            (l.rect.x() * scale).round() as i64,
+            (l.rect.y() * scale).round() as i64,
+        );
+        for y in 0..i64::from(frame.pixel_height) {
+            for x in 0..i64::from(frame.width) {
+                let (tx, ty) = (x0 + x, y0 + y);
+                if tx < 0 || ty < 0 || tx >= w || ty >= h {
+                    continue;
+                }
+                let a = f32::from(
+                    frame.pixels[y as usize * frame.stride as usize + x as usize * 4 + 3],
+                ) / 255.0;
+                let d = &mut out[(ty * w + tx) as usize];
+                *d = 1.0 - (1.0 - *d) * (1.0 - a);
+            }
+        }
+    }
+    out
+}
+
+/// The edge the compositor draws along the panel's glass is the edge the panel draws itself: at rest, at 1, 1.5 and 2
+/// in both appearances, outside the glass (inside it the faces draw their symbols), the glass's own model of the edge
+/// of [`crate::view::layers::glass_edge`] in each group's look, the search field and its mode button joined in one,
+/// is the panel's edge layers within 4 of 255 along every capsule and every straight side. A scope's continuous
+/// corners are not the circular arcs the panel strokes its edge along, which stand up to 0.57 points off them where
+/// each corner starts to curve: there the compositor's edge follows the glass and the two part by up to the line's own
+/// opacity, at the corners alone (`--no-capture` prints both).
+#[test]
+fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
+    for scale in [1.0, 1.5, 2.0] {
+        for dark in [false, true] {
+            for (what, size, layers) in resting_layers(scale, dark) {
+                let model =
+                    compositor_edge(size, scale, &layers, crate::view::layers::glass_edge(dark));
+                let own = drawn_edges(size, scale, &layers);
+                let enclosure = layers.iter().find(|l| l.key == GLASS_LAYER).unwrap();
+                let (r, radius) = (enclosure.rect, enclosure.look.radius);
+                // a corner's curve reaches this far along the sides of a continuous corner
+                let reach = radius * 1.53 + 2.0;
+                let corner = |x: f64, y: f64| {
+                    let (dx, dy) = (
+                        (x - r.x()).min(r.max_x() - x),
+                        (y - r.y()).min(r.max_y() - y),
+                    );
+                    dx < reach && dy < reach
+                };
+                let capsule = radius * 2.0 >= r.height() - 1e-9;
+                let (mut most, mut most_corner) = (0.0f32, 0.0f32);
+                for (i, ((a, d), b)) in model.iter().zip(&own).enumerate() {
+                    if *d < -1.0 {
+                        continue;
+                    }
+                    let diff = (a - b).abs() * 255.0;
+                    let (x, y) = (
+                        (i % size.0 as usize) as f64 / scale,
+                        (i / size.0 as usize) as f64 / scale,
+                    );
+                    if !capsule && corner(x, y) {
+                        most_corner = most_corner.max(diff);
+                    } else {
+                        most = most.max(diff);
+                    }
+                }
+                eprintln!(
+                    "trace: edge, {what} at {scale}x, dark {dark}: largest difference {most:.1}, at the corners {most_corner:.1}"
+                );
+                assert!(
+                    most <= 4.0,
+                    "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}"
+                );
+                assert!(
+                    capsule || most_corner > 4.0,
+                    "{what}: the corners part as the arcs do"
+                );
+            }
+        }
+    }
+}
+
 /// The deviation below which a compositor draws a layer's content sharp, in device pixels.
 const SHARP_BELOW_PX: f64 = 0.3;
 

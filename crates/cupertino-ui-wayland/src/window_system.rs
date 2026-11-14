@@ -1466,6 +1466,11 @@ impl WindowSystem for WaylandWindowSystem {
             present_animation: self.presentations.available() && self.roles.is_some(),
             present_popups: self.presentations.popups(),
             surface_layers: self.surface_layers_drawn(),
+            surface_layer_edges: self.surface_layers_drawn()
+                && self
+                    .presentations
+                    .layers()
+                    .is_some_and(cupertino_protocol_app::Layers::draws_glass_edges),
         }
     }
 

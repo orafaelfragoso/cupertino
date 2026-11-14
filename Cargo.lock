@@ -1442,6 +1442,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
+ "cupertino-glass",
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-modifiers",

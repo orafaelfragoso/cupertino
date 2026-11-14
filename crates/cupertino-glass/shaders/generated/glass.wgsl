@@ -157,7 +157,9 @@ struct Glass {
   shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
   cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
   cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
-  lens: vec4<f32>,        // the blur's weight at the top and at the bottom of the shapes, magnification, unused
+  lens: vec4<f32>,        // the blur's weight at the top and at the bottom of the shapes, magnification, the edge's
+                          // width
+  edge: vec4<f32>,        // the edge's straight colour and opacity
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -379,6 +381,23 @@ fn outside(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>) -> vec4<f32> {
   return vec4<f32>(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
 }
 
+// the share of a pixel whose centre lies d outside the outline that the edge's band, from the outline to w outside it,
+// covers
+fn edge_share(d: f32, w: f32) -> f32 {
+  return clamp(min(d + 0.5, w) - max(d - 0.5, 0.0), 0.0, 1.0);
+}
+
+// stage 8: the edge over what the pixel shows (straight colour c at coverage c.a), as a stroke drawn over it; its band
+// in the field's units, as the glass's own coverage is
+fn with_edge(c: vec4<f32>, d: f32) -> vec4<f32> {
+  let w = G.lens.w;
+  if (w <= 0.0 || G.edge.a <= 0.0) { return c; }
+  let e = clamp(G.edge.a * edge_share(d, w), 0.0, 1.0);
+  if (e <= 0.0) { return c; }
+  let a = c.a + e - c.a * e;
+  return vec4<f32>((c.rgb * c.a * (1.0 - e) + G.edge.rgb * e) / a, a);
+}
+
 // the share of the pixel inside the outline the container is cut to: all of it when it is not cut
 fn cut_coverage(p: vec2<f32>) -> f32 {
   if (G.cut_shape.z <= 0.0) { return 1.0; }
@@ -396,7 +415,7 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
     // the normal only matters to an edge line kept to the sides, in its band
     var on = vec2<f32>(0.0);
     if (G.diffuse.w > 0.0 && G.levels.x > 0.0 && d < 1.5) { on = field_normal(p); }
-    let o = outside(p, d, f.b.z, on);
+    let o = with_edge(outside(p, d, f.b.z, on), d);
     let a = o.a * G.info.w * kept;
     if (a <= 0.0) { discard; }
     return placed(vec4<f32>(o.rgb, a), fin.pos.xy);
@@ -488,5 +507,6 @@ fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
   let a = cov + under;
   var rgb = c;
   if (a > 0.0) { rgb = (clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * cov + o.rgb * under) / a; }
-  return placed(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a * G.info.w * kept), fin.pos.xy);
+  let edged = with_edge(vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), a), d);
+  return placed(vec4<f32>(clamp(edged.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), edged.a * G.info.w * kept), fin.pos.xy);
 }

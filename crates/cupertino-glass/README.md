@@ -130,6 +130,11 @@ composite then, per pixel:
 9. the veil (after the rim, before the ring): the face times `1 − v`, `v` running linearly from the recipe's top value
    at the top of the shapes' bounds to its bottom value at their bottom (`Container::veil`; the uniform's `fill.w` and
    `levels.y`).
+10. the container's edge, where it carries one (`Container::edge`, a `GlassEdge` of a width and a straight colour; the
+   uniform's `lens.w` in pixels and `edge`): a stroke of its width just outside the union's outline, its share of each
+   pixel the band's overlap with the pixel across the field (`edge_share`), laid over everything above and over the
+   glass's own antialiased edge (`over_edge`), as a stroke around the shape is. It runs along the joined outline, so it
+   is left out where the shapes join; the compositor draws a layer's `set_glass_edge` through it.
 
 Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its

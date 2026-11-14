@@ -93,6 +93,16 @@ impl Harness {
         self.settle();
     }
 
+    /// Input comes after `seconds`, and the loop pass that handles it reads the clock a hair later, as on the real
+    /// clock.
+    fn touch(&mut self, seconds: f64) {
+        self.now += seconds;
+        self.state.fixed_time = Some(self.now);
+        self.state.input_came();
+        self.now += 1e-6;
+        self.settle();
+    }
+
     /// Move the model clock on by `seconds` with nobody using the desktop.
     fn rest(&mut self, seconds: f64) {
         self.now += seconds;
@@ -190,6 +200,40 @@ fn a_desktop_nobody_uses_pings_no_one_and_the_first_input_pings_at_once() {
     client.mute(false);
     h.settle();
     assert!(!h.state.window_is_unresponsive(id));
+}
+
+#[test]
+fn a_client_that_hangs_on_the_first_input_after_a_rest_is_unresponsive_two_seconds_after_the_next_ping(
+) {
+    let Some(mut h) = Harness::new() else { return };
+    let (client, id) = mapped_window(&mut h);
+    h.advance(1.1);
+    h.rest(1.1);
+    h.rest(5.0);
+    assert!(!h.state.hung.awaiting_pong(), "the desktop rests");
+    // one input: the ping that goes out a hair after it is answered, and then the client blocks handling the input
+    h.touch(0.1);
+    assert!(!h.state.hung.awaiting_pong(), "answered");
+    client.mute(true);
+    assert!(
+        h.state.hung.next_deadline().is_some(),
+        "one more ping is due"
+    );
+    h.rest(1.1);
+    assert!(
+        h.state.hung.awaiting_pong(),
+        "the ping a second after the input"
+    );
+    h.rest(2.1);
+    assert!(h.state.window_is_unresponsive(id));
+    client.mute(false);
+    h.settle();
+    assert!(!h.state.window_is_unresponsive(id));
+    // answered, the extra ping is the last until the next input
+    h.rest(1.1);
+    h.rest(5.0);
+    assert!(!h.state.hung.awaiting_pong());
+    assert_eq!(h.state.hung.next_deadline(), None);
 }
 
 #[test]

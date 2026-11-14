@@ -22,6 +22,7 @@ use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
+use super::reduce::{self, ReducedElement};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::snapshots::Snapshots;
 use super::ui::{rounded_rect, RoundedRectSpec};
@@ -241,6 +242,7 @@ pub fn lower(
             }
         }
     }
+    ctx.programs.reduced.end_lowering();
     elements
 }
 
@@ -420,13 +422,54 @@ fn surface_tree(
                 SurfaceRole::WindowContent => mask(ctx, item.clip, viewport),
                 _ => None,
             };
+            // a surface drawn at half its size or less is drawn from a reduced copy, made at full opacity
+            let halvings = reduce::halvings(place.scale_x.min(place.scale_y));
+            let mut opaque: Option<Vec<WaylandSurfaceRenderElement<GlesRenderer>>> = None;
             for e in els {
+                let reduced = if halvings == 0 {
+                    None
+                } else {
+                    let g = e.geometry(scale);
+                    let size = reduce::copy_size((g.size.w, g.size.h), halvings);
+                    let reductions = ctx.programs.reduced.clone();
+                    reductions.kept(&e, size).or_else(|| {
+                        if e.alpha() >= 1.0 {
+                            return reductions.make(
+                                ctx.renderer,
+                                &ctx.programs.clip_minify,
+                                &e,
+                                size,
+                            );
+                        }
+                        let all = opaque.get_or_insert_with(|| {
+                            surface_elements(
+                                ctx,
+                                surface,
+                                only.as_ref(),
+                                origin,
+                                scale,
+                                1.0,
+                                Kind::Unspecified,
+                            )
+                        });
+                        let full = all.iter().find(|f| f.id() == e.id())?;
+                        reductions.make(ctx.renderer, &ctx.programs.clip_minify, full, size)
+                    })
+                };
+                let e = match reduced {
+                    Some((copy, of)) => ReducedElement::reduced(e, copy, of),
+                    None => ReducedElement::direct(e),
+                };
                 match shape {
                     Some(shape) => {
-                        let clip = clipped(ctx, e, shape);
+                        let clip =
+                            clipped(ctx, e, shape).minified(ctx.programs.clip_minify.clone());
                         out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
                     }
-                    None => out.push(RescaleRenderElement::from_element(e, pivot, rescale).into()),
+                    None => {
+                        let e = e.minified(ctx.programs.clip_minify.clone());
+                        out.push(RescaleRenderElement::from_element(e, pivot, rescale).into())
+                    }
                 }
             }
         }

@@ -11,6 +11,7 @@ use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions}
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Transform};
 
 use super::programs::{invert3, u2, u4, umat3};
+use smithay::backend::renderer::gles::Uniform;
 
 /// Mask description in output pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,10 +67,58 @@ fn inner_since(generation: usize, since: Option<CommitCounter>) -> Option<Option
     }
 }
 
+/// What an element samples as it draws the part `src` of its buffer over `dst`: the size of its texture in texels and
+/// how many of them a pixel covers a side; `None` for an element that draws no texture, or one the minifying filter
+/// does not apply to.
+pub trait Sampled {
+    fn sampled(
+        &self,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+    ) -> Option<((f64, f64), f64)> {
+        None
+    }
+}
+
+impl Sampled
+    for smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<GlesRenderer>
+{
+}
+
+/// How many texels a pixel covers when `part` texels are drawn over `dst` pixels: the side of the square of equal area,
+/// so a turned buffer is covered as an upright one.
+pub fn texels_per_pixel(part: (f64, f64), dst: (f64, f64)) -> f64 {
+    if dst.0 <= 0.0 || dst.1 <= 0.0 {
+        return 1.0;
+    }
+    ((part.0 * part.1) / (dst.0 * dst.1)).max(0.0).sqrt()
+}
+
+/// A texture is drawn through the minifying filter once a pixel covers this many texels: below it plain filtered
+/// lookups show no shimmer.
+pub const MINIFY_FROM: f64 = 1.05;
+
+/// The uniforms of the minifying filter for a texture of `texture` texels of which each pixel covers `texels` a side:
+/// the box it covers, in texture coordinates, and the lookups an axis, each a filtered one between four texels, so
+/// they are spaced at most a texel apart up to eight.
+pub fn minify_uniforms(texture: (f64, f64), texels: f64) -> [Uniform<'static>; 2] {
+    let taps = texels.ceil().clamp(2.0, 8.0) as f32;
+    [
+        u2(
+            "footprint",
+            (texels / texture.0.max(1.0)) as f32,
+            (texels / texture.1.max(1.0)) as f32,
+        ),
+        u2("taps", taps, taps),
+    ]
+}
+
 #[derive(Debug)]
 pub struct ClipElement<E> {
     inner: E,
     program: GlesTexProgram,
+    /// The program for an inner texture drawn smaller than its texels ([`minify_uniforms`]).
+    minify: Option<GlesTexProgram>,
     shape: ClipShape,
     /// Generation of `shape`, kept to the high half's width.
     generation: usize,
@@ -87,9 +136,16 @@ impl<E> ClipElement<E> {
         Self {
             inner,
             program,
+            minify: None,
             shape,
             generation: count(generation) & LOW,
         }
+    }
+
+    /// Draw an inner texture smaller than its texels through `program`, the clip program with the minifying filter.
+    pub fn minified(mut self, program: GlesTexProgram) -> Self {
+        self.minify = Some(program);
+        self
     }
 
     pub fn shape(&self) -> &ClipShape {
@@ -163,7 +219,7 @@ impl<E: Element> Element for ClipElement<E> {
     }
 }
 
-impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for ClipElement<E> {
+impl<E: RenderElement<GlesRenderer> + Sampled> RenderElement<GlesRenderer> for ClipElement<E> {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -176,30 +232,38 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for ClipElement
             return self.inner.draw(frame, src, dst, damage, opaque_regions);
         };
         let r = self.shape.rect;
-        frame.override_default_tex_program(
-            self.program.clone(),
-            vec![
-                umat3("inv_proj", inv),
-                u2(
-                    "viewport",
-                    self.shape.viewport.0 as f32,
-                    self.shape.viewport.1 as f32,
-                ),
-                u4(
-                    "clip_rect",
-                    [
-                        r.loc.x as f32,
-                        r.loc.y as f32,
-                        r.size.w as f32,
-                        r.size.h as f32,
-                    ],
-                ),
-                u4(
-                    "clip_shape",
-                    [self.shape.extent, self.shape.exponent, 0.0, 0.0],
-                ),
-            ],
-        );
+        // a texture drawn smaller than its texels: each pixel averages those it covers
+        let minify = self.minify.as_ref().and_then(|program| {
+            let (texture, texels) = self.inner.sampled(src, dst)?;
+            (texels > MINIFY_FROM).then(|| (program.clone(), minify_uniforms(texture, texels)))
+        });
+        let (program, extra) = match minify {
+            Some((program, extra)) => (program, Some(extra)),
+            None => (self.program.clone(), None),
+        };
+        let mut uniforms = vec![
+            umat3("inv_proj", inv),
+            u2(
+                "viewport",
+                self.shape.viewport.0 as f32,
+                self.shape.viewport.1 as f32,
+            ),
+            u4(
+                "clip_rect",
+                [
+                    r.loc.x as f32,
+                    r.loc.y as f32,
+                    r.size.w as f32,
+                    r.size.h as f32,
+                ],
+            ),
+            u4(
+                "clip_shape",
+                [self.shape.extent, self.shape.exponent, 0.0, 0.0],
+            ),
+        ];
+        uniforms.extend(extra.into_iter().flatten());
+        frame.override_default_tex_program(program, uniforms);
         let res = self.inner.draw(frame, src, dst, damage, opaque_regions);
         frame.clear_tex_program_override();
         res

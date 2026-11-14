@@ -24,11 +24,35 @@ uniform mat3 inv_proj;   // clip space -> output pixels
 uniform vec2 viewport;   // framebuffer size in pixels
 uniform vec4 clip_rect;  // x, y, w, h in output pixels
 uniform vec4 clip_shape; // radius (px), corner exponent, 0, 0
+#if defined(MINIFY)
+// A texture drawn smaller than its texels: each pixel is the average of the texels it covers, a box of `footprint`
+// (texture coordinates) sampled by `taps` filtered lookups an axis, at most 8.
+uniform vec2 footprint;
+uniform vec2 taps;
+
+vec4 covered() {
+    vec2 pitch = footprint / taps;
+    vec2 start = v_coords - footprint * 0.5 + pitch * 0.5;
+    vec4 sum = vec4(0.0);
+    for (int y = 0; y < 8; y++) {
+        if (float(y) >= taps.y) break;
+        for (int x = 0; x < 8; x++) {
+            if (float(x) >= taps.x) break;
+            sum += texture2D(tex, start + pitch * vec2(float(x), float(y)));
+        }
+    }
+    return sum / (taps.x * taps.y);
+}
+#endif
 
 //_SDF_
 
 void main() {
+#if defined(MINIFY)
+    vec4 color = covered();
+#else
     vec4 color = texture2D(tex, v_coords);
+#endif
 #if defined(NO_ALPHA)
     color = vec4(color.rgb, 1.0);
 #endif

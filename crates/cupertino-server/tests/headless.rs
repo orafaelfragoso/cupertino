@@ -145,6 +145,8 @@ struct ClientState {
     size: (i32, i32),
     margin: i32,
     color: [u8; 4],
+    /// Draw [`stripes`] in place of `color`.
+    stripes: bool,
     buffer: Option<wl_buffer::WlBuffer>,
     /// The popup, once requested: its surfaces and size.
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface, (i32, i32))>,
@@ -166,19 +168,39 @@ enum Sizing {
     Grow,
 }
 
-/// An opaque buffer of `size` in `color`, attached to `surface` and committed.
+/// The test pattern of a buffer `h` pixels tall, at pixel (`x`, `y`), red, green, blue: red in one-pixel columns, blue
+/// in one-pixel rows, green rising from top to bottom, so any average over two pixels or more is mid red and blue and
+/// the green of its height, and a picture upside down shows.
+fn stripes(x: i32, y: i32, h: i32) -> [u8; 3] {
+    let on = |v: i32| if v % 2 == 0 { 255 } else { 0 };
+    [on(x), (y * 255 / (h - 1).max(1)) as u8, on(y)]
+}
+
+/// An opaque buffer of `size` in `color` (or [`stripes`]), attached to `surface` and committed.
 fn attach_buffer(
     shm: &wl_shm::WlShm,
     surface: &wl_surface::WlSurface,
     size: (i32, i32),
     color: [u8; 4],
+    striped: bool,
     qh: &QueueHandle<ClientState>,
 ) -> wl_buffer::WlBuffer {
     let (w, h) = size;
     let mut file = tempfile_like(w as usize * h as usize * 4);
     let row: Vec<u8> = color.iter().copied().cycle().take(w as usize * 4).collect();
-    for _ in 0..h {
-        file.write_all(&row).unwrap();
+    for y in 0..h {
+        if striped {
+            // little-endian ARGB: blue, green, red, alpha
+            let row: Vec<u8> = (0..w)
+                .flat_map(|x| {
+                    let [r, g, b] = stripes(x, y, h);
+                    [b, g, r, 255]
+                })
+                .collect();
+            file.write_all(&row).unwrap();
+        } else {
+            file.write_all(&row).unwrap();
+        }
     }
     let pool = shm.create_pool(file.as_fd(), w * h * 4, qh, ());
     let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
@@ -198,6 +220,7 @@ impl ClientState {
             &self.surface,
             (w + 2 * m, h + 2 * m),
             self.color,
+            self.stripes,
             qh,
         ));
         self.status.lock().unwrap().committed = true;
@@ -278,6 +301,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
                             popup_surface,
                             *size,
                             [0, 255, 0, 255],
+                            false,
                             qh,
                         ));
                     }
@@ -340,6 +364,8 @@ struct Options {
     /// KDE appmenu address (service, path) announced before the first commit.
     menu_address: Option<(String, String)>,
     sizing: Sizing,
+    /// Draw [`stripes`] in place of the colour.
+    stripes: bool,
 }
 
 struct TestClient {
@@ -430,6 +456,7 @@ impl TestClient {
                 size,
                 margin: options.margin,
                 color,
+                stripes: options.stripes,
                 buffer: None,
                 popup: None,
                 popup_buffer: None,
@@ -2108,6 +2135,182 @@ fn a_minimize_captures_the_window_once_and_a_restore_once_more() {
     assert!(!h.state.wm.window(id).unwrap().state().is_minimized());
     assert_eq!(captures(&h), 2, "the restore captures the window once more");
     drop(client);
+}
+
+// ---- windows drawn well below their size ------------------------------------------------------------------------
+
+/// The picture of [`stripes`] (`size` pixels) drawn into the output rectangle `at` (output pixels, fractional), each
+/// output pixel the average of the source pixels it covers, weighted by how much of each it covers.
+fn box_filtered_stripes(size: (i32, i32), at: Rect, px: (u32, u32)) -> [f64; 3] {
+    let (sx, sy) = (f64::from(size.0) / at.w, f64::from(size.1) / at.h);
+    let x0 = (f64::from(px.0) - at.x) * sx;
+    let x1 = (f64::from(px.0) + 1.0 - at.x) * sx;
+    let y0 = (f64::from(px.1) - at.y) * sy;
+    let y1 = (f64::from(px.1) + 1.0 - at.y) * sy;
+    let mut sum = [0.0; 3];
+    let mut area = 0.0;
+    let mut y = y0.floor() as i32;
+    while f64::from(y) < y1 {
+        let hy = (f64::from(y + 1).min(y1) - f64::from(y).max(y0)).max(0.0);
+        let mut x = x0.floor() as i32;
+        while f64::from(x) < x1 {
+            let wx = (f64::from(x + 1).min(x1) - f64::from(x).max(x0)).max(0.0);
+            let c = stripes(x.clamp(0, size.0 - 1), y.clamp(0, size.1 - 1), size.1);
+            for i in 0..3 {
+                sum[i] += f64::from(c[i]) * wx * hy;
+            }
+            area += wx * hy;
+            x += 1;
+        }
+        y += 1;
+    }
+    sum.map(|s| s / area.max(f64::MIN_POSITIVE))
+}
+
+/// The mean absolute difference, a channel, between the window drawn in `shot` at `at` and the box-filtered
+/// picture, over its pixels at least 3 pixels inside its edges, and the largest.
+fn against_box_filter(shot: &image::RgbaImage, size: (i32, i32), at: Rect) -> (f64, f64) {
+    let (mut sum, mut worst, mut n) = (0.0f64, 0.0f64, 0.0f64);
+    let (x0, y0) = ((at.x + 3.0).ceil() as u32, (at.y + 3.0).ceil() as u32);
+    let (x1, y1) = (
+        (at.right() - 3.0).floor() as u32,
+        (at.bottom() - 3.0).floor() as u32,
+    );
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let want = box_filtered_stripes(size, at, (x, y));
+            let got = shot.get_pixel(x, y).0;
+            for i in 0..3 {
+                let d = (f64::from(got[i]) - want[i]).abs();
+                sum += d;
+                worst = worst.max(d);
+                n += 1.0;
+            }
+        }
+    }
+    (sum / n.max(1.0), worst)
+}
+
+/// A window of one-pixel stripes shown in the overview at well below half its size is drawn from a reduced copy, each
+/// pixel the average of those it covers: it matches its box-filtered picture, and while it moves into place the
+/// stripes' average stays put from frame to frame instead of flickering between them.
+#[test]
+fn a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_not_shimmer() {
+    let Some(mut h) = Harness::new() else { return };
+    let size = (900, 600);
+    let clients: Vec<TestClient> = (0..1)
+        .map(|_| {
+            TestClient::spawn_with(
+                h.socket_path(),
+                "org.example.stripes",
+                size,
+                [0, 0, 0, 255],
+                Options {
+                    stripes: true,
+                    ..Options::default()
+                },
+            )
+        })
+        .collect();
+    let (id, _) = h.mapped_window(clients.len());
+    let made = |h: &Harness| h.state.render.as_ref().unwrap().programs.reduced.made();
+    h.state.toggle_overview(false);
+    assert!(h.state.shell.overview_open());
+    let t0 = h.state.now();
+    // a slot of a little over a quarter of the window's size, off the pixel grid
+    let slot = Rect::new(100.3, 120.7, 243.0, 162.0);
+    assert!(h
+        .state
+        .shell
+        .overview
+        .as_mut()
+        .unwrap()
+        .set_target(id, slot, t0));
+    let placed = |h: &Harness, now: f64| {
+        h.state
+            .shell
+            .overview
+            .as_ref()
+            .unwrap()
+            .frames(now)
+            .into_iter()
+            .find(|f| f.id == id)
+            .unwrap()
+            .frame
+    };
+    // while the window moves into place, a frame after another
+    let mut strays: Vec<f64> = Vec::new();
+    for step in 1..=12 {
+        let now = t0 + 0.6 * f64::from(step) / 12.0;
+        common::set_time(&mut h.state, &mut h.event_loop, now);
+        h.state.tick();
+        let at = placed(&h, now);
+        if at.w / f64::from(size.0) > 0.5 {
+            continue;
+        }
+        let shot = h.screenshot("stripes-moving");
+        let (x0, y0) = ((at.x + 3.0).ceil() as u32, (at.y + 3.0).ceil() as u32);
+        let (x1, y1) = (
+            (at.right() - 3.0).floor() as u32,
+            (at.bottom() - 3.0).floor() as u32,
+        );
+        // how far the stripes stray from their average, a pixel: what flickers as the window moves
+        let (mut stray, mut n) = (0.0, 0.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = shot.get_pixel(x, y).0;
+                stray += (f64::from(p[0]) - 127.5).abs() + (f64::from(p[2]) - 127.5).abs();
+                n += 2.0;
+            }
+        }
+        strays.push(stray / n);
+    }
+    eprintln!("the stripes' stray from their average while the window moves: {strays:.1?}");
+    assert!(
+        strays.len() >= 3,
+        "the window is drawn below half its size while it moves: {strays:?}"
+    );
+    for pair in strays.windows(2) {
+        assert!(
+            pair[0] < 8.0 && pair[1] < 8.0 && (pair[0] - pair[1]).abs() < 4.0,
+            "every frame shows the stripes' average, and the next as well: {strays:?}"
+        );
+    }
+    // at rest: against the box-filtered picture, drawn from copies made once
+    let now = t0 + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, now);
+    h.state.tick();
+    for _ in 0..3 {
+        h.step();
+    }
+    let at = placed(&h, now);
+    assert!(
+        at.w / f64::from(size.0) <= 0.5,
+        "the overview shows the window at {at:?}"
+    );
+    let shot = h.screenshot("stripes-rest");
+    let (mean, worst) = against_box_filter(&shot, size, at);
+    eprintln!(
+        "reduced window against the box-filtered picture: mean {mean:.2}, worst {worst:.1} of 255"
+    );
+    // the exact box of a footprint 3.7 texels wide swings with its phase over the stripes; the reduced copy's is a
+    // little wider and steadier
+    assert!(
+        mean < 8.0 && worst < 24.0,
+        "mean {mean:.2}, worst {worst:.1} at {at:?}"
+    );
+    let copies = made(&h);
+    for _ in 0..5 {
+        common::set_time(&mut h.state, &mut h.event_loop, now + 0.1);
+        h.state.request_redraw();
+        h.step();
+    }
+    assert_eq!(
+        made(&h),
+        copies,
+        "a window that does not commit keeps its copy"
+    );
+    drop(clients);
 }
 
 // ---- resize band (3 pt inside, 4 pt outside the frame, corner zones 12 / 15 pt) -------------------------------

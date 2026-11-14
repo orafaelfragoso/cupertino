@@ -521,19 +521,24 @@ Gate:
     values, and the client-side drawing kept where the server lacks the protocol. The presenters draw the raised layer
     into a subsurface of its own already (`present_layer`); this generalises it to a list of layer surfaces, each
     `cupertino_layer_v1` with its own frame. Too large for one reviewable change; split:
-    - [ ] The mark and the runtime: a widget marks its subtree a surface layer with a key, its look (glass style,
-          glass group and spacing, corner radius, masks to bounds) and the changes of its properties (`x`, `y`,
-          `width`, `height`, `opacity`, `scale`, `corner_radius`, `content_blur`, each set or animated along a
-          `LayerCurve`, as `WindowRequest::Present` carries a window's). The painter leaves a marked subtree out of the
-          window's list and paints it into a list of its own, at its layout size whatever its animated values; the
-          runtime keeps a damage tracker and a renderer per layer key (as `LayerState` does for the raised layer) and
-          hands the window system the layers' frames, bounds and changes with the window's frame
+    - [x] The mark and the runtime: a widget marks its subtree a surface layer (`Widget::surface_layer`, a
+          `SurfaceLayerMark` of a key and a look: glass style, glass group and spacing, corner radius, masks to its
+          shape). The application changes the layer's properties (`x`, `y`, `width`, `height`, `opacity`, `scale`,
+          `corner_radius`, `content_blur`, each set or animated along a `LayerCurve`) with `WindowRequest::Layer`, as
+          `WindowRequest::Present` carries a window's, straight to the window system and without a frame. After the
+          paint, the runtime takes each marked subtree out of the window's list into a list of its own moved to its
+          layer's origin (`runtime/surface_layers.rs`), keeps a damage tracker and a renderer per layer key (as
+          `LayerState` does for the raised layer), draws a layer only where it changed, at its layout size whatever
+          its animated values, and hands the window system the layers' frames, rects and looks with the window's frame
           (`WindowSystem::present_surface_layers`, `Capabilities::surface_layers`; unsupported by default, where the
-          subtree is painted in place with its values applied by the toolkit, as today). Hit-testing and semantics keep
-          the layout, the target values. Tests over the headless window system: a marked subtree's pixels are in its
-          layer's frame and not the window's, a change of its animated values alone presents no frame, and without the
-          capability the window's frame is the one drawn today. New modules beside `runtime/handover.rs`, to stay apart
-          from the layout and damage work in `cupertino-ui-core`.
+          subtree paints in place and the application draws its motion itself, as today). Layout, hit-testing and
+          semantics never see the split. The headless window system keeps every list of layers presented
+          (`HeadlessWindowSystem::surface_layers`). Tests over the in-memory window system
+          (`runtime/surface-layer-tests.rs`):
+          `a_marked_subtree_draws_in_its_surface_layer_at_its_layout_size_and_not_in_the_window`,
+          `a_repaint_elsewhere_leaves_the_layer_and_one_inside_it_draws_only_the_layer_s_damage`,
+          `a_change_of_a_layer_s_properties_alone_draws_no_frame`,
+          `without_surface_layers_the_marked_subtree_paints_in_place`.
     - [ ] The shared-memory presenter: each layer a `wl_surface` made a `cupertino_layer_v1` of the window's surface,
           its frame copied into buffers of its own as the raised layer's is, its changes sent as the layer's requests
           before the window's commit (so they apply with it), its events (`finished`, `replaced`, `settled`) back to the

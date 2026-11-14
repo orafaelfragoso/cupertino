@@ -58,6 +58,18 @@ struct HeadlessWindow {
     keyboard: bool,
     /// Every raised layer presented over it, in order; `None` hid the layer.
     layers: Vec<Option<PresentedLayer>>,
+    /// Every list of surface layers presented with it, in order.
+    surface_layers: Vec<Vec<PresentedSurfaceLayer>>,
+}
+
+/// A surface layer as the window system received it ([`WindowSystem::present_surface_layers`]): its key, rect and look,
+/// and its frame when it drew one (`None`: unchanged).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentedSurfaceLayer {
+    pub key: u64,
+    pub rect: cupertino_geometry::Rect,
+    pub look: cupertino_ui_platform::SurfaceLayerLook,
+    pub frame: Option<PresentedLayer>,
 }
 
 /// A raised layer as the window system received it ([`WindowSystem::present_layer`]).
@@ -299,6 +311,7 @@ impl HeadlessWindowSystem {
                 by_keyboard: false,
                 keyboard: false,
                 layers: Vec::new(),
+                surface_layers: Vec::new(),
             },
         );
         id
@@ -570,6 +583,14 @@ impl HeadlessWindowSystem {
 
     pub fn unacknowledged(&self, window: WindowId) -> Result<&[ConfigureId], PlatformError> {
         Ok(&self.window(window)?.unacknowledged)
+    }
+
+    /// Every list of surface layers presented with `window`, in order. Only with [`Capabilities::surface_layers`].
+    pub fn surface_layers(
+        &self,
+        window: WindowId,
+    ) -> Result<&[Vec<PresentedSurfaceLayer>], PlatformError> {
+        Ok(&self.window(window)?.surface_layers)
     }
 
     /// Every raised layer presented over `window`, in order; `None` hid it. Only with
@@ -1027,6 +1048,40 @@ impl WindowSystem for HeadlessWindowSystem {
             pixels: l.frame.pixels.clone(),
             damage: l.frame.damage.clone(),
         }));
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_surface_layers(
+        &mut self,
+        window: WindowId,
+        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !layers.is_empty() && !self.capabilities.surface_layers {
+            return Err(PlatformError::Unsupported);
+        }
+        let accepting = self.accepting_frames;
+        let w = self.window_mut(window)?;
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        w.surface_layers.push(
+            layers
+                .iter()
+                .map(|l| PresentedSurfaceLayer {
+                    key: l.key,
+                    rect: l.rect,
+                    look: l.look,
+                    frame: l.frame.map(|f| PresentedLayer {
+                        height: l.rect.height().ceil() as u32,
+                        width: f.width,
+                        pixel_height: f.height,
+                        stride: f.stride,
+                        pixels: f.pixels.clone(),
+                        damage: f.damage.clone(),
+                    }),
+                })
+                .collect(),
+        );
         Ok(PresentOutcome::Presented)
     }
 

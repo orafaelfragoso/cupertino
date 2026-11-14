@@ -1361,6 +1361,8 @@ impl WindowSystem for WaylandWindowSystem {
             raised_layer: layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)),
             present_animation: self.presentations.available() && self.roles.is_some(),
             present_popups: self.presentations.popups(),
+            // the presenters draw no surface layer yet: marked subtrees paint in place
+            surface_layers: false,
         }
     }
 
@@ -1500,6 +1502,7 @@ impl WindowSystem for WaylandWindowSystem {
                 return Ok(());
             }
             WindowRequest::Present(changes) => return self.present_changes(window, &changes),
+            WindowRequest::Layer { .. } => return Err(PlatformError::Unsupported),
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)

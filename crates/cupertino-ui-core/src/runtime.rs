@@ -109,6 +109,7 @@ impl<M> WindowState<M> {
     fn invalidate_damage(&mut self) {
         self.damage.invalidate();
         self.layer.damage.invalidate();
+        self.surface_layers.invalidate();
     }
 
     /// The window just became active or inactive: when a window already drawn became active, its colours cross over
@@ -260,6 +261,8 @@ struct WindowState<M> {
     obscuring: Vec<(NodeId, Rect)>,
     /// The raised layer the window system shows over the window's content.
     layer: LayerState,
+    /// The marked subtrees the window system shows in surfaces of their own ([`Widget::surface_layer`]).
+    surface_layers: surface_layers::SurfaceLayers,
     display_list: DisplayList,
     /// The images the display list draws.
     resources: PaintResources,
@@ -1046,6 +1049,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             raised: Vec::new(),
             obscuring: Vec::new(),
             layer: LayerState::default(),
+            surface_layers: surface_layers::SurfaceLayers::default(),
             display_list: DisplayList::default(),
             resources: PaintResources::default(),
             renderer: (self.options.renderers)(),
@@ -1223,6 +1227,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 for w in &mut self.windows {
                     w.renderer = (self.options.renderers)();
                     w.layer.renderer = None;
+                    w.surface_layers.drop_renderers();
                     w.invalidate();
                     w.invalidate_damage();
                 }
@@ -1303,6 +1308,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     if let Some(layer) = w.layer.renderer.as_mut() {
                         layer.drop_layers();
                     }
+                    w.surface_layers.drop_kept();
                 }
                 w.size = size;
                 w.ack = Some(c.id);
@@ -2505,6 +2511,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.layer.shown = None;
                 w.layer.damage.invalidate();
             }
+            w.surface_layers.hide(&mut self.system, w.id)?;
             let committing = mark(&self.frame_timing);
             let solid = self.system.present_solid(w.id, color, w.ack);
             lap(&mut self.frame_timing, Phase::Commit, committing);
@@ -2541,6 +2548,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let capabilities = self.system.capabilities();
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
+        let marks = if capabilities.surface_layers {
+            surface_layers::marked(&self.tree, root, &w.geometry)
+        } else {
+            Vec::new()
+        };
         let paint = |w: &mut WindowState<A::Message>,
                      tree: &Tree<A::Message>,
                      pinned: &[Option<Arc<ThemeTokens>>; 2]| {
@@ -2620,6 +2632,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             let kept = w.materials.len();
             w.painter.tones.regions.truncate(kept);
         }
+        // the marked subtrees leave the window's paint for their surface layers
+        let surface = w
+            .surface_layers
+            .prepare(surface_layers::split(&mut painting, &marks));
         // the layer's height in whole points, from the window's top edge, as far down as its nodes draw
         let layer_height = painting
             .layer
@@ -2650,6 +2666,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
             && !w.damage.repainted()
             && !layer_changed
+            && !surface.changed
             && !materials_changed
             && w.ack.is_none()
             && !w.owed
@@ -2658,7 +2675,27 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         let scale = w.env.scale;
         let width = physical(w.size.width, scale);
-        // the layer first: it shows with the content's commit
+        // the surface layers first: they show with the content's commit
+        if surface.changed {
+            let rastering = mark(&self.frame_timing);
+            let shown = w.surface_layers.present(
+                surface,
+                &mut self.system,
+                w.id,
+                scale,
+                &w.resources,
+                &mut self.options.renderers,
+            )?;
+            lap(&mut self.frame_timing, Phase::Raster, rastering);
+            if shown == PresentOutcome::NotReady {
+                w.frame_ready = false;
+                w.dirty = true;
+                w.invalidate_damage();
+                self.system.request_frame(w.id);
+                return Ok(());
+            }
+        }
+        // the raised layer next: it shows with the content's commit
         if layer_changed {
             let shown = match (painting.layer, layer_height, layer_damage) {
                 (Some(layer), Some(height), Some(damage)) => {
@@ -3290,10 +3327,17 @@ mod fade;
 mod handover;
 mod morph;
 mod semantics;
+mod surface_layers;
 mod ungrabbed;
+
+pub use surface_layers::SurfaceLayerMark;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime/surface-layer-tests.rs"]
+mod surface_layer_tests;
 
 #[cfg(test)]
 #[path = "runtime/relayout-tests.rs"]

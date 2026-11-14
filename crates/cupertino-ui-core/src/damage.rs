@@ -149,7 +149,7 @@ impl DamageTracker {
             let mut transform = node.transform;
             transform.0[4] += shift.x;
             transform.0[5] += shift.y;
-            let scroll = match (node.layer, kept_in.contains(&Some(i))) {
+            let scroll = match (node.layer, offsets.contains_key(&node.id)) {
                 (Some(Layer::Scroll { offset }), true) => Some(offset),
                 _ => None,
             };

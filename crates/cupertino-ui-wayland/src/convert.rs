@@ -7,28 +7,33 @@ use cupertino_ui_text as text;
 use cupertino_wayland_client as wl;
 use std::time::Duration;
 
-/// The newest an input timestamp may be, mapped, before it is anchored afresh.
+/// The oldest a frame stamp may be before it is taken for another clock; and how far behind the window system's clock
+/// an input timestamp may fall, after a pause as long, before the mapping is anchored afresh.
 const MAX_LAG: Duration = Duration::from_secs(1);
 
-/// Maps the compositor's input milliseconds onto the window system's clock (nanoseconds). The first timestamp, and
-/// any that would land in the future or more than [`MAX_LAG`] in the past, anchors the mapping at the time it was
-/// read; the ones after keep the compositor's spacing, so intervals (a double click, scroll velocity) stay exact.
+/// Maps the compositor's input milliseconds onto the window system's clock (nanoseconds). Each event lands the
+/// compositor's interval after the one before it, so intervals (a double click, scroll velocity) stay exact however
+/// late the client reads them, and the milliseconds' wrap is harmless. The first timestamp anchors the mapping at the
+/// time it was read, and so does one that would land in the future, or more than [`MAX_LAG`] in the past after an
+/// interval (forwards or back) as long: those read on another clock, or one that drifted. Lateness alone does not: a
+/// client that stalls reads its events late on the same clock.
 #[derive(Debug, Default)]
 pub(crate) struct InputTimeline {
-    anchor: Option<(u32, u64)>,
+    /// The last event: its milliseconds and where they landed.
+    last: Option<(u32, u64)>,
 }
 
 impl InputTimeline {
     pub(crate) fn map(&mut self, millis: u32, now: u64) -> u64 {
-        if let Some((at_millis, at)) = self.anchor {
-            let delta = i64::from(millis.wrapping_sub(at_millis) as i32) * 1_000_000;
-            let mapped = at.checked_add_signed(delta);
-            if let Some(t) = mapped.filter(|t| *t <= now && now - t <= MAX_LAG.as_nanos() as u64) {
-                return t;
-            }
-        }
-        self.anchor = Some((millis, now));
-        now
+        let max_lag = MAX_LAG.as_nanos() as u64;
+        let mapped = self.last.and_then(|(last_millis, at)| {
+            let gap = i64::from(millis.wrapping_sub(last_millis) as i32) * 1_000_000;
+            at.checked_add_signed(gap)
+                .filter(|t| *t <= now && (now - t <= max_lag || gap.unsigned_abs() < max_lag))
+        });
+        let t = mapped.unwrap_or(now);
+        self.last = Some((millis, t));
+        t
     }
 }
 
@@ -483,10 +488,53 @@ mod tests {
             "spaced from the new anchor"
         );
         assert_eq!(
-            t.map(3_100, 13_000 * MS),
-            13_000 * MS,
-            "more than a second behind"
+            t.map(3_150, 13_000 * MS),
+            11_150 * MS,
+            "read late, close after the last: the compositor's spacing"
         );
+        assert_eq!(
+            t.map(5_200, 14_500 * MS),
+            14_500 * MS,
+            "more than a second behind and after a pause as long"
+        );
+        assert_eq!(
+            t.map(1_000, 14_600 * MS),
+            14_600 * MS,
+            "going back past a second: another clock"
+        );
+    }
+
+    #[test]
+    fn a_double_click_read_late_after_a_stall_keeps_its_interval() {
+        let mut t = InputTimeline::default();
+        assert_eq!(t.map(5_000, 100 * MS), 100 * MS, "the first press, on time");
+        // the client stalls; the second press, sent 200 ms later, is read 1.3 s after the first
+        assert_eq!(t.map(5_200, 1_400 * MS), 300 * MS);
+    }
+
+    #[test]
+    fn a_burst_read_long_after_it_came_keeps_its_spacing() {
+        let mut t = InputTimeline::default();
+        t.map(5_000, 100 * MS);
+        let burst: Vec<u64> = [5_016, 5_032, 5_048, 5_064]
+            .into_iter()
+            .map(|millis| t.map(millis, 5_100 * MS))
+            .collect();
+        assert_eq!(burst, [116 * MS, 132 * MS, 148 * MS, 164 * MS]);
+    }
+
+    #[test]
+    fn deltas_from_event_to_event_survive_the_compositors_wrap() {
+        let mut t = InputTimeline::default();
+        let mut millis = u32::MAX - 1_000;
+        let mut now = 50 * MS;
+        t.map(millis, now);
+        // ten minutes of events half a second apart cross the wrap
+        for _ in 0..1_200 {
+            millis = millis.wrapping_add(500);
+            now += 500 * MS;
+            assert_eq!(t.map(millis, now), now);
+        }
     }
 
     #[test]

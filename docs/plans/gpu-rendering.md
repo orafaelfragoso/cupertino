@@ -202,22 +202,23 @@ Gate:
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
-- [ ] API: devices, buffers, textures with external memory, immutable pipelines, explicit passes, bind groups,
+- [x] API: devices, buffers, textures with external memory, immutable pipelines, explicit passes, bind groups,
       fences; borrowed-context mode with a state-restore contract.
-- [ ] GLES backend over EGL, with EGL and GBM loaded at run time.
-- [ ] Allocators: GBM buffer objects; texture export (`EGL_MESA_image_dma_buf_export`) where there is no GBM.
-- [ ] Robustness and purge attributes on every context; reset and purge detection.
-- [ ] Shader build step: shared module concatenated, `naga` generating GLSL ES 3.00 and SPIR-V, coordinate adjustment
+- [x] GLES backend over EGL, with EGL and GBM loaded at run time.
+- [x] Allocators: GBM buffer objects; texture export (`EGL_MESA_image_dma_buf_export`) where there is no GBM.
+- [x] Robustness and purge attributes on every context; reset and purge detection.
+- [x] Shader build step: shared module concatenated, `naga` generating GLSL ES 3.00 and SPIR-V, coordinate adjustment
       off, blocks and samplers bound by name, uniform blocks only, no `mat2x2` in blocks.
-- [ ] Generated shaders committed; a test regenerates them and fails on a difference.
-- [ ] Shaders tested against the shared definitions' vectors.
-- [ ] Atlases (8-bit coverage, RGBA colour glyphs, path masks) with eviction and caps; pooled render targets with caps.
-- [ ] Tests per backend: pipelines, orientation, atlas eviction, pool reuse, export and import, fences, context loss.
+- [x] Generated shaders committed; a test regenerates them and fails on a difference.
+- [x] Shaders tested against the shared definitions' vectors.
+- [x] Atlases (8-bit coverage, RGBA colour glyphs, path masks) with eviction and caps; pooled render targets with caps.
+- [x] Tests per backend: pipelines, orientation, atlas eviction, pool reuse, export and import, fences, context loss.
 
 Gate:
 
-- [ ] CI: the crate's tests pass on llvmpipe.
-- [ ] Local tier: the crate's tests pass on the NVIDIA GPU.
+- [x] CI: the crate's tests pass on llvmpipe. In the CI image (the goldens image, no device passed in) and on the
+      host's llvmpipe ("Measurements", "Step 5"); the first CI run on `main` after the merge confirms it there.
+- [x] Local tier: the crate's tests pass on the NVIDIA GPU.
 
 ## Step 6: the GPU renderer and presenter
 
@@ -759,6 +760,76 @@ window of the same size, drawing a frame every refresh for an hour. At the end b
 lines start `control_`) with `comparison gpu_missed=N control_missed=M pass|fail`; pass is the gate's first half.
 For the second, take a few screenshots of the slice window while it runs: inside its rounded corners each must be one
 flat colour (blue or orange). The report also names the modifier and whether explicit sync was used.
+
+### Step 5: `cupertino-gpu` and the shader toolchain
+
+Taken at `0c12d235` on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08) and on llvmpipe.
+
+**Where it is.** `crates/cupertino-gpu` (graphics layer, MPL-2.0, depends on `glow` and `libloading` only):
+
+- `Device`: made on a render node through GBM (`Platform::RenderNode`) or on the surfaceless platform
+  (`Platform::Surfaceless`), or borrowed from the context current on the thread (`Device::borrow`, unsafe: the owner
+  keeps it alive and current). `DeviceInfo` says what it is: renderer, software or not, allocator (GBM, texture
+  export or none), native fences, fence import, robustness, purge notification, float targets.
+- Resources from descriptions, destroyed explicitly: `Buffer` (uniform, vertex, index), `Texture` (`R8`, `Rgba8`,
+  `Rgba16Float`, `Rgba32Float`; sampled and render targets), `Sampler`, `BindGroupLayout`, `BindGroup`, `Pipeline`
+  (program, layouts, vertex buffers, blending, topology, all fixed at creation), `Fence`.
+- External memory: `allocate_dmabuf` (a GBM buffer object with an offered modifier, or a texture exported in a layout
+  the offer holds) gives an `ExternalImage` (its texture and its `Dmabuf`); `import_dmabuf` makes a texture of
+  another device's or process's dmabuf.
+- Passes: `begin_pass(target, LoadOp)` gives a `Pass` (`set_pipeline`, `set_bind_group`, `set_vertex_buffer`,
+  `set_index_buffer`, `set_scissor`, `draw`, `draw_indexed`, `end`). `submit` gives a fence, `submit_exported` a fence
+  and its sync file, `wait_sync_file` makes later work wait on another's sync file on the GPU.
+- Loss: `status` reads the driver's reset status (`Loss::Reset { guilty }` or `Loss::Purge`; a purge does not count
+  toward the CPU fallback); a lost device refuses every call with `Error::Lost`. `inject_loss` is the test hook.
+  Every missing library, platform or device is `Error::Unavailable`, never a failed start.
+- Borrowed contexts: `enter` saves and `leave` restores the state listed in `gles::state` (program, framebuffers,
+  viewport, scissor, blending, colour mask, clear colour, depth, stencil and cull enables, the first 16 texture units'
+  textures and samplers, array and uniform buffer bindings and the first 16 uniform ranges, the vertex array, pack and
+  unpack alignment and row length); the device draws with a vertex array of its own.
+- `atlas`: coverage, colour and path mask atlases (shelf-packed pages with a one-pixel gap, a page used least
+  recently emptied when an entry fits nowhere at the cap, never one used in the current frame). `pool`: render
+  targets kept and handed out again by size and format, with a cap.
+- `shaders`: the generated programs (`shape`, `blit`, `blur_halve`, `blur_gauss`, `dither_fill`, and the test
+  programs `probe_coverage`, `probe_shadow`, `probe_gradient`, `probe_dither`). Sources in
+  `crates/cupertino-gpu/shaders/*.wgsl`, the shared module in `shared.wgsl`; `cargo run -p cupertino-gpu-shaders`
+  generates `generated/` (GLSL ES 3.00 for each stage, SPIR-V, the binding names), `--check` compares.
+  `cupertino-gpu-shaders` uses `naga` 24, the version already locked for the glass crate.
+
+**Caps** (each a multiple of the 2 MiB the driver rounds a render target up to, step 0's "Render targets"):
+
+| What | Size | Cap |
+|---|---|---|
+| Coverage atlas | 2048 x 1024 8-bit pages (2 MiB) | 2 pages, 4 MiB |
+| Colour glyph atlas | 1024 x 1024 RGBA pages (4 MiB) | 2 pages, 8 MiB |
+| Path mask atlas | 2048 x 1024 8-bit pages (2 MiB) | 2 pages, 4 MiB |
+| Render target pool | each target its bytes rounded up to 2 MiB | 16 MiB in use and free together |
+
+Together 32 MiB, the design's "32 MiB of atlases and pools" for a GPU window. The window's buffers and its
+window-sized layer are outside the pool, and a process's first render target makes the driver reserve one more
+target's size beside it, which no cap can hold (step 0); the budget names both separately. A target the pool cannot
+hold (one 3840 x 2160 RGBA target alone is 32 MiB) is refused with `Error::OverBudget`, so a full-window intermediate
+is the renderer's own, not the pool's.
+
+**Tests.** The device tests (`cupertino-gpu::suite` and the borrowed-context test in the library) run in the slow
+tier; the models of the atlases, the pool and the binding names, and the generator's tests, in the fast tier.
+
+| Where | What ran | Result |
+|---|---|---|
+| NVIDIA, GBM on the render node, `CUPERTINO_GPU_REQUIRED=1` | both crates, both tiers (`--profile ci`) | 35 of 35 passed, none skipped |
+| host llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`, the Mesa EGL vendor forced, surfaceless, texture export), `CUPERTINO_EGL_REQUIRED=1` | the same | 35 of 35 passed, none skipped |
+| the CI image (the goldens image, no device passed in), `CUPERTINO_EGL_REQUIRED=1`, `cargo test` | the same | 35 passed; the two dmabuf tests and the native fence test skipped: llvmpipe there has neither texture export nor native fences, as step 3 found |
+
+What the tests show: every generated program compiles and links; the shape program's rectangles, circular and
+continuous corners match the shared coverage within 2/255 at every pixel; premultiplied blending and the scissor;
+a shape at the top left lands in the first rows, a texture's first row on the target's first row, and dithering is
+keyed to the pixel counted from the first row; the coverage, shadow, gradient and dither programs match their vectors
+(distances and shadows within 2·10⁻³, gradients within 10⁻⁵, the dither matrix exactly and its stores within a step);
+the blur's halving and Gaussian programs match the blur vectors at both edge rules in half floats (within 2·10⁻³) and
+8 bits (within a step); a dmabuf drawn on one device is imported and sampled on a second after its sync file, in the
+driver's modifier, never linear on the NVIDIA GPU; fences and sync files signal; an injected reset of each kind and a
+purge are reported and the lost device refuses work; a borrowed device leaves its owner's state exactly as it found
+it; atlas eviction reuses a page's texture and the cap holds within a frame; a released pooled target comes back.
 
 ## Decisions taken
 

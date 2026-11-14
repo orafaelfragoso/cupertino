@@ -71,10 +71,17 @@ keeps its context, because tearing a context down returns almost no memory.
 
 A new crate, `cupertino-gpu`, exposes what a 2D renderer needs: devices, buffers, textures with external memory,
 immutable pipelines, explicit render passes, bind groups and fences. Its shape follows Vulkan so the second backend
-is a translation, not a redesign. Backend one is OpenGL ES 3.0 over EGL (`khronos-egl`, `glow`); backend two is
-Vulkan (`ash`). EGL, GBM and Vulkan are loaded at run time, so a machine without them takes the fallback instead of
-failing to start. A borrowed-context mode runs `cupertino-gpu` passes inside the compositor's GL context with a
-defined state-restore contract.
+is a translation, not a redesign. Backend one is OpenGL ES 3.0 over EGL (`glow` for GL, EGL and GBM through
+`libloading`); backend two is Vulkan (`ash`). EGL, GBM and Vulkan are loaded at run time, so a machine without them
+takes the fallback instead of failing to start. A borrowed-context mode runs `cupertino-gpu` passes inside the
+compositor's GL context with a defined state-restore contract: between entering and leaving, the device saves and
+puts back every piece of state it may change (the list is in the crate's `gles::state`), and draws with a vertex
+array of its own.
+
+Orientation is the same on every backend: a target's first row (the top of the image handed to the compositor) is at
+clip y = -1 and fragment row 0, texture coordinate v = 0 is a texture's first row, and pixels are written and read
+first row first. Nothing is flipped anywhere, because both GL and Vulkan already agree on that once the shader
+generator's coordinate adjustment is off.
 
 We do not use `wgpu` for windows: it hides buffer allocation, damage and explicit sync, which a toolkit that hands
 buffers to its own compositor has to control, and it costs more per process than a fixed-pipeline renderer needs.
@@ -110,11 +117,14 @@ A surface whose dmabuf import or allocation fails falls back to `wl_shm` for tha
 
 ### 6. One shader source
 
-Our own programs are written once in WGSL. A build step concatenates the shared module (the definitions of section 1)
-into each shader and `naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. The generated output is
-committed, so no binary builds `naga`; a test regenerates it and fails on a difference. The generator runs with
-coordinate-space adjustment off, binds blocks and samplers by name, and the shaders use uniform blocks only and no
-`mat2x2` in blocks. Each backend has an orientation test.
+Our own programs are written once in WGSL. A build step (`cupertino-gpu-shaders`, a development binary) concatenates
+the shared module (the definitions of section 1, `crates/cupertino-gpu/shaders/shared.wgsl`) into each shader and
+`naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. The generated output is committed, so no
+product binary builds `naga`; a test regenerates it and fails on a difference. The generator runs with
+coordinate-space adjustment off, declares every block `std140` (GLSL ES 3.00 would leave the layout to the driver),
+writes the GLSL name of each block and sampler by WGSL group and binding beside the code, since GLSL ES 3.00 has no
+binding qualifiers, and refuses a program with anything but uniform blocks and textures or with a `mat2x2` in a
+block. Each backend has an orientation test.
 
 Texture programs compiled through Smithay's shader interface sample client buffers, including import-only ones through
 `samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, the reduced

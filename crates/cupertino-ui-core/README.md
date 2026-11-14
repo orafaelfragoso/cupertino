@@ -90,6 +90,9 @@ all on one thread.
   most 256 events wait at each stage.
 - **Frame timing.** `Runtime::with_frame_timing(sink)` times every turn that presents a frame phase by phase: update,
   view, layout, paint, raster, the window system's copy into its buffer (`WindowSystem::time_copies`) and the commit.
+  A renderer that draws into memory (`UiRenderer::draws_into_memory`) draws a window's frame straight into the buffer
+  the window system lends (`WindowSystem::present_into`), so it has no copy and its raster paints what the buffer
+  missed too; where none is lent the frame is drawn into the renderer's own image and presented with `present`.
   The sink gets one `FrameTiming` a turn that presented; without a sink no clock is read.
 - **Scroll motion.** `kinetic::ScrollMotion` is a pure model of a scroll view's content over the time it is given:
   a finger's drag, the kinetic motion its lift leaves (exponential decay), the stretch past an edge (a resistance

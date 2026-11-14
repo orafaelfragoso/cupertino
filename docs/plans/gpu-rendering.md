@@ -332,12 +332,22 @@ Works with the CPU renderer; no GPU needed.
         it enters that band, not the frame it shows; what is left is to shape them outside any frame: the runtime
         handing a window's idle time between a presented frame and the next frame event to work its widgets ask for
         (the names of the cells past the band, in the direction of the scroll), shaped into the text system's cache
-        (two generations of 512 paragraphs) so the frame that builds them finds them there. Test: a scroll whose
-        frames build new rows shapes no paragraph inside a frame once the idle work ran.
-  - Kept semantics and names shaped between frames were not taken up in the rounds that made paint and damage
-    incremental, the shared-memory copy cheaper and the opaque region declared; their time went to those. At the
-    fifth round the layout p99 is 3.2–3.9 ms on the GPU path at both scales and 1.6–13.8 on the CPU path at loads of
-    7 to 11, so not under 4 ms in every run ("Measurements", "Step 4", "Fifth round").
+        (two generations of 512 paragraphs) so the frame that builds them finds them there. Split, not taken up in the
+        round that kept semantics and drew into the leased buffer, whose time went to those:
+    - [ ] The runtime hands a window's idle time to the widgets that ask for it: when nothing is ready and the run loop
+          would wait on the window system after a presented frame, each widget that asked in its last layout or paint
+          (a request on its context, cleared by the call) is called with an idle context that shapes paragraphs into
+          the text system's cache, within a time budget and stopping at the first event that arrives. Test: work asked
+          for runs only between frames, never inside one, and what it shapes is found by the next frame's layout, the
+          same shaping as the layout's own.
+    - [ ] Files' grid asks for it: the names of the cells past its overscan band, in the direction of the scroll, at
+          the width and style a cell shapes them with. Test: a scroll whose frames build new rows shapes no paragraph
+          inside a frame once the idle work ran.
+  - Names shaped between frames were not taken up in the rounds that made paint and damage incremental, the
+    shared-memory copy cheaper and then gone, the opaque region declared and placements and semantics kept; their
+    time went to those. At the fifth round the layout p99 is 3.2–3.9 ms on the GPU path at both scales and 1.6–13.8 on
+    the CPU path at loads of 7 to 11, so not under 4 ms in every run ("Measurements", "Step 4", "Fifth round"); with
+    kept semantics: measured at the end.
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints
@@ -435,8 +445,8 @@ Gate:
       (11.5–18.8) and 12.3 at 1.5 (10.4–14.9), frame p50 5.0 and 2.8, no run under 8 ms; CPU p99 41.2 at scale 1 and
       36.7 at 1.5, copy p99 21.3 and 22.4. The merge the round started from, measured again on the GPU at scale 1,
       gives 10.8 (9.9–11.5) with the same phases, so the round moved none of them and the fourth round's 5.9 is not
-      met at today's loads ("Measurements", "Step 4", "Fifth round"). The unticked items above are what remains of
-      it.
+      met at today's loads ("Measurements", "Step 4", "Fifth round"). With kept semantics and the CPU path drawing
+      into the leased buffer, no copy left: measured at the end. The unticked items above are what remains of it.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 

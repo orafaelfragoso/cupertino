@@ -22,7 +22,7 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-gpu = { path = "../cupertino-gpu" }
-wgpu = "24"
+wgpu = "30"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

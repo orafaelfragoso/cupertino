@@ -190,17 +190,61 @@ impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
     }
 }
 
-/// This program's file name and the options it was started with (`cupertino-files --desktop`), as the frame timing
-/// names it.
+/// This program's name and the modes it was started in (`cupertino-files --desktop`), as the frame timing names it
+/// ([`program_label`]).
 fn program_name() -> String {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+    program_label(std::env::args_os())
+}
+
+/// The file name of the first of `args` and the bare `--mode` flags among the rest. A flag with a value
+/// (`--path=...`) and every other argument are left out: a path, a name or a token never reaches the report.
+fn program_label(args: impl IntoIterator<Item = std::ffi::OsString>) -> String {
+    let mut args = args.into_iter();
+    let name = args
+        .next()
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "unknown".into());
-    std::iter::once(exe)
-        .chain(std::env::args().skip(1).filter(|a| a.starts_with("--")))
+    let mode = |a: &str| {
+        a.strip_prefix("--").is_some_and(|flag| {
+            !flag.is_empty()
+                && flag
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+    };
+    std::iter::once(name)
+        .chain(
+            args.filter_map(|a| a.into_string().ok())
+                .filter(|a| mode(a)),
+        )
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `text` as a JSON string, quotes included: quotes, backslashes and control characters escaped.
+fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04x}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// One line of the frame timing report: the process, the turn's start on the monotonic clock and each phase, in
@@ -208,8 +252,8 @@ fn program_name() -> String {
 pub fn frame_timing_json(t: &cupertino_ui_core::FrameTiming, pid: u32, program: &str) -> String {
     let ns = |d: std::time::Duration| d.as_nanos();
     format!(
-        r#"{{"pid":{pid},"program":"{}","start":{},"update":{},"view":{},"layout":{},"paint":{},"raster":{},"copy":{},"commit":{},"total":{},"frames":{}}}"#,
-        program.replace(['"', '\\'], "_"),
+        r#"{{"pid":{pid},"program":{},"start":{},"update":{},"view":{},"layout":{},"paint":{},"raster":{},"copy":{},"commit":{},"total":{},"frames":{}}}"#,
+        json_string(program),
         t.start.0,
         ns(t.update),
         ns(t.view),
@@ -578,6 +622,57 @@ mod tests {
             frame_timing_json(&t, 42, "cupertino-dock"),
             r#"{"pid":42,"program":"cupertino-dock","start":1000,"update":1,"view":2,"layout":3,"paint":4,"raster":5,"copy":6,"commit":7,"total":30,"frames":2}"#
         );
+    }
+
+    #[test]
+    fn a_program_name_with_quotes_or_control_characters_stays_one_json_line() {
+        let t = cupertino_ui_core::FrameTiming {
+            start: cupertino_ui_platform::Timestamp(1),
+            update: std::time::Duration::ZERO,
+            view: std::time::Duration::ZERO,
+            layout: std::time::Duration::ZERO,
+            paint: std::time::Duration::ZERO,
+            raster: std::time::Duration::ZERO,
+            copy: std::time::Duration::ZERO,
+            commit: std::time::Duration::ZERO,
+            total: std::time::Duration::ZERO,
+            frames: 1,
+        };
+        let name = "odd \"name\"\\\n\r\t\u{1}\u{1f}\u{7f} é";
+        let line = frame_timing_json(&t, 7, name);
+        assert!(
+            !line.contains(['\n', '\r', '\t', '\u{1}', '\u{1f}', '\u{7f}']),
+            "{line}"
+        );
+        assert!(
+            line.contains(r#""program":"odd \"name\"\\\n\r\t\u0001\u001f\u007f é","#),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn the_program_label_keeps_the_file_name_and_bare_mode_flags_alone() {
+        let label = |args: &[&str]| program_label(args.iter().map(std::ffi::OsString::from));
+        assert_eq!(
+            label(&["/usr/bin/cupertino-files", "--desktop"]),
+            "cupertino-files --desktop"
+        );
+        assert_eq!(
+            label(&[
+                "./target/release/cupertino-files",
+                "--open=/home/someone/Private/taxes.pdf",
+                "--token",
+                "s3cret",
+                "/home/someone",
+                "--Name=X",
+                "--two-panes",
+                "--",
+            ]),
+            "cupertino-files --token --two-panes",
+            "no value, path or argument that is not a bare flag"
+        );
+        assert_eq!(label(&[]), "unknown");
+        assert_eq!(label(&["/"]), "unknown");
     }
 
     #[test]

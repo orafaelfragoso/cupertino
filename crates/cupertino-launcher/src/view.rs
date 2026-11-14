@@ -13,6 +13,7 @@
 //! Kit's [`TextField`], which reports the edited query as [`Input::Query`].
 
 pub mod browse;
+pub mod layers;
 pub mod modes;
 pub mod scope;
 
@@ -585,6 +586,10 @@ pub struct PanelView<'a> {
     pub select_query: bool,
     /// The primary modifier is held: the selected file's or folder's location shows in its preview.
     pub show_location: bool,
+    /// The panel's parts draw into compositor layers of their own ([`layers`]), with the same pixels.
+    pub layered: bool,
+    /// The compositor runs the panel's close on its layers: the panel takes every key, so nothing in it draws again.
+    pub handed: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -642,12 +647,30 @@ where
         Vec::new()
     });
     let mut root = vec![panel_content(view).key("panel")];
-    root.extend(
-        buttons
-            .into_iter()
-            .enumerate()
-            .map(|(i, (_, _, button))| button.key(format!("mode-{i}"))),
-    );
+    if view.layered {
+        root.push(
+            Element::new(layers::EdgeLayer {
+                key: layers::EDGE_LAYER,
+                rect: layers::edge_layer_rect(view.extent, &view.frame),
+                shape: rect,
+                radius: enclosure_radius(&view.frame),
+                joined: mode_rects(view, &rect)
+                    .into_iter()
+                    .map(|r| (r, r.width() / 2.0))
+                    .collect(),
+                focus: false,
+                children: Vec::new(),
+            })
+            .key("panel-edge"),
+        );
+    }
+    for (i, (_, _, button)) in buttons.into_iter().enumerate() {
+        let ModeParts { button, face } = button;
+        root.push(button.key(format!("mode-{i}")));
+        if let Some(face) = face {
+            root.push(face.key(format!("mode-{i}-face")));
+        }
+    }
     Window {
         key: panel_window_key(),
         spec,
@@ -660,10 +683,16 @@ where
     }
 }
 
+/// A mode button's elements: the button, and while the panel is drawn as layers its face apart.
+struct ModeParts<M> {
+    button: Element<M>,
+    face: Option<Element<M>>,
+}
+
 /// The mode buttons as the frame presents them: each with its rectangle in the window, whether it takes input and its
-/// element. They stand where the group's layout puts them (the search field's end and the gaps), scaled with the
+/// elements. They stand where the group's layout puts them (the search field's end and the gaps), scaled with the
 /// enclosure about the window's middle, and are none once they merged into the field.
-fn mode_buttons<M>(view: &PanelView<'_>, enclosure: &Rect) -> Vec<(Rect, bool, Element<M>)>
+fn mode_buttons<M>(view: &PanelView<'_>, enclosure: &Rect) -> Vec<(Rect, bool, ModeParts<M>)>
 where
     M: From<Input> + Clone + 'static,
 {
@@ -683,20 +712,29 @@ where
                         .filter(|&(i, _)| i != index)
                         .map(|(_, r)| (*r, r.width() / 2.0)),
                 )
-                .collect();
+                .collect::<Vec<_>>();
             let mode = view.modes[index];
+            let focus = view.mode_focus == Some(index);
+            let symbol = modes::glyph(mode, frame.modes.sharp);
+            let (children, face) = if view.layered {
+                let face = layers::button_face(index, rect, joined.clone(), focus, symbol);
+                (Vec::new(), Some(face))
+            } else {
+                (vec![symbol], None)
+            };
             let button = Element::new(modes::ModeButton {
                 mode,
                 index,
                 rect,
                 alpha: frame.alpha,
                 sharp: frame.modes.sharp,
-                focus: view.mode_focus == Some(index),
+                focus,
                 active,
                 joined,
-                children: vec![modes::glyph(mode, frame.modes.sharp)],
+                layered: view.layered,
+                children,
             });
-            (rect, active, button)
+            (rect, active, ModeParts { button, face })
         })
         .collect()
 }
@@ -704,10 +742,21 @@ where
 /// The mode buttons' rectangles in the window as the frame presents them, scaled with the enclosure about the window's
 /// middle; none once they merged into the field.
 fn mode_rects(view: &PanelView<'_>, enclosure: &Rect) -> Vec<Rect> {
-    let frame = &view.frame;
-    let count = frame.modes.count.min(view.modes.len());
+    let count = view.frame.modes.count.min(view.modes.len());
+    mode_rects_of(view.extent, &view.frame, count, enclosure)
+}
+
+/// The rectangles of `count` mode buttons in a window `extent` large as `frame` presents them beside the enclosure at
+/// `enclosure`.
+pub(crate) fn mode_rects_of(
+    extent: Size,
+    frame: &Frame,
+    count: usize,
+    enclosure: &Rect,
+) -> Vec<Rect> {
+    let count = count.min(frame.modes.count);
     let scale = frame.scale.clamp(0.0, MAX_SCALE);
-    let middle = view.extent.width / 2.0;
+    let middle = extent.width / 2.0;
     let centre_y = enclosure.y() + enclosure.height() / 2.0;
     (0..count)
         .map(|index| {
@@ -931,8 +980,22 @@ where
         alpha: frame.alpha,
         size: Size::new(frame.shape.width, frame.shape.height),
         offset: (rect.width() - frame.shape.width) / 2.0,
+        layer: view.layered,
+        handed: view.handed,
         children,
     });
+    let mut children = vec![inner.key("content")];
+    if view.layered {
+        children.insert(
+            0,
+            Element::new(layers::GlassLayer {
+                rect: Rect::new(0.0, 0.0, rect.width(), rect.height()),
+                look: layers::glass_look(frame),
+                key: layers::GLASS_LAYER,
+            })
+            .key("glass"),
+        );
+    }
     Element::new(Enclosure {
         rect,
         radius: enclosure_radius(frame),
@@ -944,8 +1007,9 @@ where
             .map(|r| (r, r.width() / 2.0))
             .collect(),
         split,
+        layered: view.layered,
         content: Size::new(frame.shape.width, frame.shape.height),
-        children: vec![inner.key("content")],
+        children,
     })
 }
 
@@ -1327,6 +1391,8 @@ struct Enclosure<M> {
     /// Its parts fade themselves at `alpha` ([`Bar`] and the browser's body): the enclosure draws its own edge (and
     /// without glass its shadow and fill) at `alpha` and lays no layer over them.
     split: bool,
+    /// Its glass, edge and content are layers of their own ([`layers`]): it draws nothing itself.
+    layered: bool,
     content: Size,
     children: Vec<Element<M>>,
 }
@@ -1353,9 +1419,21 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.rect, self.content) != (old.rect, old.content) {
             Change::Layout
-        } else if (self.radius, self.alpha, self.split, self.blur, self.joins)
-            != (old.radius, old.alpha, old.split, old.blur, old.joins)
-            || self.joined != old.joined
+        } else if (
+            self.radius,
+            self.alpha,
+            self.split,
+            self.blur,
+            self.joins,
+            self.layered,
+        ) != (
+            old.radius,
+            old.alpha,
+            old.split,
+            old.blur,
+            old.joins,
+            old.layered,
+        ) || self.joined != old.joined
         {
             Change::Paint
         } else {
@@ -1385,6 +1463,11 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
         let mut material = Glass::large_panel().radius(radius).alpha(alpha);
         if self.joins {
             material = material.container(modes::JOIN_CONTAINER, modes::JOIN_SPACING);
+        }
+        if self.layered {
+            // the glass layer draws the glass and the edge layer the edge; the content lies on the glass as in place
+            cx.layer_glass(material);
+            return;
         }
         let glass = cx.glass(material);
         // what the enclosure's own drawing is multiplied by: the fade itself when its parts fade one by one
@@ -1454,6 +1537,11 @@ struct PanelRoot<M> {
     size: Size,
     /// Where it lies in the enclosure: centred across it.
     offset: f64,
+    /// It is the content's own compositor layer ([`layers::CONTENT_LAYER`]).
+    layer: bool,
+    /// The compositor runs the close ([`PanelView::handed`]): a key, its release included, reaches nothing inside, as
+    /// a field would restart its caret's blink and draw again.
+    handed: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1478,7 +1566,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.size, self.offset) != (old.size, old.offset) {
             Change::Layout
-        } else if (self.alpha, self.keys) != (old.alpha, old.keys) {
+        } else if (self.alpha, self.keys, self.layer) != (old.alpha, old.keys, old.layer) {
             Change::Paint
         } else {
             Change::None
@@ -1494,6 +1582,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            Event::Key(..) if self.handed => Propagation::Stop,
             // the primary modifier alone, held and let go: the preview shows a file's location meanwhile
             Event::Key(key, _)
                 if matches!(key.keysym.0, SUPER_L | SUPER_R)
@@ -1525,6 +1614,13 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     /// The query field is where the panel's keys go: a press on a button or in the content leaves it editing.
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.keeps_editing();
+    }
+
+    fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
+        self.layer.then_some(cupertino_kit::core::SurfaceLayerMark {
+            key: layers::CONTENT_LAYER,
+            look: cupertino_kit::platform::SurfaceLayerLook::default(),
+        })
     }
 }
 

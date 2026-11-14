@@ -46,6 +46,9 @@ pub struct ModeButton<M> {
     /// The other shapes its glass joins (the field's and the other buttons'), in the window, with their corner radii:
     /// its edge is not drawn inside them.
     pub joined: Vec<(Rect, f64)>,
+    /// Its glass is a compositor layer of its own and its face another ([`super::layers::button_face`]): it draws
+    /// nothing itself.
+    pub layered: bool,
     pub children: Vec<Element<M>>,
 }
 
@@ -84,9 +87,28 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
     fn update(&self, old: &Self, _: &mut bool) -> Change {
         if self.rect != old.rect {
             Change::Layout
-        } else if (self.mode, self.index, self.alpha, self.focus, self.active)
-            != (old.mode, old.index, old.alpha, old.focus, old.active)
-            || self.joined != old.joined
+        } else if self.layered && old.layered {
+            // its layer's glass is all it draws: its focus, its state and the shapes it joins are its face's
+            if (self.mode, self.index, self.alpha) != (old.mode, old.index, old.alpha) {
+                Change::Paint
+            } else {
+                Change::None
+            }
+        } else if (
+            self.mode,
+            self.index,
+            self.alpha,
+            self.focus,
+            self.active,
+            self.layered,
+        ) != (
+            old.mode,
+            old.index,
+            old.alpha,
+            old.focus,
+            old.active,
+            old.layered,
+        ) || self.joined != old.joined
         {
             Change::Paint
         } else {
@@ -150,12 +172,16 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
         let radius = size.width / 2.0;
         let theme = cx.env().theme.clone();
         let dark = theme.preferences.appearance.is_dark();
-        let glass = cx.glass(
-            Glass::large_panel()
-                .capsule()
-                .alpha(alpha)
-                .container(JOIN_CONTAINER, JOIN_SPACING),
-        );
+        let material = Glass::large_panel()
+            .capsule()
+            .alpha(alpha)
+            .container(JOIN_CONTAINER, JOIN_SPACING);
+        if self.layered {
+            // its layer draws the glass and its face the rest; the symbol lies on the glass as in place
+            cx.layer_glass(material);
+            return;
+        }
+        let glass = cx.glass(material);
         if alpha < 1.0 {
             cx.set_group(alpha as f32, Vec::new());
         }
@@ -178,6 +204,13 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
         if self.focus {
             focus_ring(cx, rect, radius);
         }
+    }
+
+    fn surface_layer(&self, _: &bool) -> Option<cupertino_kit::core::SurfaceLayerMark> {
+        self.layered.then(|| cupertino_kit::core::SurfaceLayerMark {
+            key: super::layers::button_glass_layer(self.index),
+            look: super::layers::button_glass_look(self.rect.width()),
+        })
     }
 
     fn semantics(&self, _: &bool, cx: &mut SemanticsCx<'_>) {

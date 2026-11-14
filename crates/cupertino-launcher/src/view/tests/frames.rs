@@ -129,6 +129,9 @@ thread_local! {
     static MOST_LOADING: Cell<usize> = const { Cell::new(0) };
     /// The CPU time the loop spent asking the host for icons, in nanoseconds.
     static LOOP_ICON_NANOS: Cell<u128> = const { Cell::new(0) };
+    /// The next [`Metered`] window system shows surface layers, and its theme is the dark one.
+    static LAYERS: Cell<bool> = const { Cell::new(false) };
+    static DARK: Cell<bool> = const { Cell::new(false) };
 }
 
 /// What loading and decoding one application icon costs the metered host's icon thread: about what a large theme icon
@@ -243,7 +246,8 @@ impl Application for MeteredApp {
         CLOCK.set(0.0);
         INBOX.set(Some(async_channel::unbounded()));
         let launcher = APPS.get().map_or_else(test_launcher, launcher_of);
-        let model = Model::new(launcher, Box::new(MeteredHost));
+        let mut model = Model::new(launcher, Box::new(MeteredHost));
+        model.compositor_layers = LAYERS.get();
         (model, vec![listen()])
     }
 
@@ -298,8 +302,13 @@ impl Metered {
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
+        let theme = if DARK.get() {
+            theme_in(Appearance::Dark)
+        } else {
+            theme()
+        };
         let options = RuntimeOptions {
-            theme: Arc::new(theme()),
+            theme: Arc::new(theme),
             text,
             icons: Arc::new(PlaceholderIcons::default()),
             direction: LayoutDirection::Ltr,
@@ -321,6 +330,7 @@ impl Metered {
         let capabilities = Capabilities {
             fractional_scale: true,
             app_effects: true,
+            surface_layers: LAYERS.get(),
             ..Capabilities::default()
         };
         let driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
@@ -986,3 +996,6 @@ fn the_panel_steps_once_per_frame_callback_of_its_window() {
         "each frame callback steps the motion once: {steps:?}"
     );
 }
+
+#[path = "layers.rs"]
+mod layers;

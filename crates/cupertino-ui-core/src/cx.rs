@@ -550,6 +550,7 @@ impl PaintCx<'_> {
                 0.0
             },
             capsule: false,
+            in_layer: false,
             alpha: if alpha.is_finite() {
                 alpha.clamp(0.0, 1.0)
             } else {
@@ -597,6 +598,18 @@ impl PaintCx<'_> {
     /// the colour of the glass's face, light or dark on a small shape as the compositor measured it. A node reads its
     /// colours after this call. [`PaintCx::material`] with a glass surface does the same.
     pub fn glass(&mut self, glass: Glass) -> bool {
+        self.glass_in(glass, false)
+    }
+
+    /// Makes this node lie on `glass` that its surface layer draws ([`SurfaceLayerMark`](crate::SurfaceLayerMark)'s
+    /// look) rather than the window: what the node paints after it, and its subtree, lie on the glass as after
+    /// [`PaintCx::glass`], and nodes it holds whole lie on it too, but the window shows no glass of its own for it.
+    /// Returns whether the window could show glass.
+    pub fn layer_glass(&mut self, glass: Glass) -> bool {
+        self.glass_in(glass, true)
+    }
+
+    fn glass_in(&mut self, glass: Glass, in_layer: bool) -> bool {
         *self.asked_material = true;
         *self.lays_material = true;
         let finite = |v: f64, otherwise: f64| if v.is_finite() { v } else { otherwise };
@@ -608,6 +621,7 @@ impl PaintCx<'_> {
                 GlassCorners::Capsule => 0.0,
             },
             capsule: glass.corners == GlassCorners::Capsule,
+            in_layer,
             alpha: finite(glass.alpha, 1.0).clamp(0.0, 1.0),
             glass: Some(GlassRegion {
                 style,

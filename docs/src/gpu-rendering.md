@@ -252,6 +252,14 @@ input and semantics keep the layout. A motion that is no single curve of one pro
 clamped ramp) goes as its values at even steps of its duration, which the compositor follows in straight lines on its
 clock.
 
+The launcher's panel is drawn as layers once it rests: the enclosure's glass is a layer that draws nothing but its
+glass, its content a layer that does not scale, and its dark edge, drawn just outside the shape, a layer of its own on a
+grid around the enclosure with room for the stroke, centred on the point the panel grows about; each mode button is a
+layer of glass at its rect and a face (edge, focus ring and symbol) above it. The window itself shows no glass. Its
+close is then the compositor's: the glass grows to its end rect and fades, the edge scales with it and blurs, the
+content blurs and fades, all on the close's ease-out, with no frame of the application's. While the panel moves, and
+under Reduce Motion, it draws itself.
+
 ### 10. The compositor
 
 The compositor stays on Smithay's GLES renderer. Its own work, in order:

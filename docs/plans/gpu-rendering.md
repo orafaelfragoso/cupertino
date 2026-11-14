@@ -743,9 +743,31 @@ Gate:
             samples while it fades, and the server sees the blur reach 7.96 of its 8 points with no window buffer
             (`a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer`).
             Every value the launcher draws can now be carried exactly, on the compositor's clock.
-      - [ ] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
+      - [x] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
             the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
-            (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it.
+            (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it. The panel at rest is
+            drawn as layers (`view::layers`): the enclosure's glass (a layer that draws only glass, through
+            `PaintCx::layer_glass`, so the window shows none and the content keeps the glass's foreground), the
+            content unscaled, the dark edge as a layer of its own on a 4 pt grid with room for the stroke outside the
+            shape and centred on the point the panel grows about, and each mode button's glass at its rect and its
+            face (edge, focus ring, symbol) above. The close sends each its curves (`layers::close_changes`): the
+            glass to the close's end rect, the edge scaled to 1.02 and blurred through samples of the content blur
+            divided by its scale, the content blurred and moved where the drawing moves it, the buttons moved, all
+            faded on the ease-out; the panel goes when the compositor is done (`Message::CloseOver`). At rest the
+            layers laid over the window are the panel's drawing within 1 of 255 at 1, 1.5 and 2 in both appearances,
+            and their glass is the regions it stands on in place
+            (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`); the close presents no
+            frame of the window or a layer (`a_resting_panel_closes_on_the_compositor_s_clock_without_a_frame`, the
+            real process against the server in
+            `shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`); under Reduce
+            Motion, while the panel moves and without the capability it draws its own close
+            (`under_reduce_motion_the_panel_draws_its_own_close`). A settled spring now rests exactly at its
+            target, so the resting panel lost a float tail: at 1.5 the caret sits one device pixel further right
+            than before and the mode buttons' rims moved by a few hundredths of a point ("Measurements", "Step 9").
+            What is not exact: the field's edge grows by a uniform scale where the drawing grows its width alone
+            (under a device pixel at the ends); content that moves lands on whole device pixels; a caret blink
+            that falls inside the 0.1 s close draws the content layer once (the field's caret has no way to hold
+            still yet).
       - [ ] A scope's open and folding (the browser, the files scope): the enclosure's width, height, corner and
             place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
             unscaled, its fade on the content's curve; the files scope's width dip as samples.
@@ -753,7 +775,17 @@ Gate:
             the products above, in one glass group with the field, each button's symbol sharpening as its layer's
             content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`.
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
-            each within the goldens' tolerance of the launcher's drawing.
+            each within the goldens' tolerance of the launcher's drawing. Split:
+        - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over
+              14 to 16 server steps part way
+              (`shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`); settled, the
+              compositor's panel is the application's within 2 of 255 ("Measurements", "Step 9", "The sheet").
+        - [ ] The open: waits on the two items above.
+        - [ ] The look mid-way within 2 of 255: a recording of two runs compares moments up to a frame apart (the
+              application's frames and the compositor's land at their own phases of the curve), so the sheet's mid-way
+              pairs differ by more (up to 109 at the close's first frame, 3 at its last); it needs the server to draw
+              a layer tree at a set time and the application to draw the same moment, a headless comparison of its
+              own.
   - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
         centre of its window geometry, after its window's rescale or its layer surface's presentation
         (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of
@@ -778,12 +810,14 @@ Gate:
       frame after its first as it opens)
       (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
       "Step 9"). Popovers and menus hold: a popover's growth and shrinking and a menu's fade present no frame. The
-      launcher waits on its split items above. The review by eye is pending the owner's review of the sheet.
+      launcher's close holds (no buffer of its window or layers); its open waits on its split items above. The review
+      by eye is pending the owner's review of the sheet.
 - [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
       own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
-      the launcher's pairs are in it with both sides drawn by the application until its layers land.
+      the launcher's close is in it drawn by the compositor, its open drawn by the application on both sides until
+      its open's layers land.
 
 ## Step 10: retire the duplicates
 
@@ -1625,10 +1659,30 @@ the number is the largest difference of any channel in the crop, out of 255.
 
 Settled, the card is the same within a step of one channel. Mid-way, the two fades sit at slightly different moments:
 each run's frames land at their own phase of the fade's clock (the card's own frames before, the compositor's after),
-so a pair compares two moments up to a frame apart, and the differences fall to 2 or 3 as the fade slows. The
-launcher's pairs (open at 1, 2, 3, 5, 8, 14 and 24 frames, close at 1 to 4, settled) are drawn by the application on
-both sides: settled within 2, mid-way up to 255 at the moving edge of the field, as the launcher's own frames land at
-different moments in the two runs.
+so a pair compares two moments up to a frame apart, and the differences fall to 2 or 3 as the fade slows.
+
+The launcher, the same way: the search field opened with the launcher action and closed with it again once it rests.
+"Before" is the merge base of the close's branch; "own" is the branch's application drawing (the same build with the
+layers turned off), so the handover alone shows; "after" is the branch, its close the compositor's. The open is drawn
+by the application on all three.
+
+| Launcher | Pairs (frames after the start) | Largest mid-way, before / own | Settled, before / own |
+|---|---|---|---|
+| Open, dark | 1, 2, 3, 5, 8, 14, 24 | 138 / 114 | 186 / 1 |
+| Close, dark | 1 to 6 | 98 / 83 | 0 / 0 |
+| Open, light | 1, 2, 3, 5, 8, 14, 24 | 81 / 149 | 240 / 2 |
+| Close, light | 1 to 6 | 120 / 109 | 0 / 0 |
+
+Settled open, against its own drawing the compositor's panel is within 1 (dark) and 2 (light); against the merge base
+the caret is one device pixel further right (186 and 240 on its three columns) and the mode buttons' rims differ by up
+to 14, where the resting panel lost the float tail of its settled springs. Mid-way, the close's differences fall from
+83 to 109 at its first frame (the application's first frame of the close against the compositor's, a frame's phase
+apart) to 0 to 3 at its sixth; the open's are those of two runs of the application's own frames.
+
+The launcher's close, counted by `shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`
+(the real process on a private bus, debug builds): 0 buffers of the window and its five layers from Escape until the
+panel goes, in each of 3 runs, over 14 to 16 server steps that showed it part way. Without the layers the panel draws a
+frame per frame callback through the close, about 6 at 60 Hz.
 
 ### Step 1: the look freeze
 

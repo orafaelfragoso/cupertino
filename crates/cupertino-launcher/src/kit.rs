@@ -238,6 +238,8 @@ pub enum Message {
     Output(Size),
     /// The session's Reduce Motion option.
     ReduceMotion(bool),
+    /// The close the compositor runs ([`Model::compositor_layers`]) is over by now.
+    CloseOver,
 }
 
 impl From<Input> for Message {
@@ -351,6 +353,13 @@ pub struct Model {
     just_shown: bool,
     /// The primary modifier is held while the panel has the keyboard.
     pub primary_held: bool,
+    /// The window system shows the panel's parts as compositor layers ([`view::layers`]): while the panel rests it
+    /// draws them so, and the compositor runs its close.
+    pub compositor_layers: bool,
+    /// The close the compositor runs: the panel as it was when the close began, which the panel's layers keep showing
+    /// until it is over, and the layers' changes not yet sent.
+    handed: Option<Frame>,
+    layer_changes: Vec<(u64, Vec<cupertino_kit::platform::LayerChange>)>,
 }
 
 impl Model {
@@ -407,6 +416,9 @@ impl Model {
             select_query: false,
             just_shown: false,
             primary_held: false,
+            compositor_layers: false,
+            handed: None,
+            layer_changes: Vec::new(),
         }
     }
 
@@ -414,9 +426,25 @@ impl Model {
         self.host.now()
     }
 
-    /// What is presented now.
+    /// What is presented now: while the compositor runs the close, the panel as the close began, which its layers
+    /// keep.
     pub fn presented(&self) -> Frame {
-        self.motion.frame(self.now().mono)
+        self.handed
+            .unwrap_or_else(|| self.motion.frame(self.now().mono))
+    }
+
+    /// Whether the panel's parts draw into compositor layers of their own now: while it rests, open, and while the
+    /// compositor runs its close; never under Reduce Motion, where nothing is handed over.
+    pub fn layered(&self) -> bool {
+        self.compositor_layers
+            && !self.motion.reduce_motion()
+            && (self.handed.is_some()
+                || (self.nav.is_visible() && !self.motion.animating(self.now().mono)))
+    }
+
+    /// Whether the compositor runs the panel's close now.
+    pub fn close_handed(&self) -> bool {
+        self.handed.is_some()
     }
 
     /// Whether the panel's window is up: open, or still fading out.
@@ -590,6 +618,9 @@ impl Model {
                 self.mode_hover = None;
                 self.mode_focus = modes::Focus::default();
                 self.just_shown = true;
+                // a close the compositor ran is turned around by the panel itself, which draws its opening
+                self.handed = None;
+                self.layer_changes.clear();
                 match view {
                     View::Browse => {
                         self.panel.set_text_quiet(&kept);
@@ -708,6 +739,12 @@ impl Model {
     /// Close: the window fades out (at once when `now_gone`, for a session lock); the launch history is written.
     fn hide(&mut self, now_gone: bool) {
         let now = self.now();
+        // the navigation has already left the panel: it was drawn as layers if it rested, shown
+        let layered = self.compositor_layers
+            && !self.motion.reduce_motion()
+            && self.handed.is_none()
+            && !self.motion.animating(now.mono)
+            && !self.motion.gone(now.mono);
         self.dragging = false;
         if self.nav.is_visible() {
             self.nav = Nav::HIDDEN;
@@ -725,9 +762,24 @@ impl Model {
         self.browse_said_before.clear();
         self.preview = PreviewState::None;
         self.previewed = None;
+        // a panel drawn as layers at rest closes on the compositor's clock: its layers keep what they show and the
+        // compositor grows, blurs and fades them on the curves the panel draws them on itself
+        let rest = (layered && !now_gone && !self.settled).then(|| self.motion.frame(now.mono));
         self.motion.hide(now.mono);
         if now_gone || self.settled {
             self.motion.settle(now.mono);
+        }
+        if let Some(from) = rest {
+            let to = self.motion.frame(now.mono + crate::motion::CLOSE_DURATION);
+            self.layer_changes = view::layers::close_changes(
+                self.extent,
+                &from,
+                &to,
+                self.modes().len(),
+                &self.motion,
+                now.mono,
+            );
+            self.handed = Some(from);
         }
         if let Err(e) = self.launcher.frecency.save_if_dirty() {
             eprintln!("cupertino-launcher: launch history not saved: {e}");
@@ -742,8 +794,9 @@ impl Model {
             View::Files => self.scope.as_ref().is_some_and(|s| s.animating(now)),
             _ => false,
         };
-        // the panel's window sends the frame's message at its next frame callback ([`view`])
-        self.frame_waiting = self.motion.animating(now) || scrolling;
+        // the panel's window sends the frame's message at its next frame callback ([`view`]); a close the compositor
+        // runs asks for none
+        self.frame_waiting = (self.motion.animating(now) && self.handed.is_none()) || scrolling;
         Vec::new()
     }
 
@@ -1887,12 +1940,34 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.motion.set_reduce_motion(on);
             Vec::new()
         }
+        Message::CloseOver => {
+            // a timer a little early waits for the rest of the close
+            let left = model.handed.map(|_| model.motion.closing_left(now.mono));
+            match left {
+                Some(left) if left > 0.0 => model.host.after(left, Message::CloseOver),
+                _ => Vec::new(),
+            }
+        }
         Message::Unheard => {
             eprintln!("cupertino-launcher: the bus interface stopped");
             vec![Command::Exit]
         }
     };
     commands.extend(model.changed());
+    // a close handed to the compositor: the layers' changes, and a timer for its end, when the window goes
+    if !model.layer_changes.is_empty() {
+        for (key, changes) in std::mem::take(&mut model.layer_changes) {
+            commands.push(Command::Window(
+                view::panel_window_key(),
+                cupertino_kit::platform::WindowRequest::Layer { key, changes },
+            ));
+        }
+        let left = model.motion.closing_left(model.now().mono);
+        commands.extend(model.host.after(left, Message::CloseOver));
+    }
+    if model.handed.is_some() && model.motion.gone(model.now().mono) {
+        model.handed = None;
+    }
     // whatever started a transition (a launch or an opened file hides the panel as Escape does), its frames follow
     if !model.frame_waiting && model.motion.animating(model.now().mono) {
         commands.extend(model.animate());
@@ -1955,6 +2030,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         file_images: &model.file_images,
         select_query: model.select_query,
         show_location: model.primary_held,
+        layered: model.layered(),
+        handed: model.close_handed(),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

@@ -1430,6 +1430,14 @@ impl Connection {
         Ok(())
     }
 
+    /// Commit `surface`'s pending state without a new buffer: what an extension asked of it (a layer's animation)
+    /// applies, and the buffer it shows stays. Nothing goes before the surface has shown a buffer.
+    pub fn commit_state(&mut self, surface: SurfaceId) -> Result<(), Error> {
+        let surf = self.state.surface_mut(surface)?;
+        surf.wl.commit();
+        self.flush()
+    }
+
     /// Hide `surface`, a subsurface, with its parent's next commit; presenting a buffer shows it again.
     pub fn unmap_subsurface(&mut self, surface: SurfaceId) -> Result<(), Error> {
         let surf = self.state.surface_mut(surface)?;

@@ -11,7 +11,7 @@ use cupertino_controlcenter::backend::{
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
 use cupertino_controlcenter::layout::{BAR_MARGIN, SHADOW_TOP};
-use cupertino_controlcenter::lifecycle::Phase;
+use cupertino_controlcenter::lifecycle::{Phase, CLOSE_CURVE, OPEN_CURVE};
 use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
 use cupertino_controlcenter::motion::Expansion;
 use cupertino_controlcenter::system::{
@@ -22,8 +22,10 @@ use cupertino_controlcenter::view::{
     self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
 };
 use cupertino_kit::controls::FrameClock;
-use cupertino_kit::core::{Application, Command, Element, Key, Window};
-use cupertino_kit::platform::{SystemAppearance, WindowSpec};
+use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
+use cupertino_kit::platform::{
+    PresentChange, PresentProperty, SystemAppearance, WindowRequest, WindowSpec, WindowSystem,
+};
 use cupertino_modifiers::Profile;
 use cupertino_pipewire::Wpctl;
 use cupertino_protocol_app::AppEvent;
@@ -479,6 +481,11 @@ pub struct Panel {
     follow_focus: bool,
     /// The fade or a detail view's motion runs: the panel's window asks for frames, each one a step.
     animating: bool,
+    /// The compositor runs the card's fades on its clock ([`PresentChange`]): the card draws at full opacity, and its
+    /// window asks for no frame while it fades.
+    compositor_fades: bool,
+    /// The phase the card's presentation was last told of.
+    told: Phase,
 }
 
 #[derive(Clone, Debug)]
@@ -591,8 +598,14 @@ impl Panel {
 
     /// How the panel is shown at `now`.
     fn presentation(&self, now: f64) -> Presentation {
+        let phase = self.controller.phase(now);
         Presentation {
-            alpha: self.controller.opacity(now),
+            // the compositor fades what the card draws whole
+            alpha: if self.compositor_fades && phase != Phase::Hidden {
+                1.0
+            } else {
+                self.controller.opacity(now)
+            },
             light: self.light,
             input: self.controller.phase(now) == Phase::Shown,
             detail: self.expansion.map(|e| Opened {
@@ -613,26 +626,60 @@ fn listen(requests: &async_channel::Receiver<Request>) -> Command<Message> {
     }))
 }
 
+/// The card's fade when the panel turned to `phase` from `told`, for the compositor to run: from nothing when the card
+/// opens, from where the fade is when it turns, on the curves the card draws itself without the compositor. None
+/// under Reduce Motion, where the card appears and goes at once.
+fn fade(told: Phase, phase: Phase, reduce_motion: bool) -> Option<Vec<PresentChange>> {
+    let opacity = |to: f64, curve| PresentChange {
+        property: PresentProperty::Opacity,
+        to,
+        curve,
+        velocity: 0.0,
+    };
+    match (told, phase) {
+        _ if reduce_motion || told == phase => None,
+        (Phase::Hidden, Phase::Shown) => {
+            Some(vec![opacity(0.0, None), opacity(1.0, Some(OPEN_CURVE))])
+        }
+        (Phase::Hiding, Phase::Shown) => Some(vec![opacity(1.0, Some(OPEN_CURVE))]),
+        (Phase::Shown, Phase::Hiding) => Some(vec![opacity(0.0, Some(CLOSE_CURVE))]),
+        _ => None,
+    }
+}
+
 /// The timer for the controller's next write or refresh or the end of the fade; the frames of the fade and of a
-/// detail view's motion come from the panel's window ([`Message::Frame`]), one per frame the compositor gives it.
+/// detail view's motion come from the panel's window ([`Message::Frame`]), one per frame the compositor gives it. A
+/// compositor that runs the fades is handed each one as it starts, and the window asks for no frame while it runs.
 fn schedule(model: &mut Panel) -> Vec<Command<Message>> {
     model.timer += 1;
     let now = model.now();
-    model.animating = model.controller.phase(now) == Phase::Hiding
-        || model.controller.opening(now)
-        || (model.moving && model.controller.phase(now) == Phase::Shown);
+    let phase = model.controller.phase(now);
+    let fading = phase == Phase::Hiding || model.controller.opening(now);
+    model.animating =
+        (fading && !model.compositor_fades) || (model.moving && phase == Phase::Shown);
+    let mut commands = Vec::new();
+    if model.compositor_fades {
+        if let Some(changes) = fade(model.told, phase, model.reduce_motion) {
+            commands.push(Command::Window(
+                WindowKey(Key::from(view::PANEL_KEY)),
+                WindowRequest::Present(changes),
+            ));
+        }
+    }
+    model.told = phase;
     let Some(wait) = model
         .controller
         .next_wakeup(now)
         .map(Duration::from_secs_f64)
     else {
-        return Vec::new();
+        return commands;
     };
     let timer = model.timer;
-    vec![Command::Perform(Box::pin(async move {
+    commands.push(Command::Perform(Box::pin(async move {
         async_io::Timer::after(wait).await;
         Message::Timer(timer)
-    }))]
+    })));
+    commands
 }
 
 /// The controller and the motion advance to now.
@@ -649,6 +696,7 @@ fn start(
     controller: Controller,
     requests: async_channel::Receiver<Request>,
     appearance: SystemAppearance,
+    compositor_fades: bool,
 ) -> (Panel, Vec<Command<Message>>) {
     let first = listen(&requests);
     let mut controller = controller;
@@ -664,6 +712,8 @@ fn start(
         moving: false,
         follow_focus: false,
         animating: false,
+        compositor_fades,
+        told: Phase::Hidden,
     };
     (model, vec![first])
 }
@@ -683,6 +733,7 @@ impl Application for Panel {
             Controller::new(backends(&Options::default())),
             async_channel::unbounded().1,
             SystemAppearance::default(),
+            false,
         )
     }
 
@@ -787,9 +838,16 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         keyboard: CardKeyboard::default(),
         control: Some(control),
     });
+    // the compositor runs the card's fades when it presents shell surfaces as a whole; else the card draws them
+    let compositor_fades = system.capabilities().present_animation;
     cupertino_kit::app::run_on::<Panel>(
         system,
-        start(Controller::new(backends(options)), requests, appearance),
+        start(
+            Controller::new(backends(options)),
+            requests,
+            appearance,
+            compositor_fades,
+        ),
     )?;
     Err("the control panel's window system stopped".into())
 }
@@ -817,6 +875,11 @@ mod tests {
     }
 
     fn panel() -> Panel {
+        panel_with(false)
+    }
+
+    /// A panel on the in-memory backends; `compositor_fades` hands its fades to the compositor.
+    fn panel_with(compositor_fades: bool) -> Panel {
         let options = Options {
             fake_backends: true,
             alsa_card: None,
@@ -825,8 +888,66 @@ mod tests {
             Controller::new(backends(&options)),
             async_channel::unbounded().1,
             SystemAppearance::default(),
+            compositor_fades,
         )
         .0
+    }
+
+    /// The presentation changes among `commands`.
+    fn fades(commands: &[Command<Message>]) -> Vec<Vec<PresentChange>> {
+        commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::Window(key, WindowRequest::Present(changes))
+                    if *key == WindowKey(Key::from(view::PANEL_KEY)) =>
+                {
+                    Some(changes.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// With a compositor that runs them, the card's fades go to it as they start, on the card's own curves, and the
+    /// card draws at full opacity without asking for frames; a toggle during the fade-out turns it from where it is.
+    #[test]
+    fn the_compositor_runs_the_card_s_fades_and_the_card_asks_for_no_frame() {
+        let mut model = panel_with(true);
+        let opened = Panel::update(&mut model, Message::Request(Request::Toggle));
+        let opacity = |to: f64, curve| PresentChange {
+            property: PresentProperty::Opacity,
+            to,
+            curve,
+            velocity: 0.0,
+        };
+        assert_eq!(
+            fades(&opened),
+            [vec![opacity(0.0, None), opacity(1.0, Some(OPEN_CURVE))]]
+        );
+        assert!(!model.animating, "no frame while it fades in");
+        assert_eq!(model.presentation(model.now()).alpha, 1.0);
+        let closed = Panel::update(&mut model, Message::Input(Input::Dismiss));
+        assert_eq!(fades(&closed), [vec![opacity(0.0, Some(CLOSE_CURVE))]]);
+        assert!(!model.animating, "no frame while it fades out");
+        assert!(timer(&closed), "the end of the fade-out is timed");
+        let again = Panel::update(&mut model, Message::Request(Request::Toggle));
+        assert_eq!(fades(&again), [vec![opacity(1.0, Some(OPEN_CURVE))]]);
+        // without the compositor's fades the card draws them
+        let mut model = panel();
+        assert!(fades(&Panel::update(
+            &mut model,
+            Message::Request(Request::Toggle)
+        ))
+        .is_empty());
+        assert!(model.animating);
+    }
+
+    #[test]
+    fn under_reduce_motion_the_compositor_is_handed_no_fade() {
+        assert_eq!(fade(Phase::Hidden, Phase::Shown, true), None);
+        assert_eq!(fade(Phase::Shown, Phase::Hiding, true), None);
+        assert_eq!(fade(Phase::Shown, Phase::Shown, false), None);
+        assert_eq!(fade(Phase::Hiding, Phase::Hidden, false), None);
     }
 
     fn app_ids(model: &Panel) -> Vec<String> {

@@ -104,7 +104,11 @@ and Return press; the arrow keys move the focus to the nearest control in their 
 instead); Home and End take a level to its ends. Each tile is a group named for its module.
 
 **Session.** A hidden panel has no window. A toggle opens the panel and the catcher, with no detail view open. A dismissal
-closes the catcher at once and fades the panel, whose window closes when the fade ends. While the panel is shown its window asks for **exclusive** keyboard interactivity, so it is the key window as soon as it
+closes the catcher at once and fades the panel, whose window closes when the fade ends. When the compositor presents
+shell surfaces (`cupertino_layers_v1` version 2) it runs both fades on its clock as the card's presentation
+(`lifecycle::OPEN_CURVE`, the same critically damped rise as a spring, and `lifecycle::CLOSE_CURVE`, the fall as a cubic
+Bezier within a two-thousandth of it): the card draws at full opacity and commits no buffer while it fades. Otherwise
+the card draws each step of the fade itself. While the panel is shown its window asks for **exclusive** keyboard interactivity, so it is the key window as soon as it
 opens, from the menu bar, a shortcut or a hot corner. It asks for it again when a toggle
 during the fade shows the panel again. It asks for none from the start of the fade. Another exclusive surface (the launcher)
 that takes the keyboard from the shown panel dismisses the panel. On `locked` a shown panel starts closing too.

@@ -514,7 +514,7 @@
   note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first. Tested in crates/cupertino-server/tests/gpu-reset.rs.
 - name: cupertino_layers_v1
   kind: wayland-global
-  version: 1
+  version: 2
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -523,7 +523,7 @@
   test_owner: crates/cupertino-server/tests/layers_v1.rs
   source: crates/cupertino-server/src/layers_v1.rs
   source_match: Cupertino, CupertinoLayersV1
-  note: Surfaces of a client made layers of its own parent surface. Geometry in fixed point and every request of a layer apply with the parent's commit (a synchronized parent caches them); content applies on the layer surface's own commit and never holds the parent's (late content shows the placeholder colour in the bounds it does not cover). Timed and spring animations start with the first frame that shows their commit (at the latest 100 ms after it) on the server's clock, so they follow the time scale and the fixed time; a retarget keeps value and velocity and sends replaced, an animation that ends sends finished, a layer with none left settled. Reduce motion ends spatial animations at their target. Layers take no input and are clipped to the parent's window. Limits: 64 layers per parent, 256 per client, 512 animations running or waiting per client, 10 s per timed animation, spring response 0.01 to 10 s and damping 0.05 to 4, lens 1 to 4.
+  note: Surfaces of a client made layers of its own parent surface. Geometry in fixed point and every request of a layer apply with the parent's commit (a synchronized parent caches them); content applies on the layer surface's own commit and never holds the parent's (late content shows the placeholder colour in the bounds it does not cover). Timed and spring animations start with the first frame that shows their commit (at the latest 100 ms after it) on the server's clock, so they follow the time scale and the fixed time; a retarget keeps value and velocity and sends replaced, an animation that ends sends finished, a layer with none left settled. Reduce motion ends spatial animations at their target. Layers take no input and are clipped to the parent's window. Limits: 64 layers per parent, 256 per client, 512 animations running or waiting per client, 10 s per timed animation, spring response 0.01 to 10 s and damping 0.05 to 4, lens 1 to 4. Version 2 adds get_presentation: a layer shell surface's own presentation, a layer object whose x, y, opacity and scale (about the surface's centre) apply to all the surface draws, its backdrops, popups and layers included, with the surface's own commit; the other properties and the look requests are invalid_property on it, one per surface (role otherwise), and input stays with the surface at rest. Tested in crates/cupertino-server/tests/layers_v1.rs (a_presentation_*); the toolkit hands a window with a shell role its open and close through it (crates/cupertino-ui-wayland/src/presentations.rs).
 - name: cupertino.control.v1
   kind: socket-protocol
   version: 1

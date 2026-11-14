@@ -5933,3 +5933,87 @@ fn lost_buffers_draw_a_whole_frame_of_a_window_that_changed_nothing() {
     assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
     assert_eq!(rt.window_system().presented.len(), presented + 1);
 }
+
+/// A panel that opens on "open" and asks for its presentation's fade in the same turn, and asks for one of a window it
+/// never opens on "elsewhere".
+struct Opening;
+
+fn fade_in() -> WindowRequest {
+    WindowRequest::Present(vec![cupertino_ui_platform::PresentChange {
+        property: cupertino_ui_platform::PresentProperty::Opacity,
+        to: 1.0,
+        curve: None,
+        velocity: 0.0,
+    }])
+}
+
+impl Application for Opening {
+    type Model = bool;
+    type Message = String;
+
+    fn init() -> (bool, Vec<Command<String>>) {
+        (false, Vec::new())
+    }
+
+    fn update(open: &mut bool, message: String) -> Vec<Command<String>> {
+        match message.as_str() {
+            "open" => {
+                *open = true;
+                vec![Command::Window(WindowKey("panel".into()), fade_in())]
+            }
+            "elsewhere" => vec![Command::Window(WindowKey("elsewhere".into()), fade_in())],
+            _ => Vec::new(),
+        }
+    }
+
+    fn view(open: &bool) -> Vec<Window<String>> {
+        let window = |key: &'static str| Window {
+            key: WindowKey(key.to_owned().into()),
+            spec: WindowSpec {
+                title: key.into(),
+                app_id: format!("test.{key}"),
+                size: Size::new(200.0, 100.0),
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::Preferred,
+                foreign_parent: None,
+                input_region: None,
+            },
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            popup: None,
+            background: WindowBackground::Theme,
+            content: Element::new(leaf(key)),
+            menus: None,
+        };
+        let mut windows = vec![window("main")];
+        if *open {
+            windows.push(window("panel"));
+        }
+        windows
+    }
+}
+
+/// A request for a window the view that follows opens reaches it before it draws, so its presentation starts with its
+/// first frame; one for a window the view does not open goes nowhere, and not to a window of that key opened later.
+#[test]
+fn a_request_for_a_window_the_view_opens_goes_before_its_first_frame() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Opening, FakeSystem>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    rt.messages.push_back("elsewhere".into());
+    rt.messages.push_back("open".into());
+    rt.step(steps()).unwrap();
+    let panel = rt
+        .windows()
+        .into_iter()
+        .find(|(k, _)| *k == WindowKey("panel".into()))
+        .map(|(_, id)| id)
+        .expect("the panel opened");
+    let system = rt.window_system();
+    assert_eq!(system.requests, [(panel, fade_in())]);
+    assert!(
+        !system.presented.iter().any(|(w, _)| *w == panel),
+        "asked before the panel drew"
+    );
+}

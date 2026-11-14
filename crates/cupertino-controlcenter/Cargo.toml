@@ -27,6 +27,7 @@ app = [
 ]
 
 [dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }

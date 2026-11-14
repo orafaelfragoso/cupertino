@@ -18,7 +18,7 @@
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="1">
+  <interface name="cupertino_layers_v1" version="2">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -58,9 +58,35 @@
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="parent" type="object" interface="wl_surface"/>
     </request>
+
+    <!-- Version 2 additions -->
+
+    <request name="get_presentation" since="2">
+      <description summary="let the server move, fade and scale a surface as a whole">
+        Gives a layer shell surface's main surface a presentation: a layer object whose x and y
+        offset everything the surface draws (its content, its subsurfaces, its backdrops, its
+        popups and its layers) from where the surface lies, whose scale scales all of it about the
+        surface's centre and whose opacity fades all of it. So a panel opens and closes along a
+        curve on the server's clock without drawing a frame. The presentation starts at rest: x
+        and y 0, opacity 1, scale 1.
+
+        Its values and animations follow the rules of cupertino_layer_v1 and apply with the
+        surface's own commit. Input and semantics stay where the surface lies: the server routes
+        input to the surface at rest and the client hit-tests against its own layout, as for
+        layers' target values. Width, height and corner_radius, and the look requests (set_glass,
+        set_blend, set_elevation, set_highlight, set_blur_ramp, set_masks_to_bounds,
+        set_placeholder), post invalid_property on a presentation. Destroying it puts the surface
+        back at rest with its next commit.
+
+        Posts invalid_surface when the surface belongs to another client, and role when it is not a
+        layer shell surface or already has a presentation that is not destroyed.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_layer_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="1">
+  <interface name="cupertino_layer_v1" version="2">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it

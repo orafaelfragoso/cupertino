@@ -1740,6 +1740,93 @@ fn interact_with_card(server: &mut Server, card: &PanelSurface, sound_x: i32) {
     }
 }
 
+/// The commit of the card's surface that last carried a buffer or damage.
+fn buffer_commit(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> Option<smithay::backend::renderer::utils::CommitCounter> {
+    with_renderer_surface_state(surface, |s| s.current_commit())
+}
+
+/// The control panel's fade in and out runs on the compositor's clock, as the card's presentation: while it fades the
+/// card draws no frame of the fade (at most a single one after its first while it opens), and
+/// its opacity rises and falls on the server. Run with
+/// `--no-capture` for the counts.
+#[test]
+fn the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer() {
+    use cupertino_server::layers_v1::{presentation, settled};
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut panel = real_process(PANEL, &bus);
+    panel.command.push("--fake-backends".into());
+    let Some(mut server) = Server::start(vec![panel], true) else {
+        return;
+    };
+    let _answer = toggle_panel(&bus);
+    server.wait_until("the card's first frame", |s| drawn_card(s).is_some());
+    let card = drawn_card(&server.state).unwrap();
+    let first = buffer_commit(&card.surface);
+    // the fade in: sampled as the scene shows it, until the presentation settles
+    let (mut between, mut frames) = (0, 0);
+    let mut new_buffers = 0;
+    let mut last = first;
+    server.wait_until("the fade in to settle", |s| {
+        let now = s.now();
+        let shown = presentation(&card.surface, now, false).expect("the card has a presentation");
+        frames += 1;
+        if shown.opacity > 0.0 && shown.opacity < 1.0 {
+            between += 1;
+        }
+        let commit = buffer_commit(&card.surface);
+        if commit != last {
+            new_buffers += 1;
+            last = commit;
+        }
+        shown.opacity == 1.0 && settled(&card.surface, now)
+    });
+    eprintln!(
+        "trace: fade in: {frames} server steps, {between} of them part way, {new_buffers} new buffers of the card"
+    );
+    assert!(between > 0, "the fade in ran on the server");
+    // the card may draw once more after its first frame as it opens; never a frame per step of the fade
+    assert!(
+        new_buffers <= 1,
+        "the card drew {new_buffers} frames while it faded in"
+    );
+    // the fade out after Escape, until the card goes
+    const ESCAPE: u32 = 1 + 8;
+    for state in [KeyState::Pressed, KeyState::Released] {
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+        server.step();
+    }
+    let (mut between, mut new_buffers) = (0, 0);
+    let mut last = buffer_commit(&card.surface);
+    server.wait_until("the card to go after its fade out", |s| {
+        if !card.surface.is_alive() {
+            return true;
+        }
+        if let Some(shown) = presentation(&card.surface, s.now(), false) {
+            if shown.opacity > 0.0 && shown.opacity < 1.0 {
+                between += 1;
+            }
+        }
+        let commit = buffer_commit(&card.surface);
+        if commit != last {
+            new_buffers += 1;
+            last = commit;
+        }
+        false
+    });
+    eprintln!(
+        "trace: fade out: {between} server steps part way, {new_buffers} new buffers of the card"
+    );
+    assert!(between > 0, "the fade out ran on the server");
+    assert_eq!(new_buffers, 0, "the card drew no frame while it faded out");
+}
+
 /// The control panel open on an output that is unplugged is dismissed at once: its surfaces go, the keyboard goes back
 /// to the window and nothing keeps the pointer. The process keeps running (it is not restarted), and the panel opens
 /// again on the remaining output with its switches and sliders acting. With the last output gone a toggle opens

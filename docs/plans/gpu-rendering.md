@@ -447,7 +447,41 @@ Gate:
 - [x] Server global, with its entry in `docs/architecture/contracts.yaml`.
 - [x] Protocol tests (atomicity, retargeting, limits, late content, time scale and fixed time).
 - [x] Compositor animator.
-- [ ] Toolkit support; shell and control transitions use it.
+- Toolkit support; shell and control transitions use it. Split:
+  - [x] A layer shell surface's own presentation (version 2, `get_presentation`): its offset, opacity and scale apply
+        to all it draws, backdrops, popups and layers included, on the server's clock, with its entry in
+        `docs/architecture/contracts.yaml`
+        (`a_presentation_fades_moves_and_scales_all_its_surface_draws_on_the_server_clock`,
+        `a_presentation_is_a_layer_shell_surface_s_own_and_has_four_properties`).
+  - [x] The client side of the protocol on the transport (`cupertino-protocol-app`: `Layers`, `Layer`, the events as
+        `AppEvent`s) and the window system's presentations: `WindowRequest::Present` with
+        `Capabilities::present_animation`, committed without a buffer, or with the first frame of a window the update
+        opens (`a_request_for_a_window_the_view_opens_goes_before_its_first_frame`); the animations followed through
+        `finished`, `replaced` and `settled`. Without the global, or on another compositor, the capability is off and
+        the application draws its transitions as before. The server retargets from the value and velocity shown,
+        applies the time scale and ends spatial motion under Reduce Motion; input and semantics stay with the layout,
+        the target.
+  - [x] Control Center's open and close run as the card's presentation on the curves it draws itself: the
+        critically damped rise as a spring of the same rate, exact up to the 0.23 s where the drawn curve jumps its
+        last hundredth, and the 0.18 s fall as a cubic Bezier within a two-thousandth of it
+        (`the_compositor_runs_the_same_fades`,
+        `the_compositor_runs_the_card_s_fades_and_the_card_asks_for_no_frame`); no fade is handed over under Reduce
+        Motion, where the card appears and goes at once.
+  - [ ] Paint-tree subtrees as layers of their own surface: a subtree marked `Layer::Opacity` or `Layer::Transform`
+        drawn into a child surface the server places and animates. It needs the presenter to draw one subtree into its
+        own buffer beside the window's, in the GPU presenter being changed for the toolkit renderer; it goes after that
+        change.
+  - [ ] The launcher's open and close (OWNER DECISION). Its opening scales only the enclosure while its content stays
+        at its size, widens the search field across only, and buds the mode buttons out of the field's joined glass on
+        springs of their own for about half a second; its close blurs the content. A presentation scales the content
+        with the glass and carries neither the buds nor the blur, so the opening keeps drawing frames for the buds
+        either way. Choosing between the panel scaled whole as a presentation (the content scaled too while it opens)
+        and the opening drawn by the launcher as now is the owner's.
+  - [ ] Control transitions in popups (a popover growing out of its anchor and shrinking back, a closing menu's
+        fade): presentations of popup surfaces, which version 2 does not take, and the runtime's fades and grows
+        handed over through them.
+  - [ ] Desktop control reads whether a surface's presentation and layers are settled (`layers_v1::settled`), so it
+        waits for what it reads to be what is shown.
 - [x] Vibrant foreground as a blend-role layer.
 - [x] Lifted thumbs and lenses as glass in a raised layer.
 - [x] Pointer-lit highlight and variable blur.
@@ -455,7 +489,13 @@ Gate:
 Gate:
 
 - [ ] Opening Control Center and the launcher costs the application no repaint per frame, and each material effect is
-      reviewed by eye in both appearances.
+      reviewed by eye in both appearances. Control Center holds: its card draws no frame of its fade in or out (a single
+      frame after its first as it opens)
+      (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
+      "Step 9"). The launcher waits on the owner's decision above. The review by eye is pending the owner's review of
+      the sheet.
+- [ ] The before and after sheet of Control Center's fades mid-way and settled, light and dark, from a headless
+      server, for that review: not made within this change's time.
 
 ## Step 10: retire the duplicates
 
@@ -1151,6 +1191,25 @@ warms (step 6's presenter), so the first-frame budget holds; a switch with a war
 its first frame, about 33 ms on the NVIDIA GPU, within the 150 ms. Under heavy load from other builds the GPU
 renderer's whole frame once took 420 ms on the CPU side, the driver's threads starved; the CPU renderer's did not
 move.
+
+### Step 9: layers and animation in the compositor
+
+Headless server, `cupertino-controlcenter --fake-backends` on a private bus, debug builds, counted by
+`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer` (its trace with
+`--no-capture`): the buffers the card committed between its first frame and the end of each fade, against the server
+steps that showed the fade part way.
+
+| Control Center | Server steps part way | New buffers of the card |
+|---|---|---|
+| Fade in, with the compositor's presentation | 58 | 1 |
+| Fade out, with the compositor's presentation | 27 | 0 |
+
+The one buffer of the fade in is a single frame the card draws after its first as it opens; the fade's steps draw
+none, where without the presentation each step is a frame. Taken at the branch's commit, on the machine shared with other builds.
+
+Without the presentation the card draws one frame per frame callback through each fade
+(`the_fade_steps_at_each_frame_of_the_card_s_window_until_it_ends`): about 14 at 60 Hz for the 0.23 s fade in and 11
+for the 0.18 s fade out.
 
 ### Step 1: the look freeze
 

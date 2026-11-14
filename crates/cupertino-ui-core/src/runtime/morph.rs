@@ -8,7 +8,7 @@ use super::Runtime;
 use crate::Application;
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_platform::{MaterialRegion, Timestamp, WindowSystem};
-use cupertino_ui_render::{DisplayList, Transform};
+use cupertino_ui_render::{DisplayList, Layer, Transform};
 
 /// The scale a popover starts at as it opens.
 pub(crate) const OPEN_START_SCALE: f64 = 0.10;
@@ -84,6 +84,10 @@ pub(crate) fn apply(
         return;
     }
     for node in &mut list.nodes {
+        // a root's subtree is drawn at a transform that changes from frame to frame
+        if node.parent.is_none() && !matches!(node.layer, Some(Layer::Scroll { .. })) {
+            node.layer = Some(Layer::Transform);
+        }
         let [a, b, c, d, e, f] = node.transform.0;
         node.transform = Transform([
             a * scale,
@@ -224,6 +228,50 @@ mod tests {
             "close to its size near the end: {last:?}"
         );
         assert_eq!(grow.scale(Timestamp(OPEN_NS)), None, "whole from then on");
+    }
+
+    #[test]
+    fn a_growing_popover_marks_its_roots_as_layers_whose_transform_animates() {
+        use cupertino_ui_render::{PaintNode, PaintNodeId, PaintRevision};
+        let node = |id: u64, parent: Option<u64>, layer: Option<Layer>| PaintNode {
+            id: PaintNodeId(id),
+            parent: parent.map(PaintNodeId),
+            revision: PaintRevision(1),
+            transform: Transform::IDENTITY,
+            clip: None,
+            group: None,
+            bounds: Rect::new(0.0, 0.0, 10.0, 10.0),
+            hit: Rect::new(0.0, 0.0, 10.0, 10.0),
+            ops: Vec::new(),
+            layer,
+        };
+        let scroll = Layer::Scroll {
+            offset: Point::new(0.0, 4.0),
+        };
+        let list = DisplayList {
+            nodes: vec![
+                node(1, None, None),
+                node(2, Some(1), None),
+                node(3, None, Some(Layer::Opacity)),
+                node(4, None, Some(scroll)),
+            ],
+        };
+        let mut at_rest = list.clone();
+        apply(&mut at_rest, &mut [], Point::ZERO, 1.0);
+        assert_eq!(at_rest, list, "at its size nothing animates");
+        let mut grown = list.clone();
+        apply(&mut grown, &mut [], Point::new(5.0, 0.0), 0.5);
+        let layers: Vec<Option<Layer>> = grown.nodes.iter().map(|n| n.layer).collect();
+        assert_eq!(
+            layers,
+            vec![
+                Some(Layer::Transform),
+                None,
+                Some(Layer::Transform),
+                Some(scroll)
+            ],
+            "the roots but a scroll layer, whose offset is what it keeps"
+        );
     }
 
     #[test]

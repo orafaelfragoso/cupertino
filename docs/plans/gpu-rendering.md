@@ -370,8 +370,11 @@ Presenter and process:
 
 Gate:
 
-- [ ] Every golden passes on both renderers, the local tier passes on the target machine, client GPU time and the
-      first-frame budget are met.
+- [x] Every golden passes on both renderers, the local tier passes on the target machine, client GPU time and the
+      first-frame budget are met. At `c30025ef`: the fast tier (7393 tests) and the slow tier (226) pass with and
+      without `CUPERTINO_GPU_REQUIRED=1`; the GPU timing test's whole-frame budget failed once at 5.7 ms while other
+      builds ran (the CPU renderer's frame beside it took 38 ms against its usual 11) and passes at 2.5 ms on its own.
+      The GPU's share of a frame is under 0.1 ms; the first frame goes out on the CPU in 30 ms while the device warms.
 
 ## Step 7: turn it on
 

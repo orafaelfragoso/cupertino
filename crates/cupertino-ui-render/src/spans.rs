@@ -489,6 +489,28 @@ impl Pending {
         self.entries = kept;
     }
 
+    /// Takes out of what is pending the parts of `region` (window pixels) that are set to one colour, each with its
+    /// colour, and writes nothing there: the caller writes every pixel of them itself, from that colour (a kept layer
+    /// laid over the background under it in one pass). Translucent layers pending there stay pending.
+    pub(crate) fn take_set(&mut self, region: &Bounds) -> Vec<(Bounds, [u8; 4])> {
+        let mut taken = Vec::new();
+        if !self.entries.iter().any(|(a, _, r)| *r && a.touches(region)) {
+            return taken;
+        }
+        let mut kept = Vec::with_capacity(self.entries.len() + 4);
+        for (a, c, replaces) in std::mem::take(&mut self.entries) {
+            let both = a.intersect(region);
+            if !replaces || both.is_empty() {
+                kept.push((a, c, replaces));
+                continue;
+            }
+            taken.push((both, c));
+            kept.extend(subtract(a, &[both]).into_iter().map(|p| (p, c, replaces)));
+        }
+        self.entries = kept;
+        taken
+    }
+
     /// Writes everything pending.
     pub(crate) fn flush_all(&mut self, pm: &mut PixmapMut<'_>, origin: (i32, i32)) {
         for (a, c, replaces) in std::mem::take(&mut self.entries) {

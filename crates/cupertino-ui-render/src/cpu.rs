@@ -918,9 +918,24 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             .map(|w| w.intersect(&area))
             .filter(|w| !w.is_empty())
             .collect();
+        // where the frame is still only to be set to one colour (the background under the layer), the layer is laid
+        // over that colour as it is written, in one pass: an empty run of it writes the colour, an opaque one is copied
+        let known: Vec<(Bounds, [u8; 4])> = whole
+            .iter()
+            .flat_map(|piece| self.pending.take_set(piece))
+            .collect();
         self.pending.flush(t.pixmap, t.origin, &area);
         for piece in &whole {
-            self.lay_rows(t, view, piece);
+            let set: Vec<Bounds> = known.iter().map(|(k, _)| k.intersect(piece)).collect();
+            for rest in spans::subtract(*piece, &set) {
+                self.lay_rows(t, view, &rest, None);
+            }
+        }
+        for (part, color) in &known {
+            self.stats
+                .scroll_on_background
+                .add(u64::from(part.width()) * u64::from(part.height()) * 4);
+            self.lay_rows(t, view, part, Some(*color));
         }
         for rim in spans::subtract(area, &whole) {
             let mut edge = Target {
@@ -942,8 +957,18 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         Ok(())
     }
 
-    /// Lays the window pixels `area` of a kept scroll layer over the target.
-    fn lay_rows(&mut self, t: &mut Target<'_, '_>, view: &View<'_>, area: &Bounds) {
+    /// Lays the window pixels `area` of a kept scroll layer over the target, or, given `under`, over that colour in
+    /// place of what the target holds there.
+    fn lay_rows(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        view: &View<'_>,
+        area: &Bounds,
+        under: Option<[u8; 4]>,
+    ) {
+        if area.is_empty() {
+            return;
+        }
         let image = view.image;
         let height = image.pixels.height() as i32;
         self.stats
@@ -958,7 +983,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 y1: row + (y1 - y0),
             };
             let at = (area.x0 - t.origin.0, y0 - view.shift.1 - t.origin.1);
-            source_over_part(t.pixmap, at, &image.pixels, &part, 1.0);
+            match under {
+                Some(color) => over_color_part(t.pixmap, at, &image.pixels, &part, color),
+                None => source_over_part(t.pixmap, at, &image.pixels, &part, 1.0),
+            }
         }
     }
 
@@ -1916,6 +1944,55 @@ fn source_over_part(
     opacity: f32,
 ) {
     let k = opacity_factor(opacity);
+    // most of a layer is often empty: runs of empty pixels are passed over, and nothing is scaled or laid for them; an
+    // opaque run laid over whole replaces what it covers
+    lay_part(dst, at, src, part, |s, d| {
+        if empty(s) {
+            return;
+        }
+        if k == 255 && opaque(s) {
+            d.copy_from_slice(s);
+            return;
+        }
+        over_run(s, d, k);
+    });
+}
+
+/// The pixels `part` of `src` laid over `color` (premultiplied) and written to the pixmap with the part's top-left pixel
+/// at `at`, whatever the pixmap held there: the bytes of `color` written first and `src` laid over it with
+/// [`source_over_part`], in one pass.
+fn over_color_part(
+    dst: &mut PixmapMut<'_>,
+    at: (i32, i32),
+    src: &Pixmap,
+    part: &Bounds,
+    color: [u8; 4],
+) {
+    let c = u32::from_le_bytes(color);
+    lay_part(dst, at, src, part, |s, d| {
+        if empty(s) {
+            for d in d.as_chunks_mut::<4>().0 {
+                *d = color;
+            }
+        } else if opaque(s) {
+            d.copy_from_slice(s);
+        } else {
+            for (s, d) in s.as_chunks::<4>().0.iter().zip(d.as_chunks_mut::<4>().0) {
+                *d = effects::over_px(u32::from_le_bytes(*s), c).to_le_bytes();
+            }
+        }
+    });
+}
+
+/// Calls `run` on each run of up to 16 pixels of the pixels `part` of `src` and the pixels of the pixmap they land on,
+/// with the part's top-left pixel at `at`. Whatever of `src` falls outside the pixmap is not drawn.
+fn lay_part(
+    dst: &mut PixmapMut<'_>,
+    at: (i32, i32),
+    src: &Pixmap,
+    part: &Bounds,
+    mut run: impl FnMut(&[u8], &mut [u8]),
+) {
     let stride = dst.width() as usize * 4;
     let part = part.intersect(&Bounds::of_size(src.width(), src.height()));
     if part.is_empty() {
@@ -1951,14 +2028,21 @@ fn source_over_part(
             debug_assert!(false, "the layer is taller than the target");
             return;
         };
-        // most of a layer is often empty: runs of empty pixels are passed over, and nothing is scaled or laid for them
         for (s, d) in s.chunks(4 * 16).zip(d.chunks_mut(4 * 16)) {
-            if empty(s) {
-                continue;
-            }
-            over_run(s, d, k);
+            run(s, d);
         }
     }
+}
+
+/// Whether every pixel of `bytes` is opaque, without an early exit, so it vectorizes.
+#[inline]
+fn opaque(bytes: &[u8]) -> bool {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .fold(255, |all, p| all & p[3])
+        == 255
 }
 
 /// Whether every byte of `bytes` is zero, read a word at a time and without an early exit, so it vectorizes.
@@ -3035,6 +3119,125 @@ mod tests {
                 .max()
                 .unwrap();
             assert!(delta <= 1, "opacity {opacity}: {delta} steps apart");
+        }
+    }
+
+    /// [`noise`] in runs of sixteen pixels that are each empty, opaque or mixed, as a layer's rows are.
+    fn runs(width: u32, height: u32, seed: u64) -> Pixmap {
+        let mut pixmap = noise(width, height, seed);
+        let opaque = noise(width, height, seed + 1);
+        let stride = width as usize * 4;
+        for y in 0..height as usize {
+            for x0 in (0..width as usize).step_by(16) {
+                let x1 = (x0 + 16).min(width as usize);
+                let row = &mut pixmap.data_mut()[y * stride + x0 * 4..y * stride + x1 * 4];
+                match (x0 / 16 + y * 7 + seed as usize) % 3 {
+                    0 => row.fill(0),
+                    1 => {
+                        for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                            let o = &opaque.data()[y * stride + (x0 + i) * 4..];
+                            *px = [o[0], o[1], o[2], 255];
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        pixmap
+    }
+
+    #[test]
+    fn a_layer_laid_over_its_background_in_one_pass_has_the_bytes_of_the_background_written_and_laid_over(
+    ) {
+        for seed in 0..6 {
+            let src = runs(77, 19, seed);
+            let dst = noise(96, 40, seed + 50);
+            let color = [
+                [0, 0, 0, 0],
+                [40, 90, 200, 255],
+                [30, 30, 30, 128],
+                [255; 4],
+            ][seed as usize % 4];
+            let (at, part) = (
+                (5, 9),
+                Bounds {
+                    x0: 3,
+                    y0: 2,
+                    x1: 70,
+                    y1: 17,
+                },
+            );
+            // the background written, then the layer laid over it
+            let mut two = dst.clone();
+            {
+                let mut pm = two.as_mut();
+                let stride = 96 * 4;
+                for y in at.1..at.1 + part.height() as i32 {
+                    let row = y as usize * stride;
+                    for px in pm.data_mut()
+                        [row + at.0 as usize * 4..row + (at.0 as usize + part.width() as usize) * 4]
+                        .as_chunks_mut::<4>()
+                        .0
+                    {
+                        *px = color;
+                    }
+                }
+            }
+            source_over_part(&mut two.as_mut(), at, &src, &part, 1.0);
+            let mut one = dst.clone();
+            over_color_part(&mut one.as_mut(), at, &src, &part, color);
+            assert_eq!(one.data(), two.data(), "seed {seed}");
+            // and the composite that copies opaque runs has the bytes of one that blends every pixel
+            let mut copied = dst.clone();
+            source_over_part(&mut copied.as_mut(), at, &src, &part, 1.0);
+            let mut blended = dst.clone();
+            let stride = 96 * 4;
+            for y in 0..part.height() as usize {
+                for x in 0..part.width() as usize {
+                    let s = &src.data()[((part.y0 as usize + y) * 77 + part.x0 as usize + x) * 4..]
+                        [..4];
+                    let at = (at.1 as usize + y) * stride + (at.0 as usize + x) * 4;
+                    let d = &mut blended.data_mut()[at..at + 4];
+                    let over = effects::over_px(
+                        u32::from_le_bytes(s.try_into().unwrap()),
+                        u32::from_le_bytes((&*d).try_into().unwrap()),
+                    );
+                    d.copy_from_slice(&over.to_le_bytes());
+                }
+            }
+            assert_eq!(copied.data(), blended.data(), "seed {seed}");
+        }
+    }
+
+    /// A kept layer over an opaque background, scrolled: the frames that lay it over the background in one pass have
+    /// the bytes of frames that write the background and blend the layer over it.
+    #[test]
+    fn a_layer_scrolled_over_its_background_has_the_bytes_of_the_general_path() {
+        for scale in [1.0, 1.5, 2.0] {
+            let list = scene(5);
+            let mut fast = CpuRenderer::new(layer_config(), NoGlyphs);
+            let mut slow = CpuRenderer::new(layer_config(), NoGlyphs).without_fast_paths();
+            let mut one_pass = 0;
+            for (frame, dy) in [0, 3, 11, -4, 30, 1].into_iter().enumerate() {
+                let offset = cupertino_geometry::Point::new(
+                    0.0,
+                    f64::from(dy.max(0) + frame as i32) / scale,
+                );
+                let damage = if frame == 0 {
+                    DamageRegion::Full
+                } else {
+                    DamageRegion::Rects(Vec::new())
+                };
+                let shown = scrolled(&list, offset, Shape::Rect(VIEW));
+                let a = draw_frame(&mut fast, &shown, &damage, scale);
+                one_pass += fast.stats().scroll_on_background.count;
+                let b = draw_frame(&mut slow, &shown, &damage, scale);
+                assert!(a.pixels == b.pixels, "scale {scale}, frame {frame}");
+            }
+            assert!(
+                one_pass > 0,
+                "scale {scale}: no layer laid over its background in one pass"
+            );
         }
     }
 

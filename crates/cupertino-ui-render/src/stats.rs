@@ -48,6 +48,9 @@ pub struct RenderStats {
     pub layer_pixels: u64,
     /// Kept scroll layers laid over the frame.
     pub scroll_composite: Tally,
+    /// Of those, the parts laid over the colour the frame was to be set to there (its background) in one pass, that
+    /// colour not written first.
+    pub scroll_on_background: Tally,
     /// Retained across frames, after this one.
     pub retained_glyphs: Tally,
     pub retained_images: Tally,

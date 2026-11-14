@@ -93,6 +93,7 @@ jobs:
       - run: python3 -I ci/test_replace.py
       - run: python3 -I ci/test_soak.py
       - run: python3 -I scripts/dev/test_bench.py
+      - run: python3 -I scripts/dev/test_drm_trace_summary.py
       - run: python3 -I ci/test_arch_ci.py
       - &rust-toolchain
         name: Rust 1.99.1

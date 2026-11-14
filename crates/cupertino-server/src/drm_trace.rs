@@ -11,6 +11,10 @@
 
 use std::time::{Duration, Instant};
 
+/// Every this many flips (all outputs together) the trace logs the flips and missed refreshes so far: once a minute at
+/// 60 Hz, so a summary of the log has the rate of missed refreshes without a line a flip.
+pub const COUNT_EVERY: u64 = 3600;
+
 /// Turns the trace on when set to anything but empty or `0`.
 pub const ENV: &str = "CUPERTINO_DRM_TRACE";
 
@@ -196,6 +200,12 @@ impl DrmTrace {
             self.missed += u64::from(late_periods);
             lines.push(format!(
                 "missed output={output} late_periods={late_periods} flips={} missed_total={}",
+                self.flips, self.missed
+            ));
+        }
+        if self.flips % COUNT_EVERY == 0 {
+            lines.push(format!(
+                "count flips={} missed_total={}",
                 self.flips, self.missed
             ));
         }
@@ -395,6 +405,28 @@ mod tests {
                 "pointer-to-flip output=DP-1 latency_us=6000"
             ],
             "a motion carried by a dropped flip is reported at the next flip"
+        );
+    }
+
+    #[test]
+    fn the_flips_and_missed_refreshes_so_far_are_logged_every_so_many_flips() {
+        let mut t = DrmTrace::new();
+        let now = Instant::now();
+        let mut counts = Vec::new();
+        for n in 1..=2 * COUNT_EVERY {
+            let late = u32::from(n == 10);
+            for line in t.flipped("DP-1", Branch::FlipTimestamp, late, 0, now) {
+                if line.starts_with("count ") {
+                    counts.push(line);
+                }
+            }
+        }
+        assert_eq!(
+            counts,
+            [
+                format!("count flips={COUNT_EVERY} missed_total=1"),
+                format!("count flips={} missed_total=1", 2 * COUNT_EVERY)
+            ]
         );
     }
 

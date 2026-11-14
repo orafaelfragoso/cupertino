@@ -251,11 +251,9 @@ impl CursorLoader {
     /// largest, so the renderer scales down where it can.
     pub fn frame(&mut self, icon: CursorIcon, pixels: u32, time: Duration) -> CursorFrame {
         let name = icon.name();
-        let (index, img) = {
-            let imgs = self.images(icon);
-            let index = pick_frame(imgs, pixels, time.as_millis() as u32);
-            (index, imgs[index].clone())
-        };
+        let index = pick_frame(self.images(icon), pixels, time.as_millis() as u32);
+        // the image stays in the cache: only its pixels' first frame makes a buffer of them
+        let img = &self.cache[name][index];
         let key = (name, index);
         let entry = self.buffers.entry(key).or_insert_with(|| {
             let buf = MemoryRenderBuffer::from_slice(

@@ -122,10 +122,20 @@ pub fn image_element(
 
 /// Hash of anything `Debug` (cache signatures of structured state).
 pub fn debug_sig<T: std::fmt::Debug>(v: &T) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    format!("{v:?}").hash(&mut h);
-    h.finish()
+    use std::fmt::Write;
+    use std::hash::Hasher;
+    /// Hashes what is written into it, so the text is never kept.
+    struct Hashing(std::collections::hash_map::DefaultHasher);
+    impl Write for Hashing {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = Hashing(std::collections::hash_map::DefaultHasher::new());
+    // writing into the hasher cannot fail
+    let _ = write!(h, "{v:?}");
+    h.0.finish()
 }
 
 #[cfg(test)]

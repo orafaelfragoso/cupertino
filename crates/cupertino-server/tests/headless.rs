@@ -2080,7 +2080,7 @@ fn a_minimize_captures_the_window_once_and_a_restore_once_more() {
     assert_eq!(captures(&h), 0);
     let duration = kind.duration_s(false);
     // the animation's frames, from its start to past its end
-    let mut animate = |h: &mut Harness| {
+    let animate = |h: &mut Harness| {
         let t0 = h.state.now();
         for step in 1..=8 {
             let time = t0 + duration * f64::from(step) / 8.0;

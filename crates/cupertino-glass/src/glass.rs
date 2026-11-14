@@ -312,12 +312,18 @@ pub fn level_position(levels: &[f32], sigma: f32) -> f32 {
 
 /// Stage 1, second part: the blur fill `fill` blended over the blurred backdrop `c`.
 pub fn blur_fill(c: Rgb, fill: Rgb, p: &GlassParams) -> Rgb {
+    blur_fill_weighted(c, fill, p, 1.0)
+}
+
+/// [`blur_fill`] with each of its blends weighed by `w`, the share of its blur the glass keeps there
+/// ([`Container::blur_weight`]).
+pub fn blur_fill_weighted(c: Rgb, fill: Rgb, p: &GlassParams, w: f32) -> Rgb {
     let b = &p.blur;
     let darker: Rgb = std::array::from_fn(|i| c[i].min(fill[i]));
-    let c = mix(c, darker, b.fill_darken);
+    let c = mix(c, darker, b.fill_darken * w);
     let lighter: Rgb = std::array::from_fn(|i| c[i].max(fill[i]));
-    let c = mix(c, lighter, b.fill_lighten);
-    mix(c, fill, b.fill_normal)
+    let c = mix(c, lighter, b.fill_lighten * w);
+    mix(c, fill, b.fill_normal * w)
 }
 
 /// The luma compression of the face: `c − (1 − max_luma) · L · (0.75 c + 0.25 L)`, `L` the luma of `c`. A grey `x`
@@ -694,6 +700,22 @@ impl Container {
         }
     }
 
+    /// The container whose blur fades by `ramp` from its top to its bottom ([`Container::blur_ramp`]): a ramp below 1
+    /// adds an unblurred copy as the first level, so where the weight reaches 0 the glass shows what lies behind it
+    /// sharp.
+    pub fn with_blur_ramp(mut self, ramp: [f32; 2]) -> Self {
+        self.blur_ramp = ramp.map(|w| w.clamp(0.0, 1.0));
+        if ramp[0] < 1.0 || ramp[1] < 1.0 {
+            let mut all: Vec<f32> = self.values.iter().map(|v| v.blur_sigma).collect();
+            all.push(0.0);
+            self.sigmas = blur_levels(&all);
+            for v in &mut self.values {
+                v.blur_level = level_position(&self.sigmas, v.blur_sigma);
+            }
+        }
+        self
+    }
+
     /// Where the glass reads what lies behind `q`: magnified by [`Container::lens`] about its first shape's centre.
     pub fn lensed(&self, q: [f32; 2]) -> [f32; 2] {
         match self.shapes.first() {
@@ -803,10 +825,11 @@ impl Container {
         let weight = self.blur_weight(p);
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
-            let c = blur_fill(
+            let c = blur_fill_weighted(
                 level_mix(levels, v.blur_level * weight),
                 sample(BLUR_LEVELS, q),
                 params,
+                weight,
             );
             face_color(c, params, v.max_luma)
         };
@@ -1062,9 +1085,11 @@ impl Container {
     /// The deviation in points of each blurred copy of the backdrop, and whether a shape reads it.
     pub fn levels(&self) -> [(f32, bool); BLUR_LEVELS] {
         let mut used = [false; BLUR_LEVELS];
+        // a blur ramp reads every level from the sharp one up to the shape's
+        let ramp = self.blur_ramp[0] < 1.0 || self.blur_ramp[1] < 1.0;
         for v in &self.values {
-            for (u, w) in used.iter_mut().zip(level_weights(v.blur_level)) {
-                *u |= w > 1e-3;
+            for (i, (u, w)) in used.iter_mut().zip(level_weights(v.blur_level)).enumerate() {
+                *u |= w > 1e-3 || (ramp && i as f32 <= v.blur_level.ceil());
             }
         }
         let last = self.sigmas.last().copied().unwrap_or(0.0);
@@ -2482,7 +2507,12 @@ mod tests {
         assert_eq!(c.lensed([10.0, 5.0]), [10.0, 5.0]);
         assert_eq!(c.blur_weight([50.0, 40.0]), 1.0);
         c.lens = 2.0;
-        c.blur_ramp = [1.0, 0.0];
+        let mut c = c.with_blur_ramp([1.0, 0.0]);
+        // the sharp copy comes first and the shape's blur after it, both read
+        assert_eq!(c.sigmas[0], 0.0);
+        assert_eq!(c.values[0].blur_level, 1.0);
+        assert!(c.levels()[0].1 && c.levels()[1].1);
+        c.lens = 2.0;
         // half way from the centre (50, 20) in what it shows
         assert_eq!(c.lensed([10.0, 0.0]), [30.0, 10.0]);
         assert_eq!(c.lensed([50.0, 20.0]), [50.0, 20.0]);

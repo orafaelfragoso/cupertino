@@ -55,7 +55,11 @@ impl LayerPlace {
 fn scaled_bounds(l: &LayerDraw, origin: Point<f64, Logical>) -> Rectangle<f64, Logical> {
     let c = centre(l, origin);
     Rectangle::new(
-        (c.x - 0.5 * l.width * l.scale, c.y - 0.5 * l.height * l.scale).into(),
+        (
+            c.x - 0.5 * l.width * l.scale,
+            c.y - 0.5 * l.height * l.scale,
+        )
+            .into(),
         (l.width * l.scale, l.height * l.scale).into(),
     )
 }
@@ -126,10 +130,8 @@ pub fn layer_pieces(
     let dark = p.config.is_dark();
     let plain = p.display.reduce_transparency || p.display.increase_contrast;
     let pointer = Point::<f64, Logical>::from((p.pointer.x - p.rect.x, p.pointer.y - p.rect.y));
-    let pointer_here = pointer.x >= 0.0
-        && pointer.y >= 0.0
-        && pointer.x <= p.rect.w
-        && pointer.y <= p.rect.h;
+    let pointer_here =
+        pointer.x >= 0.0 && pointer.y >= 0.0 && pointer.x <= p.rect.w && pointer.y <= p.rect.h;
     let s_min = place.scale.0.min(place.scale.1);
     let mut out = Vec::new();
     for l in layers.iter().rev() {
@@ -215,7 +217,7 @@ pub fn layer_pieces(
             if let Piece::Glass(g) = &mut piece {
                 let mut gc = (*g.glass).clone();
                 gc.container.lens = lens as f32;
-                gc.container.blur_ramp = l.blur_ramp;
+                gc.container = gc.container.with_blur_ramp(l.blur_ramp);
                 if let Some(angle) = light {
                     gc.container.params.highlight.angle = angle;
                 }

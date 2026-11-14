@@ -36,6 +36,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 use cupertino_layer_v1::Property;
 
+/// The output in device pixels; the captures' is as large in points at scale 2.
 const OUTPUT: (i32, i32) = (800, 600);
 /// The parent: a layer shell surface this size at these margins from the top-left corner.
 const PARENT: (i32, i32) = (600, 400);
@@ -51,11 +52,13 @@ impl Harness {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("create test event loop");
         let display: Display<Cupertino> = Display::new().expect("create test display");
-        let mut cfg = Config::default();
-        cfg.appearance = if dark {
-            cupertino_theme::Appearance::Dark
-        } else {
-            cupertino_theme::Appearance::Light
+        let cfg = Config {
+            appearance: if dark {
+                cupertino_theme::Appearance::Dark
+            } else {
+                cupertino_theme::Appearance::Light
+            },
+            ..Config::default()
         };
         let mut state = Cupertino::new(
             display,
@@ -66,7 +69,11 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("create test compositor");
-        match headless::init(&mut state, OUTPUT, scale) {
+        let size = (
+            (f64::from(OUTPUT.0) * scale) as i32,
+            (f64::from(OUTPUT.1) * scale) as i32,
+        );
+        match headless::init(&mut state, size, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -369,7 +376,9 @@ fn one_layer(h: &mut Harness) -> TestClient {
         c.parent.commit();
     });
     h.wait_until("the layer", |h| {
-        h.layers().first().is_some_and(|l| l.content == (100.0, 50.0))
+        h.layers()
+            .first()
+            .is_some_and(|l| l.content == (100.0, 50.0))
     });
     client
 }
@@ -387,7 +396,10 @@ fn geometry_applies_with_the_parents_commit_in_fixed_point() {
     };
     let client = one_layer(&mut h);
     let l = &h.layers()[0];
-    assert_eq!((l.x, l.y, l.width, l.height, l.opacity, l.scale), (0.0, 0.0, 100.0, 50.0, 1.0, 1.0));
+    assert_eq!(
+        (l.x, l.y, l.width, l.height, l.opacity, l.scale),
+        (0.0, 0.0, 100.0, 50.0, 1.0, 1.0)
+    );
     // asked but not committed: what shows stays
     client.send(|c, _| {
         c.l(0).set_value(Property::X, 10.5);
@@ -410,7 +422,10 @@ fn geometry_applies_with_the_parents_commit_in_fixed_point() {
     let shot = h.screenshot("fixed-point");
     let at = |x: u32, y: u32| shot.get_pixel(x, y).0;
     assert_eq!(at(MARGIN.0 as u32 + 60, MARGIN.1 as u32 + 40)[0], 255);
-    assert_ne!(at(MARGIN.0 as u32 + 5, MARGIN.1 as u32 + 5), [255, 0, 0, 255]);
+    assert_ne!(
+        at(MARGIN.0 as u32 + 5, MARGIN.1 as u32 + 5),
+        [255, 0, 0, 255]
+    );
 }
 
 #[test]
@@ -421,12 +436,14 @@ fn an_animation_starts_with_its_first_frame_and_finishes_on_the_fixed_clock() {
     let client = one_layer(&mut h);
     h.state.fixed_time = Some(1000.0);
     client.send(|c, _| {
-        c.l(0).animate_timed(7, Property::X, 100.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.l(0)
+            .animate_timed(7, Property::X, 100.0, 1000, 0.0, 0.0, 1.0, 1.0);
         c.parent.commit();
     });
     // the first frame that shows the commit starts it at the fixed time
     h.wait_until("the animation", |h| {
-        h.parent().is_some_and(|p| !cupertino_server::layers_v1::settled(&p, h.state.now()))
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, h.state.now()))
     });
     assert_eq!(x_of(&h), 0.0);
     h.state.fixed_time = Some(1000.5);
@@ -434,7 +451,10 @@ fn an_animation_starts_with_its_first_frame_and_finishes_on_the_fixed_clock() {
     // the client hit-tests against the target
     let p = h.parent().unwrap();
     let serial = h.layers()[0].serial;
-    assert_eq!(cupertino_server::layers_v1::target(&p, serial, 0), Some(100.0));
+    assert_eq!(
+        cupertino_server::layers_v1::target(&p, serial, 0),
+        Some(100.0)
+    );
     assert!(client.heard(|e| e.finished.is_empty()));
     h.state.fixed_time = Some(1001.0);
     h.wait_until("finished and settled", |_| {
@@ -451,11 +471,13 @@ fn a_retarget_is_continuous_and_reports_what_was_shown() {
     let client = one_layer(&mut h);
     h.state.fixed_time = Some(50.0);
     client.send(|c, _| {
-        c.l(0).animate_timed(1, Property::X, 100.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.l(0)
+            .animate_timed(1, Property::X, 100.0, 1000, 0.0, 0.0, 1.0, 1.0);
         c.parent.commit();
     });
     h.wait_until("the first animation", |h| {
-        h.parent().is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 50.0))
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 50.0))
     });
     h.state.fixed_time = Some(50.25);
     client.send(|c, _| {
@@ -487,7 +509,8 @@ fn the_time_scale_runs_animations_on_the_model_clock() {
     h.state.time_scale = 1000.0;
     let started = Instant::now();
     client.send(|c, _| {
-        c.l(0).animate_timed(3, Property::Opacity, 0.0, 10_000, 0.25, 0.1, 0.25, 1.0);
+        c.l(0)
+            .animate_timed(3, Property::Opacity, 0.0, 10_000, 0.25, 0.1, 0.25, 1.0);
         c.parent.commit();
     });
     h.wait_until("finished", |_| client.heard(|e| e.finished == [3]));
@@ -505,11 +528,16 @@ fn reduce_motion_ends_spatial_animations_at_once_and_keeps_fades() {
     h.state.fixed_time = Some(10.0);
     client.send(|c, _| {
         c.l(0).animate_spring(4, Property::Y, 80.0, 0.5, 0.8, 0.0);
-        c.l(0).animate_timed(5, Property::Opacity, 0.0, 400, 0.0, 0.0, 1.0, 1.0);
+        c.l(0)
+            .animate_timed(5, Property::Opacity, 0.0, 400, 0.0, 0.0, 1.0, 1.0);
         c.parent.commit();
     });
     h.wait_until("the move", |h| h.layers()[0].y == 80.0);
-    assert_eq!(h.layers()[0].opacity, 1.0, "the fade starts from its first frame");
+    assert_eq!(
+        h.layers()[0].opacity,
+        1.0,
+        "the fade starts from its first frame"
+    );
     h.wait_until("the jump finished", |_| client.heard(|e| e.finished == [4]));
     h.state.fixed_time = Some(10.2);
     assert!((h.layers()[0].opacity - 0.5).abs() < 1e-6);
@@ -523,11 +551,13 @@ fn a_set_value_replaces_and_cancel_freezes() {
     let client = one_layer(&mut h);
     h.state.fixed_time = Some(5.0);
     client.send(|c, _| {
-        c.l(0).animate_timed(8, Property::Scale, 2.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.l(0)
+            .animate_timed(8, Property::Scale, 2.0, 1000, 0.0, 0.0, 1.0, 1.0);
         c.parent.commit();
     });
     h.wait_until("started", |h| {
-        h.parent().is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 5.0))
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 5.0))
     });
     h.state.fixed_time = Some(5.5);
     client.send(|c, _| {
@@ -555,11 +585,18 @@ fn late_content_shows_the_placeholder_where_it_does_not_reach() {
     });
     h.wait_until("the larger bounds", |h| h.layers()[0].width == 200.0);
     let shot = h.screenshot("late-content");
-    let at = |x: i32, y: i32| shot.get_pixel((MARGIN.0 + x) as u32, (MARGIN.1 + y) as u32).0;
+    let at = |x: i32, y: i32| {
+        shot.get_pixel((MARGIN.0 + x) as u32, (MARGIN.1 + y) as u32)
+            .0
+    };
     assert_eq!(at(50, 25), [255, 0, 0, 255], "the content");
     assert_eq!(at(150, 25), [0, 0, 255, 255], "right of it");
     assert_eq!(at(50, 75), [0, 0, 255, 255], "below it");
-    assert_eq!(at(250, 25), [128, 128, 128, 255], "the parent past the bounds");
+    assert_eq!(
+        at(250, 25),
+        [128, 128, 128, 255],
+        "the parent past the bounds"
+    );
     // the content arrives: it shows from its own commit, at the bounds the server shows
     client.send(|c, qh| {
         let b = buffer(&c.shm, qh, (200, 100), &|_, _| [0, 255, 0, 255]);
@@ -569,7 +606,11 @@ fn late_content_shows_the_placeholder_where_it_does_not_reach() {
     });
     h.wait_until("the content", |h| h.layers()[0].content == (200.0, 100.0));
     let shot = h.screenshot("content-arrived");
-    assert_eq!(shot.get_pixel((MARGIN.0 + 150) as u32, (MARGIN.1 + 75) as u32).0, [0, 255, 0, 255]);
+    assert_eq!(
+        shot.get_pixel((MARGIN.0 + 150) as u32, (MARGIN.1 + 75) as u32)
+            .0,
+        [0, 255, 0, 255]
+    );
 }
 
 #[test]
@@ -586,11 +627,18 @@ fn layers_take_no_input_and_are_clipped_to_their_bounds_when_asked() {
     });
     h.wait_until("masked", |h| h.layers()[0].masks);
     let shot = h.screenshot("masked");
-    let at = |x: i32, y: i32| shot.get_pixel((MARGIN.0 + x) as u32, (MARGIN.1 + y) as u32).0;
+    let at = |x: i32, y: i32| {
+        shot.get_pixel((MARGIN.0 + x) as u32, (MARGIN.1 + y) as u32)
+            .0
+    };
     assert_eq!(at(20, 25), [255, 0, 0, 255]);
     assert_eq!(at(70, 25), [128, 128, 128, 255], "clipped to the bounds");
     // the pointer over the layer is over the parent
-    h.state.pointer_moved_to(((MARGIN.0 + 20) as f64, (MARGIN.1 + 25) as f64).into(), 1, None);
+    h.state.pointer_moved_to(
+        ((MARGIN.0 + 20) as f64, (MARGIN.1 + 25) as f64).into(),
+        1,
+        None,
+    );
     let parent = h.parent().unwrap();
     let focus = h.state.pointer.current_focus();
     assert!(
@@ -609,11 +657,17 @@ fn limits_and_bad_values_are_protocol_errors() {
     };
     // a timed animation over ten seconds
     let client = one_layer(&mut h);
-    client.send(|c, _| c.l(0).animate_timed(1, Property::X, 1.0, 10_001, 0.0, 0.0, 1.0, 1.0));
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(1, Property::X, 1.0, 10_001, 0.0, 0.0, 1.0, 1.0)
+    });
     h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
     assert_eq!(
         client.heard(|e| e.error.clone()),
-        Some(("cupertino_layer_v1".into(), cupertino_layer_v1::Error::InvalidCurve as u32))
+        Some((
+            "cupertino_layer_v1".into(),
+            cupertino_layer_v1::Error::InvalidCurve as u32
+        ))
     );
     // opacity above 1
     let client = one_layer(&mut h);
@@ -667,7 +721,8 @@ fn too_many_animations_is_a_protocol_error() {
     let client = one_layer(&mut h);
     client.send(|c, _| {
         for i in 0..=cupertino_server::layers_v1::MAX_ANIMATIONS as u32 {
-            c.l(0).animate_timed(i, Property::X, 1.0, 1000, 0.0, 0.0, 1.0, 1.0);
+            c.l(0)
+                .animate_timed(i, Property::X, 1.0, 1000, 0.0, 0.0, 1.0, 1.0);
         }
     });
     h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
@@ -721,7 +776,13 @@ fn captures() {
         client.send(|c, qh| {
             // vibrant foreground: a regular glass pill with a vibrant word over it, and a secondary one
             let pill = c.layer(qh, (0, 0), &red);
-            for (prop, v) in [(Property::X, 20.0), (Property::Y, 20.0), (Property::Width, 260.0), (Property::Height, 60.0), (Property::CornerRadius, 30.0)] {
+            for (prop, v) in [
+                (Property::X, 20.0),
+                (Property::Y, 20.0),
+                (Property::Width, 260.0),
+                (Property::Height, 60.0),
+                (Property::CornerRadius, 30.0),
+            ] {
                 c.l(pill).set_value(prop, v);
             }
             c.l(pill).set_glass(0, 1.0);
@@ -732,30 +793,58 @@ fn captures() {
             let text2 = c.layer(qh, (84, 40), &word);
             c.l(text2).set_value(Property::X, 180.0);
             c.l(text2).set_value(Property::Y, 30.0);
-            c.l(text2).set_blend(cupertino_layer_v1::Blend::VibrantSecondary);
+            c.l(text2)
+                .set_blend(cupertino_layer_v1::Blend::VibrantSecondary);
             // a lifted thumb: a raised clear lens over a track, grown by a quarter
             let thumb = c.layer(qh, (0, 0), &red);
-            for (prop, v) in [(Property::X, 340.0), (Property::Y, 30.0), (Property::Width, 50.0), (Property::Height, 31.0), (Property::CornerRadius, 15.5), (Property::Scale, 1.25)] {
+            for (prop, v) in [
+                (Property::X, 340.0),
+                (Property::Y, 30.0),
+                (Property::Width, 50.0),
+                (Property::Height, 31.0),
+                (Property::CornerRadius, 15.5),
+                (Property::Scale, 1.25),
+            ] {
                 c.l(thumb).set_value(prop, v);
             }
             c.l(thumb).set_glass(1, 1.5);
-            c.l(thumb).set_elevation(cupertino_layer_v1::Elevation::Raised);
+            c.l(thumb)
+                .set_elevation(cupertino_layer_v1::Elevation::Raised);
             // a pointer-lit glass card
             let lit = c.layer(qh, (0, 0), &red);
-            for (prop, v) in [(Property::X, 440.0), (Property::Y, 20.0), (Property::Width, 140.0), (Property::Height, 90.0), (Property::CornerRadius, 22.0)] {
+            for (prop, v) in [
+                (Property::X, 440.0),
+                (Property::Y, 20.0),
+                (Property::Width, 140.0),
+                (Property::Height, 90.0),
+                (Property::CornerRadius, 22.0),
+            ] {
                 c.l(lit).set_value(prop, v);
             }
             c.l(lit).set_glass(0, 1.0);
-            c.l(lit).set_highlight(cupertino_layer_v1::Highlight::Pointer);
+            c.l(lit)
+                .set_highlight(cupertino_layer_v1::Highlight::Pointer);
             // variable blur: a bar whose blur fades out towards its bottom, beside one that blurs evenly
             let ramp = c.layer(qh, (0, 0), &red);
-            for (prop, v) in [(Property::X, 20.0), (Property::Y, 150.0), (Property::Width, 270.0), (Property::Height, 120.0), (Property::CornerRadius, 16.0)] {
+            for (prop, v) in [
+                (Property::X, 20.0),
+                (Property::Y, 150.0),
+                (Property::Width, 270.0),
+                (Property::Height, 120.0),
+                (Property::CornerRadius, 16.0),
+            ] {
                 c.l(ramp).set_value(prop, v);
             }
             c.l(ramp).set_glass(14, 1.0);
             c.l(ramp).set_blur_ramp(1.0, 0.0);
             let even = c.layer(qh, (0, 0), &red);
-            for (prop, v) in [(Property::X, 310.0), (Property::Y, 150.0), (Property::Width, 270.0), (Property::Height, 120.0), (Property::CornerRadius, 16.0)] {
+            for (prop, v) in [
+                (Property::X, 310.0),
+                (Property::Y, 150.0),
+                (Property::Width, 270.0),
+                (Property::Height, 120.0),
+                (Property::CornerRadius, 16.0),
+            ] {
                 c.l(even).set_value(prop, v);
             }
             c.l(even).set_glass(14, 1.0);
@@ -768,7 +857,11 @@ fn captures() {
         });
         h.wait_until("the layers", |h| h.layers().len() == 8);
         // the pointer up and to the left of the lit card
-        h.state.pointer_moved_to(((MARGIN.0 + 440) as f64, (MARGIN.1 + 10) as f64).into(), 1, None);
+        h.state.pointer_moved_to(
+            ((MARGIN.0 + 440) as f64, (MARGIN.1 + 10) as f64).into(),
+            1,
+            None,
+        );
         for _ in 0..10 {
             h.step();
         }
@@ -777,13 +870,30 @@ fn captures() {
         shot.save(dir.join(format!("effects-{name}.png"))).unwrap();
         // each effect cropped (device pixels at scale 2)
         let crop = |x: i32, y: i32, w: i32, h: i32| {
-            image::imageops::crop_imm(&shot, ((MARGIN.0 + x) * 2) as u32, ((MARGIN.1 + y) * 2) as u32, (w * 2) as u32, (h * 2) as u32).to_image()
+            image::imageops::crop_imm(
+                &shot,
+                ((MARGIN.0 + x) * 2) as u32,
+                ((MARGIN.1 + y) * 2) as u32,
+                (w * 2) as u32,
+                (h * 2) as u32,
+            )
+            .to_image()
         };
-        crop(0, 0, 320, 110).save(dir.join(format!("vibrant-{name}.png"))).unwrap();
-        crop(320, 0, 100, 110).save(dir.join(format!("lifted-lens-{name}.png"))).unwrap();
-        crop(420, 0, 180, 130).save(dir.join(format!("pointer-lit-{name}.png"))).unwrap();
-        crop(0, 140, 600, 140).save(dir.join(format!("variable-blur-{name}.png"))).unwrap();
-        crop(0, 310, 200, 70).save(dir.join(format!("vibrant-on-dark-band-{name}.png"))).unwrap();
+        crop(0, 0, 320, 110)
+            .save(dir.join(format!("vibrant-{name}.png")))
+            .unwrap();
+        crop(320, 0, 100, 110)
+            .save(dir.join(format!("lifted-lens-{name}.png")))
+            .unwrap();
+        crop(420, 0, 180, 130)
+            .save(dir.join(format!("pointer-lit-{name}.png")))
+            .unwrap();
+        crop(0, 140, 600, 140)
+            .save(dir.join(format!("variable-blur-{name}.png")))
+            .unwrap();
+        crop(0, 310, 200, 70)
+            .save(dir.join(format!("vibrant-on-dark-band-{name}.png")))
+            .unwrap();
         drop(client);
     }
 }

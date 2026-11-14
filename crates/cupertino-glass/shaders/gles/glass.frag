@@ -120,13 +120,13 @@ vec3 blurred(vec2 uv, float pos) {
 }
 
 // Stages 1 and 2: the shape's blur, the blur fill and the face colour at q.
-vec3 face_at(vec2 q, float pos, float max_luma) {
+vec3 face_at(vec2 q, float pos, float max_luma, float w) {
     vec2 uv = uv_of(q);
-    vec3 c = blurred(uv, pos);
+    vec3 c = blurred(uv, pos * w);
     vec3 f = textureLod(u_fill, uv, 0.0).rgb;
-    c = mix(c, min(c, f), G.fill.x);
-    c = mix(c, max(c, f), G.fill.y);
-    c = mix(c, f, G.fill.z);
+    c = mix(c, min(c, f), G.fill.x * w);
+    c = mix(c, max(c, f), G.fill.y * w);
+    c = mix(c, f, G.fill.z * w);
     // stage 2, on encoded values: saturation, luma compression, levels, limit, fill
     vec3 s = saturate_encoded(c, G.face.x);
     float l = dot(s, LUMA);
@@ -290,7 +290,7 @@ void main() {
         float rt = clamp((p.y - G.shapes[0].y) / max(G.shapes[0].w, 1e-3), 0.0, 1.0);
         blur_weight = mix(G.lens.x, G.lens.y, smoothstep(0.0, 1.0, rt));
     }
-    vec3 c = face_at(q, fb.z * blur_weight, fb.y);
+    vec3 c = face_at(q, fb.z, fb.y, blur_weight);
     // stage 4: bleed of the blur fill
     if (fa.w > 0.0 && fb.x > 0.0) {
         float t = clamp(-d / fb.x, 0.0, 1.0);

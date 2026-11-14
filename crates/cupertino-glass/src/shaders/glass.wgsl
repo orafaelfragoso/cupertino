@@ -133,13 +133,13 @@ fn blurred(uv: vec2<f32>, pos: f32) -> vec3<f32> {
 }
 
 // Stages 1 and 2: the shape's blur, the blur fill and the face colour at `q`.
-fn face_at(q: vec2<f32>, pos: f32, max_luma: f32) -> vec3<f32> {
+fn face_at(q: vec2<f32>, pos: f32, max_luma: f32, w: f32) -> vec3<f32> {
   let uv = uv_of(q);
-  var c = blurred(uv, pos);
+  var c = blurred(uv, pos * w);
   let f = tap(blur_fill, uv);
-  c = mix(c, min(c, f), G.fill.x);
-  c = mix(c, max(c, f), G.fill.y);
-  c = mix(c, f, G.fill.z);
+  c = mix(c, min(c, f), G.fill.x * w);
+  c = mix(c, max(c, f), G.fill.y * w);
+  c = mix(c, f, G.fill.z * w);
   // stage 2, on encoded values: saturation, luma compression, levels, limit, fill
   var s = saturate_encoded(c, G.face.x);
   var l = dot(s, LUMA);
@@ -298,7 +298,7 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
     let rt = clamp((p.y - G.shapes[0].y) / max(G.shapes[0].w, 1e-3), 0.0, 1.0);
     blur_weight = mix(G.lens.x, G.lens.y, smoothstep(0.0, 1.0, rt));
   }
-  var c = face_at(q, f.b.z * blur_weight, f.b.y);
+  var c = face_at(q, f.b.z, f.b.y, blur_weight);
   // stage 4: bleed of the blur fill
   if (f.a.w > 0.0 && f.b.x > 0.0) {
     let t = clamp(-d / f.b.x, 0.0, 1.0);

@@ -502,7 +502,7 @@
   source_match: Cupertino, CupertinoScrollV1
 - name: cupertino_app_effects_v1
   kind: wayland-global
-  version: 20
+  version: 21
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -511,6 +511,7 @@
   test_owner: crates/cupertino-server/tests/app_effects_v1.rs
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
+  note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first. Tested in crates/cupertino-server/tests/gpu-reset.rs.
 - name: cupertino.control.v1
   kind: socket-protocol
   version: 1

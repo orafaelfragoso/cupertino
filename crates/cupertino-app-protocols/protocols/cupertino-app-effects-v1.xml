@@ -12,7 +12,7 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="20">
+  <interface name="cupertino_app_effects_v1" version="21">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
       event of cupertino_app_menu_v1, version 4 set_disabled_controls, version 5 the session_lock
@@ -21,7 +21,7 @@
       option of cupertino_appearance_v1, version 9 its steady_caret display option, version 10 the large_panel glass
       style of cupertino_backdrop_v1, version 11 the backdrops of a subsurface (get_backdrop), version 12 the bar glass
       style of cupertino_backdrop_v1, version 13 its dense and module glass styles, version 14 its set_shape_fixed
-      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style, version 18 its sidebar, subdued_module, snippet and veiled glass styles, version 19 its toolbar glass style, version 20 its menu glass style; the other interfaces of the protocol are unchanged in each.
+      request, version 15 its card and track glass styles, version 16 its popover glass style, version 17 its switcher glass style, version 18 its sidebar, subdued_module, snippet and veiled glass styles, version 19 its toolbar glass style, version 20 its menu glass style, version 21 the buffers_lost event of cupertino_appearance_v1; the other interfaces of the protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -266,7 +266,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_appearance_v1" version="9">
+  <interface name="cupertino_appearance_v1" version="21">
     <description summary="appearance and display options of the session">
       Right after the object is created the server sends appearance, then display_options, then
       from version 5 session_lock. The object has the version of the cupertino_app_effects_v1
@@ -320,6 +320,19 @@
         advice to a cooperating client; it hides nothing by itself.
       </description>
       <arg name="locked" type="uint"/>
+    </event>
+
+    <event name="buffers_lost" since="21">
+      <description summary="what the server showed of the client's buffers is gone">
+        The server's GPU was reset, or the driver purged its video memory (across a suspend, a
+        switch of virtual terminals or a mode set), and the server made its renderer again. A
+        buffer the client draws on a GPU of its own may have lost its pixels with it, and what the
+        server imported of every buffer was made again from what the buffers hold now. The client
+        draws every surface whole again and commits it, even one that changed nothing, so what is
+        shown is what it drew rather than what the driver left behind; a client whose own GPU
+        context was lost makes it again first. Sent to every observer of version 21 or later after
+        each reset or purge; never sent at creation.
+      </description>
     </event>
   </interface>
 

@@ -294,6 +294,9 @@ impl Dispatch<CupertinoAppearanceV1, ()> for ClientState {
             cupertino_appearance_v1::Event::DisplayOptions { options } => {
                 status.display_options.push(options.into());
             }
+            cupertino_appearance_v1::Event::BuffersLost => {
+                status.lock_events.push("buffers_lost".into());
+            }
             _ => {}
         }
     }
@@ -1318,7 +1321,8 @@ impl Client {
         })
     }
 
-    /// The session lock's `locked` and the appearance observer's `session_lock` events the client got, in order.
+    /// The session lock's `locked` and the appearance observer's `session_lock` (and `buffers_lost`) events the client
+    /// got, in order.
     pub fn lock_events(&self) -> Vec<String> {
         self.lock_status.lock().unwrap().lock_events.clone()
     }

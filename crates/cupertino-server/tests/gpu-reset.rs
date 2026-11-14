@@ -73,3 +73,40 @@ fn a_window_survives_a_gpu_reset_and_is_drawn_again_from_its_buffer() {
             .count()
     );
 }
+
+/// After a reset (and a purge, which takes the same path) the server tells every appearance observer of version 21
+/// that what it showed of the clients' buffers is gone, so a client drawing on a GPU of its own repaints; an older
+/// observer is never told, and nothing is told before a reset.
+#[test]
+fn every_appearance_observer_that_knows_the_event_is_told_its_buffers_were_lost() {
+    let mut d = Desktop::new(1.0);
+    let current = common::Client::appearance_observer(d.socket(), 21);
+    let older = common::Client::appearance_observer(d.socket(), 20);
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while current.lock_events().is_empty() || older.lock_events().is_empty() {
+        d.pump();
+        assert!(
+            Instant::now() < deadline,
+            "the observers were not told the lock state"
+        );
+    }
+    assert_eq!(current.lock_events(), ["session_lock 0"]);
+
+    headless::simulate_gpu_reset(&mut d.state).unwrap();
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while current.lock_events().len() < 2 {
+        d.pump();
+        assert!(Instant::now() < deadline, "the observer was not told");
+    }
+    assert_eq!(current.lock_events(), ["session_lock 0", "buffers_lost"]);
+    headless::simulate_gpu_reset(&mut d.state).unwrap();
+    let deadline = Instant::now() + common::HANG_GUARD;
+    while current.lock_events().len() < 3 {
+        d.pump();
+        assert!(Instant::now() < deadline, "the observer was not told again");
+    }
+    for _ in 0..20 {
+        d.pump();
+    }
+    assert_eq!(older.lock_events(), ["session_lock 0"]);
+}

@@ -1,0 +1,18 @@
+[package]
+name = "cupertino-gpu-shaders"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Development build step of Cupertino's shaders: the shared module concatenated into each WGSL program, GLSL ES 3.00 and SPIR-V generated, checked and written beside the sources in cupertino-gpu. Never packaged."
+autotests = false
+
+[package.metadata.cupertino]
+layer = "tools"
+
+[dependencies]
+naga = { version = "24", features = ["wgsl-in", "glsl-out", "spv-out"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

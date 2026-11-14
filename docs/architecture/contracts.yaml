@@ -1285,6 +1285,15 @@
   scope: public
   test_owner: crates/cupertino-server/tests/gpu_slice.rs
   source: crates/cupertino-gpu-slice/src/main.rs
+- name: cupertino-gpu-shaders
+  kind: binary
+  version: 0.1.0
+  shipped: no
+  owner_crate: cupertino-gpu-shaders
+  owner_area: rendering
+  scope: public
+  test_owner: crates/cupertino-gpu-shaders/tests/generate.rs
+  source: crates/cupertino-gpu-shaders/src/main.rs
 - name: cupertino-testclient
   kind: binary
   version: 0.1.0

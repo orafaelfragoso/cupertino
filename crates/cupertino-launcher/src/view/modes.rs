@@ -24,7 +24,7 @@ use cupertino_kit::theme::{ColorRole, Surface};
 pub const JOIN_CONTAINER: u32 = 1;
 pub const JOIN_SPACING: f64 = 8.0;
 /// How far a button's symbol is blurred while it is not yet sharp, in points.
-const GLYPH_BLUR: f64 = 6.0;
+pub(crate) const GLYPH_BLUR: f64 = 6.0;
 /// A chip's fill: the label colour at this share.
 const CHIP_FILL_SHARE: f32 = 0.08;
 /// The width of the chip that names the modifier.
@@ -52,12 +52,13 @@ pub struct ModeButton<M> {
     pub children: Vec<Element<M>>,
 }
 
-/// A button's children: its symbol, blurred and faint while it sharpens (absent while the button is a bud).
-pub fn glyph<M: 'static>(mode: Mode, sharp: f64) -> Element<M> {
+/// A button's children: its symbol, blurred and faint while it sharpens (absent while the button is a bud), at `alpha`
+/// besides (the panel's opacity, where the symbol is not drawn inside the button that fades with the panel).
+pub fn glyph<M: 'static>(mode: Mode, sharp: f64, alpha: f64) -> Element<M> {
     let sharp = sharp.clamp(0.0, 1.0);
     Element::new(GlyphBox {
         blur: (1.0 - sharp) * GLYPH_BLUR,
-        alpha: sharp,
+        alpha: sharp * alpha.clamp(0.0, 1.0),
         children: vec![Element::new(Icon {
             name: mode.symbol().to_owned(),
             size: modes::GLYPH_SIZE,

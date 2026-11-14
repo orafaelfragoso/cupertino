@@ -593,6 +593,9 @@ pub struct PanelView<'a> {
     /// The compositor runs the panel's open on its layers: the field holds its caret, which would draw the content's
     /// layer again.
     pub opening: bool,
+    /// The compositor draws the panel's edge along its glass ([`layers::glass_edge`]): while it runs the search field's
+    /// open, the shapes joining and parting every frame; no layer draws an edge then.
+    pub group_edge: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -650,7 +653,7 @@ where
         Vec::new()
     });
     let mut root = vec![panel_content(view).key("panel")];
-    if view.layered {
+    if view.layered && !view.group_edge {
         root.push(
             Element::new(layers::EdgeLayer {
                 key: layers::EDGE_LAYER,
@@ -662,6 +665,7 @@ where
                     .map(|r| (r, r.width() / 2.0))
                     .collect(),
                 focus: false,
+                edge: true,
                 children: Vec::new(),
             })
             .key("panel-edge"),
@@ -686,7 +690,7 @@ where
     }
 }
 
-/// A mode button's elements: the button, and while the panel is drawn as layers its face apart.
+/// A mode button's elements: the button, and while the panel is drawn as layers, or its symbol moves, its face apart.
 struct ModeParts<M> {
     button: Element<M>,
     face: Option<Element<M>>,
@@ -718,12 +722,31 @@ where
                 .collect::<Vec<_>>();
             let mode = view.modes[index];
             let focus = view.mode_focus == Some(index);
-            let symbol = modes::glyph(mode, frame.modes.sharp);
+            // where the button rests: while it moves its symbol lies on whole device pixels as its face layer does
+            let rest = {
+                let mut f = *frame;
+                (f.modes.spread, f.scale, f.scale_y) = (1.0, 1.0, 1.0);
+                layers::button_at(view.extent, &f, rects.len(), index)
+            };
             let (children, face) = if view.layered {
-                let face = layers::button_face(index, rect, joined.clone(), focus, symbol);
+                let symbol = modes::glyph(mode, frame.modes.sharp, 1.0);
+                let face = layers::button_face(
+                    index,
+                    rect,
+                    joined.clone(),
+                    focus,
+                    !view.group_edge,
+                    symbol,
+                );
                 (Vec::new(), Some(face))
+            } else if rect != rest {
+                let symbol = modes::glyph(mode, frame.modes.sharp, frame.alpha);
+                (
+                    Vec::new(),
+                    Some(layers::symbol_in_place(rect, rest, symbol)),
+                )
             } else {
-                (vec![symbol], None)
+                (vec![modes::glyph(mode, frame.modes.sharp, 1.0)], None)
             };
             let button = Element::new(modes::ModeButton {
                 mode,
@@ -1001,6 +1024,7 @@ where
                 rect: Rect::new(0.0, 0.0, rect.width(), rect.height()),
                 look: layers::glass_look(frame),
                 key: layers::GLASS_LAYER,
+                edge: view.group_edge,
             })
             .key("glass"),
         );

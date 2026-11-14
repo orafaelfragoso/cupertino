@@ -358,10 +358,18 @@ pub struct Model {
     /// The window system shows the panel's parts as compositor layers ([`view::layers`]): while the panel rests it
     /// draws them so, and the compositor runs its close.
     pub compositor_layers: bool,
-    /// A scope opening from hidden hands its open to the compositor ([`view::layers::open_changes`]) where the window
-    /// system shows layers: its glass is the panel's own at every moment, its content the panel's pixels and its edge
-    /// the rest's stroke scaled. On in the process; a test turns it off to compare the panel's own open.
-    pub hand_scope_opens: bool,
+    /// An open from hidden hands itself to the compositor where the window system shows layers: a scope's
+    /// ([`view::layers::open_changes`]), its glass the panel's own at every moment, its content the panel's pixels and
+    /// its edge the rest's stroke scaled; and the search field's with its mode buttons
+    /// ([`view::layers::field_open_changes`]), the glass of the field and the buttons the panel's own at every moment
+    /// and the edge drawn by the compositor along it. On in the process; a test turns it off to compare the panel's own
+    /// open.
+    pub hand_opens: bool,
+    /// The search field's open with its mode buttons is handed over too ([`view::layers::field_open_changes`]). Off in
+    /// the process: against the server its window and layers still commit a few buffers part way; a test turns it on.
+    pub hand_field_opens: bool,
+    /// The search field opens from hidden: its open is handed to the compositor once its mode buttons are placed.
+    hand_field: bool,
     /// The close the compositor runs: the panel as it was when the close began, which the panel's layers keep showing
     /// until it is over, and the layers' changes not yet sent.
     handed: Option<Frame>,
@@ -427,7 +435,9 @@ impl Model {
             just_shown: false,
             primary_held: false,
             compositor_layers: false,
-            hand_scope_opens: true,
+            hand_opens: true,
+            hand_field_opens: false,
+            hand_field: false,
             handed: None,
             layer_changes: Vec::new(),
             open_rest: None,
@@ -460,6 +470,19 @@ impl Model {
     /// Whether the compositor runs the panel's open now.
     pub fn open_handed(&self) -> bool {
         self.open_rest.is_some()
+    }
+
+    /// Whether the compositor runs the search field's open with its mode buttons now, drawing the edge along their glass.
+    pub fn field_open_handed(&self) -> bool {
+        self.open_rest
+            .is_some_and(|rest| rest.modes.count > 0 && rest.header == Header::Search)
+    }
+
+    /// The panel as it rests once what moves now comes to rest.
+    fn resting(&self, now: f64) -> Frame {
+        let mut resting = self.motion.clone();
+        resting.settle(now);
+        resting.frame(now)
     }
 
     /// The shape the enclosure moves to.
@@ -663,7 +686,12 @@ impl Model {
                 }
                 self.motion
                     .show_in(self.target_shape(), header_of(view), now.mono);
-                self.hand_open(from_hidden && view != View::Search, now.mono);
+                if view == View::Search {
+                    // handed over once the mode buttons are placed
+                    self.hand_field = from_hidden;
+                } else {
+                    self.hand_open(from_hidden, now.mono);
+                }
                 if let (Some(config), false, None) = (&self.files, self.indexing, &self.file_index)
                 {
                     self.indexing = true;
@@ -814,12 +842,14 @@ impl Model {
         }
     }
 
-    /// A scope opening from hidden, drawn as layers, opens on the compositor's clock: its layers show the panel at rest
-    /// from the first frame and the compositor moves them from where the open starts ([`view::layers::open_changes`]).
-    /// Never under Reduce Motion, nor without the layers, nor where the panel settles at once.
-    fn hand_open(&mut self, scope: bool, now: f64) {
-        if !(scope
-            && self.hand_scope_opens
+    /// An open from hidden, drawn as layers, runs on the compositor's clock: its layers show the panel at rest from the
+    /// first frame and the compositor moves them from where the open starts: a scope's
+    /// ([`view::layers::open_changes`]), or the search field's with its mode buttons budding out of it
+    /// ([`view::layers::field_open_changes`]). Never under Reduce Motion, nor without the layers, nor where the panel
+    /// settles at once.
+    fn hand_open(&mut self, from_hidden: bool, now: f64) {
+        if !(from_hidden
+            && self.hand_opens
             && self.compositor_layers
             && !self.motion.reduce_motion()
             && !self.settled)
@@ -827,16 +857,19 @@ impl Model {
             return;
         }
         let first = self.motion.frame(now);
-        let mut resting = self.motion.clone();
-        resting.settle(now);
-        let rest = resting.frame(now);
-        if first.modes.count > 0 || rest.modes.count > 0 {
+        let rest = self.resting(now);
+        let field = self.hand_field_opens && rest.header == Header::Search && rest.modes.count > 0;
+        let scope = rest.header.is_scope() && first.modes.count == 0 && rest.modes.count == 0;
+        if !(field || scope) {
             return;
         }
         // the window's size through the open, which places the layers
         let _ = self.resize();
-        self.layer_changes =
-            view::layers::open_changes(self.extent, &first, &rest, &self.motion, now);
+        self.layer_changes = if field {
+            view::layers::field_open_changes(self.extent, &first, &rest, &self.motion, now)
+        } else {
+            view::layers::open_changes(self.extent, &first, &rest, &self.motion, now)
+        };
         self.open_rest = Some(rest);
         self.open_timer = false;
     }
@@ -1105,9 +1138,14 @@ impl Model {
             if self.settled {
                 self.motion.settle(now);
             }
+            // the search field opening from hidden with its buttons runs on the compositor's clock
+            if first && std::mem::take(&mut self.hand_field) {
+                self.hand_open(true, now);
+            }
             // the buttons' own motion needs frames
             commands.extend(self.animate());
         }
+        self.hand_field = false;
         if want == 0 {
             self.mode_hover = None;
             self.mode_focus = modes::Focus::default();
@@ -2033,10 +2071,12 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             commands.extend(model.host.after(left, Message::CloseOver));
         }
     }
-    // an open the compositor runs ends when the motion it carries does; a timer comes back for it then
-    if model.open_rest.is_some() {
+    // an open the compositor runs ends when the motion it carries does; a timer comes back for it then. What changes
+    // where the panel comes to rest (a query that brings results, a scope's height) takes the open back: the panel
+    // draws the rest of it itself.
+    if let Some(rest) = model.open_rest {
         let now = model.now().mono;
-        if !model.motion.animating(now) || !model.nav.is_visible() {
+        if !model.motion.animating(now) || !model.nav.is_visible() || model.resting(now) != rest {
             model.open_rest = None;
         } else if !model.open_timer {
             model.open_timer = true;
@@ -2112,6 +2152,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         layered: model.layered(),
         handed: model.close_handed(),
         opening: model.open_handed(),
+        group_edge: model.field_open_handed(),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

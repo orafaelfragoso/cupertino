@@ -853,9 +853,19 @@ Gate:
             not: the glass's corners are continuous, and the launcher strokes its edge along circular arcs that stand
             up to 0.57 points off the glass where each corner starts to curve, so there the two part by up to the
             line's own opacity (32 of 255 at 1 and 52 at 1.5 in the light appearance, 109 and 178 in the dark, 67 and
-            230 at 2). OWNER DECISION: a scope's edge following its glass's corner is a change of the launcher's look
-            at its corners (and of the goldens), so the scopes' rest and close keep the edge layer, and the compositor's
-            edge is used where the outline changes shape while the shapes are capsules.
+            230 at 2). Decided by the owner: the edge follows the glass's continuous outline, the dark boundary being
+            the silhouette of the one enclosure, a change of the launcher's look at a scope's corners and of the
+            goldens there. Until it lands (split below, "The edge follows the glass") the scopes' rest and close keep
+            the edge layer, and the compositor's edge is used where the outline changes shape while the shapes are
+            capsules.
+            A glass group's edge is a stroke round each shape cut by the others (`Container::edge_alpha_at`, the
+            glass's stage 8, the same in the shader): each shape's band from its outline to the edge's width outside
+            it, left out by the share of the pixel each other shape covers, laid over each other. It ran along the
+            outline of the blended union, which parts from the panel's own edges while the field's buttons bud out of
+            it by up to 178 of 255 in the dark and 52 in the light at 1.5 (the union's neck outlined where the panel
+            draws each shape's outline across the neck); cut by the others it is within 17 and 7 of the panel's
+            (where two strokes cross, which the panel draws as two antialiased strokes and clips)
+            (`a_joined_container_s_edge_is_each_shape_s_outline_cut_by_the_others`).
       - [x] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
             the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
             (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it. The panel at rest is
@@ -938,12 +948,17 @@ Gate:
                 (`layers::open_values` over the fold's motion, the corner the panel's, held to half the height), the
                 body's opacity through samples of its own curve, the row's frame drawn again once at the header's
                 switch (one buffer of the row's layer, the only one the fold makes).
-          - [ ] The edge. OWNER DECISION (above): through the fold the outline goes from a scope's continuous corners
-                to the field's capsule, which only the compositor's edge can follow, and at a scope's corners it parts
-                from the panel's circular-arc edge by up to the line's opacity. Until the owner chooses, the fold and
-                unfold stay the panel's own drawing, as they are now; once a scope's edge follows its glass, the
-                compositor's edge (`layers::glass_edge`, within 4 of 255 of the panel's along the field and every
-                straight side) carries it, and the scope's edge layer goes.
+          - [ ] The edge follows the glass (decided by the owner: the edge follows the glass's continuous outline).
+                Through the fold the outline goes from a scope's continuous corners to the field's capsule, which only
+                the compositor's edge can follow. Split, in order:
+            - [ ] The panel's own edge stroked along the glass's continuous outline (the shared distance of
+                  `cupertino-glass` and `ui_fill`) in place of the circular arcs that stand up to 0.57 points off it,
+                  under Reduce Motion and without the capability as well: the goldens that change at a scope's
+                  corners re-recorded and named with their pixel counts, and before and after pairs of a scope's
+                  corner at rest, both appearances at 1.5 and 2, in the sheet under "Edge follows the glass".
+            - [ ] The scopes' rest, open and close on the compositor's edge (`layers::glass_edge`, then within 4 of
+                  255 of the panel's along every side and corner), the scope's edge layer gone.
+            - [ ] The fold and unfold carry it, from here on in order with the items above and below.
           - [ ] Their same-moment test, as the open's (`open_moments` over `Escape` from a scope and the scope's
                 shortcut from the field), and the real process's count against the server, as
                 `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` (one
@@ -956,15 +971,42 @@ Gate:
             with a stroke that keeps its width; a layer is cut only to its own shape (`masks`). The compositor now
             draws a glass group's edge along its joined outline at the output's scale (version 5, above), within 4 of
             255 of the panel's along the field and its buttons at rest, which is what this needed. Split, in order:
-          - [ ] The field's glass and each button's glass and face through samples of the panel's own values
-                (`layers::open_values` over `modes::button_rect`, `bud_size`, the field's width and corner, the
-                products of the split spring and the open spring), in one glass group with the field, its edge the
-                compositor's (`layers::glass_edge` in the looks) in place of the edge layer and `edge_cuts`.
-          - [ ] Each button's symbol: its face's content blur through samples from its starting blur to 0 on
-                `GLYPH_SHARPEN` after `GLYPH_DELAY`.
-          - [ ] The same-moment test over `Toggle` from hidden, as the open's (`open_moments`), the edge compared
-                along the joined outline as the scopes' is, and the real process's count against the server, as the
-                scope's open (`ToggleLauncher`).
+          - [x] The field's glass and each button's glass and face through samples of the panel's own values
+                (`layers::field_open_changes` over `layers::open_values`: the field's place, width and corner, each
+                button's rect and corner, the content's place, each face's place about its button's centre), left
+                out where a value never changes, everything faded in on the linear 0.1 s, in one glass group with the
+                field; while the open is the compositor's the field's glass carries the edge in its look
+                (`layers::glass_edge`, `PanelView::group_edge`), drawn round each shape cut by the others as the panel
+                cuts its own (above), and neither the edge layer nor a face draws one. The panel draws its layers once
+                at rest in the open's first frame and then no frame of its window or a layer until the open is over,
+                when the edge layer and the faces' edges draw it again
+                (`the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame`); under Reduce Motion
+                nothing is handed over (`under_reduce_motion_the_search_field_s_open_is_the_panel_s_own`). What
+                changes where the panel comes to rest part way (a query that brings results) takes the open back, and
+                the panel draws the rest of it itself. `Model::hand_scope_opens` is now `Model::hand_opens`, the
+                field's open gated by `Model::hand_field_opens` (below).
+          - [x] Each button's symbol: its face's opacity (the panel's opacity times the symbol's sharpness) and content
+                blur (`layers::glyph_deviation`, half the symbol's blur radius) through samples, from its starting
+                blur of 3 points to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. The panel's own drawing puts a moving
+                button's symbol on whole device pixels as one picture where its face layer would lie
+                (`layers::symbol_in_place`), as the compositor moves the face: part way through the panel's own bud,
+                merge and close the symbol lands on whole device pixels; at rest it is drawn as before.
+          - [x] The same-moment test over `Toggle` from hidden, every other frame of the open's 61 and its last at
+                1.5 in both appearances, the compositor's edge worked out with the glass's own model on the shapes as
+                shown (`the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`):
+                the glass is the panel's at every moment, the first and last frames within 1, and apart from the caret
+                every frame within 17 of 255 in the dark and 7 in the light (where the bud's strokes cross, 117 to
+                250 ms; within 1 from 383 ms), bounded by an eighth of the line's opacity.
+          - [ ] On in the process (`Model::hand_field_opens`, off; the in-memory tests turn it on). Against the server
+                the real process (`--no-files`, one button, the field opened and closed once first) committed 4
+                buffers of its window and layers over 186 server steps part way, in the one run taken; which commits
+                they are (the redraw at rest racing the samples' last steps, or frames part way) is not found yet. Then
+                the count as the scope's open has it
+                (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over `ToggleLauncher`, the window 760 points wide with 4 layers).
+          - [ ] The caret's blink through the field's open. The field holds its caret while the compositor runs the
+                open (about a second, the buttons' spring), where the panel's own drawing fades it out from 550 ms and
+                back by 1000 ms (255 of 255 at the caret). A blink on the compositor's clock needs the caret as a
+                layer of its own whose opacity the panel animates, or a frame of the content's layer at each blink.
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over

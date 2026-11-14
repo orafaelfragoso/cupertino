@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""What a session's DRM trace (`CUPERTINO_DRM_TRACE=1`) says about output timing, and whether it beats a baseline.
+
+    scripts/dev/drm-trace-summary LOG                    one session's figures
+    scripts/dev/drm-trace-summary --baseline BASE LOG    both sessions' figures, then `pass` or `fail`
+
+LOG and BASE are server logs (`~/.local/state/cupertino/server.log`; the run before it is `server.log.1`). For each the
+summary prints: how long the trace ran, whether frames started late after a vblank (`late_latch`), the
+presentation-time branch and the planes of each output as last logged, the flips and missed refreshes and the missed
+refreshes per thousand flips, the start delays logged, and input-to-flip and pointer-to-flip latency p50, p95 and p99.
+
+With a baseline the session passes when its input-to-flip latency p50 and p95 are both below the baseline's and it
+missed no more refreshes per thousand flips than the baseline did. A trace shorter than an hour, or one without a
+latency, fails.
+"""
+import argparse
+import datetime
+import pathlib
+import re
+import sys
+
+TARGET = "cupertino_server::drm_trace: "
+HOUR_S = 3600.0
+
+
+def pct(vals: list[float], p: float) -> float | None:
+    if not vals:
+        return None
+    vals = sorted(vals)
+    return vals[min(len(vals) - 1, round(p / 100 * (len(vals) - 1)))]
+
+
+def fields(text: str) -> dict[str, str]:
+    return dict(re.findall(r"(\w+)=(\S+)", text))
+
+
+def stamp(line: str) -> float | None:
+    head = line.split(" ", 1)[0]
+    try:
+        return datetime.datetime.fromisoformat(head.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def read(path: pathlib.Path) -> dict:
+    """The trace's figures in the log at `path`."""
+    s = {"path": str(path), "late_latch": None, "first": None, "last": None, "branches": {}, "planes": {},
+         "delays_us": [], "input_us": [], "pointer_us": [], "flips": 0, "missed": 0, "missed_lines": 0}
+    for line in path.read_text(errors="replace").splitlines():
+        if "late_latch=" in line and "cupertino_server::backend::udev" in line:
+            s["late_latch"] = fields(line)["late_latch"] == "true"
+        at = line.find(TARGET)
+        if at < 0:
+            continue
+        t = stamp(line)
+        if t is not None:
+            s["first"] = t if s["first"] is None else s["first"]
+            s["last"] = t
+        message = line[at + len(TARGET):]
+        kind, _, rest = message.partition(" ")
+        f = fields(rest)
+        if kind == "presentation-time":
+            s["branches"][f["output"]] = f["branch"]
+        elif kind == "planes":
+            s["planes"][f["output"]] = rest
+        elif kind == "missed":
+            s["missed_lines"] += 1
+            s["flips"] = max(s["flips"], int(f["flips"]))
+            s["missed"] = max(s["missed"], int(f["missed_total"]))
+        elif kind == "count":
+            s["flips"] = max(s["flips"], int(f["flips"]))
+            s["missed"] = max(s["missed"], int(f["missed_total"]))
+        elif kind == "start-delay":
+            s["delays_us"].append(int(f["delay_us"]))
+        elif kind == "input-to-flip":
+            s["input_us"].append(int(f["latency_us"]))
+        elif kind == "pointer-to-flip":
+            s["pointer_us"].append(int(f["latency_us"]))
+    s["seconds"] = 0.0 if s["first"] is None else s["last"] - s["first"]
+    s["missed_per_1000"] = None if not s["flips"] else 1000.0 * s["missed"] / s["flips"]
+    for key in ("input", "pointer"):
+        ms = [v / 1e3 for v in s[f"{key}_us"]]
+        for p in (50, 95, 99):
+            s[f"{key}_p{p}_ms"] = pct(ms, p)
+    return s
+
+
+def fmt(v, digits: int = 2) -> str:
+    return "-" if v is None else f"{v:.{digits}f}"
+
+
+def report(s: dict) -> str:
+    latch = {True: "on", False: "off", None: "unknown"}[s["late_latch"]]
+    lines = [f"{s['path']}: {s['seconds'] / 60:.1f} min traced, late start {latch}"]
+    for output, branch in sorted(s["branches"].items()):
+        lines.append(f"  {output}: branch {branch}; {s['planes'].get(output, 'planes not logged')}")
+    lines.append(f"  flips {s['flips']}, missed refreshes {s['missed']} ({fmt(s['missed_per_1000'], 3)} per 1000 flips)")
+    if s["delays_us"]:
+        delays = [d / 1e3 for d in s["delays_us"]]
+        lines.append(f"  start delay logged {len(delays)} times: {fmt(min(delays))} to {fmt(max(delays))} ms, "
+                     f"last {fmt(delays[-1])} ms")
+    for key, name in (("input", "input-to-flip"), ("pointer", "pointer-to-flip")):
+        n = len(s[f"{key}_us"])
+        lines.append(f"  {name:15} n={n:<7} p50 {fmt(s[f'{key}_p50_ms'])} ms  p95 {fmt(s[f'{key}_p95_ms'])} ms  "
+                     f"p99 {fmt(s[f'{key}_p99_ms'])} ms")
+    return "\n".join(lines)
+
+
+def compare(base: dict, run: dict) -> tuple[bool, list[str]]:
+    """Whether `run` passes the gate against `base`, and why not."""
+    why = []
+    for s, name in ((base, "baseline"), (run, "session")):
+        if s["seconds"] < HOUR_S:
+            why.append(f"the {name} traced {s['seconds'] / 60:.1f} min, under an hour")
+        if s["input_p50_ms"] is None:
+            why.append(f"the {name} has no input-to-flip latency")
+        if s["missed_per_1000"] is None:
+            why.append(f"the {name} logged no flip count")
+    if not why:
+        for p in (50, 95):
+            b, r = base[f"input_p{p}_ms"], run[f"input_p{p}_ms"]
+            if not r < b:
+                why.append(f"input-to-flip p{p} {fmt(r)} ms is not below the baseline's {fmt(b)} ms")
+        if run["missed_per_1000"] > base["missed_per_1000"]:
+            why.append(f"{fmt(run['missed_per_1000'], 3)} missed refreshes per 1000 flips, more than the baseline's "
+                       f"{fmt(base['missed_per_1000'], 3)}")
+    return not why, why
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("log", type=pathlib.Path)
+    ap.add_argument("--baseline", type=pathlib.Path)
+    args = ap.parse_args(argv)
+    run = read(args.log)
+    if args.baseline is None:
+        print(report(run))
+        return 0
+    base = read(args.baseline)
+    print("baseline " + report(base))
+    print("session  " + report(run))
+    ok, why = compare(base, run)
+    for reason in why:
+        print(f"  {reason}")
+    print("pass" if ok else "fail")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -31,7 +31,8 @@ median of the runs with their spread (max - min), which is the run-to-run noise.
               compose + render time p50/p99/max (GPU waited for), GPU time per frame p50/p99 (timestamps), glass GPU
               p95, backdrops blurred again, blur passes and the texels they wrote, render targets made, title bar and HUD rasters and uploads
               (and their bytes) per frame, input latency p50/p95 (to the next frame shown; `app`: to the first frame
-              after a client answered), and the compositor's CPU time per second and per frame
+              after a client answered; `pointer`: from pointer motion alone to the next frame shown), and the
+              compositor's CPU time per second and per frame
   clients     per program: frames, frame time p50/p99/max, slow frames (longer than a refresh), and the p50 and p99
               of each phase (update, view, layout, paint, raster, copy, commit), from the toolkit's own timing
   processes   per program: CPU in percent of one core over the scenario, and at its end the private memory (clean +
@@ -489,6 +490,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
     work = [(r["compose_us"] + r["render_us"]) / 1e3 for r in frames]
     gpu = [r["gpu_us"] / 1e3 for r in frames if r.get("gpu_us") is not None]
     per = lambda key: sum(r.get(key) or 0 for r in frames) / n
+    pointer = [r["pointer_lat_us"] / 1e3 for r in frames if r.get("pointer_lat_us") is not None]
     return {
         "frames": len(frames), "fps": len(frames) / max(1e-9, b - a),
         "interval_p50_ms": pct(ints, 50), "interval_p99_ms": pct(ints, 99), "interval_max_ms": max(ints, default=None),
@@ -509,6 +511,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
         "input_latency_p95_ms": pct([r["input_lat_us"] / 1e3 for r in frames if r["input_lat_us"] is not None], 95),
         "app_latency_p50_ms": pct([r["app_lat_us"] / 1e3 for r in frames if r["app_lat_us"] is not None], 50),
         "app_latency_p95_ms": pct([r["app_lat_us"] / 1e3 for r in frames if r["app_lat_us"] is not None], 95),
+        "pointer_latency_p50_ms": pct(pointer, 50), "pointer_latency_p95_ms": pct(pointer, 95),
         "cpu_ms_per_s": None if cpu_s is None else cpu_s * 1e3 / max(1e-9, b - a),
         "cpu_ms_per_frame": None if cpu_s is None or not frames else cpu_s * 1e3 / len(frames),
     }
@@ -715,7 +718,8 @@ def kilo(v):
 def table(summary: dict, renderer: str) -> str:
     lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
              f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'gpu99':>7} "
-             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7}"]
+             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7} "
+             f"{'ptr95':>7}"]
     for key, s in summary.items():
         g = lambda k: s.get(f"compositor.{k}", {}).get("median")
         slow = sum(v["median"] for k, v in s.items() if k.endswith(".slow_frames"))
@@ -726,7 +730,8 @@ def table(summary: dict, renderer: str) -> str:
             f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('gpu_p99_ms'))} {fmt(g('cpu_ms_per_s'))} "
             f"{fmt(g('blur_passes_per_frame'))} {fmt(kilo(g('blur_texels_per_frame')), 8, 1)} "
             f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
-            f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)}")
+            f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)} "
+            f"{fmt(g('pointer_latency_p95_ms'))}")
     return "\n".join(lines)
 
 

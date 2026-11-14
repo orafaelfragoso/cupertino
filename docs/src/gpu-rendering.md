@@ -217,9 +217,13 @@ The compositor stays on Smithay's GLES renderer. Its own work, in order:
 
 Frame scheduling starts a frame later than now only once the output's presentation timestamps are known to be real;
 it latches from the recent maximum render time plus a margin, never later than half a refresh period, because a
-missed refresh costs more than the latency it saves. Direct scanout and the cursor plane are already permitted by the
-DRM path; they are verified on the target driver rather than built. Overlay planes stay off on the proprietary NVIDIA
-driver. Variable refresh and colour management are out of scope while the target display supports neither.
+missed refresh costs more than the latency it saves (the recent maximum is the last 60 frames' render times and the
+margin 2 ms; a frame that misses its vblank counts as a whole period, which turns the late start off until it leaves
+those 60; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison). A 10-bit primary plane is a setting
+(`output_depth`), off until the probe decides; captures draw into 8-bit targets of their own. Direct scanout and
+the cursor plane are already permitted by the DRM path; they are verified on the target driver rather than built.
+Overlay planes stay off on the proprietary NVIDIA driver. Variable refresh and colour management are out of scope
+while the target display supports neither.
 
 **Vulkan in the compositor** means implementing Smithay's renderer traits for Vulkan, so `DrmCompositor`, damage
 tracking and the scene's element types survive, and porting the material, glass and mesh passes (about 250 raw GL call

@@ -114,10 +114,10 @@ class ReadingTest(unittest.TestCase):
             "# renderer test\n# refresh_us 16666\n# start_monotonic_ns 1000000000\n"
             "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us "
             "allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads "
-            "hud_upload_bytes blur_passes blur_texels\n"
-            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000\n"
-            "10016000 300 19000 0 0 0 1 0 1 - 9000 0 0 - 0 0 0 0 0 0 0 0\n"
-            "30000000 300 1000 0 0 0 0 0 0 - - 0 0 900 0 0 0 0 0 0 0 0\n")
+            "hud_upload_bytes blur_passes blur_texels pointer_lat_us\n"
+            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000 3000\n"
+            "10016000 300 19000 0 0 0 1 0 1 - 9000 0 0 - 0 0 0 0 0 0 0 0 -\n"
+            "30000000 300 1000 0 0 0 0 0 0 - - 0 0 900 0 0 0 0 0 0 0 0 -\n")
         return path
 
     def test_the_frame_lines_are_read_by_their_header_and_a_span_takes_its_frames(self):
@@ -136,6 +136,11 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual(c["gpu_p99_ms"], 1.5)
         self.assertEqual(c["cpu_ms_per_s"], 250.0)
         self.assertEqual(c["cpu_ms_per_frame"], 250.0)
+        self.assertEqual(c["input_latency_p95_ms"], 4.0)
+        self.assertEqual(c["pointer_latency_p95_ms"], 3.0, "pointer motion alone, to the next frame shown")
+        # a file of a server that writes no pointer column reads as no pointer figure
+        old = [{k: v for k, v in r.items() if k != "pointer_lat_us"} for r in rows]
+        self.assertIsNone(bench.compositor(old, 16.666, (9.0, 11.0), cpu_s=None)["pointer_latency_p95_ms"])
 
     def test_client_frames_are_grouped_by_program_and_those_longer_than_a_refresh_are_slow(self):
         path = pathlib.Path(tempfile.mkdtemp()) / "timing.jsonl"

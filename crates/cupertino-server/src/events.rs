@@ -986,7 +986,7 @@ impl Cupertino {
         time: u32,
         rel: Option<RelativeMotionEvent>,
     ) {
-        crate::frame_stats::note_input(self);
+        crate::frame_stats::note_pointer_motion(self);
         self.input_came();
         let pos = match self.constrain_motion(pos) {
             Some(Constrained::Locked) => {

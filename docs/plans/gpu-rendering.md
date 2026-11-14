@@ -306,14 +306,29 @@ Works with the CPU renderer; no GPU needed.
       frame however little changed; timed inside the client at scale 1 (about 3700 nodes, load about 4), the cached
       solve and the placement of every node take 0.8 ms p50, the window's placements 0.5 and its semantics 0.6, the
       worst frames those that lay out a new row's names. Split in two:
-  - [ ] Placements and semantics kept for a subtree that did not change: a kept node of the same subtree revision
-        moves its subtree's placements by its own offset and keeps its semantics nodes, as paint does.
-  - [ ] The names of a row measured before it comes into view, so the frame that brings a row in does not shape its
-        text.
-  - Neither was taken up in the round that made damage incremental and the shared-memory copy cheaper (its time went
-    to those and to scene 910). The first can keep a kept node's placements and semantics nodes as one run, as the
-    damage tracker keeps its paint nodes, moved by the node's own offset while its subtree revision and size are the
-    same.
+  - [ ] Placements kept for a subtree that did not change: a kept node of the same subtree revision and size moves
+        its subtree's placements by its own offset. A placement's clip is the meeting of every ancestor's clip, those
+        outside the subtree (the viewport's, which stays while the rows move) and those inside it (which move with
+        them), so the run keeps each node's placement relative to the kept node with the clips from inside the subtree
+        alone, and a frame lays it in at the node's origin, met with the clip the node gets from above. A window with
+        raised nodes or with nodes cut by them keeps none (their clips depend on what lies over them). Test: after
+        scrolls at whole and fractional offsets, changed and dropped rows and a resize, the placements are those of
+        placing every node.
+  - [ ] Semantics nodes kept for the same subtrees: a node's semantics take its size and whether it can scroll, both
+        the same while its subtree is, and its bounds, moved by the kept node's offset; the runs of focusable nodes,
+        scopes, roving groups and items, the descriptions handed down and the keyed relations are kept with it and
+        laid in in order. Test: the semantics, the focus order and the accessibility diff are those of a full build
+        after the same frames.
+  - [ ] The names of a row measured before it comes into view. Files' grid already builds the cells 200 points past
+        the viewport (`OVERSCAN` in `crates/cupertino-files/src/kit/grid.rs`), so a row's names are shaped in the frame
+        it enters that band, not the frame it shows; what is left is to shape them outside any frame: the runtime
+        handing a window's idle time between a presented frame and the next frame event to work its widgets ask for
+        (the names of the cells past the band, in the direction of the scroll), shaped into the text system's cache
+        (two generations of 512 paragraphs) so the frame that builds them finds them there. Test: a scroll whose
+        frames build new rows shapes no paragraph inside a frame once the idle work ran.
+  - None was taken up in the rounds that made paint and damage incremental, the shared-memory copy cheaper and the
+    opaque region declared; their time went to those. The layout p99 at the fifth round is in "Measurements",
+    "Step 4", "Fifth round".
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints
@@ -355,14 +370,21 @@ Works with the CPU renderer; no GPU needed.
         `a_spare_buffer_s_memory_is_made_whole_and_zeroed_on_its_own_thread`). A buffer that missed more than 32
         rectangles misses their bounds rather than all of it
         (`a_buffer_that_missed_many_frames_misses_their_bounds_and_knows_its_other_pixels`).
-  - [ ] The renderer drawing into the leased buffer rather than its own pixmap, what the buffer missed repainted by
-        its age: removes the copy that is left, the moved viewport of every scroll frame. It needs the window system
-        to lease the buffer before the frame is drawn and hand the renderer its memory and what it missed, and the CPU
-        renderer to draw the frame's damage and the missed rectangles into memory it does not own; a buffer new to the
-        window is then drawn whole. Not taken up in this round's time. With the two items above the copy's p50 is
-        3.1–5.3 ms and its p99 still 19–20 ms; at the loads measured the slow copies are not only those of new
-        buffers but frames in the middle of a scroll, all three buffers made, whose copy of the moved viewport took
-        6–25 ms ("Measurements", "Step 4", "Fourth round").
+  - The renderer drawing into the leased buffer rather than its own pixmap, what the buffer missed repainted by its
+    age: removes the copy that is left, the moved viewport of every scroll frame. With the two items above the copy's
+    p50 is 3.1–5.3 ms and its p99 still 19–20 ms; at the loads measured the slow copies are not only those of new
+    buffers but frames in the middle of a scroll, all three buffers made, whose copy of the moved viewport took 6–25
+    ms ("Measurements", "Step 4", "Fourth round"). Only a buffer in the renderer's byte order (`abgr8888`) can be
+    drawn into; elsewhere the copy converts as now. Split, none taken up yet:
+    - [ ] The window system leases the buffer before the frame is drawn (a `WindowSystem` call that hands the runtime
+          the buffer's memory, its stride and the rectangles it missed, or that it is new or its pixels unknown) and
+          presents that lease; a lease the frame does not use is given back unattached.
+    - [ ] The CPU renderer draws a frame into memory it does not own: the frame's damage and the leased buffer's
+          missed rectangles into the buffer, whole when the buffer is new or its pixels unknown, its kept layers and
+          scratch images still its own, and its own pixmap kept only while something reads it (the raised layer's
+          read back, a drag image, captures, the switch to the GPU).
+    - [ ] Test: frames of changing damage through buffers taking turns, new ones and ones whose pixels are unknown
+          among them, have the bytes of the copy path's at scales 1, 1.5 and 2, and a scroll frame copies nothing.
   - On the GPU path (`CUPERTINO_RENDERER=gpu`) the frame is copied from the renderer's texture into the dmabuf on
     the GPU: 0.07–0.12 ms p50 and 0.6–0.75 ms p99 at 1.5 ("Measurements", "Step 6: Files on the GPU path").
 - [x] The CPU renderer's kept image of content with a blur or shadow is its picture in place. Scene 910 of

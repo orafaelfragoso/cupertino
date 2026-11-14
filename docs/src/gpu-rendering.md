@@ -50,8 +50,10 @@ The toolkit keeps what it drew as layers: images that survive between frames. A 
 paints only the strip that came into view; an opening panel or a sliding card changes a transform or an opacity, not
 pixels. Layers exist in both renderers, so they cut paint and raster cost on every machine without a GPU context.
 Scroll offsets are rounded to device pixels when drawn, so a moved layer is pixel-identical to a repaint. Minimized and
-fully covered windows drop their layers. A kept subtree that did not change is laid into the next paint as it was and
-compared with the last frame's in one go, so a scroll walks and compares only the rows that changed.
+fully covered windows drop their layers; a toolkit window declares the part its pixels cover whole as its opaque
+region, so it covers the windows under it as any client that declares one does. A kept subtree that did not change is
+laid into the next paint as it was and compared with the last frame's in one go, so a scroll walks and compares only
+the rows that changed.
 
 ### 3. Who draws on the GPU: classes of surface
 

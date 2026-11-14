@@ -33,7 +33,8 @@ impl SessionChange {
             | AppEvent::SteadyCaret { .. }
             | AppEvent::MenuBar { .. }
             | AppEvent::MenuReader { .. }
-            | AppEvent::BackdropTone { .. } => None,
+            | AppEvent::BackdropTone { .. }
+            | AppEvent::BuffersLost => None,
         }
     }
 

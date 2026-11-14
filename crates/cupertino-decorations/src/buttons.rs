@@ -9,11 +9,12 @@
 //! inactive window (a translucent grey disc without a ring, colour returns while the group is hovered), disabled (the
 //! same disc, no glyph).
 
-use crate::coverage::{self, Outline, Shade};
+use crate::coverage::{Outline, Shade};
+use crate::draws::{paint_into, Draw};
 use crate::metrics::{ButtonKind, DecorationMetrics};
 use crate::palette::{Palette, Rgba};
 use cupertino_geometry::Point;
-use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{PathBuilder, Pixmap};
 
 /// What the pointer and the window do to the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,19 +130,25 @@ pub fn glyph_strokes(kind: ButtonKind, h: f64) -> Vec<Stroke2> {
     }
 }
 
-fn color(c: Rgba) -> Color {
-    Color::from_rgba(
-        c[0].clamp(0.0, 1.0),
-        c[1].clamp(0.0, 1.0),
-        c[2].clamp(0.0, 1.0),
-        c[3].clamp(0.0, 1.0),
-    )
-    .expect("clamped components")
-}
-
 /// Draw one button centred at `center` (logical points) at `scale` device pixels per point.
 pub fn draw_button(
     pm: &mut Pixmap,
+    kind: ButtonKind,
+    center: Point,
+    scale: f64,
+    metrics: &DecorationMetrics,
+    palette: &Palette,
+    state: ButtonState,
+) {
+    let mut draws = Vec::new();
+    button_draws(&mut draws, kind, center, scale, metrics, palette, state);
+    paint_into(pm, &draws);
+}
+
+/// The draws of one button centred at `center` (logical points) at `scale` device pixels per point, appended to
+/// `draws`: its disc or face, its two edge rings and its glyph.
+pub fn button_draws(
+    draws: &mut Vec<Draw>,
     kind: ButtonKind,
     center: Point,
     scale: f64,
@@ -153,18 +160,13 @@ pub fn draw_button(
     let (cx, cy) = ((center.x * scale) as f32, (center.y * scale) as f32);
     let r = (metrics.button_diameter * 0.5 * scale) as f32;
     let disc = Outline::circle([cx, cy], r);
-    let mut paint = Paint {
-        anti_alias: true,
-        ..Paint::default()
-    };
     if !v.colored {
         // one translucent disc over what the window draws beneath: a ring under it would show through doubled
-        coverage::fill(
-            pm,
-            &disc,
-            &Shade::Solid(button_fill(palette, kind, v)),
-            None,
-        );
+        draws.push(Draw::Shape {
+            outline: disc,
+            shade: Shade::Solid(button_fill(palette, kind, v)),
+            stroke: None,
+        });
         return;
     }
     // the face, a little deeper at the top
@@ -173,7 +175,11 @@ pub fn draw_button(
         let stops: Vec<(f32, [f32; 4])> = FACE_STOPS.iter().copied().zip(face).collect();
         let shade =
             Shade::linear([cx, cy - r], [cx, cy + r], &stops).unwrap_or(Shade::Solid(face[1]));
-        coverage::fill(pm, &disc, &shade, None);
+        draws.push(Draw::Shape {
+            outline: disc,
+            shade,
+            stroke: None,
+        });
     }
     // two rings just inside the edge, strongest at the two sides (or at the top and the bottom) and gone half way
     // round
@@ -207,11 +213,15 @@ pub fn draw_button(
             continue;
         };
         if radius > 0.0 {
-            coverage::fill(pm, &Outline::circle([cx, cy], radius), &shade, Some(width));
+            draws.push(Draw::Shape {
+                outline: Outline::circle([cx, cy], radius),
+                shade,
+                stroke: Some(width),
+            });
         }
     }
     if v.glyph {
-        paint.shader = tiny_skia::Shader::SolidColor(color(button_glyph(palette, kind, v)));
+        let color = button_glyph(palette, kind, v);
         if kind == ButtonKind::Zoom {
             // a square cut along its diagonal into two triangles, a thin gap between them
             let s = (metrics.button_diameter * metrics.glyph_half_extent * ZOOM_GLYPH_HALF_SIDE)
@@ -228,24 +238,28 @@ pub fn draw_button(
                 pb.line_to(cx + t[1].0, cy + t[1].1);
                 pb.line_to(cx + t[2].0, cy + t[2].1);
                 pb.close();
-                if let Some(p) = pb.finish() {
-                    pm.fill_path(&p, &paint, FillRule::Winding, Transform::identity(), None);
+                if let Some(path) = pb.finish() {
+                    draws.push(Draw::Path {
+                        path,
+                        stroke: None,
+                        color,
+                    });
                 }
             }
             return;
         }
-        let stroke = Stroke {
-            width: (metrics.glyph_stroke * scale) as f32,
-            line_cap: LineCap::Round,
-            ..Stroke::default()
-        };
+        let width = (metrics.glyph_stroke * scale) as f32;
         let h = metrics.button_diameter * metrics.glyph_half_extent;
         for ((x0, y0), (x1, y1)) in glyph_strokes(kind, h) {
             let mut pb = PathBuilder::new();
             pb.move_to(cx + (x0 * scale) as f32, cy + (y0 * scale) as f32);
             pb.line_to(cx + (x1 * scale) as f32, cy + (y1 * scale) as f32);
-            if let Some(p) = pb.finish() {
-                pm.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
+            if let Some(path) = pb.finish() {
+                draws.push(Draw::Path {
+                    path,
+                    stroke: Some(width),
+                    color,
+                });
             }
         }
     }

@@ -1104,6 +1104,51 @@ GPU p99 2.10 ms, no missed refresh. The texel count does not depend on the load.
 The gate stays open. Next: find which call in the drawing waits for the GPU (timing the glass and material passes'
 GL calls on the CPU, as was done for the textures) and remove the wait, then bench again on a quiet machine.
 
+**Fourth round: no call waits for the GPU.** Taken at `4e1bf610` with a temporary build that timed, on the CPU, each
+part of the drawing (lowering, binding, every element kind, every blit by its place, every pass's binding, uniform
+upload and draw, target creation and deletion, the tone readback, the composite) and, around the whole submit, the
+render thread's own CPU time (`CLOCK_THREAD_CPUTIME_ID`), its user and system time, page faults and voluntary and
+involuntary context switches. The probe was removed afterwards; nothing of it is committed. One run each (`--runs 1`,
+4K, scale 1.5), the frames of the scenario's span only (180), other checkouts building beside it; load average at
+start and end of each run:
+
+| Run | Condition | Load | CPU p99 ms | Frames with one call over 1 ms | CPU p99 without them ms |
+|---|---|---|---|---|---|
+| 1 | as committed | 1.05, 0.81 | 2.37 | 3 | 1.39 |
+| 2 | as committed | 4.44, 5.10 | 2.54 | 5 | 1.85 |
+| 3 | the driver told to sleep, not spin, while it waits (`__GL_YIELD=USLEEP`) | 6.00, 5.31 | 2.36 | 3 | 1.51 |
+| 4 | no timer queries at all (frame timestamps and pass timers off) | 2.48, 1.91 | 2.35 | 3 | 1.34 |
+| 5 | as committed | 3.49, 2.86 | 2.40 | 2 | 1.33 |
+| 6 | the driver's threaded dispatch on (`__GL_THREADED_OPTIMIZATIONS=1`) | 2.66, 2.31 | 2.42 | 2 | 1.46 |
+
+What holds the p99 over 2 ms is two to five frames a run in which one single GL call takes 1.7 to 2.0 ms of CPU,
+where the same call takes 5 to 60 µs in every other frame: a framebuffer blit (the first level of a material's
+pyramid, a glass capture or one of its edge strips), once the tone readback, once a glass composite, once a call of
+the renderer's own outside our passes. In those frames:
+
+- the render thread's CPU time equals the submit's wall time within 1 %, almost all of it user time, with no
+  voluntary and at most one involuntary context switch and no page faults: the thread is not sleeping, waiting in the
+  kernel or preempted;
+- with the driver told to sleep while it waits, the frames are the same and still switch no context, so the time is
+  not the driver waiting on a fence or the GPU;
+- turning every timer query off changes nothing, nor does the driver's threaded dispatch;
+- the blit's sizes and filter were each seen in earlier frames, no target is created or deleted in or around those
+  frames, and the frames before and after draw the same passes in the usual time;
+- they come about once a second (in four runs at 9.24, 10.19 and 11.25 s of the session, give or take one frame), and
+  the server's other threads use no CPU meanwhile.
+
+So no call of ours waits for the GPU. Each frame's GPU time rises with them because the GPU has nothing to do while
+the CPU is held: the timestamps span the gap, and the GPU p99 (2.2 ms) is these frames too. The earlier reading, that a
+call in the drawing waits for the GPU because the CPU time follows the GPU time, had cause and effect reversed.
+Without those frames, the CPU p99 is 1.33 to 1.51 ms on a lightly loaded machine (1.85 ms at a load of 5) against the
+2 ms budget, and the GPU p99 under 1.2 ms. At 60 Hz, 180 frames and a stall a second, three frames are enough to
+own the p99, whatever the drawing costs.
+
+The stall is driver CPU work on the calling thread at a period of its own, and nothing in what the drawing issues
+moves it. The gate is not ticked: BLOCKED until the cause inside the driver is found or the gate's p99 is taken over a
+span long enough to measure a once-a-second event as such (the drag scenario's 180 frames cannot), which is the
+lead's call. The texel count, the shimmer and the banding checks pass as before.
+
 The grid capture for window glass (next step 1) is not built: it would change the glass edges and keep nothing in the
 drag it is for. A dragged window's glass reads the window under it, and the window's own surface is one of the
 elements below the glass. A moved element changes its whole place, where it was and where it is

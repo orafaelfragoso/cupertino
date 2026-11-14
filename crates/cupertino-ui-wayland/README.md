@@ -69,7 +69,8 @@ No free buffer, no configure yet, or a frame at another size than the latest con
 damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
 with every frame. A window's input region (`WindowSpec::input_region`, then `WindowRequest::SetInputRegion`) is sent with
 the next present that follows a change, rounded outwards to whole points; a window that never sets one takes input over
-its whole surface. A raised layer (`present_layer`) is drawn into a synchronized subsurface at the window's top left
+its whole surface. A window's opaque region (`WindowRequest::SetOpaqueRegion`) goes with the next frame presented
+after it changes, rounded inwards to whole points, and an empty one sends none. A raised layer (`present_layer`) is drawn into a synchronized subsurface at the window's top left
 corner, as wide as the window, at its scale and with an empty input region; its raised materials go to the
 subsurface's backdrops (`cupertino_app_effects_v1` version 11), so the compositor draws them between the subsurface and
 the window's content. Its frame copies only its own damage and what its buffer missed, and it commits before the

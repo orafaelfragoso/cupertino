@@ -121,7 +121,11 @@ all on one thread.
   whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A scroll container
   that clips marks its content as a scroll layer with its drawn offset, its scroll bars beside it; a node in a layer
   the renderer keeps is compared in the layer's content, so a scroll damages nothing it only moved, and what changed
-  in it damages where it shows now. A window told it is suspended drops its renderers' kept layers. A frame that
+  in it damages where it shows now. A window told it is suspended drops its renderers' kept layers. A toplevel
+  declares its opaque region with the frame that changes it (`WindowRequest::SetOpaqueRegion`, `opaque.rs`): the
+  large solid fills at full alpha its paint tree lays outside any translucent group, under clips that are rectangles,
+  placed by a move alone, a rounded one less its corners, without the materials under its content, each pulled in by a
+  point and rounded inwards; so a Kit window that covers another lets the compositor suspend it. A frame that
   repainted nothing sends no buffer; one that repainted a node but no pixel commits with no damage, as an
   animation's next frame and the state an application sets on its surface outside the frame wait for a commit. The
   CPU renderer's partial redraw can sample an anti-aliased curved or fractional edge cut by a damaged rectangle's

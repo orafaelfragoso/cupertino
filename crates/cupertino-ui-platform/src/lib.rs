@@ -197,6 +197,10 @@ pub enum WindowRequest {
     Menus(Option<MenuDescription>),
     /// Sets [`WindowSpec::input_region`]; it applies with the next present.
     SetInputRegion(Option<Vec<Rect>>),
+    /// The parts of the window its pixels cover whole, in its coordinates, so the compositor may leave out what lies
+    /// under them and tell a window they cover that it is not seen; empty when none is. It applies with the next
+    /// present.
+    SetOpaqueRegion(Vec<Rect>),
     /// Changes the window's presentation on the compositor's clock, all the changes together and without drawing a
     /// frame: with the window's first frame when it has not shown one, at once otherwise. Input and the published
     /// semantics stay with the window's layout, the presentation's target. Needs

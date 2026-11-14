@@ -30,6 +30,11 @@ impl<E: Element> RescaleRenderElement<E> {
             scale: scale.into(),
         }
     }
+
+    /// The element re-scaled, to change in place
+    pub fn element_mut(&mut self) -> &mut E {
+        &mut self.element
+    }
 }
 
 impl<E: Element> Element for RescaleRenderElement<E> {

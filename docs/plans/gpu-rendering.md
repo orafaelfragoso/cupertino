@@ -272,8 +272,21 @@ Works with the CPU renderer; no GPU needed.
       (`a_minimized_window_is_told_it_is_suspended_and_no_longer_once_restored`,
       `a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again`,
       `a_window_under_covers_that_leave_no_point_of_it_does_not_show`, `a_rounded_window_covers_all_but_its_corners`).
-- [ ] Kit windows declare their opaque region (the window less its material and glass regions and its corners), so a
-      Kit window covering another suspends it: today only clients that declare one cover.
+- [x] Kit windows declare their opaque region (the window less its material and glass regions and its corners), so a
+      Kit window covering another suspends it: a toplevel sends it with the frame that changes it, the large solid fills
+      at full alpha its paint tree lays outside any translucent group, under clips that are rectangles and placed by a
+      move alone, a rounded one less its corners, less the materials under its content, each pulled in by a point and
+      rounded inwards (`an_opaque_background_less_its_edges_is_the_region_and_a_translucent_one_none`,
+      `rounded_corners_clips_fractional_edges_and_materials_are_left_out`,
+      `small_fills_and_small_subtrees_are_not_looked_at_and_the_region_keeps_its_largest`,
+      `a_window_declares_its_opaque_background_and_takes_it_back_on_none`,
+      `a_windows_opaque_region_reaches_its_surface_with_the_next_present`); the server suspends a window under it as
+      under any client's (`a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again`). The compositor's
+      damage tracker takes the same regions through the window's clip element, the corners cut, and leaves undrawn what
+      lies under them; a glass or material backdrop below reads the framebuffer as it draws, so the element now leaves
+      out of its opaque regions what the backdrops below it read, and culling never hands a backdrop pixels of an
+      earlier frame (`a_window_is_opaque_where_its_client_says_inside_its_corners_and_not_over_what_a_backdrop_reads`;
+      before, a terminal declaring its whole surface opaque over a window's sidebar did).
 - [x] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2
       (`a_frame_drawn_over_the_last_has_the_bytes_of_one_drawn_whole` at 1, 1.25, 1.5 and 2, and, through kept
       layers, `a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset` at 1, 1.5 and 2).

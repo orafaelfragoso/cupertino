@@ -475,6 +475,58 @@ impl<M: 'static> Widget<M> for GlassPane {
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
+/// A toplevel on an opaque background says its pixels cover it whole but for its edges (its glass cut out of that, as
+/// `opaque::tests` shows); on no background it says nothing is, and a frame that changes neither says nothing again.
+#[test]
+fn a_window_declares_its_opaque_background_and_takes_it_back_on_none() {
+    let damage = Rc::default();
+    let mut rt = Runtime::<Glassy, FakeSystem>::new(FakeSystem::default(), options(&damage));
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    let regions = |rt: &Runtime<Glassy, FakeSystem>| -> Vec<Vec<Rect>> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(w, r)| match r {
+                WindowRequest::SetOpaqueRegion(region) if *w == window => Some(region.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // the test theme has no window colour: nothing is opaque yet, and nothing is said
+    assert!(regions(&rt).is_empty());
+    let frame = |rt: &mut Runtime<Glassy, FakeSystem>, at: u64, background: WindowBackground| {
+        rt.window_system_mut()
+            .send(window, WindowEvent::Frame(Timestamp(at)));
+        rt.messages.push_back(background);
+        rt.step(steps()).unwrap();
+    };
+    // drawn in one opaque colour, as a window system that cannot show it without a frame draws it
+    frame(
+        &mut rt,
+        1,
+        WindowBackground::Solid(Color::new(0.2, 0.3, 0.4, 1.0)),
+    );
+    assert_eq!(
+        regions(&rt),
+        [vec![Rect::new(1.0, 1.0, 198.0, 98.0)]],
+        "the window less a point"
+    );
+    frame(
+        &mut rt,
+        2,
+        WindowBackground::Solid(Color::new(0.2, 0.3, 0.4, 0.9)),
+    );
+    assert_eq!(
+        regions(&rt).last(),
+        Some(&Vec::new()),
+        "nothing covers in a translucent colour"
+    );
+    frame(&mut rt, 3, WindowBackground::None);
+    assert_eq!(regions(&rt).len(), 2, "said once");
+}
+
 /// A window whose content stood on glass and turns one colour takes the glass away with the colour, since its content
 /// paints nothing to stand on it; back on the theme's background it asks for the glass again.
 #[test]

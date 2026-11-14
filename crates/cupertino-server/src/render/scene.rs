@@ -3322,9 +3322,21 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
     let mut captured: Vec<(u64, u64)> = Vec::new();
     // the elements finalized so far, bottom to top, each with its index into `elements`
     let mut below: Vec<(Below, usize)> = Vec::new();
+    // what the backdrops finalized so far read of the framebuffer as they draw
+    let mut read: Vec<Rectangle<i32, Physical>> = Vec::new();
     for i in (0..elements.len()).rev() {
         let (upper, lower) = elements.split_at_mut(i + 1);
         let e = &mut upper[i];
+        // a window's opaque regions leave undrawn what lies under them, so they leave out what a backdrop below reads
+        if let CupertinoElement::Window(w) = e {
+            let geometry = w.geometry(scale);
+            let under = read
+                .iter()
+                .filter(|r| r.overlaps(geometry))
+                .copied()
+                .collect();
+            w.element_mut().keep_read_below(under);
+        }
         let sampled = match &*e {
             CupertinoElement::Glass(g) => Some((g.key(), g.geometry(scale))),
             CupertinoElement::Material(m)
@@ -3334,6 +3346,7 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
             }
             _ => None,
         };
+        read.extend(sampled.map(|(_, area)| area));
         let change = sampled.map(|(key, area)| {
             let (overlapping, at): (Vec<Below>, Vec<usize>) = below
                 .iter()

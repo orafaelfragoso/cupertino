@@ -285,6 +285,8 @@ struct WindowState<M> {
     grow: Option<morph::Grow>,
     /// When the window last became active, while its colours still cross from the inactive ones.
     activated_at: Option<Timestamp>,
+    /// The opaque region the window system was last asked to show the window with ([`WindowRequest::SetOpaqueRegion`]).
+    opaque: Vec<Rect>,
 }
 
 /// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
@@ -1059,6 +1061,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             grows_from: None,
             grow: None,
             activated_at: None,
+            opaque: Vec::new(),
         }
     }
 
@@ -2656,6 +2659,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             && !w.owed
         {
             return Ok(());
+        }
+        // a toplevel says which of its parts its pixels cover whole, with this frame: the compositor leaves out what lies
+        // under them and tells a window they cover all of that it is not seen
+        if w.popup.is_none() {
+            let opaque = crate::opaque::region(&w.display_list, w.size, &w.materials);
+            if opaque != w.opaque
+                && self
+                    .system
+                    .request(w.id, WindowRequest::SetOpaqueRegion(opaque.clone()))
+                    .is_ok()
+            {
+                w.opaque = opaque;
+            }
         }
         let scale = w.env.scale;
         let width = physical(w.size.width, scale);

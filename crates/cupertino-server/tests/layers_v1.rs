@@ -1565,3 +1565,95 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
     assert!(between > 0, "the fade ran on the server");
     assert_eq!(new_buffers, 0, "the window drew no frame while its layer faded");
 }
+
+/// The same window on the GPU (`--renderer`, `CUPERTINO_RENDERER=gpu`): the layer's frames are drawn by the toolkit's
+/// GPU renderer on the presenter's device and shown from dmabufs of the layer's own surface. Skips (or with
+/// `CUPERTINO_GPU_REQUIRED=1` fails) without a render node.
+#[test]
+fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own() {
+    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::dmabuf::get_dmabuf;
+    use std::process::Stdio;
+    let required = std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() == Ok("1");
+    let Some(mut h) = Harness::new(1.0, false) else {
+        assert!(!required, "CUPERTINO_GPU_REQUIRED=1: no EGL device");
+        return;
+    };
+    let renderer = h.state.backend.as_mut().unwrap().renderer();
+    if cupertino_server::backend::render_node(renderer).is_none() {
+        assert!(
+            !required,
+            "CUPERTINO_GPU_REQUIRED=1: the device has no render node"
+        );
+        eprintln!(
+            "SKIPPED: the device has no render node; set CUPERTINO_GPU_REQUIRED=1 to fail instead"
+        );
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let runtime = home.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let report = home.path().join("report");
+    let binary = common::fixtures::artifact("cupertino-ui-wayland", "example", "surface-layers");
+    /// The window's process, ended with the test.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut command = common::spawn::cleared(binary, home.path());
+    command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("WAYLAND_DISPLAY", h.socket_path())
+        .env("CUPERTINO_RENDERER", "gpu")
+        .args(["--renderer", "--report"])
+        .arg(&report)
+        .stdout(Stdio::null());
+    for var in [
+        "LIBGL_ALWAYS_SOFTWARE",
+        "__EGL_VENDOR_LIBRARY_FILENAMES",
+        "GALLIUM_DRIVER",
+    ] {
+        if let Some(value) = std::env::var_os(var) {
+            command.env(var, value);
+        }
+    }
+    let _window = Kill(command.spawn().expect("the window"));
+    let layer_surface = |h: &Harness| {
+        let window = h.state.windows.iter().find(|w| w.mapped)?;
+        let surface = window.toplevel.wl_surface().clone();
+        present(&surface, h.state.now(), false)
+            .first()
+            .map(|l| l.surface.clone())
+    };
+    let on_dmabuf = |surface: &ServerSurface| {
+        with_states(surface, |states| {
+            let buffer = states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .and_then(|s| s.lock().unwrap().buffer().cloned());
+            buffer.is_some_and(|b| get_dmabuf(&b).is_ok())
+        })
+    };
+    let mut from_dmabuf = 0;
+    h.wait_until("the GPU frames handed over", |h| {
+        if layer_surface(h).is_some_and(|s| on_dmabuf(&s)) {
+            from_dmabuf += 1;
+        }
+        std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
+    });
+    // the last frame handed over is shown once the server has taken it
+    h.wait_until("the layer's frame from a dmabuf", |h| {
+        layer_surface(h).is_some_and(|s| on_dmabuf(&s))
+    });
+    let r = std::fs::read_to_string(&report).unwrap();
+    eprintln!("trace: {from_dmabuf} server steps showed the layer from a dmabuf; {r}");
+    assert!(r.contains("surface_layers 1"), "{r}");
+    assert!(
+        r.contains(&format!("layer_gpu_frames {}", 8)),
+        "every GPU frame was handed over: {r}"
+    );
+}

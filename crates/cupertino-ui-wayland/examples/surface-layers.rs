@@ -3,22 +3,33 @@
 //! compositor's clock ([`FADE`]) while the window draws nothing more. Development check of the surface layers'
 //! presenter, run by the server's tests.
 //!
-//! `surface-layers --report PATH`
+//! `surface-layers --report PATH [--renderer]`
+//!
+//! With `--renderer` (and the GPU path turned on, `CUPERTINO_RENDERER=gpu`) there is no fade: once the process draws
+//! on the GPU, the layer's frame is drawn by the toolkit's GPU renderer on the presenter's device, [`GPU_FRAMES`]
+//! times, each handed over as a layer frame, which the presenter copies from the renderer's texture into the layer's
+//! own buffers.
 //!
 //! The report has one `key value` line per fact: whether the window system shows surface layers, the window's frames
-//! presented, the layer frames handed over, and `faded 1` once the fade was asked for. It is written after the fade
-//! is asked for and again when the window closes.
+//! presented, the layer frames handed over (and those the GPU renderer drew), and `faded 1` once the fade was asked
+//! for (or the GPU frames are all handed over). It is written then and again when the window closes.
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_modifiers::Profile;
+use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
 use cupertino_ui_platform::{
-    DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, SurfaceLayer,
-    SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
+    DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, RendererKind,
+    SurfaceLayer, SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
+use cupertino_ui_render::{
+    Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
+    PaintResources, PaintRevision, PixelFormat, PixelRect, RenderFrameId, RenderRequest, Shape,
+    Transform, UiRenderer,
+};
+use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
 use cupertino_ui_wayland::WaylandWindowSystem;
 
 /// The window's size in points, and its layer's rect in it.
@@ -30,6 +41,8 @@ const GREY: [u8; 4] = [128, 128, 128, 255];
 const RED: [u8; 4] = [255, 0, 0, 255];
 /// The layer's fade, in seconds, linear.
 const FADE: f64 = 0.4;
+/// The layer frames the GPU renderer draws (`--renderer`).
+const GPU_FRAMES: u32 = 8;
 /// How long the window stays after the fade is asked for.
 const LINGER: Duration = Duration::from_millis(1500);
 const LIMIT: Duration = Duration::from_secs(30);
@@ -52,7 +65,59 @@ fn frame(id: u64, width: u32, height: u32, colour: [u8; 4]) -> CpuFrame {
     }
 }
 
-fn run(report: &std::path::Path) -> Result<(), String> {
+/// The toolkit renderer's text needs no glyphs here.
+struct NoGlyphs;
+
+impl GlyphRasterizer for NoGlyphs {
+    fn rasterize(&mut self, _: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        Ok(None)
+    }
+}
+
+/// The layer's paint: red all over, in its points.
+fn red_list() -> DisplayList {
+    let whole = Rect::new(0.0, 0.0, LAYER.width(), LAYER.height());
+    DisplayList {
+        nodes: vec![PaintNode {
+            id: PaintNodeId(1),
+            parent: None,
+            revision: PaintRevision(1),
+            transform: Transform::IDENTITY,
+            clip: None,
+            group: None,
+            bounds: whole,
+            hit: whole,
+            ops: vec![PaintOp::Fill {
+                shape: Shape::Rect(whole),
+                paint: Paint::Solid(Color::from_rgba8(RED)),
+            }],
+            layer: None,
+        }],
+    }
+}
+
+/// What the run saw, as the report states it.
+#[derive(Default)]
+struct Seen {
+    frames: u32,
+    layer_frames: u32,
+    gpu_frames: u32,
+    done: bool,
+}
+
+fn write(report: &std::path::Path, layers: bool, seen: &Seen) -> Result<(), String> {
+    let text = format!(
+        "surface_layers {}\nframes {}\nlayer_frames {}\nlayer_gpu_frames {}\nfaded {}\n",
+        u8::from(layers),
+        seen.frames,
+        seen.layer_frames,
+        seen.gpu_frames,
+        u8::from(seen.done)
+    );
+    std::fs::write(report, text).map_err(|e| e.to_string())
+}
+
+fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
     let mut ws =
         WaylandWindowSystem::connect(Profile::cupertino()).map_err(|e| format!("{e:?}"))?;
     let layers = ws.capabilities().surface_layers;
@@ -68,78 +133,126 @@ fn run(report: &std::path::Path) -> Result<(), String> {
             input_region: None,
         })
         .map_err(|e| format!("{e:?}"))?;
-    let (mut scale, mut frames, mut layer_frames) = (1.0_f64, 0u32, 0u32);
-    let mut faded: Option<Instant> = None;
+    let mut scale = 1.0_f64;
+    let mut seen = Seen::default();
+    let mut finished: Option<Instant> = None;
     // the latest configure and size, drawn once both the window and its layer were shown
     let mut configure = None;
     let mut size = WINDOW;
-    let write = |frames: u32, layer_frames: u32, faded: bool| {
-        let text = format!(
-            "surface_layers {}\nframes {frames}\nlayer_frames {layer_frames}\nfaded {}\n",
-            u8::from(layers),
-            u8::from(faded)
-        );
-        std::fs::write(report, text).map_err(|e| e.to_string())
-    };
+    let mut drawing: Option<WindowRenderer<NoGlyphs>> = None;
     let start = Instant::now();
     let mut events = Vec::new();
     loop {
         if start.elapsed() > LIMIT {
             return Err("timed out".into());
         }
-        if faded.is_some_and(|t| t.elapsed() > LINGER) {
-            return write(frames, layer_frames, true);
+        if finished.is_some_and(|t| t.elapsed() > LINGER) {
+            return write(report, layers, &seen);
         }
         events.clear();
         ws.dispatch(Some(Duration::from_millis(10)), &mut events)
             .map_err(|e| format!("{e:?}"))?;
+        let mut frame_due = false;
         for event in events.drain(..) {
-            let PlatformEvent::Window { event, .. } = event else {
-                continue;
-            };
             match event {
-                WindowEvent::Scale(s) => scale = s,
-                WindowEvent::Configure(c) => {
-                    size = c.size.unwrap_or(WINDOW);
-                    configure = Some(c.id);
+                PlatformEvent::RendererChanged(RendererKind::Gpu) if on_gpu => {
+                    drawing = ws
+                        .gpu_renderers()
+                        .renderer(GpuConfig::default(), NoGlyphs);
                 }
-                WindowEvent::Frame(_) if frames > 0 && faded.is_none() => {
-                    // the first frame is shown: fade the layer out, drawing nothing
-                    if layers {
-                        ws.request(
-                            window,
-                            WindowRequest::Layer {
-                                key: LAYER_KEY,
-                                changes: vec![LayerChange {
-                                    property: LayerProperty::Opacity,
-                                    to: 0.0,
-                                    curve: Some(cupertino_ui_platform::LayerCurve::Timed {
-                                        duration: FADE,
-                                        bezier: cupertino_ui_platform::CubicBezier::new(
-                                            0.0, 0.0, 1.0, 1.0,
-                                        ),
-                                    }),
-                                    velocity: 0.0,
-                                }],
-                            },
-                        )
-                        .map_err(|e| format!("{e:?}"))?;
+                PlatformEvent::RendererChanged(RendererKind::Cpu) => drawing = None,
+                PlatformEvent::Window { event, .. } => match event {
+                    WindowEvent::Scale(s) => scale = s,
+                    WindowEvent::Configure(c) => {
+                        size = c.size.unwrap_or(WINDOW);
+                        configure = Some(c.id);
                     }
-                    faded = Some(Instant::now());
-                    write(frames, layer_frames, true)?;
-                }
-                WindowEvent::CloseRequested => return write(frames, layer_frames, faded.is_some()),
+                    WindowEvent::Frame(_) => frame_due = true,
+                    WindowEvent::CloseRequested => {
+                        seen.done = finished.is_some();
+                        return write(report, layers, &seen);
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
+        let px = |v: f64| (v * scale).round() as u32;
+        if seen.frames > 0 && finished.is_none() && frame_due {
+            if !on_gpu {
+                // the first frame is shown: fade the layer out, drawing nothing
+                if layers {
+                    ws.request(
+                        window,
+                        WindowRequest::Layer {
+                            key: LAYER_KEY,
+                            changes: vec![LayerChange {
+                                property: LayerProperty::Opacity,
+                                to: 0.0,
+                                curve: Some(cupertino_ui_platform::LayerCurve::Timed {
+                                    duration: FADE,
+                                    bezier: cupertino_ui_platform::CubicBezier::new(
+                                        0.0, 0.0, 1.0, 1.0,
+                                    ),
+                                }),
+                                velocity: 0.0,
+                            }],
+                        },
+                    )
+                    .map_err(|e| format!("{e:?}"))?;
+                }
+                finished = Some(Instant::now());
+                seen.done = true;
+                write(report, layers, &seen)?;
+                continue;
+            }
+            // on the GPU: the layer drawn by the GPU renderer, the window's frame again for the next frame callback
+            if let Some(r) = drawing.as_mut() {
+                let (w, h) = (px(LAYER.width()), px(LAYER.height()));
+                let id = r
+                    .render(&RenderRequest {
+                        list: &red_list(),
+                        resources: &PaintResources::default(),
+                        scale,
+                        width: w,
+                        height: h,
+                        damage: &DamageRegion::Full,
+                    })
+                    .map_err(|e| format!("the GPU renderer: {e:?}"))?;
+                let drawn = r.frame(id).map_err(|e| format!("its frame: {e:?}"))?;
+                let shown = ws
+                    .present_surface_layers(
+                        window,
+                        &[SurfaceLayer {
+                            key: LAYER_KEY,
+                            rect: LAYER,
+                            look: SurfaceLayerLook::default(),
+                            frame: Some(drawn),
+                        }],
+                    )
+                    .map_err(|e| format!("{e:?}"))?;
+                if shown == PresentOutcome::Presented && drawn.device.is_some() {
+                    seen.gpu_frames += 1;
+                }
+                if seen.gpu_frames >= GPU_FRAMES {
+                    finished = Some(Instant::now());
+                    seen.done = true;
+                    write(report, layers, &seen)?;
+                }
+            }
+            let content = frame(3, px(size.width), px(size.height), GREY);
+            ws.present(window, &content, None)
+                .map_err(|e| format!("{e:?}"))?;
+            ws.request_frame(window);
+            continue;
+        }
         // drawn until the window's frame and the layer's are both shown, at the window's latest scale
-        let Some(id) = configure.filter(|_| frames == 0) else {
+        let Some(id) = configure.filter(|_| seen.frames == 0) else {
             continue;
         };
-        let px = |v: f64| (v * scale).round() as u32;
         let content = frame(1, px(size.width), px(size.height), GREY);
         let red = frame(2, px(LAYER.width()), px(LAYER.height()), RED);
-        if layers && layer_frames == 0 {
+        if layers && seen.layer_frames == 0 {
             let shown = ws
                 .present_surface_layers(
                     window,
@@ -154,13 +267,13 @@ fn run(report: &std::path::Path) -> Result<(), String> {
             if shown != PresentOutcome::Presented {
                 continue;
             }
-            layer_frames += 1;
+            seen.layer_frames += 1;
         }
         let shown = ws
             .present(window, &content, Some(id))
             .map_err(|e| format!("{e:?}"))?;
         if shown == PresentOutcome::Presented {
-            frames += 1;
+            seen.frames += 1;
             ws.request_frame(window);
         }
     }
@@ -168,14 +281,19 @@ fn run(report: &std::path::Path) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    let report = match (args.next().as_deref(), args.next()) {
-        (Some("--report"), Some(path)) => std::path::PathBuf::from(path),
-        _ => {
-            eprintln!("usage: surface-layers --report PATH");
-            return ExitCode::from(2);
+    let (mut report, mut on_gpu) = (None, false);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--report" => report = args.next().map(std::path::PathBuf::from),
+            "--renderer" => on_gpu = true,
+            _ => report = None,
         }
+    }
+    let Some(report) = report else {
+        eprintln!("usage: surface-layers --report PATH [--renderer]");
+        return ExitCode::from(2);
     };
-    match run(&report) {
+    match run(&report, on_gpu) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("surface-layers: {e}");

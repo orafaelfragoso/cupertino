@@ -1,11 +1,13 @@
 //! The GPU path of a process: deciding its renderer by the fallback rule ([`crate::renderer`]), making the device and
 //! its programs on a worker thread while the first frames are drawn on the CPU, switching to the GPU once they are
-//! ready, the GPU buffers of each surface, falling back per surface to shared memory when a buffer cannot be made or
+//! ready (the windows' renderers then draw on the same device, [`GpuRenderers`]), the GPU buffers of each surface, falling back per surface to shared memory when a buffer cannot be made or
 //! imported, and recovering from a lost context (three resets within a minute leave the process on the CPU; purges
 //! never count).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -14,8 +16,10 @@ use cupertino_gpu::{
     program_cache, DetachedDevice, Device, DeviceDesc, Loss, Platform, ProgramCacheStats,
     FOURCC_ARGB8888,
 };
+use cupertino_ui_gpu::{GpuConfig, GpuPrograms, GpuRenderer, WindowRenderer};
 use cupertino_ui_platform::PlatformEvent;
 use cupertino_ui_render::CpuFrame;
+use cupertino_ui_text::GlyphRasterizer;
 use cupertino_wayland_client::{Connection, PixelRect, SurfaceId};
 
 use crate::gpu_present::{GpuDevice, GpuSurface, PresentError, Programs, SurfaceStats};
@@ -108,6 +112,40 @@ fn libc_minor(dev: u64) -> u64 {
     ((dev >> 12) & 0xffff_ff00) | (dev & 0x0000_00ff)
 }
 
+/// What makes the windows' renderers on the process's GPU: its device and the renderers' programs while the process
+/// draws on the GPU, nothing otherwise. A renderer factory holds a clone and asks it for a renderer each time it makes
+/// one, so the renderers made after a switch ([`PlatformEvent::RendererChanged`]) draw on the device the frames are
+/// presented from.
+#[derive(Clone, Default)]
+pub struct GpuRenderers(Rc<RefCell<Option<OnDevice>>>);
+
+/// The process's device and the renderers' programs on it.
+type OnDevice = (Rc<Device>, Rc<GpuPrograms>);
+
+impl GpuRenderers {
+    /// A window's renderer on the process's GPU, or `None` while the process draws on the CPU.
+    pub fn renderer<R: GlyphRasterizer>(
+        &self,
+        config: GpuConfig,
+        rasterizer: R,
+    ) -> Option<WindowRenderer<R>> {
+        let (device, programs) = self.0.borrow().clone()?;
+        device.status().ok()?;
+        Some(WindowRenderer::new(GpuRenderer::with_programs(
+            device, programs, config, rasterizer,
+        )))
+    }
+
+    /// Whether renderers are made on the GPU now.
+    pub fn on(&self) -> bool {
+        self.0.borrow().is_some()
+    }
+
+    fn set(&self, on: Option<OnDevice>) {
+        *self.0.borrow_mut() = on;
+    }
+}
+
 enum State {
     /// The process draws on the CPU.
     Cpu,
@@ -152,6 +190,7 @@ pub struct GpuPath {
     pub warmed: Option<(WarmTiming, Duration)>,
     /// Events for the runtime: a change of renderer.
     events: Vec<PlatformEvent>,
+    renderers: GpuRenderers,
 }
 
 impl GpuPath {
@@ -172,6 +211,7 @@ impl GpuPath {
             cache: program_cache::default_dir(),
             warmed: None,
             events: Vec::new(),
+            renderers: GpuRenderers::default(),
         };
         let wants_device = match requested {
             Requested::Cpu => false,
@@ -226,6 +266,11 @@ impl GpuPath {
             }
             Err(e) => self.settle(Err(format!("no warm-up thread: {e}"))),
         }
+    }
+
+    /// What makes the windows' renderers on the process's GPU.
+    pub fn renderers(&self) -> GpuRenderers {
+        self.renderers.clone()
     }
 
     /// Whether the process draws on the GPU now.
@@ -286,6 +331,8 @@ impl GpuPath {
                         if gpu.explicit() { "with" } else { "without" },
                     );
                     self.warmed = Some((timing, switched_after));
+                    self.renderers
+                        .set(Some((Rc::clone(&gpu.device), Rc::clone(&gpu.ui))));
                     self.state = State::On(Box::new(gpu));
                     renderer::set_active(Choice { kind, reason });
                     self.events
@@ -362,6 +409,8 @@ impl GpuPath {
         let State::On(gpu) = std::mem::replace(&mut self.state, State::Cpu) else {
             return;
         };
+        // renderers made from now on draw on the CPU; those on the lost device go with the switch back
+        self.renderers.set(None);
         for (_, kind) in self.surfaces.drain() {
             if let SurfaceKind::Gpu(mut s) = kind {
                 // the textures went with the context; the protocol objects are destroyed
@@ -469,6 +518,22 @@ impl GpuPath {
         }
     }
 }
+
+impl Drop for GpuPath {
+    /// A process that ends while its device is still being made waits for the warm-up thread (a little while at most):
+    /// the driver must not be torn down under a thread still compiling in it.
+    fn drop(&mut self) {
+        if let State::Warming { rx, .. } = &self.state {
+            if let Ok(Ok(warm)) = rx.recv_timeout(WARM_UP_WAIT_AT_EXIT) {
+                // the context is made current here to be destroyed
+                drop(warm.device.attach());
+            }
+        }
+    }
+}
+
+/// The longest a process ending during its warm-up waits for the warm-up thread.
+const WARM_UP_WAIT_AT_EXIT: Duration = Duration::from_secs(5);
 
 #[cfg(test)]
 mod tests {

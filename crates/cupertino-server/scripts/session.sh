@@ -27,6 +27,8 @@
 # say); without it the run has the defaults.
 # CUPERTINO_FRAME_TIMING: a file every toolkit process of the session appends the phases of its frames to
 # (`scripts/dev/bench` reads it); without it no process times its frames.
+# CUPERTINO_RENDERER: the toolkit renderer every process of the session asks for (`gpu` or `cpu`); without it each takes
+# its default.
 # Needs: dbus-run-session, python3.
 set -eu
 
@@ -155,6 +157,7 @@ env -i \
     ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
     ${CUPERTINO_ACCESSIBILITY_CONF:+CUPERTINO_ACCESSIBILITY_CONF="$CUPERTINO_ACCESSIBILITY_CONF"} \
     ${CUPERTINO_FRAME_TIMING:+CUPERTINO_FRAME_TIMING="$CUPERTINO_FRAME_TIMING"} \
+    ${CUPERTINO_RENDERER:+CUPERTINO_RENDERER="$CUPERTINO_RENDERER"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --dev-shell "$@"

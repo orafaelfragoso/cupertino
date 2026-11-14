@@ -35,7 +35,7 @@ use cupertino_wayland_client::{
 use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
-use crate::gpu_path::{GpuPath, Presented};
+use crate::gpu_path::{GpuPath, GpuRenderers, Presented};
 use crate::pixels::{convert_rects, rgba_to_argb8888};
 use crate::roles::{RoleEvent, SurfaceRoles};
 
@@ -518,6 +518,12 @@ impl WaylandWindowSystem {
     /// without the desktop's effects.
     pub fn appearance(&self) -> Option<SystemAppearance> {
         self.effects.as_ref().map(|_| self.appearance)
+    }
+
+    /// What makes the windows' renderers on the process's GPU once it draws there: a renderer factory holds it
+    /// (`cupertino-kit`'s does).
+    pub fn gpu_renderers(&self) -> GpuRenderers {
+        self.gpu.renderers()
     }
 
     /// The transport, for an extension protocol such as the desktop's effects.
@@ -1983,6 +1989,12 @@ fn copy_and_present(
     resized: bool,
     copy_time: Option<&mut Duration>,
 ) -> Result<Result<(), Option<Stall>>, PlatformError> {
+    // a frame drawn on a GPU is read back; one that cannot be (its device lost) is not shown, and the frames after
+    // the switch back to the CPU replace it
+    let Ok(frame) = frame.in_memory() else {
+        return Ok(Err(None));
+    };
+    let frame = &*frame;
     let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
         Ok(lease) => lease,
         Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),

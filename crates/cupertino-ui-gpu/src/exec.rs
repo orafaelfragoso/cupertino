@@ -31,10 +31,11 @@ impl<R> GpuRenderer<R> {
         self.stats.uniform_bytes += rec.uniforms.len() as u64;
         self.stats.instance_bytes += instance_bytes.len() as u64;
         let cmds = std::mem::take(&mut rec.cmds);
-        let programs = self
+        let programs = &self
             .programs
             .as_ref()
-            .expect("programs live as long as the renderer");
+            .expect("programs live as long as the renderer")
+            .inner;
         let uniforms = self.uniforms.as_ref();
         let instances = self.instances.as_ref();
         let mut pass: Option<(TargetId, Pass<'_>)> = None;
@@ -46,7 +47,11 @@ impl<R> GpuRenderer<R> {
                         p.end();
                     }
                     rec.started[target.0] = true;
-                    let texture = target_texture(self.window.as_ref(), rec, *target);
+                    let texture = target_texture(
+                        self.window.as_deref().map(crate::WindowTexture::texture),
+                        rec,
+                        *target,
+                    );
                     pass = Some((
                         *target,
                         device.begin_pass(texture, LoadOp::Clear([0.0; 4]))?,
@@ -74,7 +79,11 @@ impl<R> GpuRenderer<R> {
                 } else {
                     LoadOp::Load
                 };
-                let texture = target_texture(self.window.as_ref(), rec, target);
+                let texture = target_texture(
+                    self.window.as_deref().map(crate::WindowTexture::texture),
+                    rec,
+                    target,
+                );
                 pass = Some((target, device.begin_pass(texture, load)?));
                 passes += 1;
             }
@@ -181,7 +190,11 @@ impl<R> GpuRenderer<R> {
             Tex::Color(page) => self.color.page(page).unwrap_or(&programs.empty),
             Tex::Mask(page) => self.masks.page(page).unwrap_or(&programs.empty),
             Tex::Image(id) => self.images.get(&id).map_or(&programs.empty, |i| &i.texture),
-            Tex::Target(t) => target_texture(self.window.as_ref(), rec, t),
+            Tex::Target(t) => target_texture(
+                self.window.as_deref().map(crate::WindowTexture::texture),
+                rec,
+                t,
+            ),
             Tex::Own(i) => &rec.own[i],
         }
     }

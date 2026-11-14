@@ -2,9 +2,12 @@
 //! and programs warm up on a worker thread, then every frame is uploaded into dmabufs and committed with syncobj points
 //! (or after the own fence without the protocol). Development check of the presenter, run by the server's tests.
 //!
-//! `gpu-window --report PATH [--frames N] [--size WxH] [--reset-every N] [--purge-every N] [--losses N]`
+//! `gpu-window --report PATH [--frames N] [--size WxH] [--reset-every N] [--purge-every N] [--losses N] [--renderer]`
 //!
 //! - `--frames N`: frames to present in all (default 120).
+//! - `--renderer`: once on the GPU, frames are drawn by the toolkit's GPU renderer on the presenter's device (the
+//!   window filled with the GPU colour, a mark of [`MARK_SIZE`] points at [`MARK_AT`] in the mark colour) and copied
+//!   from its texture into the buffers, nothing uploaded.
 //! - `--reset-every N` / `--purge-every N`: after N frames on a device, its next status check reads a reset (or a
 //!   purge), `--losses` times in all (default 1).
 //!
@@ -17,9 +20,16 @@ use std::collections::BTreeSet;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use cupertino_geometry::Rect;
 use cupertino_gpu::Loss;
+use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
 use cupertino_ui_platform::{PlatformEvent, RendererKind};
-use cupertino_ui_render::{CpuFrame, PixelFormat, RenderFrameId};
+use cupertino_ui_render::{
+    Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
+    PaintResources, PaintRevision, PixelFormat, RenderFrameId, RenderRequest, Shape, Transform,
+    UiRenderer,
+};
+use cupertino_ui_text::{GlyphKey, GlyphRasterizer, RasterGlyph, TextError};
 use cupertino_ui_wayland::gpu_path::{GpuPath, Presented};
 use cupertino_ui_wayland::gpu_present::{buffer_count, SurfaceStats};
 use cupertino_ui_wayland::renderer::{self, Requested};
@@ -30,6 +40,11 @@ use cupertino_wayland_client::{
 /// The colour of a frame presented from a GPU buffer, and of one in shared memory, as 8-bit RGBA.
 const GPU_COLOUR: [u8; 4] = [51, 115, 217, 255];
 const SHM_COLOUR: [u8; 4] = [64, 179, 89, 255];
+/// The colour of the mark the GPU renderer draws (`--renderer`), its place and size in points from the window's first
+/// pixel.
+const MARK_COLOUR: [u8; 4] = [230, 64, 26, 255];
+const MARK_AT: (f64, f64) = (16.0, 24.0);
+const MARK_SIZE: (f64, f64) = (40.0, 20.0);
 /// The longest the check runs before it gives up.
 const LIMIT: Duration = Duration::from_secs(60);
 
@@ -40,6 +55,7 @@ struct Args {
     reset_every: Option<u64>,
     purge_every: Option<u64>,
     losses: u64,
+    renderer: bool,
 }
 
 fn parse() -> Result<Args, String> {
@@ -50,6 +66,7 @@ fn parse() -> Result<Args, String> {
         reset_every: None,
         purge_every: None,
         losses: 1,
+        renderer: false,
     };
     let mut it = std::env::args().skip(1);
     let number = |v: Option<String>| -> Result<u64, String> {
@@ -71,6 +88,7 @@ fn parse() -> Result<Args, String> {
             "--reset-every" => args.reset_every = Some(number(it.next())?),
             "--purge-every" => args.purge_every = Some(number(it.next())?),
             "--losses" => args.losses = number(it.next())?,
+            "--renderer" => args.renderer = true,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -114,6 +132,8 @@ struct Seen {
     shm_with_syncobj: u64,
     fell_back: bool,
     warm: Vec<String>,
+    /// Frames the GPU renderer drew.
+    drawn: u64,
 }
 
 fn add(a: &mut SurfaceStats, b: SurfaceStats) {
@@ -121,6 +141,7 @@ fn add(a: &mut SurfaceStats, b: SurfaceStats) {
     a.allocations += b.allocations;
     a.release_waits += b.release_waits;
     a.fence_waits += b.fence_waits;
+    a.from_texture += b.from_texture;
     if b.modifier != 0 || a.modifier == 0 {
         a.modifier = b.modifier;
     }
@@ -144,6 +165,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut pending = false;
     let mut on_device = 0u64;
     let mut injected = 0u64;
+    let renderers = gpu.renderers();
+    let mut drawing: Option<WindowRenderer<NoGlyphs>> = None;
+    let mut drawn = 0u64;
     while seen.gpu_frames + seen.shm_frames < args.frames {
         if started.elapsed() > LIMIT {
             return Err("the check ran out of time".into());
@@ -167,6 +191,10 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 PlatformEvent::RendererChanged(RendererKind::Gpu) => {
                     seen.to_gpu += 1;
                     on_device = 0;
+                    drawing = args
+                        .renderer
+                        .then(|| renderers.renderer(GpuConfig::default(), NoGlyphs))
+                        .flatten();
                     if let Some((timing, after)) = &gpu.warmed {
                         seen.warm.push(format!(
                             "{} {} {} {} {} {}",
@@ -179,7 +207,10 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                 }
-                PlatformEvent::RendererChanged(RendererKind::Cpu) => seen.to_cpu += 1,
+                PlatformEvent::RendererChanged(RendererKind::Cpu) => {
+                    seen.to_cpu += 1;
+                    drawing = None;
+                }
                 _ => {}
             }
         }
@@ -211,7 +242,28 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             Err(Error::NotConfigured) => continue,
             Err(e) => return Err(e.into()),
         };
-        let cpu = solid(pixels, GPU_COLOUR);
+        let drawn_frame;
+        let cpu = match drawing.as_mut() {
+            Some(r) => {
+                let id = r
+                    .render(&RenderRequest {
+                        list: &marked(pixels),
+                        resources: &PaintResources::default(),
+                        scale: 1.0,
+                        width: pixels.0,
+                        height: pixels.1,
+                        damage: &DamageRegion::Full,
+                    })
+                    .map_err(|e| format!("the GPU renderer: {e:?}"))?;
+                drawn += 1;
+                drawn_frame = r
+                    .frame(id)
+                    .map_err(|e| format!("its frame: {e:?}"))?
+                    .clone();
+                drawn_frame
+            }
+            None => solid(pixels, GPU_COLOUR),
+        };
         let damage = [PixelRect {
             x: 0,
             y: 0,
@@ -267,8 +319,42 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    seen.drawn = drawn;
     report(args, &conn, &gpu, &mut seen);
     Ok(())
+}
+
+/// The toolkit renderer's text needs no glyphs here.
+struct NoGlyphs;
+
+impl GlyphRasterizer for NoGlyphs {
+    fn rasterize(&mut self, _: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        Ok(None)
+    }
+}
+
+/// The window filled with the GPU colour and the mark over it, as the GPU renderer draws it.
+fn marked(size: (u32, u32)) -> DisplayList {
+    let fill = |id, rect, rgba| PaintNode {
+        id: PaintNodeId(id),
+        parent: None,
+        revision: PaintRevision(1),
+        transform: Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        clip: None,
+        group: None,
+        bounds: rect,
+        hit: rect,
+        ops: vec![PaintOp::Fill {
+            shape: Shape::Rect(rect),
+            paint: Paint::Solid(Color::from_rgba8(rgba)),
+        }],
+        layer: None,
+    };
+    let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+    let mark = Rect::new(MARK_AT.0, MARK_AT.1, MARK_SIZE.0, MARK_SIZE.1);
+    DisplayList {
+        nodes: vec![fill(1, whole, GPU_COLOUR), fill(2, mark, MARK_COLOUR)],
+    }
 }
 
 /// A frame of one colour, as the CPU renderer hands frames over.
@@ -281,6 +367,7 @@ fn solid(size: (u32, u32), rgba: [u8; 4]) -> CpuFrame {
         format: PixelFormat::Rgba8Premultiplied,
         pixels: rgba.repeat((size.0 * size.1) as usize),
         damage: Vec::new(),
+        device: None,
     }
 }
 
@@ -332,6 +419,8 @@ fn report(args: &Args, conn: &Connection, gpu: &GpuPath, seen: &mut Seen) {
         ("allocations", stats.allocations.to_string()),
         ("release_waits", stats.release_waits.to_string()),
         ("fence_waits", stats.fence_waits.to_string()),
+        ("renderer_frames", seen.drawn.to_string()),
+        ("from_texture", stats.from_texture.to_string()),
         ("modifier", format!("0x{:016x}", stats.modifier)),
         ("sizes", seen.sizes.len().to_string()),
         ("syncobj_surfaces_created", made.to_string()),

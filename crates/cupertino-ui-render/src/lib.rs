@@ -314,7 +314,10 @@ pub struct PixelRect {
     pub height: u32,
 }
 
-/// A frame of the CPU renderer: its whole canonical image and the pixels this frame changed.
+/// A frame a window presents: its whole canonical image and the pixels this frame changed. The CPU renderer's frames
+/// hold their pixels in memory; a frame drawn on a GPU keeps them on its device (`device`) and leaves `pixels`
+/// empty, for a presenter on that device to draw from. [`CpuFrame::in_memory`] reads such a frame back where pixels
+/// in memory are needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpuFrame {
     pub id: RenderFrameId,
@@ -325,7 +328,61 @@ pub struct CpuFrame {
     pub format: PixelFormat,
     pub pixels: Vec<u8>,
     pub damage: Vec<PixelRect>,
+    /// The image on a GPU device, for a frame whose pixels stay there.
+    pub device: Option<DeviceFrameRef>,
 }
+
+impl CpuFrame {
+    /// The frame with its pixels in memory: itself, or a copy whose pixels were read back from its device.
+    pub fn in_memory(&self) -> Result<std::borrow::Cow<'_, CpuFrame>, RenderError> {
+        match &self.device {
+            Some(on) if self.pixels.is_empty() => {
+                let pixels = on.0.read_pixels()?;
+                if pixels.len() != self.width as usize * self.height as usize * 4 {
+                    return Err(RenderError::InvalidSize);
+                }
+                Ok(std::borrow::Cow::Owned(CpuFrame {
+                    id: self.id,
+                    width: self.width,
+                    height: self.height,
+                    stride: self.width * 4,
+                    format: self.format,
+                    pixels,
+                    damage: self.damage.clone(),
+                    device: None,
+                }))
+            }
+            _ => Ok(std::borrow::Cow::Borrowed(self)),
+        }
+    }
+}
+
+/// An image kept on a GPU device: what a presenter on the same device draws from, read back where it must be in memory.
+pub trait DeviceFrame {
+    /// The image as its own type, for a presenter that knows it.
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// Its pixels, premultiplied RGBA, rows first to last, without padding.
+    fn read_pixels(&self) -> Result<Vec<u8>, RenderError>;
+}
+
+/// A frame's image on a device, shared with the renderer that keeps drawing into it. Two are equal when they are the
+/// same image.
+#[derive(Clone)]
+pub struct DeviceFrameRef(pub std::rc::Rc<dyn DeviceFrame>);
+
+impl std::fmt::Debug for DeviceFrameRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DeviceFrameRef")
+    }
+}
+
+impl PartialEq for DeviceFrameRef {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for DeviceFrameRef {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderError {
@@ -394,4 +451,59 @@ pub trait UiRenderer {
     /// Lets go of the layers kept between frames ([`Layer`]), keeping the frame: the window is not seen. The next
     /// frame paints what it shows of them whole. A renderer that keeps none does nothing.
     fn drop_layers(&mut self) {}
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    /// An image on a pretend device: two pixels.
+    struct OnDevice;
+
+    impl DeviceFrame for OnDevice {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn read_pixels(&self) -> Result<Vec<u8>, RenderError> {
+            Ok(vec![1, 2, 3, 4, 5, 6, 7, 8])
+        }
+    }
+
+    fn frame(pixels: Vec<u8>, device: Option<DeviceFrameRef>) -> CpuFrame {
+        CpuFrame {
+            id: RenderFrameId(3),
+            width: 2,
+            height: 1,
+            stride: 8,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels,
+            damage: vec![PixelRect {
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+            }],
+            device,
+        }
+    }
+
+    #[test]
+    fn a_frame_on_a_device_is_read_back_and_one_in_memory_is_itself() {
+        let on = frame(Vec::new(), Some(DeviceFrameRef(std::rc::Rc::new(OnDevice))));
+        let read = on.in_memory().unwrap();
+        assert!(matches!(read, std::borrow::Cow::Owned(_)));
+        assert_eq!(read.pixels, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            (read.stride, read.damage.clone(), read.device.clone()),
+            (8, on.damage.clone(), None)
+        );
+        let kept = frame(vec![9; 8], None);
+        assert!(matches!(
+            kept.in_memory().unwrap(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // a frame is equal to a clone of itself, image and all
+        assert_eq!(on.clone(), on);
+    }
 }

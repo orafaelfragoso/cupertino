@@ -32,7 +32,10 @@ checkout and was run on the commit this page was written against.
   pack). The kit falls back to its built-in Inter font. Headless captures of the controls sheet need a pack
   (`ci/capture.sh` says so in its header).
 - No GPU. The kit rasterizes each window on the CPU (`cupertino-ui-render`), repainting only what changed and keeping
-  scrolled content as an image it moves, and hands it to the compositor in shared memory (`wl_shm`). Rendering on the GPU, with the CPU kept as the fallback, is planned
+  scrolled content as an image it moves, and hands it to the compositor in shared memory (`wl_shm`). Started with
+  `CUPERTINO_RENDERER=gpu`, a process draws its first frames that way while its device warms up, then draws every
+  window with the GPU renderer (`cupertino-ui-gpu`) on the device the compositor names and hands it over as a dmabuf;
+  that is off by default until the GPU path is turned on, with the CPU kept as the fallback
   ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 

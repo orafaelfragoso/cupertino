@@ -61,6 +61,7 @@ impl Default for Blank {
                 format: PixelFormat::Rgba8Premultiplied,
                 pixels: Vec::new(),
                 damage: Vec::new(),
+                device: None,
             },
         }
     }

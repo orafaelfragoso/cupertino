@@ -38,8 +38,8 @@ use cupertino_gpu::{
     TextureFormat, TextureUsage, Topology, VertexAttribute, VertexFormat, VertexLayout,
 };
 use cupertino_ui_render::{
-    damage_rects, DamageRegion, PixelRect, RenderError, RenderFrameId, RenderRequest, ResourceId,
-    UiRenderer,
+    damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, PixelFormat, PixelRect,
+    RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
 };
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer};
 
@@ -236,8 +236,8 @@ pub struct GpuRenderer<R> {
     device: Rc<Device>,
     rasterizer: R,
     config: GpuConfig,
-    programs: Option<Programs>,
-    window: Option<Texture>,
+    programs: Option<Rc<GpuPrograms>>,
+    window: Option<Rc<WindowTexture>>,
     size: (u32, u32),
     scale: f64,
     /// The window texture holds the last frame's complete contents.
@@ -266,6 +266,72 @@ fn gpu(e: GpuError) -> RenderError {
     }
 }
 
+/// The programs a renderer draws with, which every renderer on one device can share: made once (on any thread the
+/// device is current on), then handed to [`GpuRenderer::with_programs`].
+pub struct GpuPrograms {
+    inner: Programs,
+}
+
+impl GpuPrograms {
+    /// The programs on `device`, compiled or loaded from its saved programs.
+    pub fn new(device: &Device) -> Result<GpuPrograms, GpuError> {
+        Programs::new(device).map(|inner| GpuPrograms { inner })
+    }
+
+    /// Frees the programs on `device`, which they were made on.
+    pub fn destroy(self, device: &Device) {
+        self.inner.destroy(device);
+    }
+}
+
+/// The window-sized texture a renderer draws its frames into, shared with the frames it hands out
+/// ([`WindowRenderer`]): a presenter on the same device draws from it, anything else reads it back. It goes with the
+/// last of them; the renderer draws its next frame into it again, so a frame kept after the next one is drawn shows
+/// that one.
+pub struct WindowTexture {
+    device: Rc<Device>,
+    texture: Option<Texture>,
+    size: (u32, u32),
+}
+
+impl WindowTexture {
+    /// The texture: premultiplied RGBA, first row first.
+    pub fn texture(&self) -> &Texture {
+        self.texture.as_ref().expect("held until dropped")
+    }
+
+    /// The device the texture is on.
+    pub fn device(&self) -> &Rc<Device> {
+        &self.device
+    }
+
+    /// Its size in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+}
+
+impl DeviceFrame for WindowTexture {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn read_pixels(&self) -> Result<Vec<u8>, RenderError> {
+        let (w, h) = self.size;
+        self.device
+            .read_bytes(self.texture(), Region::new(0, 0, w, h))
+            .map_err(gpu)
+    }
+}
+
+impl Drop for WindowTexture {
+    fn drop(&mut self) {
+        if let Some(t) = self.texture.take() {
+            self.device.destroy_texture(t);
+        }
+    }
+}
+
 impl<R: GlyphRasterizer> GpuRenderer<R> {
     /// A renderer on `device` (current on this thread), its programs made now.
     pub fn new(
@@ -273,8 +339,18 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
         config: GpuConfig,
         rasterizer: R,
     ) -> Result<GpuRenderer<R>, GpuError> {
-        let programs = Programs::new(&device)?;
-        Ok(GpuRenderer {
+        let programs = Rc::new(GpuPrograms::new(&device)?);
+        Ok(Self::with_programs(device, programs, config, rasterizer))
+    }
+
+    /// A renderer on `device` (current on this thread) drawing with `programs`, made on the same device.
+    pub fn with_programs(
+        device: Rc<Device>,
+        programs: Rc<GpuPrograms>,
+        config: GpuConfig,
+        rasterizer: R,
+    ) -> GpuRenderer<R> {
+        GpuRenderer {
             device,
             rasterizer,
             config,
@@ -300,7 +376,7 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
                 damage: Vec::new(),
             },
             stats: GpuStats::default(),
-        })
+        }
     }
 
     /// The device the renderer draws on.
@@ -315,7 +391,15 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
 
     /// The texture holding the latest frame (premultiplied RGBA, the frame's size), once a frame was drawn.
     pub fn texture(&self) -> Option<&Texture> {
-        self.window.as_ref().filter(|_| self.valid)
+        self.window
+            .as_deref()
+            .filter(|_| self.valid)
+            .map(WindowTexture::texture)
+    }
+
+    /// The texture holding the latest frame, to share with its frames, once a frame was drawn.
+    pub fn window_texture(&self) -> Option<Rc<WindowTexture>> {
+        self.window.clone().filter(|_| self.valid)
     }
 
     /// The latest frame's pixels, premultiplied RGBA rows first to last.
@@ -356,18 +440,21 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
         let resized = size != self.size || request.scale != self.scale || !self.valid;
         self.valid = false;
         if size != self.size || self.window.is_none() {
-            if let Some(old) = self.window.take() {
-                self.device.destroy_texture(old);
-            }
-            self.window = Some(
-                self.device
-                    .create_texture(&TextureDesc {
-                        size,
-                        format: TextureFormat::Rgba8,
-                        usage: TextureUsage::TARGET,
-                    })
-                    .map_err(gpu)?,
-            );
+            // the old texture goes with the last frame that shows it
+            self.window = None;
+            let texture = self
+                .device
+                .create_texture(&TextureDesc {
+                    size,
+                    format: TextureFormat::Rgba8,
+                    usage: TextureUsage::TARGET,
+                })
+                .map_err(gpu)?;
+            self.window = Some(Rc::new(WindowTexture {
+                device: Rc::clone(&self.device),
+                texture: Some(texture),
+                size,
+            }));
             self.size = size;
         }
         self.scale = request.scale;
@@ -399,12 +486,11 @@ pub(crate) fn upload(
 impl<R> Drop for GpuRenderer<R> {
     fn drop(&mut self) {
         let device = Rc::clone(&self.device);
-        if let Some(p) = self.programs.take() {
+        // the last renderer of shared programs frees them
+        if let Some(p) = self.programs.take().and_then(Rc::into_inner) {
             p.destroy(&device);
         }
-        if let Some(w) = self.window.take() {
-            device.destroy_texture(w);
-        }
+        self.window = None;
         self.coverage.clear(&device);
         self.color.clear(&device);
         self.masks.clear(&device);
@@ -498,5 +584,62 @@ impl<R> GpuRenderer<R> {
             total -= bytes(&image);
             self.device.destroy_texture(image.texture);
         }
+    }
+}
+
+/// A [`GpuRenderer`] as a window's renderer: its frames are [`CpuFrame`]s whose image stays on the device
+/// ([`CpuFrame::device`] holds the [`WindowTexture`]) and whose `pixels` are empty. A presenter on the same device
+/// draws from the texture; anything else reads it back ([`CpuFrame::in_memory`]).
+pub struct WindowRenderer<R> {
+    inner: GpuRenderer<R>,
+    frame: Option<CpuFrame>,
+}
+
+impl<R> WindowRenderer<R> {
+    pub fn new(inner: GpuRenderer<R>) -> WindowRenderer<R> {
+        WindowRenderer { inner, frame: None }
+    }
+
+    /// The renderer that draws the frames.
+    pub fn renderer(&self) -> &GpuRenderer<R> {
+        &self.inner
+    }
+}
+
+impl<R: GlyphRasterizer> UiRenderer for WindowRenderer<R> {
+    type Frame = CpuFrame;
+
+    fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        // the last frame lets go of its texture first, so a resize frees it before the next is made
+        self.frame = None;
+        let id = self.inner.render(request)?;
+        let damage = self.inner.frame(id)?.damage.clone();
+        let window = self
+            .inner
+            .window_texture()
+            .ok_or(RenderError::UnknownFrame(id))?;
+        let (width, height) = window.size();
+        self.frame = Some(CpuFrame {
+            id,
+            width,
+            height,
+            stride: width * 4,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: Vec::new(),
+            damage,
+            device: Some(DeviceFrameRef(window)),
+        });
+        Ok(id)
+    }
+
+    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        self.frame
+            .as_ref()
+            .filter(|f| f.id == id)
+            .ok_or(RenderError::UnknownFrame(id))
+    }
+
+    fn drop_layers(&mut self) {
+        self.inner.trim();
     }
 }

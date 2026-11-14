@@ -88,6 +88,11 @@ program!(
     "blit"
 );
 program!(
+    /// A texture copied over the target texel for texel, unscaled from its first pixel.
+    BLIT_TEXELS,
+    "blit_texels"
+);
+program!(
     /// One 2x box halving of the blur pyramid.
     BLUR_HALVE,
     "blur_halve"
@@ -142,6 +147,7 @@ program!(
 pub const ALL: &[ShaderSource] = &[
     SHAPE,
     BLIT,
+    BLIT_TEXELS,
     BLUR_HALVE,
     BLUR_GAUSS,
     DITHER_FILL,

@@ -8,10 +8,13 @@
 //! once a frame. A buffer uses only a modifier the compositor offers and the driver renders to; linear is never added
 //! on a hardware driver ([`usable_modifiers`]).
 //!
-//! The drawing itself is the frame's pixels uploaded into a texture of the buffer's size and drawn over the buffer;
-//! only what the frame changed is uploaded.
+//! The drawing itself: a frame drawn on the same device ([`cupertino_ui_gpu::WindowRenderer`]) is copied from its
+//! texture into the buffer, texel for texel from the first pixel (the buffer may be larger by the size step), and
+//! nothing is uploaded. A frame of the CPU renderer has its pixels uploaded into a texture of the buffer's size, only
+//! what the frame changed, and drawn over the buffer; a frame drawn on another device is read back first.
 
 use std::os::fd::{AsFd, OwnedFd};
+use std::rc::Rc;
 use std::time::Duration;
 
 use cupertino_gpu::syncobj::{self, SyncNode, Timeline};
@@ -21,6 +24,7 @@ use cupertino_gpu::{
     Loss, Pipeline, PipelineDesc, Region, Sampler, SamplerDesc, Texture, TextureDesc,
     TextureFormat, TextureUsage, Topology, FOURCC_ARGB8888, MODIFIER_INVALID, MODIFIER_LINEAR,
 };
+use cupertino_ui_gpu::{GpuPrograms, WindowTexture};
 use cupertino_ui_render::CpuFrame;
 use cupertino_wayland_client::{
     Connection, DmabufAttributes, DmabufPlaneRef, Error as WlError, GpuBufferId, GpuFrame,
@@ -131,9 +135,9 @@ fn gpu_error(e: GpuError) -> PresentError {
     }
 }
 
-/// The process's GPU device and what every surface draws with.
+/// The process's GPU device and what every surface draws with. The device is shared with the windows' renderers.
 pub struct GpuDevice {
-    pub device: Device,
+    pub device: Rc<Device>,
     /// The render node's syncobj requests, when explicit sync is used.
     sync: Option<SyncNode>,
     /// The modifiers buffers may use.
@@ -141,13 +145,22 @@ pub struct GpuDevice {
     blit: Pipeline,
     layout: BindGroupLayout,
     sampler: Sampler,
+    texels: Pipeline,
+    texels_layout: BindGroupLayout,
+    /// The windows' renderers' programs.
+    pub ui: Rc<GpuPrograms>,
 }
 
-/// The blit program and what it binds, made when the device is (on the warm-up thread).
+/// The programs a surface draws with and those of the windows' renderers, made when the device is (on the warm-up
+/// thread).
 pub struct Programs {
     pub blit: Pipeline,
     pub layout: BindGroupLayout,
     pub sampler: Sampler,
+    /// A renderer's texture copied into a buffer texel for texel.
+    pub texels: Pipeline,
+    pub texels_layout: BindGroupLayout,
+    pub ui: GpuPrograms,
 }
 
 impl Programs {
@@ -173,10 +186,24 @@ impl Programs {
             filter: Filter::Nearest,
             address: AddressMode::ClampToEdge,
         })?;
+        let texels_layout = device.create_bind_group_layout(&[BindingLayout {
+            binding: 1,
+            kind: BindingKind::Texture,
+        }])?;
+        let texels = device.create_pipeline(&PipelineDesc {
+            shader: &shaders::BLIT_TEXELS,
+            layouts: &[&texels_layout],
+            vertex_buffers: &[],
+            blend: Blend::Replace,
+            topology: Topology::TriangleList,
+        })?;
         Ok(Programs {
             blit,
             layout,
             sampler,
+            texels,
+            texels_layout,
+            ui: GpuPrograms::new(device)?,
         })
     }
 }
@@ -202,12 +229,15 @@ impl GpuDevice {
         };
         let sync = sync.filter(|_| info.native_fences);
         GpuDevice {
-            device,
+            device: Rc::new(device),
             sync,
             modifiers,
             blit: programs.blit,
             layout: programs.layout,
             sampler: programs.sampler,
+            texels: programs.texels,
+            texels_layout: programs.texels_layout,
+            ui: Rc::new(programs.ui),
         }
     }
 
@@ -240,6 +270,8 @@ pub struct SurfaceStats {
     pub release_waits: u64,
     /// Own fences waited for before a commit (without explicit sync).
     pub fence_waits: u64,
+    /// Frames copied from a renderer's texture on the device, with nothing uploaded.
+    pub from_texture: u64,
     /// The size buffers have now.
     pub allocated: (u32, u32),
     pub modifier: u64,
@@ -389,8 +421,8 @@ impl GpuSurface {
         Ok(())
     }
 
-    /// Show `frame` on `surface`: its `damage` (pixels; everything when `whole`) uploaded, drawn into a free buffer,
-    /// synchronised and committed.
+    /// Show `frame` on `surface`: copied from its renderer's texture on this device, or its `damage` (pixels;
+    /// everything when `whole`) uploaded, drawn into a free buffer, synchronised and committed.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &mut self,
@@ -408,13 +440,30 @@ impl GpuSurface {
         if (size.width, size.height) != pixels {
             return Err(PresentError::Resized);
         }
+        // a frame drawn on this device is copied from its texture; one drawn on another is read back
+        let source = frame
+            .device
+            .as_ref()
+            .and_then(|d| d.0.as_any().downcast_ref::<WindowTexture>())
+            .filter(|w| Rc::ptr_eq(w.device(), &gpu.device) && w.size() == pixels);
+        let read_back;
+        let frame = if source.is_none() && frame.pixels.is_empty() {
+            // a frame of a device given up (a loss) is not shown: the next comes from a renderer of this one
+            read_back = frame.in_memory().map_err(|_| PresentError::Resized)?;
+            &*read_back
+        } else {
+            frame
+        };
         let can_crop = conn.can_crop(surface)?;
+        // the compositor's damage is the frame's unless the frame is whole or the buffers are new
+        let mut shown_whole = whole;
         let mut whole = whole || self.stale;
         if !self.allocated.is_some_and(|a| serves(a, pixels, can_crop)) {
             self.free(Some(gpu), conn);
             let max = gpu.device.info().max_texture_size;
             self.allocated = Some(allocation(pixels, can_crop, max));
             whole = true;
+            shown_whole = true;
         }
         let allocated = self.allocated.expect("set above");
         self.stats.allocated = allocated;
@@ -428,6 +477,13 @@ impl GpuSurface {
             }
             None => return Err(PresentError::Busy),
         };
+        if let Some(source) = source {
+            self.draw_from(gpu, index, source.texture())?;
+            self.stats.from_texture += 1;
+            // the staging texture missed this frame
+            self.stale = true;
+            return self.commit(gpu, conn, surface, index, pixels, damage, shown_whole);
+        }
         if self.staging.is_none() {
             self.staging = Some(
                 gpu.device
@@ -458,7 +514,7 @@ impl GpuSurface {
                 .write_texture(staging, Region::new(r.x, r.y, r.width, r.height), &packed)
                 .map_err(gpu_error)?;
         }
-        let slot = &mut self.slots[index];
+        let slot = &self.slots[index];
         let group = gpu
             .device
             .create_bind_group(
@@ -485,6 +541,51 @@ impl GpuSurface {
             pass.draw(0..3, 1).map_err(gpu_error)?;
             pass.end();
         }
+        self.commit(gpu, conn, surface, index, pixels, damage, whole)
+    }
+
+    /// Draws `texture` (a renderer's frame) into the buffer of slot `index`, texel for texel.
+    fn draw_from(
+        &self,
+        gpu: &GpuDevice,
+        index: usize,
+        texture: &Texture,
+    ) -> Result<(), PresentError> {
+        let group = gpu
+            .device
+            .create_bind_group(
+                &gpu.texels_layout,
+                &[BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Texture(texture),
+                }],
+            )
+            .map_err(gpu_error)?;
+        let mut pass = gpu
+            .device
+            .begin_pass(&self.slots[index].image.texture, LoadOp::Clear([0.0; 4]))
+            .map_err(gpu_error)?;
+        pass.set_pipeline(&gpu.texels);
+        pass.set_bind_group(0, &group).map_err(gpu_error)?;
+        pass.draw(0..3, 1).map_err(gpu_error)?;
+        pass.end();
+        Ok(())
+    }
+
+    /// Synchronises the buffer of slot `index`, drawn with a frame of `pixels`, and commits it with `damage` (or
+    /// whole).
+    #[allow(clippy::too_many_arguments)]
+    fn commit(
+        &mut self,
+        gpu: &GpuDevice,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        index: usize,
+        pixels: (u32, u32),
+        damage: &[PixelRect],
+        whole: bool,
+    ) -> Result<(), PresentError> {
+        let slot = &mut self.slots[index];
         let sync = match (&gpu.sync, &slot.timeline) {
             (Some(sync), Some((timeline, id))) => {
                 let (fence, file) = gpu.device.submit_exported().map_err(gpu_error)?;
@@ -628,6 +729,7 @@ mod tests {
             format: cupertino_ui_render::PixelFormat::Rgba8Premultiplied,
             pixels: (0..24).collect(),
             damage: Vec::new(),
+            device: None,
         };
         let mut out = Vec::new();
         pack(

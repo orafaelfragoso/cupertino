@@ -607,7 +607,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             self.children(&mut inner, tree, i, &mut Vec::new())?;
         }
         for effect in &group.effects {
-            effects::apply(&mut layer, effect, self.scale);
+            effects::apply(&mut layer, effect, self.scale, (area.x0, area.y0));
         }
         if let Some(mask) = self.chain_mask(chain, &area, &[])? {
             self.stats
@@ -1256,7 +1256,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             self.run(&mut inner, node, reach, pos)?;
         }
         for effect in effects {
-            effects::apply(&mut layer, effect, self.scale);
+            effects::apply(&mut layer, effect, self.scale, (area.x0, area.y0));
         }
         let paint = PixmapPaint {
             opacity,

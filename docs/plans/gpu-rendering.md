@@ -468,20 +468,40 @@ Gate:
         `the_compositor_runs_the_card_s_fades_and_the_card_asks_for_no_frame`); no fade is handed over under Reduce
         Motion, where the card appears and goes at once.
   - [ ] Paint-tree subtrees as layers of their own surface: a subtree marked `Layer::Opacity` or `Layer::Transform`
-        drawn into a child surface the server places and animates. It needs the presenter to draw one subtree into its
-        own buffer beside the window's, in the GPU presenter being changed for the toolkit renderer; it goes after that
-        change.
-  - [ ] The launcher's open and close (OWNER DECISION). Its opening scales only the enclosure while its content stays
-        at its size, widens the search field across only, and buds the mode buttons out of the field's joined glass on
-        springs of their own for about half a second; its close blurs the content. A presentation scales the content
-        with the glass and carries neither the buds nor the blur, so the opening keeps drawing frames for the buds
-        either way. Choosing between the panel scaled whole as a presentation (the content scaled too while it opens)
-        and the opening drawn by the launcher as now is the owner's.
-  - [ ] Control transitions in popups (a popover growing out of its anchor and shrinking back, a closing menu's
-        fade): presentations of popup surfaces, which version 2 does not take, and the runtime's fades and grows
-        handed over through them.
-  - [ ] Desktop control reads whether a surface's presentation and layers are settled (`layers_v1::settled`), so it
-        waits for what it reads to be what is shown.
+        (or a mark of its own for the launcher's parts) drawn into a child surface the server places and animates, in
+        both presenters, its animations sent to the compositor instead of repainted, hit-testing and semantics on the
+        target values, and the client-side drawing kept where the server lacks version 3. The presenters draw the
+        raised layer into a subsurface of its own already (`present_layer`); this generalises it to a list of layer
+        surfaces, each `cupertino_layer_v1` with its own frame, through the runtime, both renderers' frame split and
+        both presenters, which is the next reviewable change of this step.
+  - The launcher's open and close as compositor layers, keeping its look (the owner's choice: the look as it is drawn
+    now, run by the compositor). Split:
+    - [x] Glass groups (version 3, `set_glass_group`): the layers of one group draw their glass as one container of
+          their shapes as shown each frame, blended over the group's spacing, so a button grows out of the field's
+          glass as the layers move (`a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move`).
+    - [ ] Content blur: an animatable property that blurs a layer's own content (not its backdrop) by a Gaussian in
+          points, with the compositor's blur and within the per-client limits. It needs an offscreen pass of the
+          layer's content in the compositor's render path (the content drawn into a target, the blur's pyramid over
+          it, the result drawn in its place), added beside the material passes with the render work under way there;
+          version 4 of the protocol then offers it.
+    - [ ] The launcher as layers: the enclosure a layer whose width, height and corner animate with its glass, its
+          content a sibling that does not scale, the search field's layer animating its width, each mode button a layer
+          on its own spring in a glass group with the field, and the close animating the content blur; its look at
+          every moment that of the launcher's drawing within the goldens' tolerance, and no application buffer for the
+          open or the close (counted as Control Center's is). It needs the two items above.
+  - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
+        centre of its window geometry, after its window's rescale or its layer surface's presentation
+        (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of
+        its anchor and its shrinking back and a closing menu's fade to it under `Capabilities::present_popups`, on the
+        curves it draws: the opening spring, `(1 - t)²` and `(1 - t)³` as cubic Béziers, the anchor kept by an offset on
+        the same curve (`the_compositor_grows_a_popover_on_the_spring_it_draws_and_out_of_the_same_point`,
+        `the_compositor_shrinks_a_popover_and_fades_a_menu_on_the_curves_they_draw`); the popup presents no frame for
+        them (`a_popover_grows_and_shrinks_and_a_menu_fades_on_the_compositor_s_clock_without_a_frame`). Under Reduce
+        Motion nothing is handed over, as nothing animates.
+  - [x] Desktop control reads whether every presentation and layer is settled: an observation waits until they show
+        their targets, a second of model time at most, so what it reads is what is shown
+        (`an_observation_waits_for_what_is_shown_to_settle_and_no_longer_than_its_wait`,
+        `desktop_control_reads_the_clients_layouts_once_their_layers_show_their_targets`).
 - [x] Vibrant foreground as a blend-role layer.
 - [x] Lifted thumbs and lenses as glass in a raised layer.
 - [x] Pointer-lit highlight and variable blur.
@@ -492,10 +512,12 @@ Gate:
       reviewed by eye in both appearances. Control Center holds: its card draws no frame of its fade in or out (a single
       frame after its first as it opens)
       (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
-      "Step 9"). The launcher waits on the owner's decision above. The review by eye is pending the owner's review of
-      the sheet.
-- [ ] The before and after sheet of Control Center's fades mid-way and settled, light and dark, from a headless
-      server, for that review: not made within this change's time.
+      "Step 9"). Popovers and menus hold: a popover's growth and shrinking and a menu's fade present no frame. The
+      launcher waits on its split items above. The review by eye is pending the owner's review of the sheet.
+- [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
+      light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
+      compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
+      own fade from before its presentation.
 
 ## Step 10: retire the duplicates
 
@@ -1210,6 +1232,15 @@ none, where without the presentation each step is a frame. Taken at the branch's
 Without the presentation the card draws one frame per frame callback through each fade
 (`the_fade_steps_at_each_frame_of_the_card_s_window_until_it_ends`): about 14 at 60 Hz for the 0.23 s fade in and 11
 for the 0.18 s fade out.
+
+Popups, counted by `a_popover_grows_and_shrinks_and_a_menu_fades_on_the_compositor_s_clock_without_a_frame` (the
+toolkit's runtime over its in-memory window system, frame callbacks answered every 16 ms):
+
+| Popup | Frames answered | Frames presented, handed over | Without the handover |
+|---|---|---|---|
+| Popover growing (0.35 s) | 25 | 0 | one per frame until it rests |
+| Popover shrinking (0.22 s) | 14 | 0 | one per frame until it goes |
+| Menu fading (0.236 s) | 14 | 0 | one per frame until it goes |
 
 ### Step 1: the look freeze
 

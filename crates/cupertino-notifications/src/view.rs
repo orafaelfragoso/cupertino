@@ -1495,10 +1495,12 @@ fn centre_window<M: Clone + 'static>(
         let top = list_top + rect.y() - scroll.offset.y;
         Rect::new(rect.x() + slide, top, rect.width(), rect.height())
     };
-    let spots: Vec<Rect> = cards
+    let spots: Vec<(Rect, f64)> = cards
         .iter()
         .filter_map(|piece| match piece {
-            Piece::Card(c) | Piece::Sheet(c) if c.opacity > 0.0 => Some(in_layer(c.rect)),
+            Piece::Card(c) | Piece::Sheet(c) if c.opacity > 0.0 => {
+                Some((in_layer(c.rect), c.opacity))
+            }
             _ => None,
         })
         .collect();
@@ -1524,8 +1526,8 @@ fn centre_window<M: Clone + 'static>(
                 let reach = rect.outset(SHADOW_REACH);
                 let others = spots
                     .iter()
-                    .filter(|r| **r != rect && r.intersects(&reach))
-                    .map(|r| r.translate(-rect.x(), -rect.y()))
+                    .filter(|(r, _)| *r != rect && r.intersects(&reach))
+                    .map(|(r, opacity)| (r.translate(-rect.x(), -rect.y()), *opacity))
                     .collect();
                 Element::new(Halo {
                     rect,
@@ -2549,8 +2551,41 @@ fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow
 struct Halo {
     rect: Rect,
     opacity: f64,
-    /// The other cards and sheets within its reach, from its corner: it is kept off them, as their glass lies under it.
-    others: Vec<Rect>,
+    /// The other cards and sheets within its reach, from its corner, with their opacity: it is kept off them as much
+    /// as they are there, as their glass lies under it.
+    others: Vec<(Rect, f64)>,
+}
+
+/// One painting of a halo: inside the neighbour `inside` (outside every neighbour when `None`), kept off the
+/// neighbours `cut`, at `opacity`.
+#[derive(Clone, Debug, PartialEq)]
+struct HaloPass {
+    inside: Option<usize>,
+    cut: Vec<usize>,
+    opacity: f32,
+}
+
+/// How a halo with neighbours of the given opacities is painted: whole outside all of them, and over each neighbour
+/// still fading in by as much as it is not there yet, so a card that starts to fade in covers a halo next to it
+/// gradually instead of cutting a hole in it at once. An opaque neighbour gets no halo over it.
+fn halo_passes(neighbours: &[f64]) -> Vec<HaloPass> {
+    let all: Vec<usize> = (0..neighbours.len()).collect();
+    let mut passes = vec![HaloPass {
+        inside: None,
+        cut: all.clone(),
+        opacity: 1.0,
+    }];
+    for (k, opacity) in neighbours.iter().enumerate() {
+        let through = (1.0 - opacity.clamp(0.0, 1.0)) as f32;
+        if through > 0.0 {
+            passes.push(HaloPass {
+                inside: Some(k),
+                cut: all.iter().copied().filter(|&j| j != k).collect(),
+                opacity: through,
+            });
+        }
+    }
+    passes
 }
 
 impl<M: 'static> Widget<M> for Halo {
@@ -2594,27 +2629,50 @@ impl<M: 'static> Widget<M> for Halo {
         let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
         cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
         let radius_of = |r: &Rect| CORNER_RADIUS.min(r.height() / 2.0);
-        for other in &self.others {
-            let mut cut = rounded_path(rect.outset(SHADOW_REACH).union(other), 0.0);
-            cut.extend(rounded_path(*other, radius_of(other)));
-            cx.push(PaintOp::PushClip(Shape::Path {
-                verbs: cut,
-                fill_rule: FillRule::EvenOdd,
-            }));
-        }
-        paint_halo(
-            cx,
-            rect,
-            CORNER_RADIUS.min(rect.height() / 2.0),
-            fill,
-            Effect::DropShadow {
-                offset: Point::ZERO,
-                blur: SHADOW_BLUR,
-                color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
-            },
-        );
-        for _ in &self.others {
-            cx.push(PaintOp::PopClip);
+        let opacities: Vec<f64> = self.others.iter().map(|(_, o)| *o).collect();
+        for pass in halo_passes(&opacities) {
+            let mut clips = 0;
+            if let Some(k) = pass.inside {
+                let other = self.others[k].0;
+                cx.push(PaintOp::PushClip(Shape::Path {
+                    verbs: rounded_path(other, radius_of(&other)),
+                    fill_rule: FillRule::NonZero,
+                }));
+                clips += 1;
+            }
+            for &j in &pass.cut {
+                let other = self.others[j].0;
+                let mut cut = rounded_path(rect.outset(SHADOW_REACH).union(&other), 0.0);
+                cut.extend(rounded_path(other, radius_of(&other)));
+                cx.push(PaintOp::PushClip(Shape::Path {
+                    verbs: cut,
+                    fill_rule: FillRule::EvenOdd,
+                }));
+                clips += 1;
+            }
+            if pass.opacity < 1.0 {
+                cx.push(PaintOp::PushLayer {
+                    opacity: pass.opacity,
+                    effects: Vec::new(),
+                });
+            }
+            paint_halo(
+                cx,
+                rect,
+                CORNER_RADIUS.min(rect.height() / 2.0),
+                fill,
+                Effect::DropShadow {
+                    offset: Point::ZERO,
+                    blur: SHADOW_BLUR,
+                    color: Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA),
+                },
+            );
+            if pass.opacity < 1.0 {
+                cx.push(PaintOp::PopLayer);
+            }
+            for _ in 0..clips {
+                cx.push(PaintOp::PopClip);
+            }
         }
     }
 

@@ -518,3 +518,41 @@ fn a_group_expands_and_collapses_with_a_spring_and_at_once_under_reduce_motion()
     apply(&mut c, &mut ui, Input::ClearGroup(key), 7.0);
     assert!(c.groups().is_empty());
 }
+
+/// A card fading in covers a neighbour's halo by as much as it is there: at the start of its fade the halo still shows
+/// over it almost whole, and only once it is opaque is the halo kept off it entirely.
+#[test]
+fn a_card_fading_in_covers_its_neighbours_halo_by_its_opacity() {
+    let pass = |inside: Option<usize>, cut: &[usize], opacity: f32| HaloPass {
+        inside,
+        cut: cut.to_vec(),
+        opacity,
+    };
+    // no neighbour: the halo whole
+    assert_eq!(halo_passes(&[]), [pass(None, &[], 1.0)]);
+    // an opaque neighbour: kept off it, nothing over it
+    assert_eq!(halo_passes(&[1.0]), [pass(None, &[0], 1.0)]);
+    // a neighbour a tenth of the way into its fade: the halo over it at nine tenths
+    let fading = halo_passes(&[0.1]);
+    assert_eq!(fading.len(), 2);
+    assert_eq!(fading[0], pass(None, &[0], 1.0));
+    assert_eq!(
+        (fading[1].inside, fading[1].cut.as_slice()),
+        (Some(0), &[][..])
+    );
+    assert!((fading[1].opacity - 0.9).abs() < 1e-6, "{fading:?}");
+    // two neighbours, one opaque and one half in: the halo over the second at half, kept off the first there too
+    assert_eq!(
+        halo_passes(&[1.0, 0.5]),
+        [pass(None, &[0, 1], 1.0), pass(Some(1), &[0], 0.5)]
+    );
+    // the halo over a fading neighbour grows fainter as the neighbour comes in
+    let over = |o: f64| halo_passes(&[o]).get(1).map_or(0.0, |p| p.opacity);
+    let mut last = 1.0;
+    for step in 1..=10 {
+        let now = over(f64::from(step) / 10.0);
+        assert!(now < last, "{step}: {now} after {last}");
+        last = now;
+    }
+    assert_eq!(last, 0.0);
+}

@@ -344,9 +344,10 @@
         at the first sample, which the client takes from what it shows. serial names the animation
         in finished and replaced, and the property rests at the last sample, its target.
 
-        samples is an array of 32-bit IEEE 754 floats in the byte order of the host, 2 to 1024 of
-        them. Posts invalid_curve for a duration over 10000 milliseconds or under 1, an array whose
-        length is not a multiple of 4, or fewer than 2 or more than 1024 samples, invalid_value for
+        samples is an array of 32-bit IEEE 754 floats in the byte order of the host, 2 to 1000 of
+        them (as many as one request of at most 4096 bytes carries, with room to spare). Posts
+        invalid_curve for a duration over 10000 milliseconds or under 1, an array whose
+        length is not a multiple of 4, or fewer than 2 or more than 1000 samples, invalid_value for
         a sample outside the property's range, and invalid_property or too_many_animations as the
         other animations do.
       </description>

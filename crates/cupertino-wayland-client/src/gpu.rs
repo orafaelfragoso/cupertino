@@ -80,6 +80,9 @@ pub struct GpuFrame<'a> {
     /// The pixels of the buffer the frame fills from its top left corner, shown over the surface; a buffer larger than
     /// the frame (allocated in size steps during a live resize) is cropped to them.
     pub size: (u32, u32),
+    /// The logical size the surface is shown at where its role leaves it to the client ([`Connection::frame_size`]'s
+    /// `preferred`): a surface layer's size in points, which the frame's pixels fill at the scale it is drawn at.
+    pub preferred: (u32, u32),
     /// Acquire and release points on a timeline; `None` without explicit sync (the frame's own fence was waited for).
     pub sync: Option<(TimelineId, u64, u64)>,
     /// What changed since the frame shown last, in buffer pixels; `None` for all of it.
@@ -393,7 +396,7 @@ impl Connection {
     pub fn present_gpu(&mut self, surface: SurfaceId, frame: &GpuFrame<'_>) -> Result<(), Error> {
         let qh = self.queue.handle();
         let presentation = self.state.presentation.clone();
-        let size = self.frame_size(surface, frame.size)?;
+        let size = self.frame_size(surface, frame.preferred)?;
         let State { surfaces, gpu, .. } = &mut self.state;
         let surf = surfaces
             .iter_mut()

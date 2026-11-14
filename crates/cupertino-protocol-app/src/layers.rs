@@ -327,8 +327,9 @@ impl Layer {
     }
 }
 
-/// The most samples one animation through samples takes ([`Layer::animate_samples`]).
-pub const MAX_SAMPLES: usize = 1024;
+/// The most samples one animation through samples takes ([`Layer::animate_samples`]): as many as one request carries,
+/// a request being at most 4096 bytes, its header and other arguments 24 of them, with room to spare.
+pub const MAX_SAMPLES: usize = 1000;
 
 impl Drop for Layer {
     fn drop(&mut self) {

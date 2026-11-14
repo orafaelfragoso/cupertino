@@ -602,18 +602,11 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
       Settings, the dock's thumbnail and every other shot the same within 2/255, but for shots whose moment differs
       between two sessions (the overview and its band mid-motion; which of them differ changes between runs) and the
       launcher's, below.
-- [ ] The launcher's round buttons on both renderers: their rims part by exactly 3/255, one step past the tolerance,
-      on 1 to 22 pixels a shot (launcher at 1.5 and 2), as they did before this step. They are the parity tests' stray
-      pixels (the CPU's roundings of an operation's layer stacking on one pixel) on more pixels than the four those
-      allow. Split: find which of the buttons' operations stacks them and draw it so they do not, then shoot the
-      preview pair again. Found: not the renderers. The buttons' rims drawn as they draw them (a 0.5-point stroke just
-      outside a 55-point circle, black at 0.93 and 0.27, alone, over a fill, in a group, under the even-odd cut of a
-      joined shape, with the focus ring) are within 1/255 on both renderers at scales 1, 1.5 and 2, whole and under
-      damage (`parity::a_stroked_circle_matches_the_cpu`), and the launcher at scale 1 is the same on both within
-      2/255. At 1.5 and 2 the shot is not comparable: on the GPU path the panel's surface layers (its glass, edge
-      and the buttons' faces) are shown larger by the output's scale (1.5 times at 1.5, twice at 2), the CPU path's
-      in place; a layer's GPU buffer is placed as if drawn at one buffer pixel a point. Split: the GPU path's surface
-      layer buffers at the output's scale (the surface-layer code), then shoot the preview pair at 1.5 and 2 again.
+- [x] The launcher's round buttons on both renderers: their rims parted by exactly 3/255, one step past the
+      tolerance, on 1 to 22 pixels a shot (launcher at 1.5 and 2). Once a surface layer drawn on the GPU shows at its
+      size in points (its dmabuf's viewport had taken the frame's pixel size, so the button faces showed 1.5 and 2 times
+      too large, `GpuFrame::preferred`), the launcher at rest shot with every process on the CPU and on the GPU is the
+      same within 1/255 at 1.5 and 2 in both appearances (2699 to 4668 pixels a shot at 1, none past it).
 - [ ] A week of daily use on the target machine without a fallback. BLOCKED (owner action): a week of use. A
       fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
       `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
@@ -648,19 +641,9 @@ Gate:
     The processes now make their programs in turn (`program_cache::take_turn`, a lock in the driver's directory
     waited on up to 2 s), so on a cold cache only the first compiles and the rest load what it saved: cold, the
     processes that load take 40–92 MiB (adding 19–39), the one that compiles 92–133 (adding 76–79). The floor is
-    the driver's compiler in that one process after a driver update, a shader change or a new user. Now the compositor
-    makes the toolkit's programs into the cache as its backend starts (`toolkit_programs`, `program_cache::make_ahead`:
-    a thread and a context of its own on the render node it offers, the processes' turn taken first, keyed as their
-    lookup is), so no toolkit process compiles: in a cold headless session at 1.5 the server made the 7 programs in
-    200 ms and the launcher loaded its 8 and compiled none. On by default, `prepare_toolkit_programs: false` in
-    `compositor.json` turns it off. Tests:
-    `handoff::programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled`,
-    `handoff::making_programs_ahead_replaces_a_stale_binary_and_never_loads_another_drivers` (`cupertino-gpu`),
-    `programs::the_renderers_programs_made_ahead_are_all_loaded_and_none_compiled` (`cupertino-ui-gpu`),
-    `gpu_presenter::the_presenter_finds_every_program_the_server_made_at_its_start_and_compiles_none` and
-    `gpu_presenter::the_server_shows_its_first_frames_while_it_still_makes_the_toolkit_s_programs` (`cupertino-server`).
-    OWNER DECISION: implemented and on; keep it on or turn it off by default. The added memory per process after it:
-    measured at the end.
+    the driver's compiler in that one process after a driver update, a shader change or a new user. OWNER DECISION:
+    keep it, or have the compositor make the toolkit's programs into the cache at its start (it loads the compiler
+    for its own programs anyway) so that no toolkit process compiles.
   - GPU memory per GPU window, open and closed (`nvidia-smi`, Files with a second window opened and closed twice):
     51, 116, 84, 116, 84 MiB. A window adds 65 MiB; closed, 33 MiB stay and serve the next window, never growing.
     What stays is the driver's reservation step 0 measured (a process's first targets reserve one more target's
@@ -793,8 +776,11 @@ Gate:
           renderer's frame split by layer as the CPU renderer's is (the runtime makes each layer's renderer with the
           window's factory, a GPU renderer on the GPU). The example's `--renderer` draws the layer with the toolkit's
           GPU renderer on the presenter's device; the server shows it from dmabufs of the layer's own surface, every
-          frame handed over (`a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own`, the
-          local GPU tier).
+          frame handed over, at its rect in points at 1, 1.5 and 2 as from shared memory
+          (`a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own`, the local GPU tier). A
+          layer's dmabuf was first shown at one buffer pixel per point, as large as the output's scale too large: its
+          viewport took the frame's pixel size for the layer's size, which a layer's role leaves to the client, and now
+          takes the layer's size in points (`GpuFrame::preferred`).
   - The launcher's open and close as compositor layers, keeping its look (the owner's choice: the look as it is drawn
     now, run by the compositor). Split:
     - [x] Glass groups (version 3, `set_glass_group`): the layers of one group draw their glass as one container of
@@ -828,7 +814,7 @@ Gate:
       timed curve or a spring per property cannot carry a product or a clamp of two curves, so these need the
       protocol to carry them first. Split:
       - [x] Curves the protocol carries as samples: version 4's `animate_samples(serial, property, duration,
-            samples)` takes 2 to 1024 values at even steps of a duration of 1 ms to 10 s (32-bit floats in the host's
+            samples)` takes 2 to 1000 values at even steps of a duration of 1 ms to 10 s (32-bit floats in the host's
             byte order, each in the property's range), which the server follows in straight lines on its clock from
             the first to the last, where the property rests; an animation that replaces it starts from the value and
             the slope shown, and reduce motion ends a spatial one at its last value
@@ -892,7 +878,7 @@ Gate:
             place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
             unscaled, its fade on the content's curve; the files scope's width dip as samples. Not reached in this
             run; split by what each needs:
-        - [ ] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
+        - [x] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
               only the scale moves (1.1 to 1 on the open spring, both ways), and every value the open draws is affine
               in that scale, so each property is the open spring from where the first frame has it: the glass's place,
               size and corner, the edge layer's scale about the pivot, the content's place (it keeps its size), all
@@ -904,34 +890,80 @@ Gate:
               and asks for none until the open is over, the browser's scroll indicator kept meanwhile
               (`a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame`, the browser and the files
               scope); under Reduce Motion nothing is handed over
-              (`under_reduce_motion_a_scope_s_open_is_the_panel_s_own`). At the same moments its glass is the
-              panel's own (rect, corner, opacity) at every frame and its first frame is the panel's pixels within 0,
-              but part way the pixels differ by up to 255 of 255 in both scopes and appearances
+              (`under_reduce_motion_a_scope_s_open_is_the_panel_s_own`). The mid-way difference (up to 255 of 255)
+              had three causes, each closed: the compositor puts the content's layer on whole device pixels, where
+              the panel drew its text snapped to the pixels glyph by glyph and its shapes and images at the fraction
+              (the content now lies on whole device pixels as one picture while the panel scales,
+              `Widget::on_pixels`); the glass, smaller than the content while it grows in, laid the content out
+              narrower, where the layer keeps its size (an absolute container that crops now keeps a child's own
+              size past its edge, `Overflow::Crop`, set while the panel scales); and the compositor's spring comes to
+              rest within a thousandth of the property's unit, the scaled edge then 172 of 255 off at 317 ms, and its
+              glass 0.05 points off at 500 ms where the panel's spring had settled (the glass and the edge's scale
+              now go through 1000 samples of the panel's own values, `layers::OPEN_SAMPLES`, as many as one request
+              carries: the protocol had allowed 1024, which no request of at most 4096 bytes can carry, and the
+              server cut the launcher off at its first such request). The at-rest drawing
+              and every golden are unchanged. At the same moments, every other frame of the open and its last at 1.5
+              in both scopes and appearances: the glass is the panel's own (rect, corner, opacity, within 0.05) at
+              every frame, the first frame and the last the panel's pixels within 0, and part way every pixel
+              outside two device pixels of the outline within 1 of 255. Along the outline the edge, the resting
+              stroke scaled (a half-point line the scale puts between device pixels, which the panel strokes afresh
+              at each scale), differs by up to 90 of 255 in the dark and 26 in the light, bounded by two fifths of
+              the line's opacity (95 and 28)
               (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, run with
-              `CUPERTINO_LAUNCHER_MOMENTS` for the pairs), not yet located (the content's layer moved onto whole
-              device pixels where the panel lays its grid and text at fractional places is the likely part). So the
-              handover is off in the process (`hand_scope_opens` false; the tests turn it on) until it is. Left: locate
-              and close the mid-way difference, then turn it on, and the real process's count against the server.
+              `CUPERTINO_LAUNCHER_MOMENTS` for the pairs). The handover is on in the process
+              (`hand_scope_opens`). The real process against the server: no buffer of the window or its layers while
+              the open is part way, 0 in 3 runs over 92 to 93 server steps part way
+              (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`, the
+              browser opened once and closed first, as a resident launcher's has been, so the renderer's warm-up,
+              whose first frames the CPU draws and the GPU then draws again, is behind it).
         - [ ] The fold and the unfold: the header switches part way (the query row's symbol and placeholder), a frame
               of the content's layer, and the content's body fades on its own curve while the query row does not, so
               the row and the body are layers of their own; the shape changes both ways with its corner held to half
               its height, which a fixed frame of the edge cannot follow: it needs the edge drawn by the compositor.
+              Split, in order:
+          - [ ] The query row and the body as layers of their own in place of the one content layer, at rest the
+                panel's pixels within 1 of 255 (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`
+                over the browser, the files scope and the field).
+          - [ ] The glass's place, size and corner through samples of the panel's own values on the shape spring
+                (`layers::open_values` over the fold's motion, the corner the panel's, held to half the height), the
+                body's opacity through samples of its own curve, the row's frame drawn again once at the header's
+                switch (one buffer of the row's layer, the only one the fold makes).
+          - [ ] The edge. OWNER DECISION (above): through the fold the outline goes from a scope's continuous corners
+                to the field's capsule, which only the compositor's edge can follow, and at a scope's corners it parts
+                from the panel's circular-arc edge by up to the line's opacity. Until the owner chooses, the fold and
+                unfold stay the panel's own drawing, as they are now; once a scope's edge follows its glass, the
+                compositor's edge (`layers::glass_edge`, within 4 of 255 of the panel's along the field and every
+                straight side) carries it, and the scope's edge layer goes.
+          - [ ] Their same-moment test, as the open's (`open_moments` over `Escape` from a scope and the scope's
+                shortcut from the field), and the real process's count against the server, as
+                `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` (one
+                buffer of the row's layer allowed, at the switch).
       - [ ] The search field's open with its mode buttons: the field's layer and each button's on sampled curves of
             the products above, in one glass group with the field, each button's symbol sharpening as its layer's
-            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Split: the glass
-            and the symbols can be carried now; the dark edge cannot. Through the bud the field's edge is left out
-            inside each button and each button's inside the field and its neighbours (`edge_cuts`), so the outline
-            changes shape every frame, and a button's ring grows from 0.4 of its size with a stroke that keeps its
-            width; a layer is cut only to its own shape (`masks`). It needs the compositor to draw the edge of a
-            glass group (the outline of the group's shapes, with the edge's width and opacity in the layers' look),
-            a change of the protocol and of the compositor's glass, before this item can be exact.
+            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Through the bud
+            the field's edge is left out inside each button and each button's inside the field and its neighbours
+            (`edge_cuts`), so the outline changes shape every frame, and a button's ring grows from 0.4 of its size
+            with a stroke that keeps its width; a layer is cut only to its own shape (`masks`). The compositor now
+            draws a glass group's edge along its joined outline at the output's scale (version 5, above), within 4 of
+            255 of the panel's along the field and its buttons at rest, which is what this needed. Split, in order:
+          - [ ] The field's glass and each button's glass and face through samples of the panel's own values
+                (`layers::open_values` over `modes::button_rect`, `bud_size`, the field's width and corner, the
+                products of the split spring and the open spring), in one glass group with the field, its edge the
+                compositor's (`layers::glass_edge` in the looks) in place of the edge layer and `edge_cuts`.
+          - [ ] Each button's symbol: its face's content blur through samples from its starting blur to 0 on
+                `GLYPH_SHARPEN` after `GLYPH_DELAY`.
+          - [ ] The same-moment test over `Toggle` from hidden, as the open's (`open_moments`), the edge compared
+                along the joined outline as the scopes' is, and the real process's count against the server, as the
+                scope's open (`ToggleLauncher`).
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over
               14 to 16 server steps part way
               (`shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`); settled, the
               compositor's panel is the application's within 2 of 255 ("Measurements", "Step 9", "The sheet").
-        - [ ] The open: waits on the two items above.
+        - [ ] The open: from hidden it holds, 0 new buffers in 3 runs over 92 to 93 server steps part way
+              (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the
+              fold and unfold and the search field's open with its buttons wait on their items above.
         - [ ] The look mid-way within 2 of 255, compared at the same moment. Split:
           - [x] The close: at each frame the launcher draws of its own close, the compositor's layers at that same
                 moment, worked out from the curves the panel sent with the compositor's own animator
@@ -945,7 +977,12 @@ Gate:
                 onto whole device pixels, differs by up to 33 part way; the caret, which the application's own drawing
                 moves a device pixel as its enclosure moves, by 44 at 17 ms and 1 from 50 ms on ("Measurements",
                 "Step 9", "The sheet").
-          - [ ] The open: waits on the open's items above.
+          - [ ] The open: from hidden, at each frame the launcher draws of its own open (every other one and its
+                last, at 1.5, both scopes and appearances), the compositor's layers at that moment are its pixels
+                within 1 of 255 but along the outline, where the scaled edge is within two fifths of the line's
+                opacity (90 and 26 of 255 at most), and their glass its glass at every moment
+                (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`); the fold and unfold
+                and the search field's open with its buttons wait on their items above.
   - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
         centre of its window geometry, after its window's rescale or its layer surface's presentation
         (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of
@@ -970,14 +1007,20 @@ Gate:
       frame after its first as it opens)
       (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
       "Step 9"). Popovers and menus hold: a popover's growth and shrinking and a menu's fade present no frame. The
-      launcher's close holds (no buffer of its window or layers); its open waits on its split items above. The review
-      by eye is pending the owner's review of the sheet.
+      launcher's close holds (no buffer of its window or layers), and so does a scope's open from hidden (no buffer
+      of its window or layers while the open is part way,
+      `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the search
+      field's open with its mode buttons and the fold and unfold wait on their split items above. The review by eye is
+      pending the owner's review of the sheet.
 - [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
       own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
-      the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest;
-      its open is drawn by the application on both sides until its open's layers land, so it has no pairs.
+      the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest,
+      and so is a scope's open from hidden (the browser and the files scope, both appearances, 7 moments each from
+      50 ms to the open's last frame at 500 ms: within 1 of 255 apart from the outline, along it up to 90 of 255 in
+      the dark and 26 in the light, the last frame within 0); the search field's open with its mode buttons and the
+      fold and unfold are drawn by the application on both sides until their layers land, so they have no pairs.
 
 ## Step 10: retire the duplicates
 
@@ -1860,9 +1903,29 @@ The 44 is the caret at the close's first frame: the application's own drawing mo
 its enclosure moves (it lies on whole device pixels of the window), where the content's layer keeps it in place; by
 50 ms the blur has taken it under 2. The 33 and 22 are the mode button's ring and symbol, which the compositor moves
 onto whole device pixels while the drawing places them between pixels. The 7 is the text under the close's first, one
-or two pixel wide blur, where two Gaussians of the same deviation round differently. The open is drawn by the
-application with the layers on and off alike, so it has no pairs until its own layers land. The earlier recording
-of two runs, whose pairs landed up to a frame apart, put the close's first frame at 83 to 109.
+or two pixel wide blur, where two Gaussians of the same deviation round differently. The earlier recording of two runs,
+whose pairs landed up to a frame apart, put the close's first frame at 83 to 109.
+
+A scope's open from hidden at the same moment, from
+`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, the same way: every other frame the
+application draws of its open (of 30) and its last, against the compositor's layers at that moment. The largest
+channel difference over the window, then apart from two device pixels either side of the outline:
+
+| Launcher open | 50 ms | 83 ms | 150 ms | 183 ms | 283 ms | 317 ms | 500 ms (last) |
+|---|---|---|---|---|---|---|---|
+| Browser, dark | 43 / 0 | 73 / 1 | 84 / 0 | 84 / 0 | 63 / 0 | 88 / 0 | 0 |
+| Browser, light | 12 / 0 | 21 / 1 | 25 / 0 | 24 / 0 | 19 / 0 | 26 / 0 | 0 |
+| Files, dark | 45 / 0 | 73 / 1 | 78 / 0 | 83 / 0 | 71 / 0 | 90 / 0 | 0 |
+| Files, light | 12 / 0 | 21 / 1 | 23 / 0 | 24 / 0 | 21 / 0 | 26 / 0 | 0 |
+
+Every difference over 1 is along the outline: the edge is the resting stroke scaled, a half-point line that the
+scale puts between device pixels, where the application strokes it afresh at each scale; it is bounded by two fifths
+of the line's opacity (95 in the dark, 28 in the light). The first frame is the same in all four.
+
+A scope's open, counted by `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`
+(the real process on a private bus, debug builds, the browser opened and closed once first): 0 buffers of the window
+and its three layers while the open is part way, in each of 3 runs, over 92 to 93 server steps that showed it part
+way.
 
 The launcher's close, counted by `shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`
 (the real process on a private bus, debug builds): 0 buffers of the window and its five layers from Escape until the

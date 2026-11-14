@@ -1,13 +1,16 @@
 //! Containers whose children share one box: absolute, overlay and scroll content.
 
 use crate::engine::{align_offset, has_own_size, Arranged, Engine};
-use crate::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree};
+use crate::{Align, AxisConstraint, Constraints, LayoutError, LayoutTree, SizeSpec};
 use cupertino_geometry::{Point, Rect, Size};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Mode {
-    /// Children keep their natural size at their `position`.
-    Absolute,
+    /// Children keep their natural size at their `position`; in a container that `crops` them ([`Overflow::Crop`]),
+    /// a size of their own even past its edge, where it cuts them off.
+    ///
+    /// [`Overflow::Crop`]: crate::Overflow::Crop
+    Absolute { crops: bool },
     /// Children are layered; each follows its `align_self`, stretching by default.
     Overlay,
     /// Content is as large as it wants along the scrolled axes and stretches across the others.
@@ -41,10 +44,25 @@ pub(crate) fn arrange<T: LayoutTree>(
     );
     let mut natural = Vec::with_capacity(kids.len());
     for &id in kids {
-        natural.push(engine.solve(id, natural_c)?);
+        // an absolute child of a size of its own keeps it in a container that crops it, past the container's edge if
+        // need be, as a picture cut off by a frame rather than laid out again smaller
+        let c = match (mode, engine.tree.spec(id)) {
+            (Mode::Absolute { crops: true }, spec) => {
+                let own = |size: SizeSpec, axis: AxisConstraint| match size {
+                    SizeSpec::Fixed(v) if v > axis.max() => AxisConstraint::loose(v),
+                    _ => Ok(axis),
+                };
+                Constraints::new(
+                    own(spec.width, natural_c.width)?,
+                    own(spec.height, natural_c.height)?,
+                )
+            }
+            _ => natural_c,
+        };
+        natural.push(engine.solve(id, c)?);
     }
     let origin = |id: T::Id| match mode {
-        Mode::Absolute => engine.tree.spec(id).position,
+        Mode::Absolute { .. } => engine.tree.spec(id).position,
         _ => Point::ZERO,
     };
     let content = kids.iter().zip(&natural).fold(Size::ZERO, |acc, (&id, s)| {
@@ -64,7 +82,7 @@ pub(crate) fn arrange<T: LayoutTree>(
     for (&id, natural) in kids.iter().zip(natural) {
         let spec = engine.tree.spec(id);
         let align_for = |scrolled: bool| match mode {
-            Mode::Absolute => Align::Start,
+            Mode::Absolute { .. } => Align::Start,
             Mode::Scroll { .. } if scrolled => Align::Start,
             _ => spec.align_self.unwrap_or(Align::Stretch),
         };

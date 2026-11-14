@@ -482,7 +482,15 @@ impl GpuSurface {
             self.stats.from_texture += 1;
             // the staging texture missed this frame
             self.stale = true;
-            return self.commit(gpu, conn, surface, index, pixels, damage, shown_whole);
+            return self.commit(
+                gpu,
+                conn,
+                surface,
+                index,
+                (pixels, preferred),
+                damage,
+                shown_whole,
+            );
         }
         if self.staging.is_none() {
             self.staging = Some(
@@ -541,7 +549,15 @@ impl GpuSurface {
             pass.draw(0..3, 1).map_err(gpu_error)?;
             pass.end();
         }
-        self.commit(gpu, conn, surface, index, pixels, damage, whole)?;
+        self.commit(
+            gpu,
+            conn,
+            surface,
+            index,
+            (pixels, preferred),
+            damage,
+            whole,
+        )?;
         self.stale = false;
         Ok(())
     }
@@ -583,7 +599,7 @@ impl GpuSurface {
         conn: &mut Connection,
         surface: SurfaceId,
         index: usize,
-        pixels: (u32, u32),
+        (pixels, preferred): ((u32, u32), (u32, u32)),
         damage: &[PixelRect],
         whole: bool,
     ) -> Result<(), PresentError> {
@@ -623,6 +639,7 @@ impl GpuSurface {
             &GpuFrame {
                 buffer,
                 size: pixels,
+                preferred,
                 sync,
                 damage: (!whole).then_some(damage),
             },

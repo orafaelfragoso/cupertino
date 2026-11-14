@@ -358,9 +358,9 @@ pub struct Model {
     /// The window system shows the panel's parts as compositor layers ([`view::layers`]): while the panel rests it
     /// draws them so, and the compositor runs its close.
     pub compositor_layers: bool,
-    /// A scope opening from hidden hands its open to the compositor ([`view::layers::open_changes`]). Off in the
-    /// process until the open's look part way matches the panel's own drawing within the goldens' tolerance: its glass
-    /// does at every moment, its content does not yet.
+    /// A scope opening from hidden hands its open to the compositor ([`view::layers::open_changes`]) where the window
+    /// system shows layers: its glass is the panel's own at every moment, its content the panel's pixels and its edge
+    /// the rest's stroke scaled. On in the process; a test turns it off to compare the panel's own open.
     pub hand_scope_opens: bool,
     /// The close the compositor runs: the panel as it was when the close began, which the panel's layers keep showing
     /// until it is over, and the layers' changes not yet sent.
@@ -427,7 +427,7 @@ impl Model {
             just_shown: false,
             primary_held: false,
             compositor_layers: false,
-            hand_scope_opens: false,
+            hand_scope_opens: true,
             handed: None,
             layer_changes: Vec::new(),
             open_rest: None,
@@ -835,7 +835,8 @@ impl Model {
         }
         // the window's size through the open, which places the layers
         let _ = self.resize();
-        self.layer_changes = view::layers::open_changes(self.extent, &first, &rest);
+        self.layer_changes =
+            view::layers::open_changes(self.extent, &first, &rest, &self.motion, now);
         self.open_rest = Some(rest);
         self.open_timer = false;
     }

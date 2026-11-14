@@ -68,7 +68,7 @@ impl LayerChange {
         }
     }
 
-    /// `property` moved through `values` (at least two) over `duration` seconds.
+    /// `property` moved through `values` (2 to [`MAX_LAYER_SAMPLES`]) over `duration` seconds.
     pub fn through(property: LayerProperty, duration: f64, values: Arc<[f32]>) -> LayerChange {
         LayerChange {
             property,
@@ -82,6 +82,10 @@ impl LayerChange {
         }
     }
 }
+
+/// The most values a change through samples carries ([`LayerChange::through`]): as many as one request to the window
+/// system carries.
+pub const MAX_LAYER_SAMPLES: usize = 1000;
 
 /// How a surface layer looks besides its frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

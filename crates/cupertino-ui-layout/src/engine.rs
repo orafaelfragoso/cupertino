@@ -477,7 +477,10 @@ impl<T: LayoutTree> Engine<'_, T> {
                 rows,
                 gaps,
             } => grid::arrange(self, kids, columns, rows, *gaps, inner)?,
-            ContainerKind::Absolute => layers::arrange(self, kids, layers::Mode::Absolute, inner)?,
+            ContainerKind::Absolute => {
+                let crops = spec.overflow == Overflow::Crop;
+                layers::arrange(self, kids, layers::Mode::Absolute { crops }, inner)?
+            }
             ContainerKind::Overlay => layers::arrange(self, kids, layers::Mode::Overlay, inner)?,
             ContainerKind::Split(split) => crate::split::arrange(self, kids, split, inner)?,
             ContainerKind::Wrap { gaps } => crate::wrap::arrange(self, kids, *gaps, inner)?,
@@ -509,7 +512,7 @@ impl<T: LayoutTree> Engine<'_, T> {
             rect.origin.x += insets.left;
             rect.origin.y += insets.top;
         }
-        let clip = (scrolls || spec.overflow == Overflow::Clip)
+        let clip = (scrolls || spec.overflow != Overflow::Visible)
             .then(|| Rect::new(0.0, 0.0, size.width, size.height));
         Ok(Solved {
             size,

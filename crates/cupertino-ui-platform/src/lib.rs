@@ -15,7 +15,9 @@ pub use cupertino_modifiers::Mods;
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};
 pub use cupertino_ui_render::Color;
-pub use surface_layers::{LayerChange, LayerEdge, LayerProperty, SurfaceLayer, SurfaceLayerLook};
+pub use surface_layers::{
+    LayerChange, LayerEdge, LayerProperty, SurfaceLayer, SurfaceLayerLook, MAX_LAYER_SAMPLES,
+};
 
 /// A toplevel window or a popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

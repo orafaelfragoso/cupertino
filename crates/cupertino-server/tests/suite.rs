@@ -60,6 +60,8 @@ mod force_quit;
 mod frame_pacing;
 #[path = "goldens.rs"]
 mod goldens;
+#[path = "gpu_presenter.rs"]
+mod gpu_presenter;
 #[path = "gpu-reset.rs"]
 mod gpu_reset;
 #[path = "gpu_slice.rs"]

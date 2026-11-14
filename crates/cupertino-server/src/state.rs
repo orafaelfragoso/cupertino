@@ -522,6 +522,8 @@ pub struct Cupertino {
     /// Whether a headless backend withholds `linux-drm-syncobj-v1` though its device could offer it (`--no-explicit-sync`),
     /// as a compositor without the protocol does. Read when the backend starts.
     pub withhold_explicit_sync: bool,
+    /// Test hook: every dmabuf a client offers is refused, as a renderer that cannot import it would.
+    pub refuse_dmabuf_imports: bool,
     /// The waits of the clients that have had a commit held back, until they disconnect ([`crate::acquire_waits::sweep`]).
     pub acquire_registry: Vec<std::sync::Arc<crate::acquire_waits::AcquireWaits>>,
     pub popups: PopupManager,
@@ -899,6 +901,7 @@ impl Cupertino {
             dmabuf_global: None,
             syncobj_state: None,
             withhold_explicit_sync: false,
+            refuse_dmabuf_imports: false,
             acquire_registry: Vec::new(),
             popups: PopupManager::default(),
             hung: crate::hung::Pings::default(),

@@ -702,8 +702,8 @@ fn dragged_backdrops_match_whole_ones(split: Option<i32>) {
     }
     assert_eq!(h.state.wm.window(id).unwrap().geometry(), end);
     assert!(
-        reblurs(&h) > before,
-        "the dragged sidebar's backdrop is made again only where it moved to"
+        reblurs(&h) - before >= 8 * (1 + u64::from(split.is_some())),
+        "each frame of the drag makes the backdrops again only where they changed or newly reach"
     );
     let dragged = h.screenshot();
     drop(_apps);

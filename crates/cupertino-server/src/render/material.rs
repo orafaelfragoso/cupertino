@@ -1095,7 +1095,10 @@ impl MaterialGl {
     /// framebuffer as it is now, or as it was at the generation `p` knows the changes since, its pyramid is made again
     /// only where those changes or `crop` reach past it. None to make it whole.
     fn reblur_plan(&self, p: &DrawParams<'_>, old: &CachedBackdrop, crop: Crop) -> Option<Reblur> {
-        old.pyramid.as_ref()?;
+        // a backdrop that is not filtered is its own pyramid
+        if old.pyramid.is_none() && self.filters(p) {
+            return None;
+        }
         let changed: Vec<(f32, f32, f32, f32)> = if old.generation == p.generation {
             Vec::new()
         } else {
@@ -1145,7 +1148,8 @@ impl MaterialGl {
     }
 
     /// The backdrop for `crop` made from `old`'s: its pyramid's texels `plan` keeps copied, each of its parts made
-    /// again from its own pixels of the framebuffer, and the whole filtered as after a whole capture.
+    /// again from its own pixels of the framebuffer, and the whole filtered as after a whole capture (when the recipe
+    /// filters it; otherwise the pyramid is the backdrop).
     unsafe fn reblur(
         &mut self,
         gl: &ffi::Gles2,
@@ -1158,8 +1162,13 @@ impl MaterialGl {
         let factor = 1i32 << self.plan(p).levels.len().min(16);
         let (new_t, old_t) = (Texels::of(crop, factor), Texels::of(old.crop, factor));
         let at = (new_t.x0, new_t.y0);
-        self.free.push(old.target);
-        let old_pyramid = old.pyramid?;
+        let old_pyramid = match old.pyramid {
+            Some(pyramid) => {
+                self.free.push(old.target);
+                pyramid
+            }
+            None => old.target,
+        };
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
         let pyramid = if old.crop == crop {
@@ -1183,6 +1192,10 @@ impl MaterialGl {
             };
             self.copy_texels(gl, &made, (part.x0, part.y0), &pyramid, at, part);
             self.free.push(made);
+        }
+        if !self.filters(p) {
+            self.stats.reblurs += 1;
+            return Some((pyramid, None));
         }
         let Some(out) = self.filtered(gl, p, &pyramid) else {
             self.free.push(pyramid);

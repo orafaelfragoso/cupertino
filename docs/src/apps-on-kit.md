@@ -23,7 +23,7 @@ CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says 
 
 ## The Control Center
 
-`cupertino-controlcenter` opens below the menu bar at the top right as a transparent Kit window on a layer surface. Each module is its own glass tile, and Wi-Fi, Bluetooth, display and sound grow into a detail view with their networks, devices or outputs. It takes the keyboard while it is shown; every tile is reachable with Tab and the arrow keys. Escape or a press outside it closes it. With Reduce Transparency the tiles are opaque on one opaque panel. Run `cupertino-controlcenter --fake-backends` to try it without touching the machine's radios, volume and backlight. The crate's README has the details.
+`cupertino-controlcenter` opens below the menu bar at the top right as a transparent Kit window on a layer surface. Each module is its own glass tile, and Wi-Fi, Bluetooth, display and sound grow into a detail view with their networks, devices or outputs. It takes the keyboard while it is shown; every tile is reachable with Tab and the arrow keys. Escape or a press outside it closes it. Its fade in and out run on the compositor's clock, so opening it draws no frame after the first. With Reduce Transparency the tiles are opaque on one opaque panel. Run `cupertino-controlcenter --fake-backends` to try it without touching the machine's radios, volume and backlight. The crate's README has the details.
 
 ## The screenshot tool
 

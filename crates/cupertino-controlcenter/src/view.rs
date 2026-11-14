@@ -40,6 +40,8 @@ use crate::motion::{visibility, Visibility};
 
 /// The `app_id` of the panel's window, which gives it its layer surface.
 pub const APP_ID: &str = "cupertino-controlcenter";
+/// The key of the panel's window, which the compositor's fades name.
+pub const PANEL_KEY: &str = "panel";
 /// The `app_id` of the catcher's window.
 pub const CATCHER_APP_ID: &str = "cupertino-controlcenter.catcher";
 /// What assistive technology calls the panel.
@@ -2642,7 +2644,7 @@ pub fn panel<M: Clone + 'static>(
         }
     };
     Window {
-        key: WindowKey(Key::from("panel")),
+        key: WindowKey(Key::from(PANEL_KEY)),
         spec: WindowSpec {
             title: TITLE.to_owned(),
             app_id: APP_ID.to_owned(),

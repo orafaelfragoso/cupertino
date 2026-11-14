@@ -22,7 +22,7 @@ use smithay::backend::renderer::utils::CommitCounter;
 use smithay::desktop::{layer_map_for_output, LayerSurface};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Physical, Point, Scale};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::{Anchor, Layer};
 
@@ -2036,28 +2036,42 @@ fn layer_elements(
             .filter(|o| o.output == p.output_id)
             .map_or(1.0, |o| o.menu_bar_alpha(p.now) as f32);
         let (dy, opacity) = look.map_or((0.0, 1.0), |l| (l.dy, l.alpha * overview_bar));
-        if opacity <= 0.0 {
+        // the surface's own presentation (cupertino_layers_v1 version 2) moves, scales and fades all it draws
+        let shown =
+            crate::layers_v1::presentation(surface.wl_surface(), p.now, p.display.reduce_motion);
+        let (dx, dy, opacity, zoom) = shown.map_or((0.0, dy, opacity, 1.0), |s| {
+            (s.x, dy + s.y, opacity * s.opacity as f32, s.scale)
+        });
+        if opacity <= 0.0 || zoom <= 0.0 {
             continue;
         }
-        let origin: Point<f64, Logical> = geo.loc.to_f64() + Point::from((0.0, dy));
+        let origin: Point<f64, Logical> = geo.loc.to_f64() + Point::from((dx, dy));
         let loc: Point<i32, Physical> = origin.to_physical_precise_round(scale);
+        let zoomed = Zoom {
+            centre: origin
+                + Point::from((f64::from(geo.size.w) / 2.0, f64::from(geo.size.h) / 2.0)),
+            scale: zoom,
+        };
         // popups above their parent, each with its own backdrop directly below it
         let mut own = Vec::new();
         for (popup, popup_offset) in crate::popup_linger::shown(surface.wl_surface(), p.now) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
-            let tree = standalone_tree(
-                popup.wl_surface(),
-                SceneKind::LayerContent,
-                popup_origin.to_physical_precise_round(scale),
-                opacity,
+            let tree = zoomed.tree(
+                standalone_tree(
+                    popup.wl_surface(),
+                    SceneKind::LayerContent,
+                    popup_origin.to_physical_precise_round(scale),
+                    opacity,
+                ),
+                scale,
             );
             own.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
                 bounded_glass(
-                    backdrop_elements(p, &areas, opacity, WindowState::Active),
-                    bound,
+                    backdrop_elements(p, &zoomed.areas(areas), opacity, WindowState::Active),
+                    zoomed.rect(bound),
                 )
             }));
-            let backdrops = surface_backdrops(popup.wl_surface(), popup_origin);
+            let backdrops = zoomed.areas(surface_backdrops(popup.wl_surface(), popup_origin));
             own.extend(popup_backdrop_elements(p, &backdrops, opacity));
         }
         if layer == Layer::Overlay {
@@ -2068,8 +2082,12 @@ fn layer_elements(
         // its layers over it (cupertino_layers_v1)
         let place = super::layers::LayerPlace {
             origin,
-            pivot: origin,
-            scale: (1.0, 1.0),
+            pivot: if zoomed.scale == 1.0 {
+                origin
+            } else {
+                zoomed.centre
+            },
+            scale: (zoomed.scale, zoomed.scale),
             opacity,
             clip: Clip::None,
             kind: SceneKind::LayerContent,
@@ -2078,20 +2096,23 @@ fn layer_elements(
             p,
             surface.wl_surface(),
             &place,
-            |p, areas| backdrop_elements(p, &areas, opacity, WindowState::Active),
+            |p, areas| backdrop_elements(p, &zoomed.areas(areas), opacity, WindowState::Active),
         ));
-        let tree = standalone_tree(surface.wl_surface(), SceneKind::LayerContent, loc, opacity);
+        let tree = zoomed.tree(
+            standalone_tree(surface.wl_surface(), SceneKind::LayerContent, loc, opacity),
+            scale,
+        );
         out.extend(tree_pieces(p, tree, origin, |p, areas, bound| {
             bounded_glass(
-                backdrop_elements(p, &areas, opacity, WindowState::Active),
-                bound,
+                backdrop_elements(p, &zoomed.areas(areas), opacity, WindowState::Active),
+                zoomed.rect(bound),
             )
         }));
         if layer == Layer::Overlay && surface.namespace() == crate::dock::OVERVIEW_NAMESPACE {
             // the workspaces' live pictures lie on the chrome's band, under what it draws
             out.extend(overview_pictures(p, opacity));
         }
-        let backdrops = surface_backdrops(surface.wl_surface(), origin);
+        let backdrops = zoomed.areas(surface_backdrops(surface.wl_surface(), origin));
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
         } else {
@@ -2104,6 +2125,53 @@ fn layer_elements(
         }
     }
     out
+}
+
+/// A layer shell surface's presentation scale about its centre (output-local points), applied to its trees, its
+/// backdrops and the bounds of its subsurfaces' glass; at 1 everything is left as it is.
+#[derive(Clone, Copy)]
+struct Zoom {
+    centre: Point<f64, Logical>,
+    scale: f64,
+}
+
+impl Zoom {
+    fn point(&self, q: Point<f64, Logical>) -> Point<f64, Logical> {
+        Point::from((
+            self.centre.x + (q.x - self.centre.x) * self.scale,
+            self.centre.y + (q.y - self.centre.y) * self.scale,
+        ))
+    }
+
+    fn rect(&self, r: Rectangle<f64, Logical>) -> Rectangle<f64, Logical> {
+        if self.scale == 1.0 {
+            return r;
+        }
+        Rectangle::new(
+            self.point(r.loc),
+            (r.size.w * self.scale, r.size.h * self.scale).into(),
+        )
+    }
+
+    fn areas(&self, mut areas: Vec<BackdropArea>) -> Vec<BackdropArea> {
+        if self.scale != 1.0 {
+            for a in &mut areas {
+                a.area = self.rect(a.area);
+                a.radius *= self.scale;
+            }
+        }
+        areas
+    }
+
+    fn tree(&self, mut tree: Tree, scale: Scale<f64>) -> Tree {
+        if self.scale != 1.0 {
+            tree.pivot = self.centre.to_physical_precise_round(scale);
+            tree.scale = (self.scale, self.scale);
+            // drawn rescaled about the pivot, as a popup is, unmasked
+            tree.role = SurfaceRole::Popup;
+        }
+        tree
+    }
 }
 
 /// Elements of popups that carry a material, to go directly below the popup's surface (front to back:

@@ -21,7 +21,7 @@ use cupertino_protocols::client::layers::cupertino_layer_v1::{self, CupertinoLay
 use cupertino_protocols::client::layers::cupertino_layers_v1::CupertinoLayersV1;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::layers_v1::{present, LayerDraw};
+use cupertino_server::layers_v1::{present, presentation, LayerDraw, Presented};
 use cupertino_server::Cupertino;
 use smithay::desktop::layer_map_for_output;
 use smithay::reexports::calloop::EventLoop;
@@ -310,7 +310,7 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=2, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let ls = shell.get_layer_surface(
                 &parent,
@@ -385,6 +385,26 @@ fn one_layer(h: &mut Harness) -> TestClient {
 
 fn x_of(h: &Harness) -> f64 {
     h.layers()[0].x
+}
+
+/// The parent's presentation as the scene shows it now.
+fn presented(h: &Harness) -> Option<Presented> {
+    h.parent()
+        .and_then(|p| presentation(&p, h.state.now(), h.state.display_options().reduce_motion))
+}
+
+/// A client whose grey parent has a presentation, `made[0]`, committed with it; the harness waits until it shows.
+fn presented_parent(h: &mut Harness) -> TestClient {
+    let client = TestClient::spawn(h.socket_path(), grey);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    client.send(|c, qh| {
+        let parent = c.parent.clone();
+        let p = c.layers.get_presentation(&parent, qh, ());
+        c.made.push((parent, p));
+        c.parent.commit();
+    });
+    h.wait_until("the presentation", |h| presented(h).is_some());
+    client
 }
 
 // ---- tests ---------------------------------------------------------------------------------
@@ -705,6 +725,136 @@ fn limits_and_bad_values_are_protocol_errors() {
     client.send(|c, qh| {
         let parent = c.parent.clone();
         let _ = c.layers.get_layer(&parent, &parent, qh, ());
+    });
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_protocols::client::layers::cupertino_layers_v1::Error::Role as u32
+    );
+}
+
+#[test]
+fn a_presentation_fades_moves_and_scales_all_its_surface_draws_on_the_server_clock() {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = presented_parent(&mut h);
+    assert_eq!(
+        presented(&h),
+        Some(Presented {
+            x: 0.0,
+            y: 0.0,
+            opacity: 1.0,
+            scale: 1.0
+        }),
+        "it starts at rest"
+    );
+    assert!(
+        h.layers().is_empty(),
+        "a presentation is not drawn as a layer"
+    );
+    let inside = (MARGIN.0 as u32 + 40, MARGIN.1 as u32 + 20);
+    let shot = h.screenshot("presentation-rest");
+    assert_eq!(shot.get_pixel(inside.0, inside.1).0, [128, 128, 128, 255]);
+    // faded out with the commit: the surface no longer shows
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Opacity, 0.0);
+        c.parent.commit();
+    });
+    h.wait_until("the fade", |h| {
+        presented(h).is_some_and(|p| p.opacity == 0.0)
+    });
+    let shot = h.screenshot("presentation-faded");
+    assert_ne!(shot.get_pixel(inside.0, inside.1).0, [128, 128, 128, 255]);
+    // a fade in along the server's clock, finished and settled
+    h.state.fixed_time = Some(200.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(9, Property::Opacity, 1.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the animation", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 200.0))
+    });
+    h.state.fixed_time = Some(200.5);
+    assert!((presented(&h).unwrap().opacity - 0.5).abs() < 1e-6);
+    h.state.fixed_time = Some(201.0);
+    h.wait_until("finished and settled", |_| {
+        client.heard(|e| e.finished == [9] && e.settled == 1)
+    });
+    // moved and scaled about its centre: the top-left corner leaves, the centre stays
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 30.0);
+        c.l(0).set_value(Property::Scale, 0.5);
+        c.parent.commit();
+    });
+    h.wait_until("the move", |h| {
+        presented(h).is_some_and(|p| p.x == 30.0 && p.scale == 0.5)
+    });
+    let shot = h.screenshot("presentation-scaled");
+    assert_ne!(shot.get_pixel(inside.0, inside.1).0, [128, 128, 128, 255]);
+    let centre = (
+        (MARGIN.0 + PARENT.0 / 2 + 30) as u32,
+        (MARGIN.1 + PARENT.1 / 2) as u32,
+    );
+    assert_eq!(shot.get_pixel(centre.0, centre.1).0, [128, 128, 128, 255]);
+    let right_edge = ((MARGIN.0 + PARENT.0 - 10) as u32, centre.1);
+    assert_ne!(
+        shot.get_pixel(right_edge.0, right_edge.1).0,
+        [128, 128, 128, 255]
+    );
+    // destroyed: back at rest with the next commit
+    client.send(|c, _| {
+        c.l(0).destroy();
+        c.parent.commit();
+    });
+    h.wait_until("at rest", |h| presented(h).is_none());
+}
+
+#[test]
+fn a_presentation_is_a_layer_shell_surface_s_own_and_has_four_properties() {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    // width is not a property of a presentation
+    let client = presented_parent(&mut h);
+    client.send(|c, _| c.l(0).set_value(Property::Width, 10.0));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()),
+        Some((
+            "cupertino_layer_v1".into(),
+            cupertino_layer_v1::Error::InvalidProperty as u32
+        ))
+    );
+    // nor is glass
+    let client = presented_parent(&mut h);
+    client.send(|c, _| c.l(0).set_glass(0, 1.0));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidProperty as u32
+    );
+    // a second presentation of the same surface
+    let client = presented_parent(&mut h);
+    client.send(|c, qh| {
+        let parent = c.parent.clone();
+        let _ = c.layers.get_presentation(&parent, qh, ());
+    });
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()),
+        Some((
+            "cupertino_layers_v1".into(),
+            cupertino_protocols::client::layers::cupertino_layers_v1::Error::Role as u32
+        ))
+    );
+    // a surface without the layer shell's role
+    let client = presented_parent(&mut h);
+    client.send(|c, qh| {
+        let plain = c.compositor.create_surface(qh, ());
+        let _ = c.layers.get_presentation(&plain, qh, ());
     });
     h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
     assert_eq!(

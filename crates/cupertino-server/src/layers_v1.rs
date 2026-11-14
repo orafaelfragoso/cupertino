@@ -7,6 +7,8 @@
 //! ([`LayerProperty`]) and their look. An animation waits until the frame that first shows its commit is built
 //! ([`present`], called by the scene) or [`START_AT_THE_LATEST`] after the commit; [`Cupertino::tick_layers`] sends
 //! `finished`, `replaced` and `settled`. The content is the layer surface's own buffer, which applies on its own commit.
+//! A presentation (version 2) is a layer model of a layer shell surface whose parent is itself: its offset, opacity
+//! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -73,6 +75,11 @@ fn property_index(p: WEnum<Property>) -> Option<usize> {
     }
 }
 
+/// Properties a presentation has: x, y, opacity and scale.
+fn presented(prop: usize) -> bool {
+    matches!(prop, 0 | 1 | 4 | 5)
+}
+
 /// Properties that move or reshape the layer, which reduced motion does not animate.
 fn spatial(prop: usize) -> bool {
     prop != 4
@@ -108,6 +115,7 @@ enum Op {
     Create {
         surface: WlSurface,
         resource: CupertinoLayerV1,
+        whole: bool,
     },
     Destroy,
     Set(usize, f64),
@@ -168,6 +176,8 @@ struct Waiting {
 pub struct LayerModel {
     pub serial: u64,
     pub surface: WlSurface,
+    /// The parent's own presentation (`get_presentation`), not a layer drawn over it.
+    pub whole: bool,
     resource: CupertinoLayerV1,
     props: [LayerProperty; PROPERTIES],
     /// The serial of each property's running animation.
@@ -187,13 +197,14 @@ pub struct LayerModel {
 }
 
 impl LayerModel {
-    fn new(serial: u64, surface: WlSurface, resource: CupertinoLayerV1) -> Self {
+    fn new(serial: u64, surface: WlSurface, resource: CupertinoLayerV1, whole: bool) -> Self {
         let mut props = [LayerProperty::new(0.0); PROPERTIES];
         props[4] = LayerProperty::new(1.0);
         props[5] = LayerProperty::new(1.0);
         Self {
             serial,
             surface,
+            whole,
             resource,
             props,
             running: [None; PROPERTIES],
@@ -344,7 +355,13 @@ pub struct LayerData {
     parent: Option<WlSurface>,
     serial: u64,
     client: ClientId,
+    /// A presentation: only x, y, opacity and scale, and none of the look requests.
+    whole: bool,
 }
+
+/// In a layer shell surface's data map: whether it holds a presentation that is not destroyed.
+#[derive(Default)]
+struct HasPresentation(Mutex<bool>);
 
 impl LayerData {
     fn queue(&self, op: Op) {
@@ -373,7 +390,7 @@ pub struct Layers {
 impl Layers {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoLayersV1, ()>(1, ()),
+            _global: dh.create_global::<Cupertino, CupertinoLayersV1, ()>(2, ()),
             parents: Vec::new(),
             held: HashMap::new(),
         }
@@ -450,7 +467,7 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
     with_parent(parent, |layers| {
         let mut out: Vec<LayerDraw> = layers
             .iter_mut()
-            .filter(|l| l.surface.is_alive())
+            .filter(|l| l.surface.is_alive() && !l.whole)
             .map(|l| {
                 l.start(now, reduce_motion);
                 LayerDraw {
@@ -476,6 +493,32 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
             .collect();
         out.sort_by_key(|l| l.raised);
         out
+    })
+}
+
+/// What a surface's presentation shows at one time: everything the surface draws is moved by `x` and `y` (points),
+/// scaled by `scale` about the surface's centre and faded by `opacity`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Presented {
+    pub x: f64,
+    pub y: f64,
+    pub opacity: f64,
+    pub scale: f64,
+}
+
+/// The presentation of `surface` as shown at `now`, starting the animations whose commit this frame shows first;
+/// `None` when the surface has none.
+pub fn presentation(surface: &WlSurface, now: f64, reduce_motion: bool) -> Option<Presented> {
+    with_parent(surface, |layers| {
+        layers.iter_mut().find(|l| l.whole).map(|l| {
+            l.start(now, reduce_motion);
+            Presented {
+                x: l.value(0, now),
+                y: l.value(1, now),
+                opacity: l.value(4, now).clamp(0.0, 1.0),
+                scale: l.value(5, now).max(0.0),
+            }
+        })
     })
 }
 
@@ -505,9 +548,11 @@ impl Cupertino {
             with_parent(surface, |layers| {
                 for (serial, op) in ops {
                     match op {
-                        Op::Create { surface, resource } => {
-                            layers.push(LayerModel::new(serial, surface, resource))
-                        }
+                        Op::Create {
+                            surface,
+                            resource,
+                            whole,
+                        } => layers.push(LayerModel::new(serial, surface, resource, whole)),
                         Op::Destroy => layers.retain(|l| l.serial != serial),
                         op => {
                             if let Some(l) = layers.iter_mut().find(|l| l.serial == serial) {
@@ -605,6 +650,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     parent: None,
                     serial: 0,
                     client: client.id(),
+                    whole: false,
                 };
                 if !owned_by(&surface, client) || !owned_by(&parent, client) {
                     global.post_error(
@@ -662,6 +708,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     parent: Some(parent.clone()),
                     serial,
                     client: client.id(),
+                    whole: false,
                 };
                 let resource = init.init(id, data);
                 with_states(&parent, |s| {
@@ -670,6 +717,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                         Op::Create {
                             surface: surface.clone(),
                             resource,
+                            whole: false,
                         },
                     ))
                 });
@@ -677,8 +725,67 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     state.layers.parents.push(parent);
                 }
             }
+            cupertino_layers_v1::Request::GetPresentation { id, surface } => {
+                let inert = LayerData {
+                    parent: None,
+                    serial: 0,
+                    client: client.id(),
+                    whole: true,
+                };
+                if !owned_by(&surface, client) {
+                    global.post_error(
+                        LayersError::InvalidSurface,
+                        "the surface belongs to another client or is gone",
+                    );
+                    init.init(id, inert);
+                    return;
+                }
+                let layer_shell = get_role(&surface)
+                    == Some(smithay::wayland::shell::wlr_layer::LAYER_SURFACE_ROLE);
+                let taken = with_states(&surface, |s| {
+                    let held = s
+                        .data_map
+                        .get_or_insert_threadsafe(HasPresentation::default);
+                    let mut held = held.0.lock().unwrap();
+                    let taken = *held;
+                    if layer_shell {
+                        *held = true;
+                    }
+                    taken
+                });
+                if !layer_shell || taken {
+                    global.post_error(
+                        LayersError::Role,
+                        "the surface is not a layer shell surface or already has a presentation",
+                    );
+                    init.init(id, inert);
+                    return;
+                }
+                *state.layers.held.entry(client.id()).or_default() += 1;
+                let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
+                let data = LayerData {
+                    parent: Some(surface.clone()),
+                    serial,
+                    client: client.id(),
+                    whole: true,
+                };
+                let resource = init.init(id, data);
+                with_states(&surface, |s| {
+                    s.cached_state.get::<LayerOps>().pending().ops.push((
+                        serial,
+                        Op::Create {
+                            surface: surface.clone(),
+                            resource,
+                            whole: true,
+                        },
+                    ))
+                });
+                if !state.layers.parents.contains(&surface) {
+                    state.layers.parents.push(surface);
+                }
+            }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 1 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 2 has no other request"),
         }
     }
 }
@@ -722,7 +829,8 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                          to: f64,
                          curve: Option<LayerCurve>,
                          velocity: f64| {
-            let Some(prop) = property_index(property) else {
+            let Some(prop) = property_index(property).filter(|&p| !data.whole || presented(p))
+            else {
                 return bad_property("property");
             };
             if !in_range(prop, to) {
@@ -750,13 +858,15 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
         };
         match request {
             R::Destroy => {}
-            R::SetValue { property, value } => match property_index(property) {
-                None => bad_property("property"),
-                Some(prop) if !in_range(prop, value) => {
-                    bad_value("the value is outside the property's range")
+            R::SetValue { property, value } => {
+                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                    None => bad_property("property"),
+                    Some(prop) if !in_range(prop, value) => {
+                        bad_value("the value is outside the property's range")
+                    }
+                    Some(prop) => data.queue(Op::Set(prop, value)),
                 }
-                Some(prop) => data.queue(Op::Set(prop, value)),
-            },
+            }
             R::AnimateTimed {
                 serial,
                 property,
@@ -789,10 +899,13 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 spring(response, damping),
                 velocity,
             ),
-            R::Cancel { property } => match property_index(property) {
-                Some(prop) => data.queue(Op::Cancel(prop)),
-                None => bad_property("property"),
-            },
+            R::Cancel { property } => {
+                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                    Some(prop) => data.queue(Op::Cancel(prop)),
+                    None => bad_property("property"),
+                }
+            }
+            _ if data.whole => bad_property("request on a presentation"),
             R::SetGlass { style, lens } => {
                 if style == NO_GLASS {
                     data.queue(Op::Glass(None));
@@ -848,11 +961,18 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 }
                 data.queue(Op::Placeholder(c.map(|v| v as f32)));
             }
-            _ => unreachable!("cupertino_layer_v1 version 1 has no other request"),
+            _ => unreachable!("cupertino_layer_v1 version 2 has no other request"),
         }
     }
 
     fn destroyed(state: &mut Self, client: ClientId, _: &CupertinoLayerV1, data: &LayerData) {
+        if let Some(surface) = data.parent.as_ref().filter(|s| data.whole && s.is_alive()) {
+            with_states(surface, |s| {
+                if let Some(held) = s.data_map.get::<HasPresentation>() {
+                    *held.0.lock().unwrap() = false;
+                }
+            });
+        }
         if data.parent.is_some() {
             if let Some(n) = state.layers.held.get_mut(&client) {
                 *n = n.saturating_sub(1);
@@ -885,5 +1005,7 @@ mod tests {
         assert!(spring(0.3, 0.8).is_some());
         assert!(spring(0.001, 0.8).is_none() && spring(0.3, 5.0).is_none());
         assert!(!spatial(4) && spatial(0) && spatial(5));
+        assert!(presented(0) && presented(1) && presented(4) && presented(5));
+        assert!(!presented(2) && !presented(3) && !presented(6));
     }
 }

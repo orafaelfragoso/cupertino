@@ -22,7 +22,8 @@ session that finds where the two windows are at this size and scale. The scenari
   files-scroll    Files raised and its list scrolled with two fingers, down and up
 and, with --scenario all or by name: dock-sweep (magnification), overview, launcher (open and close), context-menu
 (the desktop's menu, down its rows onto a submenu), and Files full screen, so it fills the output: files-full-repaint
-(the appearance turned three times, each a repaint of the whole window) and files-full-scroll (as files-scroll).
+(the appearance turned three times, each a repaint of the whole window) and files-full-scroll (as files-scroll); their
+folder holds 3000 files, so the list still scrolls full screen at scale 1.
 
 Everything is written as JSON with --out: per run, scenario and refresh rate, the figures below; and per scenario the
 median of the runs with their spread (max - min), which is the run-to-run noise. The table printed shows the medians.
@@ -57,6 +58,9 @@ TICK = os.sysconf("SC_CLK_TCK")
 SETTLE = 9.0
 BASELINE = ["idle", "drag", "hover", "resize", "control-center", "launcher-typing", "files-scroll"]
 EXTRA = ["dock-sweep", "overview", "launcher", "context-menu", "files-full-repaint", "files-full-scroll"]
+# the files in Files' folder, and in the full screen scenarios', whose window shows 400 whole at 3840 x 2160 and scale 1
+ITEMS = 400
+FULL_SCREEN_ITEMS = 3000
 # how long Files takes to settle full screen before a scenario measures it
 FULL_SCREEN_SETTLE = 2.5
 PHASES = ["update", "view", "layout", "paint", "raster", "copy", "commit"]
@@ -70,8 +74,9 @@ SLEEPS = {7: ("poll", 2, "ms"), 23: ("select", 4, "ptr"), 35: ("nanosleep", 0, "
 # ---- where the windows are -----------------------------------------------------------------------------------------
 
 def session(bin_dir: pathlib.Path, size: tuple[int, int], scale: float, hz: float, flags: list[str], end: float,
-            env_extra: dict) -> subprocess.Popen:
-    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{size[0]}x{size[1]}", FIXTURE_DIR=str(fixture()), **env_extra)
+            env_extra: dict, items: int = None) -> subprocess.Popen:
+    env = dict(os.environ, BIN_DIR=str(bin_dir), SIZE=f"{size[0]}x{size[1]}",
+               FIXTURE_DIR=str(fixture(items or ITEMS)), **env_extra)
     w, h = logical(size, scale)
     args = [str(ROOT / "crates/cupertino-server/scripts/session.sh"), "--scale", f"{scale:g}", "--appearance", "dark",
             "--refresh", f"{hz:g}", "--spawn", "cupertino-files", "--spawn", "cupertino-settings",
@@ -84,12 +89,18 @@ def logical(size: tuple[int, int], scale: float) -> tuple[float, float]:
     return size[0] / scale, size[1] / scale
 
 
-def fixture() -> pathlib.Path:
-    folder = ROOT / "target/bench-fixture"
+def fixture(items: int) -> pathlib.Path:
+    """The home folder's contents: `items` files."""
+    folder = ROOT / ("target/bench-fixture" if items == ITEMS else f"target/bench-fixture-{items}")
     folder.mkdir(parents=True, exist_ok=True)
-    for i in range(1, 401):
+    for i in range(1, items + 1):
         (folder / f"Report {i:03}.txt").touch()
     return folder
+
+
+def items_of(name: str) -> int:
+    """The files in Files' folder for scenario `name`: full screen, enough that the list still scrolls at scale 1."""
+    return FULL_SCREEN_ITEMS if name.startswith("files-full") else ITEMS
 
 
 def read_windows(path: pathlib.Path) -> list[dict]:
@@ -590,7 +601,7 @@ def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
             shots = pathlib.Path(os.environ["BENCH_SHOTS"])
             shots.mkdir(parents=True, exist_ok=True)
             flags += ["--shot", f"{(span[0] + span[1]) / 2:.2f}:{shots}/{hz:g}-{name}.png"]
-        proc = session(bin_dir, size, scale, hz, flags, end, {"CUPERTINO_FRAME_TIMING": str(timing)})
+        proc = session(bin_dir, size, scale, hz, flags, end, {"CUPERTINO_FRAME_TIMING": str(timing)}, items_of(name))
         # the frame statistics name where the server's clock starts
         deadline = time.monotonic() + 30
         head: dict = {}

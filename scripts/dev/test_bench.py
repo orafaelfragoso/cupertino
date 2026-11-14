@@ -79,6 +79,15 @@ class ScriptTest(unittest.TestCase):
                 points = {flags[i + 1].split(":")[1] for i, f in enumerate(flags) if f == "--scroll"}
                 self.assertEqual(points, {"768.0,400.0"}, "the middle of the list, which fills the output")
 
+    def test_full_screen_files_lists_a_folder_long_enough_to_scroll_and_the_others_the_baselines_folder(self):
+        self.assertEqual(bench.items_of("files-full-scroll"), bench.FULL_SCREEN_ITEMS)
+        self.assertEqual(bench.items_of("files-full-repaint"), bench.FULL_SCREEN_ITEMS)
+        for name in bench.BASELINE:
+            self.assertEqual(bench.items_of(name), bench.ITEMS, name)
+        # 3840 x 2160 at scale 1 shows 32 icons a row and 36 rows: the scroll must not reach the folder's end
+        rows, row_pt, shown_pt = bench.FULL_SCREEN_ITEMS / 32, 59.0, 2160.0
+        self.assertGreater(rows * row_pt - shown_pt, 1800.0)
+
     def test_a_full_screen_files_scenario_where_files_did_not_fill_the_output_is_flagged(self):
         def run(width):
             return {"windows": {"before": [], "after": [dict(WINDOWS["files"], width=width, height=800.0)]},

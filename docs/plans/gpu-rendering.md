@@ -981,14 +981,20 @@ Gate:
       frame after its first as it opens)
       (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
       "Step 9"). Popovers and menus hold: a popover's growth and shrinking and a menu's fade present no frame. The
-      launcher's close holds (no buffer of its window or layers); its open waits on its split items above. The review
-      by eye is pending the owner's review of the sheet.
+      launcher's close holds (no buffer of its window or layers), and so does a scope's open from hidden (no buffer
+      of its window or layers while the open is part way,
+      `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the search
+      field's open with its mode buttons and the fold and unfold wait on their split items above. The review by eye is
+      pending the owner's review of the sheet.
 - [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
       own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
-      the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest;
-      its open is drawn by the application on both sides until its open's layers land, so it has no pairs.
+      the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest,
+      and so is a scope's open from hidden (the browser and the files scope, both appearances, 7 moments each from
+      50 ms to the open's last frame at 500 ms: within 1 of 255 apart from the outline, along it up to 90 of 255 in
+      the dark and 26 in the light, the last frame within 0); the search field's open with its mode buttons and the
+      fold and unfold are drawn by the application on both sides until their layers land, so they have no pairs.
 
 ## Step 10: retire the duplicates
 
@@ -1871,9 +1877,29 @@ The 44 is the caret at the close's first frame: the application's own drawing mo
 its enclosure moves (it lies on whole device pixels of the window), where the content's layer keeps it in place; by
 50 ms the blur has taken it under 2. The 33 and 22 are the mode button's ring and symbol, which the compositor moves
 onto whole device pixels while the drawing places them between pixels. The 7 is the text under the close's first, one
-or two pixel wide blur, where two Gaussians of the same deviation round differently. The open is drawn by the
-application with the layers on and off alike, so it has no pairs until its own layers land. The earlier recording
-of two runs, whose pairs landed up to a frame apart, put the close's first frame at 83 to 109.
+or two pixel wide blur, where two Gaussians of the same deviation round differently. The earlier recording of two runs,
+whose pairs landed up to a frame apart, put the close's first frame at 83 to 109.
+
+A scope's open from hidden at the same moment, from
+`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, the same way: every other frame the
+application draws of its open (of 30) and its last, against the compositor's layers at that moment. The largest
+channel difference over the window, then apart from two device pixels either side of the outline:
+
+| Launcher open | 50 ms | 83 ms | 150 ms | 183 ms | 283 ms | 317 ms | 500 ms (last) |
+|---|---|---|---|---|---|---|---|
+| Browser, dark | 43 / 0 | 73 / 1 | 84 / 0 | 84 / 0 | 63 / 0 | 88 / 0 | 0 |
+| Browser, light | 12 / 0 | 21 / 1 | 25 / 0 | 24 / 0 | 19 / 0 | 26 / 0 | 0 |
+| Files, dark | 45 / 0 | 73 / 1 | 78 / 0 | 83 / 0 | 71 / 0 | 90 / 0 | 0 |
+| Files, light | 12 / 0 | 21 / 1 | 23 / 0 | 24 / 0 | 21 / 0 | 26 / 0 | 0 |
+
+Every difference over 1 is along the outline: the edge is the resting stroke scaled, a half-point line that the
+scale puts between device pixels, where the application strokes it afresh at each scale; it is bounded by two fifths
+of the line's opacity (95 in the dark, 28 in the light). The first frame is the same in all four.
+
+A scope's open, counted by `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`
+(the real process on a private bus, debug builds, the browser opened and closed once first): 0 buffers of the window
+and its three layers while the open is part way, in each of 3 runs, over 92 to 93 server steps that showed it part
+way.
 
 The launcher's close, counted by `shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`
 (the real process on a private bus, debug builds): 0 buffers of the window and its five layers from Escape until the

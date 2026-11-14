@@ -28,12 +28,15 @@
 pub mod atlas;
 mod gles;
 pub mod pool;
+pub mod program_cache;
 pub mod shaders;
+pub mod syncobj;
 mod types;
 
 pub use gles::{
     wait_sync_file, BindGroup, BindGroupEntry, BindGroupLayout, BindingResource, BorrowedState,
-    Buffer, Device, ExternalImage, Fence, Pass, Pipeline, PipelineDesc, Sampler, Texture,
-    MAX_BINDINGS, MAX_GROUPS,
+    Buffer, DetachedDevice, Device, ExternalImage, Fence, Pass, Pipeline, PipelineDesc, Sampler,
+    Texture, MAX_BINDINGS, MAX_GROUPS,
 };
+pub use program_cache::ProgramCacheStats;
 pub use types::*;

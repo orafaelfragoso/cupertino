@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use glow::HasContext;
 
+use crate::program_cache::{driver_key, program_key, ProgramCache, ProgramCacheStats};
 use crate::shaders::{NamedBinding, ShaderSource};
 use crate::types::*;
 
@@ -208,6 +209,10 @@ pub struct Device {
     injected: Cell<Option<u32>>,
     borrowed: bool,
     entered: Cell<bool>,
+    /// Saved program binaries, when the caller named a cache directory.
+    program_cache: Option<ProgramCache>,
+    /// The driver's vendor, renderer and version strings, which a saved binary is valid for.
+    driver_key: String,
 }
 
 impl std::fmt::Debug for Device {
@@ -299,12 +304,15 @@ impl Device {
             None
         };
         // Safety: a current context; plain queries.
-        let (renderer, max_texture_size) = unsafe {
+        let (renderer, max_texture_size, vendor, version) = unsafe {
             (
                 gl.get_parameter_string(glow::RENDERER),
                 gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) as u32,
+                gl.get_parameter_string(glow::VENDOR),
+                gl.get_parameter_string(glow::VERSION),
             )
         };
+        let driver = driver_key(&vendor, &renderer, &version);
         let float_targets = has("GL_EXT_color_buffer_float");
         let allocator = if ctx.has_gbm() {
             Some(Allocator::Gbm)
@@ -338,6 +346,8 @@ impl Device {
             injected: Cell::new(None),
             borrowed,
             entered: Cell::new(false),
+            program_cache: None,
+            driver_key: driver,
         };
         if !borrowed {
             // Safety: our own context: its state is ours to set once.
@@ -353,6 +363,47 @@ impl Device {
     /// Whether the device draws inside someone else's context.
     pub fn is_borrowed(&self) -> bool {
         self.borrowed
+    }
+
+    /// Save linked programs under `base` (one directory per driver, [`crate::program_cache`]) and load them from
+    /// there instead of compiling, for the pipelines made from now on; `None` compiles every program. A driver with
+    /// no binary formats compiles every program whatever this says.
+    pub fn set_program_cache(&mut self, base: Option<&std::path::Path>) {
+        // Safety: a plain query on a current context (a lost device answers 0 and compiles).
+        let formats = self.ready().map_or(0, |()| unsafe {
+            self.gl.get_parameter_i32(glow::NUM_PROGRAM_BINARY_FORMATS)
+        });
+        self.program_cache = base
+            .filter(|_| formats > 0)
+            .map(|base| ProgramCache::new(base, &self.driver_key));
+    }
+
+    /// The directory programs are saved in, for this device's driver, while there is a cache.
+    pub fn program_cache_dir(&self) -> Option<&std::path::Path> {
+        self.program_cache.as_ref().map(ProgramCache::dir)
+    }
+
+    /// What the program cache did since it was set; all zero without one.
+    pub fn program_cache_stats(&self) -> ProgramCacheStats {
+        self.program_cache
+            .as_ref()
+            .map_or_else(ProgramCacheStats::default, |c| c.stats.get())
+    }
+
+    /// The device released from this thread, to be used on another ([`DetachedDevice::attach`]): a context of its
+    /// own is made current on no thread, so another may make it current. A borrowed device cannot be detached.
+    pub fn detach(self) -> Result<DetachedDevice> {
+        if self.borrowed {
+            return Err(Error::Invalid(
+                "a borrowed device stays on its owner's thread".into(),
+            ));
+        }
+        if self.ctx.is_current() {
+            // Safety: a current context; everything submitted reaches the driver before it is released.
+            unsafe { self.gl.flush() };
+            self.ctx.release_current()?;
+        }
+        Ok(DetachedDevice(self))
     }
 
     /// Save the owner's state and make the device's own current (borrowed devices; owned ones need nothing).
@@ -954,38 +1005,7 @@ impl Device {
         let gl = &self.gl;
         // Safety: a current context; shaders compiled and linked, names looked up in the linked program.
         unsafe {
-            let compile = |kind: u32, source: &str| -> Result<glow::Shader> {
-                let shader = gl.create_shader(kind).map_err(Error::Driver)?;
-                gl.shader_source(shader, source);
-                gl.compile_shader(shader);
-                if !gl.get_shader_compile_status(shader) {
-                    let log = gl.get_shader_info_log(shader);
-                    gl.delete_shader(shader);
-                    return Err(Error::Driver(format!("{}: {log}", desc.shader.name)));
-                }
-                Ok(shader)
-            };
-            let vs = compile(glow::VERTEX_SHADER, desc.shader.vertex_glsl)?;
-            let fs = match compile(glow::FRAGMENT_SHADER, desc.shader.fragment_glsl) {
-                Ok(fs) => fs,
-                Err(e) => {
-                    gl.delete_shader(vs);
-                    return Err(e);
-                }
-            };
-            let program = gl.create_program().map_err(Error::Driver)?;
-            gl.attach_shader(program, vs);
-            gl.attach_shader(program, fs);
-            gl.link_program(program);
-            gl.detach_shader(program, vs);
-            gl.detach_shader(program, fs);
-            gl.delete_shader(vs);
-            gl.delete_shader(fs);
-            if !gl.get_program_link_status(program) {
-                let log = gl.get_program_info_log(program);
-                gl.delete_program(program);
-                return Err(Error::Driver(format!("{}: {log}", desc.shader.name)));
-            }
+            let program = self.link(desc.shader)?;
             gl.use_program(Some(program));
             let mut textures = Vec::new();
             let mut result = Ok(());
@@ -1040,6 +1060,78 @@ impl Device {
                 topology: desc.topology,
                 textures,
             })
+        }
+    }
+
+    /// The linked program of `shader`: loaded from a saved binary where the cache has one the driver takes, else
+    /// compiled and linked (and saved).
+    fn link(&self, shader: &ShaderSource) -> Result<glow::Program> {
+        let gl = &self.gl;
+        let file = program_key(shader.name, shader.vertex_glsl, shader.fragment_glsl);
+        let cache = self.program_cache.as_ref();
+        if let Some((format, buffer)) = cache.and_then(|c| c.load(&file)) {
+            // Safety: a current context; the program is deleted when the driver refuses the binary.
+            unsafe {
+                let program = gl.create_program().map_err(Error::Driver)?;
+                gl.program_binary(program, &glow::ProgramBinary { buffer, format });
+                if gl.get_program_link_status(program) {
+                    if let Some(c) = cache {
+                        c.note_loaded();
+                    }
+                    return Ok(program);
+                }
+                gl.delete_program(program);
+                // a format the driver does not know leaves an error, which would fail the next query that checks
+                while gl.get_error() != glow::NO_ERROR {}
+            }
+            if let Some(c) = cache {
+                c.note_refused(&file);
+            }
+        }
+        // Safety: a current context; shaders and the program are deleted on every failure.
+        unsafe {
+            let compile = |kind: u32, source: &str| -> Result<glow::Shader> {
+                let s = gl.create_shader(kind).map_err(Error::Driver)?;
+                gl.shader_source(s, source);
+                gl.compile_shader(s);
+                if !gl.get_shader_compile_status(s) {
+                    let log = gl.get_shader_info_log(s);
+                    gl.delete_shader(s);
+                    return Err(Error::Driver(format!("{}: {log}", shader.name)));
+                }
+                Ok(s)
+            };
+            let vs = compile(glow::VERTEX_SHADER, shader.vertex_glsl)?;
+            let fs = match compile(glow::FRAGMENT_SHADER, shader.fragment_glsl) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    gl.delete_shader(vs);
+                    return Err(e);
+                }
+            };
+            let program = gl.create_program().map_err(Error::Driver)?;
+            if cache.is_some() {
+                gl.program_binary_retrievable_hint(program, true);
+            }
+            gl.attach_shader(program, vs);
+            gl.attach_shader(program, fs);
+            gl.link_program(program);
+            gl.detach_shader(program, vs);
+            gl.detach_shader(program, fs);
+            gl.delete_shader(vs);
+            gl.delete_shader(fs);
+            if !gl.get_program_link_status(program) {
+                let log = gl.get_program_info_log(program);
+                gl.delete_program(program);
+                return Err(Error::Driver(format!("{}: {log}", shader.name)));
+            }
+            if let Some(c) = cache {
+                c.note_compiled();
+                if let Some(binary) = gl.get_program_binary(program) {
+                    c.store(&file, binary.format, &binary.buffer);
+                }
+            }
+            Ok(program)
         }
     }
 
@@ -1175,6 +1267,23 @@ impl Drop for Device {
             // Safety: the device's own vertex array, deleted once while its context is current.
             unsafe { self.gl.delete_vertex_array(self.vao) };
         }
+    }
+}
+
+/// A device current on no thread, to be sent to the thread that uses it ([`Device::detach`]).
+#[derive(Debug)]
+pub struct DetachedDevice(Device);
+
+// Safety: an owned EGL context that is current on no thread may be made current on any one thread; the device's
+// other state is plain data and GL names, used only once the context is current on the receiving thread again.
+unsafe impl Send for DetachedDevice {}
+
+impl DetachedDevice {
+    /// The device again, its context made current on this thread.
+    pub fn attach(self) -> Result<Device> {
+        let device = self.0;
+        device.ready()?;
+        Ok(device)
     }
 }
 

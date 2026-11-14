@@ -10,6 +10,8 @@ mod caches;
 mod external;
 #[path = "fences.rs"]
 mod fences;
+#[path = "handoff.rs"]
+mod handoff;
 #[path = "loss.rs"]
 mod loss;
 #[path = "orientation.rs"]

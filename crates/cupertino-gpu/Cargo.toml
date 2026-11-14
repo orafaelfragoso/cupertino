@@ -11,6 +11,7 @@ layer = "graphics"
 
 [dependencies]
 glow = "0.16"
+libc = "0.2"
 libloading = "0.8"
 
 [dev-dependencies]

@@ -647,6 +647,20 @@ impl Context {
         Ok(())
     }
 
+    /// Make no context current on this thread, so this one may be made current on another.
+    pub fn release_current(&self) -> Result<()> {
+        if !self.owned {
+            return Ok(());
+        }
+        // Safety: this context's own display; releasing takes no other object.
+        if unsafe { (self.egl.eglMakeCurrent)(self.display, null_mut(), null_mut(), null_mut()) }
+            == 0
+        {
+            return Err(self.error("eglMakeCurrent"));
+        }
+        Ok(())
+    }
+
     /// Whether this context is the current one.
     pub fn is_current(&self) -> bool {
         // Safety: no preconditions.

@@ -437,3 +437,52 @@ fn a_move_with_the_serial_of_a_key_after_the_held_press_starts_nothing_and_the_p
     h.release(&client);
     assert!(!h.state.wm.is_interacting(), "the release ends it");
 }
+
+/// A toolkit asks for a move or resize only once the pointer left its drag-start box; from there the window follows the
+/// pointer as if it had been taken at the press, so the point pressed stays under the pointer and the window does not
+/// trail it by the drag-start distance for the rest of the drag.
+#[test]
+fn a_move_and_a_resize_asked_for_past_the_drag_start_keep_the_pressed_point_under_the_pointer() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = mapped_client(&mut h);
+    let window = h.state.windows.iter().find(|e| e.mapped).unwrap().id;
+    let start = h.state.wm.window(window).unwrap().geometry();
+    // the press lands at start + (120, 150); the pointer then leaves a 5 pt box before the client asks
+    let serial = h.press(&client);
+    h.state
+        .pointer_moved_to((start.x + 128.0, start.y + 156.0).into(), 0, None);
+    h.sync(&client);
+    client.ask(Ask::Move(serial));
+    h.wait_until("the move to start", |s| s.wm.is_interacting());
+    h.state.pointer_moved_to(
+        (start.x + 120.0 + 90.0, start.y + 150.0 + 60.0).into(),
+        0,
+        None,
+    );
+    let moved = h.state.wm.window(window).unwrap().geometry();
+    h.release(&client);
+    assert_eq!(
+        (moved.x - start.x, moved.y - start.y),
+        (90.0, 60.0),
+        "the window moved as far as the pointer did from the press"
+    );
+
+    let serial = h.press(&client);
+    h.state
+        .pointer_moved_to((moved.x + 128.0, moved.y + 156.0).into(), 0, None);
+    h.sync(&client);
+    client.ask(Ask::Resize(serial));
+    h.wait_until("the resize to start", |s| s.wm.is_interacting());
+    h.state.pointer_moved_to(
+        (moved.x + 120.0 + 50.0, moved.y + 150.0 + 30.0).into(),
+        0,
+        None,
+    );
+    let resized = h.state.wm.window(window).unwrap().geometry();
+    h.release(&client);
+    assert_eq!(
+        (resized.w - moved.w, resized.h - moved.h),
+        (50.0, 30.0),
+        "the corner moved as far as the pointer did from the press"
+    );
+}

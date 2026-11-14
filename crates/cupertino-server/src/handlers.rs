@@ -527,16 +527,24 @@ pub struct TokenGrant {
 }
 
 impl Cupertino {
-    /// Whether `serial` is that of a pointer press or touch that is still held, and went to a surface of the window whose
-    /// toplevel is `toplevel`: all a client may start a move or resize with. A serial of a released button, of a key or of
-    /// another window gets nothing, or a request made without a held button would glue the window to the pointer.
-    fn held_press_on(&self, toplevel: &WlSurface, seat: &WlSeat, serial: Serial) -> bool {
-        let Some(seat) = Seat::<Cupertino>::from_resource(seat) else {
-            return false;
-        };
+    /// Where a move or resize a client asks for with `serial` is anchored, when `serial` is that of a pointer press or
+    /// touch that is still held and went to a surface of the window whose toplevel is `toplevel`: all a client may start
+    /// one with. A serial of a released button, of a key or of another window gets `None`, or a request made without a
+    /// held button would glue the window to the pointer.
+    ///
+    /// A pointer press anchors at where it went down: a client asks only once the pointer left its drag-start box, and
+    /// anchored there the window would trail the pointer by that distance for the whole drag. It catches up at once
+    /// instead, as a drag of the server's own title bar does. A touch anchors at the pointer, which the window follows.
+    fn held_press_at(
+        &self,
+        toplevel: &WlSurface,
+        seat: &WlSeat,
+        serial: Serial,
+    ) -> Option<Point<f64, Logical>> {
+        let seat = Seat::<Cupertino>::from_resource(seat)?;
         // an action's grab serial stands for no press
         if self.is_action_grab_serial(serial) {
-            return false;
+            return None;
         }
         let on_window = |focus: Option<WlSurface>| {
             focus.is_some_and(|mut surface| {
@@ -548,25 +556,19 @@ impl Cupertino {
         };
         if let Some(pointer) = seat.get_pointer() {
             if pointer.has_grab(serial) {
-                return on_window(
-                    pointer
-                        .grab_start_data()
-                        .and_then(|data| data.focus)
-                        .map(|(surface, _)| surface),
-                );
+                let start = pointer.grab_start_data()?;
+                return on_window(start.focus.map(|(surface, _)| surface))
+                    .then_some(start.location);
             }
         }
         if let Some(touch) = seat.get_touch() {
             if touch.has_grab(serial) {
-                return on_window(
-                    touch
-                        .grab_start_data()
-                        .and_then(|data| data.focus)
-                        .map(|(surface, _)| surface),
-                );
+                let focus = touch.grab_start_data().and_then(|data| data.focus);
+                return on_window(focus.map(|(surface, _)| surface))
+                    .then(|| self.pointer.current_location());
             }
         }
-        false
+        None
     }
 
     /// A token for a program the server starts: valid, made now.
@@ -908,16 +910,15 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
-        if !self.held_press_on(surface.wl_surface(), &seat, serial) {
+        let Some(p) = self.held_press_at(surface.wl_surface(), &seat, serial) else {
             tracing::debug!(
                 "move request ignored: the serial is not that of a press still held on the window"
             );
             return;
-        }
+        };
         let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
             return;
         };
-        let p = self.pointer.current_location();
         self.begin_model_interaction(Command::BeginMove {
             window: id,
             pointer: MPoint::new(p.x, p.y),
@@ -931,14 +932,13 @@ impl XdgShellHandler for Cupertino {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
-        if !self.held_press_on(surface.wl_surface(), &seat, serial) {
+        let Some(p) = self.held_press_at(surface.wl_surface(), &seat, serial) else {
             tracing::debug!("resize request ignored: the serial is not that of a press still held on the window");
             return;
-        }
+        };
         let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
             return;
         };
-        let p = self.pointer.current_location();
         self.begin_model_interaction(Command::BeginResize {
             window: id,
             edges: policy::resize_edges(edges),

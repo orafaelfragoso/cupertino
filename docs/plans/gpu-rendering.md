@@ -68,13 +68,13 @@ Gate:
 
 One owner review, one re-recording of the goldens.
 
-- [ ] A graphics layer in `cupertino-layers` that the toolkit, the render layer and the compositor may depend on,
+- [x] A graphics layer in `cupertino-layers` that the toolkit, the render layer and the compositor may depend on,
       and that depends on the foundation layer only; `layers.dot`, the architecture page and the layer tests updated.
-- [ ] A crate in it with the definitions as plain Rust and test vectors: rectangle, rounded-rectangle and
+- [x] A crate in it with the definitions as plain Rust and test vectors: rectangle, rounded-rectangle and
       continuous-corner distance and coverage; the Gaussian kernel with its pyramid levels, edge rule, premultiplied
       alpha and intermediate precision; drop and inner shadow; gradient interpolation (at most eight stops);
       position-keyed dithering.
-- [ ] The blur planner moves from `cupertino-glass` into it; the compositor uses it from there.
+- [x] The blur planner moves from `cupertino-glass` into it; the compositor uses it from there.
 - [ ] CPU renderer: rectangle, rounded-rectangle, stroke and clip coverage from the distance function; nested clips
       multiply coverage.
 - [ ] CPU renderer: blur and shadows from the shared kernel.
@@ -82,10 +82,58 @@ One owner review, one re-recording of the goldens.
 - [ ] CPU renderer: scroll offsets rounded to device pixels when drawn.
 - [ ] `cupertino-decorations` shapes (title bar, window buttons) from the shared distance function, so the later move
       to GPU pipelines changes no pixel.
-- [ ] Compositor dithering from the shared definition (blur, material, glass and shadow outputs), tested against the
-      vectors.
+- [x] Compositor dithering from the shared definition (blur, material, glass and shadow outputs), tested against the
+      vectors. Off until the look freeze (see "The definitions and where the renderers disagree").
 - [ ] Before/after sheet of every golden at scales 1, 1.5 and 2, reviewed by the owner.
 - [ ] One re-recording of every golden.
+
+### The definitions and where the renderers disagree
+
+The graphics layer holds `cupertino-raster-math` (MPL-2.0, so the toolkit may link it): `coverage`, `blur` (the
+planner, moved from the glass crate, with the kernel, edge rule, precision and an `f32` implementation), `shadow`,
+`gradient` and `dither`, each in `f32` as the shaders compute it. Its test vectors are plain text in
+`crates/cupertino-raster-math/vectors/` (columns named in each file's first line), checked by its tests; a change to a
+definition fails there and `CUPERTINO_WRITE_VECTORS=1` writes them again. Each definition was taken from what the code
+does; where the compositor and the CPU renderer disagree, the definition is the compositor's (the glass tests and the
+compositor's half of the goldens rely on it), and the CPU renderer moves to it at the freeze. For the look-freeze
+review:
+
+- **Coverage.** Compositor (shadow cut-out, rounded rectangles, clip, material, glass): the closed-form first-order
+  distance, coverage `clamp(0.5 − d · px, 0, 1)`. CPU renderer: the shape's cubic path filled by its rasterizer's
+  anti-aliasing (supersampled), strokes by its stroker, clips as masks filled the same way. Definition: the distance.
+  The glass program keeps a copy of its own (`rect_sdf`): it holds the extent to half the size, treats exponents up to
+  2.0 (not 2.001) as circular and writes the straight parts as one expression; the values are the same in practice.
+- **Blur.** Compositor: 2× box halvings to the backdrop scale and while the variance is above 64 texels², then a
+  Gaussian (radius `ceil(3σ)`, at most 35) on the last level; edges clamped; levels in half floats where the device
+  renders to them, 8 bits otherwise. CPU renderer (`Effect::Blur`): three box passes per axis of radius
+  `round(radius · scale / 2)`, transparent edges, every pass rounded to 8 bits. Definition: the compositor's pyramid
+  and kernel, σ = radius / 2 for a toolkit radius, edges clamped for a backdrop and transparent for a layer's own
+  effects, half-float levels with 8 bits as the fallback.
+- **Drop shadow.** Compositor (window shadows): the blurred rounded box in closed form, two error functions across x
+  and an 8-step integral over ±3σ across y, times a density, the window's own area optionally cut out. CPU renderer:
+  the content's alpha moved by its offset rounded to whole device pixels, blurred by the three box passes in 8 bits,
+  tinted and drawn under. Definition: the closed form for rounded rectangles, offsets not rounded. The closed form
+  peaks a little under one (`blur_mass`, 0.9979 for σ = 4) since the tails past 3σ are left out.
+- **Inner shadow.** CPU renderer only: the inverted alpha moved and blurred as above, kept inside the content and drawn
+  over it. Definition: one minus the closed form divided by `blur_mass` (so a large caster's middle stays clear), times
+  the caster's coverage.
+- **Gradients.** CPU renderer: its rasterizer's gradients, straight stops interpolated in encoded sRGB and
+  premultiplied after, any number of stops, at the precision its pipeline picks. Compositor: only the wallpaper's
+  procedural mix of opaque colours. Definition: two to eight stops in order, straight encoded sRGB interpolated
+  linearly in `f32`, premultiplied after, end colours held past the ends, evaluated at pixel centres; more stops are
+  refused.
+- **Dithering.** Neither dithers today. Definition: before an 8-bit store, `v + t / 255` with
+  `t = (m + 0.5) / 64 − 0.5` from the 8 × 8 ordered matrix entry `m` of the framebuffer pixel; exact 8-bit values are
+  kept. Colour channels of straight-alpha outputs (blur, material, glass), alpha of the shadow.
+- **8-bit stores.** The definition rounds to nearest; a driver may round a value within a few hundredths of a step of
+  the half step either way (the local driver does), so a shader test compares such stores within one step and the
+  matrix itself exactly.
+
+Dithering changes pixels, so it is behind the look-freeze switch: `cupertino_raster_math::dither::BY_DEFAULT` is
+`false`, and the compositor compiles its blur (into 8-bit levels only), material, glass and shadow programs without it
+(byte-identical sources) unless `CUPERTINO_DITHER=1` is set. The freeze turns `BY_DEFAULT` on with the one re-recording
+of the goldens. The GL tests (`dither::` in the server's suite, slow tier) draw the shader's matrix and dithered stores
+and the dithered shadow against the definition.
 
 Gate:
 

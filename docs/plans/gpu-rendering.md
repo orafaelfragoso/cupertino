@@ -765,16 +765,36 @@ Gate:
             target, so the resting panel lost a float tail: at 1.5 the caret sits one device pixel further right
             than before and the mode buttons' rims moved by a few hundredths of a point ("Measurements", "Step 9").
             What is not exact: the field's edge grows by a uniform scale where the drawing grows its width alone
-            (under a device pixel at the ends); content that moves lands on whole device pixels. A caret blink
+            (under a device pixel at the ends: within 3 of 255 at 1.5 at the close's first frame and within 1 after,
+            measured at the same moment below, so it stays); content that moves lands on whole device pixels (the
+            mode button's face, up to 33 of 255 part way). A caret blink
             that falls inside the close draws nothing: the field holds its caret while the compositor runs the close
             (`BareField::hold_caret`; `a_close_in_the_caret_s_fade_draws_no_frame`,
             `a_held_caret_draws_no_frame_until_it_is_let_go`).
       - [ ] A scope's open and folding (the browser, the files scope): the enclosure's width, height, corner and
             place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
-            unscaled, its fade on the content's curve; the files scope's width dip as samples.
+            unscaled, its fade on the content's curve; the files scope's width dip as samples. Not reached in this
+            run; split by what each needs:
+        - [ ] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
+              only the scale moves (1.1 to 1 on the open spring, both ways), so the glass's place and size are that
+              spring per property and its corner the radius times the scale where it is under 1 (samples); the
+              content is unscaled at the enclosure's opacity on the linear 0.1 s fade; the edge scales about the
+              pivot as in the close. The edge layer's scale also widens its stroke (by a tenth at the first frame),
+              where the drawing keeps its 0.5 pt: the drawing would stroke the edge at the enclosure's scale while it
+              opens (a change of the open's own pixels, named), or the edge needs drawing by the compositor (below).
+        - [ ] The fold and the unfold: the header switches part way (the query row's symbol and placeholder), a frame
+              of the content's layer, and the content's body fades on its own curve while the query row does not, so
+              the row and the body are layers of their own; the shape changes both ways with its corner held to half
+              its height, which a fixed frame of the edge cannot follow: it needs the edge drawn by the compositor.
       - [ ] The search field's open with its mode buttons: the field's layer and each button's on sampled curves of
             the products above, in one glass group with the field, each button's symbol sharpening as its layer's
-            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`.
+            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Split: the glass
+            and the symbols can be carried now; the dark edge cannot. Through the bud the field's edge is left out
+            inside each button and each button's inside the field and its neighbours (`edge_cuts`), so the outline
+            changes shape every frame, and a button's ring grows from 0.4 of its size with a stroke that keeps its
+            width; a layer is cut only to its own shape (`masks`). It needs the compositor to draw the edge of a
+            glass group (the outline of the group's shapes, with the edge's width and opacity in the layers' look),
+            a change of the protocol and of the compositor's glass, before this item can be exact.
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over
@@ -782,11 +802,20 @@ Gate:
               (`shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`); settled, the
               compositor's panel is the application's within 2 of 255 ("Measurements", "Step 9", "The sheet").
         - [ ] The open: waits on the two items above.
-        - [ ] The look mid-way within 2 of 255: a recording of two runs compares moments up to a frame apart (the
-              application's frames and the compositor's land at their own phases of the curve), so the sheet's mid-way
-              pairs differ by more (up to 109 at the close's first frame, 3 at its last); it needs the server to draw
-              a layer tree at a set time and the application to draw the same moment, a headless comparison of its
-              own.
+        - [ ] The look mid-way within 2 of 255, compared at the same moment. Split:
+          - [x] The close: at each frame the launcher draws of its own close, the compositor's layers at that same
+                moment, worked out from the curves the panel sent with the compositor's own animator
+                (`cupertino_animation::LayerProperty`) and laid over each other as the compositor draws them
+                (origin on device pixels, scale about the device pixel nearest the bounds' centre, the shared
+                Gaussian for the content blur, opacity), are its pixels at 1.5 in both appearances, and their glass
+                is its glass, rect, corner and opacity, at every moment
+                (`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). Outside the mode
+                button's face and the caret: within 7 of 255 at 17 ms (two Gaussians of a pixel or two rounding
+                differently), 4 at 33 ms and 1 from 50 ms on; at rest within 1. The face, which the compositor moves
+                onto whole device pixels, differs by up to 33 part way; the caret, which the application's own drawing
+                moves a device pixel as its enclosure moves, by 44 at 17 ms and 1 from 50 ms on ("Measurements",
+                "Step 9", "The sheet").
+          - [ ] The open: waits on the open's items above.
   - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
         centre of its window geometry, after its window's rescale or its layer surface's presentation
         (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of
@@ -817,8 +846,8 @@ Gate:
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
       own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
-      the launcher's close is in it drawn by the compositor, its open drawn by the application on both sides until
-      its open's layers land.
+      the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest;
+      its open is drawn by the application on both sides until its open's layers land, so it has no pairs.
 
 ## Step 10: retire the duplicates
 
@@ -1662,23 +1691,27 @@ Settled, the card is the same within a step of one channel. Mid-way, the two fad
 each run's frames land at their own phase of the fade's clock (the card's own frames before, the compositor's after),
 so a pair compares two moments up to a frame apart, and the differences fall to 2 or 3 as the fade slows.
 
-The launcher, the same way: the search field opened with the launcher action and closed with it again once it rests.
-"Before" is the merge base of the close's branch; "own" is the branch's application drawing (the same build with the
-layers turned off), so the handover alone shows; "after" is the branch, its close the compositor's. The open is drawn
-by the application on all three.
+The launcher's close at the same moment, from
+`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments` (`--no-capture`; the pictures with
+`CUPERTINO_LAUNCHER_MOMENTS`): the launcher at 1.5 on the toolkit's in-memory window system, its clock stepped in
+16 ms frames. "Own" is each frame the application draws of its close with the layers off; "layers" is the compositor's
+layers at the same moment of the close, worked out from the curves the panel sent with the compositor's animator and
+laid over each other as the compositor draws them. The glass is the compositor's in both and matches in rect, corner
+and opacity at every moment. The largest channel difference over the window, then without the mode button's face and
+the caret:
 
-| Launcher | Pairs (frames after the start) | Largest mid-way, before / own | Settled, before / own |
-|---|---|---|---|
-| Open, dark | 1, 2, 3, 5, 8, 14, 24 | 138 / 114 | 186 / 1 |
-| Close, dark | 1 to 6 | 98 / 83 | 0 / 0 |
-| Open, light | 1, 2, 3, 5, 8, 14, 24 | 81 / 149 | 240 / 2 |
-| Close, light | 1 to 6 | 120 / 109 | 0 / 0 |
+| Launcher close | 17 ms | 33 ms | 50 ms | 67 ms | 83 ms | At rest |
+|---|---|---|---|---|---|---|
+| Dark | 44 / 7 | 15 / 4 | 33 / 1 | 22 / 1 | 6 / 1 | 1 |
+| Light | 44 / 7 | 13 / 4 | 10 / 1 | 22 / 1 | 6 / 1 | 1 |
 
-Settled open, against its own drawing the compositor's panel is within 1 (dark) and 2 (light); against the merge base
-the caret is one device pixel further right (186 and 240 on its three columns) and the mode buttons' rims differ by up
-to 14, where the resting panel lost the float tail of its settled springs. Mid-way, the close's differences fall from
-83 to 109 at its first frame (the application's first frame of the close against the compositor's, a frame's phase
-apart) to 0 to 3 at its sixth; the open's are those of two runs of the application's own frames.
+The 44 is the caret at the close's first frame: the application's own drawing moves it a device pixel to the left as
+its enclosure moves (it lies on whole device pixels of the window), where the content's layer keeps it in place; by
+50 ms the blur has taken it under 2. The 33 and 22 are the mode button's ring and symbol, which the compositor moves
+onto whole device pixels while the drawing places them between pixels. The 7 is the text under the close's first, one
+or two pixel wide blur, where two Gaussians of the same deviation round differently. The open is drawn by the
+application with the layers on and off alike, so it has no pairs until its own layers land. The earlier recording
+of two runs, whose pairs landed up to a frame apart, put the close's first frame at 83 to 109.
 
 The launcher's close, counted by `shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`
 (the real process on a private bus, debug builds): 0 buffers of the window and its five layers from Escape until the

@@ -378,3 +378,348 @@ fn a_close_in_the_caret_s_fade_draws_no_frame() {
     }
     assert_eq!(m.presents(), shown, "no frame of the window or its layers");
 }
+
+/// The deviation below which a compositor draws a layer's content sharp, in device pixels.
+const SHARP_BELOW_PX: f64 = 0.3;
+
+/// One layer as a compositor shows it at one moment: its bounds, opacity, scale about the bounds' centre, corner
+/// radius and content blur, with the frame it drew.
+#[derive(Clone, Debug)]
+struct ShownLayer {
+    bounds: Rect,
+    opacity: f64,
+    scale: f64,
+    radius: f64,
+    blur: f64,
+    glass: bool,
+    frame: Option<cupertino_ui_test::PresentedLayer>,
+}
+
+/// The layers `rest` as the compositor shows them `after` seconds into the `changes` the panel asked for: each
+/// property starts where the layer's layout puts it and follows its change on the compositor's own animator.
+fn shown_after(
+    rest: &[PresentedSurfaceLayer],
+    changes: &[(u64, Vec<cupertino_kit::platform::LayerChange>)],
+    after: f64,
+) -> Vec<ShownLayer> {
+    use cupertino_animation::layer::LayerProperty as Animated;
+    let index = |p: LayerProperty| match p {
+        LayerProperty::X => 0,
+        LayerProperty::Y => 1,
+        LayerProperty::Width => 2,
+        LayerProperty::Height => 3,
+        LayerProperty::Opacity => 4,
+        LayerProperty::Scale => 5,
+        LayerProperty::CornerRadius => 6,
+        LayerProperty::ContentBlur => 7,
+    };
+    rest.iter()
+        .map(|layer| {
+            let r = layer.rect;
+            let mut props = [
+                r.x(),
+                r.y(),
+                r.width(),
+                r.height(),
+                1.0,
+                1.0,
+                layer.look.radius,
+                0.0,
+            ]
+            .map(Animated::new);
+            for (_, list) in changes.iter().filter(|(k, _)| *k == layer.key) {
+                for change in list {
+                    let p = &mut props[index(change.property)];
+                    match (&change.samples, change.curve) {
+                        (_, None) => p.set(change.to),
+                        (
+                            Some(samples),
+                            Some(cupertino_kit::platform::LayerCurve::Timed { duration, .. }),
+                        ) => p.animate_samples(samples.clone(), duration, 0.0),
+                        (_, Some(curve)) => p.animate(change.to, curve, 0.0, change.velocity),
+                    }
+                }
+            }
+            let v = |i: usize| props[i].value(after);
+            ShownLayer {
+                bounds: Rect::new(v(0), v(1), v(2), v(3)),
+                opacity: v(4).clamp(0.0, 1.0),
+                scale: v(5).max(0.0),
+                radius: v(6).max(0.0),
+                blur: v(7).max(0.0),
+                glass: layer.look.glass.is_some(),
+                frame: layer.frame.clone(),
+            }
+        })
+        .collect()
+}
+
+/// `layers` laid over a transparent window `size` pixels large at `scale` as a compositor draws them: each frame
+/// blurred by its deviation in device pixels, its origin on the window's device pixels, scaled about the device pixel
+/// nearest its bounds' centre, sampled between pixels, at its opacity, back to front.
+fn compose(size: (u32, u32), scale: f64, layers: &[ShownLayer]) -> Vec<u8> {
+    use cupertino_raster_math::blur::{plan_blur, Edge, Image, Precision};
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut out = vec![[0.0f32; 4]; w * h];
+    for layer in layers {
+        let Some(frame) = &layer.frame else { continue };
+        if layer.opacity <= 0.0 || frame.width == 0 {
+            continue;
+        }
+        let (fw, fh) = (frame.width as usize, frame.pixel_height as usize);
+        let sigma = layer.blur * scale;
+        let pad = if sigma >= SHARP_BELOW_PX {
+            (3.0 * sigma).ceil() as usize
+        } else {
+            0
+        };
+        let (iw, ih) = (fw + 2 * pad, fh + 2 * pad);
+        let mut pixels = vec![[0.0f32; 4]; iw * ih];
+        for y in 0..fh {
+            for x in 0..fw {
+                let s = &frame.pixels[y * frame.stride as usize + 4 * x..][..4];
+                pixels[(y + pad) * iw + x + pad] = std::array::from_fn(|c| f32::from(s[c]) / 255.0);
+            }
+        }
+        let mut image = Image::new(iw, ih, pixels);
+        if pad > 0 {
+            let plan = plan_blur(iw as u32, ih as u32, 1.0, sigma as f32, 1.0);
+            assert!(plan.levels.is_empty(), "a blur this small is one Gaussian");
+            image = image.blur(&plan, Edge::Transparent, Precision::Half);
+        }
+        let b = layer.bounds;
+        let origin = ((b.x() * scale).round(), (b.y() * scale).round());
+        let pivot = (
+            ((b.x() + b.width() / 2.0) * scale).round(),
+            ((b.y() + b.height() / 2.0) * scale).round(),
+        );
+        let s = layer.scale.max(1e-6);
+        let o = layer.opacity as f32;
+        let read = |x: i64, y: i64| image.read(x, y, Edge::Transparent);
+        for (py, row) in out.chunks_mut(w).enumerate() {
+            for (px, d) in row.iter_mut().enumerate() {
+                // the frame's pixel under this one, from its blurred copy's top left
+                let u = pivot.0 + (px as f64 + 0.5 - pivot.0) / s - origin.0 + pad as f64 - 0.5;
+                let v = pivot.1 + (py as f64 + 0.5 - pivot.1) / s - origin.1 + pad as f64 - 0.5;
+                if u < -1.0 || v < -1.0 || u > iw as f64 || v > ih as f64 {
+                    continue;
+                }
+                let (x0, y0) = (u.floor(), v.floor());
+                let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
+                let (x0, y0) = (x0 as i64, y0 as i64);
+                let corners = [
+                    read(x0, y0),
+                    read(x0 + 1, y0),
+                    read(x0, y0 + 1),
+                    read(x0 + 1, y0 + 1),
+                ];
+                let src: [f32; 4] = std::array::from_fn(|k| {
+                    let top = corners[0][k] * (1.0 - fx) + corners[1][k] * fx;
+                    let bottom = corners[2][k] * (1.0 - fx) + corners[3][k] * fx;
+                    (top * (1.0 - fy) + bottom * fy) * o
+                });
+                let keep = 1.0 - src[3];
+                for k in 0..4 {
+                    d[k] = src[k] + d[k] * keep;
+                }
+            }
+        }
+    }
+    out.iter()
+        .flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .collect()
+}
+
+/// With `CUPERTINO_LAUNCHER_MOMENTS` set to a directory, writes the two drawings of a moment there as premultiplied
+/// RGBA, `<appearance>-<what>-<ms>-<own|layers>-<width>x<height>.rgba`, to look at side by side.
+fn keep_moment(what: &str, dark: bool, own: &Moment, layers: &Moment) {
+    let Some(dir) = std::env::var_os("CUPERTINO_LAUNCHER_MOMENTS") else {
+        return;
+    };
+    let look = if dark { "dark" } else { "light" };
+    for (moment, by) in [(own, "own"), (layers, "layers")] {
+        let (w, h) = moment.size;
+        let name = format!(
+            "{look}-{what}-{:03.0}-{by}-{w}x{h}.rgba",
+            moment.after * 1000.0
+        );
+        std::fs::write(std::path::Path::new(&dir).join(name), &moment.pixels).unwrap();
+    }
+}
+
+/// What one moment of a close looks like: the window's pixels and the glass it shows (rect, corner radius, opacity).
+struct Moment {
+    after: f64,
+    size: (u32, u32),
+    pixels: Vec<u8>,
+    glass: Vec<(Rect, f64, f64)>,
+    /// Where the two drawings are known to part, in points: the mode buttons' faces, which the compositor moves onto
+    /// whole device pixels, and the caret, which the panel's own drawing moves a device pixel as its enclosure moves.
+    apart: Vec<Rect>,
+}
+
+/// The search field's close at `scale` in the `dark` or light appearance, from Escape on: drawn by the panel itself
+/// (`layers` false) at each frame it draws of it, or handed to the compositor and shown at `moments` (seconds after
+/// Escape) by [`shown_after`] and [`compose`].
+fn close_moments(scale: f64, dark: bool, layers: bool, moments: &[f64]) -> Vec<Moment> {
+    let mut m = drawn(scale, dark, layers);
+    m.settle_on(Message::Toggle);
+    let rest = m.shown_layers();
+    let asked = m.layer_requests().len();
+    // the panel at rest first, as it shows before Escape
+    let mut out = vec![{
+        let (w, h, pixels) = m.window_pixels();
+        let pixels = if layers {
+            compose((w, h), scale, &shown_after(&rest, &[], 0.0))
+        } else {
+            pixels
+        };
+        Moment {
+            after: -1.0,
+            size: (w, h),
+            pixels,
+            glass: Vec::new(),
+            apart: Vec::new(),
+        }
+    }];
+    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    let start = CLOCK.get();
+    if layers {
+        assert!(m.model().close_handed(), "the close is the compositor's");
+        let changes = m.layer_requests()[asked..].to_vec();
+        let (w, h, _) = m.window_pixels();
+        // the buttons travel a few points in the close, and the caret's blur reaches out past its column
+        let mut apart: Vec<Rect> = rest
+            .iter()
+            .filter(|l| (16..).contains(&l.key) && l.key % 2 == 1)
+            .map(|l| l.rect.outset(8.0))
+            .collect();
+        if let Some(glass) = rest.iter().find(|l| l.key == GLASS_LAYER) {
+            let x = glass.rect.x() + crate::view::QUERY_INSET;
+            apart.push(Rect::new(
+                x - 8.0,
+                glass.rect.y(),
+                16.0,
+                glass.rect.height(),
+            ));
+        }
+        for &after in moments {
+            let shown = shown_after(&rest, &changes, after);
+            out.push(Moment {
+                after,
+                size: (w, h),
+                pixels: compose((w, h), scale, &shown),
+                glass: shown
+                    .iter()
+                    .filter(|l| l.glass)
+                    .map(|l| (l.bounds, l.radius, l.opacity))
+                    .collect(),
+                apart: apart.clone(),
+            });
+        }
+        return out;
+    }
+    while out.len() <= moments.len() {
+        m.step(|_, _| {});
+        let after = CLOCK.get() - start;
+        let Some(panel) = m.panel() else { break };
+        if after >= crate::motion::CLOSE_DURATION {
+            break;
+        }
+        let (w, h, pixels) = m.window_pixels();
+        let glass = m
+            .driver
+            .runtime()
+            .window_system()
+            .requests(panel)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+            .iter()
+            .map(|r| (r.rect, r.radius, r.alpha))
+            .collect();
+        out.push(Moment {
+            after,
+            size: (w, h),
+            pixels,
+            glass,
+            apart: Vec::new(),
+        });
+    }
+    out
+}
+
+/// The close the compositor runs is the panel's own drawing of it at the same moments: at each frame the panel draws
+/// of its close, the compositor's layers at that moment of the close, blurred, scaled and faded as a compositor draws
+/// them, are its pixels but where the two are known to part ([`Moment::apart`]): within 8 of 255 at the first frames,
+/// where the blur is a pixel or two wide and two blurs of the same deviation round differently, and within 1 from the
+/// close's middle on. Their glass is the glass it stands on (rect, corner and opacity). Run with `--no-capture` for the
+/// largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+#[test]
+fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
+    for dark in [true, false] {
+        let own = close_moments(1.5, dark, false, &[0.0; 8]);
+        assert!(
+            own.len() >= 5,
+            "the panel drew its close: {}",
+            own.len() - 1
+        );
+        let moments: Vec<f64> = own[1..].iter().map(|m| m.after).collect();
+        let handed = close_moments(1.5, dark, true, &moments);
+        let (most, _) = compare(&own[0].pixels, &handed[0].pixels, own[0].size.0);
+        eprintln!("trace: close, dark {dark}, at rest: largest difference {most}");
+        keep_moment("rest", dark, &own[0], &handed[0]);
+        assert!(most <= 1, "at rest, dark {dark}: {most}");
+        for (a, b) in own[1..].iter().zip(&handed[1..]) {
+            assert_eq!(a.size, b.size);
+            let ms = a.after * 1000.0;
+            let width = a.size.0;
+            let (mut most, mut most_apart) = (0, 0);
+            for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
+                let d = p
+                    .iter()
+                    .zip(q)
+                    .map(|(u, v)| u.abs_diff(*v))
+                    .max()
+                    .unwrap_or(0);
+                let at = Point::new(
+                    (i as u32 % width) as f64 / 1.5,
+                    (i as u32 / width) as f64 / 1.5,
+                );
+                if b.apart.iter().any(|r| r.contains(at)) {
+                    most_apart = most_apart.max(d);
+                } else {
+                    most = most.max(d);
+                }
+            }
+            eprintln!(
+                "trace: close, dark {dark}, {ms:.0} ms: largest difference {most}, {most_apart} on the buttons' faces and the caret"
+            );
+            keep_moment("close", dark, a, b);
+            let bound = if a.after < crate::motion::CLOSE_DURATION / 2.0 {
+                8
+            } else {
+                1
+            };
+            assert!(most <= bound, "close, dark {dark}, {ms:.0} ms: {most}");
+            assert_eq!(a.glass.len(), b.glass.len(), "{:?} {:?}", a.glass, b.glass);
+            for ((r0, q0, o0), (r1, q1, o1)) in a.glass.iter().zip(&b.glass) {
+                let off = (r0.x() - r1.x())
+                    .abs()
+                    .max((r0.y() - r1.y()).abs())
+                    .max((r0.width() - r1.width()).abs())
+                    .max((r0.height() - r1.height()).abs());
+                assert!(off < 0.02, "glass {r0:?} against {r1:?}");
+                assert!(
+                    (q0 - q1).abs() < 0.02 && (o0 - o1).abs() < 0.01,
+                    "{q0} {o0} / {q1} {o1}"
+                );
+            }
+        }
+    }
+}

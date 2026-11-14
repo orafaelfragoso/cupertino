@@ -1447,6 +1447,7 @@ dependencies = [
  "cupertino-modifiers",
  "cupertino-peer",
  "cupertino-protocol-app",
+ "cupertino-raster-math",
  "cupertino-shell-client",
  "cupertino-test-bus",
  "cupertino-theme",

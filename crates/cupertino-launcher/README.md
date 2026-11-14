@@ -66,7 +66,9 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   scales and blurs, the content blurs to a deviation of 4 pt and fades, all on the close's ease-out over 0.1 s, and the
   panel draws no frame until the compositor is done and the window goes: the panel takes every key meanwhile and the
   query field holds its caret (`BareField::hold_caret`), so neither a key nor the caret's blink draws the content
-  again. While the panel moves, under Reduce Motion and
+  again. At each frame the panel draws of its own close, the compositor's layers at the same moment, from the curves it
+  sent, are its pixels (`view::tests::frames::layers`, which writes the pairs out with `CUPERTINO_LAUNCHER_MOMENTS`
+  set to a directory). While the panel moves, under Reduce Motion and
   without the capability it draws its own close;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no

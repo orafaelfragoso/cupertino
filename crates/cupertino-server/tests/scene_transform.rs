@@ -8,6 +8,9 @@
 //! The comparison allows 2/255 per channel, the goldens' bound. Exact equality was tried and does not hold: a
 //! handful of pixels in 540 000 differ by one step in one channel, where the wallpaper gradient is rounded
 //! differently when the rasteriser samples the turned frame. Nothing may differ by more than that, or be anywhere else.
+//!
+//! The dither is off here: its pattern is laid on the framebuffer's pixels, so a turned output carries it turned
+//! against the scene, by up to a step per dithered stage. Its own tests (`dither`) pin it.
 
 use crate::common;
 
@@ -19,6 +22,11 @@ use smithay::output::Mode;
 use smithay::utils::Transform;
 
 const MODE: (i32, i32) = (900, 600);
+
+/// Turn the dither off for this test's process (each test runs in its own), before any program is built.
+fn without_dither() {
+    std::env::set_var("CUPERTINO_DITHER", "0");
+}
 
 /// The mode (framebuffer) size of an output whose logical space is `logical` once turned by `transform`.
 fn mode_for(logical: (i32, i32), transform: Transform) -> (i32, i32) {
@@ -112,6 +120,7 @@ fn beyond_tolerance(expected: &RgbaImage, actual: &RgbaImage) -> Vec<(u32, u32, 
 
 #[test]
 fn every_transform_of_an_output_shows_the_upright_frame_turned() {
+    without_dither();
     let transforms = [
         Transform::_90,
         Transform::_180,
@@ -167,6 +176,7 @@ fn screenshot(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
 
 #[test]
 fn a_screenshot_of_a_turned_output_is_what_the_upright_output_of_its_logical_space_shows() {
+    without_dither();
     let transforms = [
         Transform::_90,
         Transform::_180,

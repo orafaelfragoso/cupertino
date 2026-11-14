@@ -1228,9 +1228,12 @@ fn gaussian(img: &image::RgbaImage, sigma: f32) -> Vec<[f32; 3]> {
 /// The GLES glass pass over sharp content against the CPU model: icon-sized squares and thin bars of a surface below
 /// a dark glass panel, one square under its left edge, where the refraction bends what lies past the edge into the
 /// rim. Each blur level and the blur fill of the model are Gaussians of the shot without the glass. The comparison
-/// sees where the pass reads its backdrop: shifting the model's backdrop by 2 pixels breaks it.
+/// sees where the pass reads its backdrop: shifting the model's backdrop by 2 pixels breaks it. The dither is off (each
+/// test runs in a process of its own): it spreads every stage's rounding over a step, which the model leaves out and
+/// which would hide part of the 2 pixel shift's difference; the dither's own tests pin it.
 #[test]
 fn glass_pass_over_sharp_content_reads_the_backdrop_where_the_model_does() {
+    std::env::set_var("CUPERTINO_DITHER", "0");
     use cupertino_glass::glass::{Container, GlassShape};
     use cupertino_theme::{Appearance, GlassMode};
     use smithay::backend::renderer::utils::with_renderer_surface_state;

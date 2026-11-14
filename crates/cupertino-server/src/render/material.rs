@@ -2332,11 +2332,16 @@ mod tests {
                 assert!(frag.contains(&format!("sampler2D {sampler};")), "{name}");
             }
         }
-        assert!(
-            BIND_PLACE != BIND_PASS
-                && BIND_PLACE != BIND_REGION
-                && BIND_PLACE != super::glass::BIND_GLASS
-        );
+        // every block of the compositor's programs has a binding point of its own
+        let points = [
+            BIND_PASS,
+            BIND_REGION,
+            super::glass::BIND_GLASS,
+            BIND_PLACE,
+            crate::render::mesh::BIND_MESH,
+        ];
+        let distinct: std::collections::BTreeSet<u32> = points.into_iter().collect();
+        assert_eq!(distinct.len(), points.len(), "{points:?}");
     }
 
     #[test]

@@ -24,7 +24,7 @@ use super::snapshots::SnapshotLease;
 use super::CupertinoElement;
 
 /// The uniform block binding of the mesh program.
-const BIND_MESH: u32 = 4;
+pub(crate) const BIND_MESH: u32 = 4;
 /// The vertex attributes of the mesh program: a position and a texture coordinate, each an `f32` pair.
 const ATTRIB_POS: u32 = 0;
 const ATTRIB_UV: u32 = 1;

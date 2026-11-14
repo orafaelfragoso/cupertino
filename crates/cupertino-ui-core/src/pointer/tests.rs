@@ -30,7 +30,7 @@ fn fixture() -> Fixture {
     let [a, b] = tree.get(root).unwrap().children[..] else {
         unreachable!()
     };
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (id, rect) in [
         (root, Rect::new(0.0, 0.0, 100.0, 50.0)),
         (a, Rect::new(0.0, 0.0, 50.0, 50.0)),

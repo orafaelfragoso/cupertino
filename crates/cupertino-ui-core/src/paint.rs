@@ -9,6 +9,7 @@ use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_layout::{ContainerKind, LayoutDirection};
+use cupertino_ui_layout::{IdMap, IdSet};
 use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Layer, Paint, PaintNode, PaintNodeId, PaintOp,
@@ -16,7 +17,6 @@ use cupertino_ui_render::{
 };
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use cupertino_ui_theme::{FaceTone, ThemeTokens};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 struct Painted {
@@ -311,7 +311,7 @@ fn shape_bounds(shape: &Shape) -> Option<Rect> {
 /// One window's paint, kept between frames.
 #[derive(Default)]
 pub(crate) struct Painter {
-    nodes: HashMap<NodeId, Painted>,
+    nodes: IdMap<NodeId, Painted>,
     revision: u64,
     /// The environment the kept paint was made in; any other repaints every node.
     painted_in: Option<Environment>,
@@ -326,12 +326,12 @@ pub(crate) struct Painter {
     pin_envs: Option<[Environment; 3]>,
     /// What each node's overlay drew last, and the revision it drew with, while the node asks for one: a caret that
     /// shows again where it showed before is the same paint.
-    overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
+    overlays: IdMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
     overlay_revision: u64,
     /// The scroll views that told they are scrolled, by node ([`PaintCx::set_page_scrolled`]).
-    scrolled_pages: HashMap<NodeId, bool>,
+    scrolled_pages: IdMap<NodeId, bool>,
     /// The raised nodes that told they show a band, by node ([`PaintCx::set_band_shown`]).
-    bands: HashMap<NodeId, bool>,
+    bands: IdMap<NodeId, bool>,
 }
 
 /// The paint node of `node`'s overlay ([`Widget::overlay`](crate::Widget::overlay)): it comes after the node's
@@ -423,7 +423,7 @@ pub(crate) fn unobscured(rect: Rect, raised: &[(NodeId, Rect)]) -> Rect {
 fn paint_order<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
-    raised: &HashSet<NodeId>,
+    raised: &IdSet<NodeId>,
     layer: bool,
 ) -> Vec<NodeId> {
     let all = tree.preorder(root);
@@ -431,7 +431,7 @@ fn paint_order<M: 'static>(
         return all;
     }
     // where each lifted node goes: over the rest (`false`) or over every other raised node (`true`)
-    let mut lifted: HashMap<NodeId, bool> = HashMap::new();
+    let mut lifted: IdMap<NodeId, bool> = IdMap::default();
     let (mut rest, mut over, mut floating) =
         (Vec::with_capacity(all.len()), Vec::new(), Vec::new());
     for id in all {
@@ -612,13 +612,13 @@ impl Painter {
             })
             .clone();
         // the appearance each node pinned its subtree to, as its children inherit it
-        let mut pinned_below: HashMap<NodeId, Option<bool>> = HashMap::new();
+        let mut pinned_below: IdMap<NodeId, Option<bool>> = IdMap::default();
         let mut pins = false;
         // What each node lies on, as its children inherit it: the window's material when it is glass and shown, below
         // a node that shows a material that node's region. A node with nothing under it from its ancestors lies on
         // the glass painted before it that holds it whole: a panel's content is often drawn beside the node of its
         // glass, after it.
-        let mut on_glass: HashMap<NodeId, Under> = HashMap::new();
+        let mut on_glass: IdMap<NodeId, Under> = IdMap::default();
         let mut glass_shown: Vec<(Rect, GlassTone)> = Vec::new();
         let window_glass = match input.background {
             WindowBackground::Surface { surface, .. } if input.backdrop => input
@@ -636,7 +636,7 @@ impl Painter {
         let mut mark_readers: Vec<NodeId> = Vec::new();
         let mut band_readers: Vec<(NodeId, bool)> = Vec::new();
         let mut resources = PaintResources::default();
-        let mut seen = HashSet::with_capacity(self.nodes.len());
+        let mut seen = IdSet::with_capacity_and_hasher(self.nodes.len(), Default::default());
         let mut clips = Vec::new();
         let mut materials = Vec::new();
         let mut blank = Vec::new();
@@ -661,12 +661,12 @@ impl Painter {
                 layered.push(done.layered);
             }
         };
-        let raised_ids: HashSet<NodeId> = input.raised.iter().map(|(id, _)| *id).collect();
+        let raised_ids: IdSet<NodeId> = input.raised.iter().map(|(id, _)| *id).collect();
         // whether each node draws in the raised layer, as its children inherit it
-        let mut in_layer: HashMap<NodeId, bool> = HashMap::new();
-        let mut overlaid = HashSet::new();
+        let mut in_layer: IdMap<NodeId, bool> = IdMap::default();
+        let mut overlaid = IdSet::default();
         // whether each node's children lie on a material, from the window's background down
-        let mut material_below: HashMap<NodeId, bool> = HashMap::new();
+        let mut material_below: IdMap<NodeId, bool> = IdMap::default();
         let window_material = matches!(
             input.background,
             WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
@@ -1113,7 +1113,7 @@ impl Painter {
             // the raised subtrees move to a list of their own; a subtree's root keeps the clip of its ancestors
             let mut main = (DisplayList::default(), Vec::new(), Vec::new());
             let mut raised = (DisplayList::default(), Vec::new(), Vec::new());
-            let ids: HashSet<PaintNodeId> = list
+            let ids: IdSet<PaintNodeId> = list
                 .nodes
                 .iter()
                 .zip(&layered)
@@ -1190,7 +1190,7 @@ fn finish(
 ) -> (DisplayList, Vec<Rect>, Vec<bool>) {
     let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
     // Children come after their parent, so walking backwards widens each parent by its finished children.
-    let index: HashMap<PaintNodeId, usize> = list
+    let index: IdMap<PaintNodeId, usize> = list
         .nodes
         .iter()
         .enumerate()

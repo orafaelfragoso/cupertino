@@ -5,8 +5,8 @@ use crate::{
     LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutStats, LayoutTree, NodeLayout,
     Overflow, SizeSpec, Track,
 };
+use crate::{IdMap, IdSet};
 use cupertino_geometry::{Point, Rect, Size};
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 const MAX_DEPTH: usize = 256;
@@ -15,18 +15,18 @@ const MAX_DEPTH: usize = 256;
 /// its [`Generation`](crate::Generation) changed or any descendant's did; entries of nodes that left the tree go too.
 /// Pass the same cache to every [`layout_cached`] call for one tree.
 pub struct LayoutCache<Id> {
-    entries: HashMap<Key<Id>, Rc<Solved<Id>>>,
-    minimums: HashMap<MinKey<Id>, f64>,
-    generations: HashMap<Id, crate::Generation>,
+    entries: IdMap<Key<Id>, Rc<Solved<Id>>>,
+    minimums: IdMap<MinKey<Id>, f64>,
+    generations: IdMap<Id, crate::Generation>,
     direction: Option<LayoutDirection>,
 }
 
 impl<Id> Default for LayoutCache<Id> {
     fn default() -> Self {
         Self {
-            entries: HashMap::new(),
-            minimums: HashMap::new(),
-            generations: HashMap::new(),
+            entries: IdMap::default(),
+            minimums: IdMap::default(),
+            generations: IdMap::default(),
             direction: None,
         }
     }
@@ -113,7 +113,7 @@ pub fn layout_cached<T: LayoutTree>(
         stats: LayoutStats::default(),
     };
     let size = engine.solve(root, available)?.size;
-    let mut nodes = HashMap::new();
+    let mut nodes = IdMap::default();
     let mut pending = vec![(root, Point::ZERO, size)];
     while let Some((id, origin, size)) = pending.pop() {
         let solved = engine.solve(id, Constraints::tight(size)?)?;
@@ -156,13 +156,13 @@ fn refresh<T: LayoutTree>(
             dirty[parent] = true;
         }
     }
-    let stale: HashSet<T::Id> = visits
+    let stale: IdSet<T::Id> = visits
         .iter()
         .zip(&dirty)
         .filter(|(_, d)| **d)
         .map(|(v, _)| v.id)
         .collect();
-    let present: HashSet<T::Id> = visits.iter().map(|v| v.id).collect();
+    let present: IdSet<T::Id> = visits.iter().map(|v| v.id).collect();
     cache
         .entries
         .retain(|(id, _), _| present.contains(id) && !stale.contains(id));
@@ -186,7 +186,7 @@ fn validate_tree<T: LayoutTree>(
     root: T::Id,
     node_limit: usize,
 ) -> Result<Vec<Visit<T::Id>>, LayoutError> {
-    let mut seen = HashSet::new();
+    let mut seen = IdSet::default();
     let mut visits = Vec::new();
     let mut pending = vec![(root, None, 0usize)];
     while let Some((id, parent, depth)) = pending.pop() {

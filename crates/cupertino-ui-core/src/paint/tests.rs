@@ -92,7 +92,7 @@ impl Fixture {
     }
 
     fn painting(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> Painting {
-        let geometry = Geometry::from([(
+        let geometry = Geometry::from_iter([(
             self.root,
             Placement {
                 rect,
@@ -190,7 +190,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
         .unwrap();
     let child = tree.get(root).unwrap().children[0];
     let viewport = Rect::new(10.0, 10.0, 50.0, 50.0);
-    let geometry = Geometry::from([
+    let geometry = Geometry::from_iter([
         (
             root,
             Placement {
@@ -355,7 +355,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
     let mut tree = Tree::<M>::new(2);
     let root = tree.reconcile(None, Element::new(Shadowed)).unwrap();
     let rect = Rect::new(10.0, 10.0, 20.0, 20.0);
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect,
@@ -461,7 +461,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
             }),
         )
         .unwrap();
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: Rect::new(4.0, 4.0, 16.0, 16.0),
@@ -567,7 +567,7 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
         .unwrap();
     let ids = tree.get(root).unwrap().children.clone();
     let viewport = Rect::new(0.0, 0.0, 100.0, 1000.0);
-    let mut geometry = Geometry::from([(
+    let mut geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: viewport,
@@ -739,7 +739,7 @@ fn glass_nodes_join_their_container_with_round_ends() {
         .unwrap();
     let ids = tree.get(root).unwrap().children.clone();
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let mut geometry = Geometry::from([(
+    let mut geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: window,
@@ -956,7 +956,7 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
     };
     let inner = |id: NodeId| tree.get(id).unwrap().children[0];
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (id, rect) in [
         (root, window),
         (panel, Rect::new(10.0, 20.0, 100.0, 36.0)),
@@ -1075,7 +1075,7 @@ fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
     let [glass, over, straddling, past] = tree.get(root).unwrap().children.clone()[..] else {
         unreachable!()
     };
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (id, rect) in [
         (root, Rect::new(0.0, 0.0, 400.0, 200.0)),
         (glass, Rect::new(20.0, 20.0, 240.0, 120.0)),
@@ -1167,7 +1167,7 @@ fn text_on_a_window_of_glass_takes_the_windows_tone() {
     let mut tree = Tree::<M>::new(4);
     let root = tree.reconcile(None, Element::new(TextSwatch)).unwrap();
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: window,
@@ -1326,7 +1326,7 @@ fn probed(beneath: Beneath, background: WindowBackground, shown: bool) -> bool {
         .unwrap();
     let probe = tree.get(root).unwrap().children[0];
     let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
-    let geometry = Geometry::from([root, probe].map(|id| {
+    let geometry = Geometry::from_iter([root, probe].map(|id| {
         (
             id,
             Placement {
@@ -1464,7 +1464,7 @@ fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
         Point::new(3.7, 0.9),
     ] {
         let rect = Rect::new(origin.x, origin.y, 40.0, 20.0);
-        let geometry = Geometry::from([(
+        let geometry = Geometry::from_iter([(
             root,
             Placement {
                 rect,
@@ -1668,7 +1668,7 @@ impl Overlaid {
             own_clip,
             raised: Default::default(),
         };
-        let geometry = Geometry::from([
+        let geometry = Geometry::from_iter([
             (self.root, placed(viewport, None, Some(viewport))),
             (self.field, placed(field, Some(viewport), None)),
             (self.inner, placed(field, Some(viewport), None)),
@@ -1884,7 +1884,7 @@ fn a_subtree_pinned_to_an_appearance_paints_in_its_theme_and_the_rest_keeps_the_
         unreachable!()
     };
     let light_label = tree.get(light_panel).unwrap().children[0];
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (i, id) in [root, panel, label, light_panel, light_label, beside]
         .into_iter()
         .enumerate()

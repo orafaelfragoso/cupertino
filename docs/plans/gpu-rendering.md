@@ -588,13 +588,23 @@ Removed:
   `a_turn_that_changes_no_reading_presents_nothing_on_a_pane_of_readings`).
 - Settings re-read every pane once a second, whatever it showed: the appearance from the session service over the
   bus (which woke the server and the bus daemon each time), and on a machine without a system bus (the headless runs)
-  a connect attempt and a listing of the bus's names a second. Settings now listens: one thread holds a match rule
-  per service it reads (the session and notification services' owner and property changes; for the network, Wi-Fi,
-  Bluetooth, power and power-profile services on the system bus, their owner and every signal they send) and wakes
-  the window only when one comes and the shown pane shows what it is about. The appearance is read when the session
-  service starts or says it changed. A pane whose readings all have a change signal, or that shows none, arms no
-  timer (`a_pane_whose_readings_have_change_signals_or_that_shows_none_arms_no_timer_and_a_polling_pane_one`,
-  `the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_signal`).
+  a connect attempt and a listing of the bus's names a second. Settings now listens: one thread a bus asks the bus
+  daemon for the signals of the services it reads (the session and notification services' owner and property
+  changes; for the network, Bluetooth, power and power-profile services on the system bus, their owner and their
+  signals on the objects the panes read only, so an access point's strength or a single power device's update never
+  reaches it) and reads them from one queue it drains while it subscribes, so a burst at start cannot stall the
+  connection. A signal the shown pane does not read is dropped in that thread and never wakes the window; one it
+  reads wakes it once a burst. The appearance is read when the session service starts or says it changed. A device
+  plugged in or removed (input, power supply, network, sound, display, Bluetooth) is heard from udev's
+  announcements and reads the hardware again whatever the pane; a watch that ends with its connection starts again
+  on a new one, then after 1 s, doubling up to a minute. A pane whose readings all have a change signal, or that
+  shows none, arms no timer (`a_pane_whose_readings_have_change_signals_or_that_shows_none_arms_no_timer_and_a_polling_pane_one`,
+  `the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_signal`,
+  `a_signal_the_shown_pane_does_not_read_never_reaches_the_window`,
+  `a_burst_of_signals_while_the_watch_starts_stalls_neither_the_watch_nor_the_connection`,
+  `a_device_plugged_in_adds_its_row_whatever_pane_shows`,
+  `a_watch_that_ends_watches_the_bus_again_and_keeps_trying_while_the_bus_is_gone`,
+  `a_failure_while_the_window_reads_the_background_queue_keeps_its_wait`).
 - The settings file watch of every process woke whenever any process opened or read a file beside the settings or in
   the folder above them (`~/.config`, `/etc`; `/tmp` in the headless runs): its library always asks the kernel for
   open events and drops them only after waking. The watch now asks only for changes, and the folder above only for
@@ -603,7 +613,10 @@ Removed:
 At 3840 x 2160 before these last two changes, a minute of rest woke Settings 480–1140 times over its threads (its
 async-io thread 240–780, its main thread 180, its bus thread 60–180), the server's async-io thread 145–216 times and
 its bus thread 60, and the bus daemon 129. After them (`idle-1.5.json`, `idle-2.json`, five runs a scale): Settings 0,
-the server 1, the bus daemon 9, and no settings watch thread in any run.
+the server 1, the bus daemon 9, and no settings watch thread in any run. Those runs have no system bus; with only
+Settings given the machine's own (NetworkManager, BlueZ, UPower, the power and power-profile services running, Account
+shown), its idle minute is the same: Settings 0 over all its threads, its two bus watch threads and the hot-plug
+thread included (the idle scenario at 60 s, and each thread's voluntary context switches over a further 60 s).
 
 Kept, with what they cost per minute after the changes (Settings open on Account, 60 s, both scales):
 

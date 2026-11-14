@@ -402,8 +402,9 @@ fn merged(mut parts: Vec<Texels>) -> Vec<Texels> {
 }
 
 /// How to bring the pyramid of `old` (framebuffer pixels) up to date for `new`, in a `size` framebuffer halved
-/// `levels` times, given the rectangles where the framebuffer changed since (`changed`, framebuffer pixels: least and
-/// greatest x and y). Each texel of the last level is the mean of the pixels of its own square, so a texel of `new`
+/// `levels` times (none: a copy of the pixels, for a recipe of colour operations alone), given the rectangles where
+/// the framebuffer changed since (`changed`, framebuffer pixels: least and greatest x and y). Each texel of the last
+/// level is the mean of the pixels of its own square, so a texel of `new`
 /// is kept when `old` had it and no change touches its square, and made again from its square otherwise; the
 /// Gaussian then runs over the whole level, as it would after a whole capture. None when the parts made again cover
 /// most of `new`, which is then captured whole.
@@ -415,7 +416,7 @@ fn plan_reblur(
     changed: &[(f32, f32, f32, f32)],
 ) -> Option<Reblur> {
     let factor = 1i32 << levels.min(16);
-    if levels == 0 || size.0 % factor != 0 || size.1 % factor != 0 {
+    if size.0 % factor != 0 || size.1 % factor != 0 {
         return None;
     }
     let (new_t, old_t) = (Texels::of(new, factor), Texels::of(old, factor));
@@ -2008,6 +2009,41 @@ mod tests {
         assert_eq!(plan_reblur(size, levels, old, far, &[]), None);
         // a framebuffer that does not halve exactly is captured whole
         assert_eq!(plan_reblur((1022, 640), levels, old, old, &[]), None);
+        // a copy without halvings keeps every pixel no change touches
+        let copy = Crop {
+            x: 101,
+            y: 50,
+            w: 300,
+            h: 200,
+        };
+        let moved = Crop { x: 99, ..copy };
+        let pixels = plan_reblur(size, 0, copy, moved, &[(150.0, 60.0, 160.5, 70.0)]).unwrap();
+        assert_eq!(
+            pixels.kept,
+            Some(Texels {
+                x0: 101,
+                y0: 50,
+                x1: 399,
+                y1: 250
+            })
+        );
+        assert_eq!(
+            pixels.parts,
+            [
+                Texels {
+                    x0: 99,
+                    y0: 50,
+                    x1: 101,
+                    y1: 250
+                },
+                Texels {
+                    x0: 150,
+                    y0: 60,
+                    x1: 161,
+                    y1: 70
+                }
+            ]
+        );
     }
 
     #[test]

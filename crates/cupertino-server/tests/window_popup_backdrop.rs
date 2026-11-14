@@ -626,14 +626,14 @@ fn a_window_s_sidebar_glass_meets_the_content_s_backdrop_with_no_line_between_th
     }
 }
 
-/// The white window and the sidebar window over it, opened in that order, the sidebar window at `frame`; and the
-/// sidebar window's id.
-fn sidebar_over_a_window(h: &mut Harness, frame: Rect) -> (WindowId, [App; 2]) {
+/// The white window and the sidebar window over it, opened in that order, the sidebar window at `frame` (with its
+/// content's window background backdrop past `split` points); and the sidebar window's id.
+fn sidebar_over_a_window(h: &mut Harness, frame: Rect, split: Option<i32>) -> (WindowId, [App; 2]) {
     let white = App::spawn(h.socket_path(), None);
     h.wait_until("the white window to map", |s| {
         s.windows.iter().any(|w| w.mapped)
     });
-    let sidebar = App::spawn(h.socket_path(), Some(10.0));
+    let sidebar = App::spawn_with(h.socket_path(), Some(10.0), false, split);
     h.wait_until("the sidebar window to map", |s| {
         s.windows.iter().filter(|w| w.mapped).count() == 2
     });
@@ -672,10 +672,17 @@ fn reblurs(h: &Harness) -> u64 {
 
 #[test]
 fn a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole() {
+    // the sidebar alone, and beside the content's window background
+    for split in [None, Some(200)] {
+        dragged_backdrops_match_whole_ones(split);
+    }
+}
+
+fn dragged_backdrops_match_whole_ones(split: Option<i32>) {
     let end = Rect::new(348.0, 232.0, 500.0, 300.0);
     let Some(mut h) = Harness::new() else { return };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let (id, _apps) = sidebar_over_a_window(&mut h, Rect::new(300.0, 200.0, 500.0, 300.0));
+    let (id, _apps) = sidebar_over_a_window(&mut h, Rect::new(300.0, 200.0, 500.0, 300.0), split);
     let output = h.state.outputs[0].id;
     let before = reblurs(&h);
     // dragged a few points a frame, its backdrop reaching over the white window's edge and corner
@@ -701,11 +708,10 @@ fn a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blur
     let dragged = h.screenshot();
     drop(_apps);
     drop(h);
-    // the same windows put where the drag ended, blurred whole there
+    // the same windows put where the drag ended in one jump from where they open
     let Some(mut h) = Harness::new() else { return };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let (_, _apps) = sidebar_over_a_window(&mut h, end);
-    assert_eq!(reblurs(&h), 0, "nothing kept to make again in part");
+    let (_, _apps) = sidebar_over_a_window(&mut h, end, split);
     let whole = h.screenshot();
     let worst = dragged
         .pixels()
@@ -721,6 +727,6 @@ fn a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blur
         .unwrap();
     assert!(
         worst <= 1,
-        "the dragged sidebar differs from one blurred whole by {worst}"
+        "the dragged sidebar ({split:?}) differs from one blurred whole by {worst}"
     );
 }

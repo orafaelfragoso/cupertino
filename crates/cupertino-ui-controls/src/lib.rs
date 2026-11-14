@@ -1351,6 +1351,10 @@ pub struct SearchField<M> {
 pub struct BareField<M> {
     pub field: TextField<M>,
     pub size: f64,
+    /// The caret holds what it shows: its blink draws nothing, so the field draws no frame of its own, and once the
+    /// hold ends the blink goes on where its cycle has come to. For a field whose surface the compositor is moving
+    /// (a panel's close it runs on its own clock).
+    pub hold_caret: bool,
 }
 
 /// A [`SecureField`] without chrome, its text set at `size` points (whole points, 1 to 200) in `weight` (the body

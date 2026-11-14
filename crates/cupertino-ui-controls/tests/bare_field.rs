@@ -11,6 +11,11 @@ use cupertino_ui_text::ContentPurpose;
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
 use support::{color, window, Harness};
 
+thread_local! {
+    /// The field holds its caret.
+    static HOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
     Edit(TextChange),
@@ -58,6 +63,7 @@ impl Application for Query {
                 initial: true,
             },
             size: 26.0,
+            hold_caret: HOLD.get(),
         })
         .key("query");
         window(Element::new(Stack {
@@ -141,4 +147,38 @@ fn a_bare_field_s_caret_is_its_text_s_colour() {
         .collect();
     let text = color(ColorRole::Text, InteractionVariant::Normal, false);
     assert_eq!(bars, vec![text], "one caret, in the text's colour");
+}
+
+/// A held caret's blink draws nothing: through a fade out, the hidden stretch and a fade in the field draws no frame,
+/// so it shows what it showed when the hold began; let go, the caret blinks again.
+#[test]
+fn a_held_caret_draws_no_frame_until_it_is_let_go() {
+    use cupertino_ui_platform::Timestamp;
+    const MS: u64 = 1_000_000;
+    let blink = |h: &mut Harness<Query>, from: u64, to: u64| {
+        for ms in (from..=to).step_by(16) {
+            h.clock().advance_to(Timestamp(ms * MS)).unwrap();
+            h.settle();
+        }
+    };
+    let mut h = harness();
+    h.type_text("doc");
+    // the edit that takes the hold is the last to restart the blink
+    HOLD.set(true);
+    h.type_text("k");
+    let frames = h.rt.window_system().frames(h.window).unwrap().len();
+    blink(&mut h, 16, 1100);
+    assert_eq!(
+        h.rt.window_system().frames(h.window).unwrap().len(),
+        frames,
+        "the held caret drew no frame"
+    );
+    HOLD.set(false);
+    h.type_text("s");
+    let frames = h.rt.window_system().frames(h.window).unwrap().len();
+    blink(&mut h, 1100, 2200);
+    assert!(
+        h.rt.window_system().frames(h.window).unwrap().len() > frames,
+        "let go, the caret blinks"
+    );
 }

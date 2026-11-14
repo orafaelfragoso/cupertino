@@ -176,6 +176,7 @@ pub(super) fn window(
         children: vec![Element::new(BareField {
             field: input,
             size: f64::from(TITLE_SIZE),
+            hold_caret: false,
         })
         .key("tag-field")
         // the field takes the frame's width, so its text has room and it can be pressed anywhere in the frame

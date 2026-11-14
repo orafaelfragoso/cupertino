@@ -630,6 +630,11 @@ impl Blink {
         )
     }
 
+    /// Keeps the blink's cycle going on a wake without drawing it: the caret holds what it shows.
+    fn hold<M>(&self, selecting: bool, cx: &mut EventCx<'_, M>) {
+        self.arm(selecting, cx);
+    }
+
     /// Restarts on the events that move the caret, and keeps blinking on a wake, after the field handled `event`.
     pub(crate) fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
         if Self::restarts(event) {
@@ -1845,6 +1850,13 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     }
 
     fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if self.hold_caret {
+            if let Event::Wake(_) = event {
+                let selecting = !state.buffer.selection().is_empty();
+                state.blink.hold(selecting, cx);
+                return Propagation::Continue;
+            }
+        }
         self.field.event(state, event, cx)
     }
 

@@ -68,6 +68,7 @@ impl<M: Clone + 'static> From<ComboBox<M>> for Element<M> {
                 Element::new(BareField {
                     field: combo.field,
                     size,
+                    hold_caret: false,
                 })
                 .fill(),
                 Element::new(Disclosure {

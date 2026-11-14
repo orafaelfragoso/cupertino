@@ -496,6 +496,7 @@ pub fn screen<M: Clone + 'static>(
                     initial: true,
                 },
                 size: FIELD_TEXT_SIZE,
+                hold_caret: false,
             }),
             "name".to_owned(),
         ),

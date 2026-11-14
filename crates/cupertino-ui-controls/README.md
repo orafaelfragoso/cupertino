@@ -125,7 +125,8 @@ from the application's model and reports changes as messages.
   (24 pt at the regular size), 28 pt at `ControlSize::Large`, the size a sidebar's header uses
   (`tests/search-field.rs`). The other fields (plain, secure, combo box, date picker) keep their well on a material. `BareField` is a `TextField` with no chrome, its
   text and placeholder at its own size (whole points), for a field standing on a surface drawn around it such as a
-  launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`).
+  launcher capsule; it edits and reads as its field does (`tests/bare_field.rs`). With `hold_caret` its caret holds
+  what it shows: the blink's cycle goes on but draws nothing, for a field whose surface the compositor is moving.
 - **Tiled sidebar.** `TileSidebar` lists a settings window's pages: rows of `TILE_SIDEBAR_ROW_HEIGHT`, a tile before
   each label, in groups set apart by space, under an optional header (a `SearchField`) that does not scroll. The
   selected row fills with the selected control colour, its label bold. In a window that is not active every label, the

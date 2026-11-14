@@ -346,3 +346,35 @@ fn under_reduce_motion_the_panel_draws_its_own_close() {
     assert!(!m.model().close_handed());
     assert!(m.layer_requests().is_empty());
 }
+
+/// A close that falls in the caret's blink draws nothing: while the compositor runs it the field holds its caret, so
+/// the caret's fade, which starts inside the close, draws no frame of the content's layer.
+#[test]
+fn a_close_in_the_caret_s_fade_draws_no_frame() {
+    // how many frames after the panel rests its caret starts to fade, which it draws
+    let fade = {
+        let mut m = drawn(1.5, true, true);
+        m.settle_on(Message::Toggle);
+        let rest = m.presents();
+        (1..120)
+            .find(|_| {
+                m.step(|_, _| {});
+                m.presents() != rest
+            })
+            .expect("the caret fades")
+    };
+    let mut m = drawn(1.5, true, true);
+    m.settle_on(Message::Toggle);
+    for _ in 2..fade {
+        m.step(|_, _| {});
+    }
+    let shown = m.presents();
+    // two frames before the fade, closed by the launcher's action, not a key, so the blink goes on
+    send(Message::Toggle);
+    m.step(|_, _| {});
+    assert!(m.model().close_handed(), "the close is the compositor's");
+    for _ in 0..6 {
+        m.step(|_, _| {});
+    }
+    assert_eq!(m.presents(), shown, "no frame of the window or its layers");
+}

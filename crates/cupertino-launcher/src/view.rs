@@ -887,6 +887,8 @@ where
             initial: true,
         },
         size: QUERY_SIZE,
+        // while the compositor runs the close, the caret's blink would draw the content's layer again
+        hold_caret: view.handed,
     })
     .key("query")
     .fill();

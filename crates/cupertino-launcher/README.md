@@ -64,7 +64,9 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   stroke, centred on the point the panel grows about), and each mode button's glass and face. Closing it then hands the
   close to the compositor (`view::layers::close_changes`): the glass grows to the close's end rect and fades, the edge
   scales and blurs, the content blurs to a deviation of 4 pt and fades, all on the close's ease-out over 0.1 s, and the
-  panel draws no frame until the compositor is done and the window goes. While the panel moves, under Reduce Motion and
+  panel draws no frame until the compositor is done and the window goes: the panel takes every key meanwhile and the
+  query field holds its caret (`BareField::hold_caret`), so neither a key nor the caret's blink draws the content
+  again. While the panel moves, under Reduce Motion and
   without the capability it draws its own close;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no

@@ -765,9 +765,10 @@ Gate:
             target, so the resting panel lost a float tail: at 1.5 the caret sits one device pixel further right
             than before and the mode buttons' rims moved by a few hundredths of a point ("Measurements", "Step 9").
             What is not exact: the field's edge grows by a uniform scale where the drawing grows its width alone
-            (under a device pixel at the ends); content that moves lands on whole device pixels; a caret blink
-            that falls inside the 0.1 s close draws the content layer once (the field's caret has no way to hold
-            still yet).
+            (under a device pixel at the ends); content that moves lands on whole device pixels. A caret blink
+            that falls inside the close draws nothing: the field holds its caret while the compositor runs the close
+            (`BareField::hold_caret`; `a_close_in_the_caret_s_fade_draws_no_frame`,
+            `a_held_caret_draws_no_frame_until_it_is_let_go`).
       - [ ] A scope's open and folding (the browser, the files scope): the enclosure's width, height, corner and
             place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
             unscaled, its fade on the content's curve; the files scope's width dip as samples.

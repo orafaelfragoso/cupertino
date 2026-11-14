@@ -36,6 +36,11 @@ pub struct Programs {
     pub rrect: GlesPixelProgram,
     pub wallpaper: GlesPixelProgram,
     pub clip: GlesTexProgram,
+    /// The clip program for a texture drawn smaller than its texels, each pixel the average of those it covers
+    /// ([`super::clip::minify_uniforms`]).
+    pub clip_minify: GlesTexProgram,
+    /// The reduced copies of windows drawn well below their size.
+    pub reduced: super::reduce::Reductions,
 }
 
 impl Programs {
@@ -76,11 +81,28 @@ impl Programs {
                 v4("clip_shape"),
             ],
         )?;
+        let minify_src = format!(
+            "#version 100\n#define MINIFY\n{}",
+            CLIP.replace("//_SDF_", SDF)
+        );
+        let clip_minify = renderer.compile_custom_texture_shader(
+            minify_src,
+            &[
+                UniformName::new("inv_proj", UniformType::Matrix3x3),
+                f("viewport"),
+                v4("clip_rect"),
+                v4("clip_shape"),
+                f("footprint"),
+                f("texels"),
+            ],
+        )?;
         Ok(Self {
             shadow,
             rrect,
             wallpaper,
             clip,
+            clip_minify,
+            reduced: super::reduce::Reductions::default(),
         })
     }
 }

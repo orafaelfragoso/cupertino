@@ -28,7 +28,7 @@ window system's timestamp; `handled`; `updated`, the model update and view, or `
 it; `presented`, the compositor's time for that frame, or `null` when it was dropped). Without the variable no timing
 is kept (`app::Timed`, on `Runtime::with_scroll_timing`). They report frame timing when `CUPERTINO_FRAME_TIMING`
 (`app::FRAME_TIMING_ENV`) names an absolute path: one JSON line a presented frame, appended (every process of a session
-may share the file), with `pid`, `program`, `start` in nanoseconds of `CLOCK_MONOTONIC`, and the nanoseconds of each
+may share the file), with `pid`, `program`, `renderer` (`cpu` or `gpu`, what the process draws with now), `start` in nanoseconds of `CLOCK_MONOTONIC`, and the nanoseconds of each
 phase: `update`, `view`, `layout`, `paint`, `raster`, `copy` (into the shared buffer), `commit`, and their `total`
 (`Runtime::with_frame_timing`). `scripts/dev/bench` collects them per program. Without the variable nothing is timed.
 `app::mono_family` names the asset packs' fixed-pitch family, which the text system loads with the interface face, for

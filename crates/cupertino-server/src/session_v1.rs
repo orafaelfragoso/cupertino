@@ -175,6 +175,21 @@ fn send_appearance_options(
     observer.display_options(bits);
 }
 
+/// The version of `cupertino_appearance_v1` that has the `buffers_lost` event.
+pub const BUFFERS_LOST_VERSION: u32 = 21;
+
+impl SessionObservers {
+    /// Tell every appearance observer that knows the event that what the server showed of the clients' buffers is
+    /// gone: after a GPU reset or a purge of video memory, once the renderer is made again.
+    pub fn buffers_lost(&self) {
+        for observer in &self.appearance_observers {
+            if observer.version() >= BUFFERS_LOST_VERSION {
+                observer.buffers_lost();
+            }
+        }
+    }
+}
+
 /// `session_lock`; observers created below version 5 know no such event.
 fn send_appearance_lock(observer: &CupertinoAppearanceV1, locked: bool) {
     if observer.version() >= 5 {

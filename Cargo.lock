@@ -1359,6 +1359,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-gpu"
+version = "0.1.0"
+dependencies = [
+ "cupertino-raster-math",
+ "glow",
+ "libc",
+ "libloading",
+]
+
+[[package]]
+name = "cupertino-gpu-shaders"
+version = "0.1.0"
+dependencies = [
+ "naga",
+]
+
+[[package]]
+name = "cupertino-gpu-slice"
+version = "0.1.0"
+dependencies = [
+ "drm",
+ "libc",
+ "libloading",
+ "wayland-client",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "cupertino-icons"
 version = "0.1.0"
 dependencies = [
@@ -2218,6 +2246,7 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-gpu",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",

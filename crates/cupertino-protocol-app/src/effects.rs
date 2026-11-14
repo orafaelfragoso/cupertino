@@ -70,6 +70,8 @@ pub enum AppEvent {
         backdrop: BackdropId,
         tone: BackdropTone,
     },
+    /// The server's GPU was reset or its memory purged: draw every surface whole again and commit it (version 21).
+    BuffersLost,
 }
 
 /// The app effects global (`cupertino_app_effects_v1`).
@@ -78,7 +80,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=20, Quiet).map(AppEffects)
+        conn.bind_extension(1..=21, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -177,6 +179,11 @@ impl AppEffects {
         self.0.version() >= SESSION_LOCK_VERSION
     }
 
+    /// Whether observers tell [`AppEvent::BuffersLost`] (version 21).
+    pub fn tells_buffers_lost(&self) -> bool {
+        self.0.version() >= BUFFERS_LOST_VERSION
+    }
+
     /// Whether the server takes [`Self::set_disabled_controls`] (version 4).
     pub fn can_set_disabled_controls(&self) -> bool {
         self.0.version() >= DISABLED_CONTROLS_VERSION
@@ -201,6 +208,8 @@ const SCROLL_BARS_VERSION: u32 = 8;
 const STEADY_CARET_VERSION: u32 = 9;
 /// The version whose backdrops of a subsurface draw above the rest of its window.
 const SUBSURFACE_BACKDROPS_VERSION: u32 = 11;
+/// The version whose appearance observer tells `buffers_lost`.
+const BUFFERS_LOST_VERSION: u32 = 21;
 
 /// How the server decorates an application window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -362,6 +371,7 @@ impl Dispatch<CupertinoAppearanceV1, Quiet> for State {
                     locked: locked == 1,
                 });
             }
+            cupertino_appearance_v1::Event::BuffersLost => state.emit(AppEvent::BuffersLost),
             _ => {}
         }
     }

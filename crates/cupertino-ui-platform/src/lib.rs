@@ -676,6 +676,29 @@ pub enum PlatformEvent {
     /// How the session wants scroll views to show their bars, once when the window system learns it and on every
     /// change; a window system that can't tell never sends it, and each view keeps its own style.
     ScrollBars(ScrollBars),
+    /// What the window system showed is gone (the GPU was reset or its memory purged): every window draws a whole
+    /// frame again, even one that changed nothing.
+    BuffersLost,
+    /// The process now draws with `RendererKind`: every window makes its renderer anew, so what the old one kept
+    /// (its frame, layers and caches) is freed, and draws a whole frame.
+    RendererChanged(RendererKind),
+}
+
+/// The renderer a process draws its windows with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RendererKind {
+    Cpu,
+    Gpu,
+}
+
+impl RendererKind {
+    /// `cpu` or `gpu`, as logs and reports name it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RendererKind::Cpu => "cpu",
+            RendererKind::Gpu => "gpu",
+        }
+    }
 }
 
 /// How the session wants scroll views to show their bars.

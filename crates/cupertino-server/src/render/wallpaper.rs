@@ -609,12 +609,21 @@ impl Wallpapers {
     }
 
     /// The images to try for an appearance, best first: the user's, then the pack's.
-    fn candidates(&self, config: &WallpaperSettings, dark: bool) -> Vec<PathBuf> {
+    fn candidate_paths<'a>(
+        &'a self,
+        config: &'a WallpaperSettings,
+        dark: bool,
+    ) -> impl Iterator<Item = &'a Path> + Clone + 'a {
         config
             .for_appearance(dark)
-            .map(Path::to_path_buf)
             .into_iter()
-            .chain(self.pack[usize::from(dark)].clone())
+            .chain(self.pack[usize::from(dark)].as_deref())
+    }
+
+    /// [`Self::candidate_paths`], owned for a request to the worker.
+    fn candidates(&self, config: &WallpaperSettings, dark: bool) -> Vec<PathBuf> {
+        self.candidate_paths(config, dark)
+            .map(Path::to_path_buf)
             .collect()
     }
 
@@ -732,10 +741,26 @@ impl Wallpapers {
     }
 
     /// Bring the output's state up to date with what is wanted: no file system access, no waiting.
+    #[cfg(test)]
     fn update(
         &mut self,
         output: u64,
         candidates: Vec<PathBuf>,
+        dst: (u32, u32),
+        strip_rows: u32,
+        now: f64,
+    ) {
+        let key = key_of(candidates.iter().map(PathBuf::as_path), dst, strip_rows);
+        self.update_keyed(output, key, |_| candidates, dst, strip_rows, now);
+    }
+
+    /// [`Self::update`] for the candidates whose [`key_of`] is `key`, made by `candidates` only when a request is
+    /// sent: a frame that changes nothing copies no path.
+    fn update_keyed(
+        &mut self,
+        output: u64,
+        key: u64,
+        candidates: impl FnOnce(&Self) -> Vec<PathBuf>,
         dst: (u32, u32),
         strip_rows: u32,
         now: f64,
@@ -750,15 +775,16 @@ impl Wallpapers {
         for output in idle {
             self.forget(output);
         }
-        let key = key_of(&candidates, dst, strip_rows);
         let state = self.outputs.entry(output).or_default();
         state.seen_at = now;
         if state.key != key || state.ticket == 0 {
             state.key = key;
             state.loaded = None;
+            let candidates = candidates(self);
             self.request(output, candidates, dst, strip_rows, now, None);
         } else if !state.in_flight && now - state.checked_at >= REVALIDATE_SECONDS {
             let known = state.loaded.clone();
+            let candidates = candidates(self);
             self.request(output, candidates, dst, strip_rows, now, known);
         }
     }
@@ -806,14 +832,25 @@ impl Wallpapers {
         if dst.0 == 0 || dst.1 == 0 {
             return None;
         }
-        let candidates = self.candidates(config, dark);
-        if candidates.is_empty() {
+        let paths = self.candidate_paths(config, dark);
+        let (none, key) = (
+            paths.clone().next().is_none(),
+            key_of(paths, dst, strip_rows),
+        );
+        if none {
             self.forget(output);
             self.tint = None;
             self.procedural(output, crate::render::scene::wallpaper_tint(dark));
             return None;
         }
-        self.update(output, candidates, dst, strip_rows, now);
+        self.update_keyed(
+            output,
+            key,
+            |w| w.candidates(config, dark),
+            dst,
+            strip_rows,
+            now,
+        );
         let state = self.outputs.get(&output)?;
         // no candidate could be used and none is being read: the procedural wallpaper stays
         if !state.in_flight && state.shown.is_none() {
@@ -874,10 +911,15 @@ impl Wallpapers {
 }
 
 /// What a request is for: the files and the size.
-fn key_of(candidates: &[PathBuf], dst: (u32, u32), strip_rows: u32) -> u64 {
+fn key_of<'a>(candidates: impl Iterator<Item = &'a Path>, dst: (u32, u32), strip_rows: u32) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    candidates.hash(&mut h);
+    let mut count = 0usize;
+    for c in candidates {
+        c.hash(&mut h);
+        count += 1;
+    }
+    count.hash(&mut h);
     dst.hash(&mut h);
     strip_rows.hash(&mut h);
     h.finish()
@@ -978,6 +1020,47 @@ mod tests {
         assert_eq!(rig.wallpapers.take_bar_bands(), []);
         rig.wallpapers.set_bar_ops(&ops);
         assert_eq!(rig.wallpapers.take_bar_bands(), [(1, through)]);
+    }
+
+    #[test]
+    fn a_frame_that_changes_nothing_copies_no_wallpaper_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (32, 32), |_, _| [119, 119, 119, 255]);
+        let mut rig = rig();
+        rig.settle(&path, (32, 32), 0.0);
+        let key = key_of(std::iter::once(path.as_path()), (32, 32), 1);
+        let made = std::cell::Cell::new(0);
+        for frame in 1..=10 {
+            rig.wallpapers.update_keyed(
+                1,
+                key,
+                |_| {
+                    made.set(made.get() + 1);
+                    vec![path.clone()]
+                },
+                (32, 32),
+                1,
+                f64::from(frame) / 60.0,
+            );
+        }
+        assert_eq!(
+            made.get(),
+            0,
+            "the same image at the same size asks for nothing"
+        );
+        let other = key_of(std::iter::once(path.as_path()), (64, 32), 1);
+        rig.wallpapers.update_keyed(
+            1,
+            other,
+            |_| {
+                made.set(made.get() + 1);
+                vec![path.clone()]
+            },
+            (64, 32),
+            1,
+            0.5,
+        );
+        assert_eq!(made.get(), 1, "another size asks for the image again");
     }
 
     #[test]

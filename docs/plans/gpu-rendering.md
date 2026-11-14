@@ -142,42 +142,46 @@ Gate:
 
 ## Step 2: compositor wins
 
-- [ ] Non-glass materials use the overlap-limited backdrop generation glass uses.
-- [ ] The minimize effect reuses one captured texture.
-- [ ] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
-- [ ] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
+- [x] Non-glass materials use the overlap-limited backdrop generation glass uses.
+- [x] The minimize effect reuses one captured texture.
+- [x] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
+- [x] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
       hand-written texture program with the external-sampler variant.
-- [ ] A better minification filter for integer-scale clients shown at a fractional scale.
-- [ ] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
+- [x] A better minification filter for integer-scale clients shown at a fractional scale.
+- [x] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
       gradient under glass (banding).
 
 Gate:
 
-- [ ] Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
-      checks pass.
+- [ ] Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
+      the shimmer and banding checks pass. (Revised from "fewer blur passes": every frame of a drag uncovers
+      something, so every frame needs a blur; the work the blur does is what can fall. See Measurements, step 2.)
 
 ## Step 3: vertical slice of the GPU path
 
 The risk is the handoff, so it is proven first with the smallest renderer possible.
 
-- [ ] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
-- [ ] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
+- [x] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
+- [x] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
       offered modifiers, never adding linear on a hardware driver.
-- [ ] It attaches them through `zwp_linux_dmabuf_v1` v4.
-- [ ] Acquire through native fence → syncobj timeline point; release waited through a syncobj eventfd.
-- [ ] The syncobj surface object is destroyed before a shared-memory attach and re-created on return to dmabuf.
-- [ ] Without the protocol: wait for the own fence before commit; reuse after release plus one frame.
-- [ ] The client counts missed refreshes from presentation-feedback sequence gaps.
-- [ ] Overdraw test: many layers of drawing ending in one flat colour; every capture must be uniform.
-- [ ] The compositor imports the client's buffers with the driver's default modifier (recorded).
-- [ ] Probe: the slice on llvmpipe in the goldens image, allocating by texture export; result recorded.
-- [ ] Runs in a headless session and in the live session on the target machine.
+- [x] It attaches them through `zwp_linux_dmabuf_v1` v4.
+- [x] Acquire through native fence → syncobj timeline point; release waited through a syncobj eventfd.
+- [x] The syncobj surface object is destroyed before a shared-memory attach and re-created on return to dmabuf.
+- [x] Without the protocol: wait for the own fence before commit; reuse after release plus one frame.
+- [x] The client counts missed refreshes from presentation-feedback sequence gaps.
+- [x] Overdraw test: many layers of drawing ending in one flat colour; every capture must be uniform.
+- [x] The compositor imports the client's buffers with the driver's default modifier (recorded).
+- [x] Probe: the slice on llvmpipe in the goldens image, allocating by texture export; result recorded.
+- [ ] Runs in a headless session and in the live session on the target machine. Headless: done
+      (`crates/cupertino-server/tests/gpu_slice.rs`). Live: BLOCKED (owner action), one command ("Measurements",
+      "Step 3").
 
 Gate:
 
 - [ ] One hour in the live session on the target machine beside a `wl_shm` control client of the same size: no more
-      missed refreshes than the control, and every overdraw capture uniform.
-- [ ] The slice's offscreen loop of 10 million frames meets the fence budget.
+      missed refreshes than the control, and every overdraw capture uniform. BLOCKED (owner action): the command is
+      under "Measurements", "Step 3".
+- [x] The slice's offscreen loop of 10 million frames meets the fence budget.
 
 ## Step 4: retained layers in the toolkit
 
@@ -199,22 +203,23 @@ Gate:
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
-- [ ] API: devices, buffers, textures with external memory, immutable pipelines, explicit passes, bind groups,
+- [x] API: devices, buffers, textures with external memory, immutable pipelines, explicit passes, bind groups,
       fences; borrowed-context mode with a state-restore contract.
-- [ ] GLES backend over EGL, with EGL and GBM loaded at run time.
-- [ ] Allocators: GBM buffer objects; texture export (`EGL_MESA_image_dma_buf_export`) where there is no GBM.
-- [ ] Robustness and purge attributes on every context; reset and purge detection.
-- [ ] Shader build step: shared module concatenated, `naga` generating GLSL ES 3.00 and SPIR-V, coordinate adjustment
+- [x] GLES backend over EGL, with EGL and GBM loaded at run time.
+- [x] Allocators: GBM buffer objects; texture export (`EGL_MESA_image_dma_buf_export`) where there is no GBM.
+- [x] Robustness and purge attributes on every context; reset and purge detection.
+- [x] Shader build step: shared module concatenated, `naga` generating GLSL ES 3.00 and SPIR-V, coordinate adjustment
       off, blocks and samplers bound by name, uniform blocks only, no `mat2x2` in blocks.
-- [ ] Generated shaders committed; a test regenerates them and fails on a difference.
-- [ ] Shaders tested against the shared definitions' vectors.
-- [ ] Atlases (8-bit coverage, RGBA colour glyphs, path masks) with eviction and caps; pooled render targets with caps.
-- [ ] Tests per backend: pipelines, orientation, atlas eviction, pool reuse, export and import, fences, context loss.
+- [x] Generated shaders committed; a test regenerates them and fails on a difference.
+- [x] Shaders tested against the shared definitions' vectors.
+- [x] Atlases (8-bit coverage, RGBA colour glyphs, path masks) with eviction and caps; pooled render targets with caps.
+- [x] Tests per backend: pipelines, orientation, atlas eviction, pool reuse, export and import, fences, context loss.
 
 Gate:
 
-- [ ] CI: the crate's tests pass on llvmpipe.
-- [ ] Local tier: the crate's tests pass on the NVIDIA GPU.
+- [x] CI: the crate's tests pass on llvmpipe. In the CI image (the goldens image, no device passed in) and on the
+      host's llvmpipe ("Measurements", "Step 5"); the first CI run on `main` after the merge confirms it there.
+- [x] Local tier: the crate's tests pass on the NVIDIA GPU.
 
 ## Step 6: the GPU renderer and presenter
 
@@ -233,17 +238,20 @@ renderers:
 
 Presenter and process:
 
-- [ ] dmabuf presenter in `cupertino-ui-wayland` with the step 3 synchronisation, size-stepped allocation for live
+- [x] dmabuf presenter in `cupertino-ui-wayland` with the step 3 synchronisation, size-stepped allocation for live
       resize, two buffers with release points and three without.
-- [ ] Fallback rule in full: `CUPERTINO_RENDERER` (`gpu` overriding software and missing feedback), missing libraries,
+- [x] Fallback rule in full: `CUPERTINO_RENDERER` (`gpu` overriding software and missing feedback), missing libraries,
       three losses, purges not counted, per-surface fallback to shared memory on import or allocation failure.
-- [ ] "Buffers lost" after a reset or purge: protocol version bump, contract entry in
+- [x] "Buffers lost" after a reset or purge: protocol version bump, contract entry in
       `docs/architecture/contracts.yaml`, compositor event, client repaint, tests.
-- [ ] First frame on the CPU while the context and programs warm on a worker thread; after the switch the CPU
+- [x] First frame on the CPU while the context and programs warm on a worker thread; after the switch the CPU
       renderer's frame, layers and caches are freed.
-- [ ] `cupertino-diagnose` and the frame statistics report the renderer per process.
-- [ ] Local GPU tier: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import fallback, resize
-      storm, fence soak, goldens on the NVIDIA GPU.
+- [x] `cupertino-diagnose` and the frame statistics report the renderer per process.
+- [x] Local GPU tier, presenter: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import
+      fallback, resize storm, fence soak on the NVIDIA GPU.
+- [ ] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`).
+- [x] Renderer selection wired with every process on the CPU by default: the single switch `GPU_BY_DEFAULT`
+      (`crates/cupertino-ui-wayland/src/renderer.rs`), which step 7 turns on.
 - [ ] Parity at scales 1, 1.5 and 2 with odd sizes.
 
 Gate:
@@ -684,6 +692,279 @@ stay armed without firing in a minute (one in the server, one in the menu bar): 
 headless sessions keep the server's settings in a folder of their own, as a machine does (`/etc/cupertino`): beside
 `/tmp` every file another process made there woke the settings watch.
 
+### Step 3: the vertical slice
+
+Taken at `7f54f6b8` on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08), headless.
+
+**Where it is.** `cupertino-gpu-slice` (`crates/cupertino-gpu-slice`, a development binary, never packaged): a window
+drawing solid rectangles with GLES (scissored clears) into dmabufs. It reads the compositor's default dmabuf feedback,
+opens the main device's render node, makes a GLES 3 context on its GBM device (or, without one, on the surfaceless
+platform with texture export), and allocates ARGB8888 buffers with the modifiers both the feedback offers and the
+driver renders to (`model::usable_modifiers`: linear only when both list it). With `linux-drm-syncobj-v1` it keeps two
+buffers, each with a timeline: the frame's native fence is imported into a binary syncobj and transferred to the
+acquire point, the release point is waited for through an eventfd in its poll loop. Without the protocol it keeps
+three, waits for its own fence before each commit (on a driver without native fences, for the GPU on the CPU), and
+reuses a buffer only after its release and one further commit. `--shm-every K` draws every K-th frame from shared
+memory, destroying the syncobj surface object first and making it again on the next dmabuf frame. Presentation
+feedback counts missed refreshes from sequence gaps (or from the times over the refresh period when the compositor
+does not number its refreshes); the headless backend now numbers them (refreshes since its clock started). Every
+frame lays 24 overlapping rectangles in colours never shown at rest, then one flat colour over the window.
+
+The headless session offers explicit sync when its device has a render node and the kernel waits on timeline points
+through an eventfd; `--no-explicit-sync` withholds it.
+
+**Headless session tests** (`gpu_slice::`, the slow tier but the first two; on the NVIDIA GPU with
+`CUPERTINO_GPU_REQUIRED=1`, which turns every skip into a failure):
+
+| Test | What it shows |
+|---|---|
+| `a_headless_session_offers_explicit_sync_with_a_render_node_and_withholds_it_when_told` | offered with the render node, withheld with the flag |
+| `a_headless_presentation_numbers_its_refresh` | the sequence a headless presentation carries |
+| `the_slice_attaches_dmabufs_with_acquire_and_release_points_in_the_driver_s_layout` | 180 dmabuf frames, two buffers, no CPU wait, every buffer but the last two back through its release point; the compositor's buffer has the client's modifier, `0x0300000000e08014` (the driver's default) on the NVIDIA GPU, never linear |
+| `the_slice_destroys_its_syncobj_surface_before_a_shared_memory_frame_and_makes_it_again_after` | 6 shared-memory frames in 60, the object destroyed 6 times and made 6 times; the session never shows a shared-memory buffer on a surface that has the object |
+| `the_slice_without_explicit_sync_waits_for_its_own_fence_and_keeps_three_buffers` | 180 commits, 180 fence waits, three buffers, captures uniform |
+| `the_slice_counts_no_missed_refresh_when_the_session_keeps_up_and_every_overdraw_capture_is_flat` | 8 captures of the window, each one flat colour; missed refreshes counted |
+
+Missed refreshes headless: none in 59 frames when nothing holds the loop up; the captures (each a whole-output render
+and a PNG written by the session) hold it for a few refreshes each (15 in 107 frames with 8 captures).
+
+**The driver's default modifier.** The compositor imports the slice's buffers in `0x0300000000e08014`, the layout the
+driver picks among those both sides list (linear is import-only on this driver, so never offered to the allocator).
+
+**The fence budget** (`cupertino-gpu-slice --offscreen 10000000`, two GBM buffers, one full-buffer draw a frame,
+resident memory sampled 200 times and fitted after the first tenth):
+
+| Per frame | Resident growth | Run time |
+|---|---|---|
+| the window's fence path: native fence, import into a syncobj, transfer to a timeline point, eventfd wait | 15.95 bytes | 443 s |
+| no fence (`glFinish`) | 15.99 bytes | 262 s |
+
+The fence path adds nothing (-0.04 bytes a frame; the budget is under 1). Both grow about 16 bytes a frame, as the
+step 0 probe found for drawing without presenting.
+
+**llvmpipe and texture export.** On the host's llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`, the Mesa EGL vendor forced, the
+headless server on the surfaceless platform): the compositor offers dmabuf version 3 without feedback, with linear
+and the implicit layout; the slice allocates by texture export (linear), and 120 of 120 frames were dmabufs the
+compositor imported, each waited for by its fence. In the goldens image (`cupertino-goldens:7153b7a8…`, no device
+passed in): llvmpipe has neither native fences nor texture export, so the slice falls back to shared memory for its
+surface (120 shared-memory frames). With `/dev/udmabuf` passed into the same image (`docker run --device
+/dev/udmabuf`), texture export works: 120 of 120 dmabuf frames, linear, imported. So the dmabuf presenter can run
+in CI on llvmpipe only where the runner gives the container `/dev/udmabuf`.
+
+**The live session and the one-hour gate.** BLOCKED (owner action): it needs the desktop session. From a terminal in
+the session, in the checkout:
+
+```sh
+cargo build --release -p cupertino-gpu-slice
+target/release/cupertino-gpu-slice --minutes 60 --control-shm --size 1280x800 --report ~/gpu-slice-hour.txt
+```
+
+Two windows open side by side (place them so neither covers the other): the slice and a shared-memory control
+window of the same size, drawing a frame every refresh for an hour. At the end both reports are printed (the control's
+lines start `control_`) with `comparison gpu_missed=N control_missed=M pass|fail`; pass is the gate's first half.
+For the second, take a few screenshots of the slice window while it runs: inside its rounded corners each must be one
+flat colour (blue or orange). The report also names the modifier and whether explicit sync was used.
+
+### Step 5: `cupertino-gpu` and the shader toolchain
+
+Taken at `0c12d235` on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08) and on llvmpipe.
+
+**Where it is.** `crates/cupertino-gpu` (graphics layer, MPL-2.0, depends on `glow` and `libloading` only):
+
+- `Device`: made on a render node through GBM (`Platform::RenderNode`) or on the surfaceless platform
+  (`Platform::Surfaceless`), or borrowed from the context current on the thread (`Device::borrow`, unsafe: the owner
+  keeps it alive and current). `DeviceInfo` says what it is: renderer, software or not, allocator (GBM, texture
+  export or none), native fences, fence import, robustness, purge notification, float targets.
+- Resources from descriptions, destroyed explicitly: `Buffer` (uniform, vertex, index), `Texture` (`R8`, `Rgba8`,
+  `Rgba16Float`, `Rgba32Float`; sampled and render targets), `Sampler`, `BindGroupLayout`, `BindGroup`, `Pipeline`
+  (program, layouts, vertex buffers, blending, topology, all fixed at creation), `Fence`.
+- External memory: `allocate_dmabuf` (a GBM buffer object with an offered modifier, or a texture exported in a layout
+  the offer holds) gives an `ExternalImage` (its texture and its `Dmabuf`); `import_dmabuf` makes a texture of
+  another device's or process's dmabuf.
+- Passes: `begin_pass(target, LoadOp)` gives a `Pass` (`set_pipeline`, `set_bind_group`, `set_vertex_buffer`,
+  `set_index_buffer`, `set_scissor`, `draw`, `draw_indexed`, `end`). `submit` gives a fence, `submit_exported` a fence
+  and its sync file, `wait_sync_file` makes later work wait on another's sync file on the GPU.
+- Loss: `status` reads the driver's reset status (`Loss::Reset { guilty }` or `Loss::Purge`; a purge does not count
+  toward the CPU fallback); a lost device refuses every call with `Error::Lost`. `inject_loss` is the test hook.
+  Every missing library, platform or device is `Error::Unavailable`, never a failed start.
+- Borrowed contexts: `enter` saves and `leave` restores the state listed in `gles::state` (program, framebuffers,
+  viewport, scissor, blending, colour mask, clear colour, depth, stencil and cull enables, the first 16 texture units'
+  textures and samplers, array and uniform buffer bindings and the first 16 uniform ranges, the vertex array, pack and
+  unpack alignment and row length); the device draws with a vertex array of its own.
+- `atlas`: coverage, colour and path mask atlases (shelf-packed pages with a one-pixel gap, a page used least
+  recently emptied when an entry fits nowhere at the cap, never one used in the current frame). `pool`: render
+  targets kept and handed out again by size and format, with a cap.
+- `shaders`: the generated programs (`shape`, `blit`, `blur_halve`, `blur_gauss`, `dither_fill`, and the test
+  programs `probe_coverage`, `probe_shadow`, `probe_gradient`, `probe_dither`). Sources in
+  `crates/cupertino-gpu/shaders/*.wgsl`, the shared module in `shared.wgsl`; `cargo run -p cupertino-gpu-shaders`
+  generates `generated/` (GLSL ES 3.00 for each stage, SPIR-V, the binding names), `--check` compares.
+  `cupertino-gpu-shaders` uses `naga` 24, the version already locked for the glass crate.
+
+**Caps** (each a multiple of the 2 MiB the driver rounds a render target up to, step 0's "Render targets"):
+
+| What | Size | Cap |
+|---|---|---|
+| Coverage atlas | 2048 x 1024 8-bit pages (2 MiB) | 2 pages, 4 MiB |
+| Colour glyph atlas | 1024 x 1024 RGBA pages (4 MiB) | 2 pages, 8 MiB |
+| Path mask atlas | 2048 x 1024 8-bit pages (2 MiB) | 2 pages, 4 MiB |
+| Render target pool | each target its bytes rounded up to 2 MiB | 16 MiB in use and free together |
+
+Together 32 MiB, the design's "32 MiB of atlases and pools" for a GPU window. The window's buffers and its
+window-sized layer are outside the pool, and a process's first render target makes the driver reserve one more
+target's size beside it, which no cap can hold (step 0); the budget names both separately. A target the pool cannot
+hold (one 3840 x 2160 RGBA target alone is 32 MiB) is refused with `Error::OverBudget`, so a full-window intermediate
+is the renderer's own, not the pool's.
+
+**Tests.** The device tests (`cupertino-gpu::suite` and the borrowed-context test in the library) run in the slow
+tier; the models of the atlases, the pool and the binding names, and the generator's tests, in the fast tier.
+
+| Where | What ran | Result |
+|---|---|---|
+| NVIDIA, GBM on the render node, `CUPERTINO_GPU_REQUIRED=1` | both crates, both tiers (`--profile ci`) | 35 of 35 passed, none skipped |
+| host llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`, the Mesa EGL vendor forced, surfaceless, texture export), `CUPERTINO_EGL_REQUIRED=1` | the same | 35 of 35 passed, none skipped |
+| the CI image (the goldens image, no device passed in), `CUPERTINO_EGL_REQUIRED=1`, `cargo test` | the same | 35 passed; the two dmabuf tests and the native fence test skipped: llvmpipe there has neither texture export nor native fences, as step 3 found |
+
+What the tests show: every generated program compiles and links; the shape program's rectangles, circular and
+continuous corners match the shared coverage within 2/255 at every pixel; premultiplied blending and the scissor;
+a shape at the top left lands in the first rows, a texture's first row on the target's first row, and dithering is
+keyed to the pixel counted from the first row; the coverage, shadow, gradient and dither programs match their vectors
+(distances and shadows within 2·10⁻³, gradients within 10⁻⁵, the dither matrix exactly and its stores within a step);
+the blur's halving and Gaussian programs match the blur vectors at both edge rules in half floats (within 2·10⁻³) and
+8 bits (within a step); a dmabuf drawn on one device is imported and sampled on a second after its sync file, in the
+driver's modifier, never linear on the NVIDIA GPU; fences and sync files signal; an injected reset of each kind and a
+purge are reported and the lost device refuses work; a borrowed device leaves its owner's state exactly as it found
+it; atlas eviction reuses a page's texture and the cap holds within a frame; a released pooled target comes back.
+
+### Step 6: the presenter and the process
+
+Taken on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08), headless sessions, scale 1.
+
+**Where it is.**
+
+- `cupertino-ui-wayland::renderer`: the fallback rule as functions of what the process found (`start`, `settle`,
+  `LossHistory`), the switch `GPU_BY_DEFAULT` (off), `CUPERTINO_RENDERER`, the process's current renderer and why
+  (`active`), logged as `renderer: <cpu|gpu> (<reason>)` on every change and recorded in
+  `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino-diagnose` (`gpu.client_renderers`). The frame
+  statistics carry `renderer` on every line and `scripts/dev/bench` lists each program's renderers.
+- `cupertino-ui-wayland::gpu_path`: the warm-up thread (device on the feedback's render node, saved programs, the blit
+  program; the context released and taken over by the main thread), the switch (`PlatformEvent::RendererChanged`,
+  on which the runtime drops each window's renderer and draws whole frames with a new one), losses (every surface's
+  buffers freed, a new warm-up, the CPU for good after three resets within a minute; purges never counted), the
+  per-surface fallback to shared memory and `buffers_lost`.
+- `cupertino-ui-wayland::gpu_present`: one surface's buffers. A frame's damage is uploaded into a staging texture and
+  drawn into a dmabuf allocated in 128-pixel steps (a buffer serves a frame that fits and is less than two steps
+  smaller; the viewport crops it), in a modifier both the compositor offers and the driver renders to. With
+  `linux-drm-syncobj-v1` the frame's native fence becomes the acquire point of a timeline per buffer and its release
+  point is waited for through an eventfd, two buffers; without, the commit waits for the own fence and a buffer is
+  reused one commit after its release, three buffers.
+- Transport (`cupertino-wayland-client`): dmabuf feedback (format table, main device, tranches), buffers the
+  compositor may refuse (`create`, not `create_immed`), syncobj timelines and points, frames cropped to their size; the
+  syncobj surface object is destroyed before any shared-memory or one-colour commit.
+- `cupertino-gpu`: syncobj timelines on the render node (`syncobj`), the saved program binaries (`program_cache`), and
+  a device made on one thread and used on another (`Device::detach`, `DetachedDevice::attach`).
+- `cupertino_app_effects_v1` version 21: `cupertino_appearance_v1.buffers_lost`, sent by the server after its own
+  reset or purge to every observer of version 21 or later. It goes on the appearance observer because every toolkit
+  process, third-party ones included, already holds that surface-less object for session-wide events that need a
+  repaint, so no new global is needed and `cupertino_shell_v1` (shell processes only) is not the place.
+
+**First frame and warm-up** (the check window, 320 x 240, three runs each; the first frame went out on the CPU every
+time):
+
+| Program cache | First frame (shared memory) | GPU ready after the start | Context | Programs |
+|---|---|---|---|---|
+| empty (compiled, then saved) | 29.7–30.2 ms | 99–103 ms | 62.9–66.5 ms | 35.9–36.7 ms |
+| filled by the run before (loaded) | 28.9–29.3 ms | 65–73 ms | 64.6–72.1 ms | 0.3 ms |
+
+**Tests.** The presenter's GPU tier is `cupertino-server`'s `gpu_presenter` (slow tier) with
+`cupertino-ui-wayland`'s `gpu-window` as its client; the rule, the size steps, the reuse, the records and the switch
+in the runtime are fast tests.
+
+| Test | What it shows on the NVIDIA GPU (`CUPERTINO_GPU_REQUIRED=1`) |
+|---|---|
+| warm-up and syncobj | first frames in shared memory, then 2 buffers in the driver's tiled modifier (`0x0300000000e08014`) imported as drawn, every buffer back through its release point, no CPU fence wait, one syncobj surface object, the record says `gpu` |
+| program cache | the second start loads the program the first compiled and compiles none |
+| without explicit sync | 3 buffers, one fence wait a frame, no syncobj object |
+| resets | a new device after each, the CPU for good after the third (reason "the context was lost 3 times within 60 s"), the syncobj object destroyed before every shared-memory frame |
+| purges | four purges, five devices, the process stays on the GPU and the later devices load the saved program |
+| refused import | the surface moves to shared memory with its syncobj object destroyed first; the process stays on the GPU |
+| resize storm | 183 sizes in 233 frames from 13 buffers |
+| short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
+
+8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
+
+### Step 2: compositor wins
+
+Taken on the target machine's GPU, release builds, `scripts/dev/bench --scenario drag --size 3840x2160 --scale 1.5
+--runs 3`, no build running. Before is `2b119fa4` with only the counter of texels the blurs write added; after is the
+step's last commit. Medians of the three runs, spread in brackets where it is not zero.
+
+| Drag over glass | Before | After |
+|---|---|---|
+| Blur passes per frame | 9.36 | 9.33 |
+| Texels the blurs write per frame | 1 221 263 | 561 017 |
+| Backdrops blurred again / reused per frame | 4.69 / 4.31 | 2.79 / 6.21 |
+| Compositor work p50 / p99 ms | 1.25 (0.02) / 2.33 (0.11) | 1.39 (1.12) / 2.42 (0.24) |
+| Compositor GPU p50 / p99 ms | 1.01 / 2.09 (1.03) | 1.06 (0.37) / 1.49 (0.76) |
+| Server CPU ms/s | 86.7 (3.3) | 93.3 (53.3) |
+| Missed refreshes | 0 | 0 |
+
+The GPU p99 is not the overlap-limited generation's. It moves between runs of one build by more than any change of
+the step: `2b119fa4` measured 0.94 ms one session, 1.53 to 5.55 ms and 1.16 to 2.19 ms on two later ones, and a build
+of the step without the overlap-limited generation 2.11 to 5.89 ms. The frames past 2 ms are one to three a run,
+where the blur passes alone take 1.65 to 1.8 ms of GPU time against 0.23 ms in the frames around them, with the same
+passes, crops and backdrops made again, at full clocks, in every build. The GPU is shared with the desktop session
+while the bench runs, and the slow frames come with it, not with a build.
+
+Every frame of the drag uncovers something under the backdrops the window passes or carries, so every frame runs the
+passes of a blur for them: 9.33 passes a frame is the drag's own, and making a backdrop again in parts adds passes
+(a capture and a pyramid a part) while each covers less. What the step cuts is how much the passes cover: a
+backdrop whose region moved, or whose scene changed in part, keeps its pyramid's last level and makes again only the
+texels whose squares changed or newly lie under it, then filters the whole level as after a whole capture. Since
+each texel of the last level is the mean of its own square of pixels, the result is the whole capture's texel for
+texel (`material::tests::a_backdrop_made_again_where_it_changed_or_newly_reaches_is_the_blur_of_the_whole`, and on the
+GPU `window_popup_backdrop::a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole`,
+worst difference 1 of 255). A window's shadow and outline draw nothing under the window, so their move changes only
+the ring around it. The texels written fall by 54 %; the glass containers, whose passes are most of the count, still
+blur their whole sampled area.
+
+The gate is not met as written: the passes are inherent to the drag, and the compositor work p99 stays over the
+2 ms budget (2.33 ms before, 2.42 ms after, which includes waiting for the GPU). Proposed revision of the gate, for
+the lead:
+
+- Old: "Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
+  checks pass."
+- New: "Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
+  the shimmer and banding checks pass."
+- Reason: each frame of a drag uncovers new backdrop, so the pass count is set by how many backdrops the window
+  touches, not by how they are made; the texels written are what a cheaper blur saves, and are measured per frame by
+  the bench (`blurKt/f`).
+
+Even revised, the budget half stays open: the work p99 at 1.5 is over 2 ms before and after.
+
+Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
+the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a
+window drawn below half its size. Nothing is re-recorded.
+
+**Checks of our own output** (headless, GPU tier):
+
+- A window of one-pixel stripes shown at 0.27 of its size in the overview, against its box-filtered picture computed in
+  Rust: mean difference 6.0, worst 10.7 of 255 (plain filtered lookups: 37.5 and 112). While it moves into place, the
+  stripes stray 0.5 of 255 from their average on every frame (plain lookups: 63), so nothing shimmers
+  (`headless::a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_not_shimmer`). The copy is
+  made once and kept while the window does not commit.
+- A scale 2 window on a scale 1.5 output against its box-filtered picture: mean 0.29, worst 0.5 of 255 (plain lookups:
+  9.4 and 20.8) (`headless::a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture`).
+- A grey gradient (64 to 96 over the output's height) under a large glass panel: down the panel the value steps one
+  level at a time, the longest run 35 rows where its 3 levels over 90 rows give 30 a level; the bare wall beside it
+  runs 16 rows over 6 levels (`backdrop_tone::a_gradient_under_glass_shows_no_bands`). The check passes without
+  dithering: the glass adds no bands of its own. The glass halves the gradient's contrast, so its 8-bit steps are
+  twice as tall as the wall's; dithering is what breaks those up.
+- One snapshot a minimize and one a restore, whatever the frames in between
+  (`headless::a_minimize_captures_the_window_once_and_a_restore_once_more`); a steady frame copies no cursor image
+  (`scene_cost::a_steady_frame_copies_no_cursor_image`), an overlay's signature allocates nothing
+  (`scene_cost::an_overlay_signature_allocates_nothing`) and a frame that changes nothing copies no wallpaper path
+  (`wallpaper::tests::a_frame_that_changes_nothing_copies_no_wallpaper_path`).
+
 ## Decisions taken
 
 - Shared maths and one look freeze come first; goldens are not re-recorded per step afterwards.
@@ -705,4 +986,5 @@ headless sessions keep the server's settings in a folder of their own, as a mach
   plane takes 10-bit formats; the look needs the owner's run of `tools/gpu-probes/depth.sh` ("Measurements").
 - Are the driver's flip timestamps real? (step 0) The trace that answers it is in place; it needs the owner's
   traced session ("Measurements").
-- Does the dmabuf slice run on llvmpipe inside the goldens container? (step 3)
+- Does the dmabuf slice run on llvmpipe inside the goldens container? (step 3) Answered: only with `/dev/udmabuf`
+  passed in; without it llvmpipe has no texture export and the slice falls back to shared memory ("Measurements").

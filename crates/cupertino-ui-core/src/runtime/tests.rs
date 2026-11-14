@@ -5803,3 +5803,82 @@ fn focus_reveals_a_node_below_the_raised_row_and_overlays_are_cut_from_it() {
     );
     assert_eq!(rt.model().0, 10.0, "the target's top at the row's bottom");
 }
+
+/// A renderer that counts how many of its kind are alive, standing for the frame, layers and caches it keeps.
+struct Counted {
+    inner: Box<dyn UiRenderer<Frame = CpuFrame>>,
+    alive: Rc<Cell<i32>>,
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.alive.set(self.alive.get() - 1);
+    }
+}
+
+impl UiRenderer for Counted {
+    type Frame = CpuFrame;
+
+    fn render(
+        &mut self,
+        request: &RenderRequest<'_>,
+    ) -> Result<cupertino_ui_render::RenderFrameId, RenderError> {
+        self.inner.render(request)
+    }
+
+    fn frame(&self, id: cupertino_ui_render::RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        self.inner.frame(id)
+    }
+}
+
+#[test]
+fn a_change_of_renderer_frees_the_old_one_and_draws_whole_frames_with_a_new_one() {
+    let (alive, made) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (mut rt, window, damage) = start_with(|options| {
+        let (alive, made) = (Rc::clone(&alive), Rc::clone(&made));
+        let mut inner = std::mem::replace(&mut options.renderers, Box::new(|| unreachable!()));
+        options.renderers = Box::new(move || {
+            alive.set(alive.get() + 1);
+            made.set(made.get() + 1);
+            Box::new(Counted {
+                inner: inner(),
+                alive: Rc::clone(&alive),
+            })
+        });
+    });
+    configure(&mut rt, window, 1);
+    assert_eq!((alive.get(), made.get()), (1, 1));
+    damage.borrow_mut().clear();
+
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::RendererChanged(
+            cupertino_ui_platform::RendererKind::Gpu,
+        ));
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert_eq!(made.get(), 2, "a renderer of the new kind");
+    assert_eq!(alive.get(), 1, "the old one is gone");
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+}
+
+#[test]
+fn lost_buffers_draw_a_whole_frame_of_a_window_that_changed_nothing() {
+    let (mut rt, window, damage) = start();
+    configure(&mut rt, window, 1);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    damage.borrow_mut().clear();
+    let presented = rt.window_system().presented.len();
+
+    rt.window_system_mut()
+        .queue
+        .push_back(PlatformEvent::BuffersLost);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(0)));
+    rt.step(steps()).unwrap();
+    assert_eq!(damage.borrow().as_slice(), [DamageRegion::Full]);
+    assert_eq!(rt.window_system().presented.len(), presented + 1);
+}

@@ -12,9 +12,12 @@ pub mod clipboard;
 mod convert;
 mod damage;
 mod error;
+pub mod gpu_path;
+pub mod gpu_present;
 mod pixels;
 pub mod popup;
 mod presenter;
+pub mod renderer;
 mod roles;
 mod window_system;
 

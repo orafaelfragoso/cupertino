@@ -23,7 +23,8 @@
 #               the global without default feedback, crates/cupertino-server/src/backend/mod.rs)
 #   visible_to  globals only, optional: `unsandboxed` when a client connected through a security context
 #               (wp_security_context_v1) does not see the global
-#   advertised  globals only: always, or accent-table (only when the server is started with an accent table)
+#   advertised  globals only: always, accent-table (only when the server is started with an accent table) or render-node
+#               (only when the device has a render node and its kernel waits on syncobj timelines through an eventfd)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
 #   shipped     binaries only: yes when packaging/release.py installs it
 #   test_owner  test file that exercises it, or `unknown`
@@ -413,6 +414,18 @@
   test_owner: unknown
   source: crates/cupertino-server/src/backend/mod.rs
   source_match: create_global_with_default_feedback
+- name: wp_linux_drm_syncobj_manager_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: rendering
+  scope: public
+  role: none
+  advertised: render-node
+  test_owner: crates/cupertino-server/tests/gpu_slice.rs
+  source: crates/cupertino-server/src/backend/headless.rs
+  source_match: DrmSyncobjState::new
+  note: the DRM backend offers it when its kernel waits on timeline points through an eventfd; the headless backend when its device also has a render node, unless started with --no-explicit-sync
 - name: wp_security_context_manager_v1
   kind: wayland-global
   version: 1
@@ -489,7 +502,7 @@
   source_match: Cupertino, CupertinoScrollV1
 - name: cupertino_app_effects_v1
   kind: wayland-global
-  version: 20
+  version: 21
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
@@ -498,6 +511,7 @@
   test_owner: crates/cupertino-server/tests/app_effects_v1.rs
   source: crates/cupertino-server/src/app_effects_v1.rs
   source_match: Cupertino, CupertinoAppEffectsV1
+  note: Version 21 adds buffers_lost to cupertino_appearance_v1, the per-client observer every toolkit process holds: sent to each observer of version 21 or later after the server's GPU was reset or its video memory purged and its renderer made again (crates/cupertino-server/src/gpu_reset.rs, Cupertino::rebuild_render), never at creation. The client draws every surface whole again and commits it; a client whose own context was lost makes it again first. Tested in crates/cupertino-server/tests/gpu-reset.rs.
 - name: cupertino.control.v1
   kind: socket-protocol
   version: 1
@@ -1263,6 +1277,24 @@
   scope: shell-private
   test_owner: crates/cupertino-settings/tests/start-process.rs
   source: crates/cupertino-settings/src/main.rs
+- name: cupertino-gpu-slice
+  kind: binary
+  version: 0.1.0
+  shipped: no
+  owner_crate: cupertino-gpu-slice
+  owner_area: rendering
+  scope: public
+  test_owner: crates/cupertino-server/tests/gpu_slice.rs
+  source: crates/cupertino-gpu-slice/src/main.rs
+- name: cupertino-gpu-shaders
+  kind: binary
+  version: 0.1.0
+  shipped: no
+  owner_crate: cupertino-gpu-shaders
+  owner_area: rendering
+  scope: public
+  test_owner: crates/cupertino-gpu-shaders/tests/generate.rs
+  source: crates/cupertino-gpu-shaders/src/main.rs
 - name: cupertino-testclient
   kind: binary
   version: 0.1.0

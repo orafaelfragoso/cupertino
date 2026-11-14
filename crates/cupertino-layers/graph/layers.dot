@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 87 crates, 433 internal dependencies
-// per layer: foundation 23, models 9, platform 9, protocol 4, transport 3, render 3, ui 13, core 1, shell 12, services 4, apps 2, tools 4
+// 91 crates, 437 internal dependencies
+// per layer: foundation 23, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 13, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -36,7 +36,8 @@ digraph "layers" {
     "xkbcommon";
   }
   subgraph "cluster_graphics" {
-    label="graphics (1)";
+    label="graphics (2)";
+    "cupertino-gpu";
     "cupertino-raster-math";
   }
   subgraph "cluster_models" {
@@ -130,9 +131,11 @@ digraph "layers" {
     "cupertino-settings";
   }
   subgraph "cluster_tools" {
-    label="tools (4)";
+    label="tools (6)";
     "cupertino-cli";
     "cupertino-diagnostics";
+    "cupertino-gpu-shaders";
+    "cupertino-gpu-slice";
     "cupertino-layers";
     "cupertino-testclient";
   }
@@ -225,6 +228,7 @@ digraph "layers" {
   "cupertino-glass" -> "cupertino-geometry";
   "cupertino-glass" -> "cupertino-raster-math";
   "cupertino-glass" -> "cupertino-theme";
+  "cupertino-gpu" -> "cupertino-raster-math" [label="dev"];
   "cupertino-icons" -> "cupertino-apps";
   "cupertino-icons" -> "cupertino-assets";
   "cupertino-icons" -> "cupertino-defaults";
@@ -551,6 +555,7 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-app-protocols" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-defaults" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-geometry";
+  "cupertino-ui-wayland" -> "cupertino-gpu";
   "cupertino-ui-wayland" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-modifiers";
   "cupertino-ui-wayland" -> "cupertino-protocol-app";

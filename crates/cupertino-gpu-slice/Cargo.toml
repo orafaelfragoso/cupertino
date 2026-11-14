@@ -1,0 +1,17 @@
+[package]
+name = "cupertino-gpu-slice"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Development check of the GPU buffer handoff: a window drawn with GLES into dmabufs on the device the compositor names, synchronised explicitly, counting missed refreshes. Never packaged."
+
+[package.metadata.cupertino]
+layer = "tools"
+
+[dependencies]
+drm = "0.14.1"
+libc = "0.2.191"
+libloading = "0.8"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

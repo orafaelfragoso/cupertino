@@ -31,7 +31,88 @@ const GPU_RESET_MARK: &str = " the GPU was reset: gpu=";
 const SOFTWARE_RENDER_MARK: &str = " only a software renderer is available: gpu=";
 
 pub fn gpu(sources: &Sources) -> Vec<Check> {
-    vec![driver(sources), renderer(sources)]
+    vec![
+        driver(sources),
+        renderer(sources),
+        client_renderers(sources),
+    ]
+}
+
+/// The reasons a process gives for drawing on the CPU when it was meant to draw on the GPU
+/// (`cupertino_ui_wayland::renderer::Reason`).
+const GPU_FAILURES: [&str; 5] = [
+    "no GPU device",
+    "the context was lost",
+    "a software rasterizer",
+    "no dmabuf feedback",
+    "no dmabuf allocator",
+];
+
+/// Which renderer every running toolkit process draws with, from the record each writes under
+/// `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`; a process that fell back from the GPU warns.
+fn client_renderers(sources: &Sources) -> Check {
+    let skip = |why: &str| Check::new("gpu.client_renderers", Area::Gpu, Status::Skip, why);
+    let Some(runtime) = sources.var("XDG_RUNTIME_DIR") else {
+        return skip("no XDG_RUNTIME_DIR");
+    };
+    let Ok(entries) = fs::read_dir(Path::new(runtime).join("cupertino/renderers")) else {
+        return skip("no process has drawn a window yet");
+    };
+    let mut processes: Vec<(u32, String, String, String)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            if !sources.installed(&format!("proc/{pid}")).exists() {
+                return None;
+            }
+            let text = fs::read_to_string(entry.path()).ok()?;
+            let field = |key: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            Some((pid, field("program"), field("renderer"), field("reason")))
+        })
+        .collect();
+    if processes.is_empty() {
+        return skip("no running process has drawn a window");
+    }
+    processes.sort();
+    let gpu = processes.iter().filter(|p| p.2 == "gpu").count();
+    let failed: Vec<&(u32, String, String, String)> = processes
+        .iter()
+        .filter(|p| p.2 != "gpu" && GPU_FAILURES.iter().any(|f| p.3.starts_with(f)))
+        .collect();
+    let mut check = match failed.first() {
+        Some((pid, program, _, reason)) => Check::new(
+            "gpu.client_renderers",
+            Area::Gpu,
+            Status::Warn,
+            format!(
+                "{} of {} processes draw on the CPU after the GPU failed; {program} ({pid}): {reason}",
+                failed.len(),
+                processes.len()
+            ),
+        )
+        .fix("check gpu.driver; set CUPERTINO_RENDERER=gpu on one process to see the GPU path's own error"),
+        None => Check::new(
+            "gpu.client_renderers",
+            Area::Gpu,
+            Status::Ok,
+            format!(
+                "{gpu} of {} processes draw on the GPU, the rest on the CPU",
+                processes.len()
+            ),
+        ),
+    };
+    for (pid, program, renderer, reason) in &processes {
+        check = check.fact(
+            "process",
+            format!("{program} ({pid}): {renderer}, {reason}"),
+        );
+    }
+    check
 }
 
 /// The primary GPU's driver and what it needs (`cupertino_devices::preflight`).

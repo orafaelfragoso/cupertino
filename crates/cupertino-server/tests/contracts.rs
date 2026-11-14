@@ -96,6 +96,7 @@ fn registered(registry: &str, peer: Peer, accent_table: bool, render_node: bool)
             let present = match entry["advertised"] {
                 "always" => true,
                 "accent-table" => accent_table,
+                "render-node" => render_node && syncobj_eventfd(),
                 other => panic!("{}: advertised {other}", entry["name"]),
             };
             let offered = match entry["scope"] {
@@ -163,6 +164,33 @@ struct Server {
 
 fn egl_required() -> bool {
     std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1")
+}
+
+/// Whether this machine's kernel waits on syncobj timeline points through an eventfd (Linux 6.6 and later), which a
+/// render-node global needs besides the render node.
+fn syncobj_eventfd() -> bool {
+    use smithay::backend::drm::DrmDeviceFd;
+    use smithay::utils::DeviceFd;
+    let Some(node) = std::fs::read_dir("/dev/dri").ok().and_then(|entries| {
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("renderD"))
+            })
+            .min()
+    }) else {
+        return false;
+    };
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(node)
+        .is_ok_and(|file| {
+            let fd = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
+            smithay::wayland::drm_syncobj::supports_syncobj_eventfd(&fd)
+        })
 }
 
 fn render_node_device_exists() -> bool {

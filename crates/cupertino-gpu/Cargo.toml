@@ -1,0 +1,22 @@
+[package]
+name = "cupertino-gpu"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Cupertino's thin GPU layer for 2D rendering: devices, buffers, textures with external memory, immutable pipelines, explicit passes, bind groups and fences, with a GLES backend over EGL and GBM loaded at run time, atlases and pooled render targets"
+autotests = false
+
+[package.metadata.cupertino]
+layer = "graphics"
+
+[dependencies]
+glow = "0.16"
+libc = "0.2"
+libloading = "0.8"
+
+[dev-dependencies]
+cupertino-raster-math = { path = "../cupertino-raster-math" }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

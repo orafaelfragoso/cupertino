@@ -19,6 +19,7 @@ pub mod material;
 pub mod mesh;
 pub mod motion;
 pub mod programs;
+pub mod reduce;
 pub mod scene;
 pub mod screenshot;
 pub mod shader_rect;
@@ -32,15 +33,16 @@ pub use material::glass::{GlassContainer, GlassElement};
 pub use material::{GpuRecipe, MaterialElement, MaterialGl, MaterialStage, SharedMaterial};
 pub use mesh::{MeshElement, MeshGl, SharedMesh};
 pub use programs::Programs;
+pub use reduce::ReducedElement;
 pub use shader_rect::{ElementCache, ElementKey, ShaderRect, Sig};
 
 render_elements! {
     /// Everything the compositor draws.
     pub CupertinoElement<=GlesRenderer>;
     /// Window content: surface element, rounded mask, uniform or animated rescale.
-    Window = RescaleRenderElement<ClipElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
+    Window = RescaleRenderElement<ClipElement<ReducedElement>>,
     /// Popups and other surfaces drawn without a mask (rescaled with their window).
-    Popup = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Popup = RescaleRenderElement<ReducedElement>,
     /// Plain surfaces: layer-shell surfaces, drag icon, client cursor.
     Surface = WaylandSurfaceRenderElement<GlesRenderer>,
     /// Shadows, wallpaper, highlights.

@@ -11,6 +11,7 @@ layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }

@@ -4,8 +4,8 @@ CupertinoKit's window system on the transport (`cupertino-wayland-client`), and 
 MPL-2.0. It binds no protocol beyond the
 transport's standard set and never reaches the private protocols (`cupertino-layers` denies `cupertino-protocols` and
 `cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-modifiers`,
-`cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus` and
-`tiny-skia`.
+`cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text`, `cupertino-menu-model`, `cupertino-ui-menus`,
+`cupertino-gpu` (the graphics layer, for the GPU presenter) and `tiny-skia`.
 
 ## Public API
 
@@ -81,6 +81,32 @@ held; `answer_drop` accepts the type and sets the actions, `read_drop` reads the
 runtime took it as an ask, and refusing an action the source does not allow) or
 refuses it. At most 8 drops are kept while they are read. A popup's `offset` moves
 its anchor rectangle; `reactive` is not sent.
+
+## The GPU path
+
+`renderer` holds the fallback rule and the switch: `GPU_BY_DEFAULT` is `false`, so every process draws on the CPU
+unless `CUPERTINO_RENDERER=gpu` asks for the GPU (it overrides a software device and missing dmabuf feedback);
+`CUPERTINO_RENDERER=cpu` keeps a process on the CPU. Missing libraries or devices (`Unavailable`) select the CPU, and
+so do three resets within a minute; purges never count. The current renderer and why (`active`) is logged as
+`renderer: <cpu|gpu> (<reason>)` on each change and recorded in `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`.
+
+`gpu_path::GpuPath`, owned by the window system, makes the device on the feedback's render node and links the
+programs on a worker thread (saved per driver in `$XDG_CACHE_HOME/cupertino/programs`) while the first frames go out
+in shared memory, then takes the device over and reports `PlatformEvent::RendererChanged`: the runtime drops every
+window's renderer and draws whole frames with a new one. On a loss it frees every surface's buffers, reports the
+change back to the CPU and warms up again (or stays on the CPU after the third reset). `buffers_lost` from the
+compositor checks the device and makes every surface's next upload whole.
+
+`gpu_present::GpuSurface` keeps one surface's dmabufs, allocated in `SIZE_STEP` (128 pixel) steps and cropped by the
+viewport, in a modifier the compositor offers and the driver renders to. Each frame's damage is uploaded into a
+staging texture and drawn into a free buffer. With `linux-drm-syncobj-v1` the frame's native fence is the buffer's
+acquire point and its release point is waited for through an eventfd (two buffers); without it the commit waits for
+the own fence and a buffer is reused one commit after its release (three buffers). A buffer that cannot be allocated
+or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj
+surface object before the first shared-memory attach.
+
+`examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`'s `tests/gpu_presenter.rs`:
+`--frames`, `--reset-every`, `--purge-every`, `--losses`, and a `key value` report of what it did.
 
 ## Tests
 

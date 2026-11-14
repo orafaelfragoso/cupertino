@@ -12,12 +12,14 @@ use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::egl::native::EGLSurfacelessDisplay;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{Color32F, Offscreen};
 use smithay::reexports::calloop::EventLoop;
-use smithay::utils::{Buffer, Size, Transform};
+use smithay::utils::{Buffer, DeviceFd, Size, Transform};
+use smithay::wayland::drm_syncobj::{supports_syncobj_eventfd, DrmSyncobjState};
 
 use super::Backend;
 use crate::displays::{HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
@@ -112,6 +114,35 @@ pub fn create_renderer() -> Result<GlesRenderer> {
     }
 }
 
+/// Offer `linux-drm-syncobj-v1` on the render node of `renderer`'s device when it has one whose kernel waits on
+/// timeline points through an eventfd; clients' acquire points are then waited for and release points signalled as on
+/// a display. A render node can never hold the device's master, so opening it takes nothing from a session on the
+/// same device.
+fn offer_explicit_sync(state: &mut Cupertino, renderer: &GlesRenderer) {
+    let Some(path) = super::render_node(renderer).and_then(|node| node.dev_path()) else {
+        return;
+    };
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "explicit sync is not offered: the render node cannot be opened");
+            return;
+        }
+    };
+    let fd = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
+    if supports_syncobj_eventfd(&fd) {
+        let dh = state.display_handle.clone();
+        state.syncobj_state = Some(DrmSyncobjState::new::<Cupertino>(&dh, fd));
+        tracing::info!(path = %path.display(), "explicit sync (linux-drm-syncobj-v1) is offered");
+    } else {
+        tracing::info!("explicit sync is not offered: the kernel cannot wait on syncobj timelines");
+    }
+}
+
 /// Create the offscreen renderer and one display of `size` pixels at `scale`.
 pub fn init(state: &mut Cupertino, size: (i32, i32), scale: f64) -> Result<()> {
     init_displays(
@@ -138,6 +169,9 @@ pub fn init_displays(
     );
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
+    if !state.withhold_explicit_sync {
+        offer_explicit_sync(state, &renderer);
+    }
     state.backend = Some(Backend::Headless(Box::new(HeadlessBackend {
         renderer,
         targets: Vec::new(),

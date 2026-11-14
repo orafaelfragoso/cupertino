@@ -93,6 +93,8 @@ impl Cupertino {
             output.scheduler.reset();
         }
         self.request_redraw();
+        // clients drawing on a GPU of their own may have lost their buffers' pixels too: they draw whole again
+        self.sessions.buffers_lost();
         Ok(())
     }
 }

@@ -598,3 +598,49 @@ fn without_a_declared_development_folder_the_shell_check_is_skipped() {
     fixture.file_at("/usr/bin/cupertino-dock", 60);
     assert_eq!(skip(&fixture), Status::Skip, "no dev_folder key");
 }
+
+#[test]
+fn every_running_process_reports_its_renderer_and_one_that_fell_back_from_the_gpu_warns() {
+    let fixture = Fixture::new().in_session();
+    let check = |fixture: &Fixture| find(&fixture.run(Area::Gpu), "gpu.client_renderers").clone();
+    assert_eq!(check(&fixture).status, Status::Skip);
+
+    let records = fixture.dir.path().join("runtime/cupertino/renderers");
+    fs::create_dir_all(&records).unwrap();
+    let record = |pid: u32, program: &str, renderer: &str, reason: &str| {
+        fs::write(
+            records.join(pid.to_string()),
+            format!("program={program}\nrenderer={renderer}\nreason={reason}\n"),
+        )
+        .unwrap();
+    };
+    record(41, "cupertino-dock", "cpu", "the GPU path is not turned on");
+    record(42, "cupertino-files", "gpu", "the GPU");
+    record(43, "gone", "cpu", "no GPU device: no libEGL");
+    fixture.file("/proc/41/stat", "");
+    fixture.file("/proc/42/stat", "");
+    let seen = check(&fixture);
+    assert_eq!(
+        (seen.status, seen.summary.as_str()),
+        (
+            Status::Ok,
+            "1 of 2 processes draw on the GPU, the rest on the CPU"
+        )
+    );
+    let facts: Vec<&str> = seen.facts.iter().map(|f| f.value.as_str()).collect();
+    assert_eq!(
+        facts,
+        [
+            "cupertino-dock (41): cpu, the GPU path is not turned on",
+            "cupertino-files (42): gpu, the GPU"
+        ]
+    );
+
+    fixture.file("/proc/43/stat", "");
+    let seen = check(&fixture);
+    assert_eq!(seen.status, Status::Warn);
+    assert_eq!(
+        seen.summary,
+        "1 of 3 processes draw on the CPU after the GPU failed; gone (43): no GPU device: no libEGL"
+    );
+}

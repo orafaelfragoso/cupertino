@@ -321,11 +321,12 @@ impl DmabufHandler for Cupertino {
         dmabuf: Dmabuf,
         notifier: ImportNotifier,
     ) {
-        let ok = self
-            .backend
-            .as_mut()
-            .map(|b| b.renderer().import_dmabuf(&dmabuf, None).is_ok())
-            .unwrap_or(false);
+        let ok = !self.refuse_dmabuf_imports
+            && self
+                .backend
+                .as_mut()
+                .map(|b| b.renderer().import_dmabuf(&dmabuf, None).is_ok())
+                .unwrap_or(false);
         if ok {
             let _ = notifier.successful::<Cupertino>();
         } else {

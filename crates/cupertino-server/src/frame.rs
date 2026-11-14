@@ -926,14 +926,25 @@ impl Cupertino {
         self.send_frames(idx, time);
         if presented {
             let mut feedback = self.collect_feedback(idx);
+            let seq = refresh_count(time, refresh);
             let refresh = refresh.map(Refresh::fixed).unwrap_or(Refresh::Unknown);
             feedback.presented(
                 self.clock.now(),
                 refresh,
-                0,
+                seq,
                 wp_presentation_feedback::Kind::Vsync,
             );
         }
+    }
+}
+
+/// The number of the refresh at `time` on an output refreshing every `refresh`, counted from the clock's start, which
+/// a backend without a scan-out counter reports as the presentation's sequence so a client can count the refreshes it
+/// missed; 0 (no counter) when the period is unknown.
+pub fn refresh_count(time: Duration, refresh: Option<Duration>) -> u64 {
+    match refresh {
+        Some(period) if !period.is_zero() => (time.as_nanos() / period.as_nanos()) as u64,
+        _ => 0,
     }
 }
 

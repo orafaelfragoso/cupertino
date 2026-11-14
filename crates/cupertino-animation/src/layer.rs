@@ -167,10 +167,12 @@ impl LayerProperty {
     }
 
     /// Start moving to `to` along `curve` at `start`, from the value and velocity shown then. `velocity` is the
-    /// initial velocity (units per second) used when the property is at rest; a running animation keeps its own.
+    /// initial velocity (units per second) used when the property is at rest; a running animation keeps its own. A
+    /// timed curve from rest with no velocity (0) follows its own slope.
     pub fn animate(&mut self, to: f64, curve: LayerCurve, start: f64, velocity: f64) {
         let from = self.value(start);
-        let v = if self.is_animating(start) {
+        let moving = self.is_animating(start);
+        let v = if moving {
             self.velocity(start)
         } else {
             velocity
@@ -190,7 +192,11 @@ impl LayerProperty {
                     start,
                     duration,
                     bezier,
-                    dv: if duration > 0.0 { v - own } else { 0.0 },
+                    dv: if duration > 0.0 && (moving || v != 0.0) {
+                        v - own
+                    } else {
+                        0.0
+                    },
                 }
             }
             LayerCurve::Spring { response, damping } => {
@@ -319,6 +325,18 @@ mod tests {
         assert!(p.value(0.05) > 0.0);
         assert_eq!(p.value(0.3), 0.0);
         assert!(p.velocity(0.299).abs() < 5.0);
+    }
+
+    #[test]
+    fn a_timed_curve_from_rest_follows_its_own_slope() {
+        let mut p = LayerProperty::new(0.0);
+        let linear = LayerCurve::Timed {
+            duration: 1.0,
+            bezier: CubicBezier::LINEAR,
+        };
+        p.animate(100.0, linear, 0.0, 0.0);
+        assert!((p.value(0.25) - 25.0).abs() < 1e-9);
+        assert!((p.velocity(0.5) - 100.0).abs() < 1e-3);
     }
 
     #[test]

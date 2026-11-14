@@ -45,3 +45,9 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 [[profile.default.overrides]]
 filter = 'package(cupertino-launcher) & (test(/fits_the_budget/) | test(/keeps_icon_decoding_off_the_frames/))'
 threads-required = "num-cpus"
+
+# The GPU renderer's large window is timed against the CPU budget of recording and issuing a frame; programs compiled
+# and frames drawn on the same device by tests beside it starve the driver's threads, so it runs alone.
+[[profile.default.overrides]]
+filter = 'package(cupertino-ui-gpu) & test(/^timing::/)'
+threads-required = "num-cpus"

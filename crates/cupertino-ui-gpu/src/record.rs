@@ -98,7 +98,13 @@ pub(crate) struct Recording {
     pub cmds: Vec<Cmd>,
     pub uniforms: Vec<u8>,
     pub instances: Vec<f32>,
-    pub targets: Vec<TargetMem>,
+    /// The textures targets are drawn into, with their size and format: a target finished with in a frame gives its
+    /// texture to a later target of the same size and format, so a frame holds only the targets alive at once.
+    pub targets: Vec<(TargetMem, (u32, u32), TextureFormat)>,
+    /// The texture of each target, by its id.
+    pub storage: Vec<usize>,
+    /// Textures whose targets are finished with, free for a later target of the frame.
+    spare: Vec<usize>,
     /// Each target's size and whether a pass into it ran (a later pass keeps what an earlier drew).
     pub sizes: Vec<(u32, u32)>,
     pub started: Vec<bool>,
@@ -115,7 +121,9 @@ impl Recording {
             cmds: Vec::new(),
             uniforms: Vec::new(),
             instances: Vec::new(),
-            targets: vec![TargetMem::Window],
+            targets: vec![(TargetMem::Window, (0, 0), TextureFormat::Rgba8)],
+            storage: vec![0],
+            spare: Vec::new(),
             sizes: vec![(0, 0)],
             started: vec![false],
             own: Vec::new(),
@@ -146,13 +154,34 @@ impl Recording {
         ]);
     }
 
+    /// A new target drawn into the texture `at`.
+    fn add_target(&mut self, at: usize, size: (u32, u32)) -> TargetId {
+        self.storage.push(at);
+        self.sizes.push(size);
+        self.started.push(false);
+        TargetId(self.storage.len() - 1)
+    }
+
     fn instance_count(&self) -> u32 {
         (self.instances.len() / 8) as u32
     }
 
+    /// The texture target `t` is drawn into.
+    pub(crate) fn target_mem(&self, t: TargetId) -> &TargetMem {
+        &self.targets[self.storage[t.0]].0
+    }
+
+    /// Nothing recorded after this reads or draws into `t`: its texture may serve a later target of the frame.
+    fn finish(&mut self, t: TargetId) {
+        let at = self.storage[t.0];
+        if t != WINDOW && !self.spare.contains(&at) {
+            self.spare.push(at);
+        }
+    }
+
     /// Gives every target and texture of the frame back.
     pub(crate) fn release<R>(self, r: &mut GpuRenderer<R>) {
-        for t in self.targets {
+        for (t, _, _) in self.targets {
             match t {
                 TargetMem::Window => {}
                 TargetMem::Pooled(p) => r.pool.release(p, r.frames),
@@ -692,7 +721,9 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             layer = self.effect(layer, area, effect)?;
         }
         let visible = area.intersect(&ctx.limit);
-        self.lay_layer(ctx, layer, area, visible, k, chain)
+        let laid = self.lay_layer(ctx, layer, area, visible, k, chain);
+        self.rec.finish(layer);
+        laid
     }
 
     fn own(&mut self, ctx: &Ctx, i: usize, chain: &[ClipItem]) -> Result<(), RenderError> {
@@ -798,10 +829,13 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             layer = self.effect(layer, area, effect)?;
         }
         let k = opacity_factor(opacity);
-        if k == 0 {
-            return Ok(());
-        }
-        self.lay_layer(ctx, layer, area, area.intersect(&needed), k, clips)
+        let laid = if k == 0 {
+            Ok(())
+        } else {
+            self.lay_layer(ctx, layer, area, area.intersect(&needed), k, clips)
+        };
+        self.rec.finish(layer);
+        laid
     }
 
     /// A new offscreen target covering the window pixels `area`, transparent.
@@ -816,7 +850,17 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         size: (u32, u32),
         format: TextureFormat,
     ) -> Result<TargetId, RenderError> {
+        self.r.stats.layers += 1;
+        let reused = self.rec.spare.iter().position(|&at| {
+            let (_, s, f) = self.rec.targets[at];
+            (s, f) == (size, format)
+        });
+        if let Some(i) = reused {
+            let at = self.rec.spare.swap_remove(i);
+            return Ok(self.rec.add_target(at, size));
+        }
         let device = std::rc::Rc::clone(&self.r.device);
+        let made_before = self.r.pool.made();
         let mem = match self.r.pool.acquire(&mut &*device, size, format) {
             Ok(p) => TargetMem::Pooled(p),
             Err(GpuError::OverBudget { .. }) => TargetMem::Own(
@@ -830,11 +874,11 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             ),
             Err(e) => return Err(gpu(e)),
         };
-        self.r.stats.layers += 1;
-        self.rec.targets.push(mem);
-        self.rec.sizes.push(size);
-        self.rec.started.push(false);
-        Ok(TargetId(self.rec.targets.len() - 1))
+        if matches!(mem, TargetMem::Own(_)) || self.r.pool.made() != made_before {
+            self.r.stats.targets_made += 1;
+        }
+        self.rec.targets.push((mem, size, format));
+        Ok(self.rec.add_target(self.rec.targets.len() - 1, size))
     }
 
     /// The format of the blur's levels: floats where the device renders to them (the blur's sums kept as exact as
@@ -903,6 +947,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
                 uniform,
                 textures: [level, Tex::Empty],
             });
+            self.finish_level(level, layer);
             level = Tex::Target(next);
         }
         if plan.weights.len() > 1 {
@@ -917,6 +962,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
                     uniform,
                     textures: [level, Tex::Empty],
                 });
+                self.finish_level(level, layer);
                 level = Tex::Target(next);
             }
         }
@@ -939,7 +985,18 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             uniform,
             textures: [level, Tex::Target(layer)],
         });
+        self.finish_level(level, layer);
+        self.rec.finish(layer);
         Ok(out)
+    }
+
+    /// A level of `layer`'s blur is read for the last time: its texture may serve a later target.
+    fn finish_level(&mut self, level: Tex, layer: TargetId) {
+        if let Tex::Target(t) = level {
+            if t != layer {
+                self.rec.finish(t);
+            }
+        }
     }
 
     /// Lays the layer `layer` (covering `area`) over `ctx` where `visible`, at opacity `k`, through `clips`.

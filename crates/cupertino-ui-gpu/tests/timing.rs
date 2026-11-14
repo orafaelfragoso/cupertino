@@ -2,7 +2,8 @@
 //! golden scenes (controls with strokes and gradients, a card with a shadow, text, clips and a faded group), drawn
 //! whole and then repainting a control's worth of damage. A GPU frame is
 //! timed from the request to the device finishing it, so its time holds the recording on the CPU as well. On the
-//! local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) a damaged frame must stay within the client's GPU budget per frame.
+//! local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) a damaged frame must stay within the client's GPU budget per frame,
+//! and a whole frame's recording and issuing of its draws within its CPU budget.
 
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,9 @@ const SCALE: f64 = 1.5;
 
 /// The most a frame repainting a control's worth of damage may take on the GPU, request to finish.
 const DAMAGED_BUDGET: Duration = Duration::from_millis(4);
+
+/// The most the recording and issuing of a whole frame's draws may take on the CPU, request to return.
+const WHOLE_RECORDING_BUDGET: Duration = Duration::from_millis(4);
 
 /// The window tiled with the golden scenes, each moved to its place.
 fn window(system: &TextSystem) -> DisplayList {
@@ -99,6 +103,7 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     };
     // what of a frame is spent before the request returns: recording, uploads and issuing the passes
     let submitted = std::cell::RefCell::new(Vec::new());
+    let last_stats = std::cell::Cell::new(cupertino_ui_gpu::GpuStats::default());
     let mut on_gpu = |f: &Frame<'_>| {
         let start = Instant::now();
         gpu.render(&cupertino_ui_render::RenderRequest {
@@ -111,6 +116,7 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
         })
         .expect("the GPU frame");
         submitted.borrow_mut().push(start.elapsed());
+        last_stats.set(*gpu.stats());
         device.finish().expect("the frame finished");
     };
     // the first frame fills the caches and atlases
@@ -118,6 +124,7 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     submitted.borrow_mut().clear();
     let whole_gpu = median(time(&full, 9, &mut on_gpu));
     let whole_submitted = median(submitted.take());
+    let whole_stats = last_stats.get();
     let damaged_gpu = median(time(&damaged, 21, &mut on_gpu));
     let damaged_submitted = median(submitted.take());
     let mut on_cpu = |f: &Frame<'_>| {
@@ -129,16 +136,23 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     eprintln!(
         "renderer made in {made:?} (programs compiled); {} nodes, {}x{} pixels: first frame gpu {first_gpu:?} cpu {first_cpu:?}; whole frame (median) gpu \
          {whole_gpu:?} (returned after {whole_submitted:?}) cpu {whole_cpu:?}; damaged frame (median) gpu \
-         {damaged_gpu:?} (returned after {damaged_submitted:?}) cpu {damaged_cpu:?}; {:?}",
+         {damaged_gpu:?} (returned after {damaged_submitted:?}) cpu {damaged_cpu:?}; whole {whole_stats:?}; damaged {:?}",
         list.nodes.len(),
         size.0,
         size.1,
         gpu.stats()
     );
+    // a frame's offscreen targets come from the pool and from the targets it finished with, never made anew
+    assert_eq!(whole_stats.targets_made, 0, "{whole_stats:?}");
+    assert!(whole_stats.layers > 100, "{whole_stats:?}");
     if common::gpu_required() {
         assert!(
             damaged_gpu < DAMAGED_BUDGET,
             "a damaged frame took {damaged_gpu:?} on the GPU"
+        );
+        assert!(
+            whole_submitted < WHOLE_RECORDING_BUDGET,
+            "a whole frame's draws took {whole_submitted:?} to record and issue"
         );
     }
 }

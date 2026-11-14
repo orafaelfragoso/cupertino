@@ -82,6 +82,9 @@ pub struct GpuStats {
     pub passes: u32,
     /// Offscreen targets used for groups, layers and effects.
     pub layers: u32,
+    /// Of them, those whose texture was made for the frame, not taken from the pool or from a target the frame had
+    /// finished with.
+    pub targets_made: u32,
     pub glyph_uploads: u32,
     pub mask_uploads: u32,
     pub image_uploads: u32,

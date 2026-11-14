@@ -46,7 +46,7 @@ impl<R> GpuRenderer<R> {
                         p.end();
                     }
                     rec.started[target.0] = true;
-                    let texture = target_texture(self.window.as_ref(), &rec.targets, *target);
+                    let texture = target_texture(self.window.as_ref(), rec, *target);
                     pass = Some((
                         *target,
                         device.begin_pass(texture, LoadOp::Clear([0.0; 4]))?,
@@ -74,7 +74,7 @@ impl<R> GpuRenderer<R> {
                 } else {
                     LoadOp::Load
                 };
-                let texture = target_texture(self.window.as_ref(), &rec.targets, target);
+                let texture = target_texture(self.window.as_ref(), rec, target);
                 pass = Some((target, device.begin_pass(texture, load)?));
                 passes += 1;
             }
@@ -181,18 +181,14 @@ impl<R> GpuRenderer<R> {
             Tex::Color(page) => self.color.page(page).unwrap_or(&programs.empty),
             Tex::Mask(page) => self.masks.page(page).unwrap_or(&programs.empty),
             Tex::Image(id) => self.images.get(&id).map_or(&programs.empty, |i| &i.texture),
-            Tex::Target(t) => target_texture(self.window.as_ref(), &rec.targets, t),
+            Tex::Target(t) => target_texture(self.window.as_ref(), rec, t),
             Tex::Own(i) => &rec.own[i],
         }
     }
 }
 
-fn target_texture<'a>(
-    window: Option<&'a Texture>,
-    targets: &'a [TargetMem],
-    t: TargetId,
-) -> &'a Texture {
-    match &targets[t.0] {
+fn target_texture<'a>(window: Option<&'a Texture>, rec: &'a Recording, t: TargetId) -> &'a Texture {
+    match rec.target_mem(t) {
         TargetMem::Window => window.expect("the window texture is made before drawing"),
         TargetMem::Pooled(p) => &p.target,
         TargetMem::Own(t) => t,

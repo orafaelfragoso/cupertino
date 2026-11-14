@@ -19,13 +19,13 @@ use cupertino_protocol_app::{
 use cupertino_ui_menus::{AppMenus, WindowMenus};
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, Color,
-    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
-    DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
-    MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    RaisedLayer, RendererClass, ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DrawInto,
+    DropAction, DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent,
+    Keysym, Lent, MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec,
+    PresentOutcome, RaisedLayer, RendererClass, ScrollBars, SystemAppearance, Timestamp,
+    WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_render::{CpuFrame, RenderFrameId};
+use cupertino_ui_render::{CpuFrame, MemoryTarget, RenderFrameId};
 use cupertino_ui_text::TextInputState;
 use cupertino_wayland_client::{
     BufferFormat, Capability, ClipboardOffer, Connection, DragActions, DragEvent, DragIcon,
@@ -971,6 +971,56 @@ impl WaylandWindowSystem {
         Ok(self.conn.set_size_limits(t, min, max))
     }
 
+    /// What every present of `window` does first: its backdrop shaped to its size, and its input and opaque regions
+    /// set for the commit. Its surface and logical size.
+    fn before_present(
+        &mut self,
+        window: WindowId,
+    ) -> Result<(SurfaceId, (u32, u32)), PlatformError> {
+        let w = self.window_mut(window)?;
+        let (surface, size) = (w.surface, w.size);
+        if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
+            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+            if b.material.set_shape(&bounds, b.radius).is_ok() {
+                b.shaped = Some(size);
+            }
+        }
+        let opaque = w.opaque_region.take();
+        if let Some(region) = w.input_region.take() {
+            self.conn
+                .set_input_region(surface, region.as_deref())
+                .map_err(platform_error)?;
+        }
+        if let Some(region) = opaque {
+            self.conn
+                .set_opaque_region(surface, &region)
+                .map_err(platform_error)?;
+        }
+        Ok((surface, size))
+    }
+
+    /// `window` presented frame `id` of `size` pixels: its feedback awaited, its next frame paced, and the size and
+    /// repaint rule told.
+    fn presented_frame(
+        &mut self,
+        window: WindowId,
+        id: RenderFrameId,
+        size: (u32, u32),
+    ) -> Result<(), PlatformError> {
+        let feedback = self.conn.capabilities().contains(Capability::Presentation);
+        let w = self.window_mut(window)?;
+        if feedback {
+            w.in_flight.push_back(id);
+        }
+        w.frame_pending = true;
+        w.shown = Some(size);
+        let surface = w.surface;
+        // a process of the size and repaint rule's class counts what its windows present
+        let now = self.now().0;
+        self.gpu.presented(&mut self.conn, surface, size, now);
+        Ok(())
+    }
+
     /// Keep `damage` for the next present.
     fn carry(
         &mut self,
@@ -1828,14 +1878,8 @@ impl WindowSystem for WaylandWindowSystem {
         frame: &CpuFrame,
         _configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError> {
+        let (surface, size) = self.before_present(window)?;
         let w = self.window_mut(window)?;
-        let (surface, size) = (w.surface, w.size);
-        if let Some(b) = w.backdrop.as_mut().filter(|b| b.shaped != Some(size)) {
-            let bounds = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
-            if b.material.set_shape(&bounds, b.radius).is_ok() {
-                b.shaped = Some(size);
-            }
-        }
         let resized = w.shown != Some((frame.width, frame.height));
         let mut damage = std::mem::take(&mut w.carried);
         damage.extend(frame.damage.iter().map(|r| PixelRect {
@@ -1844,17 +1888,6 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        let opaque = w.opaque_region.take();
-        if let Some(region) = w.input_region.take() {
-            self.conn
-                .set_input_region(surface, region.as_deref())
-                .map_err(platform_error)?;
-        }
-        if let Some(region) = opaque {
-            self.conn
-                .set_opaque_region(surface, &region)
-                .map_err(platform_error)?;
-        }
         let copying = self.copy_time.is_some().then(Instant::now);
         let on_gpu = self
             .gpu
@@ -1882,23 +1915,96 @@ impl WindowSystem for WaylandWindowSystem {
         };
         match shown {
             Ok(()) => {
-                let feedback = self.conn.capabilities().contains(Capability::Presentation);
-                let w = self.window_mut(window)?;
-                if feedback {
-                    w.in_flight.push_back(frame.id);
-                }
-                w.frame_pending = true;
-                w.shown = Some((frame.width, frame.height));
-                // a process of the size and repaint rule's class counts what its windows present
-                let now = self.now().0;
-                self.gpu
-                    .presented(&mut self.conn, surface, (frame.width, frame.height), now);
+                self.presented_frame(window, frame.id, (frame.width, frame.height))?;
                 Ok(PresentOutcome::Presented)
             }
             Err(stall) => {
                 self.carry(window, damage, frame)?;
                 self.window_mut(window)?.stalled = stall;
                 Ok(PresentOutcome::NotReady)
+            }
+        }
+    }
+
+    /// A surface presenting from shared memory in the renderer's byte order (`abgr8888`, where the compositor lists it)
+    /// has its frame drawn into the buffer it leases, what the buffer missed and the damage carried drawn with it, and
+    /// nothing copied; in the other byte order, or from GPU buffers, the frame is drawn and presented as before.
+    fn present_into(
+        &mut self,
+        window: WindowId,
+        size: (u32, u32),
+        _configure: Option<ConfigureId>,
+        damage: &[cupertino_ui_render::PixelRect],
+        draw: &mut DrawInto<'_>,
+    ) -> Result<Lent, PlatformError> {
+        let surface = self.window_mut(window)?.surface;
+        if !self.gpu.on_shm(surface) || !self.conn.offers(BufferFormat::Abgr8888) {
+            return Ok(Lent::No);
+        }
+        let (surface, logical) = self.before_present(window)?;
+        let w = self.window_mut(window)?;
+        let resized = w.shown != Some(size);
+        let carried = std::mem::take(&mut w.carried);
+        let inside = |r: &PixelRect| clip(*r, size.0, size.1);
+        let leased = match self.conn.lease(surface, logical, BufferFormat::Abgr8888) {
+            Ok(mut lease) => {
+                let layout = lease.layout();
+                if (layout.width(), layout.height()) != size
+                    || layout.stride() != size.0 as usize * 4
+                {
+                    Err(None)
+                } else {
+                    // what the buffer misses: the frames shown in the others since it held one and those not shown
+                    let missed: Option<Vec<_>> = lease.missed().map(|missed| {
+                        missed
+                            .iter()
+                            .chain(&carried)
+                            .filter_map(inside)
+                            .map(render_rect)
+                            .collect()
+                    });
+                    let drawn = draw(MemoryTarget {
+                        pixels: lease.pixels_mut(),
+                        stride: layout.stride(),
+                        missed: missed.as_deref(),
+                    });
+                    match drawn {
+                        Some((id, drawn)) => {
+                            let changed: Vec<PixelRect> = carried
+                                .iter()
+                                .copied()
+                                .chain(drawn.iter().map(wire_rect))
+                                .filter_map(|r| inside(&r))
+                                .collect();
+                            lease
+                                .present_damage((!resized).then_some(&changed[..]))
+                                .map_err(platform_error)?;
+                            Ok(id)
+                        }
+                        // drawing failed: the lease goes back unattached, its pixels unknown
+                        None => Err(None),
+                    }
+                }
+            }
+            Err(Error::NoFreeBuffer) => Err(Some(Stall::Buffer)),
+            Err(Error::NotConfigured) => Err(Some(Stall::Configure)),
+            Err(e) => {
+                self.window_mut(window)?.carried = carried;
+                return Err(platform_error(e));
+            }
+        };
+        match leased {
+            Ok(id) => {
+                self.presented_frame(window, id, size)?;
+                Ok(Lent::Drawn(PresentOutcome::Presented))
+            }
+            Err(stall) => {
+                let w = self.window_mut(window)?;
+                w.carried = carried;
+                w.carried.extend(damage.iter().map(wire_rect));
+                bound(&mut w.carried, size.0, size.1);
+                w.stalled = stall;
+                Ok(Lent::Drawn(PresentOutcome::NotReady))
             }
         }
     }
@@ -2291,6 +2397,26 @@ fn bound(carried: &mut Vec<PixelRect>, width: u32, height: u32) {
             width,
             height,
         }];
+    }
+}
+
+/// A renderer's rectangle of pixels as the transport's.
+fn wire_rect(r: &cupertino_ui_render::PixelRect) -> PixelRect {
+    PixelRect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+    }
+}
+
+/// The transport's rectangle of pixels as a renderer's.
+fn render_rect(r: PixelRect) -> cupertino_ui_render::PixelRect {
+    cupertino_ui_render::PixelRect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
     }
 }
 

@@ -4,7 +4,7 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_ui_render::{CpuFrame, RenderFrameId};
+use cupertino_ui_render::{CpuFrame, MemoryTarget, PixelRect, RenderFrameId};
 use cupertino_ui_text::{ImeEvent, TextInputState};
 use std::collections::BTreeSet;
 use std::task::Waker;
@@ -531,6 +531,22 @@ pub enum PresentOutcome {
     NotReady,
 }
 
+/// What [`WindowSystem::present_into`] did with a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lent {
+    /// A buffer was lent: the frame was drawn into it and presented, or, `NotReady`, no buffer is free or the window
+    /// waits for its configure, so the frame was not drawn and its damage carries over to the next present.
+    Drawn(PresentOutcome),
+    /// No buffer is lent to this window (it presents from GPU buffers, from buffers in another byte order, or the window
+    /// system draws no frame into its buffers): draw the frame into the renderer's output and
+    /// [`present`](WindowSystem::present) it.
+    No,
+}
+
+/// Draws a frame into the buffer it is given ([`WindowSystem::present_into`]) and returns its id and the rectangles
+/// that changed since the last frame, or `None` when drawing failed, which gives the buffer back unattached.
+pub type DrawInto<'a> = dyn FnMut(MemoryTarget<'_>) -> Option<(RenderFrameId, Vec<PixelRect>)> + 'a;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TiledEdges {
     pub top: bool,
@@ -922,6 +938,24 @@ pub trait WindowSystem {
         frame: &CpuFrame,
         configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError>;
+    /// Lends a buffer of `window`, `width` × `height` pixels in the renderer's byte order, to `draw` with what it
+    /// misses (the frames shown in the window's other buffers since it held one and the damage of frames not shown;
+    /// all of it when its pixels are unknown), and presents it with the damage `draw` returns, acknowledging
+    /// `configure` as [`present`](WindowSystem::present) does: the frame reaches the buffer without a copy. When no buffer
+    /// is free, the window waits for its configure or the buffer is not of the frame's size, `draw` is not called and
+    /// `damage` (the frame's, in pixels) carries over to the next present. [`Lent::No`] (the default) when the window
+    /// takes no frame drawn this way.
+    fn present_into(
+        &mut self,
+        window: WindowId,
+        size: (u32, u32),
+        configure: Option<ConfigureId>,
+        damage: &[PixelRect],
+        draw: &mut DrawInto<'_>,
+    ) -> Result<Lent, PlatformError> {
+        let _ = (window, size, configure, damage, draw);
+        Ok(Lent::No)
+    }
     /// Shows `layer` over the window's content with the window's next [`present`](WindowSystem::present), or hides it
     /// then with `None`: the window's raised materials ([`MaterialRegion::raised`]) lie between the two. Like a present
     /// it copies the frame's damage, plus whatever the buffer it is drawn into missed. `NotReady` keeps nothing: the

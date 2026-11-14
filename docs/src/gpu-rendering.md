@@ -15,7 +15,7 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Title bars, window buttons, rims, keyboard HUDs | the compositor: each recorded as a list of draws, drawn by the borrowed device with the toolkit's coverage program into a texture of the renderer when its state changes (glyphs and button glyph paths kept in an atlas); painted on the CPU from the same list where the device cannot draw it | n/a |
 | The procedural cursor | the compositor, rasterized on the CPU (tiny-skia), cached, uploaded on change: the cursor plane's buffer is filled on the CPU | memory buffers |
 | Toolkit windows of the GPU class (Files windows, Settings, the dock and overview, the launcher) and third-party windows once large or busy | the GPU renderer (`cupertino-ui-gpu`) after the first frames, which the CPU draws while the device warms up, its scroll layers kept as textures; the CPU renderer on a fallback | dmabufs copied from the renderer's texture; shared memory on a fallback |
-| Toolkit windows of the CPU class (menu bar, OSD, banners, Control Center, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, copied byte for byte as `abgr8888` where the compositor lists it, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
+| Toolkit windows of the CPU class (menu bar, OSD, banners, Control Center, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, drawn straight into the leased slot as `abgr8888` where the compositor lists it (what the slot missed repainted, nothing copied), converted into `argb8888` elsewhere, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
 The material system is already a GPU system: a window asks the compositor for glass by shape and style, and the
@@ -54,8 +54,8 @@ pixels. Layers exist in both renderers, so they cut paint and raster cost on eve
 Scroll offsets are rounded to device pixels when drawn, so a moved layer is pixel-identical to a repaint. Minimized and
 fully covered windows drop their layers; a toolkit window declares the part its pixels cover whole as its opaque
 region, so it covers the windows under it as any client that declares one does. A kept subtree that did not change is
-laid into the next paint as it was and compared with the last frame's in one go, so a scroll walks and compares only
-the rows that changed.
+placed from what it was placed from, its semantics laid in as the last pass left them, laid into the next paint as it
+was and compared with the last frame's in one go, so a scroll walks, places and compares only the rows that changed.
 
 ### 3. Who draws on the GPU: classes of surface
 

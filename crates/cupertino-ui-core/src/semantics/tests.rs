@@ -766,3 +766,348 @@ fn a_focus_on_a_node_without_a_role_is_told_on_its_nearest_ancestor_in_the_tree(
     assert_eq!(none.focus, None);
     assert!(focused(&none).is_empty());
 }
+
+/// What a [`Declares`] node says about itself.
+#[derive(Clone, Default, PartialEq)]
+struct Said {
+    role: Option<Role>,
+    name: Option<&'static str>,
+    description: Option<&'static str>,
+    content: Option<&'static str>,
+    focusable: bool,
+    fallback: bool,
+    scope: bool,
+    roving_group: bool,
+    roving_item: bool,
+    hidden: bool,
+    controls_panel: bool,
+    bounds: Option<Rect>,
+}
+
+/// A node 90 points wide, `height` tall (or as tall as its children), its children stacked, saying `said`.
+struct Declares {
+    said: Said,
+    height: Option<f64>,
+    children: Vec<Element<M>>,
+}
+
+fn declares(said: Said, height: Option<f64>, children: Vec<Element<M>>) -> Element<M> {
+    Element::new(Declares {
+        said,
+        height,
+        children,
+    })
+}
+
+impl Widget<M> for Declares {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: cupertino_ui_layout::SizeSpec::Fixed(90.0),
+            height: self.height.map_or(cupertino_ui_layout::SizeSpec::Fit, |h| {
+                cupertino_ui_layout::SizeSpec::Fixed(h)
+            }),
+            ..spec(ContainerKind::Stack {
+                axis: cupertino_ui_layout::Axis::Vertical,
+                spacing: 2.0,
+                align: cupertino_ui_layout::Align::Start,
+                justify: cupertino_ui_layout::Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.height != old.height {
+            Change::Layout
+        } else if self.said != old.said {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        let s = &self.said;
+        if let Some(role) = s.role {
+            cx.role(role);
+        }
+        if let Some(name) = s.name {
+            cx.name(name);
+        }
+        if let Some(text) = s.description {
+            cx.description(text);
+        }
+        if let Some(text) = s.content {
+            cx.describe_content(text);
+        }
+        if s.focusable {
+            cx.focusable();
+        }
+        if s.fallback {
+            cx.focus_fallback();
+        }
+        if s.scope {
+            cx.focus_scope();
+        }
+        if s.roving_group {
+            cx.roving_group();
+        }
+        if s.roving_item {
+            cx.roving_item();
+        }
+        if s.hidden {
+            cx.hidden();
+        }
+        if s.controls_panel {
+            cx.relation_to(Relation::Controls, "panel");
+        }
+        if let Some(bounds) = s.bounds {
+            cx.bounds(bounds);
+        }
+    }
+}
+
+/// Row `i` named `name`: an item of the list when `i` is even, a plain wrapper whose words go to the list when it is
+/// odd; in it a button controlling the panel with bounds of its own, a badge describing the row, a part hidden in
+/// every third row, a fallback around a scope, and words handed down to its first node with a role.
+fn kept_row(i: usize, name: &'static str) -> Element<M> {
+    let mark = name.len() as u64 * 1000 + i as u64;
+    Element::kept(i as u64, mark, move || {
+        let item = i.is_multiple_of(2);
+        declares(
+            Said {
+                role: item.then_some(Role::ListItem),
+                name: Some(name),
+                description: (!item).then_some("odd row"),
+                content: Some("in the list"),
+                roving_item: item,
+                ..Said::default()
+            },
+            Some(30.0),
+            vec![
+                declares(
+                    Said {
+                        role: Some(Role::Button),
+                        name: Some("open"),
+                        focusable: true,
+                        controls_panel: true,
+                        bounds: Some(Rect::new(2.0, 3.0, 10.0, 5.0)),
+                        ..Said::default()
+                    },
+                    Some(6.0),
+                    Vec::new(),
+                ),
+                declares(
+                    Said {
+                        description: Some("badge"),
+                        ..Said::default()
+                    },
+                    Some(4.0),
+                    Vec::new(),
+                ),
+                declares(
+                    Said {
+                        role: Some(Role::StaticText),
+                        hidden: i.is_multiple_of(3),
+                        ..Said::default()
+                    },
+                    Some(3.0),
+                    Vec::new(),
+                ),
+                declares(
+                    Said {
+                        fallback: true,
+                        ..Said::default()
+                    },
+                    None,
+                    vec![declares(
+                        Said {
+                            scope: true,
+                            role: Some(Role::Group),
+                            ..Said::default()
+                        },
+                        Some(2.0),
+                        Vec::new(),
+                    )],
+                ),
+            ],
+        )
+    })
+}
+
+/// A scrolled list of kept rows, which hands its first row words of its own, beside the panel the rows' buttons
+/// control.
+fn kept_list(names: &[&'static str], offset: f64) -> Element<M> {
+    let rows = names
+        .iter()
+        .enumerate()
+        .map(|(i, &name)| kept_row(i, name))
+        .collect();
+    Element::new(group(vec![
+        Element::new(crate::test_support::Scroller {
+            children: vec![declares(
+                Said {
+                    role: Some(Role::List),
+                    roving_group: true,
+                    content: Some("files"),
+                    ..Said::default()
+                },
+                None,
+                rows,
+            )],
+            offset: cupertino_geometry::Point::new(0.0, offset),
+        }),
+        declares(
+            Said {
+                role: Some(Role::Group),
+                name: Some("panel"),
+                ..Said::default()
+            },
+            Some(10.0),
+            Vec::new(),
+        )
+        .key("panel"),
+    ]))
+}
+
+/// The pass's every part, compared with another's.
+fn assert_same(got: &SemanticsPass, whole: &SemanticsPass, at: &str) {
+    assert_eq!(got.nodes, whole.nodes, "nodes {at}");
+    assert_eq!(got.focusable, whole.focusable, "focus order {at}");
+    assert_eq!(got.scopes, whole.scopes, "scopes {at}");
+    assert_eq!(got.roving_groups, whole.roving_groups, "roving groups {at}");
+    assert_eq!(got.roving_items, whole.roving_items, "roving items {at}");
+    assert_eq!(got.hidden, whole.hidden, "hidden {at}");
+    assert_eq!(got.focus, whole.focus, "focus {at}");
+}
+
+/// A kept subtree that did not change has its semantics laid in from its run, unwalked, and after scrolls at whole
+/// and fractional offsets, the focus moving into a row and out, a row made anew, a row dropped and a resize, the
+/// nodes, the focus order, the scopes, roving groups and items, the hidden roots and the accessibility diff are those
+/// of a full build after the same frames.
+#[test]
+fn kept_semantics_laid_in_from_their_runs_are_those_of_a_full_build() {
+    let env = crate::test_support::env();
+    let mut names = vec![
+        "a", "bb", "ccc", "dd", "e", "ff", "ggg", "h", "ii", "jjj", "k", "ll",
+    ];
+    let mut tree = Tree::<M>::new(200);
+    let root = tree.reconcile(None, kept_list(&names, 0.0)).unwrap();
+    let mut kept = KeptSemantics::default();
+    let mut last_got = BTreeMap::new();
+    let mut last_whole = BTreeMap::new();
+    let mut frame = |tree: &Tree<M>, kept: &mut KeptSemantics, size: Size, focus, at: &str| {
+        let result = cupertino_ui_layout::layout(
+            &crate::layout_view::TreeView { tree, env: &env },
+            root,
+            Constraints::tight(size).unwrap(),
+            &cupertino_ui_layout::LayoutOptions {
+                direction: env.direction,
+                node_limit: 1000,
+            },
+        )
+        .unwrap();
+        let geometry = crate::layout_view::placements(tree, root, &result, &env, &[]);
+        let got = build_kept(
+            tree,
+            root,
+            &geometry,
+            focus,
+            env.direction,
+            env.scale,
+            &[],
+            kept,
+        );
+        let whole = build(tree, root, &geometry, focus, env.direction, env.scale, &[]);
+        assert_same(&got, &whole, at);
+        assert_eq!(
+            diff(&last_got, &got.nodes),
+            diff(&last_whole, &whole.nodes),
+            "the diff {at}"
+        );
+        last_got = got.nodes;
+        last_whole = whole.nodes;
+        kept.laid
+    };
+    // six nodes asked in each row; the first is handed the list's words and is always walked
+    let per_row = 6;
+    let window = Size::new(100.0, 120.5);
+    assert_eq!(frame(&tree, &mut kept, window, None, "at first"), 0);
+    for offset in [7.0, 13.5, 40.25, 0.0] {
+        tree.reconcile(Some(root), kept_list(&names, offset))
+            .unwrap();
+        let at = format!("at {offset}");
+        assert_eq!(
+            frame(&tree, &mut kept, window, None, &at),
+            11 * per_row,
+            "{at}"
+        );
+    }
+    // the focus in a row: the row is walked while it holds it, and kept again once it leaves
+    let row = |tree: &Tree<M>, i: usize| {
+        let scroller = tree.get(root).unwrap().children[0];
+        let list = tree.get(scroller).unwrap().children[0];
+        tree.get(list).unwrap().children[i]
+    };
+    let button = tree.get(row(&tree, 4)).unwrap().children[0];
+    tree.reconcile(Some(root), kept_list(&names, 20.0)).unwrap();
+    assert_eq!(
+        frame(&tree, &mut kept, window, Some(button), "focused"),
+        10 * per_row
+    );
+    // the row it left has no run yet, and the one it is on, which has no role, is walked
+    assert_eq!(
+        frame(
+            &tree,
+            &mut kept,
+            window,
+            Some(row(&tree, 5)),
+            "focus on a row"
+        ),
+        9 * per_row
+    );
+    assert_eq!(
+        frame(&tree, &mut kept, window, None, "focus gone"),
+        10 * per_row
+    );
+    assert_eq!(frame(&tree, &mut kept, window, None, "again"), 11 * per_row);
+    // a row made anew is walked, the others laid in
+    names[3] = "dddd";
+    tree.reconcile(Some(root), kept_list(&names, 13.5)).unwrap();
+    assert_eq!(
+        frame(&tree, &mut kept, window, None, "a row made anew"),
+        10 * per_row
+    );
+    // a row dropped: its run goes with it
+    names.pop();
+    tree.reconcile(Some(root), kept_list(&names, 20.0)).unwrap();
+    assert_eq!(
+        frame(&tree, &mut kept, window, None, "a row dropped"),
+        10 * per_row
+    );
+    // the window resized: the rows keep their sizes, so their runs still hold
+    assert_eq!(
+        frame(&tree, &mut kept, Size::new(97.0, 50.0), None, "resized"),
+        10 * per_row
+    );
+}

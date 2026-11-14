@@ -54,6 +54,15 @@ is not painted (`groups_kept`), with the bytes of a frame that paints it, at sca
 transform changed is painted again: laid over moved, even by whole device pixels, the image would not put its paths'
 edges and its dithering on the pixels painting them there does, and scaled it would be resampled.
 
+`UiRenderer::render_into` draws a frame into memory the renderer is lent (`MemoryTarget`: a window's shared-memory
+buffer, its stride and the rectangles in which it differs from the frame drawn last, `None` when its pixels are
+unknown) instead of its own image: the frame's damage and what the memory missed, all of it when unknown, painted over
+what the memory holds, so it ends with the bytes the copy path leaves in a buffer (`render`, then the damage and what
+the buffer missed copied over), which a test checks through buffers taking turns, new ones, one held for frames on end
+and ones of unknown pixels at scales 1, 1.5 and 2. Its kept layers and scratch images stay its own; its own image is let
+go, and a frame drawn with `render` after it is drawn whole. `UiRenderer::draws_into_memory` says whether a renderer
+can (the CPU renderer; not the GPU renderer, whose frames are copied on the device).
+
 The frame's pixels are kept from one frame to the next; a frame drawn whole clears or paints over every one of them, so
 they are not cleared beforehand as well. Pixels of a new size (a window's first frame) are allocated zeroed, which the
 system gives without writing them, and the frame's clear then writes nothing, so a transparent window touches only the

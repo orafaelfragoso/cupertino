@@ -321,6 +321,16 @@ pub struct PixelRect {
     pub height: u32,
 }
 
+/// Memory a renderer is lent to draw one frame into, such as a window's shared-memory buffer: premultiplied RGBA bytes
+/// of the frame's size, `stride` bytes a row, holding an earlier frame of the window or nothing known.
+pub struct MemoryTarget<'a> {
+    pub pixels: &'a mut [u8],
+    pub stride: usize,
+    /// Where the memory differs from the frame drawn last, which the frame draws besides its own damage; `None` when
+    /// its pixels are unknown (memory new to the window, or written and not shown): the frame draws all of it.
+    pub missed: Option<&'a [PixelRect]>,
+}
+
 /// A frame a window presents: its whole canonical image and the pixels this frame changed. The CPU renderer's frames
 /// hold their pixels in memory; a frame drawn on a GPU keeps them on its device (`device`) and leaves `pixels`
 /// empty, for a presenter on that device to draw from. [`CpuFrame::in_memory`] reads such a frame back where pixels
@@ -458,6 +468,24 @@ pub trait UiRenderer {
     /// Lets go of the layers kept between frames ([`Layer`]), keeping the frame: the window is not seen. The next
     /// frame paints what it shows of them whole. A renderer that keeps none does nothing.
     fn drop_layers(&mut self) {}
+    /// Whether the renderer draws frames into memory it is lent ([`render_into`](UiRenderer::render_into)).
+    fn draws_into_memory(&self) -> bool {
+        false
+    }
+    /// Repaints the frame into `target` rather than the renderer's own output: its damage and what `target` missed, all
+    /// of it when that is unknown, so `target` ends up with the bytes [`render`](UiRenderer::render) leaves in the
+    /// renderer's output. Returns the frame's id and the rectangles that changed since the last frame, as
+    /// [`CpuFrame::damage`] does. The renderer's output does not hold the frame: [`frame`](UiRenderer::frame) refuses
+    /// it, and the next `render` repaints in full. On error `target` may be half painted. A renderer that does not
+    /// draw into memory ([`draws_into_memory`](UiRenderer::draws_into_memory)) refuses with `InvalidSize`.
+    fn render_into(
+        &mut self,
+        request: &RenderRequest<'_>,
+        target: MemoryTarget<'_>,
+    ) -> Result<(RenderFrameId, Vec<PixelRect>), RenderError> {
+        let _ = (request, target);
+        Err(RenderError::InvalidSize)
+    }
 }
 
 #[cfg(test)]

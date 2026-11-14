@@ -54,7 +54,9 @@ a rule changes this file first, in its own reviewed change.
     without that protocol, a client-side wait on its own fence before commit. Nothing relies on implicit
     synchronisation.
 15. *(from step 6)* A surface that cannot use dmabuf (failed import, failed allocation) falls back to `wl_shm` alone;
-    the syncobj surface object is destroyed before a shared-memory attach.
+    the syncobj surface object is destroyed before a shared-memory attach. *(from step 4)* A CPU frame drawn straight
+    into a leased shared-memory buffer, what the buffer missed repainted, has the bytes of the frame drawn into the
+    renderer's own image and copied.
 
 ## Failure and fallback
 

@@ -1672,7 +1672,7 @@ mod window_system {
         PlatformEvent, PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId,
         WindowRequest, WindowSpec, WindowSystem,
     };
-    use cupertino_ui_render::{CpuFrame, PixelFormat, PixelRect, RenderFrameId};
+    use cupertino_ui_render::{CpuFrame, DamageRegion, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;
     use std::collections::HashMap;
     use zbus::zvariant::{OwnedValue, Value};
@@ -2270,6 +2270,174 @@ mod window_system {
             shown_in[0] == shown_in[1],
             "the two byte orders show the same pixels"
         );
+    }
+
+    /// The renderer's text needs no glyphs here.
+    struct NoGlyphs;
+
+    impl cupertino_ui_text::GlyphRasterizer for NoGlyphs {
+        fn rasterize(
+            &mut self,
+            _: &cupertino_ui_text::GlyphKey,
+        ) -> Result<Option<cupertino_ui_text::RasterGlyph>, cupertino_ui_text::TextError> {
+            Ok(None)
+        }
+    }
+
+    /// Frame `i` at `scale` of a 200 × 100 window: a background, a box that moves across it and a bar that changes
+    /// colour every third frame, with the damage of what moved and changed (all of it for the first frame).
+    fn moving(i: u32, scale: f64) -> (cupertino_ui_render::DisplayList, DamageRegion) {
+        use cupertino_ui_render::{Paint, PaintNode, PaintNodeId, PaintOp, PaintRevision, Shape};
+        let (w, h) = (200.0 / scale, 100.0 / scale);
+        let node = |id, rect: Rect, rgba| PaintNode {
+            id: PaintNodeId(id),
+            parent: None,
+            revision: PaintRevision(1),
+            transform: cupertino_ui_render::Transform::IDENTITY,
+            clip: None,
+            group: None,
+            bounds: rect,
+            hit: rect,
+            ops: vec![PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, radius: 3.3 },
+                paint: Paint::Solid(Color::from_rgba8(rgba)),
+            }],
+            layer: None,
+        };
+        let at = |i: u32| Rect::new(f64::from(i % 9) * w / 11.0, h / 4.0, w / 5.5, h / 2.3);
+        let bar = Rect::new(0.0, 0.0, w, h / 7.0);
+        let shade = (i / 3 * 40 % 256) as u8;
+        let list = cupertino_ui_render::DisplayList {
+            nodes: vec![
+                node(1, Rect::new(0.0, 0.0, w, h), [240, 238, 232, 255]),
+                node(2, at(i), [30, 90, 200, 200]),
+                node(3, bar, [shade, 120, 255 - shade, 180]),
+            ],
+        };
+        let damage = if i == 0 {
+            DamageRegion::Full
+        } else {
+            let mut rects = vec![at(i - 1), at(i)];
+            if i.is_multiple_of(3) {
+                rects.push(bar);
+            }
+            DamageRegion::Rects(rects)
+        };
+        (list, damage)
+    }
+
+    /// Frames drawn by the CPU renderer straight into the buffers the window lends show, in every buffer committed,
+    /// the bytes and damage the frames drawn into the renderer's own image and copied show, at scales 1, 1.5 and 2:
+    /// through buffers taking turns, new ones (whose pixels are unknown) made while the compositor holds the others,
+    /// a frame that finds no free buffer and carries its damage, and the held buffers released late and drawn into
+    /// again with what they missed. The frames drawn into the buffers copy nothing.
+    #[test]
+    fn frames_drawn_into_leased_buffers_show_the_bytes_of_the_copy_path() {
+        use cupertino_ui_platform::Lent;
+        use cupertino_ui_render::{CpuConfig, CpuRenderer, RenderRequest, UiRenderer};
+        let config = CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 16,
+            font_smoothing: true,
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let mut runs = Vec::new();
+            for into in [false, true] {
+                let (mut kit, control, committed, _seen) = mapped_listing(true);
+                let w = kit.window;
+                kit.ws.time_copies(true);
+                let _ = kit.ws.take_copy_time();
+                let mut renderer = CpuRenderer::new(config, NoGlyphs);
+                let mut shown = Vec::new();
+                let mut stalls = 0;
+                for i in 0..14 {
+                    if i > 0 && stalls == 0 {
+                        kit.ws.request_frame(w);
+                        control.send(Control::FrameDone).unwrap();
+                        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+                    }
+                    // from frame 4 the compositor holds every buffer it is given, until one finds none free
+                    if i == 4 {
+                        control.send(Control::HoldBuffers).unwrap();
+                        kit.pump();
+                    }
+                    if stalls == 1 {
+                        kit.ws.request_frame(w);
+                        kit.pump();
+                        control.send(Control::ReleaseBuffers).unwrap();
+                        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+                        stalls = 2;
+                    }
+                    let (list, damage) = moving(i, scale);
+                    let resources = cupertino_ui_render::PaintResources::default();
+                    let request = RenderRequest {
+                        list: &list,
+                        resources: &resources,
+                        scale,
+                        width: 200,
+                        height: 100,
+                        damage: &damage,
+                    };
+                    let outcome = if into {
+                        let changes = match &damage {
+                            DamageRegion::Full => vec![rect(0, 0, 200, 100)],
+                            DamageRegion::Rects(r) => {
+                                cupertino_ui_render::damage_rects(r, scale, 200, 100)
+                            }
+                        };
+                        let lent = kit
+                            .ws
+                            .present_into(w, (200, 100), None, &changes, &mut |target| {
+                                renderer.render_into(&request, target).ok()
+                            })
+                            .unwrap();
+                        match lent {
+                            Lent::Drawn(outcome) => outcome,
+                            Lent::No => panic!("frame {i}: no buffer lent"),
+                        }
+                    } else {
+                        let id = renderer.render(&request).unwrap();
+                        kit.ws
+                            .present(w, renderer.frame(id).unwrap(), None)
+                            .unwrap()
+                    };
+                    if outcome == PresentOutcome::NotReady {
+                        assert!(i > 4 && stalls == 0, "frame {i} not shown");
+                        stalls = 1;
+                        shown.push(None);
+                        continue;
+                    }
+                    kit.pump();
+                    let c = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+                    assert_eq!(c.format, wl_shm::Format::Abgr8888);
+                    shown.push(Some((c.buffer, c.pixels, c.damage)));
+                }
+                assert_eq!(stalls, 2, "a frame found no free buffer");
+                if into {
+                    assert_eq!(kit.ws.take_copy_time(), Duration::ZERO, "nothing is copied");
+                }
+                runs.push(shown);
+            }
+            let (copied, drawn) = (&runs[0], &runs[1]);
+            for (i, (a, b)) in copied.iter().zip(drawn).enumerate() {
+                match (a, b) {
+                    (None, None) => {}
+                    (Some(a), Some(b)) => {
+                        assert!(
+                            a.1 == b.1,
+                            "scale {scale}, frame {i}: the buffer drawn into differs from the one copied into"
+                        );
+                        assert_eq!(a.2, b.2, "scale {scale}, frame {i}: the damage told");
+                    }
+                    _ => panic!("scale {scale}, frame {i}: shown on one path only"),
+                }
+            }
+            // buffers new to the window were made, and the held ones drawn into again
+            let buffers: std::collections::BTreeSet<u32> =
+                drawn.iter().flatten().map(|s| s.0).collect();
+            assert!(buffers.len() >= 3, "scale {scale}: buffers {buffers:?}");
+        }
     }
 
     #[test]

@@ -9,6 +9,13 @@ re-exported): the compositor stretches a single pixel over the window, so a tran
 or a uniform scrim, costs nothing per frame at any size or scale. It answers like `present`; the trait's default, and a
 system that cannot, refuse with `PlatformError::Unsupported`, and the caller presents a drawn frame instead.
 
+`present_into(window, size, configure, damage, draw)` lends the renderer a buffer of the window to draw the frame into,
+with what the buffer misses (the frames shown in the window's other buffers since it held one, the damage of frames not
+shown, or `None` when its pixels are unknown), and presents what `draw` drew with the damage it returns: the frame
+reaches the buffer without a copy. With no free buffer, no configure yet or a buffer of another size, `draw` is not
+called, `damage` carries over and the frame is `NotReady` (`Lent::Drawn`). `Lent::No`, the trait's default, asks for
+the frame drawn into the renderer's own image and presented with `present`.
+
 A popup asks for a place beside an anchor (`PopupSpec`); where the compositor put it, after flipping or sliding it to
 fit, arrives as `WindowEvent::PopupPlaced(rect)`, in its parent's coordinates, before each configure that places it.
 

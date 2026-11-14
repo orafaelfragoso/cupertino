@@ -33,13 +33,14 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{
     ActivationRequest, Backdrop, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
     ConstraintAdjust, DragImage, DragProgress, DragRequest, DragToken, DropAction, DropToken,
-    GlassTone, KeyEvent, Keysym, MaterialRegion, MenuDescription, Mods, MouseButton, PlatformError,
-    PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
+    GlassTone, KeyEvent, Keysym, Lent, MaterialRegion, MenuDescription, Mods, MouseButton,
+    PlatformError, PlatformEvent, PointerEvent, PopupEdge, PopupSpec, PresentOutcome, RaisedLayer,
     SystemAppearance, Timestamp, TouchEvent, WindowEvent, WindowId, WindowRequest, WindowSpec,
     WindowSystem,
 };
 use cupertino_ui_render::{
-    CpuFrame, DamageRegion, DisplayList, PaintResources, RenderError, RenderRequest, UiRenderer,
+    damage_rects, CpuFrame, DamageRegion, DisplayList, PaintResources, PixelRect, RenderError,
+    RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
 use cupertino_ui_theme::{Color, Surface, ThemeTokens};
@@ -2777,25 +2778,71 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.layer.shown = layer_height;
         }
         let rastering = mark(&self.frame_timing);
-        let id = w
-            .renderer
-            .render(&RenderRequest {
-                list: &w.display_list,
-                resources: &w.resources,
-                scale,
-                width,
-                height: physical(w.size.height, scale),
-                damage: &damage,
-            })
-            .map_err(UiError::Render)?;
-        let frame = w.renderer.frame(id).map_err(UiError::Render)?;
-        lap(&mut self.frame_timing, Phase::Raster, rastering);
-        let committing = mark(&self.frame_timing);
-        let outcome = self
-            .system
-            .present(w.id, frame, w.ack)
-            .map_err(UiError::Platform)?;
-        handed_over(&mut self.frame_timing, &mut self.system, committing);
+        let height = physical(w.size.height, scale);
+        let request = RenderRequest {
+            list: &w.display_list,
+            resources: &w.resources,
+            scale,
+            width,
+            height,
+            damage: &damage,
+        };
+        // the frame drawn straight into a buffer the window system lends, where it lends one; else drawn into the
+        // renderer's own image and copied
+        let mut lent = None;
+        if w.renderer.draws_into_memory() {
+            let changes = match &damage {
+                DamageRegion::Full => vec![PixelRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                }],
+                DamageRegion::Rects(rects) => damage_rects(rects, scale, width, height),
+            };
+            let (renderer, timing) = (&mut w.renderer, &mut self.frame_timing);
+            let (mut failed, mut drawn, mut committing) = (None, None, None);
+            let outcome = self
+                .system
+                .present_into(w.id, (width, height), w.ack, &changes, &mut |target| {
+                    let into = renderer.render_into(&request, target);
+                    lap(timing, Phase::Raster, rastering);
+                    committing = mark(timing);
+                    match into {
+                        Ok((id, damage)) => {
+                            drawn = Some(id);
+                            Some((id, damage))
+                        }
+                        Err(e) => {
+                            failed = Some(e);
+                            None
+                        }
+                    }
+                })
+                .map_err(UiError::Platform)?;
+            if let Some(e) = failed {
+                return Err(UiError::Render(e));
+            }
+            if let Lent::Drawn(outcome) = outcome {
+                handed_over(&mut self.frame_timing, &mut self.system, committing);
+                lent = Some((outcome, drawn));
+            }
+        }
+        let (outcome, id) = match lent {
+            Some(lent) => lent,
+            None => {
+                let id = w.renderer.render(&request).map_err(UiError::Render)?;
+                let frame = w.renderer.frame(id).map_err(UiError::Render)?;
+                lap(&mut self.frame_timing, Phase::Raster, rastering);
+                let committing = mark(&self.frame_timing);
+                let outcome = self
+                    .system
+                    .present(w.id, frame, w.ack)
+                    .map_err(UiError::Platform)?;
+                handed_over(&mut self.frame_timing, &mut self.system, committing);
+                (outcome, Some(id))
+            }
+        };
         w.failed = None;
         match outcome {
             PresentOutcome::Presented => {
@@ -2807,12 +2854,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.frame_ready = false;
                 w.committed = true;
                 self.system.request_frame(w.id);
-                if let Some(timing) = &mut self.scroll_timing {
+                if let (Some(timing), Some(id)) = (&mut self.scroll_timing, id) {
                     timing.submitted(w.id, id, self.options.clock.now());
                 }
             }
-            // the frame is drawn and the window system keeps its damage for the next present, which only draws what
-            // changes after it
+            // the frame is drawn (or, into a lent buffer, not drawn) and the window system keeps its damage for the next
+            // present, which only draws what changes after it
             PresentOutcome::NotReady => {
                 w.frame_ready = false;
                 w.dirty = true;

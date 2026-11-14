@@ -441,6 +441,15 @@ impl GpuPath {
         node.supports_eventfd().then_some(node)
     }
 
+    /// Whether `surface` presents from shared memory: the process draws on the CPU (or is warming up), or the surface
+    /// fell back to it.
+    pub fn on_shm(&self, surface: SurfaceId) -> bool {
+        match self.state {
+            State::On(_) => matches!(self.surfaces.get(&surface), Some(SurfaceKind::Fallback)),
+            _ => true,
+        }
+    }
+
     /// Present `frame` of `surface` on the GPU if the process and the surface draw there.
     #[allow(clippy::too_many_arguments)]
     pub fn present(

@@ -69,8 +69,12 @@ now): the first one, and any that would land in the future or more than a second
 at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
 input serial.
 
-`present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as ABGR8888 where the
-compositor lists that format and converted to ARGB8888 otherwise: its damage, the damage of
+Where the compositor lists ABGR8888, a surface presenting from shared memory takes its frame drawn straight into the
+buffer it leases (`present_into`): the CPU renderer paints the frame's damage, the damage of frames that were not
+presented and what the buffer missed, or all of it when its pixels are unknown, into the buffer, and nothing is copied;
+a lease the frame does not use (its drawing failed) goes back unattached. Elsewhere, and for a frame of the GPU
+renderer read back, `present` copies the renderer's frame (premultiplied RGBA) into a leased buffer, byte for byte as
+ABGR8888 where the compositor lists that format and converted to ARGB8888 otherwise: its damage, the damage of
 frames that were not presented, and what the buffer missed, or all of it when the buffer's pixels are unknown. The
 compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
 No free buffer, no configure yet, or a frame at another size than the latest configure asks for is `NotReady`, and the

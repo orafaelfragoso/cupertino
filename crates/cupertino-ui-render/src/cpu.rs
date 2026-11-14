@@ -8,8 +8,8 @@ use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
 use crate::{
-    CpuFrame, DamageRegion, Layer, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, PixelRect,
-    RenderError, RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
+    CpuFrame, DamageRegion, Layer, MemoryTarget, Paint, PaintNode, PaintNodeId, PaintOp,
+    PixelFormat, PixelRect, RenderError, RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
 };
 use cupertino_geometry::Rect;
 use cupertino_raster_math::dither;
@@ -35,7 +35,8 @@ pub struct CpuConfig {
     pub font_smoothing: bool,
 }
 
-/// Paints display lists into a premultiplied RGBA image it keeps between frames, repainting only the damage.
+/// Paints display lists into a premultiplied RGBA image it keeps between frames, repainting only the damage, or into
+/// memory it is lent ([`UiRenderer::render_into`]), repainting the damage and what the memory missed.
 pub struct CpuRenderer<R> {
     config: CpuConfig,
     rasterizer: R,
@@ -43,8 +44,10 @@ pub struct CpuRenderer<R> {
     images: ImageCache,
     frame: CpuFrame,
     scale: f64,
-    /// The image holds the last frame's complete contents.
+    /// The last frame was drawn whole and its layers are good for the next.
     valid: bool,
+    /// The renderer's own image holds the last frame; not when it was drawn into lent memory, which lets the image go.
+    image: bool,
     next_id: u64,
     stats: RenderStats,
     /// Takes the span path and skips what an opaque node hides; off only to check both give the same pixels.
@@ -103,6 +106,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             rasterizer,
             scale: 1.0,
             valid: false,
+            image: false,
             next_id: 1,
             stats: RenderStats::default(),
             fast: true,
@@ -127,9 +131,14 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         &self.stats
     }
 
-    /// Checks the request and sizes the frame's pixels for it: whether the frame is drawn whole, and whether its pixels
-    /// were just allocated, all zero (transparent), so a clear need not write them.
-    fn prepare(&mut self, request: &RenderRequest<'_>) -> Result<(bool, bool), RenderError> {
+    /// Checks the request and, for a frame drawn into the renderer's own image (`own`), sizes its pixels for it:
+    /// whether the frame is drawn whole, and whether its pixels were just allocated, all zero (transparent), so a clear
+    /// need not write them. A frame drawn into lent memory lets the image go.
+    fn prepare(
+        &mut self,
+        request: &RenderRequest<'_>,
+        own: bool,
+    ) -> Result<(bool, bool), RenderError> {
         validate::check(
             request.list,
             request.resources,
@@ -148,16 +157,21 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         let resized = request.width != self.frame.width
             || request.height != self.frame.height
             || request.scale != self.scale
-            || !self.valid;
+            || !self.valid
+            || (own && !self.image);
         let full = resized || matches!(request.damage, DamageRegion::Full);
         self.valid = false;
         let mut zeroed = false;
+        if !own {
+            self.frame.pixels = Vec::new();
+            self.image = false;
+        }
         if full {
             let len = usize::try_from(len).map_err(|_| RenderError::ResourceLimit)?;
             // a frame drawn whole clears or paints over every pixel, so pixels of the right size are kept as they are;
             // pixels of a new size are allocated zeroed, which the system gives without writing them, so the first
             // frame of a window touches only what it paints (the old ones are let go first, not held alongside)
-            if self.frame.pixels.len() != len {
+            if own && self.frame.pixels.len() != len {
                 self.frame.pixels = Vec::new();
                 self.frame.pixels = vec![0; len];
                 zeroed = true;
@@ -170,11 +184,19 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         Ok((full, zeroed))
     }
 
-    /// Paints the `dirty` rectangles; `zeroed`: every pixel of the frame is zero (transparent), so clearing writes
-    /// nothing.
+    /// The bytes of the frame's pixels, the measure of the kept layers' cap, whether they are the renderer's own or
+    /// lent.
+    fn frame_bytes(&self) -> u64 {
+        u64::from(self.frame.stride) * u64::from(self.frame.height)
+    }
+
+    /// Paints the `dirty` rectangles into `pixels`, the frame's bytes; `zeroed`: every pixel of the frame is zero
+    /// (transparent), so clearing writes nothing.
+    #[allow(clippy::too_many_arguments)]
     fn paint(
         &mut self,
         request: &RenderRequest<'_>,
+        pixels: &mut [u8],
         dirty: &[Bounds],
         zeroed: bool,
         kept_in: &[Option<usize>],
@@ -183,10 +205,10 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
         // what the kept groups may hold more: the cap less the scroll layers and the groups kept already
-        let group_room = (self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES)
-            .saturating_sub(self.kept.bytes());
-        let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
-            .ok_or(RenderError::InvalidSize)?;
+        let group_room =
+            (self.frame_bytes() + layers::LAYER_SLACK_BYTES).saturating_sub(self.kept.bytes());
+        let mut base =
+            PixmapMut::from_bytes(pixels, width, height).ok_or(RenderError::InvalidSize)?;
         let mut tree = Tree::new(&request.list.nodes, scale);
         let mut views: Vec<Option<View<'_>>> = Vec::new();
         for plan in plans.iter().filter(|p| p.kept) {
@@ -281,7 +303,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         layer_nodes.dedup();
         let mut before = std::mem::take(&mut self.kept.scrolls);
         let seen = std::mem::take(&mut self.kept.seen);
-        let mut budget = self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES;
+        let mut budget = self.frame_bytes() + layers::LAYER_SLACK_BYTES;
         let mut plans = Vec::with_capacity(layer_nodes.len());
         for index in layer_nodes {
             let node = &request.list.nodes[index];
@@ -394,7 +416,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             .map(|n| n.id)
             .collect();
         self.kept.groups.retain(|id, _| groups.contains(id));
-        if self.kept.bytes() > self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES {
+        if self.kept.bytes() > self.frame_bytes() + layers::LAYER_SLACK_BYTES {
             self.kept.groups.clear();
         }
     }
@@ -575,7 +597,74 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
         self.stats = RenderStats::default();
-        let (full, zeroed) = self.prepare(request)?;
+        let (full, zeroed) = self.prepare(request, true)?;
+        let mut pixels = std::mem::take(&mut self.frame.pixels);
+        let drawn = self.draw(request, &mut pixels, full, zeroed, None);
+        self.frame.pixels = pixels;
+        self.frame.damage = drawn?;
+        self.frame.id = RenderFrameId(self.next_id);
+        self.next_id += 1;
+        self.valid = true;
+        self.image = true;
+        Ok(self.frame.id)
+    }
+
+    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        if self.valid && self.image && id == self.frame.id {
+            Ok(&self.frame)
+        } else {
+            Err(RenderError::UnknownFrame(id))
+        }
+    }
+
+    fn drop_layers(&mut self) {
+        self.kept.clear();
+    }
+
+    fn draws_into_memory(&self) -> bool {
+        true
+    }
+
+    fn render_into(
+        &mut self,
+        request: &RenderRequest<'_>,
+        target: MemoryTarget<'_>,
+    ) -> Result<(RenderFrameId, Vec<PixelRect>), RenderError> {
+        self.stats = RenderStats::default();
+        let (full, _) = self.prepare(request, false)?;
+        let row = request.width as usize * 4;
+        let len = row * request.height as usize;
+        if target.stride != row || target.pixels.len() < len {
+            return Err(RenderError::InvalidSize);
+        }
+        // what the memory holds is unknown, so nothing is taken to be zero
+        let damage = self.draw(
+            request,
+            &mut target.pixels[..len],
+            full,
+            false,
+            Some(target.missed),
+        )?;
+        self.frame.damage = damage.clone();
+        self.frame.id = RenderFrameId(self.next_id);
+        self.next_id += 1;
+        self.valid = true;
+        Ok((self.frame.id, damage))
+    }
+}
+
+impl<R: GlyphRasterizer> CpuRenderer<R> {
+    /// Draws the frame into `pixels`: the request's damage and what the layers need, all of it when `full`, and for
+    /// lent memory (`missed` set) what it missed, all of it when that is unknown. Returns the rectangles that changed
+    /// since the last frame.
+    fn draw(
+        &mut self,
+        request: &RenderRequest<'_>,
+        pixels: &mut [u8],
+        full: bool,
+        zeroed: bool,
+        missed: Option<Option<&[PixelRect]>>,
+    ) -> Result<Vec<PixelRect>, RenderError> {
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
         let damage: Vec<Bounds> = match (full, request.damage) {
@@ -596,18 +685,40 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             dirty.extend(plans.iter().flat_map(|p| p.frame.iter().copied()));
             geometry::merge(dirty)
         };
+        // lent memory also needs what it missed of the frames shown since it held one
+        let painted = match missed {
+            None => None,
+            Some(_) if full => None,
+            Some(None) => Some(vec![whole]),
+            Some(Some(rects)) => Some(geometry::merge(
+                dirty
+                    .iter()
+                    .copied()
+                    .chain(rects.iter().map(|r| {
+                        Bounds {
+                            x0: r.x as i32,
+                            y0: r.y as i32,
+                            x1: r.x.saturating_add(r.width) as i32,
+                            y1: r.y.saturating_add(r.height) as i32,
+                        }
+                        .intersect(&whole)
+                    }))
+                    .collect(),
+            )),
+        };
+        let painting = painted.as_deref().unwrap_or(&dirty);
         self.stats = RenderStats {
-            dirty_rects: dirty.len() as u32,
-            dirty_pixels: dirty
+            dirty_rects: painting.len() as u32,
+            dirty_pixels: painting
                 .iter()
                 .map(|d| u64::from(d.width()) * u64::from(d.height()))
                 .sum(),
-            frame_bytes: self.frame.pixels.len() as u64,
+            frame_bytes: self.frame_bytes(),
             ..RenderStats::default()
         };
         let painted = self
             .paint_scrolls(request, &kept_in, &plans)
-            .and_then(|()| self.paint(request, &dirty, zeroed, &kept_in, &plans));
+            .and_then(|()| self.paint(request, pixels, painting, zeroed, &kept_in, &plans));
         self.stats.glyph_rasterize = self.glyphs.take_filled();
         self.stats.image_decode = self.images.take_filled();
         if painted.is_err() {
@@ -623,7 +734,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         self.images.trim();
         self.stats.retained_glyphs = self.glyphs.retained();
         self.stats.retained_images = self.images.retained();
-        self.frame.damage = dirty
+        Ok(dirty
             .iter()
             .map(|d| PixelRect {
                 x: d.x0 as u32,
@@ -631,23 +742,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
                 width: d.width(),
                 height: d.height(),
             })
-            .collect();
-        self.frame.id = RenderFrameId(self.next_id);
-        self.next_id += 1;
-        self.valid = true;
-        Ok(self.frame.id)
-    }
-
-    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
-        if self.valid && id == self.frame.id {
-            Ok(&self.frame)
-        } else {
-            Err(RenderError::UnknownFrame(id))
-        }
-    }
-
-    fn drop_layers(&mut self) {
-        self.kept.clear();
+            .collect())
     }
 }
 
@@ -3722,6 +3817,186 @@ mod tests {
                         radius: 6.0,
                     },
                 );
+            }
+        }
+    }
+
+    /// A window's buffers as a window system keeps them: each one's bytes and what it missed of the frames shown since
+    /// it held one, `None` when its pixels are unknown.
+    struct Buffers {
+        pixels: Vec<Vec<u8>>,
+        missed: Vec<Option<Vec<PixelRect>>>,
+    }
+
+    impl Buffers {
+        fn new(count: usize, len: usize) -> Buffers {
+            Buffers {
+                // a buffer's bytes are whatever its memory held
+                pixels: (0..count)
+                    .map(|i| (0..len).map(|b| (b * 31 + i * 7) as u8).collect())
+                    .collect(),
+                missed: vec![None; count],
+            }
+        }
+
+        /// Buffer `at` is shown with `damage`: it holds the frame now, and every other buffer misses the damage.
+        fn shown(&mut self, at: usize, damage: &[PixelRect]) {
+            for (i, missed) in self.missed.iter_mut().enumerate() {
+                if i == at {
+                    *missed = Some(Vec::new());
+                } else if let Some(missed) = missed {
+                    missed.extend_from_slice(damage);
+                }
+            }
+        }
+    }
+
+    /// Frames of a scrolled list whose nodes change now and then, drawn into buffers that take turns, new ones, one the
+    /// compositor holds for frames on end and ones whose pixels are unknown among them, have in every buffer shown the
+    /// bytes the copy path leaves there (the frame drawn into the renderer's own image, its damage and what the buffer
+    /// missed copied over), and tell the same damage; a frame drawn into the renderer's own image between them is drawn
+    /// whole.
+    #[test]
+    fn frames_drawn_into_lent_buffers_have_the_bytes_of_the_copy_path() {
+        // which buffer each frame is drawn into: they take turns, one is held from frames 4 to 8, a fourth is new at
+        // frame 7, and the pixels of buffer 0 are unknown at frame 10
+        let turns = [0, 1, 2, 0, 1, 2, 1, 3, 1, 3, 0, 2, 3, 0];
+        for seed in 0..3 {
+            for scale in [1.0, 1.5, 2.0] {
+                let (width, height) = (
+                    (SCENE.0 * scale).ceil() as u32,
+                    (SCENE.1 * scale).ceil() as u32,
+                );
+                let len = (width * height * 4) as usize;
+                let none = resources();
+                let mut draw = Draw(seed ^ 0x1e45);
+                let mut list = if seed % 2 == 0 {
+                    scene(seed)
+                } else {
+                    harsh(seed)
+                };
+                let mut copying = CpuRenderer::new(layer_config(), NoGlyphs);
+                let mut lent = CpuRenderer::new(layer_config(), NoGlyphs);
+                let (mut copied, mut drawn) = (Buffers::new(4, len), Buffers::new(4, len));
+                let mut offset = cupertino_geometry::Point::new(0.0, 0.0);
+                let mut bar = Color::new(0.95, 0.9, 0.8, 0.6);
+                for (frame, &at) in turns.iter().enumerate() {
+                    let px = |n: i32| f64::from(n) / scale;
+                    offset.y += px(draw.pick(41) as i32 - 20);
+                    let mut rects = Vec::new();
+                    if frame % 2 == 0 {
+                        // the bar over the layer changes colour, only its own box damaged
+                        bar = draw.color();
+                        rects.push(Rect::new(0.0, 0.0, SCENE.0, 14.0));
+                    }
+                    if frame % 5 == 1 {
+                        let i = draw.pick(list.nodes.len() as u32) as usize;
+                        for op in &mut list.nodes[i].ops {
+                            if let PaintOp::Fill { paint, .. } = op {
+                                *paint = Paint::Solid(draw.color());
+                            }
+                        }
+                        // the changed node's box, wherever it shows
+                        rects.push(Rect::new(0.0, 0.0, SCENE.0, SCENE.1));
+                    } else if frame % 3 == 2 {
+                        rects.push(draw.rect(SCENE.0, SCENE.1, 1));
+                    }
+                    if frame == 10 {
+                        copied.missed[0] = None;
+                        drawn.missed[0] = None;
+                    }
+                    let mut current = scrolled(&list, offset, Shape::Rect(VIEW));
+                    for node in current
+                        .nodes
+                        .iter_mut()
+                        .filter(|n| n.id == PaintNodeId(8001))
+                    {
+                        for op in &mut node.ops {
+                            if let PaintOp::Fill { paint, .. } = op {
+                                *paint = Paint::Solid(bar);
+                            }
+                        }
+                    }
+                    let damage = if frame == 5 {
+                        DamageRegion::Full
+                    } else {
+                        DamageRegion::Rects(rects)
+                    };
+                    let request = RenderRequest {
+                        list: &current,
+                        resources: &none,
+                        scale,
+                        width,
+                        height,
+                        damage: &damage,
+                    };
+                    // the copy path: the frame's damage and what the buffer missed copied from the renderer's image
+                    let id = copying.render(&request).unwrap();
+                    let image = copying.frame(id).unwrap();
+                    let copy = match &copied.missed[at] {
+                        Some(missed) => image.damage.iter().chain(missed).copied().collect(),
+                        None => vec![PixelRect {
+                            x: 0,
+                            y: 0,
+                            width,
+                            height,
+                        }],
+                    };
+                    let row = width as usize * 4;
+                    for r in &copy {
+                        for y in r.y..r.y + r.height {
+                            let from = y as usize * row + r.x as usize * 4;
+                            let to = from + r.width as usize * 4;
+                            copied.pixels[at][from..to].copy_from_slice(&image.pixels[from..to]);
+                        }
+                    }
+                    let shown = image.damage.clone();
+                    copied.shown(at, &shown);
+                    // drawn into the lent buffer, but for one frame drawn into the renderer's own image and copied whole
+                    let told = if frame == 8 {
+                        let id = lent.render(&request).unwrap();
+                        let own = lent.frame(id).unwrap();
+                        drawn.pixels[at].copy_from_slice(&own.pixels);
+                        own.damage.clone()
+                    } else {
+                        let missed = drawn.missed[at].clone();
+                        let (_, told) = lent
+                            .render_into(
+                                &request,
+                                MemoryTarget {
+                                    pixels: &mut drawn.pixels[at],
+                                    stride: row,
+                                    missed: missed.as_deref(),
+                                },
+                            )
+                            .unwrap();
+                        assert!(
+                            lent.frame(id).is_err(),
+                            "the renderer's image does not hold it"
+                        );
+                        told
+                    };
+                    let at_frame = format!("seed {seed}, scale {scale}, frame {frame}");
+                    if frame != 8 {
+                        assert_eq!(told, shown, "the damage told, {at_frame}");
+                    }
+                    drawn.shown(at, &told);
+                    if let Some(p) = (0..len / 4).find(|&p| {
+                        drawn.pixels[at][4 * p..4 * p + 4] != copied.pixels[at][4 * p..4 * p + 4]
+                    }) {
+                        panic!(
+                            "{at_frame}: pixel ({}, {}) of buffer {at} is {:?} drawn into it and {:?} copied",
+                            p as u32 % width,
+                            p as u32 / width,
+                            &drawn.pixels[at][4 * p..4 * p + 4],
+                            &copied.pixels[at][4 * p..4 * p + 4],
+                        );
+                    }
+                    assert!(
+                        copied.pixels[at] == image.pixels,
+                        "{at_frame}: the copy is the frame"
+                    );
+                }
             }
         }
     }

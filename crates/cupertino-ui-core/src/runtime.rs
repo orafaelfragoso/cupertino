@@ -3287,6 +3287,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 
 mod drops;
 mod fade;
+mod handover;
 mod morph;
 mod semantics;
 mod ungrabbed;

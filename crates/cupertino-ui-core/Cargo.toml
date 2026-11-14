@@ -11,6 +11,7 @@ layer = "ui"
 [dependencies]
 cupertino-semantics = { path = "../cupertino-semantics" }
 async-task = "4.7"
+cupertino-animation = { path = "../cupertino-animation" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }

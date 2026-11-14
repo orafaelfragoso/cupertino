@@ -851,21 +851,29 @@ impl WaylandWindowSystem {
 
     /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
     /// window's coordinates, as it lies at the window's top left corner.
-    /// Hand `changes` to the presentation of `window`, a surface with a role from [`SurfaceRoles`]; a window that showed
-    /// a frame commits them at once without a buffer, one that did not with its first frame.
+    /// Hand `changes` to the presentation of `window`, a surface with a role from [`SurfaceRoles`] or, where the
+    /// compositor presents popups, a popup; a window that showed a frame commits them at once without a buffer, one that
+    /// did not with its first frame.
     fn present_changes(
         &mut self,
         window: WindowId,
         changes: &[cupertino_ui_platform::PresentChange],
     ) -> Result<(), PlatformError> {
         let w = self.window(window)?;
-        if !matches!(w.kind, Kind::External) {
+        let popup = matches!(w.kind, Kind::Popup(_)) && self.presentations.popups();
+        if !matches!(w.kind, Kind::External) && !popup {
             return Err(PlatformError::Unsupported);
         }
         let (surface, shown) = (w.surface, w.shown.is_some());
         self.presentations
             .change(&self.conn, window, surface, changes)?;
         if shown {
+            // an input region asked for meanwhile goes with the commit: a closing popup takes no input as it fades
+            if let Some(region) = self.window_mut(window)?.input_region.take() {
+                self.conn
+                    .set_input_region(surface, region.as_deref())
+                    .map_err(platform_error)?;
+            }
             self.conn.commit_state(surface).map_err(platform_error)?;
         }
         Ok(())
@@ -1352,6 +1360,7 @@ impl WindowSystem for WaylandWindowSystem {
             app_effects: self.effects.is_some(),
             raised_layer: layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)),
             present_animation: self.presentations.available() && self.roles.is_some(),
+            present_popups: self.presentations.popups(),
         }
     }
 

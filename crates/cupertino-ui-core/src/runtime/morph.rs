@@ -7,15 +7,15 @@
 use super::Runtime;
 use crate::Application;
 use cupertino_geometry::{Point, Rect};
-use cupertino_ui_platform::{MaterialRegion, Timestamp, WindowSystem};
+use cupertino_ui_platform::{MaterialRegion, Timestamp, WindowRequest, WindowSystem};
 use cupertino_ui_render::{DisplayList, Layer, Transform};
 
 /// The scale a popover starts at as it opens.
 pub(crate) const OPEN_START_SCALE: f64 = 0.10;
 /// The response of the spring a popover opens on: the period of its undamped swing, in seconds.
-const OPEN_RESPONSE: f64 = 0.29;
+pub(crate) const OPEN_RESPONSE: f64 = 0.29;
 /// The spring's damping ratio: a little under critical, so the popover passes its size by about 1 % and comes back.
-const OPEN_DAMPING: f64 = 0.82;
+pub(crate) const OPEN_DAMPING: f64 = 0.82;
 /// How long the opening takes until the popover rests at its size, in nanoseconds; it is drawn whole from then on.
 pub(crate) const OPEN_NS: u64 = 350_000_000;
 /// How long a popover takes to shrink back into its anchor as it closes, in nanoseconds.
@@ -157,9 +157,21 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             origin(popup.placed.anchor_rect, placed)
         });
         let reduce_motion = w.env.theme.preferences.reduce_motion;
+        let (id, size) = (w.id, w.size);
+        // a compositor that presents popups grows it on its clock, on the same spring: no frame is drawn for it
+        let handed = !reduce_motion
+            && self.system.capabilities().present_popups
+            && self
+                .system
+                .request(id, WindowRequest::Present(super::handover::grow(at, size)))
+                .is_ok();
         let w = &mut self.windows[i];
         w.grows_from = Some(at);
-        w.grow = Grow::begin(now, at, reduce_motion);
+        w.grow = if handed {
+            None
+        } else {
+            Grow::begin(now, at, reduce_motion)
+        };
     }
 
     /// The growing popovers draw again at each frame, whole once they rest at their size.

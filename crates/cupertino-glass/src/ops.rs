@@ -187,6 +187,27 @@ impl Placement {
     }
 }
 
+/// Uniform block of a mesh draw (`shaders/mesh.wgsl`, `Mesh`): a window snapshot drawn through an effect mesh.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MeshUniform {
+    /// The frame's projection from output pixels to clip space, column-major, each column padded to four floats.
+    pub proj: [[f32; 4]; 3],
+    /// The element's opacity, 0, 0, 0.
+    pub alpha: [f32; 4],
+}
+
+impl MeshUniform {
+    /// The block of a draw through the column-major 3 x 3 `projection` at `alpha`.
+    pub fn new(projection: &[f32; 9], alpha: f32) -> Self {
+        let place = Placement::new(projection, [0.0; 4], false);
+        Self {
+            proj: place.proj,
+            alpha: [alpha, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
 /// Uniform block of a vibrant glyph draw (`vibrant.wgsl`, `Vibrant`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -218,6 +239,25 @@ mod tests {
         assert_eq!(std::mem::size_of::<VibrantUniform>(), 96);
         // a 3 x 3 matrix in std140 is three columns of four floats
         assert_eq!(std::mem::size_of::<Placement>(), 48 + 16 + 16);
+        assert_eq!(std::mem::size_of::<MeshUniform>(), 48 + 16);
+    }
+
+    #[test]
+    fn a_projection_is_written_column_by_column_each_padded() {
+        let m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let p = Placement::new(&m, [1.0, 2.0, 3.0, 4.0], true);
+        assert_eq!(
+            p.proj,
+            [
+                [1.0, 2.0, 3.0, 0.0],
+                [4.0, 5.0, 6.0, 0.0],
+                [7.0, 8.0, 9.0, 0.0]
+            ]
+        );
+        assert_eq!(p.flags, [PLACE_DITHER, 0, 0, 0]);
+        assert_eq!(Placement::new(&m, [0.0; 4], false).flags, [0; 4]);
+        let mesh = MeshUniform::new(&m, 0.25);
+        assert_eq!((mesh.proj, mesh.alpha), (p.proj, [0.25, 0.0, 0.0, 0.0]));
         assert_eq!(std::mem::size_of::<Op>(), 32);
     }
 

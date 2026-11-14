@@ -133,8 +133,20 @@ program!(
     "vibrant"
 );
 
+program!(
+    /// A window snapshot drawn through an effect mesh (the compositor's minimize and close effects): positions at
+    /// location 0 and texture coordinates at location 1, each an `f32` pair.
+    MESH,
+    "mesh"
+);
+/// Where the mesh program binds its block (`MeshUniform`) and its snapshot.
+pub const MESH_BLOCK: (u32, u32) = (0, 0);
+pub const MESH_SNAPSHOT: (u32, u32) = (0, 1);
+
 /// The backdrop passes, which share their block and source binding (`shaders/include/pass.wgsl`).
 pub const PASSES: [Program; 4] = [DOWNSAMPLE, BLUR, COLOR, BLIT];
 
 /// Every generated program of the crate.
-pub const ALL: [Program; 7] = [DOWNSAMPLE, BLUR, COLOR, BLIT, MATERIAL, GLASS, VIBRANT];
+pub const ALL: [Program; 8] = [
+    DOWNSAMPLE, BLUR, COLOR, BLIT, MATERIAL, GLASS, VIBRANT, MESH,
+];

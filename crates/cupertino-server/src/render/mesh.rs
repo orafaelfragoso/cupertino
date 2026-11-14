@@ -23,27 +23,11 @@ use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
 use super::snapshots::SnapshotLease;
 use super::CupertinoElement;
 
-const VERT: &str = "#version 100
-uniform mat3 u_proj;
-attribute vec2 a_pos;
-attribute vec2 a_uv;
-varying vec2 v_uv;
-void main() {
-    vec3 p = u_proj * vec3(a_pos, 1.0);
-    gl_Position = vec4(p.xy, 0.0, 1.0);
-    v_uv = a_uv;
-}
-";
-
-const FRAG: &str = "#version 100
-precision mediump float;
-uniform sampler2D u_tex;
-uniform float u_alpha;
-varying vec2 v_uv;
-void main() {
-    gl_FragColor = texture2D(u_tex, v_uv) * u_alpha;
-}
-";
+/// The uniform block binding of the mesh program.
+const BIND_MESH: u32 = 4;
+/// The vertex attributes of the mesh program: a position and a texture coordinate, each an `f32` pair.
+const ATTRIB_POS: u32 = 0;
+const ATTRIB_UV: u32 = 1;
 
 type GLuint = ffi::types::GLuint;
 type GLint = ffi::types::GLint;
@@ -54,9 +38,8 @@ pub const CAPTURE_V_FLIPPED: bool = false;
 
 struct MeshProgram {
     program: GLuint,
-    proj: GLint,
     tex: GLint,
-    alpha: GLint,
+    ubo: GLuint,
     pos: GLuint,
     uv: GLuint,
 }
@@ -95,11 +78,12 @@ unsafe fn loc(gl: &ffi::Gles2, p: GLuint, name: &str) -> GLint {
 
 impl MeshGl {
     pub fn new(renderer: &mut GlesRenderer) -> Result<SharedMesh, String> {
+        let source = &cupertino_glass::shaders::MESH;
         let prog = renderer
             .with_context(|gl| unsafe {
-                let v = compile(gl, ffi::VERTEX_SHADER, VERT)
+                let v = compile(gl, ffi::VERTEX_SHADER, source.source.vertex_glsl)
                     .map_err(|e| format!("mesh vertex: {e}"))?;
-                let f = compile(gl, ffi::FRAGMENT_SHADER, FRAG)
+                let f = compile(gl, ffi::FRAGMENT_SHADER, source.source.fragment_glsl)
                     .map_err(|e| format!("mesh fragment: {e}"))?;
                 let p = gl.CreateProgram();
                 gl.AttachShader(p, v);
@@ -112,15 +96,30 @@ impl MeshGl {
                 if ok == 0 {
                     return Err("mesh program failed to link".to_string());
                 }
-                let a = CString::new("a_pos").unwrap();
-                let b = CString::new("a_uv").unwrap();
+                // the block and the sampler by the names generated beside the program
+                let (group, binding) = cupertino_glass::shaders::MESH_BLOCK;
+                for block in source.blocks(group, binding) {
+                    let c = CString::new(block.as_str()).unwrap();
+                    let index = gl.GetUniformBlockIndex(p, c.as_ptr());
+                    if index == ffi::INVALID_INDEX {
+                        gl.DeleteProgram(p);
+                        return Err(format!("mesh: no block {block}"));
+                    }
+                    gl.UniformBlockBinding(p, index, BIND_MESH);
+                }
+                let (group, binding) = cupertino_glass::shaders::MESH_SNAPSHOT;
+                let Some(sampler) = source.sampler(group, binding) else {
+                    gl.DeleteProgram(p);
+                    return Err("mesh: no snapshot sampler".to_string());
+                };
+                let mut ubo = 0;
+                gl.GenBuffers(1, &mut ubo);
                 Ok(MeshProgram {
                     program: p,
-                    proj: loc(gl, p, "u_proj"),
-                    tex: loc(gl, p, "u_tex"),
-                    alpha: loc(gl, p, "u_alpha"),
-                    pos: gl.GetAttribLocation(p, a.as_ptr()) as GLuint,
-                    uv: gl.GetAttribLocation(p, b.as_ptr()) as GLuint,
+                    tex: loc(gl, p, &sampler),
+                    ubo,
+                    pos: ATTRIB_POS,
+                    uv: ATTRIB_UV,
                 })
             })
             .map_err(|e| format!("making the context current failed: {e}"))??;
@@ -129,7 +128,10 @@ impl MeshGl {
 
     pub fn destroy(&mut self, renderer: &mut GlesRenderer) {
         if let Some(p) = self.prog.take() {
-            let _ = renderer.with_context(|gl| unsafe { gl.DeleteProgram(p.program) });
+            let _ = renderer.with_context(|gl| unsafe {
+                gl.DeleteProgram(p.program);
+                gl.DeleteBuffers(1, &p.ubo);
+            });
         }
     }
 }
@@ -292,10 +294,21 @@ impl RenderElement<GlesRenderer> for MeshElement {
             let mut prev_buffer = 0;
             gl.GetIntegerv(ffi::ARRAY_BUFFER_BINDING, &mut prev_buffer);
 
+            let mut prev_ubo = 0;
+            gl.GetIntegerv(ffi::UNIFORM_BUFFER_BINDING, &mut prev_ubo);
+
             gl.UseProgram(p.program);
-            gl.UniformMatrix3fv(p.proj, 1, ffi::FALSE, proj.as_ptr());
+            let block = cupertino_glass::ops::MeshUniform::new(&proj, alpha);
+            let bytes = bytemuck::bytes_of(&block);
+            gl.BindBuffer(ffi::UNIFORM_BUFFER, p.ubo);
+            gl.BufferData(
+                ffi::UNIFORM_BUFFER,
+                bytes.len() as isize,
+                bytes.as_ptr() as *const _,
+                ffi::DYNAMIC_DRAW,
+            );
+            gl.BindBufferBase(ffi::UNIFORM_BUFFER, BIND_MESH, p.ubo);
             gl.Uniform1i(p.tex, 0);
-            gl.Uniform1f(p.alpha, alpha);
             gl.BindTexture(ffi::TEXTURE_2D, tex);
             gl.TexParameteri(
                 ffi::TEXTURE_2D,
@@ -386,6 +399,7 @@ impl RenderElement<GlesRenderer> for MeshElement {
                 gl.Disable(ffi::SCISSOR_TEST);
             }
             gl.BindBuffer(ffi::ARRAY_BUFFER, prev_buffer as GLuint);
+            gl.BindBuffer(ffi::UNIFORM_BUFFER, prev_ubo as GLuint);
             gl.BindTexture(ffi::TEXTURE_2D, prev_tex as GLuint);
             gl.ActiveTexture(prev_active as u32);
             gl.UseProgram(prev_program as GLuint);
@@ -426,4 +440,36 @@ pub fn capture(
             .map_err(|e| anyhow!("render snapshot: {e:?}"))?;
     }
     Ok(texture)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cupertino_glass::shaders::{MESH, MESH_BLOCK, MESH_SNAPSHOT};
+
+    #[test]
+    fn the_mesh_is_the_glass_crates_generated_program_fed_at_fixed_locations() {
+        let (vert, frag) = (MESH.source.vertex_glsl, MESH.source.fragment_glsl);
+        assert!(vert.starts_with("#version 300 es") && frag.starts_with("#version 300 es"));
+        // the attributes are bound by location, not looked up by name
+        for location in [ATTRIB_POS, ATTRIB_UV] {
+            assert!(
+                vert.contains(&format!("layout(location = {location}) in vec2 ")),
+                "{location}: {vert}"
+            );
+        }
+        // the projection and the opacity come from one block, read by both stages under a name each
+        let blocks = MESH.blocks(MESH_BLOCK.0, MESH_BLOCK.1);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        for b in &blocks {
+            let decl = format!("uniform {b} {{ Mesh ");
+            assert!(vert.contains(&decl) || frag.contains(&decl), "{b}");
+        }
+        assert!(!vert.contains("uniform mat3 ") && !frag.contains("uniform float "));
+        let sampler = MESH.sampler(MESH_SNAPSHOT.0, MESH_SNAPSHOT.1).unwrap();
+        assert!(frag.contains(&format!("sampler2D {sampler};")), "{frag}");
+        // the block the element uploads is the one the program reads
+        assert_eq!(std::mem::size_of::<cupertino_glass::ops::MeshUniform>(), 64);
+        assert!(MESH.wgsl.contains("proj: mat3x3<f32>") && MESH.wgsl.contains("alpha: vec4<f32>"));
+    }
 }

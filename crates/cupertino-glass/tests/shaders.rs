@@ -93,6 +93,22 @@ fn the_region_blocks_hold_the_rust_uniforms_in_the_wgsl_and_the_generated_glsl()
         assert!(program.wgsl.contains("proj: mat3x3<f32>,"));
     }
     assert_eq!(std::mem::size_of::<Placement>(), 3 * 16 + 16 + 16);
+    // the mesh block: the same projection and the opacity
+    let mesh = cupertino_glass::shaders::MESH;
+    let names: Vec<String> = block_members(mesh.wgsl, "struct Mesh {", true)
+        .into_iter()
+        .map(|(m, _)| m)
+        .collect();
+    assert_eq!(names, ["proj", "alpha"]);
+    assert!(mesh.wgsl.contains("proj: mat3x3<f32>,") && mesh.wgsl.contains("alpha: vec4<f32>,"));
+    assert!(mesh
+        .source
+        .vertex_glsl
+        .contains("mat3x3 proj;\n    vec4 alpha;"));
+    assert_eq!(
+        std::mem::size_of::<cupertino_glass::ops::MeshUniform>(),
+        3 * 16 + 16
+    );
 }
 
 #[test]

@@ -292,6 +292,10 @@ Works with the CPU renderer; no GPU needed.
         moves its subtree's placements by its own offset and keeps its semantics nodes, as paint does.
   - [ ] The names of a row measured before it comes into view, so the frame that brings a row in does not shape its
         text.
+  - Neither was taken up in the round that made damage incremental and the shared-memory copy cheaper (its time went
+    to those and to scene 910). The first can keep a kept node's placements and semantics nodes as one run, as the
+    damage tracker keeps its paint nodes, moved by the node's own offset while its subtree revision and size are the
+    same.
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints
@@ -299,9 +303,13 @@ Works with the CPU renderer; no GPU needed.
       scrolls at whole and fractional offsets walk 2 of 42 nodes, a changed row walks its own, an inactive window all;
       list, own pixels and blank equal a new painter's). A Files scroll frame at scale 1 walks about 60 of 3700 nodes;
       the walk is 0.95 ms p50 from 1.20 at load about 4 ("Measurements", "Step 4", "Third round").
-- [ ] The toolkit's damage phase made incremental: comparing the paint tree with the last frame's is 0.7 ms p50 at
-      scale 1 (load about 4). It needs the comparison skipped for a kept run laid in unchanged, whose nodes moved only
-      by the scroll's offset inside a layer.
+- [x] The toolkit's damage phase made incremental: the damage tracker keeps each kept subtree the painter laid in
+      unwalked as one run of its nodes; laid in again from the same root with the same nodes, they are compared in
+      order with the run, none looked up apart, and any other run gives its nodes back to be compared one by one, so the
+      damage and the commits are those of comparing every node apart
+      (`kept_subtrees_compared_in_one_go_damage_what_every_node_compared_apart_damages`: scrolls, changed and dropped
+      rows and an inactive window against a tracker comparing each node; a scroll over unchanged rows looks up the
+      view, its pile and the rows across the viewport's edges, of which more or less shows).
 - [x] A kept opaque scroll layer laid over by copy rather than by blending, with the background behind it baked in: the
       layer is laid over the background colour pending under it in one pass, its empty runs writing the colour and
       its opaque runs copied (`a_layer_laid_over_its_background_in_one_pass_has_the_bytes_of_the_background_written_and_laid_over`,
@@ -311,24 +319,43 @@ Works with the CPU renderer; no GPU needed.
       cut into rectangles that do not overlap, where a scroll converted the moved viewport once for each
       (`overlapping_rectangles_become_ones_that_hold_each_pixel_of_their_union_once`). Copy p50 3.2–4.6 ms at scale 1,
       from 8.9.
-- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy's p99 stays at
-      20.3–20.6 ms, the frames that convert a whole buffer (a buffer new to the window, or one whose pixels are
-      unknown). Rendering straight into the buffer needs the buffer in the renderer's byte order (`abgr8888`, which
-      the window system offers when the compositor's renderer takes it; the toolkit asks for `argb8888` and swaps the
-      channels as it copies), the renderer drawing into a buffer it borrows rather than its own pixmap, and what the
-      buffer missed repainted by its age, not copied from the last frame; or the GPU path of step 6. On the GPU path
-      (`CUPERTINO_RENDERER=gpu`) the frame is copied from the renderer's texture into the dmabuf on the GPU: 0.07–0.12
-      ms p50 and 0.6–0.75 ms p99 at 1.5 ("Measurements", "Step 6: Files on the GPU path"); the CPU path keeps its
-      copy until step 7 turns the GPU on.
-- [ ] The CPU renderer's kept image of content with a blur or shadow is its picture in place: drawn whole at offset
-      0, scene 910 of `cupertino-ui-gpu`'s `parity::scroll_layers_drawn_whole_match_the_cpu` parts from the same list
-      drawn without the layer by up to 6/255 on up to 30 pixels at the viewport's first column and rows, where the GPU
-      renderer's kept texture and both renderers' pictures in place agree within 1/255. That test runs scenes 900 to
-      909 until this is found. Narrowed: the scene's parting comes from two blur groups, one inside the other (radii
-      5.1 and 5.6), over a gradient fill that lies just outside the viewport's start edge (window x 0.1 to 3.1, the
-      viewport starting at 4). Moving the fill inside the viewport or dropping either group removes it; one blur
-      group alone across the edge does not part. Still to find: how the CPU layer's image bounds the inner group's
-      blur source where it crosses the layer's edge, against the outer group's.
+- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy's p99 stayed at
+      20.3–26.4 ms, the frames that convert a whole buffer (a buffer new to the window, or one whose pixels are
+      unknown). Timed on the target machine, writing a 3840 x 2160 buffer whose pages are new costs 19–28 ms, nearly
+      all of it the kernel making and zeroing its pages; converting the pixels of a buffer written before costs 5 ms and
+      copying them as they are 1.6–3 ms. So those frames cost the same written by the renderer or by the copy. Split:
+  - [x] The buffer in the renderer's byte order: `abgr8888` where the compositor lists it (`Connection::offers`), the
+        frame's bytes copied as they are; `argb8888`, converted, elsewhere
+        (`abgr8888_is_offered_where_the_compositor_lists_it_and_its_buffers_are_committed_so`,
+        `every_buffer_shown_holds_the_whole_frame_in_either_byte_order`: frames of changing damage through buffers
+        taking turns, new ones among them, hold the whole frame in both byte orders).
+  - [x] A buffer's pages made off the frame: a surface drawing frame after frame whose buffers of its size are all in
+        use has the memory of its next one made and mapped on a thread of its own, the first buffer of a size makes
+        none (a resize), a pause lets an unused one go, and the first frame after a pause that has to make a buffer
+        beside one the compositor holds starts the next one's
+        (`a_surface_drawing_frame_after_frame_makes_its_next_buffer_ahead_and_lets_it_go_after_a_pause`,
+        `a_spare_buffer_s_memory_is_made_whole_and_zeroed_on_its_own_thread`). A buffer that missed more than 32
+        rectangles misses their bounds rather than all of it
+        (`a_buffer_that_missed_many_frames_misses_their_bounds_and_knows_its_other_pixels`).
+  - [ ] The renderer drawing into the leased buffer rather than its own pixmap, what the buffer missed repainted by
+        its age: removes the copy that is left, the moved viewport of every scroll frame. It needs the window system
+        to lease the buffer before the frame is drawn and hand the renderer its memory and what it missed, and the CPU
+        renderer to draw the frame's damage and the missed rectangles into memory it does not own; a buffer new to the
+        window is then drawn whole. Not taken up in this round's time. With the two items above the copy's p50 is
+        3.1–5.3 ms and its p99 still 19–20 ms; at the loads measured the slow copies are not only those of new
+        buffers but frames in the middle of a scroll, all three buffers made, whose copy of the moved viewport took
+        6–25 ms ("Measurements", "Step 4", "Fourth round").
+  - On the GPU path (`CUPERTINO_RENDERER=gpu`) the frame is copied from the renderer's texture into the dmabuf on
+    the GPU: 0.07–0.12 ms p50 and 0.6–0.75 ms p99 at 1.5 ("Measurements", "Step 6: Files on the GPU path").
+- [x] The CPU renderer's kept image of content with a blur or shadow is its picture in place. Scene 910 of
+      `cupertino-ui-gpu`'s `parity::scroll_layers_drawn_whole_match_the_cpu` parted by up to 6/255 on up to 30
+      pixels at the viewport's first column and rows: painting in place cuts what a group reads at the window's edges,
+      and the layer's image, whose scratch images follow the nodes' own extents, did not, so the two nested blurs
+      carried a fill lying past the window's start edge into the viewport; and the image took only the nodes that reach
+      the rows being painted, leaving out of a group the nodes its blur carries in. A group in the image is now painted
+      with all of its subtree, and what a group or a layer of effects reads is cut at the window's edges moved by the
+      layer's offset (`a_kept_layer_s_blurred_groups_read_only_what_the_window_holds_as_in_place`, which fails with
+      either change undone); the parity test runs scenes 900 to 910.
 
 Gate:
 
@@ -337,8 +364,12 @@ Gate:
       36.6–41.0 ms at 1.5 before the third round, 39.3–67.5 and 41.3–64.8 after it under a heavier load, against 8 ms
       (79.3 and 126.4 ms at step 0); painting covers the exposed strip, compositing and copying the whole viewport. GPU
       (`CUPERTINO_RENDERER=gpu`): p99 8.4–10.6 ms at scale 1 and 21.6–35.3 at 1.5 before, 11.4–17.8 and 10.8–14.8 after,
-      with frame p50 4.0–4.1 ms at 1.5 from 6.6 ("Measurements", "Step 4", "Third round"). The unticked items above are
-      what remains of it; on the CPU path the copy's p99 alone is over the budget.
+      with frame p50 4.0–4.1 ms at 1.5 from 6.6 ("Measurements", "Step 4", "Third round"). After the fourth round, at
+      loads of 13 falling to 5: CPU p99 40.0 ms at scale 1 and 39.8 at 1.5 (frame p50 22.0 and 17.9); GPU p99 5.9 ms at
+      scale 1 (load 7.9 to 4.6) and 8.5 at 1.5 (load 4.6 to 5.3), frame p50 3.2 and 2.6 ("Measurements", "Step 4",
+      "Fourth round"). So the GPU path meets the budget at scale 1 in two runs of three (5.6, 5.9; the third 11.7) and
+      at 1.5 in one of three (7.2; 8.5, 10.0), at these loads only; the CPU path misses it at both, its copy's p99
+      alone over the budget. The unticked items above are what remains of it.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1753,6 +1784,48 @@ solve, 1.8 to place, 1.5 for semantics and 2.0 to compare, and the walk 3.6 ms w
 No pixel changed: a kept run is laid in only where the subtree, its ground and its order in the paint are those it was
 painted with, and each node of it is built by the same function a walk uses; the test compares the list, the own
 pixels and the blank region with a new painter's after every scroll. No golden is re-recorded.
+
+#### Fourth round: damage runs, the buffer's byte order and its pages
+
+The same scenario and machine, release builds, three runs per configuration, other agents building and testing beside
+it; the load average is recorded before and after each configuration's runs. Before is the third round's after
+(`0059ca5ec`, its second measurement); after is `61777874d`. The round's commits are `bdb49dcd3` (`abgr8888` copied as
+it is, the next buffer's pages made on a thread of their own), `10e965481` (scene 910: a kept layer's groups read what
+the window holds) and `af6708a74` (kept subtrees compared in one go); `db9b9199e` (the first frame after a pause that
+makes a buffer starts the next one's) came after the three runs and is measured in one run below. Medians of the three
+runs, the frame p99's range across them in brackets.
+
+| Files two-finger scroll, client frame ms | Before | After |
+|---|---|---|
+| CPU, scale 1: load | 8.0 to 8.7 | 13.3 to 10.1 |
+| CPU, scale 1: frames, frame p50, p99 | 84, 17.7, 62.6 (49.9–66.4) | 77, 22.0, 40.0 (38.9–62.7) |
+| CPU, scale 1: layout, paint, raster, copy p50 | 1.5, 3.2, –, – | 3.1, 3.1, 8.3, 4.9 |
+| CPU, scale 1: raster, copy p99 | 17.4, 26.4 | 13.9, 20.3 |
+| CPU, scale 1.5: load | 8.1 to 6.9 | 10.1 to 7.9 |
+| CPU, scale 1.5: frames, frame p50, p99 | 107, 18.7, 46.5 (42.6–64.8) | 109, 17.9, 39.8 (34.3–39.9) |
+| CPU, scale 1.5: layout, paint, raster, copy p50 | 1.2, 1.3, –, – | 1.2, 1.2, 8.7, 4.8 |
+| CPU, scale 1.5: raster, copy p99 | 19.8, 24.8 | 13.4, 19.6 |
+| GPU, scale 1: load | 8.7 to 8.1 | 7.9 to 4.6 |
+| GPU, scale 1: frames, frame p50, p99 | 172, 6.1, 13.4 (11.4–17.8) | 183, 3.2, 5.9 (5.6–11.7) |
+| GPU, scale 1: layout, paint, raster, copy p50 | 1.4, 3.1, –, – | 0.7, 1.5, 0.9, 0.1 |
+| GPU, scale 1.5: load | 6.9 to 7.3 | 4.6 to 5.3 |
+| GPU, scale 1.5: frames, frame p50, p99 | 182, 4.1, 11.2 (10.8–14.8) | 183, 2.6, 8.5 (7.2–10.0) |
+| GPU, scale 1.5: layout, paint, raster, copy p50 | 0.6, 1.1, –, – | 0.4, 1.1, 0.9, 0.1 |
+
+The after runs' phase p99s: CPU at scale 1 update 0.7, view 4.6, layout 8.2, paint 5.7; at 1.5 0.3, 3.3, 3.2, 2.9;
+GPU at scale 1 view 1.3, layout 1.5, paint 2.0, raster 2.3, copy 0.6; at 1.5 2.2, 1.8, 1.5, 2.6, 0.8.
+
+The CPU copy's p50 and p99 barely moved: copied as it is or converted, the moved viewport of a scroll frame is about
+33 MB at scale 1, and beside the other builds the copy is bound by memory more than by the conversion. Single CPU
+runs at scale 1 with each frame's timings kept: at `61777874d` (load 6.8 to 9.3) frame p50 22.3, p99 68.0, copy p50
+5.3 and p99 31.4; at `db9b9199e` (load 8.6 to 4.9) frame p50 12.2, p99 32.8, copy p50 3.1 and p99 19.4. In both, the
+copies over 8 ms are the scroll's first two frames (19–36 ms) and frames in its middle, all three buffers made, whose
+copy took 6–25 ms with the raster around them slow as well; the spare made at the first frame of the scroll did not
+bring its second under 19 ms at that load. The frame p99s follow the load more than any change of this round.
+
+No pixel changed: the byte copy writes the bytes the conversion wrote in the compositor's other order
+(`every_buffer_shown_holds_the_whole_frame_in_either_byte_order`), the damage runs damage and commit what comparing every
+node apart does, and the scene 910 change makes the kept image the picture painted in place. No golden is re-recorded.
 
 ## Decisions taken
 

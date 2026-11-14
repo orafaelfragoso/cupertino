@@ -2,10 +2,11 @@
 //! the compositor until it releases it.
 
 use crate::Error;
-use memmap2::MmapMut;
-use rustix::fs::{memfd_create, MemfdFlags};
+use memmap2::{MmapMut, MmapOptions};
+use rustix::fs::{fallocate, memfd_create, FallocateFlags, MemfdFlags};
 use std::fs::File;
 use std::os::fd::AsFd;
+use std::thread::JoinHandle;
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
@@ -14,21 +15,30 @@ use wayland_client::{Dispatch, QueueHandle};
 /// The most buffers a surface keeps: one on screen, one the compositor may still read, one to draw into.
 pub(crate) const MAX_SLOTS: usize = 3;
 
-/// Pixel formats every compositor supports (`wl_shm` requires both).
+/// Pixel formats of a buffer. `wl_shm` requires every compositor to take the first two; the others only where it
+/// lists them ([`Connection::offers`](crate::Connection::offers)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BufferFormat {
     /// Premultiplied alpha; a little-endian 32-bit word, bytes B, G, R, A in memory.
     Argb8888,
     /// Opaque; the fourth byte is ignored.
     Xrgb8888,
+    /// Premultiplied alpha; a little-endian 32-bit word, bytes R, G, B, A in memory.
+    Abgr8888,
 }
 
 impl BufferFormat {
-    fn wire(self) -> wl_shm::Format {
+    pub(crate) fn wire(self) -> wl_shm::Format {
         match self {
             BufferFormat::Argb8888 => wl_shm::Format::Argb8888,
             BufferFormat::Xrgb8888 => wl_shm::Format::Xrgb8888,
+            BufferFormat::Abgr8888 => wl_shm::Format::Abgr8888,
         }
+    }
+
+    /// Whether every compositor takes the format, listed or not.
+    pub(crate) fn required(self) -> bool {
+        matches!(self, BufferFormat::Argb8888 | BufferFormat::Xrgb8888)
     }
 }
 
@@ -93,7 +103,7 @@ impl PixelRect {
             self.x.saturating_add(self.width).min(layout.width()),
             self.y.saturating_add(self.height).min(layout.height()),
         );
-        (self.x < x1 && self.y < y1).then_some(PixelRect {
+        (self.x < x1 && self.y < y1).then(|| PixelRect {
             x: self.x,
             y: self.y,
             width: x1 - self.x,
@@ -102,7 +112,7 @@ impl PixelRect {
     }
 }
 
-/// More rectangles than this make a buffer forget what it missed.
+/// More rectangles than this make a buffer miss their bounds instead.
 const MAX_MISSED: usize = 32;
 
 /// What a buffer misses of the frames shown since it last held one: `None` when its pixels are unknown.
@@ -119,11 +129,15 @@ impl Missed {
         self.0 = Some(Vec::new());
     }
 
-    /// Another buffer of the same layout showed a frame that changed `damage`; `None` for all of it.
+    /// Another buffer of the same layout showed a frame that changed `damage`; `None` for all of it. Past
+    /// [`MAX_MISSED`] rectangles the buffer misses their bounds, so its other pixels stay known.
     pub(crate) fn passed(&mut self, damage: Option<&[PixelRect]>) {
         self.0 = match (self.0.take(), damage) {
-            (Some(mut missed), Some(rects)) if missed.len() + rects.len() <= MAX_MISSED => {
+            (Some(mut missed), Some(rects)) => {
                 missed.extend_from_slice(rects);
+                if missed.len() > MAX_MISSED {
+                    missed = vec![bounds(&missed)];
+                }
                 Some(missed)
             }
             _ => None,
@@ -132,6 +146,92 @@ impl Missed {
 
     pub(crate) fn forget(&mut self) {
         self.0 = None;
+    }
+}
+
+/// The rectangle around every one of `rects`, which are not empty.
+fn bounds(rects: &[PixelRect]) -> PixelRect {
+    let (x0, y0, x1, y1) = rects
+        .iter()
+        .fold((u32::MAX, u32::MAX, 0, 0), |(x0, y0, x1, y1), r| {
+            (
+                x0.min(r.x),
+                y0.min(r.y),
+                x1.max(r.x + r.width),
+                y1.max(r.y + r.height),
+            )
+        });
+    PixelRect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    }
+}
+
+/// The shared memory of one buffer: the file the compositor maps and the client's own map of it.
+pub(crate) struct Memory {
+    file: File,
+    map: MmapMut,
+}
+
+impl Memory {
+    /// `len` bytes of zeros, whose pages are made as they are first written.
+    fn new(len: usize) -> Result<Memory, Error> {
+        let file = Self::file(len)?;
+        // SAFETY: the memfd is private to this process and the compositor; neither truncates it.
+        let map = unsafe { MmapMut::map_mut(&file) }.map_err(Error::Io)?;
+        Ok(Memory { file, map })
+    }
+
+    /// `len` bytes of zeros with every page made and mapped already, so that writing the first frame into it costs
+    /// what writing into a buffer drawn before does: making the pages of a buffer the size of a large display costs
+    /// several times more than writing all of its pixels.
+    fn prepared(len: usize) -> Result<Memory, Error> {
+        let file = Self::file(len)?;
+        // a file system without it makes the pages as they are mapped below
+        let _ = fallocate(&file, FallocateFlags::empty(), 0, len as u64);
+        // SAFETY: as in `new`.
+        let map = unsafe { MmapOptions::new().populate().map_mut(&file) }.map_err(Error::Io)?;
+        Ok(Memory { file, map })
+    }
+
+    fn file(len: usize) -> Result<File, Error> {
+        let fd = memfd_create("cupertino-wayland-client", MemfdFlags::CLOEXEC)
+            .map_err(|e| Error::Io(e.into()))?;
+        let file = File::from(fd);
+        file.set_len(len as u64).map_err(Error::Io)?;
+        Ok(file)
+    }
+}
+
+/// The memory of a surface's next buffer, made on a thread of its own while the surface draws into the buffers it
+/// has: a surface that draws frame after frame comes to need one buffer more than it has, and making that buffer on
+/// the frame that needs it would cost the frame the pages of a whole buffer.
+pub(crate) struct Spare {
+    len: usize,
+    making: JoinHandle<Result<Memory, Error>>,
+}
+
+impl Spare {
+    /// Starts making the memory of a buffer of `layout`; `None` when no thread can be started.
+    pub(crate) fn start(layout: BufferLayout) -> Option<Spare> {
+        let len = layout.buffer_len();
+        std::thread::Builder::new()
+            .name("cupertino-shm-spare".into())
+            .spawn(move || Memory::prepared(len))
+            .ok()
+            .map(|making| Spare { len, making })
+    }
+
+    /// Whether the memory is that of a buffer of `layout`.
+    pub(crate) fn fits(&self, layout: BufferLayout) -> bool {
+        self.len == layout.buffer_len()
+    }
+
+    /// The memory, waiting for it if it is still being made; `None` when it could not be made.
+    pub(crate) fn take(self) -> Option<Memory> {
+        self.making.join().ok().and_then(Result::ok)
     }
 }
 
@@ -154,22 +254,21 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
+    /// A buffer of `layout` in `memory` (of its size), or in memory made now.
     pub(crate) fn new<D>(
         shm: &WlShm,
         qh: &QueueHandle<D>,
         tag: SlotTag,
         layout: BufferLayout,
+        memory: Option<Memory>,
     ) -> Result<Self, Error>
     where
         D: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, SlotTag> + 'static,
     {
-        let fd = memfd_create("cupertino-wayland-client", MemfdFlags::CLOEXEC)
-            .map_err(|e| Error::Io(e.into()))?;
-        let file = File::from(fd);
-        file.set_len(layout.buffer_len() as u64)
-            .map_err(Error::Io)?;
-        // SAFETY: the memfd is private to this process and the compositor; neither truncates it.
-        let map = unsafe { MmapMut::map_mut(&file) }.map_err(Error::Io)?;
+        let Memory { file, map } = match memory {
+            Some(memory) if memory.map.len() == layout.buffer_len() => memory,
+            _ => Memory::new(layout.buffer_len())?,
+        };
         let pool = shm.create_pool(file.as_fd(), layout.buffer_len() as i32, qh, ());
         let buffer = pool.create_buffer(
             0,
@@ -301,7 +400,32 @@ mod tests {
         missed.shown();
         missed.passed(Some(&vec![r(0); MAX_MISSED]));
         assert_eq!(missed.rects().map(<[_]>::len), Some(MAX_MISSED));
-        missed.passed(Some(&[r(0)]));
-        assert_eq!(missed.rects(), None, "too many rectangles");
+        missed.passed(Some(&[r(5)]));
+        let around = PixelRect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 1,
+        };
+        assert_eq!(
+            missed.rects(),
+            Some(&[around][..]),
+            "too many rectangles become their bounds"
+        );
+    }
+
+    #[test]
+    fn a_spare_buffer_s_memory_is_made_whole_and_zeroed_on_its_own_thread() {
+        let layout = BufferLayout::new(64, 48, BufferFormat::Abgr8888).unwrap();
+        let spare = Spare::start(layout).unwrap();
+        assert!(spare.fits(layout));
+        assert!(!spare.fits(BufferLayout::new(64, 49, BufferFormat::Abgr8888).unwrap()));
+        let memory = spare.take().unwrap();
+        assert_eq!(memory.map.len(), layout.buffer_len());
+        assert!(memory.map.iter().all(|&b| b == 0));
+        assert_eq!(
+            memory.file.metadata().unwrap().len(),
+            layout.buffer_len() as u64
+        );
     }
 }

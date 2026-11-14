@@ -32,7 +32,9 @@ tracker uses the same rule. The CPU renderer keeps each such layer as an image o
 pixels, its rows a ring, so a vertical scroll moves no pixel and paints only the rows that come into view and what
 changed in the layer; a horizontal scroll or a change of the viewport paints it whole. A layer new to a frame is laid
 over only where the frame is damaged, as its nodes are all new to it and damage what they draw. Inside a layer each node's
-scratch image follows the node's own extent, never the damage or the image, and a node too large for one is painted
+scratch image follows the node's own extent, never the damage or the image; a group in it is painted with all of its
+subtree, whatever rows are painted, and what a group or a layer of effects reads is cut at the window's edges moved by
+the layer's offset, as painting in place cuts it, so a blur carries in the same pixels; and a node too large for one is painted
 in 1024-pixel squares fixed in the content, so a row painted as it scrolls in has the bytes of the same row in a layer
 painted whole: a test scrolls random scenes up, down, sideways and past the viewport at scales 1, 1.5 and 2, changing
 nodes on the way, and checks every frame against one drawn whole. The layer is laid over the frame where every clip

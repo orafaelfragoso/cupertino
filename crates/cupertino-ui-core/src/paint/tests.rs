@@ -2329,3 +2329,70 @@ fn a_kept_subtree_that_did_not_change_is_laid_in_as_it_was_unwalked_and_the_list
     );
     assert_eq!(paints.get(), before + 20);
 }
+
+/// The damage of each frame of kept rows scrolled, changed, dropped and painted whole, as a tracker that compares the
+/// kept subtrees in one go finds it, against one that compares every node apart: the same rectangles and the same
+/// commits, while a scroll over unchanged rows looks up only the nodes it walked.
+#[test]
+fn kept_subtrees_compared_in_one_go_damage_what_every_node_compared_apart_damages() {
+    use crate::damage::DamageTracker;
+    use cupertino_ui_render::DamageRegion;
+    let sorted = |damage: DamageRegion| match damage {
+        DamageRegion::Full => None,
+        DamageRegion::Rects(mut rects) => {
+            rects.sort_by(|a, b| {
+                (a.min_y(), a.min_x(), a.max_y(), a.max_x())
+                    .partial_cmp(&(b.min_y(), b.min_x(), b.max_y(), b.max_x()))
+                    .unwrap()
+            });
+            Some(rects)
+        }
+    };
+    let paints = Rc::default();
+    let env = env();
+    let mut tones = vec![0.5_f32; 20];
+    let mut tree = Tree::<M>::new(100);
+    let root = tree
+        .reconcile(None, kept_rows(&paints, &tones, 0.0))
+        .unwrap();
+    let mut painter = Painter::default();
+    let (mut in_runs, mut apart) = (DamageTracker::default(), DamageTracker::default());
+    // (offset, the row given a new tone, how many rows, the window active)
+    let frames: [(f64, Option<usize>, usize, bool); 11] = [
+        (0.0, None, 20, true),
+        (7.0, None, 20, true),
+        (13.5, None, 20, true),
+        (13.5, None, 20, true),
+        (20.0, Some(3), 20, true),
+        (40.0, None, 20, true),
+        (40.0, None, 18, true),
+        (33.0, Some(17), 18, true),
+        (33.0, None, 18, false),
+        (26.0, None, 18, false),
+        (26.0, None, 18, true),
+    ];
+    for (frame, &(offset, changed, rows, active)) in frames.iter().enumerate() {
+        if let Some(row) = changed {
+            tones[row] += 0.125;
+        }
+        tree.reconcile(Some(root), kept_rows(&paints, &tones[..rows], offset))
+            .unwrap();
+        let painting = paint_laid_out(&mut painter, &tree, root, &env, active);
+        let found = sorted(in_runs.damage(&painting));
+        let mut whole = painting;
+        whole.kept_runs.clear();
+        let each = sorted(apart.damage(&whole));
+        assert_eq!(found, each, "frame {frame}");
+        assert_eq!(in_runs.repainted(), apart.repainted(), "frame {frame}");
+        assert_eq!(apart.looked_up, whole.list.nodes.len());
+        // the first frame that lays the rows in looks them up and keeps them as runs; a scroll after it looks up the
+        // view, its pile and the rows across the viewport's edges, of which more or less shows, and a frame that moves
+        // nothing the view and its pile alone
+        if frame == 2 {
+            assert!(in_runs.looked_up <= 2 + 3 * 2, "{}", in_runs.looked_up);
+        }
+        if frame == 3 {
+            assert_eq!(in_runs.looked_up, 2);
+        }
+    }
+}

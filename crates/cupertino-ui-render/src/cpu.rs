@@ -220,6 +220,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             views: &views,
             groups: Some(&mut self.kept.groups),
             group_room,
+            window: whole,
         };
         for d in dirty {
             let hidden = if self.fast {
@@ -436,6 +437,10 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 views: &[],
                 groups: None,
                 group_room: 0,
+                window: {
+                    let shift = device_shift(plan.offset, scale);
+                    Bounds::of_size(request.width, request.height).offset(shift.0, shift.1)
+                },
             };
             let (width, height) = (image.pixels.width(), image.pixels.height());
             let stride = width as usize * 4;
@@ -530,6 +535,9 @@ fn in_content(
     let layer = list.nodes[plan.index].id;
     let (dx, dy) = (plan.offset.x, plan.offset.y);
     let mut taken: HashSet<PaintNodeId> = HashSet::new();
+    // the taken nodes inside a group: a group paints its whole subtree, whatever the pixels asked for, since its blurs
+    // and shadows carry what lies outside them into them
+    let mut grouped: HashSet<PaintNodeId> = HashSet::new();
     let mut nodes = Vec::new();
     for (node, _) in list
         .nodes
@@ -539,12 +547,16 @@ fn in_content(
     {
         let parent_taken =
             node.parent == Some(layer) || node.parent.is_some_and(|p| taken.contains(&p));
+        let in_group = node.parent.is_some_and(|p| grouped.contains(&p));
         let bounds = node.bounds.translate(dx, dy);
         let reach = Bounds::of_rect(&bounds, scale);
-        if !parent_taken || !rects.iter().any(|r| reach.touches(r)) {
+        if !parent_taken || !(in_group || rects.iter().any(|r| reach.touches(r))) {
             continue;
         }
         taken.insert(node.id);
+        if in_group || node.group.is_some() {
+            grouped.insert(node.id);
+        }
         let mut moved = node.clone();
         moved.transform.0[4] += dx;
         moved.transform.0[5] += dy;
@@ -784,6 +796,9 @@ struct Painter<'a, R> {
     /// The kept groups, by node, when the painter paints the frame; and the bytes more of them may hold.
     groups: Option<&'a mut HashMap<PaintNodeId, GroupImage>>,
     group_room: u64,
+    /// The window's pixels where the painter paints, which bound what a group or a layer of effects reads, as
+    /// painting in place does: in a scroll layer's image, the window moved by the layer's offset.
+    window: Bounds,
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
@@ -1089,7 +1104,9 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         // shadows read the same ones in every frame
         let halo = node_support(node, self.scale);
         let area = bounded(
-            Bounds::of_rect(&node.bounds, self.scale).intersect(&t.space),
+            Bounds::of_rect(&node.bounds, self.scale)
+                .intersect(&t.space)
+                .intersect(&self.window),
             t,
             halo,
         );
@@ -1858,7 +1875,11 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
     ) -> Result<(), RenderError> {
         // the layer's whole reach, whatever the damage, as for a group
         let area = bounded(
-            reach.extent.outset(reach.halo).intersect(&t.space),
+            reach
+                .extent
+                .outset(reach.halo)
+                .intersect(&t.space)
+                .intersect(&self.window),
             t,
             reach.halo,
         );
@@ -3741,6 +3762,80 @@ mod tests {
                     "seed {seed}, scale {scale}: {worst}/255 from the picture drawn in place"
                 );
             }
+        }
+    }
+
+    /// Blurred groups, one inside the other, over fills outside the layer's viewport but close enough for the blurs to
+    /// carry them in, one past the window's start edge and one inside the window: a group's image in the layer holds
+    /// all of its subtree, not only the nodes that reach the rows being painted, and the window cuts what a group reads
+    /// in the layer's image as it does in place, so the image is the picture in place.
+    #[test]
+    fn a_kept_layer_s_blurred_groups_read_only_what_the_window_holds_as_in_place() {
+        let blur = |radius| {
+            Some(crate::Group {
+                opacity: 1.0,
+                effects: vec![crate::Effect::Blur { radius }],
+            })
+        };
+        let everywhere = Rect::new(-40.0, -40.0, SCENE.0 + 80.0, SCENE.1 + 80.0);
+        let mut outer = plain(1, None, (0.0, 0.0), Vec::new());
+        outer.group = blur(12.0);
+        let mut inner = plain(2, Some(1), (0.0, 0.0), Vec::new());
+        inner.group = blur(14.0);
+        outer.bounds = everywhere;
+        inner.bounds = everywhere;
+        let fill = |id, rect: Rect| {
+            let mut fill = plain(
+                id,
+                Some(2),
+                (0.0, 0.0),
+                vec![PaintOp::Fill {
+                    shape: Shape::Rect(rect),
+                    paint: Paint::Solid(Color::new(0.9, 0.2, 0.1, 1.0)),
+                }],
+            );
+            fill.bounds = rect;
+            fill
+        };
+        let content = DisplayList {
+            nodes: vec![
+                outer,
+                inner,
+                // past the window's start edge
+                fill(3, Rect::new(-12.0, 20.0, 11.0, 10.0)),
+                // in the window, before the viewport's start edge
+                fill(4, Rect::new(1.0, 40.0, VIEW.min_x() - 2.0, 10.0)),
+            ],
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let layered = scrolled(
+                &content,
+                cupertino_geometry::Point::new(0.0, 0.0),
+                Shape::Rect(VIEW),
+            );
+            let mut in_place = layered.clone();
+            for node in &mut in_place.nodes {
+                node.layer = None;
+            }
+            let [a, b] = [&layered, &in_place].map(|list| {
+                draw_frame(
+                    &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                    list,
+                    &DamageRegion::Full,
+                    scale,
+                )
+            });
+            let worst = a
+                .pixels
+                .iter()
+                .zip(&b.pixels)
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap();
+            assert!(
+                worst <= 2,
+                "scale {scale}: {worst}/255 from the picture drawn in place"
+            );
         }
     }
 

@@ -30,6 +30,24 @@ pub(crate) fn convert_rects(
     }
 }
 
+/// The bytes of `rects` (inside both buffers) copied as they are, for a buffer in the renderer's own byte order
+/// (`abgr8888`, bytes R, G, B, A in memory), with rows `from_stride` and `to_stride` bytes apart.
+pub(crate) fn copy_rects(
+    from: &[u8],
+    from_stride: usize,
+    to: &mut [u8],
+    to_stride: usize,
+    rects: &[PixelRect],
+) {
+    for r in rects {
+        let (start, len) = (r.x as usize * 4, r.width as usize * 4);
+        for row in r.y as usize..(r.y + r.height) as usize {
+            let (a, b) = (row * from_stride + start, row * to_stride + start);
+            to[b..b + len].copy_from_slice(&from[a..a + len]);
+        }
+    }
+}
+
 /// The pixels of `rects` as rectangles that do not overlap, each pixel of their union in exactly one: a frame's
 /// damage and what its buffer missed of the frames shown since often cover the same pixels (a scroll damages the whole
 /// moved viewport every frame), and each pixel needs converting once.
@@ -122,6 +140,33 @@ mod tests {
         for rects in cases {
             let union: Vec<u32> = coverage(&rects).into_iter().map(|c| c.min(1)).collect();
             assert_eq!(coverage(&disjoint(&rects)), union, "{rects:?}");
+        }
+    }
+
+    #[test]
+    fn a_buffer_in_the_renderer_s_byte_order_takes_the_rectangles_bytes_as_they_are() {
+        let (width, height) = (40usize, 30usize);
+        let from: Vec<u8> = (0..width * height * 4).map(|i| (i % 251) as u8).collect();
+        // the buffer's rows are wider than the frame's
+        let to_stride = (width + 3) * 4;
+        let mut to = vec![0xAAu8; to_stride * height];
+        let rects = [rect(3, 4, 5, 6), rect(30, 0, 10, 30)];
+        copy_rects(&from, width * 4, &mut to, to_stride, &rects);
+        for y in 0..height {
+            for x in 0..width + 3 {
+                let inside = rects.iter().any(|r| {
+                    (r.x as usize..(r.x + r.width) as usize).contains(&x)
+                        && (r.y as usize..(r.y + r.height) as usize).contains(&y)
+                });
+                for c in 0..4 {
+                    let want = if inside {
+                        from[y * width * 4 + x * 4 + c]
+                    } else {
+                        0xAA
+                    };
+                    assert_eq!(to[y * to_stride + x * 4 + c], want, "({x}, {y})");
+                }
+            }
         }
     }
 

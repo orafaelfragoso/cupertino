@@ -39,7 +39,10 @@ all on one thread.
   changes when it or any descendant is marked or built again) and the ground it was painted on (what lies under it,
   its layer, the window's state). A kept node whose subtree revision and ground are the same next frame has its paint
   nodes laid in as they were, each placed where layout puts it, without walking its subtree; anything else is painted
-  as usual. The list is the one a full walk paints.
+  as usual. The list is the one a full walk paints. The damage tracker keeps such a subtree as one run of its nodes:
+  laid in again from the same root with the same nodes, they are compared in order with the run, none looked up
+  apart, and any other run gives its nodes back to be compared one by one, so the damage is the one comparing every
+  node apart finds.
 - **Events.** An event goes down the target's path (capture), reaches the target and goes back up (bubble); a handler
   can stop it. Hit-testing takes the topmost node and respects every clip. Hover enter and leave reach each node the
   pointer crosses. A raised node (`Widget::raised`, a toolbar row over a page that scrolls under it) takes a point

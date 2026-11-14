@@ -552,6 +552,9 @@ pub(crate) struct Painting {
     pub(crate) layer: Option<LayerPainting>,
     /// A node pinned its subtree to an appearance ([`PaintCx::pin_appearance`]).
     pub(crate) pins: bool,
+    /// The kept subtrees laid in as the last paint laid them, unwalked: each one's root with the number of nodes it
+    /// lays from it on, in the list's order. The damage tracker compares them with the last frame's in one go.
+    pub(crate) kept_runs: IdMap<PaintNodeId, usize>,
 }
 
 /// The raised layer of a [`Painting`]: its own list, damage boxes and blank flags, in window coordinates.
@@ -735,6 +738,7 @@ impl Painter {
             IdMap::with_capacity_and_hasher(self.segments.len(), Default::default());
         let mut recording: Option<Recording> = None;
         let mut stats = PaintStats::default();
+        let mut kept_runs: IdMap<PaintNodeId, usize> = IdMap::default();
         let mut at = 0;
         while at < order.len() {
             let id = order[at];
@@ -899,6 +903,7 @@ impl Painter {
                 }
                 if laid {
                     stats.kept += segment.nodes.len();
+                    kept_runs.insert(id.into(), segment.nodes.len());
                     at += segment.nodes.len() - 1;
                     if let Some(rec) = &mut recording {
                         rec.nodes.extend(&segment.nodes);
@@ -1346,6 +1351,7 @@ impl Painter {
             materials,
             layer,
             pins,
+            kept_runs,
         }
     }
 }

@@ -13,7 +13,7 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Window shadows, outlines, the shell's rounded rectangles, the procedural wallpaper | the compositor: passes generated from WGSL, drawn by a `cupertino-gpu` device borrowed from its context into the framebuffer it has bound | n/a |
 | Rounded clips of window content, reduced copies | the compositor, texture programs compiled through Smithay's shader interface | n/a |
 | Title bars, window buttons, keyboard HUDs, the procedural cursor | the compositor, rasterized on the CPU (tiny-skia, swash), cached, uploaded on change | memory buffers |
-| Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles; on the GPU, dmabufs copied from the renderer's texture |
+| Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles, copied byte for byte as `abgr8888` where the compositor lists it, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
 The material system is already a GPU system: a window asks the compositor for glass by shape and style, and the
@@ -50,7 +50,8 @@ The toolkit keeps what it drew as layers: images that survive between frames. A 
 paints only the strip that came into view; an opening panel or a sliding card changes a transform or an opacity, not
 pixels. Layers exist in both renderers, so they cut paint and raster cost on every machine without a GPU context.
 Scroll offsets are rounded to device pixels when drawn, so a moved layer is pixel-identical to a repaint. Minimized and
-fully covered windows drop their layers.
+fully covered windows drop their layers. A kept subtree that did not change is laid into the next paint as it was and
+compared with the last frame's in one go, so a scroll walks and compares only the rows that changed.
 
 ### 3. Who draws on the GPU: classes of surface
 

@@ -805,7 +805,7 @@ fn scroll_layers_drawn_whole_match_the_cpu() {
     };
     let resources = resources();
     let mut failures = Vec::new();
-    for seed in 900..910 {
+    for seed in 900..911 {
         for scale in SCALES {
             for clip in [
                 Shape::Rect(VIEW),

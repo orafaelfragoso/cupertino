@@ -2629,10 +2629,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             w.layer.damage.invalidate();
         }
         let damage = w.damage.damage(&painting);
-        let layer_damage = painting
-            .layer
-            .as_ref()
-            .map(|l| w.layer.damage.damage_of(&l.list, &l.own, &l.blank));
+        let layer_damage = painting.layer.as_ref().map(|l| {
+            w.layer
+                .damage
+                .damage_of(&l.list, &l.own, &l.blank, &Default::default())
+        });
         w.paint_animate.extend(painting.animating.iter().copied());
         w.animate.extend(painting.animating);
         w.display_list = painting.list;

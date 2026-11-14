@@ -182,6 +182,11 @@ pub fn generate(name: &str, shared: &str, program: &str) -> Result<Generated, St
     ] {
         let (mut text, reflection) =
             glsl_stage(&module, &info, stage, entry).map_err(|e| format!("{name}: {e}"))?;
+        if let Some(reserved) = reserved_name(&text) {
+            return Err(format!(
+                "{name}: {label} GLSL names {reserved}; GLSL reserves names starting with gl_ (rename the WGSL `gl`)"
+            ));
+        }
         for (handle, block) in &reflection.uniforms {
             // GLSL ES 3.00 blocks default to the shared layout, which the driver chooses; every backend lays
             // blocks out as std140
@@ -250,6 +255,26 @@ pub fn generate(name: &str, shared: &str, program: &str) -> Result<Generated, St
         spirv,
         bindings,
     })
+}
+
+/// A name of our own in `glsl` that GLSL reserves: one starting with `gl_` that is not a built-in (the built-ins
+/// continue in capitals, `gl_Position`), as the generator makes of a WGSL name `gl` that clashes with nothing else.
+fn reserved_name(glsl: &str) -> Option<String> {
+    let mut rest = glsl;
+    while let Some(i) = rest.find("gl_") {
+        let before = rest[..i].chars().next_back();
+        let tail = &rest[i + 3..];
+        let ident: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let starts_word = before.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if starts_word && !ident.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return Some(format!("gl_{ident}"));
+        }
+        rest = tail;
+    }
+    None
 }
 
 /// One directory of programs: its sources, where their generated files go, and what goes ahead of each program.

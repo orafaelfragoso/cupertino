@@ -127,7 +127,7 @@ impl PassParams {
     }
 }
 
-/// Uniform block of a material region (`material.wgsl`, `Region`).
+/// Uniform block of a material region (`shaders/material.wgsl`, `Region`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RegionParams {
@@ -150,6 +150,40 @@ impl RegionParams {
             self.fills[2 * i + 1] = f.b;
         }
         self.info[0] = fills.len().min(MAX_FILLS) as f32;
+    }
+}
+
+/// Uniform block of where a region program (material, glass) draws (`shaders/include/place.wgsl`, `Placement`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Placement {
+    /// The frame's projection from target pixels to clip space, column-major, each column padded to four floats.
+    pub proj: [[f32; 4]; 3],
+    /// x, y, w, h of the quad drawn, in target pixels.
+    pub quad: [f32; 4],
+    /// [`PLACE_DITHER`] when the result is dithered by its pixel before an 8-bit store; 0, 0, 0
+    pub flags: [i32; 4],
+}
+
+/// `Placement::flags[0]`: the program dithers its result by pixel position.
+pub const PLACE_DITHER: i32 = 1;
+
+impl Placement {
+    /// The placement of `quad` through the column-major 3 x 3 `projection`, dithered or not.
+    pub fn new(projection: &[f32; 9], quad: [f32; 4], dither: bool) -> Self {
+        let column = |c: usize| {
+            [
+                projection[3 * c],
+                projection[3 * c + 1],
+                projection[3 * c + 2],
+                0.0,
+            ]
+        };
+        Self {
+            proj: [column(0), column(1), column(2)],
+            quad,
+            flags: [if dither { PLACE_DITHER } else { 0 }, 0, 0, 0],
+        }
     }
 }
 
@@ -182,6 +216,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<PassParams>(), 16 + 16 + 144 + 256 + 16);
         assert_eq!(std::mem::size_of::<RegionParams>(), 5 * 16 + 256);
         assert_eq!(std::mem::size_of::<VibrantUniform>(), 96);
+        // a 3 x 3 matrix in std140 is three columns of four floats
+        assert_eq!(std::mem::size_of::<Placement>(), 48 + 16 + 16);
         assert_eq!(std::mem::size_of::<Op>(), 32);
     }
 

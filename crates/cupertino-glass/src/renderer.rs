@@ -24,12 +24,9 @@ use wgpu::util::DeviceExt;
 
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MATERIAL_SHADER: &str = include_str!("shaders/material.wgsl");
-const VIBRANT_SHADER: &str = include_str!("shaders/vibrant.wgsl");
-const GLASS_SHADER: &str = include_str!("shaders/glass.wgsl");
+const VIBRANT_SHADER: &str = crate::shaders::VIBRANT.wgsl;
 
 pub const MATERIAL_WGSL: &str = MATERIAL_SHADER;
-pub const VIBRANT_WGSL: &str = VIBRANT_SHADER;
-pub const GLASS_WGSL: &str = GLASS_SHADER;
 
 /// One material to draw: a rectangle in target pixels (y down) plus its recipe.
 #[derive(Clone, Copy, Debug)]
@@ -409,8 +406,8 @@ impl MaterialRenderer {
             "glass-vibrant",
             &pl_vibrant,
             &vibrant,
-            "vs_vibrant",
-            "fs_vibrant",
+            "vs_main",
+            "fs_main",
             target_format,
             None,
             true,

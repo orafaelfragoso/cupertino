@@ -29,7 +29,7 @@ struct VsOut {
 };
 
 @vertex
-fn vs_vibrant(@builtin(vertex_index) vi: u32) -> VsOut {
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
   let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
   let p = V.rect.xy + corner * V.rect.zw;
   var o: VsOut;
@@ -86,7 +86,7 @@ fn vibrant_light(s0: vec4<f32>, d0: vec4<f32>, reversed: bool) -> vec4<f32> {
 // Writes the blended colour (no hardware blending): `backdrop` must hold the current content of
 // the target, `glyphs` is premultiplied.
 @fragment
-fn fs_vibrant(fin: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
   let s0 = textureSampleLevel(glyphs, samp, fin.tex, 0.0);
   let p = vec2<i32>(fin.pos.xy);
   let d0 = vec4<f32>(textureLoad(backdrop, p, 0).rgb, 1.0);

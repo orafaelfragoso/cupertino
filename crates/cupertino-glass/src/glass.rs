@@ -1,5 +1,5 @@
 //! Glass: the CPU model of the background pass and of the foreground colour matrix, and the uniform block the
-//! shaders read (`shaders/glass.wgsl`, `shaders/gles/glass.frag`).
+//! glass program reads (`shaders/glass.wgsl`, generated for every backend).
 //!
 //! A glass *container* holds up to [`MAX_SHAPES`] shapes (rounded rectangles or capsules). Its backdrop is captured
 //! once, at half the output's scale, over the bounds of every shape plus the reach of the blur and the refraction, gaps
@@ -899,7 +899,7 @@ impl Container {
     }
 }
 
-/// Uniform block of the glass composite (`Glass` in `shaders/glass.wgsl` and `shaders/gles/glass.frag`), std140
+/// Uniform block of the glass composite (`Glass` in `shaders/glass.wgsl` and the GLSL generated from it), std140
 /// with 16-byte members only. Lengths are in target pixels.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

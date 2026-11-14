@@ -118,3 +118,23 @@ fn unused(a: array<vec4<f32>, 2>) -> f32 {\n    return a[0].x;\n}\n"
         "{wgsl}"
     );
 }
+
+#[test]
+fn a_name_glsl_reserves_is_refused() {
+    // the GLSL writer names the second local `gl` of a program `gl_1`, which GLSL reserves
+    let program = "
+@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }
+fn half_length(v: vec2<f32>) -> f32 {
+    let gl = length(v);
+    return gl * 0.5;
+}
+@fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let gl = length(p.xy);
+    return vec4<f32>(gl + half_length(p.zw));
+}
+";
+    let e = generate("reserved", "", program).unwrap_err();
+    assert!(e.contains("reserves names starting with gl_"), "{e}");
+    // the built-ins are not ours
+    assert!(generate("fine", "", &program.replace("gl", "slope")).is_ok());
+}

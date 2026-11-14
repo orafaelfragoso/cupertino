@@ -1,7 +1,9 @@
 //! The pieces of a parent surface's layers (`cupertino_layers_v1`, [`crate::layers_v1`]): each layer's content where
 //! its animated values put it, the placeholder where its content has not arrived, and its glass below it, moving,
 //! scaling and fading with it. Raised layers come in front of the flat ones and lift their glass with a soft shadow; a
-//! vibrant layer draws its coverage blended with the glass behind it ([`SurfaceRole::Vibrant`]).
+//! vibrant layer draws its coverage blended with the glass behind it ([`SurfaceRole::Vibrant`]). The glass of the layers
+//! of one glass group is one container of their shapes as shown, drawn below the content of its first layer
+//! ([`glass_anchors`]).
 
 use cupertino_scene::{Clip, SceneKind, SurfaceRole, VibrantBlend};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -115,6 +117,43 @@ pub fn vibrant_blend(role: BlendRole, dark: bool, plain: bool) -> Option<Vibrant
     })
 }
 
+/// Whether a layer drawn at `opacity` and `scale` shows at all.
+fn shows(opacity: f32, l: &LayerDraw) -> bool {
+    opacity > 0.0 && l.scale > 0.0
+}
+
+/// For each layer of `layers` (back to front), whether its glass is drawn with it: alone, or as the first shown layer
+/// of its glass group, which draws the glass of the whole group below its content.
+pub fn glass_anchors(layers: &[LayerDraw], opacity: f32) -> Vec<bool> {
+    let mut seen = std::collections::HashSet::new();
+    layers
+        .iter()
+        .map(|l| {
+            let drawn = l.glass.is_some()
+                && shows(opacity * l.opacity as f32, l)
+                && l.width * l.scale > 0.0
+                && l.height * l.scale > 0.0;
+            drawn && (l.group == 0 || seen.insert(l.group))
+        })
+        .collect()
+}
+
+/// The glass shapes of the layers of `group` that show, back to front: their bounds as shown, output-local points before
+/// the window's rescale, their corner radii and opacities.
+fn group_areas(
+    layers: &[LayerDraw],
+    group: u32,
+    opacity: f32,
+    origin: Point<f64, Logical>,
+) -> Vec<(Rectangle<f64, Logical>, f64, f64)> {
+    layers
+        .iter()
+        .filter(|l| l.group == group && l.glass.is_some() && shows(opacity * l.opacity as f32, l))
+        .map(|l| (scaled_bounds(l, origin), l.radius * l.scale, l.opacity))
+        .filter(|(b, _, _)| b.size.w > 0.0 && b.size.h > 0.0)
+        .collect()
+}
+
 /// The pieces of `parent`'s layers, front to back, as shown at `p.now`. `glass` makes the pieces of a layer's glass
 /// from its backdrop (output-local points before the window's rescale), as the parent's own backdrops are made.
 pub fn layer_pieces(
@@ -133,10 +172,11 @@ pub fn layer_pieces(
     let pointer_here =
         pointer.x >= 0.0 && pointer.y >= 0.0 && pointer.x <= p.rect.w && pointer.y <= p.rect.h;
     let s_min = place.scale.0.min(place.scale.1);
+    let anchors = glass_anchors(&layers, place.opacity);
     let mut out = Vec::new();
-    for l in layers.iter().rev() {
+    for (l, &anchor) in layers.iter().zip(&anchors).rev() {
         let opacity = place.opacity * l.opacity as f32;
-        if opacity <= 0.0 || l.scale <= 0.0 {
+        if !shows(opacity, l) {
             continue;
         }
         let c = centre(l, place.origin);
@@ -192,28 +232,42 @@ pub fn layer_pieces(
                 ));
             }
         }
-        let Some((style, lens)) = l.glass else {
+        let Some((style, lens)) = l.glass.filter(|_| anchor) else {
             continue;
         };
-        if bounds.size.w <= 0.0 || bounds.size.h <= 0.0 {
-            continue;
-        }
-        let area = BackdropArea {
-            key: l.serial | LAYER_GLASS_KEY,
-            material: String::new(),
-            area: bounds,
-            radius,
-            alpha: 1.0,
-            glass: Some(GlassSpec {
-                style,
-                container: 0,
-                spacing: 0.0,
-            }),
+        let spec = GlassSpec {
+            style,
+            container: l.group,
+            spacing: if l.group == 0 { 0.0 } else { l.spacing },
+        };
+        // a group's shapes as shown, front to back as backdrops are listed, each at its layer's opacity
+        let areas: Vec<BackdropArea> = if l.group == 0 {
+            vec![BackdropArea {
+                key: l.serial | LAYER_GLASS_KEY,
+                material: String::new(),
+                area: bounds,
+                radius,
+                alpha: 1.0,
+                glass: Some(spec),
+            }]
+        } else {
+            group_areas(&layers, l.group, place.opacity, place.origin)
+                .into_iter()
+                .rev()
+                .map(|(area, radius, alpha)| BackdropArea {
+                    key: l.serial | LAYER_GLASS_KEY,
+                    material: String::new(),
+                    area,
+                    radius,
+                    alpha,
+                    glass: Some(spec),
+                })
+                .collect()
         };
         let light = (l.pointer_lit && pointer_here)
             .then(|| pointer_light(mc, pointer))
             .flatten();
-        for mut piece in glass(p, vec![area]) {
+        for mut piece in glass(p, areas) {
             if let Piece::Glass(g) = &mut piece {
                 let mut gc = (*g.glass).clone();
                 gc.container.lens = lens as f32;
@@ -236,7 +290,10 @@ pub fn layer_pieces(
                     .u(u64::from(l.raised))
                     .finish();
                 g.glass = std::rc::Rc::new(gc);
-                g.opacity *= l.opacity as f32;
+                // a group's shapes carry their layers' opacities
+                if l.group == 0 {
+                    g.opacity *= l.opacity as f32;
+                }
             }
             out.push(piece);
         }

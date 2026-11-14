@@ -39,6 +39,7 @@ use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{
     cross_fade_opacity, skips_frame_animation, skips_sheet_slide, WorkspaceTransition,
 };
+use super::popup_shown::Shown;
 use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, Sig};
 use super::{CupertinoElement, SceneLayer};
@@ -1080,7 +1081,15 @@ fn window_popup_elements(
             visual_local.loc.x + ins.left + f64::from(popup_offset.x - popup.geometry().loc.x),
             visual_local.loc.y + ins.top + f64::from(popup_offset.y - popup.geometry().loc.y),
         ));
-        let tree = Tree {
+        // the popup's own presentation (cupertino_layers_v1 version 3) moves, scales and fades it, then the window's
+        // rescale applies
+        let own = popup_presentation(p, &popup, popup_origin);
+        let alpha = alpha * own.map_or(1.0, |(_, opacity)| opacity);
+        let own = own.map(|(shown, _)| shown);
+        if alpha <= 0.0 || own.is_some_and(|s| s.k.0 <= 0.0) {
+            continue;
+        }
+        let mut tree = Tree {
             surface: popup.wl_surface().clone(),
             kind: SceneKind::PopupContent,
             role: SurfaceRole::Popup,
@@ -1091,10 +1100,18 @@ fn window_popup_elements(
             clip: Clip::None,
             only: None,
         };
+        if let Some(own) = own {
+            let window = Shown::about(visual_local.loc, (plan.scale_x, plan.scale_y));
+            tree = own.then(window).tree(tree, p.scale);
+        }
+        let shown = |areas: Vec<BackdropArea>| match own {
+            Some(s) => s.areas(areas),
+            None => areas,
+        };
         // the backdrops of the popup's subsurfaces lie between its slices, moved and scaled with the window
         out.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
-            let areas = rescaled_backdrops(areas, visual_local.loc, plan);
-            let bound = rescaled_rect(bound, visual_local.loc, plan);
+            let areas = rescaled_backdrops(shown(areas), visual_local.loc, plan);
+            let bound = rescaled_rect(own.map_or(bound, |s| s.rect(bound)), visual_local.loc, plan);
             bounded_glass(
                 backdrop_elements(p, &areas, alpha, WindowState::Active),
                 bound,
@@ -1102,7 +1119,7 @@ fn window_popup_elements(
         }));
         // the popup's own backdrop (a menu's material) lies directly below it, above the window
         let backdrops = rescaled_backdrops(
-            surface_backdrops(popup.wl_surface(), popup_origin),
+            shown(surface_backdrops(popup.wl_surface(), popup_origin)),
             visual_local.loc,
             plan,
         );
@@ -2056,6 +2073,31 @@ fn layer_elements(
         let mut own = Vec::new();
         for (popup, popup_offset) in crate::popup_linger::shown(surface.wl_surface(), p.now) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
+            // a popup with a presentation of its own is moved, scaled and faded by it before the surface's
+            if let Some((shown, popup_opacity)) = popup_presentation(p, &popup, popup_origin) {
+                let opacity = opacity * popup_opacity;
+                if opacity <= 0.0 || shown.k.0 <= 0.0 {
+                    continue;
+                }
+                let both = shown.then(Shown::about(zoomed.centre, (zoomed.scale, zoomed.scale)));
+                let mut tree = standalone_tree(
+                    popup.wl_surface(),
+                    SceneKind::LayerContent,
+                    popup_origin.to_physical_precise_round(scale),
+                    opacity,
+                );
+                tree.role = SurfaceRole::Popup;
+                let tree = both.tree(tree, p.scale);
+                own.extend(tree_pieces(p, tree, popup_origin, |p, areas, bound| {
+                    bounded_glass(
+                        backdrop_elements(p, &both.areas(areas), opacity, WindowState::Active),
+                        both.rect(bound),
+                    )
+                }));
+                let backdrops = both.areas(surface_backdrops(popup.wl_surface(), popup_origin));
+                own.extend(popup_backdrop_elements(p, &backdrops, opacity));
+                continue;
+            }
             let tree = zoomed.tree(
                 standalone_tree(
                     popup.wl_surface(),
@@ -2125,6 +2167,24 @@ fn layer_elements(
         }
     }
     out
+}
+
+/// The presentation of `popup` (its surface's origin at `origin`, output-local points) as shown now, and its opacity;
+/// `None` for a popup without one.
+fn popup_presentation(
+    p: &SceneParams<'_>,
+    popup: &smithay::desktop::PopupKind,
+    origin: Point<f64, Logical>,
+) -> Option<(Shown, f32)> {
+    let shown = crate::layers_v1::presentation(popup.wl_surface(), p.now, p.display.reduce_motion)?;
+    // its window geometry, or without one what its surfaces cover
+    let g = Some(popup.geometry())
+        .filter(|g| !g.is_empty())
+        .unwrap_or_else(|| {
+            smithay::desktop::utils::bbox_from_surface_tree(popup.wl_surface(), (0, 0))
+        });
+    let geometry = Rectangle::new(origin + g.loc.to_f64(), g.size.to_f64());
+    Some((Shown::presented(shown, geometry), shown.opacity as f32))
 }
 
 /// A layer shell surface's presentation scale about its centre (output-local points), applied to its trees, its

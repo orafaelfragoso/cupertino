@@ -32,6 +32,7 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use cupertino_layer_v1::Property;
@@ -41,6 +42,9 @@ const OUTPUT: (i32, i32) = (800, 600);
 /// The parent: a layer shell surface this size at these margins from the top-left corner.
 const PARENT: (i32, i32) = (600, 400);
 const MARGIN: (i32, i32) = (100, 50);
+/// A popup of the parent: this size, its top-left corner at this point of the parent.
+const POPUP: (i32, i32) = (200, 100);
+const POPUP_AT: (i32, i32) = (100, 100);
 
 struct Harness {
     state: Cupertino,
@@ -113,6 +117,14 @@ impl Harness {
         surface
     }
 
+    /// The parent's first popup.
+    fn popup(&self) -> Option<ServerSurface> {
+        let parent = self.parent()?;
+        smithay::desktop::PopupManager::popups_for_surface(&parent)
+            .next()
+            .map(|(p, _)| p.wl_surface().clone())
+    }
+
     /// The parent's layers as the scene shows them at the current time; it starts what waits for its first frame.
     fn layers(&self) -> Vec<LayerDraw> {
         self.parent().map_or_else(Vec::new, |p| {
@@ -165,6 +177,14 @@ struct Client {
     paint: fn(i32, i32) -> [u8; 4],
     heard: Arc<Mutex<Heard>>,
     configured: bool,
+    wm: xdg_wm_base::XdgWmBase,
+    layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    /// The popup's surface and objects, once made ([`Client::popup`]).
+    popup: Option<(
+        wl_surface::WlSurface,
+        xdg_surface::XdgSurface,
+        xdg_popup::XdgPopup,
+    )>,
 }
 
 /// A buffer of `w`×`h` painted by `paint` (straight RGBA by position).
@@ -215,6 +235,22 @@ impl Client {
     fn l(&self, i: usize) -> &CupertinoLayerV1 {
         &self.made[i].1
     }
+
+    /// Make a popup of the parent, [`POPUP`] large at [`POPUP_AT`] in it and painted red once configured.
+    fn popup(&mut self, qh: &QueueHandle<Client>) {
+        let surface = self.compositor.create_surface(qh, ());
+        let xdg = self.wm.get_xdg_surface(&surface, qh, surface.clone());
+        let positioner = self.wm.create_positioner(qh, ());
+        positioner.set_size(POPUP.0, POPUP.1);
+        positioner.set_anchor_rect(POPUP_AT.0, POPUP_AT.1, 1, 1);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        let popup = xdg.get_popup(None, &positioner, qh, ());
+        self.layer_surface.get_popup(&popup);
+        positioner.destroy();
+        surface.commit();
+        self.popup = Some((surface, xdg, popup));
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
@@ -236,6 +272,8 @@ macro_rules! ignore_events {
     )*};
 }
 ignore_events!(
+    xdg_positioner::XdgPositioner,
+    xdg_popup::XdgPopup,
     wl_compositor::WlCompositor,
     wl_shm::WlShm,
     wl_shm_pool::WlShmPool,
@@ -264,6 +302,41 @@ impl Dispatch<CupertinoLayerV1, ()> for Client {
             } => heard.replaced.push((serial, value, velocity)),
             cupertino_layer_v1::Event::Settled => heard.settled += 1,
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Client {
+    fn event(
+        _: &mut Self,
+        wm: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            wm.pong(serial);
+        }
+    }
+}
+
+/// A popup's xdg surface, whose wl_surface draws its red frame on the first configure.
+impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for Client {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            xdg.ack_configure(serial);
+            let b = buffer(&state.shm, qh, POPUP, &red);
+            surface.attach(Some(&b), 0, 0);
+            surface.damage_buffer(0, 0, POPUP.0, POPUP.1);
+            surface.commit();
         }
     }
 }
@@ -310,7 +383,8 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=2, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=3, ()).unwrap();
+            let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let ls = shell.get_layer_surface(
                 &parent,
@@ -334,6 +408,9 @@ impl TestClient {
                 paint,
                 heard: h.clone(),
                 configured: false,
+                wm,
+                layer_surface: ls,
+                popup: None,
             };
             loop {
                 while let Ok(cmd) = inbox.try_recv() {
@@ -385,6 +462,12 @@ fn one_layer(h: &mut Harness) -> TestClient {
 
 fn x_of(h: &Harness) -> f64 {
     h.layers()[0].x
+}
+
+/// The presentation of the parent's popup as the scene shows it now.
+fn popup_presented(h: &Harness) -> Option<Presented> {
+    h.popup()
+        .and_then(|p| presentation(&p, h.state.now(), h.state.display_options().reduce_motion))
 }
 
 /// The parent's presentation as the scene shows it now.
@@ -861,6 +944,161 @@ fn a_presentation_is_a_layer_shell_surface_s_own_and_has_four_properties() {
         client.heard(|e| e.error.clone()).unwrap().1,
         cupertino_protocols::client::layers::cupertino_layers_v1::Error::Role as u32
     );
+}
+
+/// The colour at `(x, y)` of the parent, in `shot`.
+fn at(shot: &image::RgbaImage, x: i32, y: i32) -> [u8; 4] {
+    shot.get_pixel((MARGIN.0 + x) as u32, (MARGIN.1 + y) as u32)
+        .0
+}
+
+fn differs(a: [u8; 4], b: [u8; 4]) -> bool {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| x.abs_diff(y) as u32)
+        .sum::<u32>()
+        > 12
+}
+
+#[test]
+fn a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move() {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = TestClient::spawn(h.socket_path(), scene);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    // a field and a button beside it, 8 points apart, each with glass and no content
+    client.send(|c, qh| {
+        for (x, w) in [(100.0, 200.0), (308.0, 56.0)] {
+            let i = c.layer(qh, (0, 0), &red);
+            let l = c.l(i);
+            l.set_value(Property::X, x);
+            l.set_value(Property::Y, 100.0);
+            l.set_value(Property::Width, w);
+            l.set_value(Property::Height, 56.0);
+            l.set_value(Property::CornerRadius, 28.0);
+            l.set_glass(0, 1.0);
+        }
+        c.parent.commit();
+    });
+    h.wait_until("the layers", |h| {
+        h.layers().len() == 2 && h.layers()[1].width == 56.0
+    });
+    let gap = (304, 128);
+    let apart = h.screenshot("glass-apart");
+    let behind = scene(gap.0, gap.1);
+    assert_eq!(
+        at(&apart, gap.0, gap.1),
+        behind,
+        "the gap shows the parent while the glass is apart"
+    );
+    // in one group the shapes join across the gap
+    client.send(|c, _| {
+        c.l(0).set_glass_group(7, 16.0);
+        c.l(1).set_glass_group(7, 16.0);
+        c.parent.commit();
+    });
+    h.wait_until("the group", |h| h.layers().iter().all(|l| l.group == 7));
+    assert!(h.layers().iter().all(|l| l.spacing == 16.0));
+    let joined = h.screenshot("glass-joined");
+    assert!(
+        differs(at(&joined, gap.0, gap.1), behind),
+        "the joined glass fills the gap: {:?}",
+        at(&joined, gap.0, gap.1)
+    );
+    // the button moves out on the server's clock and its glass parts from the field's as the shapes do
+    h.state.fixed_time = Some(300.0);
+    client.send(|c, _| {
+        c.l(1)
+            .animate_timed(3, Property::X, 400.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the move", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 300.0))
+    });
+    h.state.fixed_time = Some(301.0);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [3]));
+    let parted = h.screenshot("glass-parted");
+    assert_eq!(
+        at(&parted, 350, 128),
+        scene(350, 128),
+        "far apart the group's shapes no longer join"
+    );
+    assert!(
+        differs(at(&parted, 428, 128), scene(428, 128)),
+        "the button's glass moved with it"
+    );
+    // a spacing past the most the server blends is refused
+    client.send(|c, _| c.l(0).set_glass_group(1, 65.0));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
+    );
+}
+
+#[test]
+fn a_popup_s_presentation_scales_and_fades_it_on_the_server_clock() {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = TestClient::spawn(h.socket_path(), grey);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    client.send(|c, qh| c.popup(qh));
+    let red = [255, 0, 0, 255];
+    let near_corner = (POPUP_AT.0 + 10, POPUP_AT.1 + 10);
+    let centre = (POPUP_AT.0 + POPUP.0 / 2, POPUP_AT.1 + POPUP.1 / 2);
+    let mut shot = h.screenshot("popup");
+    let end = Instant::now() + common::HANG_GUARD;
+    while at(&shot, near_corner.0, near_corner.1) != red && Instant::now() < end {
+        shot = h.screenshot("popup");
+    }
+    assert_eq!(
+        at(&shot, near_corner.0, near_corner.1),
+        red,
+        "the popup shows"
+    );
+    // its presentation at half its size about its centre, then faded out along the server's clock
+    client.send(|c, qh| {
+        let surface = c.popup.as_ref().unwrap().0.clone();
+        let p = c.layers.get_presentation(&surface, qh, ());
+        p.set_value(Property::Scale, 0.5);
+        surface.commit();
+        c.made.push((surface, p));
+    });
+    h.wait_until("the scale", |h| {
+        popup_presented(h).is_some_and(|p| p.scale == 0.5)
+    });
+    let half = h.screenshot("popup-half");
+    assert_eq!(at(&half, centre.0, centre.1), red, "the centre stays");
+    assert_eq!(
+        at(&half, near_corner.0, near_corner.1),
+        [128, 128, 128, 255],
+        "the corner drew in towards it"
+    );
+    h.state.fixed_time = Some(400.0);
+    client.send(|c, _| {
+        let (surface, p) = c.made.last().unwrap();
+        p.animate_timed(5, Property::Opacity, 0.0, 200, 0.33, 1.0, 0.67, 1.0);
+        surface.commit();
+    });
+    h.wait_until("the fade", |h| {
+        popup_presented(h).is_some_and(|p| p.opacity < 1.0)
+            || h.popup()
+                .is_some_and(|s| !cupertino_server::layers_v1::settled(&s, 400.0))
+    });
+    h.state.fixed_time = Some(400.2);
+    h.wait_until("finished and settled", |_| {
+        client.heard(|e| e.finished == [5] && e.settled == 1)
+    });
+    let gone = h.screenshot("popup-gone");
+    assert_eq!(
+        at(&gone, centre.0, centre.1),
+        [128, 128, 128, 255],
+        "faded out"
+    );
+    assert!(client.heard(|e| e.error.is_none()));
 }
 
 #[test]

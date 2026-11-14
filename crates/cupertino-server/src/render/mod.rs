@@ -19,6 +19,7 @@ pub mod lower;
 pub mod material;
 pub mod mesh;
 pub mod motion;
+pub mod popup_shown;
 pub mod programs;
 pub mod reduce;
 pub mod scene;

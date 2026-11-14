@@ -10,8 +10,10 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cupertino_kit::controls::{Icon, IconDirection};
+use cupertino_kit::core::next_resource_id;
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
     Element, Environment, Event, EventCx, Glass, Key, MeasureCx, PaintCx, Phase, Propagation, Role,
@@ -25,9 +27,14 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, WindowSpec,
 };
-use cupertino_kit::render::{FillRule, Paint, PaintOp, PathVerb, Shape};
+use cupertino_kit::render::{
+    CpuConfig, CpuRenderer, DamageRegion, DisplayList, FillRule, ImageResource, Paint, PaintNode,
+    PaintNodeId, PaintOp, PaintResources, PaintRevision, PathVerb, PixelFormat, RenderRequest,
+    ResourceId, Sampling, Shape, Transform, UiRenderer,
+};
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
+    AttributedText, FontWeight, GlyphKey, GlyphRasterizer, ParagraphLayout, ParagraphStyle,
+    RasterGlyph, TextAlign, TextError, TextStyle, Wrap,
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
@@ -560,7 +567,7 @@ fn band_outline(rect: Rect, distance: f64, top_reach: f64) -> (Rect, f64) {
 /// Inside `rect` the shadow is also laid between the `cutouts`, the tiles' outlines, at the strength it has at the
 /// edge, and under a fading tile at the share its glass lets through, so a tile fading out leaves the darkening the
 /// gaps around it have rather than a light patch, and nothing changes the moment a motion starts or ends.
-fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout]) {
+fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout], resting: bool) {
     let edge = shadow_at(0.0);
     let black = |alpha: f64| Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha as f32));
     let around = rounded_path(rect.outset(SHADOW_REACH + 1.0), 0.0);
@@ -623,8 +630,23 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout]) 
         }
         cx.push(PaintOp::PopClip);
     }
-    let bands = (SHADOW_REACH / SHADOW_BAND).ceil() as usize;
-    for i in 0..bands {
+    let scale = cx.env().scale;
+    match band_image(rect, top_reach, scale, resting) {
+        Some((id, image, dst)) => cx.image(id, &image, dst, Sampling::Nearest),
+        None => {
+            for op in bands(rect, top_reach) {
+                cx.push(op);
+            }
+        }
+    }
+}
+
+/// The shadow's bands around `rect`: rings that never overlap, each filled at the darkening of its middle.
+fn bands(rect: Rect, top_reach: f64) -> Vec<PaintOp> {
+    let black = |alpha: f64| Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha as f32));
+    let count = (SHADOW_REACH / SHADOW_BAND).ceil() as usize;
+    let mut ops = Vec::with_capacity(count);
+    for i in 0..count {
         let from = i as f64 * SHADOW_BAND;
         let alpha = shadow_at(from + SHADOW_BAND / 2.0);
         if alpha <= 0.0 {
@@ -634,7 +656,7 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout]) 
         let (inner, inner_radius) = band_outline(rect, from, top_reach);
         let mut path = rounded_path(outer, outer_radius);
         path.extend(rounded_path(inner, inner_radius));
-        cx.push(PaintOp::Fill {
+        ops.push(PaintOp::Fill {
             shape: Shape::Path {
                 verbs: path,
                 fill_rule: FillRule::EvenOdd,
@@ -642,6 +664,156 @@ fn shadow(cx: &mut PaintCx<'_>, rect: Rect, top_reach: f64, cutouts: &[Cutout]) 
             paint: black(alpha),
         });
     }
+    ops
+}
+
+/// How many pictures of the shadow's bands the process keeps: the panel at rest with no view and with a view open.
+/// Each is the window's size in device pixels, some 2.5 MiB at scale 1.5.
+const BAND_IMAGES: usize = 2;
+
+/// What a band picture is made for: the outline's corners, the top reach and the scale, as bits.
+type BandKey = [u64; 6];
+
+/// A picture of the shadow's bands at the window's device pixels, one texel per pixel, and where it goes.
+struct BandImage {
+    key: BandKey,
+    id: ResourceId,
+    image: ImageResource,
+    dst: Rect,
+}
+
+thread_local! {
+    /// The band pictures made, the latest used last.
+    static BAND_IMAGES_KEPT: RefCell<Vec<BandImage>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Glyphs for the bands' renderer, which draws none.
+struct NoGlyphs;
+
+impl GlyphRasterizer for NoGlyphs {
+    fn rasterize(&mut self, _: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        Ok(None)
+    }
+}
+
+/// The shadow's bands around `rect` as one picture of the window's device pixels at `scale`, drawn by the CPU
+/// renderer the panel's class draws with, so the picture laid over one texel per pixel has the pixels the bands filled
+/// in place have, to within two steps of rounding. A whole frame of the panel then lays one picture instead of filling some 26 rings each as large as the
+/// window, which cost a frame most of its time; a panel opened again, whose window and renderer are new, finds the
+/// picture. A picture is made only while the panel is `resting`: an outline that changes every frame (a detail view's
+/// motion) is filled in place, as making its picture would cost the same and not be used again. The panel is the
+/// window's root, so its points are the window's.
+fn band_image(
+    rect: Rect,
+    top_reach: f64,
+    scale: f64,
+    resting: bool,
+) -> Option<(ResourceId, ImageResource, Rect)> {
+    let key: BandKey = [
+        rect.min_x().to_bits(),
+        rect.min_y().to_bits(),
+        rect.max_x().to_bits(),
+        rect.max_y().to_bits(),
+        top_reach.to_bits(),
+        scale.to_bits(),
+    ];
+    BAND_IMAGES_KEPT.with_borrow_mut(|kept| {
+        if let Some(i) = kept.iter().position(|b| b.key == key) {
+            let b = kept.remove(i);
+            let found = (b.id, b.image.clone(), b.dst);
+            kept.push(b);
+            return Some(found);
+        }
+        if !resting {
+            return None;
+        }
+        let made = draw_bands(rect, top_reach, scale)?;
+        let found = (made.id, made.image.clone(), made.dst);
+        kept.push(BandImage { key, ..made });
+        if kept.len() > BAND_IMAGES {
+            kept.remove(0);
+        }
+        Some(found)
+    })
+}
+
+/// Draws the bands around `rect` into a picture of the device pixels they reach at `scale`.
+fn draw_bands(rect: Rect, top_reach: f64, scale: f64) -> Option<BandImage> {
+    if !(scale.is_finite() && scale > 0.0) {
+        return None;
+    }
+    let (outer, _) = band_outline(rect, SHADOW_REACH, top_reach);
+    let (x0, y0) = (
+        (outer.min_x() * scale).floor(),
+        (outer.min_y() * scale).floor(),
+    );
+    let (x1, y1) = (
+        (outer.max_x() * scale).ceil(),
+        (outer.max_y() * scale).ceil(),
+    );
+    let (width, height) = (x1 - x0, y1 - y0);
+    if !(width >= 1.0 && height >= 1.0 && width * height <= f64::from(1u32 << 26)) {
+        return None;
+    }
+    let (width, height) = (width as u32, height as u32);
+    // the picture's first pixel is the window's pixel (x0, y0): the bands move by whole device pixels into it
+    let at = Point::new(x0 / scale, y0 / scale);
+    let node = PaintNode {
+        layer: None,
+        id: PaintNodeId(1),
+        parent: None,
+        revision: PaintRevision(1),
+        transform: Transform([1.0, 0.0, 0.0, 1.0, -at.x, -at.y]),
+        clip: None,
+        group: None,
+        bounds: Rect::new(
+            0.0,
+            0.0,
+            f64::from(width) / scale,
+            f64::from(height) / scale,
+        ),
+        hit: Rect::new(0.0, 0.0, 0.0, 0.0),
+        ops: bands(rect, top_reach),
+    };
+    let list = DisplayList { nodes: vec![node] };
+    let mut renderer = CpuRenderer::new(
+        CpuConfig {
+            max_pixels: 1 << 26,
+            glyph_cache_bytes: 0,
+            image_cache_bytes: 0,
+            font_smoothing: true,
+        },
+        NoGlyphs,
+    );
+    let frame = renderer
+        .render(&RenderRequest {
+            list: &list,
+            resources: &PaintResources::default(),
+            scale,
+            width,
+            height,
+            damage: &DamageRegion::Full,
+        })
+        .ok()?;
+    let frame = renderer.frame(frame).ok()?;
+    Some(BandImage {
+        key: [0; 6],
+        id: next_resource_id(),
+        image: ImageResource {
+            revision: 1,
+            width,
+            height,
+            stride: frame.stride,
+            format: PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(frame.pixels.as_slice()),
+        },
+        dst: Rect::new(
+            at.x,
+            at.y,
+            f64::from(width) / scale,
+            f64::from(height) / scale,
+        ),
+    })
 }
 
 /// Whether the panel is drawn in the dark appearance.
@@ -809,6 +981,8 @@ struct Board<M> {
     height: f64,
     /// The outline of what the soft shadow goes around, relative to the grid's corner.
     shadow: Rect,
+    /// No detail view is moving, so the outline is one the panel shows again and again.
+    resting: bool,
     /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over by their opacity.
     cutouts: Vec<Cutout>,
     on_outside: M,
@@ -838,6 +1012,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
         if self.alpha != old.alpha
             || self.height != old.height
             || self.shadow != old.shadow
+            || self.resting != old.resting
             || self.cutouts != old.cutouts
         {
             Change::Paint
@@ -903,7 +1078,7 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
             cx.push(PaintOp::PushClip(Shape::Rect(Rect::new(
                 -1.0e4, bar_edge, 2.0e4, 2.0e4,
             ))));
-            shadow(cx, rect, rect.y() - bar_edge, &cutouts);
+            shadow(cx, rect, rect.y() - bar_edge, &cutouts, self.resting);
             cx.push(PaintOp::PopClip);
         }
     }
@@ -2673,6 +2848,9 @@ pub fn panel<M: Clone + 'static>(
             alpha: presentation.alpha,
             height: builder.height(),
             shadow: builder.shadow(),
+            resting: presentation
+                .detail
+                .is_none_or(|o| o.progress <= 0.0 || o.progress >= 1.0),
             cutouts: builder.cutouts(),
             on_outside: to(away(Via::Pointer)),
             children: builder.board(),
@@ -2806,6 +2984,134 @@ mod tests {
             rect.max_y() + SHADOW_REACH,
             "below: the full reach"
         );
+    }
+
+    /// Draws `ops` over an opaque backdrop in a window that holds the bands around `rect` at `scale`.
+    fn draw_over_backdrop(
+        rect: Rect,
+        top_reach: f64,
+        scale: f64,
+        ops: Vec<PaintOp>,
+        resources: &PaintResources,
+    ) -> Vec<u8> {
+        let (outer, _) = band_outline(rect, SHADOW_REACH, top_reach);
+        let size = (outer.max_x() + 3.0, outer.max_y() + 3.0);
+        let (width, height) = (
+            (size.0 * scale).ceil() as u32,
+            (size.1 * scale).ceil() as u32,
+        );
+        let mut all = vec![PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, size.0, size.1)),
+            paint: Paint::Solid(Color::new(0.62, 0.7, 0.81, 1.0)),
+        }];
+        all.push(PaintOp::PushClip(Shape::Rect(Rect::new(
+            -1.0e4,
+            rect.y() - top_reach,
+            2.0e4,
+            2.0e4,
+        ))));
+        all.extend(ops);
+        all.push(PaintOp::PopClip);
+        let node = PaintNode {
+            layer: None,
+            id: PaintNodeId(1),
+            parent: None,
+            revision: PaintRevision(1),
+            transform: Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            clip: None,
+            group: None,
+            bounds: Rect::new(0.0, 0.0, size.0, size.1),
+            hit: Rect::new(0.0, 0.0, 0.0, 0.0),
+            ops: all,
+        };
+        let mut renderer = CpuRenderer::new(
+            CpuConfig {
+                max_pixels: 1 << 26,
+                glyph_cache_bytes: 0,
+                image_cache_bytes: 1 << 24,
+                font_smoothing: true,
+            },
+            NoGlyphs,
+        );
+        let list = DisplayList { nodes: vec![node] };
+        let frame = renderer
+            .render(&RenderRequest {
+                list: &list,
+                resources,
+                scale,
+                width,
+                height,
+                damage: &DamageRegion::Full,
+            })
+            .unwrap();
+        renderer.frame(frame).unwrap().pixels.clone()
+    }
+
+    /// The bands laid over as one picture have the pixels of the bands filled in place, to within the two steps a
+    /// colour may round apart, at every scale and with the top cut off by the bar's edge.
+    #[test]
+    fn the_bands_laid_as_one_picture_have_the_pixels_of_the_bands_filled_in_place() {
+        let (rect, top_reach) = (Rect::new(140.0, 30.0, 292.0, 404.5), 22.0);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let filled = draw_over_backdrop(
+                rect,
+                top_reach,
+                scale,
+                bands(rect, top_reach),
+                &PaintResources::default(),
+            );
+            let picture = draw_bands(rect, top_reach, scale).unwrap();
+            let mut resources = PaintResources::default();
+            resources.images.insert(picture.id, picture.image.clone());
+            let laid = vec![PaintOp::Image {
+                image: cupertino_kit::render::ResourceRef {
+                    id: picture.id,
+                    revision: picture.image.revision,
+                },
+                src: Rect::new(
+                    0.0,
+                    0.0,
+                    f64::from(picture.image.width),
+                    f64::from(picture.image.height),
+                ),
+                dst: picture.dst,
+                sampling: Sampling::Nearest,
+            }];
+            let laid = draw_over_backdrop(rect, top_reach, scale, laid, &resources);
+            let apart = filled
+                .iter()
+                .zip(&laid)
+                .filter(|(a, b)| a.abs_diff(**b) > 2)
+                .count();
+            assert_eq!(apart, 0, "scale {scale}: {apart} channels beyond 2 steps");
+            let bare = draw_over_backdrop(rect, top_reach, scale, Vec::new(), &resources);
+            let darkened = bare.iter().zip(&laid).filter(|(a, b)| a != b).count();
+            assert!(
+                darkened > filled.len() / 4,
+                "scale {scale}: the bands darken the backdrop"
+            );
+        }
+    }
+
+    /// A band picture is made while the panel rests and found by any later frame with the same outline and scale,
+    /// moving or not; a moving outline never seen before is filled in place; the oldest of more pictures than are
+    /// kept is let go.
+    #[test]
+    fn a_band_picture_is_made_at_rest_and_found_again_by_a_later_frame() {
+        let rect = Rect::new(140.0, 30.0, 292.0, 404.5);
+        assert!(band_image(rect, 22.0, 1.5, false).is_none(), "moving, new");
+        let (made, _, _) = band_image(rect, 22.0, 1.5, true).unwrap();
+        let (found, _, _) = band_image(rect, 22.0, 1.5, false).unwrap();
+        assert_eq!(found, made, "a later frame, moving, finds it");
+        assert!(
+            band_image(rect, 22.0, 2.0, false).is_none(),
+            "another scale"
+        );
+        for i in 0..BAND_IMAGES {
+            band_image(rect.translate(0.0, i as f64 + 1.0), 22.0, 1.5, true).unwrap();
+        }
+        let (again, _, _) = band_image(rect, 22.0, 1.5, true).unwrap();
+        assert_ne!(again, made, "the oldest was let go and made again");
     }
 
     #[test]

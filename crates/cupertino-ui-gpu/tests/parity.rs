@@ -1065,3 +1065,174 @@ fn a_kept_scroll_layer_paints_only_the_rows_that_come_into_view() {
         }
     }
 }
+
+/// A round button's side in points, its edge's width and the edge's black in the dark and the light appearance: the
+/// round glass buttons beside a search field, whose edge is a stroke just outside the circle.
+const ROUND_BUTTON: f64 = 55.0;
+const ROUND_EDGE: f64 = 0.5;
+const ROUND_EDGE_DARK: f32 = 0.93;
+const ROUND_EDGE_LIGHT: f32 = 0.27;
+/// The keyboard focus ring around it: a stroke this wide just outside the circle.
+const ROUND_FOCUS: f64 = 3.0;
+/// The room around the button in its window, in points: its edge and its focus ring on every side.
+const ROUND_ROOM: f64 = 5.0;
+
+/// The outline of `rect` with corners of `radius` as path verbs, each quarter circle one cubic.
+fn rounded_outline(rect: Rect, radius: f64) -> Vec<PathVerb> {
+    // a quarter circle's control points sit this far along its tangents, as a fraction of the radius
+    const KAPPA: f64 = 0.552_284_75;
+    let (l, t, r, b) = (rect.min_x(), rect.min_y(), rect.max_x(), rect.max_y());
+    let k = radius * KAPPA;
+    let p = Point::new;
+    vec![
+        PathVerb::MoveTo(p(l + radius, t)),
+        PathVerb::LineTo(p(r - radius, t)),
+        PathVerb::CubicTo(p(r - radius + k, t), p(r, t + radius - k), p(r, t + radius)),
+        PathVerb::LineTo(p(r, b - radius)),
+        PathVerb::CubicTo(p(r, b - radius + k), p(r - radius + k, b), p(r - radius, b)),
+        PathVerb::LineTo(p(l + radius, b)),
+        PathVerb::CubicTo(p(l + radius - k, b), p(l, b - radius + k), p(l, b - radius)),
+        PathVerb::LineTo(p(l, t + radius)),
+        PathVerb::CubicTo(p(l, t + radius - k), p(l + radius - k, t), p(l + radius, t)),
+        PathVerb::Close,
+    ]
+}
+
+/// A round button at `at` in a window of its own: over `under` (none: the button's face is a layer of its own, which
+/// the compositor lays over its glass), its edge (the circle's outline moved out by half the edge's width, stroked
+/// [`ROUND_EDGE`] wide in black at `edge`), left out inside a capsule `cut` points to its left when there is one (a
+/// shape its glass joins, whose own edge goes round both), its focus ring when `focus`, and all of it at `opacity` in
+/// a group when that is below 1.
+fn round_button(
+    at: Point,
+    edge: f32,
+    under: Option<Color>,
+    cut: Option<f64>,
+    focus: bool,
+    opacity: f32,
+) -> DisplayList {
+    let side = ROUND_BUTTON + 2.0 * ROUND_ROOM + 1.0;
+    let mut root = node(
+        1,
+        None,
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        under
+            .map(|c| PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, side, side)),
+                paint: Paint::Solid(c),
+            })
+            .into_iter()
+            .collect(),
+    );
+    root.bounds = Rect::new(0.0, 0.0, side, side);
+    let circle = Rect::new(0.0, 0.0, ROUND_BUTTON, ROUND_BUTTON);
+    let ring = |width: f64, color: Color| PaintOp::Stroke {
+        shape: Shape::RoundedRect {
+            rect: circle.outset(width / 2.0),
+            radius: ROUND_BUTTON / 2.0 + width / 2.0,
+        },
+        width,
+        paint: Paint::Solid(color),
+    };
+    let mut ops = Vec::new();
+    if opacity < 1.0 {
+        ops.push(PaintOp::PushLayer {
+            opacity,
+            effects: Vec::new(),
+        });
+    }
+    if let Some(gap) = cut {
+        let other = Rect::new(-gap - 200.0, 0.0, 200.0, ROUND_BUTTON);
+        let room = circle.outset(ROUND_EDGE + 1.0).union(&other);
+        let mut verbs = rounded_outline(room, 0.0);
+        verbs.extend(rounded_outline(other, ROUND_BUTTON / 2.0));
+        ops.push(PaintOp::PushClip(Shape::Path {
+            verbs,
+            fill_rule: FillRule::EvenOdd,
+        }));
+    }
+    ops.push(ring(ROUND_EDGE, Color::new(0.0, 0.0, 0.0, edge)));
+    if cut.is_some() {
+        ops.push(PaintOp::PopClip);
+    }
+    if focus {
+        ops.push(ring(ROUND_FOCUS, Color::new(0.0, 0.4, 0.86, 0.5)));
+    }
+    if opacity < 1.0 {
+        ops.push(PaintOp::PopLayer);
+    }
+    let mut button = node(2, Some(1), Transform([1.0, 0.0, 0.0, 1.0, at.x, at.y]), ops);
+    button.bounds = Rect::new(at.x, at.y, ROUND_BUTTON, ROUND_BUTTON).outset(ROUND_ROOM);
+    DisplayList {
+        nodes: vec![root, button],
+    }
+}
+
+/// A stroked circle, as a round button's edge and focus ring draw it, at scales 1, 1.5 and 2 in the dark and the light
+/// appearance: over nothing, over an opaque fill and in a group at partial opacity, at positions on whole points, half
+/// points and between, drawn whole and repainted under damage through the rim. Every pixel is within the tolerance of
+/// the CPU's.
+#[test]
+fn a_stroked_circle_matches_the_cpu() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let resources = resources();
+    let mut failures = Vec::new();
+    let mut largest = 0;
+    let side = ROUND_BUTTON + 2.0 * ROUND_ROOM + 1.0;
+    for scale in SCALES {
+        let size = ((side * scale).ceil() as u32, (side * scale).ceil() as u32);
+        for (appearance, edge, fill) in [
+            ("dark", ROUND_EDGE_DARK, Color::new(0.17, 0.17, 0.18, 1.0)),
+            ("light", ROUND_EDGE_LIGHT, Color::new(0.96, 0.96, 0.97, 1.0)),
+        ] {
+            for at in [
+                Point::new(ROUND_ROOM, ROUND_ROOM),
+                Point::new(ROUND_ROOM + 0.5, ROUND_ROOM + 0.25),
+                Point::new(ROUND_ROOM + 1.0 / 3.0, ROUND_ROOM + 2.0 / 3.0),
+                Point::new(ROUND_ROOM + 0.3, ROUND_ROOM + 0.7),
+            ] {
+                for (under, cut, focus, opacity) in [
+                    (None, None, false, 1.0),
+                    (Some(fill), None, false, 1.0),
+                    (None, None, true, 1.0),
+                    (Some(fill), None, true, 1.0),
+                    (None, None, false, 0.6),
+                    (Some(fill), None, true, 0.85),
+                    (None, Some(8.0), false, 1.0),
+                    (Some(fill), Some(4.5), true, 1.0),
+                    (None, Some(7.25), false, 0.7),
+                ] {
+                    let list = round_button(at, edge, under, cut, focus, opacity);
+                    let rim = Rect::new(at.x - 2.0, at.y + 20.0, ROUND_BUTTON + 4.0, 9.5);
+                    let mut cpu = common::cpu(Boxes);
+                    let mut gpu = common::gpu(&device, Boxes);
+                    for damage in [DamageRegion::Full, DamageRegion::Rects(vec![rim])] {
+                        let f = Frame {
+                            list: &list,
+                            resources: &resources,
+                            scale,
+                            size,
+                            damage: &damage,
+                        };
+                        let a = common::draw_cpu(&mut cpu, &f);
+                        let b = common::draw_gpu(&mut gpu, &f);
+                        let (beyond, most, first) = common::difference(&a, &b, size.0);
+                        largest = largest.max(most);
+                        if beyond > 0 {
+                            let (x, y, p, q) = first.unwrap();
+                            failures.push(format!(
+                                "scale {scale} {appearance} at {at:?} under {under:?} cut {cut:?} focus {focus} opacity \
+                                 {opacity} ({damage:?}): {beyond} pixels beyond, largest {most}; first at ({x}, {y}): \
+                                 cpu {p:?} gpu {q:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("largest difference {largest}");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

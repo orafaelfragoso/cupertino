@@ -641,9 +641,19 @@ Gate:
     The processes now make their programs in turn (`program_cache::take_turn`, a lock in the driver's directory
     waited on up to 2 s), so on a cold cache only the first compiles and the rest load what it saved: cold, the
     processes that load take 40–92 MiB (adding 19–39), the one that compiles 92–133 (adding 76–79). The floor is
-    the driver's compiler in that one process after a driver update, a shader change or a new user. OWNER DECISION:
-    keep it, or have the compositor make the toolkit's programs into the cache at its start (it loads the compiler
-    for its own programs anyway) so that no toolkit process compiles.
+    the driver's compiler in that one process after a driver update, a shader change or a new user. Now the compositor
+    makes the toolkit's programs into the cache as its backend starts (`toolkit_programs`, `program_cache::make_ahead`:
+    a thread and a context of its own on the render node it offers, the processes' turn taken first, keyed as their
+    lookup is), so no toolkit process compiles: in a cold headless session at 1.5 the server made the 7 programs in
+    200 ms and the launcher loaded its 8 and compiled none. On by default, `prepare_toolkit_programs: false` in
+    `compositor.json` turns it off. Tests:
+    `handoff::programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled`,
+    `handoff::making_programs_ahead_replaces_a_stale_binary_and_never_loads_another_drivers` (`cupertino-gpu`),
+    `programs::the_renderers_programs_made_ahead_are_all_loaded_and_none_compiled` (`cupertino-ui-gpu`),
+    `gpu_presenter::the_presenter_finds_every_program_the_server_made_at_its_start_and_compiles_none` and
+    `gpu_presenter::the_server_shows_its_first_frames_while_it_still_makes_the_toolkit_s_programs` (`cupertino-server`).
+    OWNER DECISION: implemented and on; keep it on or turn it off by default. The added memory per process after it:
+    measured at the end.
   - GPU memory per GPU window, open and closed (`nvidia-smi`, Files with a second window opened and closed twice):
     51, 116, 84, 116, 84 MiB. A window adds 65 MiB; closed, 33 MiB stay and serve the next window, never growing.
     What stays is the driver's reservation step 0 measured (a process's first targets reserve one more target's

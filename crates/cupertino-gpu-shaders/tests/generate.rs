@@ -22,6 +22,36 @@ fn the_committed_shaders_are_what_the_sources_generate() {
     );
 }
 
+#[test]
+fn the_compositor_s_rectangle_passes_are_a_set_each_placed_by_the_included_block() {
+    let set = sets()
+        .into_iter()
+        .find(|s| s.dir.ends_with("cupertino-server/shaders/passes"))
+        .expect("the compositor's rectangle passes are a set");
+    assert!(!set.wgsl, "the compositor links GLSL only");
+    let fresh = generate_set(&set).expect("every pass generates");
+    for pass in ["rrect", "shadow", "wallpaper"] {
+        let bindings = fresh
+            .iter()
+            .find(|(f, _)| *f == format!("{pass}.bindings"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{pass} is generated"));
+        // the placement is group 1 in both stages, the pass's own parameters group 0
+        assert!(
+            bindings.contains("uniform 1 0 vertex RectPlace_block"),
+            "{pass}: {bindings}"
+        );
+        assert!(
+            bindings.contains("uniform 1 0 fragment RectPlace_block"),
+            "{pass}: {bindings}"
+        );
+        assert!(
+            bindings.contains("uniform 0 0 fragment"),
+            "{pass}: {bindings}"
+        );
+    }
+}
+
 const ENTRY_POINTS: &str = "
 @vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }
 @fragment fn fs_main() -> @location(0) vec4<f32> { return probe(); }

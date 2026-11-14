@@ -389,6 +389,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_glass_style_names_its_own_wire_style_for_the_other_extensions() {
+        let all = [
+            GlassStyle::Regular,
+            GlassStyle::Clear,
+            GlassStyle::LargePanel,
+            GlassStyle::Bar,
+            GlassStyle::Dense,
+            GlassStyle::Module,
+            GlassStyle::Card,
+            GlassStyle::Track,
+            GlassStyle::Popover,
+            GlassStyle::Switcher,
+            GlassStyle::Sidebar,
+            GlassStyle::SubduedModule,
+            GlassStyle::Snippet,
+            GlassStyle::Veiled,
+            GlassStyle::Toolbar,
+            GlassStyle::Menu,
+        ];
+        let wired: std::collections::HashSet<u32> = all.iter().map(|s| s.wire()).collect();
+        assert_eq!(wired.len(), all.len());
+        assert_eq!(GlassStyle::LargePanel.wire(), WireStyle::LargePanel as u32);
+        assert_eq!(GlassStyle::Menu.wire(), WireStyle::Menu as u32);
+    }
+
+    #[test]
     fn shape_rounds_to_whole_points() {
         let s = Shape::new(&Rect::new(10.4, 20.5, 343.6, 71.49), 12.0).unwrap();
         assert_eq!(

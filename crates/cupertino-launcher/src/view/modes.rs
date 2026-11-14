@@ -6,7 +6,7 @@
 //! pressing it, or the shortcut, switches the launcher to the scope.
 
 use super::browse::{fill, focus_ring, label, line, placed, role, share};
-use super::{glyphs, Input, EDGE_ALPHA_DARK, EDGE_ALPHA_LIGHT};
+use super::{glyphs, Input};
 use crate::modes::{self, Mode};
 use cupertino_kit::controls::{Icon, IconDirection};
 use cupertino_kit::core::{
@@ -168,11 +168,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
                 });
             }
         }
-        let edge = if dark {
-            EDGE_ALPHA_DARK
-        } else {
-            EDGE_ALPHA_LIGHT
-        };
+        let edge = super::edge_alpha(dark, glass);
         let joined: Vec<(Rect, f64)> = self
             .joined
             .iter()

@@ -131,11 +131,23 @@ pub const SHADOW_ALPHA_LIGHT: f32 = 0.22;
 pub const SHADOW_SIDE: f64 = 1.5 * SHADOW_BLUR;
 pub const SHADOW_TOP: f64 = 1.5 * SHADOW_BLUR - SHADOW_OFFSET;
 pub const SHADOW_BOTTOM: f64 = 1.5 * SHADOW_BLUR + SHADOW_OFFSET;
-/// The thin dark edge just outside the panel, and its opacity in each appearance: near black in the dark one, where it
-/// sits against the glass's bright inner rim, so the edge reads as a bevel over any scene.
+/// The thin dark edge just outside the panel, and its opacity in each appearance: near black in the dark one over glass,
+/// where it sits against the glass's bright inner rim, so the edge reads as a bevel over any scene.
 pub const EDGE_WIDTH: f64 = 0.5;
 pub const EDGE_ALPHA_DARK: f32 = 0.93;
+/// The dark edge around the opaque fill drawn when there is no glass: no bright rim inside it to answer, so a softer
+/// line that only separates the fill from the scene.
+pub const EDGE_ALPHA_DARK_OPAQUE: f32 = 0.55;
 pub const EDGE_ALPHA_LIGHT: f32 = 0.27;
+
+/// The opacity of the edge outside a panel in the dark or light appearance, over glass or around the opaque fill.
+pub fn edge_alpha(dark: bool, glass: bool) -> f32 {
+    match (dark, glass) {
+        (true, true) => EDGE_ALPHA_DARK,
+        (true, false) => EDGE_ALPHA_DARK_OPAQUE,
+        (false, _) => EDGE_ALPHA_LIGHT,
+    }
+}
 /// A separator line over the panel's glass: white at this opacity in the dark appearance, black at this one in the
 /// light appearance, so it reads as a faint line on any backdrop. Off the glass (the panel's opaque fill) and with
 /// Increase Contrast it takes the theme's separator colour.
@@ -1422,11 +1434,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
                 });
             }
         }
-        let edge = if dark {
-            EDGE_ALPHA_DARK
-        } else {
-            EDGE_ALPHA_LIGHT
-        };
+        let edge = edge_alpha(dark, glass);
         let joined: Vec<(Rect, f64)> = self
             .joined
             .iter()

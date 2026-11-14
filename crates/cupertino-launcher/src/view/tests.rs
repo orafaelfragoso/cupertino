@@ -2582,6 +2582,29 @@ impl Run {
             })
     }
 
+    /// The colours of the edge lines (strokes [`EDGE_WIDTH`] wide) the node `key` names in the panel paints.
+    fn edges_of(&self, key: &'static str) -> Vec<Color> {
+        let Some(id) = self.driver.runtime().find(self.panel(), &Key::from(key)) else {
+            return Vec::new();
+        };
+        let paint = cupertino_kit::render::PaintNodeId::from(id);
+        self.snapshot()
+            .display_list
+            .nodes
+            .iter()
+            .filter(|n| n.id == paint)
+            .flat_map(|n| &n.ops)
+            .filter_map(|op| match op {
+                PaintOp::Stroke {
+                    width,
+                    paint: Paint::Solid(c),
+                    ..
+                } if *width == EDGE_WIDTH => Some(*c),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The colour of the fill the node `key` names in the panel paints.
     fn fill_of(&self, key: &'static str) -> Option<Color> {
         let id = self.driver.runtime().find(self.panel(), &Key::from(key))?;
@@ -2674,6 +2697,33 @@ fn the_selected_result_over_the_glass_is_a_thin_fill_the_tint_shows_through() {
         assert_eq!(run.fill_of(key), expected, "{appearance:?}, glass {glass}");
         if let Some(fill) = expected.filter(|_| glass) {
             assert!(fill.a < 0.2, "thin enough for the tint to show: {fill:?}");
+        }
+    }
+}
+
+/// The dark appearance's near-black edge answers the glass's bright inner rim; around the opaque fill drawn without
+/// glass, which has no rim, the edge is the softer line. The light appearance's edge is the same either way.
+#[test]
+fn the_panel_s_near_black_edge_is_drawn_over_glass_alone() {
+    assert_eq!(edge_alpha(true, true), EDGE_ALPHA_DARK);
+    assert_eq!(edge_alpha(true, false), EDGE_ALPHA_DARK_OPAQUE);
+    assert!(EDGE_ALPHA_DARK_OPAQUE < EDGE_ALPHA_DARK);
+    assert_eq!(edge_alpha(false, true), edge_alpha(false, false));
+    for (appearance, glass, alpha) in [
+        (Appearance::Dark, true, EDGE_ALPHA_DARK),
+        (Appearance::Dark, false, EDGE_ALPHA_DARK_OPAQUE),
+        (Appearance::Light, true, EDGE_ALPHA_LIGHT),
+        (Appearance::Light, false, EDGE_ALPHA_LIGHT),
+    ] {
+        let run = Run::with(appearance, glass);
+        let edges = run.edges_of("panel");
+        assert!(!edges.is_empty(), "{appearance:?}, glass {glass}: an edge");
+        for edge in edges {
+            assert_eq!(
+                (edge.r, edge.g, edge.b, edge.a),
+                (0.0, 0.0, 0.0, alpha),
+                "{appearance:?}, glass {glass}"
+            );
         }
     }
 }

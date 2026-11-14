@@ -496,6 +496,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `cursor_size` | number | `1.0` | cursor scale, clamped to 1 to 4 |
 | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` | `#000000`, `#ffffffff` | cursor colours |
 | `shake_to_locate` | bool | `true` | shake to locate |
+| `output_depth` | `8` or `10` | `8` | bits a channel of the displays' primary planes on the text console; 10 asks for `AB30`, and a display without a 10-bit format keeps 8; read at the session's start; captures stay 8-bit |
 | `shell` | array of `{name, command} | ` | processes the supervisor starts |
 | `dev_folder` | `{path, components}` | none | the development folder some shell processes start from (system file only; applies from each named process's next start; *Development folder*) |
 | `screenshot` | string array | `["/usr/bin/cupertino-screenshot"]` | screenshot process (non-empty; system file only, read at start) |

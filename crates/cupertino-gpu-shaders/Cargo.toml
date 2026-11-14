@@ -11,7 +11,7 @@ autotests = false
 layer = "tools"
 
 [dependencies]
-naga = { version = "24", features = ["wgsl-in", "glsl-out", "spv-out"] }
+naga = { version = "30", features = ["wgsl-in", "glsl-out", "spv-out"] }
 
 [[test]]
 name = "suite"

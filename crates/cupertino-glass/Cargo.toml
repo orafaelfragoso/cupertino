@@ -27,7 +27,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 anyhow = "1"
 
 [dev-dependencies]
-naga = { version = "24", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 
 [[test]]
 name = "suite"

@@ -10,5 +10,7 @@ mod goldens;
 mod memory;
 #[path = "parity.rs"]
 mod parity;
+#[path = "programs.rs"]
+mod programs;
 #[path = "timing.rs"]
 mod timing;

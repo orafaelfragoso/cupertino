@@ -16,6 +16,7 @@
 //! | `wallpaper_color` | `#rrggbb`: a solid colour in place of any picture |
 //! | `material_density` | number 0 to 1: how much denser (less see-through) every material is made, 0 leaving the recipes as they are |
 //! | `output_depth` | `8` or `10`: bits a channel of the displays' primary planes, 8 by default; 10 falls back to 8 where a display has no 10-bit format; read when the session starts |
+//! | `prepare_toolkit_programs` | boolean, `true` by default: the compositor makes the toolkit's GPU programs into the per-user program cache on a thread of its own when the session starts, so no application process compiles them; read when the session starts |
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
 //! | `show_scroll_bars` | `automatic` (beside the content while a mouse is connected, else over it while it scrolls), `when-scrolling`, `always` |
@@ -213,6 +214,8 @@ pub struct CompositorSettings {
     pub material_density: Option<f64>,
     /// Bits a channel of the primary planes: 8 or 10.
     pub output_depth: Option<u8>,
+    /// The compositor makes the toolkit's GPU programs into the per-user program cache when the session starts.
+    pub prepare_toolkit_programs: Option<bool>,
     pub decorations: Option<bool>,
     pub minimize_effect: Option<MinimizeEffectName>,
     pub show_scroll_bars: Option<ScrollBarsName>,
@@ -561,6 +564,7 @@ const KEYS: &[JsonKey] = &[
         },
         |b: &u8| Value::from(*b)
     ),
+    json_key!(prepare_toolkit_programs, boolean, bool_value),
     json_key!(wallpaper, absolute_path, |s: &String| Value::String(
         s.clone()
     )),
@@ -874,6 +878,17 @@ mod tests {
             assert_eq!(problems.len(), 1, "{bad}");
         }
         assert_eq!(CompositorSettings::default().output_depth, None);
+    }
+
+    #[test]
+    fn making_the_toolkit_s_programs_ahead_is_a_boolean_left_unset_by_default() {
+        let (s, problems) =
+            CompositorSettings::parse(r#"{"prepare_toolkit_programs":false}"#, None);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(s.prepare_toolkit_programs, Some(false));
+        let (s, problems) = CompositorSettings::parse(r#"{"prepare_toolkit_programs":"no"}"#, None);
+        assert_eq!((s.prepare_toolkit_programs, problems.len()), (None, 1));
+        assert_eq!(CompositorSettings::default().prepare_toolkit_programs, None);
     }
 
     #[test]

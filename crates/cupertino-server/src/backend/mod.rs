@@ -97,7 +97,8 @@ pub fn render_node(renderer: &GlesRenderer) -> Option<DrmNode> {
 }
 
 /// Create the dmabuf global (with default feedback when the render node is known) and publish the
-/// shm formats of `renderer`.
+/// shm formats of `renderer`; with a render node and [`Cupertino::program_cache_base`], start making the toolkit's GPU
+/// programs into that cache ([`crate::toolkit_programs`]).
 pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     let formats = renderer.dmabuf_formats();
     let node = render_node(renderer);
@@ -114,6 +115,13 @@ pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     };
     state.dmabuf_global = Some(global);
     state.shm_state.update_formats(renderer.shm_formats());
+    // the toolkit's programs for the device the clients are offered, once, off the frame path
+    if let (Some(path), Some(base)) = (
+        node.and_then(|n| n.dev_path()),
+        state.program_cache_base.take(),
+    ) {
+        state.toolkit_programs = crate::toolkit_programs::start(path, base);
+    }
 }
 
 /// The longest a main loop sleeps with nothing due. Every piece of time-driven work names its deadline (the tick's calls

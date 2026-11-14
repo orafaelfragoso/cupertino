@@ -58,6 +58,11 @@ struct Session {
 impl Session {
     /// A headless session; with `explicit_sync`, one that must offer syncobj timelines.
     fn start(explicit_sync: bool) -> Option<Session> {
+        Self::start_with(explicit_sync, None)
+    }
+
+    /// [`Session::start`], its server making the toolkit's programs into the cache under `programs` as it starts.
+    fn start_with(explicit_sync: bool, programs: Option<PathBuf>) -> Option<Session> {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = Cupertino::new(
             Display::new().unwrap(),
@@ -69,6 +74,7 @@ impl Session {
         )
         .unwrap();
         state.withhold_explicit_sync = !explicit_sync;
+        state.program_cache_base = programs;
         state.cursor_status = CursorImageStatus::Hidden;
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
             unavailable(&format!("no EGL device ({e:#})"));
@@ -335,6 +341,87 @@ fn the_presenter_loads_the_programs_it_saved_on_its_next_start() {
         "the next start loads every program and compiles none"
     );
     assert!(home.join(".cache/cupertino/programs").is_dir());
+}
+
+/// The program cache of a fresh home of the test's own, as a toolkit process started with that home looks it up.
+fn fresh_program_cache() -> (tempfile::TempDir, PathBuf) {
+    let home = tempfile::tempdir().unwrap();
+    let base = home.path().join(".cache/cupertino/programs");
+    (home, base)
+}
+
+/// The server makes the toolkit's programs into the user's program cache as its backend starts (a new user, or a driver
+/// or shader change: nothing saved yet); a toolkit process on the GPU started afterwards makes its presenter's and its
+/// renderer's programs from what the server saved and compiles none.
+#[test]
+fn the_presenter_finds_every_program_the_server_made_at_its_start_and_compiles_none() {
+    let (home, base) = fresh_program_cache();
+    let Some(mut s) = Session::start_with(true, Some(base.clone())) else {
+        return;
+    };
+    let Some(thread) = s.state.toolkit_programs.take() else {
+        panic!("the server started making the toolkit's programs with its backend");
+    };
+    let Some(made) = thread.join().unwrap().unwrap() else {
+        unavailable("the driver keeps no program binaries");
+        return;
+    };
+    let n = cupertino_gpu::shaders::TOOLKIT.len() as u32;
+    assert_eq!(
+        (made.compiled, made.stored, made.loaded),
+        (n, n, 0),
+        "{made:?}"
+    );
+    let (report, _) = s.run(home.path(), &["--frames", "90"], |_, _| {});
+    assert_eq!(report["renderer"], "gpu");
+    let up = warm_ups(&report)[0];
+    assert_eq!(up.4, 0, "the window compiles none of its programs: {up:?}");
+    assert!(up.3 >= u64::from(n), "it loads every one: {up:?}");
+}
+
+/// Making the toolkit's programs never holds back the server's frames: with the cache's turn held by another process
+/// (one compiling them already), the thread waits for it while the session draws and presents its first frames.
+#[test]
+fn the_server_shows_its_first_frames_while_it_still_makes_the_toolkit_s_programs() {
+    let (_home, base) = fresh_program_cache();
+    // the driver's directory of the render node the session offers, as the server's thread finds it
+    let renderer = match headless::create_renderer() {
+        Ok(r) => r,
+        Err(e) => return unavailable(&format!("no EGL device ({e:#})")),
+    };
+    let Some(node) = cupertino_server::backend::render_node(&renderer).and_then(|n| n.dev_path())
+    else {
+        return unavailable("the device has no render node");
+    };
+    drop(renderer);
+    let mut probe = cupertino_gpu::Device::new(&cupertino_gpu::DeviceDesc {
+        platform: cupertino_gpu::Platform::RenderNode(node),
+    })
+    .unwrap();
+    probe.set_program_cache(Some(&base));
+    let Some(dir) = probe.program_cache_dir().map(Path::to_path_buf) else {
+        return unavailable("the driver keeps no program binaries");
+    };
+    drop(probe);
+    let turn = cupertino_gpu::program_cache::take_turn(&dir, Duration::ZERO).expect("a free turn");
+
+    let Some(mut s) = Session::start_with(false, Some(base)) else {
+        return;
+    };
+    let thread = s.state.toolkit_programs.take().expect("the thread started");
+    let end = Instant::now() + common::HANG_GUARD;
+    while s.state.outputs[0].scheduler.counts().queued == 0 {
+        assert!(Instant::now() < end, "the session presents no frame");
+        s.pump();
+    }
+    assert!(
+        !thread.is_finished(),
+        "the first frame presented while the programs wait for their turn"
+    );
+    drop(turn);
+    let made = thread.join().unwrap().unwrap().unwrap();
+    let n = cupertino_gpu::shaders::TOOLKIT.len() as u32;
+    assert_eq!(made.compiled, n, "made once the turn came: {made:?}");
 }
 
 #[test]

@@ -3,6 +3,8 @@
 //! native fence into a point and signal an eventfd at a point.
 
 use std::os::fd::AsFd;
+use std::path::Path;
+use std::time::Duration;
 
 use cupertino_gpu::syncobj::{self, SyncNode};
 use cupertino_gpu::*;
@@ -92,6 +94,118 @@ fn a_binary_the_driver_refuses_is_compiled_again_and_replaced() {
     assert_eq!(stats.stored, 2, "{stats:?}");
     assert!(std::fs::read(&file).unwrap().len() > 40, "replaced");
     device.destroy_pipeline(p);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The platform [`common::device`] makes its device on.
+fn platform() -> Platform {
+    common::render_node().map_or(Platform::Surfaceless, Platform::RenderNode)
+}
+
+/// The toolkit's programs made ahead into a cache, as the compositor makes them at a session's start, then by a toolkit
+/// process's device: it makes every pipeline of them from saved binaries and compiles none.
+#[test]
+fn programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled() {
+    let dir = scratch("ahead");
+    if common::device().is_none() {
+        return;
+    }
+    let n = shaders::TOOLKIT.len() as u32;
+    let ahead = program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO);
+    let Some(made) = ahead.unwrap() else {
+        common::has(false, "program binary format");
+        return;
+    };
+    assert_eq!(
+        (made.compiled, made.stored, made.loaded),
+        (n, n, 0),
+        "{made:?}"
+    );
+    // made again (the next session's start): every one loaded and checked, none compiled
+    let again = program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (again.loaded, again.compiled, again.refused),
+        (n, 0, 0),
+        "{again:?}"
+    );
+
+    let mut device = common::device().unwrap();
+    device.set_program_cache(Some(&dir));
+    for shader in shaders::TOOLKIT {
+        let (p, _l) = common::pipeline(&device, shader, Blend::PremultipliedOver);
+        device.destroy_pipeline(p);
+    }
+    let stats = device.program_cache_stats();
+    assert_eq!((stats.loaded, stats.compiled), (n, 0), "{stats:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A saved program the driver refuses (written by an earlier driver of the same strings, or damaged) is compiled again
+/// and replaced when the programs are made ahead; the programs another driver version saved, in that driver's own
+/// directory, are never loaded: the current driver's are compiled into its directory, and the next device loads them.
+#[test]
+fn making_programs_ahead_replaces_a_stale_binary_and_never_loads_another_drivers() {
+    let dir = scratch("stale");
+    let Some(mut device) = common::device() else {
+        return;
+    };
+    device.set_program_cache(Some(&dir));
+    let Some(ours) = device.program_cache_dir().map(Path::to_path_buf) else {
+        common::has(false, "program binary format");
+        return;
+    };
+    drop(device);
+    let n = shaders::TOOLKIT.len() as u32;
+    let made = |what| {
+        program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{what}: the driver keeps binaries"))
+    };
+    made("first");
+    // another driver version's directory holds the same programs; ours is gone
+    let theirs = dir.join(program_cache::driver_key(
+        "vendor",
+        "renderer",
+        "an older version",
+    ));
+    std::fs::rename(&ours, &theirs).unwrap();
+    let fresh = made("beside another driver's");
+    assert_eq!((fresh.loaded, fresh.compiled), (0, n), "{fresh:?}");
+    let saved = std::fs::read_dir(&theirs)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|x| x == "bin")
+        })
+        .count() as u32;
+    assert_eq!(saved, n, "left as it was");
+
+    // a binary the driver does not take, in our directory
+    let fill = shaders::UI_FILL;
+    let file = ours.join(program_cache::program_key(
+        fill.name,
+        fill.vertex_glsl,
+        fill.fragment_glsl,
+    ));
+    std::fs::write(
+        &file,
+        b"CPB1\x01\x00\x00\x00a binary from another driver build",
+    )
+    .unwrap();
+    let replaced = made("over a stale binary");
+    assert_eq!(
+        (replaced.refused, replaced.compiled, replaced.loaded),
+        (1, 1, n - 1),
+        "{replaced:?}"
+    );
+    assert!(std::fs::read(&file).unwrap().len() > 64, "replaced");
+    let after = made("after the replacement");
+    assert_eq!((after.loaded, after.compiled), (n, 0), "{after:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

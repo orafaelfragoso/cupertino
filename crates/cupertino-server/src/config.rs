@@ -539,6 +539,9 @@ pub struct Config {
     pub material_density: f64,
     /// Bits a channel of the displays' primary planes (`output_depth`), read when the session starts.
     pub output_depth: crate::output_depth::Depth,
+    /// Whether the server makes the toolkit's GPU programs into the per-user program cache when the session starts
+    /// (`prepare_toolkit_programs`, [`crate::toolkit_programs`]), read then.
+    pub prepare_toolkit_programs: bool,
     /// Windows take a slight tint of the wallpaper's colour (`tint_windows` of `appearance.conf`).
     pub tint_windows: bool,
     /// What a double click on a server-drawn title bar does (`titlebar_double_click` of `appearance.conf`).
@@ -696,6 +699,7 @@ impl Default for Config {
             tile_margins: true,
             material_density: 0.0,
             output_depth: crate::output_depth::Depth::Eight,
+            prepare_toolkit_programs: true,
             tint_windows: true,
             titlebar_double_click: cupertino_defaults::appearance::TitlebarAction::Zoom,
         }
@@ -968,6 +972,9 @@ impl Config {
         if let Some(bits) = f.output_depth {
             self.output_depth = crate::output_depth::Depth::from_setting(Some(bits));
         }
+        if let Some(b) = f.prepare_toolkit_programs {
+            self.prepare_toolkit_programs = b;
+        }
         if let Some(b) = f.decorations {
             self.window.decorations = b;
         }
@@ -1132,6 +1139,16 @@ mod tests {
         assert_eq!(c.output_depth, Depth::Ten);
         c.apply_file(&CompositorSettings::parse(r#"{"output_depth":8}"#, None).0);
         assert_eq!(c.output_depth, Depth::Eight);
+    }
+
+    #[test]
+    fn the_toolkit_s_programs_are_made_ahead_unless_the_file_turns_it_off() {
+        let mut c = Config::default();
+        assert!(c.prepare_toolkit_programs);
+        c.apply_file(&CompositorSettings::parse(r#"{"appearance":"dark"}"#, None).0);
+        assert!(c.prepare_toolkit_programs, "a file without the key");
+        c.apply_file(&CompositorSettings::parse(r#"{"prepare_toolkit_programs":false}"#, None).0);
+        assert!(!c.prepare_toolkit_programs);
     }
 
     #[test]

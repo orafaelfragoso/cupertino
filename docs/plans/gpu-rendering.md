@@ -776,8 +776,11 @@ Gate:
           renderer's frame split by layer as the CPU renderer's is (the runtime makes each layer's renderer with the
           window's factory, a GPU renderer on the GPU). The example's `--renderer` draws the layer with the toolkit's
           GPU renderer on the presenter's device; the server shows it from dmabufs of the layer's own surface, every
-          frame handed over (`a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own`, the
-          local GPU tier).
+          frame handed over, at its rect in points at 1, 1.5 and 2 as from shared memory
+          (`a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own`, the local GPU tier). A
+          layer's dmabuf was first shown at one buffer pixel per point, as large as the output's scale too large: its
+          viewport took the frame's pixel size for the layer's size, which a layer's role leaves to the client, and now
+          takes the layer's size in points (`GpuFrame::preferred`).
   - The launcher's open and close as compositor layers, keeping its look (the owner's choice: the look as it is drawn
     now, run by the compositor). Split:
     - [x] Glass groups (version 3, `set_glass_group`): the layers of one group draw their glass as one container of

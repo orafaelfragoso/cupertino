@@ -1701,18 +1701,31 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
 }
 
 /// The same window on the GPU (`--renderer`, `CUPERTINO_RENDERER=gpu`): the layer's frames are drawn by the toolkit's
-/// GPU renderer on the presenter's device and shown from dmabufs of the layer's own surface. Skips (or with
-/// `CUPERTINO_GPU_REQUIRED=1` fails) without a render node.
+/// GPU renderer on the presenter's device and shown from dmabufs of the layer's own surface, at 1, 1.5 and 2: its
+/// buffer is drawn at the window's scale and shown at the rect the window gave it, in points, as from shared memory.
+/// Skips (or with `CUPERTINO_GPU_REQUIRED=1` fails) without a render node.
 #[test]
 fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own() {
-    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+    for scale in [1.0, 1.5, 2.0] {
+        if !gpu_layer_at(scale) {
+            return;
+        }
+    }
+}
+
+/// [`a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own`] at `scale`; false where it
+/// skips.
+fn gpu_layer_at(scale: f64) -> bool {
+    use smithay::backend::renderer::utils::{
+        with_renderer_surface_state, RendererSurfaceStateUserData,
+    };
     use smithay::wayland::compositor::with_states;
     use smithay::wayland::dmabuf::get_dmabuf;
     use std::process::Stdio;
     let required = std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() == Ok("1");
-    let Some(mut h) = Harness::new(1.0, false) else {
+    let Some(mut h) = Harness::new(scale, false) else {
         assert!(!required, "CUPERTINO_GPU_REQUIRED=1: no EGL device");
-        return;
+        return false;
     };
     let renderer = h.state.backend.as_mut().unwrap().renderer();
     if cupertino_server::backend::render_node(renderer).is_none() {
@@ -1723,7 +1736,7 @@ fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_o
         eprintln!(
             "SKIPPED: the device has no render node; set CUPERTINO_GPU_REQUIRED=1 to fail instead"
         );
-        return;
+        return false;
     }
     let home = tempfile::tempdir().unwrap();
     let runtime = home.path().join("runtime");
@@ -1756,12 +1769,14 @@ fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_o
         }
     }
     let _window = Kill(command.spawn().expect("the window"));
-    let layer_surface = |h: &Harness| {
-        let window = h.state.windows.iter().find(|w| w.mapped)?;
-        let surface = window.toplevel.wl_surface().clone();
-        present(&surface, h.state.now(), false)
-            .first()
-            .map(|l| l.surface.clone())
+    let drawn = |h: &Harness| {
+        h.state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .map_or_else(Vec::new, |w| {
+                present(w.toplevel.wl_surface(), h.state.now(), false)
+            })
     };
     let on_dmabuf = |surface: &ServerSurface| {
         with_states(surface, |states| {
@@ -1772,24 +1787,55 @@ fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_o
             buffer.is_some_and(|b| get_dmabuf(&b).is_ok())
         })
     };
+    let layer_on_dmabuf = |h: &Harness| drawn(h).first().is_some_and(|l| on_dmabuf(&l.surface));
+    // the layer's first frame from a dmabuf, where it shows before its fade
+    h.wait_until("the layer's first frame from a dmabuf", |h| {
+        layer_on_dmabuf(h)
+    });
+    let layer = drawn(&h)[0].clone();
+    // the buffers are made in size steps and cropped to the frame
+    let source = with_renderer_surface_state(&layer.surface, |s| s.view())
+        .flatten()
+        .expect("the layer's buffer")
+        .src
+        .size;
+    assert_eq!(
+        (source.w, source.h),
+        (120.0 * scale, 60.0 * scale),
+        "at {scale}: drawn at the window's scale"
+    );
+    assert_eq!(
+        layer.content,
+        (120.0, 60.0),
+        "at {scale}: its frame shown at the layer's size in points"
+    );
+    assert_eq!(
+        (layer.x, layer.y, layer.width, layer.height),
+        (40.0, 30.0, 120.0, 60.0),
+        "at {scale}: at the rect the window gave it"
+    );
     let mut from_dmabuf = 0;
     h.wait_until("the GPU frames handed over", |h| {
-        if layer_surface(h).is_some_and(|s| on_dmabuf(&s)) {
+        if layer_on_dmabuf(h) {
             from_dmabuf += 1;
         }
         std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
     });
     // the last frame handed over is shown once the server has taken it
-    h.wait_until("the layer's frame from a dmabuf", |h| {
-        layer_surface(h).is_some_and(|s| on_dmabuf(&s))
-    });
+    h.wait_until("the layer's frame from a dmabuf", |h| layer_on_dmabuf(h));
+    assert_eq!(
+        drawn(&h)[0].content,
+        (120.0, 60.0),
+        "at {scale}: every frame at the layer's size"
+    );
     let r = std::fs::read_to_string(&report).unwrap();
-    eprintln!("trace: {from_dmabuf} server steps showed the layer from a dmabuf; {r}");
+    eprintln!("trace: at {scale}, {from_dmabuf} server steps showed the layer from a dmabuf; {r}");
     assert!(r.contains("surface_layers 1"), "{r}");
     assert!(
         r.contains(&format!("layer_gpu_frames {}", 8)),
         "every GPU frame was handed over: {r}"
     );
+    true
 }
 
 /// Samples as the protocol carries them: 32-bit floats in the host's byte order.

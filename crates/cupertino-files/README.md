@@ -526,7 +526,8 @@ cargo test --release -p cupertino-files --features app --test suite -- --ignored
 ## Open issues
 
 * Scrolling the listing, with the wheel or with an arrow key past the last row in view, repaints the whole listing on
-  the CPU: 60–70 ms a frame at 3840×2160, over the 8 ms budget. Opening a folder and the key of a search whose results
+  the CPU: with the window filling a 3840×2160 output, 57–59 ms a frame (p50) at scales 1 and 1.5 and 34 ms at
+  scale 2, over the 8 ms budget (`docs/plans/gpu-rendering.md`, Measurements). Opening a folder and the key of a search whose results
   fill the listing take as long. At scale 1 the search field's animation and typing a new name take 8–10 ms. See Frame
   time.
 * A drop from another application shows a move while it is held even when it will copy across devices. The drag badge

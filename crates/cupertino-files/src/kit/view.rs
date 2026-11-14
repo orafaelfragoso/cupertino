@@ -1224,6 +1224,10 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
+        names: Some(grid::NameShape {
+            text_size,
+            max_lines: lines,
+        }),
         revision: session.view_revision,
         strip: false,
     });

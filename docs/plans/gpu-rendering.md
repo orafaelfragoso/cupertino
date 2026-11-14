@@ -327,27 +327,44 @@ Works with the CPU renderer; no GPU needed.
         the focus into a row and out, a row made anew, a row dropped and a resize, the nodes, the focus order, the
         scopes, roving groups and items, the hidden roots and the accessibility diff against a full build). Its time
         in a scroll frame: measured at the end.
-  - [ ] The names of a row measured before it comes into view. Files' grid already builds the cells 200 points past
+  - [x] The names of a row measured before it comes into view. Files' grid already builds the cells 200 points past
         the viewport (`OVERSCAN` in `crates/cupertino-files/src/kit/grid.rs`), so a row's names are shaped in the frame
         it enters that band, not the frame it shows; what is left is to shape them outside any frame: the runtime
         handing a window's idle time between a presented frame and the next frame event to work its widgets ask for
         (the names of the cells past the band, in the direction of the scroll), shaped into the text system's cache
-        (two generations of 512 paragraphs) so the frame that builds them finds them there. Split, not taken up in the
-        round that kept semantics and drew into the leased buffer, whose time went to those:
-    - [ ] The runtime hands a window's idle time to the widgets that ask for it: when nothing is ready and the run loop
-          would wait on the window system after a presented frame, each widget that asked in its last layout or paint
-          (a request on its context, cleared by the call) is called with an idle context that shapes paragraphs into
-          the text system's cache, within a time budget and stopping at the first event that arrives. Test: work asked
-          for runs only between frames, never inside one, and what it shapes is found by the next frame's layout, the
-          same shaping as the layout's own.
-    - [ ] Files' grid asks for it: the names of the cells past its overscan band, in the direction of the scroll, at
-          the width and style a cell shapes them with. Test: a scroll whose frames build new rows shapes no paragraph
-          inside a frame once the idle work ran.
+        (two generations of 512 paragraphs) so the frame that builds them finds them there. Split:
+    - [x] The runtime hands a window's idle time to the widgets that ask for it (`Widget::idle`,
+          `Runtime::run_idle`, `crates/cupertino-ui-core/src/runtime/idle.rs`): when nothing is ready and the run loop
+          would wait on the window system, each node that asked in its measure, its paint or its last idle call
+          (`MeasureCx`, `PaintCx` and `IdleCx::request_idle`, cleared by the call) is called with an idle context that
+          gives it the window's environment, its text system with it, and the time left. The time goes in slices of 1
+          ms at most, each ending 2 ms before a window waiting on its frame is due by its frame clock (the shortest of
+          its last eight periods between frames, a frame a whole period late no longer counted) and before any wake;
+          the window system is looked at before each slice and the first event that arrives ends it. With no request
+          left the loop waits as before, so the work adds no wakeup once done; with work left for a frame that is due,
+          the wait is bounded by the frame being a period late
+          (`idle_work_runs_between_frames_never_inside_one_and_once_for_each_request`,
+          `a_node_asks_from_its_measure_and_one_that_went_away_is_not_called`,
+          `slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_on_after_the_frame`,
+          `the_first_event_that_arrives_ends_the_idle_time`, `once_the_work_is_done_the_loop_waits_as_it_does_without_it`,
+          `what_idle_work_shapes_the_next_frame_lays_out_without_shaping_and_as_it_shapes_itself`,
+          `the_frame_clock_takes_the_shortest_recent_period_and_lets_a_late_frame_go`). The text system's cache stays
+          within its two generations however much is shaped ahead
+          (`the_cache_holds_two_generations_at_most_and_the_last_paragraphs_shaped_whole`).
+    - [x] Files' grid asks for it: its paint asks whenever cells cross the band's edges or the scroll turns, and its
+          idle work shapes the names of the cells within 200 points past the band in the direction of the scroll,
+          nearest first and 64 at most, as a cell's name shapes them: in its name width, then at the width it took
+          (`the_names_shaped_ahead_lie_past_the_cells_built_that_way_nearest_first_and_a_bounded_few`,
+          `the_grid_asks_for_idle_time_again_when_cells_cross_its_band_or_the_scroll_turns`). A scroll whose frames
+          build new rows shapes no paragraph inside a frame once the idle work ran, and each of its frames has the
+          pixels of the same scroll without it
+          (`a_scroll_whose_frames_build_new_rows_shapes_no_name_inside_a_frame_once_the_idle_work_ran`).
   - Names shaped between frames were not taken up in the rounds that made paint and damage incremental, the
     shared-memory copy cheaper and then gone, the opaque region declared and placements and semantics kept; their
     time went to those. At the fifth round the layout p99 is 3.2–3.9 ms on the GPU path at both scales and 1.6–13.8 on
     the CPU path at loads of 7 to 11, so not under 4 ms in every run ("Measurements", "Step 4", "Fifth round"); with
-    kept semantics: measured at the end.
+    kept semantics and the names shaped between frames: measured at the end. The idle wakeups with the names shaped
+    between frames: measured at the end.
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints

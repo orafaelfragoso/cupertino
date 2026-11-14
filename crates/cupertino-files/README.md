@@ -508,6 +508,12 @@ search field's animation repaints only the toolbar, a hover repaints no row, a w
 and a window kept up to date from damage alone has, after each of these, the pixels of the window drawn whole (at
 scale 1.5), give or take the few levels by which the renderer's partial redraw blends an edge.
 
+The icon grid shapes the names of the cells about to be built in the window's idle time, between frames: the cells
+within 200 pt past those it builds, in the direction of the last scroll, nearest first and 64 at most, each as its
+cell's name shapes it, into the text system's cache. Its paint asks for the time whenever cells cross the edges of
+what it builds or the scroll turns. `tests/kit-idle.rs` pins that a scroll whose frames build new rows shapes no
+name inside a frame once that work ran, and that every frame has the pixels of the same scroll without it.
+
 `tests/kit-repaint.rs` holds `repaint_budget_report`, `#[ignore]`d because it measures wall time. In a generated folder of
 1500 files and with the window filling a 3840×2160 display at scales 2, 1.5 and 1, it times every frame of opening the
 folder, arrow-key selection among the rows in view and past them, hover, wheel scrolling, the search field opening

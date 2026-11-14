@@ -56,6 +56,9 @@ fully covered windows drop their layers; a toolkit window declares the part its 
 region, so it covers the windows under it as any client that declares one does. A kept subtree that did not change is
 placed from what it was placed from, its semantics laid in as the last pass left them, laid into the next paint as it
 was and compared with the last frame's in one go, so a scroll walks, places and compares only the rows that changed.
+Work a later frame would do is done between frames: the runtime hands a window's idle time, in short slices that end
+before its next frame is due, to the widgets that ask for it, and Files' grid shapes there the names of the cells it is
+about to build, so the frame that builds them shapes none.
 
 ### 3. Who draws on the GPU: classes of surface
 

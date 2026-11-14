@@ -11,8 +11,8 @@ use std::rc::Rc;
 
 use cupertino_kit::controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, Element, Environment, Event, EventCx, FocusTarget, Key,
-    MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+    AccessibleStates, Action, Change, Element, Environment, Event, EventCx, FocusTarget, IdleCx,
+    Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -51,6 +51,12 @@ const LEFT_TAB: Keysym = Keysym(0xfe20);
 
 /// How far past the viewport cells are built, in points.
 const OVERSCAN: f64 = 200.0;
+/// How far past the cells built the names are shaped between frames, in points, in the direction of the scroll: a
+/// frame that scrolls less than this builds cells whose names are shaped.
+const AHEAD: f64 = 200.0;
+/// The most names shaped between two frames. Each is a paragraph in the text system's cache, a name cut short a few,
+/// so they fit in one of its generations beside the names of the cells built.
+const AHEAD_NAMES: usize = 64;
 /// How long typed letters add to one search (1 s).
 const TYPE_SELECT_NS: u64 = 1_000_000_000;
 /// Corner radius of the highlight behind a selected name (approximate).
@@ -170,6 +176,9 @@ pub(super) struct IconGrid {
     pub lead: f64,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
     pub name: Rc<dyn Fn(usize, bool) -> Element<Message>>,
+    /// How `name` shapes an item's name, for the names past the cells built, which the grid shapes in the window's
+    /// idle time so the frame that builds their cells finds them shaped; `None` where the cells show no names.
+    pub names: Option<NameShape>,
     /// Changes whenever what the cells are made from may have changed, other than where the grid is scrolled to: a
     /// cell built at the same revision, place and state is kept as it was rather than built and compared again.
     pub revision: u64,
@@ -187,6 +196,15 @@ pub(super) struct TypeSelect {
     press: Option<Press>,
     band: Option<Band>,
     clicks: Clicks,
+    /// The last scroll went toward the start: the names before the cells built are shaped ahead, else those after.
+    back: bool,
+}
+
+/// How a grid's names are shaped: in the view's text size, keeping at most `max_lines` lines ([`name`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct NameShape {
+    pub text_size: f64,
+    pub max_lines: u32,
 }
 
 /// A press on an item, held: moving [`drag::START_DISTANCE`] drags the selection, a release without moving
@@ -274,10 +292,7 @@ impl IconGrid {
                 Box::new(move |c| c.frame.x + c.frame.w >= left && c.frame.x <= right)
             }
             false => {
-                // in the grid, which starts `lead` down the content: what shows under the toolbar row too
-                let top = self.scroll.offset.y - self.lead - OVERSCAN;
-                let bottom =
-                    self.scroll.offset.y - self.lead + self.scroll.viewport.height + OVERSCAN;
+                let (top, bottom) = self.band();
                 Box::new(move |c| c.frame.y + c.frame.h >= top && c.frame.y <= bottom)
             }
         };
@@ -287,6 +302,48 @@ impl IconGrid {
             .filter(|c| near(c) || Some(c.index) == at)
             .map(|c| c.index)
             .collect()
+    }
+
+    /// The top and the bottom of the band whose cells are built, in the grid, which starts `lead` down the content:
+    /// what shows under the toolbar row too, and [`OVERSCAN`] past the viewport each way.
+    fn band(&self) -> (f64, f64) {
+        let top = self.scroll.offset.y - self.lead;
+        (top - OVERSCAN, top + self.scroll.viewport.height + OVERSCAN)
+    }
+
+    /// Where the band of built cells ends each way: how many cells lie wholly before it and how many start in it or
+    /// before. The names past it are shaped between frames, so the grid asks for that again when either changes.
+    fn band_edges(&self) -> (usize, usize) {
+        let (top, bottom) = self.band();
+        let cells = &self.layout.cells;
+        (
+            cells.iter().filter(|c| c.frame.y + c.frame.h < top).count(),
+            cells.iter().filter(|c| c.frame.y <= bottom).count(),
+        )
+    }
+
+    /// The items whose names are shaped between frames: those of the cells past the band within [`AHEAD`] points of it,
+    /// after it or, `back`, before it, nearest first, [`AHEAD_NAMES`] at most.
+    fn ahead(&self, back: bool) -> Vec<usize> {
+        let (top, bottom) = self.band();
+        let cells = &self.layout.cells;
+        let cells: Vec<usize> = if back {
+            cells
+                .iter()
+                .rev()
+                .filter(|c| c.frame.y + c.frame.h < top && c.frame.y + c.frame.h >= top - AHEAD)
+                .take(AHEAD_NAMES)
+                .map(|c| c.index)
+                .collect()
+        } else {
+            cells
+                .iter()
+                .filter(|c| c.frame.y > bottom && c.frame.y <= bottom + AHEAD)
+                .take(AHEAD_NAMES)
+                .map(|c| c.index)
+                .collect()
+        };
+        cells
     }
 
     /// `position` in the window as a point of the layout, which is laid out left to right.
@@ -620,11 +677,20 @@ impl Widget<Message> for IconGrid {
         TypeSelect::default()
     }
 
-    fn update(&self, old: &Self, _: &mut TypeSelect) -> Change {
+    fn update(&self, old: &Self, state: &mut TypeSelect) -> Change {
+        let was_back = state.back;
+        if self.scroll.offset.y != old.scroll.offset.y {
+            state.back = self.scroll.offset.y < old.scroll.offset.y;
+        }
         // the view hands the same layout on while it holds (`view::icon_layout`): no cell is compared then
         let relaid = !Rc::ptr_eq(&self.layout, &old.layout) && self.layout != old.layout;
         if relaid || self.scroll.viewport != old.scroll.viewport {
             Change::Layout
+        } else if self.names.is_some()
+            && (state.back != was_back || self.band_edges() != old.band_edges())
+        {
+            // other names lie past the band now: its paint, which draws nothing, asks for the idle time to shape them
+            Change::Paint
         } else {
             Change::None
         }
@@ -831,7 +897,37 @@ impl Widget<Message> for IconGrid {
         }
     }
 
-    fn paint(&self, _: &TypeSelect, _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &TypeSelect, cx: &mut PaintCx<'_>) {
+        if self.names.is_some() && !self.strip {
+            cx.request_idle();
+        }
+    }
+
+    /// Shapes the names past the band of built cells, in the direction of the last scroll, as each cell's name shapes
+    /// its own: laid out in its cell's name width, then at the width it took, as its measure and its paint lay it out.
+    /// The text system's cache keeps them for the frame that builds their cells, which then shapes none.
+    fn idle(&self, state: &TypeSelect, cx: &mut IdleCx<'_>) {
+        let Some(names) = self.names.filter(|_| !self.strip) else {
+            return;
+        };
+        for index in self.ahead(state.back) {
+            if !cx.has_time() {
+                cx.request_idle();
+                return;
+            }
+            let (Some(cell), Some(item)) = (self.layout.cells.get(index), self.items.get(index))
+            else {
+                continue;
+            };
+            let content =
+                AttributedText::plain(item.name.clone(), TextStyle::new(names.text_size as f32));
+            let room = cell.label_frame.w - NAME_INSETS.left - NAME_INSETS.right;
+            let lines = Some(names.max_lines);
+            if let Some(laid) = laid_out_name(cx.env(), &content, lines, room) {
+                laid_out_name(cx.env(), &content, lines, laid.size().width);
+            }
+        }
+    }
 
     fn semantics(&self, _: &TypeSelect, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::List);
@@ -1419,6 +1515,7 @@ mod tests {
             band: None,
             lead: 0.0,
             name: Rc::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            names: None,
             revision: 0,
             strip: false,
         };
@@ -1466,6 +1563,7 @@ mod tests {
             band: None,
             lead: 0.0,
             name: Rc::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            names: None,
             revision: 7,
             strip: false,
         };
@@ -1505,6 +1603,112 @@ mod tests {
         grid.revision += 1;
         let revised = marks(&mut grid);
         assert!(revised.iter().all(|(key, mark)| selected[key] != *mark));
+    }
+
+    /// A grid of `count` named items `columns` cells wide in a 600 point view scrolled `offset` down.
+    fn named_grid(count: usize, columns: usize, offset: f64) -> IconGrid {
+        let params = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
+        let width = columns as f64 * 112.0 + 2.0 * icon::MARGIN;
+        let layout = icon::layout(
+            &params,
+            width,
+            &[SectionSpec { title: None, count }],
+            Flow::Leading,
+        );
+        IconGrid {
+            window: 1,
+            label: "Items".into(),
+            params,
+            items: (0..count)
+                .map(|i| crate::Entry::synthetic(&format!("item {i}.txt"), false, 1))
+                .collect(),
+            icon: Rc::new(|_| Vec::new()),
+            scroll: ScrollState {
+                offset: Point::new(0.0, offset),
+                content: Size::new(layout.content.w, layout.content.h),
+                viewport: Size::new(width, 600.0),
+            },
+            layout: Rc::new(layout),
+            selection: Selection::new([], None, None),
+            ringed: Selection::new([], None, None),
+            band: None,
+            lead: 0.0,
+            name: Rc::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            names: Some(NameShape {
+                text_size: 12.0,
+                max_lines: 2,
+            }),
+            revision: 0,
+            strip: false,
+        }
+    }
+
+    #[test]
+    fn the_names_shaped_ahead_lie_past_the_cells_built_that_way_nearest_first_and_a_bounded_few() {
+        let grid = named_grid(400, 8, 1000.0);
+        let built = grid.built();
+        let (top, bottom) = grid.band();
+        let cells = &grid.layout.cells;
+
+        let after = grid.ahead(false);
+        assert!(!after.is_empty() && after.len() <= AHEAD_NAMES);
+        assert_eq!(after[0], built.last().unwrap() + 1, "nearest first");
+        assert!(after.windows(2).all(|w| w[0] < w[1]));
+        for &i in &after {
+            assert!(!built.contains(&i));
+            let y = cells[i].frame.y;
+            assert!(y > bottom && y <= bottom + AHEAD, "item {i} at {y}");
+        }
+
+        let before = grid.ahead(true);
+        assert!(!before.is_empty() && before.len() <= AHEAD_NAMES);
+        assert_eq!(before[0] + 1, built[0], "nearest first");
+        assert!(before.windows(2).all(|w| w[0] > w[1]));
+        for &i in &before {
+            assert!(!built.contains(&i));
+            let end = cells[i].frame.y + cells[i].frame.h;
+            assert!(end < top && end >= top - AHEAD, "item {i} ending at {end}");
+        }
+
+        // a wide grid has more names past the band than one idle time shapes, and the cache holds
+        let wide = named_grid(4000, 60, 1000.0);
+        assert_eq!(wide.ahead(false).len(), AHEAD_NAMES);
+        // none past the last row
+        let end = named_grid(40, 8, 0.0);
+        assert!(end.ahead(false).is_empty() && end.ahead(true).is_empty());
+    }
+
+    #[test]
+    fn the_grid_asks_for_idle_time_again_when_cells_cross_its_band_or_the_scroll_turns() {
+        let update = |new: &IconGrid, old: &IconGrid, state: &mut TypeSelect| {
+            Widget::<Message>::update(new, old, state)
+        };
+        let mut state = TypeSelect::default();
+        let at = named_grid(400, 8, 1000.0);
+        let nudged = named_grid(400, 8, 1000.5);
+        assert_eq!(at.band_edges(), nudged.band_edges());
+        assert_eq!(update(&nudged, &at, &mut state), Change::None);
+        assert!(!state.back);
+
+        let far = named_grid(400, 8, 1300.0);
+        assert_ne!(far.band_edges(), nudged.band_edges());
+        assert_eq!(update(&far, &nudged, &mut state), Change::Paint);
+
+        // back up a little: the names ahead are now those before the band
+        let turned = named_grid(400, 8, 1299.5);
+        assert_eq!(turned.band_edges(), far.band_edges());
+        assert_eq!(update(&turned, &far, &mut state), Change::Paint);
+        assert!(state.back);
+        assert_eq!(
+            update(&named_grid(400, 8, 1299.0), &turned, &mut state),
+            Change::None
+        );
+
+        // cells that show no names ask for nothing
+        let (mut quiet, mut moved) = (named_grid(400, 8, 1000.0), named_grid(400, 8, 1300.0));
+        quiet.names = None;
+        moved.names = None;
+        assert_eq!(update(&moved, &quiet, &mut state), Change::None);
     }
 
     #[test]

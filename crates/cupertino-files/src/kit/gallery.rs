@@ -204,6 +204,7 @@ fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         lead: 0.0,
         // the strip names no picture: the name is under the large one
         name: Rc::new(|_, _| Element::new(Spacer { min: 0.0 })),
+        names: None,
         revision: session.view_revision,
         strip: true,
     });

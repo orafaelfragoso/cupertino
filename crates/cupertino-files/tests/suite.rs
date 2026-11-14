@@ -20,6 +20,8 @@ mod kit_drag;
 mod kit_drop;
 #[path = "kit-gallery.rs"]
 mod kit_gallery;
+#[path = "kit-idle.rs"]
+mod kit_idle;
 #[path = "kit-item-icons.rs"]
 mod kit_item_icons;
 #[path = "kit-jobs.rs"]

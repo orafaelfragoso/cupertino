@@ -90,4 +90,6 @@ a rule changes this file first, in its own reviewed change.
     *(from the step that gates it)* Each scenario fits in one refresh of the target display. The budgets in the design
     are gates: a change that misses one is fixed or reverted, not shipped.
 24. *(from step 7)* An idle desktop draws no frames, does no GPU work, and wakes no process except by the timers listed
-    in the plan's measurements.
+    in the plan's measurements. *(from step 4)* Work a toolkit window does in its idle time runs only between frames,
+    ends before its next frame is due and changes nothing the window shows; once it is done the window waits as it did
+    without it, so the work adds no wakeup.

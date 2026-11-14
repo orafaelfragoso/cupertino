@@ -380,23 +380,39 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     }
     for (t, (x, y)) in cli.pointers.iter().copied() {
         schedule(event_loop, t, move |state| {
-            state.pointer_moved_to((x, y).into(), 0, None);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
         })?;
     }
     for (t, (x, y)) in cli.clicks.iter().copied() {
         schedule(event_loop, t, move |state| {
             use smithay::backend::input::ButtonState;
-            state.pointer_moved_to((x, y).into(), 0, None);
-            state.pointer_button(crate::events::BTN_LEFT, ButtonState::Pressed, 0);
-            state.pointer_button(crate::events::BTN_LEFT, ButtonState::Released, 0);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
+            state.pointer_button(
+                crate::events::BTN_LEFT,
+                ButtonState::Pressed,
+                input_millis(state),
+            );
+            state.pointer_button(
+                crate::events::BTN_LEFT,
+                ButtonState::Released,
+                input_millis(state),
+            );
         })?;
     }
     for (t, (x, y)) in cli.right_clicks.iter().copied() {
         schedule(event_loop, t, move |state| {
             use smithay::backend::input::ButtonState;
-            state.pointer_moved_to((x, y).into(), 0, None);
-            state.pointer_button(crate::events::BTN_RIGHT, ButtonState::Pressed, 0);
-            state.pointer_button(crate::events::BTN_RIGHT, ButtonState::Released, 0);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
+            state.pointer_button(
+                crate::events::BTN_RIGHT,
+                ButtonState::Pressed,
+                input_millis(state),
+            );
+            state.pointer_button(
+                crate::events::BTN_RIGHT,
+                ButtonState::Released,
+                input_millis(state),
+            );
         })?;
     }
     for (t, name) in cli.modifier_downs.iter().cloned() {
@@ -415,28 +431,28 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     }
     for (t, (x, y)) in cli.presses.iter().copied() {
         schedule(event_loop, t, move |state| {
-            state.pointer_moved_to((x, y).into(), 0, None);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
             state.pointer_button(
                 crate::events::BTN_LEFT,
                 smithay::backend::input::ButtonState::Pressed,
-                0,
+                input_millis(state),
             );
         })?;
     }
     for (t, (x, y)) in cli.releases.iter().copied() {
         schedule(event_loop, t, move |state| {
-            state.pointer_moved_to((x, y).into(), 0, None);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
             state.pointer_button(
                 crate::events::BTN_LEFT,
                 smithay::backend::input::ButtonState::Released,
-                0,
+                input_millis(state),
             );
         })?;
     }
     for (t, (x, y), dy) in cli.scrolls.iter().copied() {
         schedule(event_loop, t, move |state| {
             use smithay::backend::input::{AxisRelativeDirection, AxisSource};
-            state.pointer_moved_to((x, y).into(), 0, None);
+            state.pointer_moved_to((x, y).into(), input_millis(state), None);
             state.pointer_axis(&crate::events::AxisInput {
                 device: String::new(),
                 source: AxisSource::Finger,
@@ -487,6 +503,12 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
         })?;
     }
     Ok(())
+}
+
+/// The milliseconds a scripted pointer event is stamped with: the model clock's, as a device's would be, so clients
+/// see the time between scripted clicks and do not take two at one spot seconds apart for a double click.
+fn input_millis(state: &Cupertino) -> u32 {
+    (state.now() * 1000.0) as u32
 }
 
 /// The axis amounts of a scripted two-finger scroll of `dy` points, horizontal then vertical: the horizontal axis

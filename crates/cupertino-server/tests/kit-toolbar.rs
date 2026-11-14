@@ -359,6 +359,29 @@ fn a_double_click_on_the_toolbar_zooms_the_kit_window_and_another_restores_it() 
     h.wait_until("the window to restore", |s| frame(s) == before);
 }
 
+/// The server's scripted clicks carry the time they are sent at: two at one spot on the toolbar a second apart are two
+/// single clicks, and the window is not zoomed.
+#[test]
+fn two_scripted_clicks_on_the_toolbar_a_second_apart_do_not_zoom_the_kit_window() {
+    let Some(mut h) = Harness::new() else {
+        return;
+    };
+    let before = frame(&h.state);
+    let at = h.screen(TOOLBAR_GAP);
+    h.state.scripted_click(at, BTN_LEFT);
+    h.settle();
+    let resume = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < resume {
+        h.step();
+    }
+    h.state.scripted_click(at, BTN_LEFT);
+    h.settle();
+    // a zoom would show here: the server has what the client did with the clicks
+    h.settle();
+    assert_eq!(h.state(), LifecycleState::Normal);
+    assert_eq!(frame(&h.state), before);
+}
+
 /// However long the server takes between two events, their stamps are as far apart as the events were sent: a zoom
 /// that took a second between two double clicks leaves the stamps no second behind the client's clock.
 #[test]

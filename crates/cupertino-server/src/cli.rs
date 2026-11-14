@@ -385,34 +385,12 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     }
     for (t, (x, y)) in cli.clicks.iter().copied() {
         schedule(event_loop, t, move |state| {
-            use smithay::backend::input::ButtonState;
-            state.pointer_moved_to((x, y).into(), input_millis(state), None);
-            state.pointer_button(
-                crate::events::BTN_LEFT,
-                ButtonState::Pressed,
-                input_millis(state),
-            );
-            state.pointer_button(
-                crate::events::BTN_LEFT,
-                ButtonState::Released,
-                input_millis(state),
-            );
+            state.scripted_click((x, y), crate::events::BTN_LEFT);
         })?;
     }
     for (t, (x, y)) in cli.right_clicks.iter().copied() {
         schedule(event_loop, t, move |state| {
-            use smithay::backend::input::ButtonState;
-            state.pointer_moved_to((x, y).into(), input_millis(state), None);
-            state.pointer_button(
-                crate::events::BTN_RIGHT,
-                ButtonState::Pressed,
-                input_millis(state),
-            );
-            state.pointer_button(
-                crate::events::BTN_RIGHT,
-                ButtonState::Released,
-                input_millis(state),
-            );
+            state.scripted_click((x, y), crate::events::BTN_RIGHT);
         })?;
     }
     for (t, name) in cli.modifier_downs.iter().cloned() {
@@ -509,6 +487,17 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
 /// see the time between scripted clicks and do not take two at one spot seconds apart for a double click.
 fn input_millis(state: &Cupertino) -> u32 {
     (state.now() * 1000.0) as u32
+}
+
+impl Cupertino {
+    /// A scripted click of `button` (an evdev code) at `at`, in global logical points: the pointer goes there, and
+    /// the button is pressed and released, stamped as [`input_millis`] says.
+    pub fn scripted_click(&mut self, at: (f64, f64), button: u32) {
+        use smithay::backend::input::ButtonState;
+        self.pointer_moved_to(at.into(), input_millis(self), None);
+        self.pointer_button(button, ButtonState::Pressed, input_millis(self));
+        self.pointer_button(button, ButtonState::Released, input_millis(self));
+    }
 }
 
 /// The axis amounts of a scripted two-finger scroll of `dy` points, horizontal then vertical: the horizontal axis

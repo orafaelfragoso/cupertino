@@ -33,6 +33,8 @@ pub struct Programs {
     pub rrect: GlesPixelProgram,
     pub wallpaper: GlesPixelProgram,
     pub clip: GlesTexProgram,
+    /// The clip program drawing a vibrant layer's coverage ([`cupertino_scene::source::VibrantBlend`]).
+    pub vibrant: GlesTexProgram,
 }
 
 impl Programs {
@@ -73,11 +75,25 @@ impl Programs {
                 v4("clip_shape"),
             ],
         )?;
+        let vibrant = renderer.compile_custom_texture_shader(
+            format!(
+                "#version 100\n#define VIBRANT\n{}",
+                CLIP.replace("//_SDF_", SDF)
+            ),
+            &[
+                UniformName::new("inv_proj", UniformType::Matrix3x3),
+                f("viewport"),
+                v4("clip_rect"),
+                v4("clip_shape"),
+                v4("vibrant"),
+            ],
+        )?;
         Ok(Self {
             shadow,
             rrect,
             wallpaper,
             clip,
+            vibrant,
         })
     }
 }

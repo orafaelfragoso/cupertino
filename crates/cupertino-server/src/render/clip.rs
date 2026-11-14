@@ -73,6 +73,8 @@ pub struct ClipElement<E> {
     shape: ClipShape,
     /// Generation of `shape`, kept to the high half's width.
     generation: usize,
+    /// Drawn as a vibrant layer: its coverage alone, blended with what lies behind it.
+    vibrant: Option<cupertino_scene::VibrantBlend>,
 }
 
 impl<E> ClipElement<E> {
@@ -89,7 +91,31 @@ impl<E> ClipElement<E> {
             program,
             shape,
             generation: count(generation) & LOW,
+            vibrant: None,
         }
+    }
+
+    /// The element drawn as a vibrant layer through `program`, the vibrant clip program.
+    pub fn vibrant(
+        mut self,
+        program: GlesTexProgram,
+        blend: cupertino_scene::VibrantBlend,
+    ) -> Self {
+        self.program = program;
+        self.vibrant = Some(blend);
+        self
+    }
+
+    /// The vibrant program's uniform and whether the coverage is screened in (over a dark face, not plain).
+    fn vibrant_uniform(&self) -> Option<([f32; 4], bool)> {
+        self.vibrant.map(|v| {
+            let dark = if v.dark { 1.0 } else { 0.0 };
+            let plain = if v.plain { 1.0 } else { 0.0 };
+            (
+                [dark, f32::from(v.weight) / 1000.0, plain, 0.0],
+                v.dark && !v.plain,
+            )
+        })
     }
 
     pub fn shape(&self) -> &ClipShape {
@@ -137,7 +163,7 @@ impl<E: Element> Element for ClipElement<E> {
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        if !self.shape.exact {
+        if !self.shape.exact || self.vibrant.is_some() {
             return OpaqueRegions::default();
         }
         let geo = self.inner.geometry(scale);
@@ -176,31 +202,48 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for ClipElement
             return self.inner.draw(frame, src, dst, damage, opaque_regions);
         };
         let r = self.shape.rect;
-        frame.override_default_tex_program(
-            self.program.clone(),
-            vec![
-                umat3("inv_proj", inv),
-                u2(
-                    "viewport",
-                    self.shape.viewport.0 as f32,
-                    self.shape.viewport.1 as f32,
-                ),
-                u4(
-                    "clip_rect",
-                    [
-                        r.loc.x as f32,
-                        r.loc.y as f32,
-                        r.size.w as f32,
-                        r.size.h as f32,
-                    ],
-                ),
-                u4(
-                    "clip_shape",
-                    [self.shape.extent, self.shape.exponent, 0.0, 0.0],
-                ),
-            ],
-        );
-        let res = self.inner.draw(frame, src, dst, damage, opaque_regions);
+        let vibrant = self.vibrant_uniform();
+        let mut uniforms = vec![
+            umat3("inv_proj", inv),
+            u2(
+                "viewport",
+                self.shape.viewport.0 as f32,
+                self.shape.viewport.1 as f32,
+            ),
+            u4(
+                "clip_rect",
+                [
+                    r.loc.x as f32,
+                    r.loc.y as f32,
+                    r.size.w as f32,
+                    r.size.h as f32,
+                ],
+            ),
+            u4(
+                "clip_shape",
+                [self.shape.extent, self.shape.exponent, 0.0, 0.0],
+            ),
+        ];
+        let Some((v, screened)) = vibrant else {
+            frame.override_default_tex_program(self.program.clone(), uniforms);
+            let res = self.inner.draw(frame, src, dst, damage, opaque_regions);
+            frame.clear_tex_program_override();
+            return res;
+        };
+        uniforms.push(u4("vibrant", v));
+        frame.override_default_tex_program(self.program.clone(), uniforms);
+        use smithay::backend::renderer::gles::ffi;
+        if screened {
+            // what lies behind plus the lift times what is not white yet; its alpha stays
+            frame.with_context(|gl| unsafe {
+                gl.BlendFuncSeparate(ffi::ONE_MINUS_DST_COLOR, ffi::ONE, ffi::ZERO, ffi::ONE)
+            })?;
+        }
+        // no opaque region: the renderer would draw it without blending
+        let res = self.inner.draw(frame, src, dst, damage, &[]);
+        if screened {
+            frame.with_context(|gl| unsafe { gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA) })?;
+        }
         frame.clear_tex_program_override();
         res
     }

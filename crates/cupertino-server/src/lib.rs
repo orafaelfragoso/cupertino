@@ -42,6 +42,7 @@ pub mod input_method;
 pub mod kbd;
 pub mod kbd_filters;
 pub mod kbd_ui;
+pub mod layers_v1;
 pub mod live;
 pub mod localed;
 pub mod logging;

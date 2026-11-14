@@ -619,6 +619,8 @@ pub struct Cupertino {
     pub sessions: SessionObservers,
     /// `cupertino_scroll_v1`: the scroll objects of the clients.
     pub scroll_counts: ScrollObservers,
+    /// `cupertino_layers_v1`: the parents that hold layers and the clients' counts.
+    pub layers: crate::layers_v1::Layers,
     /// What the axis values sent so far lost to the protocol's fixed point, carried into the next ones.
     pub axis_carry: crate::events::AxisCarry,
     /// Reduce Motion, Reduce Transparency, Increase Contrast, the colour filter (`accessibility.conf`).
@@ -832,6 +834,7 @@ impl Cupertino {
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
+        let layers = crate::layers_v1::Layers::new(&dh);
         let mut supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
         supervisor.set_dev_folder(config.dev_folder.as_ref());
         let menu_bars = MenuBars::new(config.shell.menu_bar_height);
@@ -955,6 +958,7 @@ impl Cupertino {
             docks: Docks::default(),
             sessions: SessionObservers::default(),
             scroll_counts,
+            layers,
             axis_carry: crate::events::AxisCarry::default(),
             accessibility: crate::accessibility::Accessibility::default(),
             window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
@@ -2102,6 +2106,7 @@ impl Cupertino {
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
         self.tick_overlays(now);
+        self.tick_layers(now);
         self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());
@@ -2163,6 +2168,7 @@ impl Cupertino {
             || self.menu_bars_want_tick(now)
             || self.overlays.wants_tick()
             || self.power.policy().animating(now)
+            || self.layers.wants_tick(now)
     }
 
     pub fn wants_frames(&self) -> bool {

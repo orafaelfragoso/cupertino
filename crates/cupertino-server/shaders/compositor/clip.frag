@@ -24,6 +24,12 @@ uniform mat3 inv_proj;   // clip space -> output pixels
 uniform vec2 viewport;   // framebuffer size in pixels
 uniform vec4 clip_rect;  // x, y, w, h in output pixels
 uniform vec4 clip_shape; // radius (px), corner exponent, 0, 0
+#if defined(VIBRANT)
+// x: 1 over a dark face, 0 over a light one; y: the coverage's weight; z: 1 for the plain label colour
+uniform vec4 vibrant;
+// how far towards white a full coverage lifts what lies behind a dark face; the blend screens it in
+#define VIBRANT_LIFT 0.95
+#endif
 
 //_SDF_
 
@@ -39,6 +45,18 @@ void main() {
     float d = rounded_sdf(p - (clip_rect.xy + hs), hs, radius, clip_shape.y);
     float cov = clamp(0.5 - d, 0.0, 1.0);
     color = color * (alpha * cov);
+#if defined(VIBRANT)
+    // the content's coverage alone: over a dark face it is screened in (the blend adds it times what is not white yet),
+    // over a light one it darkens what lies behind, so either keeps the hue of the glass
+    float va = color.a * vibrant.y;
+    if (vibrant.z > 0.5 && vibrant.x > 0.5) {
+        color = vec4(va);
+    } else if (vibrant.x > 0.5) {
+        color = vec4(vec3(VIBRANT_LIFT * va), 0.0);
+    } else {
+        color = vec4(0.0, 0.0, 0.0, va);
+    }
+#endif
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
         color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;

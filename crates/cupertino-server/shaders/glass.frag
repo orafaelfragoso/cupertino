@@ -31,6 +31,8 @@ layout(std140) uniform Glass {
     vec4 shape_b[16]; // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
     vec4 cut;         // the outline the container is cut to: x, y, w, h
     vec4 cut_shape;   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
+    vec4 lens;        // the blur's weight at the top and at the bottom of the shapes, magnification about the first
+                      // shape's centre, unused
 } G;
 
 uniform sampler2D u_level0;
@@ -277,7 +279,18 @@ void main() {
     if (fa.z > 0.0 && d <= 0.0) {
         off = n * fa.y * refraction_profile(max(-d / fa.z, 0.0));
     }
-    vec3 c = face_at(p + off, fb.z, fb.y);
+    // a lens shows what lies behind it magnified about its centre; a ramp weighs the blur from top to bottom
+    vec2 q = p + off;
+    if (G.lens.z > 1.0) {
+        vec2 lc = G.shapes[0].xy + 0.5 * G.shapes[0].zw;
+        q = lc + (q - lc) / G.lens.z;
+    }
+    float blur_weight = 1.0;
+    if (G.lens.x < 1.0 || G.lens.y < 1.0) {
+        float rt = clamp((p.y - G.shapes[0].y) / max(G.shapes[0].w, 1e-3), 0.0, 1.0);
+        blur_weight = mix(G.lens.x, G.lens.y, smoothstep(0.0, 1.0, rt));
+    }
+    vec3 c = face_at(q, fb.z * blur_weight, fb.y);
     // stage 4: bleed of the blur fill
     if (fa.w > 0.0 && fb.x > 0.0) {
         float t = clamp(-d / fb.x, 0.0, 1.0);

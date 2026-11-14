@@ -25,6 +25,7 @@ struct Glass {
   shape_b: array<vec4<f32>, 16>, // bleed band, largest luminance, where the shape's blur lies among the blurred copies, corner exponent
   cut: vec4<f32>,         // the outline the container is cut to: x, y, w, h
   cut_shape: vec4<f32>,   // its corner extent, corner exponent, 1 when cut; 1 when the edge line is even
+  lens: vec4<f32>,        // the blur's weight at the top and at the bottom of the shapes, magnification, unused
 };
 
 @group(0) @binding(0) var<uniform> G: Glass;
@@ -286,7 +287,18 @@ fn fs_glass(fin: VsOut) -> @location(0) vec4<f32> {
   if (f.a.z > 0.0 && d <= 0.0) {
     off = n * f.a.y * refraction_profile(max(-d / f.a.z, 0.0));
   }
-  var c = face_at(p + off, f.b.z, f.b.y);
+  // a lens shows what lies behind it magnified about its centre; a ramp weighs the blur from top to bottom
+  var q = p + off;
+  if (G.lens.z > 1.0) {
+    let lc = G.shapes[0].xy + 0.5 * G.shapes[0].zw;
+    q = lc + (q - lc) / G.lens.z;
+  }
+  var blur_weight = 1.0;
+  if (G.lens.x < 1.0 || G.lens.y < 1.0) {
+    let rt = clamp((p.y - G.shapes[0].y) / max(G.shapes[0].w, 1e-3), 0.0, 1.0);
+    blur_weight = mix(G.lens.x, G.lens.y, smoothstep(0.0, 1.0, rt));
+  }
+  var c = face_at(q, f.b.z * blur_weight, f.b.y);
   // stage 4: bleed of the blur fill
   if (f.a.w > 0.0 && f.b.x > 0.0) {
     let t = clamp(-d / f.b.x, 0.0, 1.0);

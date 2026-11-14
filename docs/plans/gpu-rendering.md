@@ -306,14 +306,16 @@ Works with the CPU renderer; no GPU needed.
       frame however little changed; timed inside the client at scale 1 (about 3700 nodes, load about 4), the cached
       solve and the placement of every node take 0.8 ms p50, the window's placements 0.5 and its semantics 0.6, the
       worst frames those that lay out a new row's names. Split in two:
-  - [ ] Placements kept for a subtree that did not change: a kept node of the same subtree revision and size moves
-        its subtree's placements by its own offset. A placement's clip is the meeting of every ancestor's clip, those
+  - [x] Placements kept for a subtree that did not change: a kept node of the same subtree revision and size has its
+        descendants placed from a run, unwalked. A placement's clip is the meeting of every ancestor's clip, those
         outside the subtree (the viewport's, which stays while the rows move) and those inside it (which move with
-        them), so the run keeps each node's placement relative to the kept node with the clips from inside the subtree
-        alone, and a frame lays it in at the node's origin, met with the clip the node gets from above. A window with
-        raised nodes or with nodes cut by them keeps none (their clips depend on what lies over them). Test: after
-        scrolls at whole and fractional offsets, changed and dropped rows and a resize, the placements are those of
-        placing every node.
+        them), so the run keeps what each descendant was placed from (its parent in the run, its rect and clip as
+        layout gave them and its least hit size) and a frame places them again by the same sums from the kept node's
+        origin and the clip it gets from above, so the placements are the same to the bit without looking a node up
+        in the layout or the tree. A subtree with a scroll container or a raised node keeps no run (their placements
+        follow scroll offsets and what lies over them, which the subtree revision does not cover)
+        (`a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it`: scrolls at
+        whole and fractional offsets, a row made anew, a row dropped and a resize, against placing every node).
   - [ ] Semantics nodes kept for the same subtrees: a node's semantics take its size and whether it can scroll, both
         the same while its subtree is, and its bounds, moved by the kept node's offset; the runs of focusable nodes,
         scopes, roving groups and items, the descriptions handed down and the keyed relations are kept with it and

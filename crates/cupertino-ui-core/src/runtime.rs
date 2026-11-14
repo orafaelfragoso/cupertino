@@ -8,7 +8,7 @@ use crate::cx::{Effects, Status, WindowGesture};
 use crate::damage::DamageTracker;
 use crate::focus::{Focus, FocusChange};
 use crate::frame_timing::{handed_over, lap, mark, Phase};
-use crate::layout_view::{placements, TreeView};
+use crate::layout_view::{placements, placements_kept, KeptPlacements, TreeView};
 use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
@@ -252,6 +252,8 @@ struct WindowState<M> {
     /// measured in only.
     layout_cache: LayoutCache<NodeId>,
     measured_in: Option<Environment>,
+    /// The kept subtrees' placements, good for the environment the layout cache is.
+    placements: KeptPlacements,
     painter: Painter,
     damage: DamageTracker,
     /// The raised nodes ([`Widget::raised`]) of the last layout with their rects, in window coordinates.
@@ -1042,6 +1044,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             held_paints: 0,
             layout: LayoutStats::default(),
             layout_cache: LayoutCache::new(),
+            placements: KeptPlacements::default(),
             measured_in: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
@@ -2313,6 +2316,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         .is_some_and(|env| same_environment(env, &w.env))
                     {
                         w.layout_cache.clear();
+                        w.placements.clear();
                         w.measured_in = Some(w.env.clone());
                     }
                     let result = layout_cached(
@@ -2334,7 +2338,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             };
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
-            w.geometry = placements(&self.tree, root, &result, &w.env, &[]);
+            w.geometry = placements_kept(&self.tree, root, &result, &w.env, &[], &mut w.placements);
             w.raised = raised_nodes(&self.tree, root, &w.geometry);
             w.obscuring = w
                 .raised
@@ -2348,7 +2352,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .collect();
             // raised nodes that draw in place leave what scrolls under them out: it would cover the glass under them
             if !w.obscuring.is_empty() && !self.system.capabilities().raised_layer {
-                w.geometry = placements(&self.tree, root, &result, &w.env, &w.obscuring);
+                w.geometry = placements_kept(
+                    &self.tree,
+                    root,
+                    &result,
+                    &w.env,
+                    &w.obscuring,
+                    &mut w.placements,
+                );
             }
             // In a layer every node's paint lies over every material of the layer, so a raised node a floating one
             // lies across would show through the floating one's glass: it draws with the content instead, under that

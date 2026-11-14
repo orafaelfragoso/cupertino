@@ -72,6 +72,7 @@ pub(crate) fn build<M: 'static>(
     geometry: &Geometry,
     focus: Option<NodeId>,
     direction: LayoutDirection,
+    scale: f64,
     raised: &[(NodeId, Rect)],
 ) -> SemanticsPass {
     let mut pass = SemanticsPass {
@@ -101,7 +102,7 @@ pub(crate) fn build<M: 'static>(
                 node: id,
                 size: rect.size,
                 direction,
-                can_scroll: can_scroll(tree, geometry, id, direction),
+                can_scroll: can_scroll(tree, geometry, id, direction, scale),
                 semantics: &mut semantics,
             },
         );

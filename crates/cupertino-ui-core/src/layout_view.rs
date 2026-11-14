@@ -54,6 +54,16 @@ impl<M: 'static> LayoutTree for TreeView<'_, M> {
     }
 }
 
+/// A scroll offset as it is drawn: a whole number of device pixels at `scale`, so content that moves by it lands on
+/// the same pixel grid as content that does not, and a moved picture is the picture drawn again.
+pub(crate) fn drawn_offset(offset: Point, scale: f64) -> Point {
+    if !(scale > 0.0 && scale.is_finite()) {
+        return offset;
+    }
+    let round = |v: f64| (v * scale).round() / scale;
+    Point::new(round(offset.x), round(offset.y))
+}
+
 /// Window placements from a layout of the subtree under `root`. A scroll container's children move by its scroll
 /// offset, which counts from the start edge: in right-to-left layout, where layout mirrors the content, a horizontal
 /// offset moves the content right. A scroll container outside the raised subtrees `cut` (window rects) clips its
@@ -125,7 +135,7 @@ pub(crate) fn placements<M: 'static>(
                 vertical,
             } = n.spec.kind
             {
-                let offset = n.widget.scroll_offset(&*n.state);
+                let offset = drawn_offset(n.widget.scroll_offset(&*n.state), env.scale);
                 if horizontal {
                     origin.x += match env.direction {
                         LayoutDirection::Ltr => -offset.x,
@@ -270,6 +280,20 @@ mod tests {
             &[],
         );
         (tree, root, geometry)
+    }
+
+    #[test]
+    fn a_drawn_scroll_offset_is_a_whole_number_of_device_pixels() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for v in [0.0, 0.3, 10.4, 10.6, 333.333, -7.77] {
+                let d = drawn_offset(Point::new(v, v * 2.0), scale);
+                for (got, given) in [(d.x, v), (d.y, v * 2.0)] {
+                    let px = got * scale;
+                    assert!((px - px.round()).abs() < 1e-9, "{v} at {scale}: {px}");
+                    assert!((got - given).abs() <= 0.5 / scale + 1e-9, "{v} at {scale}");
+                }
+            }
+        }
     }
 
     #[test]

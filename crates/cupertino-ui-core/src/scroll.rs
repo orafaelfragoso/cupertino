@@ -52,6 +52,7 @@ fn scroller<M: 'static>(
     geometry: &Geometry,
     id: NodeId,
     direction: LayoutDirection,
+    scale: f64,
 ) -> Option<Scroller> {
     let node = tree.get(id)?;
     let ContainerKind::Scroll {
@@ -67,16 +68,18 @@ fn scroller<M: 'static>(
         if horizontal { scrolled.x } else { 0.0 },
         if vertical { scrolled.y } else { 0.0 },
     );
+    // the content is placed by the offset as it is drawn, in whole device pixels
+    let drawn = crate::layout_view::drawn_offset(offset, scale);
     // the content's start corner, where an offset of zero puts it
-    let start_y = viewport.origin.y - offset.y;
+    let start_y = viewport.origin.y - drawn.y;
     let mut content = Size::new(0.0, 0.0);
     for child in &node.children {
         let Some(rect) = geometry.get(child).map(|p| p.rect) else {
             continue;
         };
         let width = match direction {
-            LayoutDirection::Ltr => rect.max_x() - (viewport.origin.x - offset.x),
-            LayoutDirection::Rtl => viewport.max_x() + offset.x - rect.origin.x,
+            LayoutDirection::Ltr => rect.max_x() - (viewport.origin.x - drawn.x),
+            LayoutDirection::Rtl => viewport.max_x() + drawn.x - rect.origin.x,
         };
         content = Size::new(
             content.width.max(width),
@@ -98,8 +101,9 @@ pub(crate) fn can_scroll<M: 'static>(
     geometry: &Geometry,
     id: NodeId,
     direction: LayoutDirection,
+    scale: f64,
 ) -> bool {
-    scroller(tree, geometry, id, direction).is_some_and(|s| s.max_offset() != Point::ZERO)
+    scroller(tree, geometry, id, direction, scale).is_some_and(|s| s.max_offset() != Point::ZERO)
 }
 
 /// [`Event::ScrollGeometry`] for each scroll container under `root` whose viewport or content changed since `heard`,
@@ -109,12 +113,13 @@ pub(crate) fn geometry_events<M: 'static>(
     root: NodeId,
     geometry: &Geometry,
     direction: LayoutDirection,
+    scale: f64,
     heard: &mut HashMap<NodeId, (Size, Size)>,
 ) -> Vec<(NodeId, Event)> {
     let mut events = Vec::new();
     let mut seen = HashMap::with_capacity(heard.len());
     for id in tree.preorder(root) {
-        let Some(s) = scroller(tree, geometry, id, direction) else {
+        let Some(s) = scroller(tree, geometry, id, direction, scale) else {
             continue;
         };
         let now = (s.viewport.size, s.content);
@@ -141,6 +146,7 @@ pub(crate) fn reveal_events<M: 'static>(
     geometry: &Geometry,
     raised: &[(NodeId, Rect)],
     direction: LayoutDirection,
+    scale: f64,
     target: NodeId,
     part: Option<Rect>,
 ) -> Vec<(NodeId, Event)> {
@@ -152,7 +158,7 @@ pub(crate) fn reveal_events<M: 'static>(
         part.translate(bounds.origin.x, bounds.origin.y)
     });
     for id in tree.path(target).into_iter().rev().skip(1) {
-        let Some(mut s) = scroller(tree, geometry, id, direction) else {
+        let Some(mut s) = scroller(tree, geometry, id, direction, scale) else {
             continue;
         };
         let max = s.max_offset();

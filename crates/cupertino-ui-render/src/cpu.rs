@@ -109,12 +109,6 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         }
     }
 
-    /// Lets go of every kept layer: a window nobody sees (minimized, or covered whole) keeps only its frame. The next
-    /// frame paints what it shows of them whole and keeps them again.
-    pub fn drop_layers(&mut self) {
-        self.kept.clear();
-    }
-
     /// How many layers the renderer keeps, and their bytes.
     pub fn kept_layers(&self) -> (u64, u64) {
         (self.kept.count(), self.kept.bytes())
@@ -385,11 +379,12 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 continue;
             };
             let held = image.content();
-            let rects: Vec<Bounds> = geometry::merge(plan.paint.clone())
-                .into_iter()
-                .map(|r| r.intersect(&held))
-                .filter(|r| !r.is_empty())
-                .collect();
+            // the pieces of what is to be painted, each pixel once, none grown over pixels kept
+            let mut rects: Vec<Bounds> = Vec::new();
+            for r in &plan.paint {
+                let new = spans::subtract(r.intersect(&held), &rects);
+                rects.extend(new.into_iter().filter(|r| !r.is_empty()));
+            }
             if rects.is_empty() {
                 continue;
             }
@@ -572,6 +567,10 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         } else {
             Err(RenderError::UnknownFrame(id))
         }
+    }
+
+    fn drop_layers(&mut self) {
+        self.kept.clear();
     }
 }
 

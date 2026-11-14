@@ -1286,6 +1286,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     && w.maximized == c.states.maximized
                     && w.fullscreen == c.states.fullscreen;
                 let shown_active = w.active || w.keyboard_in_popup;
+                // a window nobody sees (minimized, or covered whole) keeps its frame and lets go of its layers
+                if c.states.suspended {
+                    w.renderer.drop_layers();
+                    if let Some(layer) = w.layer.renderer.as_mut() {
+                        layer.drop_layers();
+                    }
+                }
                 w.size = size;
                 w.ack = Some(c.id);
                 w.configured = true;

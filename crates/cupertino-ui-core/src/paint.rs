@@ -1045,7 +1045,12 @@ impl Painter {
                     ))),
                     (clip, cut) => clip.or(cut),
                 };
-                if let Some(overlay) = self.overlay(id, fills, clip, placement.clip) {
+                if let Some(mut overlay) = self.overlay(id, fills, clip, placement.clip) {
+                    // a scroll container's own overlay (its scroll bars) stays where it is as the content moves: it
+                    // lies beside the content's layer, over it, not in it
+                    if matches!(layer, Some(Layer::Scroll { .. })) {
+                        overlay.parent = node.parent.map(PaintNodeId::from);
+                    }
                     pending.push(Pending {
                         owner: id,
                         node: overlay,

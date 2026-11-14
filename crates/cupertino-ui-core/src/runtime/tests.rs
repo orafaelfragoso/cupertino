@@ -5804,10 +5804,12 @@ fn focus_reveals_a_node_below_the_raised_row_and_overlays_are_cut_from_it() {
     assert_eq!(rt.model().0, 10.0, "the target's top at the row's bottom");
 }
 
-/// A renderer that counts how many of its kind are alive, standing for the frame, layers and caches it keeps.
+/// A renderer that counts how many of its kind are alive, standing for the frame, layers and caches it keeps, and how
+/// often it was told to let its layers go.
 struct Counted {
     inner: Box<dyn UiRenderer<Frame = CpuFrame>>,
     alive: Rc<Cell<i32>>,
+    dropped: Rc<Cell<i32>>,
 }
 
 impl Drop for Counted {
@@ -5829,6 +5831,54 @@ impl UiRenderer for Counted {
     fn frame(&self, id: cupertino_ui_render::RenderFrameId) -> Result<&CpuFrame, RenderError> {
         self.inner.frame(id)
     }
+
+    fn drop_layers(&mut self) {
+        self.dropped.set(self.dropped.get() + 1);
+        self.inner.drop_layers();
+    }
+}
+
+#[test]
+fn a_window_told_it_is_suspended_lets_its_layers_go() {
+    let dropped = Rc::new(Cell::new(0));
+    let (mut rt, window, _) = start_with(|options| {
+        let dropped = Rc::clone(&dropped);
+        let mut inner = std::mem::replace(&mut options.renderers, Box::new(|| unreachable!()));
+        options.renderers = Box::new(move || {
+            Box::new(Counted {
+                inner: inner(),
+                alive: Rc::new(Cell::new(1)),
+                dropped: Rc::clone(&dropped),
+            })
+        });
+    });
+    configure(&mut rt, window, 1);
+    assert_eq!(dropped.get(), 0, "a window shown keeps them");
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Configure(Configure {
+            id: ConfigureId(2),
+            size: Some(Size::new(200.0, 100.0)),
+            states: WindowStates {
+                suspended: true,
+                ..WindowStates::default()
+            },
+            bounds: None,
+            server_decorations: true,
+            wm_capabilities: WmCapabilities {
+                window_menu: true,
+                maximize: true,
+                fullscreen: true,
+                minimize: true,
+            },
+        }),
+    );
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        dropped.get(),
+        1,
+        "minimized or covered whole, it keeps its frame alone"
+    );
 }
 
 #[test]
@@ -5843,6 +5893,7 @@ fn a_change_of_renderer_frees_the_old_one_and_draws_whole_frames_with_a_new_one(
             Box::new(Counted {
                 inner: inner(),
                 alive: Rc::clone(&alive),
+                dropped: Rc::new(Cell::new(0)),
             })
         });
     });

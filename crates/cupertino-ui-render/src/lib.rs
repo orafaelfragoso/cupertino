@@ -359,4 +359,7 @@ pub trait UiRenderer {
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError>;
     /// Borrows a frame for presentation; only the latest frame id is valid.
     fn frame(&self, id: RenderFrameId) -> Result<&Self::Frame, RenderError>;
+    /// Lets go of the layers kept between frames ([`Layer`]), keeping the frame: the window is not seen. The next
+    /// frame paints what it shows of them whole. A renderer that keeps none does nothing.
+    fn drop_layers(&mut self) {}
 }

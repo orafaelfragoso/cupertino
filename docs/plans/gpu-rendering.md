@@ -156,6 +156,11 @@ Gate:
 - [ ] Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
       the shimmer and banding checks pass. (Revised from "fewer blur passes": every frame of a drag uncovers
       something, so every frame needs a blur; the work the blur does is what can fall. See Measurements, step 2.)
+
+## Step 3: vertical slice of the GPU path
+
+The risk is the handoff, so it is proven first with the smallest renderer possible.
+
 - [x] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
 - [x] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
       offered modifiers, never adding linear on a hardware driver.

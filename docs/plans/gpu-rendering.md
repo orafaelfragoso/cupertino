@@ -395,9 +395,25 @@ Gate:
 
 ## Step 10: retire the duplicates
 
-- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL.
+- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split:
+  - [ ] A borrowed device's pass can draw into the framebuffer its owner has bound, with its viewport and scissor
+        (the element's damage), under the state-restore contract; `cupertino-gpu` today draws only into its own
+        textures.
+  - [ ] The shadow pass, dithered as before.
+  - [ ] The rounded-rectangle pass.
+  - [ ] The wallpaper pass.
 - [ ] The hand-written GLSL ES 3.00 programs of the glass crate and the compositor replaced by generated ones; the
-      tests that pinned the copies pin the generated output.
+      tests that pinned the copies pin the generated output. Split:
+  - [x] The build step generates a second set, `cupertino-glass`'s programs (the shared module ahead of each, include
+        files, and the assembled WGSL for the wgpu renderer); the backdrop passes (downsample, blur, colour, blit) are
+        generated, the compositor and the wgpu renderer draw them, their hand-written copies in both crates are gone,
+        and the blur's dither for 8-bit levels is a flag of its block instead of a second program.
+  - [ ] The material region program (the glass crate's and the compositor's, which differ in how the region is placed
+        and sampled).
+  - [ ] The vibrant program.
+  - [ ] The glass program.
+  - [ ] The compositor's mesh program of the minimize and close effects (GLSL ES 1.00, compiled by the compositor
+        itself, not through Smithay's interface).
 - [ ] `wgpu` removed from `cupertino-glass`; the headless glass renderer and its tests run on `cupertino-gpu`.
 
 Gate:
@@ -1184,6 +1200,51 @@ GPU p99 2.10 ms, no missed refresh. The texel count does not depend on the load.
 The gate stays open. Next: find which call in the drawing waits for the GPU (timing the glass and material passes'
 GL calls on the CPU, as was done for the textures) and remove the wait, then bench again on a quiet machine.
 
+**Fourth round: no call waits for the GPU.** Taken at `4e1bf610` with a temporary build that timed, on the CPU, each
+part of the drawing (lowering, binding, every element kind, every blit by its place, every pass's binding, uniform
+upload and draw, target creation and deletion, the tone readback, the composite) and, around the whole submit, the
+render thread's own CPU time (`CLOCK_THREAD_CPUTIME_ID`), its user and system time, page faults and voluntary and
+involuntary context switches. The probe was removed afterwards; nothing of it is committed. One run each (`--runs 1`,
+4K, scale 1.5), the frames of the scenario's span only (180), other checkouts building beside it; load average at
+start and end of each run:
+
+| Run | Condition | Load | CPU p99 ms | Frames with one call over 1 ms | CPU p99 without them ms |
+|---|---|---|---|---|---|
+| 1 | as committed | 1.05, 0.81 | 2.37 | 3 | 1.39 |
+| 2 | as committed | 4.44, 5.10 | 2.54 | 5 | 1.85 |
+| 3 | the driver told to sleep, not spin, while it waits (`__GL_YIELD=USLEEP`) | 6.00, 5.31 | 2.36 | 3 | 1.51 |
+| 4 | no timer queries at all (frame timestamps and pass timers off) | 2.48, 1.91 | 2.35 | 3 | 1.34 |
+| 5 | as committed | 3.49, 2.86 | 2.40 | 2 | 1.33 |
+| 6 | the driver's threaded dispatch on (`__GL_THREADED_OPTIMIZATIONS=1`) | 2.66, 2.31 | 2.42 | 2 | 1.46 |
+
+What holds the p99 over 2 ms is two to five frames a run in which one single GL call takes 1.7 to 2.0 ms of CPU,
+where the same call takes 5 to 60 µs in every other frame: a framebuffer blit (the first level of a material's
+pyramid, a glass capture or one of its edge strips), once the tone readback, once a glass composite, once a call of
+the renderer's own outside our passes. In those frames:
+
+- the render thread's CPU time equals the submit's wall time within 1 %, almost all of it user time, with no
+  voluntary and at most one involuntary context switch and no page faults: the thread is not sleeping, waiting in the
+  kernel or preempted;
+- with the driver told to sleep while it waits, the frames are the same and still switch no context, so the time is
+  not the driver waiting on a fence or the GPU;
+- turning every timer query off changes nothing, nor does the driver's threaded dispatch;
+- the blit's sizes and filter were each seen in earlier frames, no target is created or deleted in or around those
+  frames, and the frames before and after draw the same passes in the usual time;
+- they come about once a second (in four runs at 9.24, 10.19 and 11.25 s of the session, give or take one frame), and
+  the server's other threads use no CPU meanwhile.
+
+So no call of ours waits for the GPU. Each frame's GPU time rises with them because the GPU has nothing to do while
+the CPU is held: the timestamps span the gap, and the GPU p99 (2.2 ms) is these frames too. The earlier reading, that a
+call in the drawing waits for the GPU because the CPU time follows the GPU time, had cause and effect reversed.
+Without those frames, the CPU p99 is 1.33 to 1.51 ms on a lightly loaded machine (1.85 ms at a load of 5) against the
+2 ms budget, and the GPU p99 under 1.2 ms. At 60 Hz, 180 frames and a stall a second, three frames are enough to
+own the p99, whatever the drawing costs.
+
+The stall is driver CPU work on the calling thread at a period of its own, and nothing in what the drawing issues
+moves it. The gate is not ticked: BLOCKED until the cause inside the driver is found or the gate's p99 is taken over a
+span long enough to measure a once-a-second event as such (the drag scenario's 180 frames cannot), which is the
+lead's call. The texel count, the shimmer and the banding checks pass as before.
+
 The grid capture for window glass (next step 1) is not built: it would change the glass edges and keep nothing in the
 drag it is for. A dragged window's glass reads the window under it, and the window's own surface is one of the
 elements below the glass. A moved element changes its whole place, where it was and where it is
@@ -1228,6 +1289,22 @@ window drawn below half its size. Nothing is re-recorded.
   (`scene_cost::a_steady_frame_copies_no_cursor_image`), an overlay's signature allocates nothing
   (`scene_cost::an_overlay_signature_allocates_nothing`) and a frame that changes nothing copies no wallpaper path
   (`wallpaper::tests::a_frame_that_changes_nothing_copies_no_wallpaper_path`).
+
+### Step 10: retire the duplicates
+
+**The backdrop passes generated.** Pixels, on the target machine's GPU: a headless shot of Settings alone and of Files
+alone, 1920 x 1200 at scale 1.5, dark and light, drawn by the compositor with the hand-written passes and with the
+generated ones (the same build otherwise): no pixel differs by more than 2 of 255 outside the menu bar's clock, whose
+minute changed between the shots. The server's material, glass, tone and dither tests and the glass crate's GPU
+tests (its colour pass within one level of the CPU chain, PSNR 60 dB and more) pass unchanged. The blur's 8-bit
+dither is now a flag of `PassParams` (`flags[0]`) set by the compositor when its levels have 8 bits, instead of a
+second program text; the levels have half floats on the target machine, so the flag is off there, as the dither
+was.
+
+The assembled WGSL leaves out every function its entry points do not reach: the Vulkan driver of the target machine
+crashed (a segmentation fault in its SPIR-V compiler, inside pipeline creation) on the backdrop passes with the whole
+shared module in them, and no longer does once the unused gradient function, which takes arrays by value, is left out.
+A Vulkan backend (step 12) compiling `cupertino-gpu`'s own SPIR-V, which keeps every function, will meet the same.
 
 ### Step 11: output timing and depth
 

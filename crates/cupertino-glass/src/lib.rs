@@ -12,8 +12,10 @@
 //!   and GLSL ES shaders follow it.
 //! * [`gpu`]: headless helpers (adapter, upload/read-back, procedural wallpaper, PSNR).
 //!
-//! Recipes come from `cupertino-theme` (decoded layer archives). The GLSL ES 3.00 port of every
-//! shader lives in `shaders/gles/`; see the README.
+//! * [`shaders`]: the generated programs (the backdrop passes), written once in WGSL.
+//!
+//! Recipes come from `cupertino-theme` (decoded layer archives). The material, vibrant and glass programs still have
+//! a hand-written GLSL ES 3.00 port in `shaders/gles/`; see the README.
 
 pub mod cpu;
 pub mod display_filter;
@@ -21,18 +23,14 @@ pub mod glass;
 pub mod gpu;
 pub mod ops;
 pub mod renderer;
+pub mod shaders;
 pub mod vibrant;
 
 pub use renderer::{FrameDesc, MaterialRegion, MaterialRenderer, RenderStats, TargetInit};
 pub use vibrant::{VibrantDraw, VibrantMode, VibrantStyle};
 
-/// GLSL ES 3.00 sources (vertex, fragment) of the ported shaders, by name.
+/// GLSL ES 3.00 sources (vertex, fragment) of the shaders not yet generated from WGSL, by name.
 pub mod gles {
-    pub const FULLSCREEN_VERT: &str = include_str!("../shaders/gles/fullscreen.vert");
-    pub const DOWNSAMPLE_FRAG: &str = include_str!("../shaders/gles/downsample.frag");
-    pub const BLUR_FRAG: &str = include_str!("../shaders/gles/blur.frag");
-    pub const COLOR_FRAG: &str = include_str!("../shaders/gles/color.frag");
-    pub const BLIT_FRAG: &str = include_str!("../shaders/gles/blit.frag");
     pub const MATERIAL_VERT: &str = include_str!("../shaders/gles/material.vert");
     pub const MATERIAL_FRAG: &str = include_str!("../shaders/gles/material.frag");
     pub const VIBRANT_VERT: &str = include_str!("../shaders/gles/vibrant.vert");
@@ -41,12 +39,7 @@ pub mod gles {
     pub const GLASS_FRAG: &str = include_str!("../shaders/gles/glass.frag");
 
     /// `(file name, is fragment stage, source)` for every shader.
-    pub const ALL: [(&str, bool, &str); 11] = [
-        ("fullscreen.vert", false, FULLSCREEN_VERT),
-        ("downsample.frag", true, DOWNSAMPLE_FRAG),
-        ("blur.frag", true, BLUR_FRAG),
-        ("color.frag", true, COLOR_FRAG),
-        ("blit.frag", true, BLIT_FRAG),
+    pub const ALL: [(&str, bool, &str); 6] = [
         ("material.vert", false, MATERIAL_VERT),
         ("material.frag", true, MATERIAL_FRAG),
         ("vibrant.vert", false, VIBRANT_VERT),

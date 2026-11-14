@@ -10,7 +10,8 @@ filters and vibrant blending, driven by the recipes of `cupertino-theme`.
 | `MaterialRenderer` | library API on an external wgpu `Device`/`Queue`; `render` records into the caller's encoder from a `FrameDesc` and a list of `MaterialRegion`s |
 | `glass-renderer` | headless binary (`--demo`, `--cpu-check`, `--bench N`) |
 | `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated); `apply_color_ops` runs a recipe's colour chain on one colour, which the server uses to measure the wallpaper as the menu bar's material shows it |
-| `shaders/gles/ | GLSL ES 3.00 port of every shader for the compositor's GLES renderer |
+| `shaders` | the generated programs (the backdrop passes: GLSL ES 3.00, SPIR-V, binding names and WGSL from one WGSL source each) |
+| `shaders/gles/` | GLSL ES 3.00 port of the material, vibrant and glass shaders, not yet generated |
 | `glass` | the glass background pass: `Container` (shapes joined by a smooth union whose blend width is the container's spacing, each with the recipe of its size from `cupertino-theme`), `Container::shade` (the CPU model of every stage, for tests), `GlassUniform` (the std140 block of `glass.wgsl` and `gles/glass.frag`) |
 | `display_filter` | the display's colour filter, invert and contrast as a colour chain over a whole output (settings from `cupertino-defaults`) |
 
@@ -152,18 +153,29 @@ is their CPU model. The toolkit draws its text in the client, which never sees t
 The alternative, drawing glass text in the compositor as the menu bar's vibrant text is (`draw_vibrant`), needs the
 glyphs on a surface of their own and is not planned.
 
+### Generated programs
+
+The backdrop passes are written once in WGSL: `shaders/downsample.wgsl`, `blur.wgsl`, `color.wgsl` and `blit.wgsl`,
+each including `shaders/include/pass.wgsl` (the `PassParams` block, the source texture and the full-screen triangle)
+through a `// include pass.wgsl` line, with the shared module of `cupertino-gpu` ahead of it. `cargo run -p
+cupertino-gpu-shaders` generates `shaders/generated/`: GLSL ES 3.00 of each stage, SPIR-V, the GLSL names of the block
+and sampler by WGSL group and binding (`NAME.bindings`), and the assembled WGSL without the functions the program
+never calls (`NAME.wgsl`), which the wgpu renderer takes. The generated files are committed; that crate's test fails
+when they differ from a fresh generation. `shaders::DOWNSAMPLE`, `BLUR`, `COLOR` and `BLIT` hold them; the compositor
+links their GLSL and binds `PassParams` and the source by `Program::block` and `Program::sampler`. The blur dithers its
+result by pixel when `PassParams::flags[0]` is `PASS_DITHER` (set by the compositor for 8-bit levels).
+
 ### GLSL ES 3.00 port
 
-`shaders/gles/`: `fullscreen.vert`, `downsample.frag`, `blur.frag`, `color.frag`, `blit.frag`,
-`material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`, `glass.vert`, `glass.frag`. Uniform blocks use std140 and are
-byte-identical to the Rust structs in `src/ops.rs`, so the same buffers work for both back ends.
-Material and vibrant quads are 4-vertex triangle strips (`gl_VertexID`). Samplers: `u_src`,
-`u_source`, `u_backdrop`, `u_glyphs`. When the source/backdrop textures were rendered by GL (row 0 at
-the bottom) set `Region.info.z = 1`.
+`shaders/gles/`: `material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`, `glass.vert`, `glass.frag`, the
+programs not yet generated from WGSL. Uniform blocks use std140 and are byte-identical to the Rust structs in
+`src/ops.rs`, so the same buffers work for both back ends. Material and vibrant quads are 4-vertex triangle strips
+(`gl_VertexID`). Samplers: `u_source`, `u_backdrop`, `u_glyphs`. When the source/backdrop textures were rendered by GL
+(row 0 at the bottom) set `Region.info.z = 1`.
 
-`tests/shaders.rs` validates the WGSL sources and the GLSL ports with `naga`. Its GLSL front end only accepts the Vulkan
-dialect, so the test first rewrites the ES sources (version line, `gl_VertexID`, location/binding qualifiers,
-texture/sampler split, `precision` statements).
+`tests/shaders.rs` validates the WGSL sources, the generated programs and the GLSL ports with `naga`. Its GLSL front
+end only accepts the Vulkan dialect, so the test first rewrites the ES sources (version line, `gl_VertexID`,
+location/binding qualifiers, texture/sampler split, `precision` statements).
 
 ## Tests
 

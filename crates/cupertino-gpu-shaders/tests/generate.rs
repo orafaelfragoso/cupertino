@@ -1,13 +1,20 @@
 //! The committed shaders are a fresh generation of their sources, and the build step refuses what the backends
 //! cannot share.
 
-use cupertino_gpu_shaders::{differences, generate, generate_all, generated_dir, source_dir};
+use cupertino_gpu_shaders::{
+    assembled, differences, generate, generate_set, resolve_includes, sets,
+};
 
 #[test]
 fn the_committed_shaders_are_what_the_sources_generate() {
-    let fresh = generate_all(&source_dir()).expect("every program generates");
-    assert!(!fresh.is_empty());
-    let problems = differences(&fresh, &generated_dir());
+    let mut problems = Vec::new();
+    for set in sets() {
+        let fresh = generate_set(&set).expect("every program generates");
+        assert!(!fresh.is_empty(), "{}", set.dir.display());
+        for p in differences(&fresh, &set.generated) {
+            problems.push(format!("{}: {p}", set.generated.display()));
+        }
+    }
     assert!(
         problems.is_empty(),
         "run `cargo run -p cupertino-gpu-shaders` and commit the result:\n{}",
@@ -81,4 +88,33 @@ struct U { color: vec4<f32>, }
     );
     // SPIR-V: the magic number first
     assert_eq!(&g.spirv[..4], &0x0723_0203u32.to_le_bytes());
+}
+
+#[test]
+fn an_include_line_puts_its_file_in_place_and_the_assembled_wgsl_keeps_only_what_runs() {
+    let files = |f: &str| match f {
+        "common.wgsl" => Ok("fn used() -> f32 { return 0.5; }\n\
+fn unused(a: array<vec4<f32>, 2>) -> f32 {\n    return a[0].x;\n}\n"
+            .to_owned()),
+        other => Err(format!("{other}: no such file")),
+    };
+    let program = "// include common.wgsl\n\
+@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(used()); }\n\
+@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n";
+    let resolved = resolve_includes("p", program, &files).unwrap();
+    assert!(resolved.contains("fn used()") && resolved.contains("fn unused("));
+    assert!(!resolved.contains("// include "));
+    let missing = resolve_includes("p", "// include missing.wgsl\n", &files).unwrap_err();
+    assert!(missing.contains("missing.wgsl"), "{missing}");
+    let shared = "fn shared_unused() -> f32 {\n    return 1.0;\n}\n";
+    let wgsl = assembled("p", shared, &resolved).unwrap();
+    assert!(wgsl.contains("fn used()"), "{wgsl}");
+    assert!(
+        wgsl.contains("fn vs_main(") && wgsl.contains("fn fs_main("),
+        "{wgsl}"
+    );
+    assert!(
+        !wgsl.contains("fn unused(") && !wgsl.contains("fn shared_unused("),
+        "{wgsl}"
+    );
 }

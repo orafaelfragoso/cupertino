@@ -87,7 +87,7 @@ pub fn fill_ops(r: &Recipe) -> Vec<Op> {
         .collect()
 }
 
-/// Uniform block of the backdrop passes (`passes.wgsl`, `PassParams`).
+/// Uniform block of the backdrop passes (`shaders/include/pass.wgsl`, `PassParams`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PassParams {
@@ -97,7 +97,12 @@ pub struct PassParams {
     pub dir_radius: [i32; 4],
     pub weights: [[f32; 4]; 9],
     pub ops: [Op; MAX_OPS],
+    /// [`PASS_DITHER`] when the blur's result is dithered by its pixel before an 8-bit store; 0, 0, 0
+    pub flags: [i32; 4],
 }
+
+/// `PassParams::flags[0]`: the blur dithers its result by pixel position (its target holds 8 bits a channel).
+pub const PASS_DITHER: i32 = 1;
 
 impl PassParams {
     pub fn new(src: (u32, u32), dst: (u32, u32)) -> Self {
@@ -174,7 +179,7 @@ mod tests {
 
     #[test]
     fn uniform_sizes_match_shader_layout() {
-        assert_eq!(std::mem::size_of::<PassParams>(), 16 + 16 + 144 + 256);
+        assert_eq!(std::mem::size_of::<PassParams>(), 16 + 16 + 144 + 256 + 16);
         assert_eq!(std::mem::size_of::<RegionParams>(), 5 * 16 + 256);
         assert_eq!(std::mem::size_of::<VibrantUniform>(), 96);
         assert_eq!(std::mem::size_of::<Op>(), 32);

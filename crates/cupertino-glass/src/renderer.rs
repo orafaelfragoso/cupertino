@@ -1,6 +1,7 @@
 //! `MaterialRenderer`: renders N material regions per frame with an external wgpu device.
 //!
-//! Pipeline (all full-screen fragment passes, mirrored by the GLSL ES sources in `shaders/gles/`):
+//! Pipeline (all full-screen fragment passes; the backdrop passes are the generated programs of [`crate::shaders`], the
+//! region and vibrant programs are mirrored by the GLSL ES sources in `shaders/gles/`):
 //!
 //! ```text
 //! source ─(2× box)→ capture @ backdrop scale ─(2× box pyramid)→ separable Gaussian
@@ -22,12 +23,10 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 const BACKDROP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const PASS_SHADER: &str = include_str!("shaders/passes.wgsl");
 const MATERIAL_SHADER: &str = include_str!("shaders/material.wgsl");
 const VIBRANT_SHADER: &str = include_str!("shaders/vibrant.wgsl");
 const GLASS_SHADER: &str = include_str!("shaders/glass.wgsl");
 
-pub const PASSES_WGSL: &str = PASS_SHADER;
 pub const MATERIAL_WGSL: &str = MATERIAL_SHADER;
 pub const VIBRANT_WGSL: &str = VIBRANT_SHADER;
 pub const GLASS_WGSL: &str = GLASS_SHADER;
@@ -240,10 +239,17 @@ impl MaterialRenderer {
         queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
     ) -> Self {
-        let passes = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("glass-passes"),
-            source: wgpu::ShaderSource::Wgsl(PASS_SHADER.into()),
-        });
+        // each backdrop pass is a program of its own, generated with its includes and the shared module
+        let pass_module = |label: &str, source: &crate::shaders::Program| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.wgsl.into()),
+            })
+        };
+        let downsample = pass_module("glass-downsample", &crate::shaders::DOWNSAMPLE);
+        let blur = pass_module("glass-blur", &crate::shaders::BLUR);
+        let color = pass_module("glass-color", &crate::shaders::COLOR);
+        let blit = pass_module("glass-blit", &crate::shaders::BLIT);
         let material = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("glass-material"),
             source: wgpu::ShaderSource::Wgsl(MATERIAL_SHADER.into()),
@@ -352,9 +358,9 @@ impl MaterialRenderer {
         let pipe_downsample = make(
             "glass-downsample",
             &pl_pass,
-            &passes,
-            "vs_fullscreen",
-            "fs_downsample",
+            &downsample,
+            "vs_main",
+            "fs_main",
             BACKDROP_FORMAT,
             None,
             false,
@@ -362,9 +368,9 @@ impl MaterialRenderer {
         let pipe_blur = make(
             "glass-blur",
             &pl_pass,
-            &passes,
-            "vs_fullscreen",
-            "fs_blur",
+            &blur,
+            "vs_main",
+            "fs_main",
             BACKDROP_FORMAT,
             None,
             false,
@@ -372,9 +378,9 @@ impl MaterialRenderer {
         let pipe_color = make(
             "glass-color",
             &pl_pass,
-            &passes,
-            "vs_fullscreen",
-            "fs_color",
+            &color,
+            "vs_main",
+            "fs_main",
             BACKDROP_FORMAT,
             None,
             false,
@@ -382,9 +388,9 @@ impl MaterialRenderer {
         let pipe_blit = make(
             "glass-blit",
             &pl_pass,
-            &passes,
-            "vs_fullscreen",
-            "fs_blit",
+            &blit,
+            "vs_main",
+            "fs_main",
             target_format,
             None,
             false,

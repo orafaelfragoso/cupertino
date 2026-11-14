@@ -21,6 +21,7 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }
+cupertino-gpu = { path = "../cupertino-gpu" }
 wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }

@@ -106,7 +106,8 @@ Gate:
 Gate:
 
 - [ ] Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
-      checks pass.
+      checks pass. (A revision to fewer texels written by blur passes per frame is proposed under Measurements, step
+      2: the shimmer and banding checks pass and the texels fall by 54 %, while the work p99 stays over 2 ms.)
 
 ## Step 3: vertical slice of the GPU path
 
@@ -638,26 +639,56 @@ headless sessions keep the server's settings in a folder of their own, as a mach
 
 ### Step 2: compositor wins
 
-Taken at `30ef514a` (before: `2b119fa4`) on the target machine's GPU, release builds, `scripts/dev/bench --scenario
-drag --size 3840x2160 --scale 1.5 --runs 3`, no build running. Medians of the three runs, spread in brackets where it
-is not zero.
+Taken on the target machine's GPU, release builds, `scripts/dev/bench --scenario drag --size 3840x2160 --scale 1.5
+--runs 3`, no build running. Before is `2b119fa4` with only the counter of texels the blurs write added; after is the
+step's last commit. Medians of the three runs, spread in brackets where it is not zero.
 
 | Drag over glass | Before | After |
 |---|---|---|
 | Blur passes per frame | 9.36 | 9.33 |
-| Backdrops blurred again / reused per frame | 1.87 / 3.13 | 2.79 / 6.21 |
-| Compositor work p50 / p99 ms | 1.24 (0.21) / 1.60 (0.78) | 1.24 (0.01) / 2.55 (0.29) |
-| Compositor GPU p50 / p99 ms | 0.92 / 0.94 (0.01) | 0.98 / 2.26 (0.14) |
-| Server CPU ms/s | 80.0 (20.0) | 86.7 (6.7) |
+| Texels the blurs write per frame | 1 221 263 | 561 017 |
+| Backdrops blurred again / reused per frame | 4.69 / 4.31 | 2.79 / 6.21 |
+| Compositor work p50 / p99 ms | 1.25 (0.02) / 2.33 (0.11) | 1.39 (1.12) / 2.42 (0.24) |
+| Compositor GPU p50 / p99 ms | 1.01 / 2.09 (1.03) | 1.06 (0.37) / 1.49 (0.76) |
+| Server CPU ms/s | 86.7 (3.3) | 93.3 (53.3) |
 | Missed refreshes | 0 | 0 |
 
-The gate is not met. The dragged window lies above every material that blurs, so what it uncovers is re-blurred with
-either generation: the overlap-limited one takes away only the regions elsewhere (0.03 passes a frame). The GPU p99 is
-three frames a run (the drag's turns) at 2.3–2.5 ms with the same blur counters as the frames around them, so the
-added work there is drawing, not blurring; still inside the 4 ms budget. The CPU p99 is over 2 ms in both, and within
-the run-to-run noise of the baseline's spread. A build with every step 2 change but the overlap-limited generation
-measured 9.36 passes, GPU p99 1.05 ms and work p99 2.35 ms (one run), so the GPU p99 change comes with that
-generation.
+The GPU p99 is not the overlap-limited generation's. It moves between runs of one build by more than any change of
+the step: `2b119fa4` measured 0.94 ms one session, 1.53 to 5.55 ms and 1.16 to 2.19 ms on two later ones, and a build
+of the step without the overlap-limited generation 2.11 to 5.89 ms. The frames past 2 ms are one to three a run,
+where the blur passes alone take 1.65 to 1.8 ms of GPU time against 0.23 ms in the frames around them, with the same
+passes, crops and backdrops made again, at full clocks, in every build. The GPU is shared with the desktop session
+while the bench runs, and the slow frames come with it, not with a build.
+
+Every frame of the drag uncovers something under the backdrops the window passes or carries, so every frame runs the
+passes of a blur for them: 9.33 passes a frame is the drag's own, and making a backdrop again in parts adds passes
+(a capture and a pyramid a part) while each covers less. What the step cuts is how much the passes cover: a
+backdrop whose region moved, or whose scene changed in part, keeps its pyramid's last level and makes again only the
+texels whose squares changed or newly lie under it, then filters the whole level as after a whole capture. Since
+each texel of the last level is the mean of its own square of pixels, the result is the whole capture's texel for
+texel (`material::tests::a_backdrop_made_again_where_it_changed_or_newly_reaches_is_the_blur_of_the_whole`, and on the
+GPU `window_popup_backdrop::a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole`,
+worst difference 1 of 255). A window's shadow and outline draw nothing under the window, so their move changes only
+the ring around it. The texels written fall by 54 %; the glass containers, whose passes are most of the count, still
+blur their whole sampled area.
+
+The gate is not met as written: the passes are inherent to the drag, and the compositor work p99 stays over the
+2 ms budget (2.33 ms before, 2.42 ms after, which includes waiting for the GPU). Proposed revision of the gate, for
+the lead:
+
+- Old: "Window drag over glass meets its budget with fewer blur passes than the baseline; the shimmer and banding
+  checks pass."
+- New: "Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
+  the shimmer and banding checks pass."
+- Reason: each frame of a drag uncovers new backdrop, so the pass count is set by how many backdrops the window
+  touches, not by how they are made; the texels written are what a cheaper blur saves, and are measured per frame by
+  the bench (`blurKt/f`).
+
+Even revised, the budget half stays open: the work p99 at 1.5 is over 2 ms before and after.
+
+Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
+the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a
+window drawn below half its size. Nothing is re-recorded.
 
 **Checks of our own output** (headless, GPU tier):
 

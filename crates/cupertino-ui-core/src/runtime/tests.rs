@@ -4466,6 +4466,46 @@ mod popup_release {
         }
     }
 
+    /// A popover's growth is the only transform that animates in a window's paint. Drawn by the application, its frames
+    /// mark the popover's roots as layers whose transform animates; where the compositor presents popups, no frame the
+    /// popover draws while it grows marks one, so the CPU renderer has no moving image to lay over.
+    #[test]
+    fn only_a_popover_drawn_growing_marks_a_transform_layer_and_one_presented_grows_without_it() {
+        use cupertino_ui_render::Layer;
+        for present_popups in [false, true] {
+            let mut desk = Desk::new();
+            desk.rt.window_system_mut().present_popups = present_popups;
+            desk.button("second", Point::new(5.0, 5.0), true);
+            desk.button("second", Point::new(5.0, 5.0), false);
+            desk.press_opener();
+            desk.frames();
+            let menu = desk.id("menu");
+            let mut marked = 0;
+            for ms in 1..=25 {
+                desk.at(PRESSED + ms * 16_000_000);
+                desk.frames();
+                for (_, window) in desk.rt.windows() {
+                    let list = desk.rt.snapshot(window).expect("open").display_list;
+                    let transforms = list
+                        .nodes
+                        .iter()
+                        .filter(|n| n.layer == Some(Layer::Transform))
+                        .count();
+                    assert!(
+                        window == menu || transforms == 0,
+                        "no other window animates a transform"
+                    );
+                    marked += transforms;
+                }
+            }
+            assert_eq!(
+                marked > 0,
+                !present_popups,
+                "present_popups {present_popups}: {marked} transform layers drawn"
+            );
+        }
+    }
+
     #[test]
     fn a_release_on_the_opener_tells_the_menu_of_a_release_outside_it() {
         let mut desk = Desk::new();

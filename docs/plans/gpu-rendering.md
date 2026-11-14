@@ -254,11 +254,16 @@ Works with the CPU renderer; no GPU needed.
 - [x] Opacity animations change layer properties, not pixels: a group marked as fading or moving is kept as the image
       of its subtree within the same cap and laid over from it at each opacity while its subtree is the same and lies
       where it was painted (`a_fading_group_is_laid_over_from_its_kept_image_and_a_moved_one_painted_again`).
-- [ ] Transform animations change layer properties, not pixels. On the CPU path a kept image laid at another place or
-      scale does not have the bytes of its subtree painted there (dithering follows the pixel, paths are rasterized at
-      their place), so a group whose transform changed is painted again and the pixels stay those of painting in
-      place. Laying the kept image over at its transform goes with the GPU renderer's layers (step 6); on the CPU it
-      needs the owner to accept a moving popover's pixels differing from painting in place.
+- [x] Transform animations change layer properties, not pixels: moot on the CPU path, closed. The one transform that
+      animates in a window's paint is a popover growing out of its anchor or shrinking into it, and where the
+      compositor presents popups (the layer protocol's version 3) that runs as the popup's presentation, so the popover
+      draws no frame while it grows and no frame marks a transform layer; only under a compositor without it does
+      the application draw the growth (under Reduce Motion there is none)
+      (`only_a_popover_drawn_growing_marks_a_transform_layer_and_one_presented_grows_without_it`). There the CPU
+      renderer keeps painting a group whose transform changed, since a kept image laid at another place or scale does
+      not have the bytes of its subtree painted there (dithering follows the pixel, paths are rasterized at their
+      place), and the pixels stay those of painting in place. Laying the kept image over at its transform goes with
+      the GPU renderer's layers (step 6).
 - [x] A window told it is suspended drops its renderers' layers and keeps its frame
       (`a_window_told_it_is_suspended_lets_its_layers_go`).
 - [x] The server tells minimized and fully covered windows they are suspended (`xdg_toplevel` state `suspended`), so

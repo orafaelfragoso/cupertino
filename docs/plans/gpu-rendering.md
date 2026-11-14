@@ -26,13 +26,13 @@ Instruments:
 
 - [x] `scripts/dev/bench` takes size and scale as arguments.
 - [x] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, Control Center open, launcher
-      typing (Files wheel scroll exists).
+      typing (the Files two-finger scroll exists).
 - [x] Toolkit processes write per-phase frame timings (update, view, layout, paint, raster, copy, commit) to a file
       named by an environment variable; bench collects them per process.
 - [x] Bench counts client frames longer than one refresh, per process, besides the compositor's missed refreshes.
 - [x] `scripts/dev/measure` reports private dirty memory besides Pss and Rss.
 - [x] Counters in the frame statistics for decoration and HUD rasters and uploads, and for blur passes.
-- [x] The DRM backend logs, on request, which presentation-time branch it takes (flip timestamp or own clock), missed
+- [x] The DRM backend logs, on request, which presentation-time branch it takes (`flip-timestamp` or `own-clock`), missed
       flips, plane assignment (cursor plane, direct scanout) and input-to-flip latency.
 - [x] Every timer that wakes a process on an idle desktop recorded with its reason; each is kept (and listed under
       "Measurements") or removed.
@@ -42,7 +42,7 @@ Baseline:
 - [x] Every bench scenario at scale 1.5 and 2: frame time p50/p99, missed refreshes, slow client frames, compositor CPU
       and GPU time, per-phase client split, per-process CPU and private memory.
 - [x] Each scenario run five times; the run-to-run spread of every figure recorded as its noise.
-- [x] One measured table for Files replacing the two figures in the docs (full repaint at 3840 x 2160, wheel scroll
+- [x] One measured table for Files replacing the two figures in the docs (full repaint at 3840 x 2160, two-finger scroll
       p99 at scales 1, 1.5 and 2).
 - [ ] Presentation-time branch and plane assignment on the target driver recorded. BLOCKED (owner action): it needs
       the session server on the display ("Measurements").
@@ -146,7 +146,7 @@ Works with the CPU renderer; no GPU needed.
 
 Gate:
 
-- [ ] Files wheel scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
+- [ ] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
       cover only the exposed strip.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
@@ -320,7 +320,7 @@ desktop session running beside the runs.
   HUD rasters and uploads with their bytes, and blur passes; a `# start_monotonic_ns` line lines other processes'
   times up with them.
 - `CUPERTINO_DRM_TRACE=1` on the session server logs, under the `cupertino_server::drm_trace` target: the
-  presentation-time branch when it changes (`flip timestamp` or `own clock`), every missed flip with how many refresh
+  presentation-time branch when it changes (`flip-timestamp` or `own-clock`), every missed flip with how many refresh
   periods late, the plane assignment when it changes (direct scanout, cursor plane, overlays) and the input-to-flip
   latency of each output (keys and pointer alike, an input whose flip was dropped reported at the output's next flip).
   Without the variable nothing is kept.
@@ -453,16 +453,17 @@ What the baseline shows:
   start is now anchored at the press
   (`a_move_and_a_resize_asked_for_past_the_drag_start_keep_the_pressed_point_under_the_pointer`).
 - **A scroll of a full-screen grid** damaged 641–673 separate rectangles a frame at scale 1, each walking the whole
-  display list: 530–600 ms frames. More than 16 separate rectangles are now repainted as the one around them
-  (`many_separate_pieces_become_the_one_rectangle_around_them`); the worst frame went to about 80 ms.
+  display list: 530–600 ms frames. More than 16 separate rectangles are now merged down to 16, the closest pairs first
+  (`a_scrolled_grid_of_separate_items_is_repainted_in_a_few_rows_not_one_rectangle_around_them`); the worst frame went
+  to about 80 ms.
 
 **Files at 3840 x 2160** (`--scenario files-full-repaint,files-full-scroll,files-scroll`, five runs a scale;
 `96034ac4`). Full screen: Files fills the output (`toggle-fullscreen`) on a folder of 3000 files; the repaint is
-three appearance switches, each repainting the whole window; the scroll is the wheel over the grid. Default size:
+three appearance switches, each repainting the whole window; the scroll is a two-finger (touchpad) scroll over the grid, as the bench sends it (`--scroll`). Default size:
 the baseline's `files-scroll` (a 400-file folder, the window at its default size). Client frame p50 / p99 ms, spread
 in brackets:
 
-| Scale | Full repaint, full screen | Raster / copy p50 | Wheel scroll, full screen | Frames over a refresh | Wheel scroll, default size |
+| Scale | Full repaint, full screen | Raster / copy p50 | Two-finger scroll, full screen | Frames over a refresh | Two-finger scroll, default size |
 |---|---|---|---|---|---|
 | 1 | 82.5 (1.4) / 106.5 (1.4) | 52.0 / 13.6 | 56.7 (1.4) / 79.2 (5.1) | all (41 of 41) | 2.26 / 3.25 (0.32) |
 | 1.5 | 81.0 (2.0) / 106.2 (3.3) | 56.6 / 16.0 | 59.1 (6.9) / 77.9 (8.9) | all (42 of 42) | 5.44 / 6.23 (0.40) |
@@ -490,7 +491,7 @@ layout about 3 ms each): above 4 ms, so step 4 gains the incremental view and la
 | Budget | Baseline | Verdict |
 |---|---|---|
 | Any frame inside one refresh; no missed refreshes or slow client frames | no missed refresh in any scenario; slow client frames only in resize and Control Center at scale 2 and in full-screen Files | confirmed: the scenarios that miss are the ones the owning steps fix |
-| Files wheel scroll, p99 client CPU under 8 ms at scales 1 and 1.5 | default size 3.25 / 6.23 ms; full screen 79.2 / 77.9 ms | revised: the budget now names the window filling the output. At its default size Files meets it today, so only the full-screen scroll measures what step 4 must do |
+| Files two-finger scroll, p99 client CPU under 8 ms at scales 1 and 1.5 | default size 3.25 / 6.23 ms; full screen 79.2 / 77.9 ms | revised: the budget now names the window filling the output. At its default size Files meets it today, so only the full-screen scroll measures what step 4 must do |
 | Files live resize: client CPU excluding raster under 8 ms, GPU under 4 ms | p99 at 1.5: raster 8.6 ms, copy 6.5 ms, the other phases 2.3 ms together | confirmed: the copy is what the GPU path removes; the rest is a quarter of the budget |
 | Toolkit animation frame under 4 ms client CPU | Control Center 12.8 / 14.6 ms (raster 12.1 / 13.1); launcher p99 6.4 ms (raster 6.2) | confirmed: outside raster the phases' p99s add to 2.4 ms (Control Center) and 3.0 ms (launcher) at 1.5, most of it the copy the GPU path removes |
 | Client GPU time per frame under 4 ms | no client draws on the GPU yet; the compositor's whole output takes 0.7–6.8 ms of GPU at p99 | confirmed, checked from step 6 |

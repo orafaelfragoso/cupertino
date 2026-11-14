@@ -10,13 +10,18 @@ use std::time::Duration;
 /// The oldest a frame stamp may be before it is taken for another clock; and how far behind the window system's clock
 /// an input timestamp may fall, after a pause as long, before the mapping is anchored afresh.
 const MAX_LAG: Duration = Duration::from_secs(1);
+/// The oldest an input stamp that reads on the window system's own clock may be and still be taken at its own time:
+/// longer than a client stalls and is still waited for.
+const MAX_INPUT_AGE: Duration = Duration::from_secs(300);
 
 /// Maps the compositor's input milliseconds onto the window system's clock (nanoseconds). Each event lands the
 /// compositor's interval after the one before it, so intervals (a double click, scroll velocity) stay exact however
-/// late the client reads them, and the milliseconds' wrap is harmless. The first timestamp anchors the mapping at the
-/// time it was read, and so does one that would land in the future, or more than [`MAX_LAG`] in the past after an
-/// interval (forwards or back) as long: those read on another clock, or one that drifted. Lateness alone does not: a
-/// client that stalls reads its events late on the same clock.
+/// late the client reads them, and the milliseconds' wrap is harmless. The first timestamp anchors the mapping, and so
+/// does one that would land in the future, or more than [`MAX_LAG`] in the past after an interval (forwards or back) as
+/// long: those read on another clock, or one that drifted. Lateness alone does not: a client that stalls reads its
+/// events late on the same clock. An anchor that reads on the window system's own monotonic clock, as a compositor's
+/// stamps do, at most [`MAX_INPUT_AGE`] old, is taken at its own time, so a burst read late after a pause keeps its
+/// times; any other is taken at the moment it was read.
 #[derive(Debug, Default)]
 pub(crate) struct InputTimeline {
     /// The last event: its milliseconds and where they landed.
@@ -31,10 +36,24 @@ impl InputTimeline {
             at.checked_add_signed(gap)
                 .filter(|t| *t <= now && (now - t <= max_lag || gap.unsigned_abs() < max_lag))
         });
-        let t = mapped.unwrap_or(now);
+        let t = mapped
+            .or_else(|| on_own_clock(millis, now, MAX_INPUT_AGE))
+            .unwrap_or(now);
         self.last = Some((millis, t));
         t
     }
+}
+
+/// `millis` read as the window system's own clock's milliseconds (wrapped at 2^32), which reads `now` (nanoseconds):
+/// the start of that millisecond, when it is at most `max_age` before `now`; `None` for a stamp from the future or one
+/// older, which reads on another clock.
+fn on_own_clock(millis: u32, now: u64, max_age: Duration) -> Option<u64> {
+    let age = i64::from((now / 1_000_000) as u32).wrapping_sub(i64::from(millis)) as i32;
+    let age_nanos = u64::try_from(i64::from(age) * 1_000_000).ok()?;
+    if u128::from(age_nanos) > max_age.as_nanos() {
+        return None;
+    }
+    (now - now % 1_000_000).checked_sub(age_nanos)
 }
 
 /// A frame callback's time (`millis`, the compositor's milliseconds) on the window system's clock that reads `now`
@@ -42,13 +61,7 @@ impl InputTimeline {
 /// is that many milliseconds before `now`; a stamp from the future or over [`MAX_LAG`] old reads on another clock, and
 /// the frame is taken as handled when it came: at `now`.
 pub(crate) fn frame_time(millis: u32, now: u64) -> u64 {
-    let age = i64::from((now / 1_000_000) as u32).wrapping_sub(i64::from(millis)) as i32;
-    let age_nanos = i64::from(age) * 1_000_000;
-    if age < 0 || age_nanos as u128 > MAX_LAG.as_nanos() {
-        return now;
-    }
-    // the stamp is a whole millisecond: the frame's time is that millisecond's start
-    (now - now % 1_000_000).saturating_sub(age_nanos as u64)
+    on_own_clock(millis, now, MAX_LAG).unwrap_or(now)
 }
 
 /// `time` on a clock that reads `clock_now`, on the window system's clock that reads `now`; never later than `now`.
@@ -477,31 +490,65 @@ mod tests {
         assert_eq!(on_window_clock(0, 10_000 * MS, 500 * MS), 0);
     }
 
+    /// Milliseconds on a clock other than the window system's: days ahead of it.
+    const ELSEWHERE: u32 = 1_000_000_000;
+
     #[test]
     fn a_time_in_the_future_or_long_past_anchors_again() {
         let mut t = InputTimeline::default();
-        t.map(1_000, 10_000 * MS);
-        assert_eq!(t.map(3_000, 11_000 * MS), 11_000 * MS, "ahead of now");
+        t.map(ELSEWHERE + 1_000, 10_000 * MS);
         assert_eq!(
-            t.map(3_100, 11_100 * MS),
+            t.map(ELSEWHERE + 3_000, 11_000 * MS),
+            11_000 * MS,
+            "ahead of now"
+        );
+        assert_eq!(
+            t.map(ELSEWHERE + 3_100, 11_100 * MS),
             11_100 * MS,
             "spaced from the new anchor"
         );
         assert_eq!(
-            t.map(3_150, 13_000 * MS),
+            t.map(ELSEWHERE + 3_150, 13_000 * MS),
             11_150 * MS,
             "read late, close after the last: the compositor's spacing"
         );
         assert_eq!(
-            t.map(5_200, 14_500 * MS),
+            t.map(ELSEWHERE + 5_200, 14_500 * MS),
             14_500 * MS,
             "more than a second behind and after a pause as long"
         );
         assert_eq!(
-            t.map(1_000, 14_600 * MS),
+            t.map(ELSEWHERE + 1_000, 14_600 * MS),
             14_600 * MS,
             "going back past a second: another clock"
         );
+    }
+
+    #[test]
+    fn a_burst_after_a_pause_read_late_on_the_window_systems_clock_keeps_its_times() {
+        let mut t = InputTimeline::default();
+        assert_eq!(t.map(100_000, 100_000 * MS + 300), 100_000 * MS);
+        // two seconds later a burst comes, and the client reads it a second and a half after it came
+        let burst: Vec<u64> = [102_000, 102_016, 102_032, 102_048]
+            .into_iter()
+            .map(|millis| t.map(millis, 103_550 * MS))
+            .collect();
+        assert_eq!(
+            burst,
+            [102_000 * MS, 102_016 * MS, 102_032 * MS, 102_048 * MS]
+        );
+        // the first event the client sees can be late too
+        let mut t = InputTimeline::default();
+        assert_eq!(t.map(50_000, 53_000 * MS), 50_000 * MS);
+        assert_eq!(t.map(50_200, 53_000 * MS), 50_200 * MS);
+    }
+
+    #[test]
+    fn an_old_stamp_on_the_window_systems_clock_is_taken_for_another_clock() {
+        let mut t = InputTimeline::default();
+        let now = 1_000_000 * MS;
+        let old = 1_000_000 - MAX_INPUT_AGE.as_millis() as u32 - 1;
+        assert_eq!(t.map(old, now), now);
     }
 
     #[test]

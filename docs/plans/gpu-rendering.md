@@ -268,9 +268,16 @@ Works with the CPU renderer; no GPU needed.
 - [ ] A kept opaque scroll layer laid over by copy rather than by blending, or with the background behind it baked in:
       a scroll frame lays the whole viewport over (raster p50 7.2–10.2 ms, of it the composite of about 33 MB at
       scale 1).
-- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy of a scroll frame,
+- [x] The frame reaches the compositor without the copy into the shared-memory buffer: the copy of a scroll frame,
       whose damage is the whole moved viewport, is 8.7–10.3 ms p50 and 20–26 ms p99 (rendered straight into the
-      buffer, or the GPU path of step 6).
+      buffer, or the GPU path of step 6). On the GPU path (`CUPERTINO_RENDERER=gpu`) the frame is copied from the
+      renderer's texture into the dmabuf on the GPU: 0.07–0.12 ms p50 and 0.6–0.75 ms p99 at 1.5 ("Measurements",
+      "Step 6: Files on the GPU path"); the CPU path keeps its copy until step 7 turns the GPU on.
+- [ ] The CPU renderer's kept image of content with a blur or shadow is its picture in place: drawn whole at offset
+      0, scene 910 of `cupertino-ui-gpu`'s `parity::scroll_layers_drawn_whole_match_the_cpu` parts from the same list
+      drawn without the layer by up to 6/255 on up to 30 pixels at the viewport's first column and rows, where the GPU
+      renderer's kept texture and both renderers' pictures in place agree within 1/255. That test runs scenes 900 to
+      909 until this is found.
 
 Gate:
 
@@ -346,13 +353,20 @@ Presenter and process:
       the frame has finished with now gives its texture to the next of its size and format: 2.5 ms, no target made
       (`timing::a_large_windows_damaged_frame_stays_within_the_gpu_budget`, which holds both budgets). Batching
       draws is not needed for the budget.
-- [ ] `GpuRenderer` keeps scroll layers (`Layer::Scroll`) as textures between frames and moves them, painting only the
-      rows that come into view, as the CPU renderer keeps its images (ring of rows, the cap, a layer new to a frame
-      laid over only where damaged), with the parity tests of step 4 run on both renderers. Split from the batching
-      item: the GPU path meets the scroll's budget without it (see "Step 6: the renderer"), so it is an
-      optimisation of GPU time and power, not a gate.
-- [ ] The raised layer's subsurface presented from GPU buffers too: on the GPU path its frame is read back into
-      shared memory today (`CpuFrame::in_memory`).
+- [x] `GpuRenderer` keeps scroll layers (`Layer::Scroll`) as textures between frames and moves them, painting only the
+      rows that come into view, as the CPU renderer keeps its images (the cap, a layer new to a frame laid over only
+      where damaged). Without it a scroll frame's damage, which leaves out what only moved with the layer, made the
+      GPU renderer paint the whole viewport in place (raster 5.9 ms p50 at 1.5). Each layer has two textures the size
+      of its viewport: a scroll by whole device pixels draws what stays in view into the other, moved, and paints the
+      rows or columns that come into view and the damage; the content is painted under none of the layer's clips and
+      dithered by its own pixel, so it keeps its bytes as it moves, and the window lays the texture over where the
+      clips let pixels through whole and paints the content in place along their edges. Tests:
+      `parity::scroll_layers_scrolled_frame_by_frame_are_the_frames_drawn_whole` (scrolls down, up, sideways, past the
+      viewport and by half a pixel, with damage), `parity::scroll_layers_drawn_whole_match_the_cpu` and
+      `parity::a_kept_scroll_layer_paints_only_the_rows_that_come_into_view`. Raster 0.7–0.8 ms p50 at 1.5.
+- [x] The raised layer's subsurface presented from GPU buffers too: its frame was read back into shared memory, a
+      wait for the GPU of 4–6 ms in every third Files scroll frame; it now has dmabufs of its own and is copied from
+      the renderer's texture as its window is.
 
 Gate:
 
@@ -982,6 +996,10 @@ time):
 | empty (compiled, then saved) | 29.7–30.2 ms | 99–103 ms | 62.9–66.5 ms | 35.9–36.7 ms |
 | filled by the run before (loaded) | 28.9–29.3 ms | 65–73 ms | 64.6–72.1 ms | 0.3 ms |
 
+With the renderer's programs made in the warm-up too (`118b31cd`, the presenter's tests' window, 3 runs): first frame
+29.8–30.5 ms; empty cache, GPU ready after 233–237 ms (context 64–69 ms, programs 168–169 ms, once per driver and
+cache); filled cache 69–78 ms (context 65–74 ms, programs 4 ms).
+
 **Tests.** The presenter's GPU tier is `cupertino-server`'s `gpu_presenter` (slow tier) with
 `cupertino-ui-wayland`'s `gpu-window` as its client; the rule, the size steps, the reuse, the records and the switch
 in the runtime are fast tests.
@@ -998,6 +1016,36 @@ in the runtime are fast tests.
 | short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
 
 8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
+
+### Step 6: Files on the GPU path
+
+Taken at `999c46f2` on the target machine (GeForce RTX 3060, proprietary driver), release builds,
+`CUPERTINO_RENDERER=gpu scripts/dev/bench --size 3840x2160 --scale S --scenario files-full-scroll --runs 3`, other
+checkouts building beside it (load 5 to 9). Every Files frame counted was drawn by `GpuRenderer` (the frame lines'
+`renderer`). Medians of the three runs, the range of the runs after them; the phases are the Files client's own. The
+CPU column is the CPU path in the same hour at `68ff5660` (one run, load over 10).
+
+| Files two-finger scroll, client frame ms | GPU, scale 1.5 | GPU, scale 1 | CPU, scale 1.5 |
+|---|---|---|---|
+| Frames drawn in the scroll | 184 | 158 | 80 |
+| Frame p50 / p99 | 2.8 / 7.7 (7.2–10.8) | 6.3 / 37.5 (25.9–39.5) | 32.0 / 52.5 |
+| Update + view + layout p99 | 4.6 | 25.4 | |
+| Paint p50 / p99 | 1.5 / 2.0 | 4.0 / 12.3 | |
+| Raster p50 / p99 | 0.8 / 2.2 | 1.1 / 4.6 | 11.3 / 16.1 |
+| Copy p50 / p99 | 0.09 / 0.65 | 0.11 / 0.59 | 13.3 / 29.8 |
+| Commit p99 | 0.0 | 0.0 | |
+
+How it came there, at 1.5:
+
+| Commit | Frame p50 / p99 | Raster p50 / p99 | Copy p50 / p99 | Commit p99 |
+|---|---|---|---|---|
+| `68ff5660` (the content painted in place) | 7.8 / 15.0 | 5.9 / 7.4 | 0.07 / 0.53 | |
+| kept scroll layers on the GPU | 4.1 / 14.6 | 0.9 / 2.2 | 0.14 / 0.73 | 5.6 |
+| the raised layer from GPU buffers (`06898193`) and `999c46f2` | 2.8 / 7.7 | 0.8 / 2.2 | 0.09 / 0.65 | 0.0 |
+
+The scroll's budget (8 ms p99) is met at 1.5 in two runs of three. What is left of a frame is the toolkit's: at scale
+1 the frames that show other rows make the view again (view and layout together 16–26 ms p99, paint 8.5–12.5 ms
+p99), step 4's open items. The renderer's own part of a frame (raster and copy) stays under 6 ms p99 at both scales.
 
 ### Step 6: the renderer
 
@@ -1034,12 +1082,14 @@ device finishing it):
 |---|---|---|---|
 | making the renderer (its programs) | 16.7 ms | 12.6 ms | |
 | first frame (caches and atlases filled) | 16.4 ms | 75.3 ms | 14.7 ms |
-| whole frame | 13.4 ms, of which 13.3 ms before the request returns | 42.3 ms | 10.8 ms |
+| whole frame | 13.4 ms, of which 13.3 ms before the request returns (2.5 ms at `88f056ec`) | 42.3 ms | 10.8 ms |
 | a control's worth of damage | 0.24 ms, of which 0.17 ms before the request returns | 1.7 ms | 0.51 ms |
 
 The GPU's own share of a frame is under a tenth of a millisecond after the request returns: client GPU time is far
 under its 4 ms. The whole frame's time is the recording and issuing of its draws on the CPU, one draw and bind group
-per operation, which the batching item above takes down. The first frame still goes out on the CPU while the device
+per operation, and above all the 117 of its 125 offscreen targets made and destroyed every frame: with a finished
+target's texture serving the next of its size (`88f056ec`) the whole frame takes 2.5 ms, 2.3 ms before the request
+returns, no target made; a control's worth of damage 0.24 ms. The first frame still goes out on the CPU while the device
 warms (step 6's presenter), so the first-frame budget holds; a switch with a warm cache costs making the renderer and
 its first frame, about 33 ms on the NVIDIA GPU, within the 150 ms. Under heavy load from other builds the GPU
 renderer's whole frame once took 420 ms on the CPU side, the driver's threads starved; the CPU renderer's did not

@@ -12,7 +12,7 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Glass and materials | the compositor on the GPU: backdrop captured at half scale, blur pyramid, every glass stage in one shader pass | n/a |
 | Window shadows, rounded clips, outlines, wallpaper | the compositor, GPU shaders compiled through Smithay's shader interface | n/a |
 | Title bars, window buttons, keyboard HUDs, the procedural cursor | the compositor, rasterized on the CPU (tiny-skia, swash), cached, uploaded on change | memory buffers |
-| Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames | `wl_shm`, three slots, damage rectangles; on the GPU, dmabufs copied from the renderer's texture |
+| Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
 The material system is already a GPU system: a window asks the compositor for glass by shape and style, and the

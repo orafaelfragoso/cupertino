@@ -511,6 +511,7 @@ mod tests {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", name, "--test-threads=1", "--nocapture"])
                 .env(POOL_ALONE, "1")
+                .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .output()
                 .unwrap();
             let stdout = String::from_utf8_lossy(&out.stdout);

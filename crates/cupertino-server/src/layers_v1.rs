@@ -421,6 +421,14 @@ impl Layers {
         })
     }
 
+    /// Whether every layer and presentation of every client shows its target values at `now`: what desktop control reads
+    /// of the clients' layouts is what is shown.
+    pub fn settled(&self, now: f64) -> bool {
+        self.parents
+            .iter()
+            .all(|p| !p.is_alive() || settled(p, now))
+    }
+
     /// Animations the client has running or waiting, those queued on its parents included.
     fn animations(&self, client: &ClientId) -> usize {
         self.parents

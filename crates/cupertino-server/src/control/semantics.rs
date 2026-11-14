@@ -36,6 +36,8 @@ pub(super) struct SemanticState {
     grab_serials: VecDeque<Serial>,
     /// The grab serials still good.
     grants: Vec<GrabGrant>,
+    /// Observations waiting for the compositor's transitions to settle.
+    held: Vec<Held>,
 }
 /// The popup grab an action's publisher may take while it handles the action: once, with `serial`, for a popup whose
 /// chain hangs from `root`, from its own connection. It goes when it is used, when the run that asked for the action
@@ -71,6 +73,23 @@ struct Publication {
     /// closes its descriptor at once, so a burst is read once ([`Cupertino::flush_publications`]).
     unread: Option<(OwnedFd, u32)>,
 }
+/// The longest an observation waits for what is shown to be what the layouts say, in seconds of model time: every
+/// transition the compositor runs for a client is shorter, so one still running past it is observed mid-way.
+pub const SETTLE_WAIT: f64 = 1.0;
+
+/// Whether an observation asked at `since` is answered at `now`: once every layer and presentation shows its target
+/// values (`settled`), or at the latest [`SETTLE_WAIT`] later.
+pub fn observation_due(settled: bool, since: f64, now: f64) -> bool {
+    settled || now >= since + SETTLE_WAIT
+}
+
+/// An observation held until what it reads is what is shown: the run that asked, its serial and when it asked.
+struct Held {
+    controller: CupertinoControlSessionV1,
+    serial: u32,
+    since: f64,
+}
+
 struct Pending {
     id: u64,
     /// The subscription the action was sent under.
@@ -113,6 +132,7 @@ impl SemanticState {
             subscription: None,
             grab_serials: VecDeque::new(),
             grants: Vec::new(),
+            held: Vec::new(),
         }
     }
 }
@@ -299,8 +319,16 @@ impl Cupertino {
             self.control.runs[i].resource.semantic_changed(h, l);
         }
     }
-    /// Pending native replies have a real deadline even while every output is idle.
+    /// Pending native replies have a real deadline even while every output is idle, and a held observation the end of
+    /// its wait.
     pub(crate) fn control_deadline(&self) -> Option<f64> {
+        let held = self
+            .control
+            .semantics
+            .held
+            .iter()
+            .map(|h| h.since + SETTLE_WAIT)
+            .reduce(f64::min);
         self.control
             .semantics
             .pending
@@ -312,6 +340,49 @@ impl Cupertino {
                 self.now()
                     + at.saturating_duration_since(Instant::now()).as_secs_f64() * self.time_scale
             })
+            .into_iter()
+            .chain(held)
+            .reduce(f64::min)
+    }
+
+    /// Hold the observation `serial` of run `index` while a layer or a presentation of a client is on its way to its
+    /// target: desktop control then reads what is shown, not what is about to be. Whether it was held.
+    pub(super) fn control_hold_observation(&mut self, index: usize, serial: u32) -> bool {
+        let now = self.now();
+        if observation_due(self.layers.settled(now), now, now) {
+            return false;
+        }
+        self.control.semantics.held.push(Held {
+            controller: self.control.runs[index].resource.clone(),
+            serial,
+            since: now,
+        });
+        true
+    }
+
+    /// Answer the held observations that are due: what is shown settled, or they waited long enough.
+    pub(crate) fn control_release_observations(&mut self, now: f64) {
+        if self.control.semantics.held.is_empty() {
+            return;
+        }
+        let settled = self.layers.settled(now);
+        let held = std::mem::take(&mut self.control.semantics.held);
+        let (due, still): (Vec<Held>, Vec<Held>) = held
+            .into_iter()
+            .partition(|h| observation_due(settled, h.since, now));
+        self.control.semantics.held = still;
+        for h in due {
+            // a run that ended meanwhile is not answered
+            if let Some(i) = self
+                .control
+                .runs
+                .iter()
+                .position(|r| r.resource == h.controller)
+            {
+                let result = self.control_observe(i, h.serial);
+                self.control_finish(i, h.serial, result);
+            }
+        }
     }
     /// Read the newest publication each publisher has sent since the last call and tell the observing runs once. An
     /// invalid, stale or unsealed one is a protocol error of its publisher, as when it arrived.
@@ -851,5 +922,27 @@ impl Dispatch<CupertinoSemanticSurfaceV1, ()> for Cupertino {
             .retain(|p| p.resource != *resource);
         state.refresh_semantics();
         state.semantics_changed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_observation_waits_for_what_is_shown_to_settle_and_no_longer_than_its_wait() {
+        assert!(
+            observation_due(true, 10.0, 10.0),
+            "settled: answered at once"
+        );
+        assert!(
+            !observation_due(false, 10.0, 10.0),
+            "held while a transition runs"
+        );
+        assert!(!observation_due(false, 10.0, 10.0 + SETTLE_WAIT - 0.01));
+        assert!(
+            observation_due(false, 10.0, 10.0 + SETTLE_WAIT),
+            "a transition longer than the wait is observed mid-way"
+        );
     }
 }

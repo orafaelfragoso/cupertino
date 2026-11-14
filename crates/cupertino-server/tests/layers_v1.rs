@@ -1102,6 +1102,30 @@ fn a_popup_s_presentation_scales_and_fades_it_on_the_server_clock() {
 }
 
 #[test]
+fn desktop_control_reads_the_clients_layouts_once_their_layers_show_their_targets() {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = presented_parent(&mut h);
+    assert!(h.state.layers.settled(h.state.now()), "at rest");
+    h.state.fixed_time = Some(500.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(4, Property::Opacity, 0.0, 300, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the fade", |h| !h.state.layers.settled(500.0));
+    h.state.fixed_time = Some(500.2);
+    assert!(
+        !h.state.layers.settled(500.2),
+        "mid-way what is shown is not the layout's"
+    );
+    h.state.fixed_time = Some(500.3);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [4]));
+    assert!(h.state.layers.settled(500.3), "shown at its target again");
+}
+
+#[test]
 fn too_many_animations_is_a_protocol_error() {
     let Some(mut h) = Harness::new(1.0, false) else {
         return;

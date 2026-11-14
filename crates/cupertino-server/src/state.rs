@@ -2110,6 +2110,7 @@ impl Cupertino {
         self.tick_input_timers(now);
         self.tick_overlays(now);
         self.tick_layers(now);
+        self.control_release_observations(now);
         self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         self.refresh_shortcut_inhibitors(focus.as_ref());

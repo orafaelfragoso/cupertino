@@ -1196,6 +1196,39 @@ impl MaterialElement {
         self.stage
     }
 
+    /// The key its id, commit and backdrop record are kept under.
+    pub fn key(&self) -> ElementKey {
+        self.key
+    }
+
+    /// The part of the output (output pixels) whose pixels reach what the region shows: its rectangle with the reach
+    /// of its blur around it ([`backdrop_crop`]'s margin) for a region that blurs what is under it, the whole output
+    /// for a backdrop captured below the windows.
+    pub fn sampled_area(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        let whole = Rectangle::from_size(Size::from(self.output_px));
+        if !matches!(self.stage, MaterialStage::Full) {
+            return whole;
+        }
+        let own = to_physical_rect(self.area, scale);
+        let Some((capture, sigma, _)) = self.recipe.backdrop.as_ref() else {
+            return own;
+        };
+        let (w, h) = self.output_px;
+        let plan = plan_blur(
+            w.max(0) as u32,
+            h.max(0) as u32,
+            *capture,
+            *sigma,
+            self.scale as f32,
+        );
+        let factor = 1i32 << plan.levels.len().min(16);
+        let margin = (plan.weights.len().saturating_sub(1) as i32 + 2) * factor;
+        Rectangle::new(
+            (own.loc.x - margin, own.loc.y - margin).into(),
+            (own.size.w + 2 * margin, own.size.h + 2 * margin).into(),
+        )
+    }
+
     /// Set the backdrop generation (a signature of everything drawn below) and refresh the id and
     /// commit counter from the cache.
     pub fn finalize(&mut self, generation: u64, cache: &mut ElementCache) {

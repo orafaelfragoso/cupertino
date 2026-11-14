@@ -61,7 +61,7 @@ struct Slot {
 #[derive(Debug, Default)]
 pub struct ElementCache {
     slots: HashMap<ElementKey, Slot>,
-    /// What each glass element's backdrop signature was made from, and whether it was used since the last frame.
+    /// What each material and glass element's backdrop signature was made from, and whether it was used since the last frame.
     backdrops: HashMap<ElementKey, (crate::render::material::glass::BackdropRecord, bool)>,
 }
 
@@ -101,7 +101,7 @@ impl ElementCache {
         Some(s.commit)
     }
 
-    /// What the backdrop signature of glass element `key` was made from last frame.
+    /// What the backdrop signature of material or glass element `key` was made from last frame.
     pub fn backdrop(
         &self,
         key: ElementKey,
@@ -109,7 +109,7 @@ impl ElementCache {
         self.backdrops.get(&key).map(|(r, _)| r)
     }
 
-    /// Keep what the backdrop signature of glass element `key` was made from this frame.
+    /// Keep what the backdrop signature of material or glass element `key` was made from this frame.
     pub fn set_backdrop(
         &mut self,
         key: ElementKey,

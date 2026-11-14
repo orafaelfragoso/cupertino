@@ -3084,32 +3084,39 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
     );
 }
 
-/// Assign each material element the signature of everything below it (bottom to top). A
-/// composite takes the signature of its capture element, which sits lower in the scene. A glass element takes the
-/// signature of the elements below it that overlap the area it samples ([`backdrop_generation`]).
+/// Assign each material and glass element the signature of its backdrop, bottom to top: of the elements below it that
+/// overlap the area it samples ([`backdrop_generation`]), so a change elsewhere on the output, or a commit that leaves
+/// that area as it was, keeps its blurred levels. A region that blurs what is under it samples its rectangle with the
+/// reach of its blur around it, a backdrop captured below the windows the whole output, a glass element its own area;
+/// a composite takes the signature of its capture element, which sits lower in the scene. Each element is finalized
+/// before the elements above it read its commit, so a backdrop that changes this frame shows above it this frame.
 pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: &mut ElementCache) {
     let scale = Scale::from(scale);
-    let mut running = Sig::new();
-    let mut acc: u64 = 0;
     let mut captured: Vec<(u64, u64)> = Vec::new();
-    // the elements so far, bottom to top
-    let mut below: Vec<Below> = Vec::new();
-    // the elements below each glass element that overlap the area it samples, as indices into `elements`
-    let mut glass_generations: Vec<Option<u64>> = vec![None; elements.len()];
-    for (i, e) in elements.iter().enumerate().rev() {
-        if let CupertinoElement::Glass(g) = e {
-            // glass reads only the area it samples: what changes elsewhere, or a commit that leaves that area as it
-            // was, keeps its blurred levels
-            let area = g.geometry(scale);
+    // the elements finalized so far, bottom to top, each with its index into `elements`
+    let mut below: Vec<(Below, usize)> = Vec::new();
+    for i in (0..elements.len()).rev() {
+        let (upper, lower) = elements.split_at_mut(i + 1);
+        let e = &mut upper[i];
+        let sampled = match &*e {
+            CupertinoElement::Glass(g) => Some((g.key(), g.geometry(scale))),
+            CupertinoElement::Material(m)
+                if !matches!(m.stage(), MaterialStage::Composite { .. }) =>
+            {
+                Some((m.key(), m.sampled_area(scale)))
+            }
+            _ => None,
+        };
+        let generation = sampled.map(|(key, area)| {
             let (overlapping, at): (Vec<Below>, Vec<usize>) = below
                 .iter()
-                .enumerate()
-                .filter(|(_, b)| b.geometry.overlaps(area))
-                .map(|(j, b)| (*b, elements.len() - 1 - j))
+                .filter(|(b, _)| b.geometry.overlaps(area))
+                .map(|(b, j)| (*b, *j))
                 .unzip();
             let generation =
-                backdrop_generation(area, &overlapping, cache.backdrop(g.key()), |k, since| {
-                    let e = &elements[at[k]];
+                backdrop_generation(area, &overlapping, cache.backdrop(key), |k, since| {
+                    // `lower` starts at index `i + 1` of `elements`
+                    let e = &lower[at[k] - i - 1];
                     let origin = e.geometry(scale).loc;
                     e.damage_since(scale, Some(CommitCounter::from(since as usize)))
                         .iter()
@@ -3117,64 +3124,51 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
                         .collect()
                 });
             cache.set_backdrop(
-                g.key(),
+                key,
                 BackdropRecord {
                     generation,
                     below: overlapping,
                 },
             );
-            glass_generations[i] = Some(generation);
-        }
-        let g = e.geometry(scale);
-        let c = e
-            .current_commit()
-            .distance(Some(CommitCounter::default()))
-            .unwrap_or(0) as u64;
-        below.push(Below {
-            id: id_hash(e.id()),
-            commit: c,
-            alpha: e.alpha(),
-            geometry: g,
+            generation
         });
-    }
-    below.clear();
-    for (i, e) in elements.iter_mut().enumerate().rev() {
-        if let (CupertinoElement::Glass(g), Some(generation)) = (&mut *e, glass_generations[i]) {
-            g.finalize(generation, cache);
+        match e {
+            CupertinoElement::Glass(g) => {
+                g.finalize(generation.expect("glass samples an area"), cache);
+            }
+            CupertinoElement::Material(m) => {
+                let generation = match m.stage() {
+                    MaterialStage::Full => generation.expect("a region samples an area"),
+                    MaterialStage::Capture { owner } => {
+                        let generation = generation.expect("a capture samples the output");
+                        captured.push((owner, generation));
+                        generation
+                    }
+                    MaterialStage::Composite { owner } => {
+                        captured
+                            .iter()
+                            .find(|(o, _)| *o == owner)
+                            .expect("a composite is built together with its capture")
+                            .1
+                    }
+                };
+                m.finalize(generation, cache);
+            }
+            _ => {}
         }
-        if let CupertinoElement::Material(m) = e {
-            let generation = match m.stage() {
-                MaterialStage::Full => acc,
-                MaterialStage::Capture { owner } => {
-                    captured.push((owner, acc));
-                    acc
-                }
-                MaterialStage::Composite { owner } => {
-                    captured
-                        .iter()
-                        .find(|(o, _)| *o == owner)
-                        .expect("a composite is built together with its capture")
-                        .1
-                }
-            };
-            m.finalize(generation, cache);
-        }
-        let g = e.geometry(scale);
         let c = e
             .current_commit()
             .distance(Some(CommitCounter::default()))
             .unwrap_or(0) as u64;
-        // order-dependent combination of (id, commit, geometry)
-        let mut h = Sig::new()
-            .u(acc)
-            .u(c)
-            .u(g.loc.x as u64)
-            .u(g.loc.y as u64)
-            .u(g.size.w as u64)
-            .u(g.size.h as u64);
-        h = h.u(id_hash(e.id()));
-        acc = h.finish();
-        let _ = &mut running;
+        below.push((
+            Below {
+                id: id_hash(e.id()),
+                commit: c,
+                alpha: e.alpha(),
+                geometry: e.geometry(scale),
+            },
+            i,
+        ));
     }
 }
 
@@ -3507,6 +3501,19 @@ mod tests {
         radius: f64,
         opacity: f32,
     ) -> CupertinoElement {
+        material_on(cache, key, stage, area, radius, opacity, (1280, 800))
+    }
+
+    /// A material region on an output of `output_px` pixels at scale 1.
+    fn material_on(
+        cache: &mut ElementCache,
+        key: ElementKey,
+        stage: MaterialStage,
+        area: Rect,
+        radius: f64,
+        opacity: f32,
+        output_px: (i32, i32),
+    ) -> CupertinoElement {
         let recipe = Theme::load()
             .unwrap()
             .recipe(Appearance::Light, "MenuBar", &MaterialOptions::default())
@@ -3526,7 +3533,7 @@ mod tests {
             true,
             opacity,
             [0.0; 3],
-            (1280, 800),
+            output_px,
             1.0,
         )
         .into()
@@ -3675,6 +3682,74 @@ mod tests {
             far,
             scene(Rect::new(450.0, 320.0, 100.0, 50.0)),
             "a window moving under the glass makes them again"
+        );
+    }
+
+    #[test]
+    fn a_material_reblurs_only_when_what_lies_below_its_sampled_area_changes() {
+        let mut cache = ElementCache::default();
+        let output = (3840, 2160);
+        let region = Rect::new(400.0, 300.0, 200.0, 60.0);
+        // front to back: a region blurring what is under it, a material standing in for a window, and a full-output
+        // one standing in for the wallpaper
+        let mut scene = |window: Rect| {
+            let mut els = vec![
+                material_on(
+                    &mut cache,
+                    ElementKey::new("sidebar", 0),
+                    MaterialStage::Full,
+                    region,
+                    0.0,
+                    1.0,
+                    output,
+                ),
+                material_on(
+                    &mut cache,
+                    ElementKey::new("window", 0),
+                    MaterialStage::Full,
+                    window,
+                    0.0,
+                    1.0,
+                    output,
+                ),
+                material_on(
+                    &mut cache,
+                    ElementKey::new("wallpaper", 0),
+                    MaterialStage::Full,
+                    Rect::new(0.0, 0.0, 3840.0, 2160.0),
+                    0.0,
+                    1.0,
+                    output,
+                ),
+            ];
+            finalize_materials(&mut els, 1.0, &mut cache);
+            let CupertinoElement::Material(m) = &els[0] else {
+                unreachable!()
+            };
+            (m.generation(), m.sampled_area(Scale::from(1.0)))
+        };
+        let (far, sampled) = scene(Rect::new(3000.0, 1800.0, 300.0, 200.0));
+        assert!(
+            sampled.size.w > 200 && sampled.size.h > 60,
+            "the region samples the reach of its blur around it"
+        );
+        assert_eq!(
+            far,
+            scene(Rect::new(3010.0, 1800.0, 300.0, 200.0)).0,
+            "a window moving elsewhere on the output keeps the region's blurred levels"
+        );
+        assert_ne!(
+            far,
+            scene(Rect::new(450.0, 320.0, 100.0, 50.0)).0,
+            "a window moving under the region makes them again"
+        );
+        // just past the region's bottom edge, inside the reach of its blur
+        let edge = f64::from(sampled.loc.y + sampled.size.h) - 20.0;
+        let near = scene(Rect::new(400.0, edge, 100.0, 10.0)).0;
+        assert_ne!(
+            near,
+            scene(Rect::new(400.0, edge + 1.0, 100.0, 10.0)).0,
+            "a window moving inside the reach of its blur makes them again"
         );
     }
 

@@ -52,7 +52,8 @@ buffer follow.
   missing glyph. A cluster with the
   emoji presentation selector (U+FE0F) takes the first colour face (COLR, CBDT or sbix) that has it, the run's face
   included, before any face without colour, so ❤️ is the colour heart even when the text face has a heart; without
-  the selector the run's face keeps it. The cache keeps two generations of 512 paragraphs, a size
+  the selector the run's face keeps it. The cache keeps two generations of 512 paragraphs (`cached_paragraphs`
+  counts them; text shaped ahead of the frame that lays it out cannot grow it past them), a size
   or spacing that is not finite (or a size of zero or less) is `TextError::InvalidValue`, and variation values are
   kept in quarter units so an animated axis shares instances.
 - `Paragraph::layout(width)` re-wraps the shaped text without reshaping (UAX 14 breaks from `icu_segmenter`; a word

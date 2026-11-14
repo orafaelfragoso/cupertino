@@ -224,6 +224,10 @@ struct WindowState<M> {
     /// The nodes of [`WindowState::animate`] that asked from their paint: what they draw moves by itself, so they
     /// paint again at the frame whether or not they handle [`Event::AnimationFrame`].
     paint_animate: BTreeSet<NodeId>,
+    /// The nodes that asked for the window's idle time ([`Widget::idle`]), each to be called once.
+    idle: BTreeSet<NodeId>,
+    /// When the window's frames came, to tell when the next is due.
+    frame_clock: idle::FrameClock,
     /// When each node asked to be woken, one time per node; ordered so that nodes due together wake in a fixed order.
     wakes: BTreeMap<NodeId, Timestamp>,
     text_input: Option<NodeId>,
@@ -549,8 +553,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 continue;
             }
             if !self.exit {
-                // a wake due later bounds the wait; `ready` makes one already due run before waiting at all
-                let timeout = self.next_wake().map(|at| {
+                // the time until the next event or frame goes to the widgets that asked for it
+                self.run_idle()?;
+                if self.exit || self.ready() {
+                    continue;
+                }
+                // a wake due later bounds the wait; `ready` makes one already due run before waiting at all. Idle work
+                // left for a frame that was due goes on once the frame is late, so a window the compositor stopped
+                // drawing does not hold it back
+                let wake = self.next_wake().into_iter().chain(self.idle_resume()).min();
+                let timeout = wake.map(|at| {
                     Duration::from_nanos(at.0.saturating_sub(self.options.clock.now().0))
                 });
                 let events = &mut self.events;
@@ -1033,6 +1045,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             dismissed: None,
             animate: BTreeSet::new(),
             paint_animate: BTreeSet::new(),
+            idle: BTreeSet::new(),
+            frame_clock: idle::FrameClock::default(),
             wakes: BTreeMap::new(),
             text_input: None,
             geometry: Geometry::default(),
@@ -1101,10 +1115,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .reconcile(existing.as_mut().and_then(|w| w.root.take()), content)?;
         let env = parent.env.clone();
         let measured = layout(
-            &TreeView {
-                tree: &self.tree,
-                env: &env,
-            },
+            &TreeView::new(&self.tree, &env),
             root,
             Constraints::loose(spec.size).map_err(UiError::Layout)?,
             &LayoutOptions {
@@ -1371,6 +1382,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             WindowEvent::Frame(time) => {
                 w.frame_ready = true;
+                w.frame_clock.frame(now);
                 // the callback of a committed frame: the compositor has shown it, not only received it
                 w.presented |= w.committed;
                 let animate = std::mem::take(&mut w.animate);
@@ -2332,11 +2344,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         w.semantics.clear();
                         w.measured_in = Some(w.env.clone());
                     }
+                    let view = TreeView::new(&self.tree, &w.env);
                     let result = layout_cached(
-                        &TreeView {
-                            tree: &self.tree,
-                            env: &w.env,
-                        },
+                        &view,
                         root,
                         available,
                         &LayoutOptions {
@@ -2346,6 +2356,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         &mut w.layout_cache,
                     )
                     .map_err(UiError::Layout)?;
+                    w.idle.extend(view.idle.into_inner());
                     w.layout = result.stats;
                     result
                 }
@@ -2674,6 +2685,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .damage_of(&l.list, &l.own, &l.blank, &Default::default())
         });
         w.paint_animate.extend(painting.animating.iter().copied());
+        w.idle.extend(painting.idle.iter().copied());
         w.animate.extend(painting.animating);
         w.display_list = painting.list;
         w.resources = painting.resources;
@@ -3164,10 +3176,7 @@ fn drag_image<M: 'static>(
     let mut tree = Tree::new(options.node_limit);
     let root = tree.reconcile(None, content)?;
     let result = layout(
-        &TreeView {
-            tree: &tree,
-            env: &env,
-        },
+        &TreeView::new(&tree, &env),
         root,
         Constraints::tight(size).map_err(UiError::Layout)?,
         &LayoutOptions {
@@ -3408,6 +3417,7 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
 mod drops;
 mod fade;
 mod handover;
+mod idle;
 mod morph;
 mod semantics;
 mod surface_layers;
@@ -3425,6 +3435,10 @@ mod surface_layer_tests;
 #[cfg(test)]
 #[path = "runtime/relayout-tests.rs"]
 mod relayout_tests;
+
+#[cfg(test)]
+#[path = "runtime/idle-tests.rs"]
+mod idle_tests;
 
 /// The themes of `theme`'s session options in the light and the dark appearance, from `theme_for`; none without it.
 /// The session's own appearance is asked for last, as the theme maker may remember the last one it made.

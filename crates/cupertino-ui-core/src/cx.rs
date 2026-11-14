@@ -13,11 +13,14 @@ use cupertino_ui_render::{
 };
 use cupertino_ui_text::TextInputState;
 use cupertino_ui_theme::Surface;
+use std::cell::Cell;
 use std::collections::BTreeSet;
 
 pub struct MeasureCx<'a> {
     pub(crate) node: NodeId,
     pub(crate) env: &'a Environment,
+    /// The node called [`MeasureCx::request_idle`].
+    pub(crate) idle: &'a Cell<bool>,
 }
 
 impl MeasureCx<'_> {
@@ -27,6 +30,53 @@ impl MeasureCx<'_> {
 
     pub fn env(&self) -> &Environment {
         self.env
+    }
+
+    /// Hands the node the window's idle time once ([`Widget::idle`](crate::Widget::idle)), after this frame is shown
+    /// and before the next one is due.
+    pub fn request_idle(&self) {
+        self.idle.set(true);
+    }
+}
+
+/// A slice of a window's idle time, handed to a node that asked for it ([`Widget::idle`](crate::Widget::idle)): time
+/// between a presented frame and the next, while nothing else is ready. The work done in it is work a later frame would
+/// do (shaping the text it will lay out into the text system's cache), done earlier: it changes nothing the window
+/// shows.
+pub struct IdleCx<'a> {
+    pub(crate) node: NodeId,
+    pub(crate) env: &'a Environment,
+    pub(crate) clock: &'a dyn crate::Clock,
+    /// When the slice ends.
+    pub(crate) until: Timestamp,
+    /// The node called [`IdleCx::request_idle`].
+    pub(crate) again: bool,
+}
+
+impl IdleCx<'_> {
+    pub fn node(&self) -> NodeId {
+        self.node
+    }
+
+    /// The environment the window lays its nodes out in, with the text system their layout shapes with.
+    pub fn env(&self) -> &Environment {
+        self.env
+    }
+
+    /// Whether the slice has time left for one more piece of work. A node does its work a piece at a time while it
+    /// has, and asks again ([`IdleCx::request_idle`]) for what is left.
+    pub fn has_time(&self) -> bool {
+        self.clock.now() < self.until
+    }
+
+    /// When the slice ends: before the window's next frame is due and before any wake asked for.
+    pub fn until(&self) -> Timestamp {
+        self.until
+    }
+
+    /// Calls the node again in a later slice, for the work this one left.
+    pub fn request_idle(&mut self) {
+        self.again = true;
     }
 }
 
@@ -345,6 +395,8 @@ pub struct PaintCx<'a> {
     pub(crate) asked_material: &'a mut bool,
     /// The node called [`PaintCx::overlay`].
     pub(crate) overlay: &'a mut bool,
+    /// The node called [`PaintCx::request_idle`].
+    pub(crate) idle: &'a mut bool,
     /// The node lies on a material ([`PaintCx::on_material`]).
     pub(crate) on_material: bool,
     /// The node asked for glass or a translucent surface's material under itself, which its subtree lies on.
@@ -486,6 +538,12 @@ impl PaintCx<'_> {
     /// again without asking.
     pub fn overlay(&mut self) {
         *self.overlay = true;
+    }
+
+    /// Hands the node the window's idle time once ([`Widget::idle`](crate::Widget::idle)), after this frame is shown
+    /// and before the next one is due.
+    pub fn request_idle(&mut self) {
+        *self.idle = true;
     }
 
     /// Fills `rect` (node coordinates) with `color`, each edge on the nearest device pixel edge of the window wherever

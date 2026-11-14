@@ -465,6 +465,7 @@ mod tests {
             list: DisplayList { nodes },
             own,
             animating: Vec::new(),
+            idle: Vec::new(),
             resources: Default::default(),
             materials: Vec::new(),
             layer: None,

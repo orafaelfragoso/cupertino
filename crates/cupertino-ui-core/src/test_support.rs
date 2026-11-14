@@ -349,6 +349,8 @@ pub(crate) struct FakeSystem {
     pub(crate) copy_time: Duration,
     /// The timeout of every wait, in order.
     pub(crate) waits: Rc<RefCell<Vec<Option<Duration>>>>,
+    /// Events that arrive while the runtime is busy, delivered at its next look; shared, so a widget can send one.
+    pub(crate) arriving: Rc<RefCell<VecDeque<PlatformEvent>>>,
     /// A wait that may block (not a step's zero-timeout poll) with nothing queued asks the first window to close, so
     /// `run` returns.
     pub(crate) close_on_wait: bool,
@@ -734,6 +736,7 @@ impl WindowSystem for FakeSystem {
             }
         }
         events.extend(self.queue.drain(..));
+        events.extend(self.arriving.borrow_mut().drain(..));
         Ok(())
     }
 

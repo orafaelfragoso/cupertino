@@ -89,6 +89,13 @@ impl TextSystem {
         Ok(paragraph)
     }
 
+    /// How many paragraphs the cache holds: two generations of at most 512 each, however many are shaped, so work that
+    /// shapes text ahead of the frame that lays it out (a window's idle time) cannot grow it.
+    pub fn cached_paragraphs(&self) -> usize {
+        let state = self.state();
+        state.current.len() + state.previous.len()
+    }
+
     /// The size of `text` laid out within `max_width`.
     pub fn measure(
         &self,
@@ -562,6 +569,32 @@ mod tests {
             )
             .unwrap();
         GLYPH_LOOKUPS.with(|count| count.get())
+    }
+
+    #[test]
+    fn the_cache_holds_two_generations_at_most_and_the_last_paragraphs_shaped_whole() {
+        let mut fonts = FontIndex::new();
+        fonts.add_font(Arc::new(INTER.to_vec())).unwrap();
+        let system = TextSystem::new(fonts, "Inter");
+        let style = ParagraphStyle::default();
+        let text = |i: usize| AttributedText::plain(format!("name {i}"), TextStyle::new(13.0));
+        let count = 3 * CACHE_LIMIT + 7;
+        for i in 0..count {
+            system.paragraph(&text(i), &style).unwrap();
+            assert!(
+                system.cached_paragraphs() <= 2 * CACHE_LIMIT,
+                "{} held after {} shaped",
+                system.cached_paragraphs(),
+                i + 1
+            );
+        }
+        // the last generation's worth is found, none shaped again
+        let shaped = crate::TextWork::current().shaped;
+        for i in count - CACHE_LIMIT..count {
+            system.paragraph(&text(i), &style).unwrap();
+        }
+        assert_eq!(crate::TextWork::current().shaped, shaped);
+        assert!(system.cached_paragraphs() <= 2 * CACHE_LIMIT);
     }
 
     #[test]

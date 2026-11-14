@@ -2328,7 +2328,7 @@ fn paint_laid_out(
     active: bool,
 ) -> Painting {
     let result = cupertino_ui_layout::layout(
-        &crate::layout_view::TreeView { tree, env },
+        &crate::layout_view::TreeView::new(tree, env),
         root,
         Constraints::tight(Size::new(100.0, 50.0)).unwrap(),
         &cupertino_ui_layout::LayoutOptions {

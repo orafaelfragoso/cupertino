@@ -546,6 +546,8 @@ pub(crate) struct Painting {
     pub(crate) blank: Vec<bool>,
     /// The nodes that asked for the next frame while they painted.
     pub(crate) animating: Vec<NodeId>,
+    /// The nodes that asked for the window's idle time while they painted ([`PaintCx::request_idle`]).
+    pub(crate) idle: Vec<NodeId>,
     /// The images the list draws.
     pub(crate) resources: PaintResources,
     /// The materials the nodes asked for, in window coordinates, in paint order.
@@ -688,6 +690,7 @@ impl Painter {
         };
         let mut list = DisplayList::default();
         let mut animating = Vec::new();
+        let mut idle_nodes = Vec::new();
         // the nodes that read the window's marks this pass, and the overlays with the band they saw
         let mut mark_readers: Vec<NodeId> = Vec::new();
         let mut band_readers: Vec<(NodeId, bool)> = Vec::new();
@@ -986,6 +989,7 @@ impl Painter {
                 let mut material = None;
                 let mut asked_material = false;
                 let mut overlay = false;
+                let mut idle = false;
                 let mut lays_material = false;
                 let mut pixels = Vec::new();
                 let mut reads_obscured = false;
@@ -1021,6 +1025,7 @@ impl Painter {
                         material: &mut material,
                         asked_material: &mut asked_material,
                         overlay: &mut overlay,
+                        idle: &mut idle,
                         on_material,
                         lays_material: &mut lays_material,
                         pixels: &mut pixels,
@@ -1049,6 +1054,9 @@ impl Painter {
                 }
                 if animate {
                     animating.push(id);
+                }
+                if idle {
+                    idle_nodes.push(id);
                 }
                 self.revision += 1;
                 self.nodes.insert(
@@ -1350,6 +1358,7 @@ impl Painter {
             own,
             blank,
             animating,
+            idle: idle_nodes,
             resources,
             materials,
             layer,

@@ -11,10 +11,23 @@ use cupertino_ui_layout::{
     Constraints, ContainerKind, Generation, IdMap, LayoutDirection, LayoutResult, LayoutSpec,
     LayoutTree, Measured,
 };
+use std::cell::{Cell, RefCell};
 
 pub(crate) struct TreeView<'a, M> {
     pub(crate) tree: &'a Tree<M>,
     pub(crate) env: &'a Environment,
+    /// The leaves that asked for idle time while they were measured ([`MeasureCx::request_idle`]).
+    pub(crate) idle: RefCell<Vec<NodeId>>,
+}
+
+impl<'a, M> TreeView<'a, M> {
+    pub(crate) fn new(tree: &'a Tree<M>, env: &'a Environment) -> Self {
+        Self {
+            tree,
+            env,
+            idle: RefCell::default(),
+        }
+    }
 }
 
 impl<M: 'static> LayoutTree for TreeView<'_, M> {
@@ -43,14 +56,20 @@ impl<M: 'static> LayoutTree for TreeView<'_, M> {
             .tree
             .get(id)
             .expect("layout asks only for nodes the tree handed it");
-        node.widget.measure(
+        let idle = Cell::new(false);
+        let measured = node.widget.measure(
             &*node.state,
             constraints,
             &mut MeasureCx {
                 node: id,
                 env: self.env,
+                idle: &idle,
             },
-        )
+        );
+        if idle.get() {
+            self.idle.borrow_mut().push(id);
+        }
+        measured
     }
 }
 
@@ -517,7 +536,7 @@ mod tests {
         let mut kept = KeptPlacements::default();
         let place = |tree: &Tree<String>, kept: &mut KeptPlacements, size: Size| {
             let result = cupertino_ui_layout::layout(
-                &TreeView { tree, env: &env },
+                &TreeView::new(tree, &env),
                 root,
                 Constraints::tight(size).unwrap(),
                 &cupertino_ui_layout::LayoutOptions {

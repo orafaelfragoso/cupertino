@@ -38,7 +38,7 @@ pub use command::CommandRegistry;
 pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
 pub use cupertino_ui_platform::{GlassStyle, RendererClass};
 pub use cx::{
-    EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, OverlayCx, PaintCx, SemanticsCx,
+    EventCx, FocusTarget, Glass, GlassCorners, IdleCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx,
 };
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,

@@ -1,4 +1,4 @@
-use crate::cx::{EventCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx};
+use crate::cx::{EventCx, IdleCx, MeasureCx, OverlayCx, PaintCx, SemanticsCx};
 use crate::{Environment, Event, Key};
 use cupertino_geometry::{Point, Size};
 use cupertino_ui_layout::{Constraints, Flex, GridSpan, LayoutSpec, Measured, SizeSpec};
@@ -105,6 +105,12 @@ pub trait Widget<M>: 'static {
     fn closes_as_menu(&self) -> bool {
         false
     }
+    /// Work done in the window's idle time, once for each time the node asked for it in its measure, its paint or its
+    /// last idle call ([`MeasureCx::request_idle`], [`PaintCx::request_idle`], [`IdleCx::request_idle`]): between a
+    /// presented frame and the next, never inside a frame, while nothing else is ready, in slices that end before the
+    /// next frame is due ([`IdleCx::has_time`]). It does now what a later frame would do, such as shaping the text it
+    /// will lay out into the text system's cache, and changes nothing the window shows: the state is only read.
+    fn idle(&self, _state: &Self::State, _cx: &mut IdleCx<'_>) {}
 }
 
 /// An immutable description of one widget and its children.
@@ -323,6 +329,7 @@ pub(crate) trait AnyWidget<M> {
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
     fn grows_from_anchor(&self) -> bool;
     fn closes_as_menu(&self) -> bool;
+    fn idle(&self, state: &dyn Any, cx: &mut IdleCx<'_>);
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -419,5 +426,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn closes_as_menu(&self) -> bool {
         Widget::closes_as_menu(self)
+    }
+
+    fn idle(&self, state: &dyn Any, cx: &mut IdleCx<'_>) {
+        Widget::idle(self, state.downcast_ref().expect(STATE), cx)
     }
 }

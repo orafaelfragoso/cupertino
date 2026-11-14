@@ -1018,7 +1018,7 @@ fn kept_semantics_laid_in_from_their_runs_are_those_of_a_full_build() {
     let mut last_whole = BTreeMap::new();
     let mut frame = |tree: &Tree<M>, kept: &mut KeptSemantics, size: Size, focus, at: &str| {
         let result = cupertino_ui_layout::layout(
-            &crate::layout_view::TreeView { tree, env: &env },
+            &crate::layout_view::TreeView::new(tree, &env),
             root,
             Constraints::tight(size).unwrap(),
             &cupertino_ui_layout::LayoutOptions {

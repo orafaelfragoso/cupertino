@@ -2706,6 +2706,28 @@ fn a_minimized_window_is_told_it_is_suspended_and_no_longer_once_restored() {
 }
 
 #[test]
+fn windows_that_open_partly_in_view_are_never_told_they_are_suspended() {
+    let Some(mut h) = Harness::new() else { return };
+    let first = opaque_client(&h, "org.example.suspend-map-a", (200, 150));
+    h.mapped_window(1);
+    let second = opaque_client(&h, "org.example.suspend-map-b", (300, 200));
+    h.mapped_window(2);
+    let t = h.state.now();
+    common::set_time(&mut h.state, &mut h.event_loop, t + 3.0);
+    h.state.tick();
+    h.sync(&first);
+    h.sync(&second);
+    for (client, name) in [(&first, "first"), (&second, "second")] {
+        let heard = client.status.lock().unwrap().suspended.clone();
+        assert!(
+            !heard.iter().any(|&s| s),
+            "the {name} window was told it is suspended while it opened: {heard:?}"
+        );
+    }
+    drop((first, second));
+}
+
+#[test]
 fn a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again() {
     let Some(mut h) = Harness::new() else { return };
     let under = opaque_client(&h, "org.example.suspend-under", (200, 150));

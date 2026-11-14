@@ -223,7 +223,9 @@ On the toolkit's side a widget marks a subtree a surface layer (`Widget::surface
 frame of its own at its layout size, with its own damage and renderer, and the window system makes it a layer of the
 window's surface, drawn from buffers of its own (shared memory, or dmabufs from the GPU renderer's texture). The
 application then sets or animates the layer's properties with `WindowRequest::Layer`, which costs no frame; layout,
-input and semantics keep the layout.
+input and semantics keep the layout. A motion that is no single curve of one property (a product of two springs, a
+clamped ramp) goes as its values at even steps of its duration, which the compositor follows in straight lines on its
+clock.
 
 ### 10. The compositor
 

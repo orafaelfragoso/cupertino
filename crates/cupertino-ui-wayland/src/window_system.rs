@@ -889,7 +889,9 @@ impl WaylandWindowSystem {
 
     /// Whether windows may have surface layers: the layers global at the version that blurs content.
     fn surface_layers_drawn(&self) -> bool {
-        self.presentations.layers().is_some_and(cupertino_protocol_app::Layers::blurs_content)
+        self.presentations
+            .layers()
+            .is_some_and(cupertino_protocol_app::Layers::blurs_content)
     }
 
     /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame,
@@ -1953,7 +1955,10 @@ impl WindowSystem for WaylandWindowSystem {
             };
         }
         let parent = self.window(window)?.surface;
-        let global = self.presentations.layers().ok_or(PlatformError::Unsupported)?;
+        let global = self
+            .presentations
+            .layers()
+            .ok_or(PlatformError::Unsupported)?;
         let gone = self
             .surface_layers
             .sync(&mut self.conn, global, window, parent, layers)?;

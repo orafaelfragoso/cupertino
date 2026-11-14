@@ -1,7 +1,7 @@
 //! A window with one surface layer, presented through the toolkit's window system: the window's frame is grey all
 //! over, the layer's frame red at [`LAYER`] in the window, and once both are shown the layer fades out on the
-//! compositor's clock ([`FADE`]) while the window draws nothing more. Development check of the surface layers'
-//! presenter, run by the server's tests.
+//! compositor's clock ([`FADE`]) while its content blur goes up and back down through samples ([`BLUR_SAMPLES`]), and
+//! the window draws nothing more. Development check of the surface layers' presenter, run by the server's tests.
 //!
 //! `surface-layers --report PATH [--renderer]`
 //!
@@ -41,6 +41,8 @@ const GREY: [u8; 4] = [128, 128, 128, 255];
 const RED: [u8; 4] = [255, 0, 0, 255];
 /// The layer's fade, in seconds, linear.
 const FADE: f64 = 0.4;
+/// The layer's content blur over the fade, in points: up and back down, which no single curve draws.
+const BLUR_SAMPLES: [f32; 3] = [0.0, 8.0, 0.0];
 /// The layer frames the GPU renderer draws (`--renderer`).
 const GPU_FRAMES: u32 = 8;
 /// How long the window stays after the fade is asked for.
@@ -156,9 +158,7 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
         for event in events.drain(..) {
             match event {
                 PlatformEvent::RendererChanged(RendererKind::Gpu) if on_gpu => {
-                    drawing = ws
-                        .gpu_renderers()
-                        .renderer(GpuConfig::default(), NoGlyphs);
+                    drawing = ws.gpu_renderers().renderer(GpuConfig::default(), NoGlyphs);
                 }
                 PlatformEvent::RendererChanged(RendererKind::Cpu) => drawing = None,
                 PlatformEvent::Window { event, .. } => match event {
@@ -186,17 +186,23 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
                         window,
                         WindowRequest::Layer {
                             key: LAYER_KEY,
-                            changes: vec![LayerChange {
-                                property: LayerProperty::Opacity,
-                                to: 0.0,
-                                curve: Some(cupertino_ui_platform::LayerCurve::Timed {
-                                    duration: FADE,
-                                    bezier: cupertino_ui_platform::CubicBezier::new(
-                                        0.0, 0.0, 1.0, 1.0,
-                                    ),
-                                }),
-                                velocity: 0.0,
-                            }],
+                            changes: vec![
+                                LayerChange::new(
+                                    LayerProperty::Opacity,
+                                    0.0,
+                                    Some(cupertino_ui_platform::LayerCurve::Timed {
+                                        duration: FADE,
+                                        bezier: cupertino_ui_platform::CubicBezier::new(
+                                            0.0, 0.0, 1.0, 1.0,
+                                        ),
+                                    }),
+                                ),
+                                LayerChange::through(
+                                    LayerProperty::ContentBlur,
+                                    FADE,
+                                    BLUR_SAMPLES.into(),
+                                ),
+                            ],
                         },
                     )
                     .map_err(|e| format!("{e:?}"))?;

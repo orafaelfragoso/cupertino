@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cupertino_animation::{CubicBezier, LayerCurve, LayerProperty};
 use cupertino_protocols::server::layers::cupertino_layer_v1::{
@@ -144,6 +144,9 @@ enum Op {
         to: f64,
         curve: LayerCurve,
         velocity: f64,
+        /// An animation through samples (`animate_samples`): the values at even steps of `curve`'s duration, the
+        /// last of them `to`.
+        samples: Option<Arc<[f32]>>,
     },
     Cancel(usize),
     Glass(Option<(GlassStyle, f64)>),
@@ -182,13 +185,14 @@ impl Cacheable for LayerOps {
 }
 
 /// An animation asked for but not started: it starts when its commit is first shown.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Waiting {
     serial: u32,
     prop: usize,
     to: f64,
     curve: LayerCurve,
     velocity: f64,
+    samples: Option<Arc<[f32]>>,
     since: f64,
 }
 
@@ -221,9 +225,9 @@ pub struct LayerModel {
 
 impl LayerModel {
     fn new(serial: u64, surface: WlSurface, resource: CupertinoLayerV1, whole: bool) -> Self {
-        let mut props = [LayerProperty::new(0.0); PROPERTIES];
-        props[4] = LayerProperty::new(1.0);
-        props[5] = LayerProperty::new(1.0);
+        // opacity and scale start at 1, the rest at 0
+        let props =
+            std::array::from_fn(|i| LayerProperty::new(if i == 4 || i == 5 { 1.0 } else { 0.0 }));
         Self {
             serial,
             surface,
@@ -319,6 +323,9 @@ impl LayerModel {
             self.replace(w.prop, now);
             if reduce_motion && spatial(w.prop) {
                 self.props[w.prop].set(w.to);
+            } else if let (Some(samples), LayerCurve::Timed { duration, .. }) = (w.samples, w.curve)
+            {
+                self.props[w.prop].animate_samples(samples, duration, now);
             } else {
                 self.props[w.prop].animate(w.to, w.curve, now, w.velocity);
             }
@@ -341,12 +348,14 @@ impl LayerModel {
                 to,
                 curve,
                 velocity,
+                samples,
             } => self.waiting.push(Waiting {
                 serial,
                 prop,
                 to,
                 curve,
                 velocity,
+                samples,
                 since: now,
             }),
             Op::Cancel(prop) => {
@@ -847,6 +856,24 @@ fn timed(duration: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> Option<LayerCurve
     })
 }
 
+/// The fewest and the most samples an `animate_samples` takes.
+const SAMPLES: (usize, usize) = (2, 1024);
+
+/// The samples of `animate_samples`, floats in the host's byte order, or `None` when the request is refused for its
+/// duration or its array.
+fn sampled(duration: u32, bytes: &[u8]) -> Option<Arc<[f32]>> {
+    let (chunks, rest) = bytes.as_chunks::<4>();
+    if duration == 0
+        || duration > MAX_DURATION_MS
+        || !rest.is_empty()
+        || !(SAMPLES.0..=SAMPLES.1).contains(&chunks.len())
+    {
+        return None;
+    }
+    let values: Vec<f32> = chunks.iter().map(|&b| f32::from_ne_bytes(b)).collect();
+    values.iter().all(|v| v.is_finite()).then(|| values.into())
+}
+
 /// The curve of `animate_spring`, or the reason it is refused.
 fn spring(response: f64, damping: f64) -> Option<LayerCurve> {
     ((SPRING_RESPONSE.0..=SPRING_RESPONSE.1).contains(&response)
@@ -901,6 +928,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 to,
                 curve,
                 velocity,
+                samples: None,
             });
         };
         match request {
@@ -948,6 +976,45 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 spring(response, damping),
                 velocity,
             ),
+            R::AnimateSamples {
+                serial,
+                property,
+                duration,
+                samples,
+            } => {
+                let Some(prop) = property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                else {
+                    return bad_property("property");
+                };
+                let Some(values) = sampled(duration, &samples) else {
+                    return layer.post_error(
+                        Error::InvalidCurve,
+                        "a duration outside 1 to 10000 ms, or not 2 to 1024 samples of 4 bytes",
+                    );
+                };
+                if !values.iter().all(|&v| in_range(prop, f64::from(v))) {
+                    return bad_value("a sample is outside the property's range");
+                }
+                if state.layers.animations(&data.client) >= MAX_ANIMATIONS {
+                    return layer.post_error(
+                        Error::TooManyAnimations,
+                        format!("a client has at most {MAX_ANIMATIONS} animations"),
+                    );
+                }
+                let to = f64::from(*values.last().expect("two samples at least"));
+                data.queue(Op::Animate {
+                    serial,
+                    prop,
+                    to,
+                    curve: LayerCurve::Timed {
+                        duration: f64::from(duration) / 1000.0,
+                        bezier: CubicBezier::new(0.0, 0.0, 1.0, 1.0),
+                    },
+                    velocity: 0.0,
+                    samples: Some(values),
+                });
+            }
             R::Cancel { property } => {
                 match property_index(property, layer.version())
                     .filter(|&p| !data.whole || presented(p))

@@ -590,10 +590,18 @@ Gate:
       (`modes::button_rect`, `bud_size`); its corner radius is the radius times the smaller of the two axes' scales. A
       timed curve or a spring per property cannot carry a product or a clamp of two curves, so these need the
       protocol to carry them first. Split:
-      - [ ] Curves the protocol carries as samples: an animation given as values at even steps of its duration (the
-            client sampling its own motion at, say, 240 a second), which the server interpolates, retargeting from the
-            value and the slope shown as other animations do; `LayerCurve` gains it, the server's animator and the
-            transport with it. Then every value the launcher draws is carried exactly, on the compositor's clock.
+      - [x] Curves the protocol carries as samples: version 4's `animate_samples(serial, property, duration,
+            samples)` takes 2 to 1024 values at even steps of a duration of 1 ms to 10 s (32-bit floats in the host's
+            byte order, each in the property's range), which the server follows in straight lines on its clock from
+            the first to the last, where the property rests; an animation that replaces it starts from the value and
+            the slope shown, and reduce motion ends a spatial one at its last value
+            (`a_property_moves_through_samples_in_straight_lines_on_the_server_clock_from_its_first_to_its_last`;
+            the animator's `samples_are_followed_in_straight_lines_from_the_first_to_the_last_whatever_was_shown`).
+            The client sends it with `Layer::animate_samples`, a toolkit window with `LayerChange::through` in a
+            `WindowRequest::Layer`; the surface layers example moves its layer's content blur up and back down through
+            samples while it fades, and the server sees the blur reach 7.96 of its 8 points with no window buffer
+            (`a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer`).
+            Every value the launcher draws can now be carried exactly, on the compositor's clock.
       - [ ] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
             the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
             (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it.

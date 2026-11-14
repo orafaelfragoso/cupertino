@@ -52,7 +52,9 @@ checkout and was run on the commit this page was written against.
   `SurfaceLayerMark` (a key and a look: glass style, glass group, corner radius, masks) draws its subtree into a
   surface of its own at its layout size, when `Capabilities::surface_layers` says the compositor can; the application
   then sets or animates that layer's place, size, opacity, scale, corner radius and content blur with
-  `Command::Window(key, WindowRequest::Layer { key, changes })`, which draws no frame. Elsewhere the subtree paints in
+  `Command::Window(key, WindowRequest::Layer { key, changes })`, which draws no frame; a motion no single curve
+  draws (a product of two springs, a clamped ramp) goes as values at even steps of its duration
+  (`LayerChange::through`). Elsewhere the subtree paints in
   place and the application draws its motion itself.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 

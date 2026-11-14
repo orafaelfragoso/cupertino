@@ -235,6 +235,33 @@ impl Layer {
         Ok(())
     }
 
+    /// Move `property` through `samples` over `duration` seconds (version 4): its values at even steps of the duration,
+    /// the first at its start and the last, where it rests, at its end, in a straight line between two. It starts at
+    /// the first sample, not from what is shown. `serial` names the animation in the events.
+    pub fn animate_samples(
+        &self,
+        serial: u32,
+        property: LayerProperty,
+        duration: f64,
+        samples: &[f32],
+    ) -> Result<(), Error> {
+        if self.0.version() < CONTENT_BLUR_VERSION {
+            return Err(Error::Unsupported("cupertino_layer_v1.animate_samples"));
+        }
+        self.takes(property)?;
+        let ms = (duration * 1000.0).round();
+        if !(1.0..=10_000.0).contains(&ms) || !(2..=MAX_SAMPLES).contains(&samples.len()) {
+            return Err(Error::InvalidLayerValue);
+        }
+        if !samples.iter().all(|&v| property.accepts(f64::from(v))) {
+            return Err(Error::InvalidLayerValue);
+        }
+        let bytes = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        self.0
+            .animate_samples(serial, property.wire(), ms as u32, bytes);
+        Ok(())
+    }
+
     /// Stop `property` where it is shown when the commit applies; a property the layer object does not take is left.
     pub fn cancel(&self, property: LayerProperty) {
         if self.takes(property).is_ok() {
@@ -271,6 +298,9 @@ impl Layer {
         Ok(())
     }
 }
+
+/// The most samples one animation through samples takes ([`Layer::animate_samples`]).
+pub const MAX_SAMPLES: usize = 1024;
 
 impl Drop for Layer {
     fn drop(&mut self) {

@@ -58,8 +58,9 @@ is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn fro
 scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
 layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
 without a buffer when the window shows a frame, or with the layer's first values); their animations count for
-`presentation_settled`. The `surface-layers` example is a window with one layer that fades on the compositor's clock,
-or with `--renderer` is drawn by the GPU renderer; the server's tests run it.
+`presentation_settled`; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
+with one layer that fades on the compositor's clock while its content blur goes up and back down through samples, or
+with `--renderer` is drawn by the GPU renderer; the server's tests run it.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was

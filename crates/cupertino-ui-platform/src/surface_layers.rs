@@ -8,6 +8,8 @@
 //! sharp. The application changes them, at once or along a curve, with [`WindowRequest::Layer`](crate::WindowRequest);
 //! input and the published semantics keep the layout.
 
+use std::sync::Arc;
+
 use cupertino_geometry::Rect;
 use cupertino_ui_render::CpuFrame;
 
@@ -37,12 +39,48 @@ pub enum LayerProperty {
 
 /// One change of a surface layer: `property` goes to `to` at once (`curve` `None`), or along `curve` from what is
 /// shown when the change is first drawn, keeping its velocity; `velocity` (units per second) starts a spring from rest.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// With `samples` the property moves through them instead ([`LayerChange::through`]).
+#[derive(Clone, Debug, PartialEq)]
 pub struct LayerChange {
     pub property: LayerProperty,
     pub to: f64,
     pub curve: Option<cupertino_animation::LayerCurve>,
     pub velocity: f64,
+    /// The property's values at even steps of a timed `curve`'s duration (its Bézier unused), the first at its start
+    /// and the last, `to`, at its end, in a straight line between two: a motion the application works out itself (a
+    /// product of two springs, a clamped ramp) carried as it is. It starts at the first value, not from what is shown.
+    pub samples: Option<Arc<[f32]>>,
+}
+
+impl LayerChange {
+    /// `property` set to `to` at once (`curve` `None`) or animated along `curve`.
+    pub fn new(
+        property: LayerProperty,
+        to: f64,
+        curve: Option<cupertino_animation::LayerCurve>,
+    ) -> LayerChange {
+        LayerChange {
+            property,
+            to,
+            curve,
+            velocity: 0.0,
+            samples: None,
+        }
+    }
+
+    /// `property` moved through `values` (at least two) over `duration` seconds.
+    pub fn through(property: LayerProperty, duration: f64, values: Arc<[f32]>) -> LayerChange {
+        LayerChange {
+            property,
+            to: values.last().map_or(0.0, |&v| f64::from(v)),
+            curve: Some(cupertino_animation::LayerCurve::Timed {
+                duration,
+                bezier: cupertino_animation::CubicBezier::new(0.0, 0.0, 1.0, 1.0),
+            }),
+            velocity: 0.0,
+            samples: Some(values),
+        }
+    }
 }
 
 /// How a surface layer looks besides its frame.

@@ -16,7 +16,6 @@ use cupertino_ui_platform::{
 };
 use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
 
-
 fn wire(p: LayerProperty) -> Wire {
     match p {
         LayerProperty::X => Wire::X,
@@ -175,7 +174,9 @@ impl SurfaceLayers {
 
     /// The layers `window` shows, in order.
     pub(crate) fn shown_mut(&mut self, window: WindowId) -> &mut [Shown] {
-        self.windows.get_mut(&window).map_or(&mut [], |v| v.as_mut_slice())
+        self.windows
+            .get_mut(&window)
+            .map_or(&mut [], |v| v.as_mut_slice())
     }
 
     /// Sends `changes` to `window`'s layer `key`; false when it is not made yet, the changes then waiting for it.
@@ -203,8 +204,11 @@ impl SurfaceLayers {
     /// Whether every layer of `window` shows its values: none of their animations runs.
     pub(crate) fn settled(&self, window: WindowId) -> bool {
         self.windows.get(&window).is_none_or(|v| {
-            v.iter()
-                .all(|s| self.running.get(&s.layer.id()).is_none_or(HashSet::is_empty))
+            v.iter().all(|s| {
+                self.running
+                    .get(&s.layer.id())
+                    .is_none_or(HashSet::is_empty)
+            })
         })
     }
 
@@ -247,12 +251,17 @@ fn send(
 ) -> Result<(), PlatformError> {
     for change in changes {
         let property = wire(change.property);
-        match change.curve {
-            None => layer.set(property, change.to),
-            Some(curve) => {
+        match (change.curve, &change.samples) {
+            (None, _) => layer.set(property, change.to),
+            (Some(curve), samples) => {
                 *next_serial = next_serial.wrapping_add(1);
                 running.entry(layer.id()).or_default().insert(*next_serial);
-                layer.animate(*next_serial, property, change.to, curve, change.velocity)
+                match (curve, samples) {
+                    (cupertino_ui_platform::LayerCurve::Timed { duration, .. }, Some(values)) => {
+                        layer.animate_samples(*next_serial, property, duration, values)
+                    }
+                    _ => layer.animate(*next_serial, property, change.to, curve, change.velocity),
+                }
             }
         }
         .map_err(protocol_error)?;

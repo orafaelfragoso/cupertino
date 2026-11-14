@@ -113,7 +113,8 @@
       that started it is drawn (and at the latest 100 milliseconds after that commit when no output
       shows the parent), and follows the session's time scale and the fixed time tests set. A new
       value or animation of a property retargets it from the value and velocity shown at its
-      start: the motion stays continuous in both. While reduce_motion is on
+      start: the motion stays continuous in both (an animation through samples starts at its first
+      sample instead). While reduce_motion is on
       (cupertino_appearance_v1), animations of the spatial properties (x, y, width, height, scale,
       corner_radius) and of content_blur end at their target in their first frame; opacity
       animates as asked, so a transition becomes a fade.
@@ -328,6 +329,30 @@
       </description>
       <arg name="group" type="uint"/>
       <arg name="spacing" type="fixed"/>
+    </request>
+
+    <!-- Version 4 additions -->
+
+    <request name="animate_samples" since="4">
+      <description summary="animate a property through values sampled at even steps">
+        Moves the property through samples over duration milliseconds: the samples are its values
+        at even steps of the duration, the first at its start and the last at its end, and between
+        two of them it moves in a straight line. So a client carries a motion no single curve does
+        (the product of two springs, a clamped ramp) and the server runs it on its clock. Unlike
+        animate_timed and animate_spring the motion does not start from the value shown: it starts
+        at the first sample, which the client takes from what it shows. serial names the animation
+        in finished and replaced, and the property rests at the last sample, its target.
+
+        samples is an array of 32-bit IEEE 754 floats in the byte order of the host, 2 to 1024 of
+        them. Posts invalid_curve for a duration over 10000 milliseconds or under 1, an array whose
+        length is not a multiple of 4, or fewer than 2 or more than 1024 samples, invalid_value for
+        a sample outside the property's range, and invalid_property or too_many_animations as the
+        other animations do.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="property" type="uint" enum="property"/>
+      <arg name="duration" type="uint" summary="milliseconds, 1 to 10000"/>
+      <arg name="samples" type="array"/>
     </request>
 
     <event name="finished">

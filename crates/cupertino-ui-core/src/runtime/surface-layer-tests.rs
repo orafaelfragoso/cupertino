@@ -11,8 +11,8 @@ use cupertino_ui_platform::{
     WmCapabilities,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use std::num::NonZeroU32;
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 
 const WINDOW: Size = Size::new(200.0, 100.0);
@@ -57,15 +57,14 @@ impl Application for Scene {
                 WindowKey("main".into()),
                 WindowRequest::Layer {
                     key: KEY,
-                    changes: vec![LayerChange {
-                        property: LayerProperty::Opacity,
-                        to: 0.0,
-                        curve: Some(cupertino_animation::LayerCurve::Timed {
+                    changes: vec![LayerChange::new(
+                        LayerProperty::Opacity,
+                        0.0,
+                        Some(cupertino_animation::LayerCurve::Timed {
                             duration: 0.1,
                             bezier: cupertino_animation::CubicBezier::EASE_OUT,
                         }),
-                        velocity: 0.0,
-                    }],
+                    )],
                 },
             )],
         }
@@ -280,7 +279,10 @@ fn fills(list: &DisplayList) -> Vec<(Color, Rect)> {
                     paint: Paint::Solid(c),
                 } => {
                     let [a, _, _, d, e, f] = n.transform.0;
-                    Some((*c, Rect::new(a * r.x() + e, d * r.y() + f, r.width(), r.height())))
+                    Some((
+                        *c,
+                        Rect::new(a * r.x() + e, d * r.y() + f, r.width(), r.height()),
+                    ))
                 }
                 _ => None,
             })
@@ -302,7 +304,11 @@ fn a_marked_subtree_draws_in_its_surface_layer_at_its_layout_size_and_not_in_the
     let layer = &layers[0];
     assert_eq!((layer.key, layer.rect, layer.look), (KEY, PANEL, LOOK));
     let frame = layer.frame.as_ref().expect("its first frame");
-    assert_eq!(frame.size, (90, 45), "its layout size at the window's scale");
+    assert_eq!(
+        frame.size,
+        (90, 45),
+        "its layout size at the window's scale"
+    );
     assert_eq!(
         fills(layer_list(&rt)),
         vec![(BLUE, Rect::new(10.0, 5.0, 20.0, 20.0))],
@@ -313,7 +319,11 @@ fn a_marked_subtree_draws_in_its_surface_layer_at_its_layout_size_and_not_in_the
         vec![(RED, Rect::new(10.0, 10.0, 20.0, 20.0))],
         "the window draws the rest and not the panel"
     );
-    assert_eq!(rt.window_system().presented.len(), 1, "with the window's frame");
+    assert_eq!(
+        rt.window_system().presented.len(),
+        1,
+        "with the window's frame"
+    );
 }
 
 #[test]
@@ -321,7 +331,11 @@ fn a_repaint_elsewhere_leaves_the_layer_and_one_inside_it_draws_only_the_layer_s
     let (mut rt, window, damage) = start_with(true, 1.0);
     let layer_presents = rt.window_system().surface_presents.len();
     send(&mut rt, window, Message::Colors(GREEN, BLUE), 1);
-    assert_eq!(rt.window_system().presented.len(), 2, "the window repainted");
+    assert_eq!(
+        rt.window_system().presented.len(),
+        2,
+        "the window repainted"
+    );
     assert_eq!(
         rt.window_system().surface_presents.len(),
         layer_presents,
@@ -354,7 +368,11 @@ fn a_change_of_a_layer_s_properties_alone_draws_no_frame() {
         rt.window_system().surface_presents.len(),
     );
     send(&mut rt, window, Message::FadePanel, 1);
-    assert_eq!(rt.window_system().presented.len(), frames, "no window frame");
+    assert_eq!(
+        rt.window_system().presented.len(),
+        frames,
+        "no window frame"
+    );
     assert_eq!(
         rt.window_system().surface_presents.len(),
         layers,

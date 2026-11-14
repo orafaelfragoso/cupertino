@@ -1479,9 +1479,11 @@ fn captures() {
 /// The toolkit's window system against the server (`cupertino-ui-wayland`'s `surface-layers`), at scale 1.5: a window
 /// hands over a surface layer with its frame, which the server shows as a layer of the window's surface at the rect
 /// the window gave it, drawn from the layer's own buffer at the window's scale; the fade the window then asks for runs
-/// on the server's clock to its end while the window commits no new buffer.
+/// on the server's clock to its end while the window commits no new buffer, and the content blur it sends as samples
+/// goes up and back down with it.
 #[test]
-fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer() {
+fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer(
+) {
     use smithay::backend::renderer::utils::with_renderer_surface_state;
     use std::process::Stdio;
     let Some(mut h) = Harness::new(1.5, false) else {
@@ -1537,8 +1539,7 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
         "at the rect the window gave it"
     );
     let surface = toplevel(&h).unwrap();
-    let commit =
-        |s: &ServerSurface| with_renderer_surface_state(s, |state| state.current_commit());
+    let commit = |s: &ServerSurface| with_renderer_surface_state(s, |state| state.current_commit());
     h.wait_until("the fade asked for", |_| {
         std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
     });
@@ -1547,10 +1548,12 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
     assert!(r.contains("layer_frames 1"), "{r}");
     let first = commit(&surface);
     let (mut between, mut new_buffers, mut last) = (0, 0, first);
+    let mut blurred = 0.0_f64;
     h.wait_until("the layer faded out", |h| {
-        let Some(shown) = drawn(h).first().map(|l| l.opacity) else {
+        let Some((shown, blur)) = drawn(h).first().map(|l| (l.opacity, l.content_blur)) else {
             return false;
         };
+        blurred = blurred.max(blur);
         if shown > 0.0 && shown < 1.0 {
             between += 1;
         }
@@ -1561,9 +1564,20 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
         }
         shown == 0.0
     });
-    eprintln!("trace: fade: {between} server steps part way, {new_buffers} new buffers of the window");
+    eprintln!(
+        "trace: fade: {between} server steps part way, {new_buffers} new buffers of the window, blur up to {blurred:.2}"
+    );
     assert!(between > 0, "the fade ran on the server");
-    assert_eq!(new_buffers, 0, "the window drew no frame while its layer faded");
+    assert_eq!(
+        new_buffers, 0,
+        "the window drew no frame while its layer faded"
+    );
+    assert!(
+        blurred > 2.0 && blurred <= 8.0,
+        "the blur went up through its samples: {blurred}"
+    );
+    let end = drawn(&h)[0].content_blur;
+    assert!(end < 0.5, "and back down towards its last: {end}");
 }
 
 /// The same window on the GPU (`--renderer`, `CUPERTINO_RENDERER=gpu`): the layer's frames are drawn by the toolkit's
@@ -1655,5 +1669,100 @@ fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_o
     assert!(
         r.contains(&format!("layer_gpu_frames {}", 8)),
         "every GPU frame was handed over: {r}"
+    );
+}
+
+/// Samples as the protocol carries them: 32-bit floats in the host's byte order.
+fn sample_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_ne_bytes()).collect()
+}
+
+#[test]
+fn a_property_moves_through_samples_in_straight_lines_on_the_server_clock_from_its_first_to_its_last(
+) {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 500.0);
+        c.parent.commit();
+    });
+    h.wait_until("the layer placed", |h| x_of(h) == 500.0);
+    // three steps over 0.3 s, which no single curve draws: out, back and further out
+    h.state.fixed_time = Some(50.0);
+    client.send(|c, _| {
+        c.l(0).animate_samples(
+            21,
+            Property::X,
+            300,
+            sample_bytes(&[200.0, 300.0, 250.0, 400.0]),
+        );
+        c.parent.commit();
+    });
+    h.wait_until("the samples' animation", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 50.0))
+    });
+    assert_eq!(x_of(&h), 200.0, "it starts at its first sample");
+    for (t, x) in [(50.05, 250.0), (50.15, 275.0), (50.25, 325.0)] {
+        h.state.fixed_time = Some(t);
+        assert!((x_of(&h) - x).abs() < 1e-3, "{t}: {} against {x}", x_of(&h));
+    }
+    h.state.fixed_time = Some(50.4);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [21]));
+    assert_eq!(x_of(&h), 400.0, "it rests at its last sample");
+    // a curve after it, replacing it part way, starts from what the samples show
+    h.state.fixed_time = Some(60.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(22, Property::X, 300, sample_bytes(&[400.0, 100.0]));
+        c.parent.commit();
+    });
+    h.wait_until("the second", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 60.0))
+    });
+    h.state.fixed_time = Some(60.15);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(23, Property::X, 0.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("replaced", |_| !client.heard(|e| e.replaced.is_empty()));
+    let (serial, value, velocity) = client.heard(|e| e.replaced[0]);
+    assert_eq!(serial, 22);
+    assert!((value - 250.0).abs() < 0.01, "{value}");
+    assert!(
+        (velocity + 1000.0).abs() < 0.5,
+        "the samples' slope: {velocity}"
+    );
+    // under reduce motion a spatial property goes to its last sample at once
+    h.state.accessibility.settings.display.reduce_motion = true;
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(24, Property::X, 300, sample_bytes(&[10.0, 90.0, 30.0]));
+        c.parent.commit();
+    });
+    h.wait_until("at its last sample", |h| x_of(h) == 30.0);
+    // one sample is not a motion, and an opacity past 1 is out of its range
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(25, Property::Opacity, 300, sample_bytes(&[0.5]))
+    });
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidCurve as u32
+    );
+    let other = one_layer(&mut h);
+    other.send(|c, _| {
+        c.l(0)
+            .animate_samples(26, Property::Opacity, 300, sample_bytes(&[0.5, 1.5]))
+    });
+    h.wait_until("the error", |_| other.heard(|e| e.error.is_some()));
+    assert_eq!(
+        other.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
     );
 }

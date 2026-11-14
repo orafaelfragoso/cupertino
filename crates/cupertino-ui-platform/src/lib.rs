@@ -14,8 +14,8 @@ pub use cupertino_modifiers::Mods;
 
 mod surface_layers;
 pub use cupertino_animation::{CubicBezier, LayerCurve};
-pub use surface_layers::{LayerChange, LayerProperty, SurfaceLayer, SurfaceLayerLook};
 pub use cupertino_ui_render::Color;
+pub use surface_layers::{LayerChange, LayerProperty, SurfaceLayer, SurfaceLayerLook};
 
 /// A toplevel window or a popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -212,7 +212,10 @@ pub enum WindowRequest {
     /// Changes the window's surface layer `key` ([`SurfaceLayer`]) on the compositor's clock, all the changes together
     /// and without drawing a frame: with the layer's first frame when it has not shown one, at once otherwise. Needs
     /// [`Capabilities::surface_layers`].
-    Layer { key: u64, changes: Vec<LayerChange> },
+    Layer {
+        key: u64,
+        changes: Vec<LayerChange>,
+    },
 }
 
 /// A window's menus as the desktop's menu bar shows them.

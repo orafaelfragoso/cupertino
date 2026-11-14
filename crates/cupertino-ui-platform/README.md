@@ -28,7 +28,8 @@ its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radiu
 its rect's size, or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
 content, and a key left out goes. `WindowRequest::Layer { key, changes }` sets or animates a layer's properties
 (`LayerChange`, `LayerProperty`: x, y, width, height, opacity, scale, corner radius, content blur, along a
-`LayerCurve`) on the compositor's clock without a frame. Without the capability an empty list is all a window system
+`LayerCurve`, or with `LayerChange::through` through values the application works out itself at even steps of a
+duration) on the compositor's clock without a frame. Without the capability an empty list is all a window system
 takes.
 
 `PlatformEvent::ScrollBars` tells how the session wants scroll views to show their bars: `ScrollBars::WhenScrolling`

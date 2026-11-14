@@ -275,8 +275,12 @@ under Reduce Motion, it draws itself. The compositor can draw the panel's edge a
 every straight side it is the panel's own edge within 4 of 255, while at a scope's continuous corners it follows the
 glass, where the panel strokes circular arcs that stand up to 0.57 points off it. A scope's open from hidden can be
 handed over the same way (`layers::open_changes`): the layers drawn once at rest in the open's first frame, then the
-glass, the edge layer's scale and the content's place on the open's spring from where it starts and all of it faded
-in, with no frame of the application's; it stays off in the process until its look part way is the panel's own.
+glass and the edge layer's scale through the panel's own values on the open's spring (sampled, so the compositor's
+spring does not come to rest apart from the panel's), the content's place on the open's spring, and all of it faded
+in, with no frame of the application's. While the panel scales in or out its content keeps its size, cut off by the
+glass (`Overflow::Crop`), and lies on whole device pixels as one picture (`Widget::on_pixels`), as the compositor
+moves the content's layer, so part way the two are the same pixels within 1 of 255; only the edge, the resting
+stroke scaled, differs from the stroke the panel draws at each scale, along the outline.
 
 ### 10. The compositor
 

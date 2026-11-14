@@ -602,11 +602,11 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
       Settings, the dock's thumbnail and every other shot the same within 2/255, but for shots whose moment differs
       between two sessions (the overview and its band mid-motion; which of them differ changes between runs) and the
       launcher's, below.
-- [ ] The launcher's round buttons on both renderers: their rims part by exactly 3/255, one step past the tolerance,
-      on 1 to 22 pixels a shot (launcher at 1.5 and 2), as they did before this step. They are the parity tests' stray
-      pixels (the CPU's roundings of an operation's layer stacking on one pixel) on more pixels than the four those
-      allow. Split: find which of the buttons' operations stacks them and draw it so they do not, then shoot the
-      preview pair again.
+- [x] The launcher's round buttons on both renderers: their rims parted by exactly 3/255, one step past the
+      tolerance, on 1 to 22 pixels a shot (launcher at 1.5 and 2). Once a surface layer drawn on the GPU shows at its
+      size in points (its dmabuf's viewport had taken the frame's pixel size, so the button faces showed 1.5 and 2 times
+      too large, `GpuFrame::preferred`), the launcher at rest shot with every process on the CPU and on the GPU is the
+      same within 1/255 at 1.5 and 2 in both appearances (2699 to 4668 pixels a shot at 1, none past it).
 - [ ] A week of daily use on the target machine without a fallback. BLOCKED (owner action): a week of use. A
       fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
       `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
@@ -890,14 +890,26 @@ Gate:
               and asks for none until the open is over, the browser's scroll indicator kept meanwhile
               (`a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame`, the browser and the files
               scope); under Reduce Motion nothing is handed over
-              (`under_reduce_motion_a_scope_s_open_is_the_panel_s_own`). At the same moments its glass is the
-              panel's own (rect, corner, opacity) at every frame and its first frame is the panel's pixels within 0,
-              but part way the pixels differ by up to 255 of 255 in both scopes and appearances
+              (`under_reduce_motion_a_scope_s_open_is_the_panel_s_own`). The mid-way difference (up to 255 of 255)
+              had three causes, each closed: the compositor puts the content's layer on whole device pixels, where
+              the panel drew its text snapped to the pixels glyph by glyph and its shapes and images at the fraction
+              (the content now lies on whole device pixels as one picture while the panel scales,
+              `Widget::on_pixels`); the glass, smaller than the content while it grows in, laid the content out
+              narrower, where the layer keeps its size (an absolute container that crops now keeps a child's own
+              size past its edge, `Overflow::Crop`, set while the panel scales); and the compositor's spring comes to
+              rest within a thousandth of the property's unit, the scaled edge then 172 of 255 off at 317 ms, and its
+              glass 0.05 points off at 500 ms where the panel's spring had settled (the glass and the edge's scale
+              now go through 1024 samples of the panel's own values, `layers::OPEN_SAMPLES`). The at-rest drawing
+              and every golden are unchanged. At the same moments, every other frame of the open and its last at 1.5
+              in both scopes and appearances: the glass is the panel's own (rect, corner, opacity, within 0.05) at
+              every frame, the first frame and the last the panel's pixels within 0, and part way every pixel
+              outside two device pixels of the outline within 1 of 255. Along the outline the edge, the resting
+              stroke scaled (a half-point line the scale puts between device pixels, which the panel strokes afresh
+              at each scale), differs by up to 90 of 255 in the dark and 26 in the light, bounded by two fifths of
+              the line's opacity (95 and 28)
               (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, run with
-              `CUPERTINO_LAUNCHER_MOMENTS` for the pairs), not yet located (the content's layer moved onto whole
-              device pixels where the panel lays its grid and text at fractional places is the likely part). So the
-              handover is off in the process (`hand_scope_opens` false; the tests turn it on) until it is. Left: locate
-              and close the mid-way difference, then turn it on, and the real process's count against the server.
+              `CUPERTINO_LAUNCHER_MOMENTS` for the pairs). The handover is on in the process
+              (`hand_scope_opens`). Left: the real process's count against the server.
         - [ ] The fold and the unfold: the header switches part way (the query row's symbol and placeholder), a frame
               of the content's layer, and the content's body fades on its own curve while the query row does not, so
               the row and the body are layers of their own; the shape changes both ways with its corner held to half

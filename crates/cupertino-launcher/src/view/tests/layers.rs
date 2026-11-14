@@ -667,8 +667,19 @@ fn compose(size: (u32, u32), scale: f64, layers: &[ShownLayer]) -> Vec<u8> {
         let s = layer.scale.max(1e-6);
         let o = layer.opacity as f32;
         let read = |x: i64, y: i64| image.read(x, y, Edge::Transparent);
-        for (py, row) in out.chunks_mut(w).enumerate() {
-            for (px, d) in row.iter_mut().enumerate() {
+        // the window's pixels the scaled copy can reach, a pixel either way
+        let reach = |pivot: f64, origin: f64, size: usize, most: usize| {
+            let at = |u: f64| pivot + (u + origin - pad as f64 - pivot) * s;
+            let low = (at(-1.0).floor() - 1.0).max(0.0) as usize;
+            let high = (at(size as f64 + 1.0).ceil() + 1.0).clamp(0.0, most as f64) as usize;
+            low..high.max(low)
+        };
+        let (xs, ys) = (
+            reach(pivot.0, origin.0, iw, w),
+            reach(pivot.1, origin.1, ih, h),
+        );
+        for (py, row) in out.chunks_mut(w).enumerate().skip(ys.start).take(ys.len()) {
+            for (px, d) in row.iter_mut().enumerate().skip(xs.start).take(xs.len()) {
                 // the frame's pixel under this one, from its blurred copy's top left
                 let u = pivot.0 + (px as f64 + 0.5 - pivot.0) / s - origin.0 + pad as f64 - 0.5;
                 let v = pivot.1 + (py as f64 + 0.5 - pivot.1) / s - origin.1 + pad as f64 - 0.5;
@@ -937,16 +948,23 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
         };
         let rest = m.shown_layers();
         let glass = rest.iter().find(|l| l.key == GLASS_LAYER).unwrap().rect;
+        // the glass through the panel's own values, from where the open starts to its rest
         let width = of(GLASS_LAYER, LayerProperty::Width);
+        assert_eq!(width.len(), 1, "{what}: carried through samples");
+        let samples = width[0].samples.clone().expect("samples");
+        assert_eq!(samples.len(), crate::view::layers::OPEN_SAMPLES);
+        let start = f64::from(samples[0]);
+        assert!((start - glass.width() * crate::motion::ENTER_SCALE).abs() < 1e-3);
+        assert_eq!(width[0].to, glass.width());
+        // the content's place springs, the compositor putting it on whole device pixels as the panel does
+        let y = of(CONTENT_LAYER, LayerProperty::Y);
         assert_eq!(
-            width.len(),
+            y.len(),
             2,
             "{what}: set where it starts, then sprung to its rest"
         );
-        assert!((width[0].to - glass.width() * crate::motion::ENTER_SCALE).abs() < 1e-6);
-        assert_eq!(width[1].to, glass.width());
         assert!(matches!(
-            width[1].curve,
+            y[1].curve,
             Some(cupertino_kit::platform::LayerCurve::Spring { response, damping })
                 if response == crate::motion::OPEN_RESPONSE && damping == crate::motion::OPEN_DAMPING
         ));
@@ -958,10 +976,14 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
                 "{what}: layer {key} fades in"
             );
         }
+        // the edge's scale through the panel's own values, from where the open starts to its rest
+        let scale = of(EDGE_LAYER, LayerProperty::Scale);
+        let samples = scale[0].samples.clone().expect("carried as samples");
         assert_eq!(
-            of(EDGE_LAYER, LayerProperty::Scale)[0].to,
-            crate::motion::ENTER_SCALE
+            f64::from(samples[0]),
+            crate::motion::ENTER_SCALE as f32 as f64
         );
+        assert_eq!((scale[0].to, *samples.last().unwrap()), (1.0, 1.0));
         // the open's frames: none drawn, none asked for, the browser's scroll indicator, which shows as it comes into
         // view, kept as it is meanwhile
         let open = {
@@ -1048,7 +1070,14 @@ fn open_moments(
         }
         return out;
     }
-    // each frame the panel draws, at the time it is drawn: the first in the step the open began in
+    // each frame the panel draws, at the time it is drawn: the first in the step the open began in, the last the first
+    // at rest (the caret's blink draws later ones)
+    let open = {
+        let target = m.model().motion_target();
+        let mut motion = crate::motion::Motion::new(target);
+        motion.show_in(target, m.model().presented().header, 0.0);
+        motion.moving_left(0.0)
+    };
     let mut seen = 0;
     let mut after = CLOCK.get() - start;
     for _ in 0..120 {
@@ -1098,7 +1127,7 @@ fn open_moments(
             glass,
             apart: Vec::new(),
         });
-        if !m.model().animating() {
+        if !m.model().animating() || after >= open {
             break;
         }
         m.step(|_, _| {});
@@ -1107,13 +1136,56 @@ fn open_moments(
     out
 }
 
+/// How far two frames at `scale` differ, `(apart from the edge, along the edge)`: the largest difference of a channel
+/// outside and inside the band of [`EDGE_BAND`] points either side of the enclosure's outline, the rounded rect of
+/// `glass` (points), where the panel strokes its edge.
+fn apart_from_edge(a: &Moment, b: &Moment, glass: (Rect, f64), scale: f64) -> (u8, u8) {
+    let (rect, radius) = glass;
+    let (cx, cy) = (
+        rect.x() + rect.width() / 2.0,
+        rect.y() + rect.height() / 2.0,
+    );
+    let (hw, hh) = (rect.width() / 2.0, rect.height() / 2.0);
+    let radius = radius.min(hw).min(hh);
+    let width = a.size.0;
+    let (mut content, mut edge) = (0, 0);
+    for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
+        let d = p
+            .iter()
+            .zip(q)
+            .map(|(u, v)| u.abs_diff(*v))
+            .max()
+            .unwrap_or(0);
+        if d == 0 {
+            continue;
+        }
+        let x = ((i as u32 % width) as f64 + 0.5) / scale;
+        let y = ((i as u32 / width) as f64 + 0.5) / scale;
+        let qx = (x - cx).abs() - (hw - radius);
+        let qy = (y - cy).abs() - (hh - radius);
+        let outside = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+        if outside.abs() < EDGE_BAND {
+            edge = edge.max(d);
+        } else {
+            content = content.max(d);
+        }
+    }
+    (content, edge)
+}
+
+/// The band either side of the enclosure's outline, in points, that holds its edge stroke and the stroke's
+/// antialiasing as the open scales it.
+const EDGE_BAND: f64 = 2.0;
+
 /// The open the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
 /// draws of a scope's open from hidden, the compositor's layers at that moment of the open, scaled, moved and faded as
 /// a compositor draws them, against its pixels, and their glass against the glass it stands on (rect, corner and
-/// opacity), which it is at every moment; at the open's first frame the pixels are the same within 1. Part way they
-/// are not yet within the goldens' tolerance, which keeps the handover off in the process
-/// ([`crate::kit::Model::hand_scope_opens`]). Run with `--no-capture` for the largest differences, and with
-/// `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+/// opacity), which it is at every moment. Their pixels are the same within 1 of 255 at every moment but along the edge
+/// (the content lies on whole device pixels in both, [`crate::view`]'s `PanelRoot::on_pixels`); the edge is the rest's
+/// stroke scaled by the compositor where the panel strokes it afresh at the fractional place the scaled shape puts it,
+/// a half-point line on a device pixel grid, so there the two part by up to two fifths of the line's opacity. Run with
+/// `--no-capture` for the largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures
+/// ([`keep_moment`]).
 #[test]
 fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
     type Open = fn() -> Message;
@@ -1123,22 +1195,48 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
     ];
     for (what, message) in scopes {
         for dark in [true, false] {
-            let own = open_moments(1.5, dark, false, message, &[0.0; 12]);
+            let own = open_moments(1.5, dark, false, message, &[0.0; 40]);
             assert!(
-                own.len() >= 5,
+                own.len() >= 12,
                 "{what}: the panel drew its open: {}",
                 own.len()
             );
+            // every other frame of the open and its last, at rest
+            let last = own.len() - 1;
+            let own: Vec<Moment> = own
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == 0 || *i == last)
+                .map(|(_, m)| m)
+                .collect();
             let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
             let handed = open_moments(1.5, dark, true, message, &moments);
-            let mut worst = 0;
+            // the line's own opacity, of which the scaled edge may differ by two fifths
+            let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
+            let edge_bound = (0.4 * line).ceil() as u8;
+            let (mut worst, mut worst_edge) = (0, 0);
             for (a, b) in own.iter().zip(&handed) {
                 assert_eq!(a.size, b.size);
                 let ms = a.after * 1000.0;
-                let (most, _) = compare(&a.pixels, &b.pixels, a.size.0);
-                worst = worst.max(most);
-                eprintln!("trace: open {what}, dark {dark}, {ms:.0} ms: largest difference {most}");
+                // the enclosure's glass, which a frame wholly faded out does not stand on
+                let (content, edge) = match a.glass.first() {
+                    Some(&(rect, radius, _)) => apart_from_edge(a, b, (rect, radius), 1.5),
+                    None => (compare(&a.pixels, &b.pixels, a.size.0).0, 0),
+                };
+                worst = worst.max(content);
+                worst_edge = worst_edge.max(edge);
+                eprintln!(
+                    "trace: open {what}, dark {dark}, {ms:.0} ms: largest difference {content}, {edge} along the edge"
+                );
                 keep_moment(&format!("open-{what}"), dark, a, b);
+                assert!(
+                    content <= 1,
+                    "{what}, dark {dark}, {ms:.0} ms: {content} apart from the edge"
+                );
+                assert!(
+                    edge <= edge_bound,
+                    "{what}, dark {dark}, {ms:.0} ms: {edge} along the edge, over {edge_bound}"
+                );
                 assert_eq!(a.glass.len(), b.glass.len(), "{:?} {:?}", a.glass, b.glass);
                 for ((r0, q0, o0), (r1, q1, o1)) in a.glass.iter().zip(&b.glass) {
                     let off = (r0.x() - r1.x())
@@ -1155,7 +1253,10 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
             }
             let (first, _) = compare(&own[0].pixels, &handed[0].pixels, own[0].size.0);
             eprintln!(
-                "trace: open {what}, dark {dark}: largest {worst}, at the first frame {first}"
+                "trace: open {what}, dark {dark}: {} of its {} frames, largest {worst} apart from the edge, {worst_edge} \
+                 along it (bound {edge_bound}), at the first frame {first}",
+                own.len(),
+                last + 1
             );
             assert!(
                 first <= 1,

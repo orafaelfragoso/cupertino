@@ -83,6 +83,16 @@ pub(crate) fn drawn_offset(offset: Point, scale: f64) -> Point {
     Point::new(round(offset.x), round(offset.y))
 }
 
+/// A node's origin on the window's device pixels at `scale` ([`Widget::on_pixels`](crate::Widget::on_pixels)): each
+/// coordinate on the nearest device pixel edge, as a compositor places a layer's origin.
+pub(crate) fn pixel_origin(origin: Point, scale: f64) -> Point {
+    if !(scale > 0.0 && scale.is_finite()) {
+        return origin;
+    }
+    let round = |v: f64| (v * scale).round() / scale;
+    Point::new(round(origin.x), round(origin.y))
+}
+
 /// Window placements from a layout of the subtree under `root`. A scroll container's children move by its scroll
 /// offset, which counts from the start edge: in right-to-left layout, where layout mirrors the content, a horizontal
 /// offset moves the content right. A scroll container outside the raised subtrees `cut` (window rects) clips its
@@ -173,8 +183,12 @@ pub(crate) fn placements_kept<M: 'static>(
         let Some(node) = layout.nodes.get(&id) else {
             continue;
         };
-        let rect = node.rect.translate(parent_origin.x, parent_origin.y);
         let n = tree.get(id);
+        let on_pixels = n.is_some_and(|n| n.widget.on_pixels(&*n.state));
+        let mut rect = node.rect.translate(parent_origin.x, parent_origin.y);
+        if on_pixels {
+            rect.origin = pixel_origin(rect.origin, env.scale);
+        }
         let raised = raised || n.is_some_and(|n| n.widget.raised(&*n.state));
         let scrolls = n.is_some_and(|n| matches!(n.spec.kind, ContainerKind::Scroll { .. }));
         let own_clip = node
@@ -208,7 +222,7 @@ pub(crate) fn placements_kept<M: 'static>(
         // the run this node is placed into, if one is being made: its descendants go into it too
         let placed_into = recording.map(|(r, parent)| {
             let rec = &mut recordings[r];
-            rec.keepable &= !scrolls && !raised;
+            rec.keepable &= !scrolls && !raised && !on_pixels;
             rec.run.nodes.push(RunNode {
                 id,
                 parent,
@@ -580,6 +594,115 @@ mod tests {
         let (got, whole) = place(&tree, &mut kept, Size::new(97.0, 50.0));
         assert_eq!(got, whole);
         assert_eq!(kept.laid, 11 * 2);
+    }
+
+    /// A group that lies on whole device pixels ([`crate::Widget::on_pixels`]) when `pixels` says so.
+    struct Snapped {
+        pixels: bool,
+        children: Vec<Element<String>>,
+    }
+
+    impl crate::Widget<String> for Snapped {
+        type State = ();
+
+        fn layout(&self) -> LayoutSpec {
+            LayoutSpec::new(ContainerKind::Overlay)
+        }
+
+        fn take_children(&mut self) -> Vec<Element<String>> {
+            std::mem::take(&mut self.children)
+        }
+
+        fn state(&self) {}
+
+        fn update(&self, old: &Self, _: &mut ()) -> crate::Change {
+            if self.pixels == old.pixels {
+                crate::Change::None
+            } else {
+                crate::Change::Layout
+            }
+        }
+
+        fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+            Measured {
+                size: Size::ZERO,
+                baseline: None,
+            }
+        }
+
+        fn event(
+            &self,
+            _: &mut (),
+            _: &crate::Event,
+            _: &mut crate::cx::EventCx<'_, String>,
+        ) -> crate::Propagation {
+            crate::Propagation::Continue
+        }
+
+        fn paint(&self, _: &(), _: &mut crate::cx::PaintCx<'_>) {}
+
+        fn semantics(&self, _: &(), _: &mut crate::cx::SemanticsCx<'_>) {}
+
+        fn on_pixels(&self, _: &()) -> bool {
+            self.pixels
+        }
+    }
+
+    /// A node on whole device pixels moves to the nearest device pixel corner at the window's scale, and its subtree
+    /// with it, keeping where each descendant lies in it; a node that is not keeps its fraction.
+    #[test]
+    fn a_node_on_whole_device_pixels_moves_its_subtree_to_the_nearest_pixel_corner() {
+        for pixels in [false, true] {
+            for scale in [1.0, 1.5, 2.0] {
+                let mut tree = Tree::<String>::new(10);
+                let view = Element::new(group(vec![Element::new(Snapped {
+                    pixels,
+                    children: vec![Element::new(leaf("x"))],
+                })]));
+                let root = tree.reconcile(None, view).unwrap();
+                let snapped = tree.get(root).unwrap().children[0];
+                let inside = tree.get(snapped).unwrap().children[0];
+                let at = |x, y| NodeLayout {
+                    rect: Rect::new(x, y, 40.0, 20.0),
+                    clip: None,
+                    baseline: None,
+                };
+                let layout = LayoutResult {
+                    nodes: [
+                        (root, at(0.0, 0.0)),
+                        (snapped, at(10.3, 20.7)),
+                        (inside, at(0.25, 1.0)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    stats: LayoutStats::default(),
+                };
+                let g = placements(&tree, root, &layout, &Environment { scale, ..env() }, &[]);
+                let origin = g[&snapped].rect.origin;
+                let expected = if pixels {
+                    Point::new(
+                        (10.3 * scale).round() / scale,
+                        (20.7 * scale).round() / scale,
+                    )
+                } else {
+                    Point::new(10.3, 20.7)
+                };
+                assert!(
+                    (origin.x - expected.x).abs() < 1e-9 && (origin.y - expected.y).abs() < 1e-9,
+                    "{pixels} at {scale}: {origin:?}"
+                );
+                if pixels {
+                    for v in [origin.x * scale, origin.y * scale] {
+                        assert!((v - v.round()).abs() < 1e-9, "at {scale}: {v}");
+                    }
+                }
+                let child = g[&inside].rect.origin;
+                assert!(
+                    (child.x - origin.x - 0.25).abs() < 1e-9
+                        && (child.y - origin.y - 1.0).abs() < 1e-9
+                );
+            }
+        }
     }
 
     #[test]

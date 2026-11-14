@@ -72,8 +72,11 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   without the capability it draws its own close. The compositor can also draw the edge along the glass itself
   (`view::layers::glass_edge` in a glass layer's look, `SurfaceLayerLook::edge`), the panel's own edge along capsules and
   straight sides; a scope's open from hidden can be handed over (`view::layers::open_changes`, the layers drawn once at
-  rest and moved on the open's spring from where it starts), off in the process (`Model::hand_scope_opens`) until its
-  look part way is the panel's own;
+  rest and moved on the open's spring from where it starts, `Model::hand_scope_opens`): part way its glass is the
+  panel's own, its content the panel's pixels within 1 of 255 (while the panel scales its content keeps its size, cut
+  off by the glass, `Overflow::Crop`, and lies on whole device pixels as one picture, `Widget::on_pixels`, in the
+  panel's drawing as in the compositor's) and its edge the rest's stroke scaled, a half-point line that the scale puts
+  between device pixels, within two fifths of the line's opacity of the panel's own;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);

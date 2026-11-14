@@ -94,6 +94,14 @@ pub trait Widget<M>: 'static {
     fn surface_layer(&self, _state: &Self::State) -> Option<crate::SurfaceLayerMark> {
         None
     }
+    /// Whether the node lies on whole device pixels of the window: its origin, and its subtree with it, moves to the
+    /// nearest device pixel corner at the window's scale. A subtree that rides on a parent moving by fractions of a
+    /// pixel then lands on the pixel grid as one picture, as a compositor layer moved by whole pixels does, instead of
+    /// its text snapping to the grid glyph by glyph while its shapes are drawn at the fraction. Layout, input and
+    /// semantics see the moved origin. A widget whose answer changes returns [`Change::Layout`] from its update.
+    fn on_pixels(&self, _state: &Self::State) -> bool {
+        false
+    }
     /// Whether the window whose root this widget is grows out of what it opened from: a popup that is a popover
     /// starts small at the point of its anchor nearest to it, springs to its full size, and shrinks back into that
     /// point as it closes, its glass with it. Under Reduce Motion it shows and goes at once.
@@ -327,6 +335,7 @@ pub(crate) trait AnyWidget<M> {
     fn raised(&self, state: &dyn Any) -> bool;
     fn obscures(&self, state: &dyn Any) -> bool;
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
+    fn on_pixels(&self, state: &dyn Any) -> bool;
     fn grows_from_anchor(&self) -> bool;
     fn closes_as_menu(&self) -> bool;
     fn idle(&self, state: &dyn Any, cx: &mut IdleCx<'_>);
@@ -418,6 +427,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark> {
         Widget::surface_layer(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn on_pixels(&self, state: &dyn Any) -> bool {
+        Widget::on_pixels(self, state.downcast_ref().expect(STATE))
     }
 
     fn grows_from_anchor(&self) -> bool {

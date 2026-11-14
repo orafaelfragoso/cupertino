@@ -233,6 +233,9 @@ pub enum Overflow {
     #[default]
     Visible,
     Clip,
+    /// Clips as [`Overflow::Clip`] does, and an absolute container's child of a size of its own keeps it past the
+    /// container's edge: a picture cut off by its frame as the frame shrinks, rather than laid out again smaller.
+    Crop,
 }
 
 /// A grid track.

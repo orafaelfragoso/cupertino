@@ -4,7 +4,7 @@ use common::TestTree;
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_layout::{
     layout, Align, Axis, Constraints, ContainerKind, Flex, GridSpan, LayoutCache, LayoutDirection,
-    LayoutError, LayoutOptions, SizeSpec, Track,
+    LayoutError, LayoutOptions, Overflow, SizeSpec, Track,
 };
 
 const OPEN: Size = Size::new(f64::INFINITY, f64::INFINITY);
@@ -98,6 +98,31 @@ fn absolute_children_sit_at_their_position_and_the_container_grows_to_hold_them(
     assert_eq!(r.nodes[&root].rect.size, Size::new(70.0, 20.0));
     let r = t.run_tight(root, Size::new(100.0, 50.0), LayoutDirection::Rtl);
     assert_eq!(r.nodes[&a].rect.origin, Point::new(85.0, 7.0));
+}
+
+#[test]
+fn an_absolute_child_of_a_size_of_its_own_keeps_it_past_a_smaller_container_that_crops_it() {
+    let mut t = TestTree::default();
+    let (a, b) = (t.leaf(10.0, 10.0), t.leaf(30.0, 20.0));
+    t.size(a, SizeSpec::Fixed(120.0), SizeSpec::Fixed(80.0));
+    t.spec(a).position = Point::new(-4.0, 2.0);
+    let root = t.container(ContainerKind::Absolute, vec![a, b]);
+    // a container that lets its children show past it, or only clips them, holds them to its size
+    for overflow in [Overflow::Visible, Overflow::Clip] {
+        t.spec(root).overflow = overflow;
+        let r = t.run_tight(root, Size::new(100.0, 50.0), LayoutDirection::Ltr);
+        assert_eq!(r.nodes[&a].rect, Rect::new(-4.0, 2.0, 100.0, 50.0));
+    }
+    t.spec(root).overflow = Overflow::Crop;
+    let r = t.run_tight(root, Size::new(100.0, 50.0), LayoutDirection::Ltr);
+    assert_eq!(r.nodes[&a].rect, Rect::new(-4.0, 2.0, 120.0, 80.0));
+    assert_eq!(r.nodes[&root].rect.size, Size::new(100.0, 50.0));
+    // and cuts them off at its edge
+    assert_eq!(r.nodes[&root].clip, Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+    // a child that fits itself to the room still takes no more than the container's
+    t.size(b, SizeSpec::Fill, SizeSpec::Fit);
+    let r = t.run_tight(root, Size::new(100.0, 50.0), LayoutDirection::Ltr);
+    assert_eq!(r.nodes[&b].rect.size.width, 100.0);
 }
 
 #[test]

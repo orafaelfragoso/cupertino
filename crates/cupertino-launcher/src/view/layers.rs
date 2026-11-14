@@ -447,13 +447,22 @@ pub fn close_changes(
     out
 }
 
-/// The changes of the panel's layers for an open from hidden the compositor runs: from `first`, the motion's first
-/// frame of the open, to `rest`, the panel at rest that the layers are drawn at, in a window `extent` large, for a
+/// The changes of the panel's layers for an open from hidden the compositor runs: from `first`, `motion`'s first frame
+/// of the open at `start`, to `rest`, the panel at rest that the layers are drawn at, in a window `extent` large, for a
 /// panel with no mode buttons (a scope). The open only scales the enclosure about its centre (on the open's spring)
-/// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale, so
-/// each property starts where the first frame has it and springs to its rest on the same spring: the glass's place,
-/// size and corner, the edge's scale about the enclosure's middle, and the content's place, which keeps its size.
-pub fn open_changes(extent: Size, first: &Frame, rest: &Frame) -> Vec<(u64, Vec<LayerChange>)> {
+/// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale. The
+/// content's place, which keeps its size, springs from where the first frame has it on the same spring, as the
+/// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner and the edge's
+/// scale about the enclosure's middle are carried through `motion`'s own values ([`open_values`]): a spring of the
+/// compositor comes to rest within a thousandth of its unit of its target, which for a scale is a third of a device
+/// pixel at the panel's sides, and the panel's own spring comes to rest at its own time.
+pub fn open_changes(
+    extent: Size,
+    first: &Frame,
+    rest: &Frame,
+    motion: &Motion,
+    start: f64,
+) -> Vec<(u64, Vec<LayerChange>)> {
     let spring = Some(LayerCurve::Spring {
         response: OPEN_RESPONSE,
         damping: OPEN_DAMPING,
@@ -473,39 +482,27 @@ pub fn open_changes(extent: Size, first: &Frame, rest: &Frame) -> Vec<(u64, Vec<
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
         out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
     };
-    let (a, b) = (enclosure_rect(extent, first), enclosure_rect(extent, rest));
-    let mut glass = Vec::new();
-    for (property, x, y) in [
-        (LayerProperty::X, a.x(), b.x()),
-        (LayerProperty::Y, a.y(), b.y()),
-        (LayerProperty::Width, a.width(), b.width()),
-        (LayerProperty::Height, a.height(), b.height()),
-        (
-            LayerProperty::CornerRadius,
-            enclosure_radius(first),
-            enclosure_radius(rest),
-        ),
-    ] {
-        from_to(&mut glass, property, x, y, spring);
-    }
+    let through = |property, value: &dyn Fn(&Frame) -> f64| {
+        let (duration, values) = open_values(motion, start, value);
+        LayerChange::through(property, duration, values)
+    };
+    let rect = |frame: &Frame| enclosure_rect(extent, frame);
+    let mut glass = vec![
+        through(LayerProperty::X, &|f| rect(f).x()),
+        through(LayerProperty::Y, &|f| rect(f).y()),
+        through(LayerProperty::Width, &|f| rect(f).width()),
+        through(LayerProperty::Height, &|f| rect(f).height()),
+        through(LayerProperty::CornerRadius, &enclosure_radius),
+    ];
     opacity(&mut glass);
-    let mut edge = Vec::new();
-    from_to(
-        &mut edge,
-        LayerProperty::Scale,
-        first.scale.max(first.scale_y),
-        rest.scale.max(rest.scale_y),
-        spring,
-    );
+    let mut edge = vec![through(LayerProperty::Scale, &|f| f.scale.max(f.scale_y))];
     opacity(&mut edge);
     // the content keeps its size, centred across the enclosure and from its top edge
-    let content_at = |frame: &Frame, rect: Rect| {
-        Point::new(
-            rect.x() + (rect.width() - frame.shape.width) / 2.0,
-            rect.y(),
-        )
+    let content_at = |frame: &Frame| {
+        let r = rect(frame);
+        Point::new(r.x() + (r.width() - frame.shape.width) / 2.0, r.y())
     };
-    let (p, q) = (content_at(first, a), content_at(rest, b));
+    let (p, q) = (content_at(first), content_at(rest));
     let mut content = Vec::new();
     from_to(&mut content, LayerProperty::X, p.x, q.x, spring);
     from_to(&mut content, LayerProperty::Y, p.y, q.y, spring);
@@ -515,6 +512,25 @@ pub fn open_changes(extent: Size, first: &Frame, rest: &Frame) -> Vec<(u64, Vec<
         (EDGE_LAYER, edge),
         (CONTENT_LAYER, content),
     ]
+}
+
+/// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight
+/// line between two of them stands off the spring by about a thousandth of a point.
+pub const OPEN_SAMPLES: usize = 1024;
+
+/// A value of the panel through an open from `start` as `motion` presents it, to where nothing moves: the open's
+/// duration and the value at [`OPEN_SAMPLES`] even steps of it, the first where the open starts and the last at rest.
+pub fn open_values(
+    motion: &Motion,
+    start: f64,
+    value: &dyn Fn(&Frame) -> f64,
+) -> (f64, Arc<[f32]>) {
+    let duration = motion.moving_left(start).max(1e-3);
+    let last = OPEN_SAMPLES - 1;
+    let values = (0..OPEN_SAMPLES)
+        .map(|i| value(&motion.frame(start + duration * i as f64 / last as f64)) as f32)
+        .collect();
+    (duration, values)
 }
 
 /// The edge's blur through the close in the edge layer's points: the close's deviation over the layer's scale, at

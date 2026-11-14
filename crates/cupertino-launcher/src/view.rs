@@ -980,6 +980,9 @@ where
     } else {
         children.extend(search_body(view));
     }
+    // while the panel scales in or out its content keeps its size, cut off by the glass, and moves on whole device
+    // pixels, as one picture, as the content's layer does when the compositor runs the open
+    let scaled = frame.scale != 1.0 || frame.scale_y != 1.0;
     let inner = Element::new(PanelRoot {
         keys: view.keys,
         alpha: frame.alpha,
@@ -987,6 +990,7 @@ where
         offset: (rect.width() - frame.shape.width) / 2.0,
         layer: view.layered,
         handed: view.handed,
+        scaled,
         children,
     });
     let mut children = vec![inner.key("content")];
@@ -1013,6 +1017,7 @@ where
             .collect(),
         split,
         layered: view.layered,
+        crops: scaled,
         content: Size::new(frame.shape.width, frame.shape.height),
         children,
     })
@@ -1398,6 +1403,8 @@ struct Enclosure<M> {
     split: bool,
     /// Its glass, edge and content are layers of their own ([`layers`]): it draws nothing itself.
     layered: bool,
+    /// It scales in or out: its content keeps its size past its edge, cut off there ([`Overflow::Crop`]).
+    crops: bool,
     content: Size,
     children: Vec<Element<M>>,
 }
@@ -1410,7 +1417,11 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
             width: SizeSpec::Fixed(self.rect.width().max(0.0)),
             height: SizeSpec::Fixed(self.rect.height().max(0.0)),
             position: self.rect.origin,
-            overflow: Overflow::Clip,
+            overflow: if self.crops {
+                Overflow::Crop
+            } else {
+                Overflow::Clip
+            },
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
@@ -1422,7 +1433,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.rect, self.content) != (old.rect, old.content) {
+        if (self.rect, self.content, self.crops) != (old.rect, old.content, old.crops) {
             Change::Layout
         } else if (
             self.radius,
@@ -1547,6 +1558,8 @@ struct PanelRoot<M> {
     /// The compositor runs the close ([`PanelView::handed`]): a key, its release included, reaches nothing inside, as
     /// a field would restart its caret's blink and draw again.
     handed: bool,
+    /// The panel scales in or out: the content lies on whole device pixels ([`Widget::on_pixels`]).
+    scaled: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1569,7 +1582,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.size, self.offset) != (old.size, old.offset) {
+        if (self.size, self.offset, self.scaled) != (old.size, old.offset, old.scaled) {
             Change::Layout
         } else if (self.alpha, self.keys, self.layer) != (old.alpha, old.keys, old.layer) {
             Change::Paint
@@ -1619,6 +1632,13 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     /// The query field is where the panel's keys go: a press on a button or in the content leaves it editing.
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.keeps_editing();
+    }
+
+    /// While the enclosure scales about its middle the content moves as one picture on whole device pixels, as the
+    /// compositor moves its layer when it runs the open, rather than its text snapping to the pixels line by line
+    /// while its shapes and images fall between them.
+    fn on_pixels(&self, _: &()) -> bool {
+        self.scaled
     }
 
     fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {

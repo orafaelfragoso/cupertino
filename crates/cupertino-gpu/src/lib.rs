@@ -7,7 +7,8 @@
 //! * Immutable [`Pipeline`]s made from the generated programs of [`shaders`], with their [`BindGroupLayout`]s;
 //!   [`BindGroup`]s naming the resources a draw reads.
 //! * Explicit render passes ([`Device::begin_pass`]: a target, a load operation, then pipelines, bind groups and
-//!   draws) and [`Fence`]s after a submission, with native sync files where the driver has them.
+//!   draws; a borrowed device's [`Device::begin_owner_pass`] draws into the framebuffer its owner has bound) and
+//!   [`Fence`]s after a submission, with native sync files where the driver has them.
 //! * [`atlas`]: 8-bit coverage, colour glyph and path mask atlases with least-recently-used eviction and caps;
 //!   [`pool`]: pooled render targets with a cap.
 //!

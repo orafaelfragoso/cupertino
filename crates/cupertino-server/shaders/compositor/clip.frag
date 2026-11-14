@@ -27,14 +27,37 @@ uniform vec4 clip_shape; // radius (px), corner exponent, 0, 0
 #if defined(MINIFY)
 // A texture drawn smaller than its texels: each pixel is the average of the texels it covers, `footprint` texels a
 // side about its centre (at most 16), each texel weighted by how much of it the pixel covers. `texels` is the
-// texture's size; a lookup at a texel's centre reads that texel alone.
+// texture's size; a lookup at a texel's centre reads that texel alone, and past the edge the edge's texel.
 uniform vec2 footprint;
 uniform vec2 texels;
+
+// One axis of a box from `lo` to `hi` (texels) over at most three texels, as two filtered lookups: the first two
+// texels blended where their weights put the lookup, and the third at its centre. Places in `at`, weights in `weight`.
+void two_taps(float lo, float hi, out vec2 at, out vec2 weight) {
+    float first = floor(lo);
+    float w0 = min(first + 1.0, hi) - lo;
+    float w1 = clamp(min(first + 2.0, hi) - (first + 1.0), 0.0, 1.0);
+    float w2 = max(hi - (first + 2.0), 0.0);
+    float pair = w0 + w1;
+    at = vec2(first + 0.5 + w1 / max(pair, 1e-6), first + 2.5);
+    weight = vec2(pair, w2);
+}
 
 vec4 covered() {
     vec2 centre = v_coords * texels;
     vec2 lo = centre - footprint * 0.5;
     vec2 hi = centre + footprint * 0.5;
+    if (footprint.x <= 2.0 && footprint.y <= 2.0) {
+        // up to two texels a side: four lookups give the weights exactly, as the products of each axis's
+        vec2 ax, wx, ay, wy;
+        two_taps(lo.x, hi.x, ax, wx);
+        two_taps(lo.y, hi.y, ay, wy);
+        vec4 c = texture2D(tex, vec2(ax.x, ay.x) / texels) * (wx.x * wy.x)
+            + texture2D(tex, vec2(ax.y, ay.x) / texels) * (wx.y * wy.x)
+            + texture2D(tex, vec2(ax.x, ay.y) / texels) * (wx.x * wy.y)
+            + texture2D(tex, vec2(ax.y, ay.y) / texels) * (wx.y * wy.y);
+        return c / max((wx.x + wx.y) * (wy.x + wy.y), 1e-6);
+    }
     vec2 first = floor(lo);
     vec4 sum = vec4(0.0);
     float total = 0.0;

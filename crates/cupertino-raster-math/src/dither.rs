@@ -46,7 +46,11 @@ pub fn dither(v: f32, x: u32, y: u32) -> f32 {
 
 /// `v` stored in 8 bits: held to 0 to 1, rounded to nearest.
 pub fn quantize(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    let x = v.clamp(0.0, 1.0) * 255.0;
+    // to nearest, a half away from zero, as `f32::round`; the fraction `x - whole` is exact, and no library call is
+    // made where the target has no rounding instruction
+    let whole = x as u32;
+    (whole + u32::from(x - whole as f32 >= 0.5)) as u8
 }
 
 /// `v` dithered at pixel `(x, y)` and stored in 8 bits.
@@ -84,6 +88,31 @@ mod tests {
         );
         // it repeats every eight pixels
         assert_eq!(matrix(13, 21), matrix(5, 5));
+    }
+
+    #[test]
+    fn a_store_rounds_as_the_library_rounds() {
+        let library = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        // every step and its halves, a few representable values either side of each
+        for k in 0..=510u32 {
+            let at = k as f32 / 510.0;
+            let mut v = at;
+            for _ in 0..8 {
+                v = f32::from_bits(v.to_bits().saturating_sub(1));
+            }
+            for _ in 0..17 {
+                assert_eq!(quantize(v), library(v), "{v:e}");
+                v = f32::from_bits(v.to_bits() + 1);
+            }
+        }
+        // a spread of the values between, and the ends
+        for bits in (0..=1.0f32.to_bits()).step_by(4099) {
+            let v = f32::from_bits(bits);
+            assert_eq!(quantize(v), library(v), "{v:e}");
+        }
+        for v in [f32::NAN, -0.0, -1.0, 2.0, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(quantize(v), library(v), "{v:e}");
+        }
     }
 
     #[test]

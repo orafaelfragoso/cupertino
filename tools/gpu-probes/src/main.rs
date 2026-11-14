@@ -57,11 +57,17 @@ fn mem_json(m: Memory) -> String {
     )
 }
 
-/// A scratch folder for the driver's program cache, so the probes never touch the person's.
+/// A scratch folder for the driver's program cache, so the probes never touch the person's: `target/gpu-probes/cache`
+/// in the checkout, beside the probes' build, where no one else can have made it first.
 fn cache_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("gpu-probes-cache-{}", unsafe { libc::getuid() }));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = cache_dir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    std::fs::create_dir_all(&dir).expect("the probes' cache folder");
     dir
+}
+
+/// The probes' cache folder under the checkout `root`.
+fn cache_dir_in(root: std::path::PathBuf) -> std::path::PathBuf {
+    root.join("target").join("gpu-probes").join("cache")
 }
 
 /// Runs this program again with `args`, the driver's disk cache on or off, and returns its output lines.
@@ -406,6 +412,22 @@ fn fence(args: &[String]) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_driver_cache_lives_in_the_checkouts_build_folder_not_a_shared_one() {
+        let root = std::path::PathBuf::from("/src/checkout");
+        assert_eq!(
+            super::cache_dir_in(root),
+            std::path::Path::new("/src/checkout/target/gpu-probes/cache")
+        );
+        let dir = super::cache_dir();
+        assert!(!dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+        assert!(
+            dir.ends_with("target/gpu-probes/cache") && dir.is_dir(),
+            "{}",
+            dir.display()
+        );
+    }
+
     #[test]
     fn the_slope_of_a_line_is_its_gradient() {
         let xs: Vec<f64> = (0..10).map(f64::from).collect();

@@ -1,7 +1,9 @@
 //! What the DRM backend does with each frame, logged on request (`CUPERTINO_DRM_TRACE=1`): which presentation time a
 //! flip reports (the driver's flip timestamp, or the server's own clock when the driver gives none), flips shown late
-//! (missed refreshes), which planes a frame used (the cursor plane, direct scanout of a client buffer on the primary
-//! plane, overlay planes) and the time from an input to the flip that showed its first frame.
+//! (missed refreshes: after the vblank the frame was drawn for, or so late that its clients were called back without
+//! it), which planes a frame used (the cursor plane, direct scanout of a client buffer on the primary plane, overlay
+//! planes), how late after a vblank the next frame starts ([`crate::latch`]), and the time from an input, and from
+//! pointer motion on its own, to the flip that showed its first frame.
 //!
 //! The lines go to the server's log (`~/.local/state/cupertino/server.log` on the TTY) under the target
 //! `cupertino_server::drm_trace`, at the info level the default filter keeps. Without the variable nothing is kept and
@@ -46,23 +48,49 @@ pub struct Planes {
     pub overlays: usize,
 }
 
+/// The earliest inputs no queued frame of an output has taken yet, or that a queued frame took: any input, and pointer
+/// motion alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Inputs {
+    any: Option<Instant>,
+    pointer: Option<Instant>,
+}
+
+impl Inputs {
+    fn is_empty(&self) -> bool {
+        self.any.is_none() && self.pointer.is_none()
+    }
+
+    /// The earlier of each.
+    fn merge(&mut self, other: Inputs) {
+        let earliest = |a: Option<Instant>, b: Option<Instant>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        self.any = earliest(self.any, other.any);
+        self.pointer = earliest(self.pointer, other.pointer);
+    }
+}
+
 /// The trace of one server run.
 ///
 /// Each output reports its own input-to-flip latency: an input is waiting on every output until a frame of that output
 /// is queued, which takes it; the first flip of that output that shows that frame or a later one reports it. A frame
 /// whose flip never comes (refused, dropped with its CRTC's state, or parked behind a failed one) leaves its input to the
-/// next flip of the output that does.
+/// next flip of the output that does. Pointer motion is reported on its own as well (`pointer-to-flip`): from a motion
+/// to the flip that first shows the pointer where it moved.
 #[derive(Debug, Default)]
 pub struct DrmTrace {
-    /// By output name, the earliest input no queued frame of the output has taken yet.
-    waiting: Vec<(String, Option<Instant>)>,
+    /// By output name, the inputs no queued frame of the output has taken yet.
+    waiting: Vec<(String, Inputs)>,
     /// The inputs queued frames took, by output and the frame's [`DrmTrace::queued`] number, not reported yet.
-    in_flight: Vec<(String, u64, Instant)>,
+    in_flight: Vec<(String, u64, Inputs)>,
     /// The number of the last frame queued.
     frames: u64,
-    /// The last branch and planes logged, by output name, so only changes are logged.
+    /// The last branch, planes and start delay (whole milliseconds) logged, by output name, so only changes are logged.
     branches: Vec<(String, Branch)>,
     planes: Vec<(String, Planes)>,
+    delays: Vec<(String, u128)>,
     pub flips: u64,
     pub missed: u64,
 }
@@ -75,7 +103,15 @@ impl DrmTrace {
     /// An input arrived at `at`: it waits on every output for the output's next frame.
     pub fn input(&mut self, at: Instant) {
         for (_, waiting) in &mut self.waiting {
-            waiting.get_or_insert(at);
+            waiting.any.get_or_insert(at);
+        }
+    }
+
+    /// The pointer moved at `at`: an input ([`DrmTrace::input`]) that is also reported as pointer motion.
+    pub fn pointer(&mut self, at: Instant) {
+        for (_, waiting) in &mut self.waiting {
+            waiting.any.get_or_insert(at);
+            waiting.pointer.get_or_insert(at);
         }
     }
 
@@ -84,39 +120,46 @@ impl DrmTrace {
         self.waiting
             .iter()
             .find(|(name, _)| name == output)
-            .and_then(|(_, at)| *at)
+            .and_then(|(_, at)| at.any)
     }
 
-    /// A frame of `output` is being queued: it takes the input waiting on the output, if any. Its number, for
+    /// A frame of `output` is being queued: it takes the inputs waiting on the output, if any. Its number, for
     /// [`DrmTrace::flipped`].
     pub fn queued(&mut self, output: &str) -> u64 {
         self.frames += 1;
         let taken = match self.waiting.iter_mut().find(|(name, _)| name == output) {
-            Some((_, waiting)) => waiting.take(),
+            Some((_, waiting)) => std::mem::take(waiting),
             None => {
                 // an output starts waiting for inputs at its first frame
-                self.waiting.push((output.to_owned(), None));
-                None
+                self.waiting.push((output.to_owned(), Inputs::default()));
+                Inputs::default()
             }
         };
-        if let Some(at) = taken {
-            self.in_flight.push((output.to_owned(), self.frames, at));
+        if !taken.is_empty() {
+            self.in_flight.push((output.to_owned(), self.frames, taken));
         }
         self.frames
     }
 
-    /// The earliest input a flip of `output` showing the frame numbered `frame` shows first: the input of that frame or
-    /// of any earlier frame of the output whose flip never came.
-    fn shown_input(&mut self, output: &str, frame: u64) -> Option<Instant> {
-        let mut earliest: Option<Instant> = None;
-        self.in_flight.retain(|(name, number, at)| {
+    /// The earliest inputs a flip of `output` showing the frame numbered `frame` shows first: the inputs of that frame
+    /// or of any earlier frame of the output whose flip never came.
+    fn shown_inputs(&mut self, output: &str, frame: u64) -> Inputs {
+        let mut earliest = Inputs::default();
+        self.in_flight.retain(|(name, number, inputs)| {
             let shown = name == output && *number <= frame;
             if shown {
-                earliest = Some(earliest.map_or(*at, |e| e.min(*at)));
+                earliest.merge(*inputs);
             }
             !shown
         });
         earliest
+    }
+
+    /// How long after a vblank of `output` its next frame starts ([`crate::latch`]): the line to log when it differs
+    /// by whole milliseconds from the one logged before.
+    pub fn start_delay(&mut self, output: &str, delay: Duration) -> Option<String> {
+        changed(&mut self.delays, output, delay.as_millis())
+            .then(|| format!("start-delay output={output} delay_us={}", delay.as_micros()))
     }
 
     /// The planes of a frame of `output`: the line to log when they differ from the last frame's.
@@ -131,7 +174,7 @@ impl DrmTrace {
 
     /// A flip of `output` showing the frame numbered `frame` (from [`DrmTrace::queued`]) was shown at `flip`, its time
     /// from `branch`, `late_periods` refreshes after it was due. The lines to log: the branch when it changed, a missed
-    /// flip, the latency from the earliest input it is the first to show.
+    /// flip, the latency from the earliest input it is the first to show and from the earliest pointer motion.
     pub fn flipped(
         &mut self,
         output: &str,
@@ -140,7 +183,7 @@ impl DrmTrace {
         frame: u64,
         flip: Instant,
     ) -> Vec<String> {
-        let input = self.shown_input(output, frame);
+        let inputs = self.shown_inputs(output, frame);
         self.flips += 1;
         let mut lines = Vec::new();
         if changed(&mut self.branches, output, branch) {
@@ -156,10 +199,17 @@ impl DrmTrace {
                 self.flips, self.missed
             ));
         }
-        if let Some(input) = input {
+        if let Some(input) = inputs.any {
             let latency = flip.saturating_duration_since(input);
             lines.push(format!(
                 "input-to-flip output={output} latency_us={}",
+                latency.as_micros()
+            ));
+        }
+        if let Some(motion) = inputs.pointer {
+            let latency = flip.saturating_duration_since(motion);
+            lines.push(format!(
+                "pointer-to-flip output={output} latency_us={}",
                 latency.as_micros()
             ));
         }
@@ -308,6 +358,63 @@ mod tests {
         assert_eq!(
             t.flipped("DP-1", Branch::OwnClock, 0, next, t0 + us(40_000)),
             ["input-to-flip output=DP-1 latency_us=40000"]
+        );
+    }
+
+    #[test]
+    fn pointer_motion_is_reported_on_its_own_beside_the_earliest_input() {
+        let mut t = DrmTrace::new();
+        let t0 = Instant::now();
+        let first = t.queued("DP-1");
+        t.flipped("DP-1", Branch::FlipTimestamp, 0, first, t0);
+        t.input(t0);
+        t.pointer(t0 + us(2_000));
+        t.pointer(t0 + us(3_000));
+        let frame = t.queued("DP-1");
+        assert_eq!(
+            t.flipped("DP-1", Branch::FlipTimestamp, 0, frame, t0 + us(10_000)),
+            [
+                "input-to-flip output=DP-1 latency_us=10000",
+                "pointer-to-flip output=DP-1 latency_us=8000"
+            ]
+        );
+        // a key alone reports no pointer motion; motion alone reports both
+        t.input(t0 + us(20_000));
+        let key = t.queued("DP-1");
+        assert_eq!(
+            t.flipped("DP-1", Branch::FlipTimestamp, 0, key, t0 + us(25_000)),
+            ["input-to-flip output=DP-1 latency_us=5000"]
+        );
+        t.pointer(t0 + us(30_000));
+        let _dropped = t.queued("DP-1");
+        let next = t.queued("DP-1");
+        assert_eq!(
+            t.flipped("DP-1", Branch::FlipTimestamp, 0, next, t0 + us(36_000)),
+            [
+                "input-to-flip output=DP-1 latency_us=6000",
+                "pointer-to-flip output=DP-1 latency_us=6000"
+            ],
+            "a motion carried by a dropped flip is reported at the next flip"
+        );
+    }
+
+    #[test]
+    fn the_start_delay_is_logged_when_it_changes_by_whole_milliseconds() {
+        let mut t = DrmTrace::new();
+        assert_eq!(
+            t.start_delay("DP-1", us(8_333)).as_deref(),
+            Some("start-delay output=DP-1 delay_us=8333")
+        );
+        assert_eq!(
+            t.start_delay("DP-1", us(8_900)),
+            None,
+            "the same millisecond"
+        );
+        assert!(t.start_delay("DP-1", us(4_100)).is_some());
+        assert!(t.start_delay("DP-1", Duration::ZERO).is_some(), "at once");
+        assert!(
+            t.start_delay("DP-2", Duration::ZERO).is_some(),
+            "per output"
         );
     }
 

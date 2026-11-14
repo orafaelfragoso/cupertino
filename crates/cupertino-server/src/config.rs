@@ -537,6 +537,8 @@ pub struct Config {
     pub tile_margins: bool,
     /// How much denser every material is made, 0 to 1 (`material_density`).
     pub material_density: f64,
+    /// Bits a channel of the displays' primary planes (`output_depth`), read when the session starts.
+    pub output_depth: crate::output_depth::Depth,
     /// Windows take a slight tint of the wallpaper's colour (`tint_windows` of `appearance.conf`).
     pub tint_windows: bool,
     /// What a double click on a server-drawn title bar does (`titlebar_double_click` of `appearance.conf`).
@@ -693,6 +695,7 @@ impl Default for Config {
             edge_tiling: true,
             tile_margins: true,
             material_density: 0.0,
+            output_depth: crate::output_depth::Depth::Eight,
             tint_windows: true,
             titlebar_double_click: cupertino_defaults::appearance::TitlebarAction::Zoom,
         }
@@ -962,6 +965,9 @@ impl Config {
         if let Some(d) = f.material_density {
             self.material_density = d.clamp(0.0, 1.0);
         }
+        if let Some(bits) = f.output_depth {
+            self.output_depth = crate::output_depth::Depth::from_setting(Some(bits));
+        }
         if let Some(b) = f.decorations {
             self.window.decorations = b;
         }
@@ -1115,6 +1121,19 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_primary_planes_are_8_bits_unless_the_file_asks_for_10() {
+        use crate::output_depth::Depth;
+        let mut c = Config::default();
+        assert_eq!(c.output_depth, Depth::Eight);
+        c.apply_file(&CompositorSettings::parse(r#"{"appearance":"dark"}"#, None).0);
+        assert_eq!(c.output_depth, Depth::Eight, "a file without the key");
+        c.apply_file(&CompositorSettings::parse(r#"{"output_depth":10}"#, None).0);
+        assert_eq!(c.output_depth, Depth::Ten);
+        c.apply_file(&CompositorSettings::parse(r#"{"output_depth":8}"#, None).0);
+        assert_eq!(c.output_depth, Depth::Eight);
+    }
+
     #[test]
     fn the_system_file_is_applied_under_the_users_file_and_never_under_an_explicit_one() {
         let dir = tempfile::tempdir().unwrap();

@@ -32,6 +32,8 @@ pub struct Latency {
     app: Option<Instant>,
     /// A client committed after [`Latency::app`].
     answered: bool,
+    /// The earliest pointer motion no frame has shown yet.
+    pointer: Option<Instant>,
 }
 
 impl Latency {
@@ -42,6 +44,17 @@ impl Latency {
             self.app = Some(at);
             self.answered = false;
         }
+    }
+
+    /// The pointer moved at `at`: an input that is also timed on its own, to the first frame shown after it.
+    pub fn pointer(&mut self, at: Instant) {
+        self.input(at);
+        self.pointer.get_or_insert(at);
+    }
+
+    /// A frame was shown at `at`: the pointer-motion latency it ends, if any.
+    pub fn pointer_presented(&mut self, at: Instant) -> Option<Duration> {
+        self.pointer.take().map(|t| at.saturating_duration_since(t))
     }
 
     /// A client committed at `at`.
@@ -109,6 +122,8 @@ pub struct FrameRecord {
     /// The GPU's time for the whole frame, when the device has GPU timestamps.
     pub gpu: Option<Duration>,
     pub counts: DrawCounts,
+    /// From the earliest pointer motion no frame has shown yet to this frame, when it is the first shown after one.
+    pub pointer_latency: Option<Duration>,
 }
 
 /// What the compositor drew on the CPU and uploaded, and the blur passes it ran, within a frame.
@@ -173,7 +188,7 @@ impl FrameRecord {
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         let c = &self.counts;
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -196,6 +211,7 @@ impl FrameRecord {
             c.hud_upload_bytes,
             c.blur_passes,
             c.blur_texels,
+            opt(self.pointer_latency),
         )
     }
 }
@@ -289,7 +305,7 @@ pub struct FrameStats {
 /// The first line of the file: the column names.
 pub const HEADER: &str = "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us \
 app_lat_us allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads hud_upload_bytes \
-blur_passes blur_texels";
+blur_passes blur_texels pointer_lat_us";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -427,6 +443,7 @@ pub fn frame_rendered(
         passes: counts.passes - before.passes,
         gpu,
         counts: totals.since(&stats.before),
+        pointer_latency: stats.latency.pointer_presented(now),
     };
     stats.write(&record);
 }
@@ -438,6 +455,17 @@ pub fn note_input(state: &mut crate::state::Cupertino) {
     }
     if let Some(trace) = state.drm_trace.as_mut() {
         trace.input(Instant::now());
+    }
+}
+
+/// The pointer moved (benchmark runs and the DRM trace only): an input that is also timed on its own.
+pub fn note_pointer_motion(state: &mut crate::state::Cupertino) {
+    let at = Instant::now();
+    if let Some(stats) = state.frame_stats.as_mut() {
+        stats.latency.pointer(at);
+    }
+    if let Some(trace) = state.drm_trace.as_mut() {
+        trace.pointer(at);
     }
 }
 
@@ -466,6 +494,20 @@ mod tests {
         l.commit(t0 + ms(9));
         assert_eq!(l.presented(t0 + ms(13)), (None, Some(ms(13))));
         assert_eq!(l.presented(t0 + ms(20)), (None, None));
+    }
+
+    #[test]
+    fn pointer_motion_is_an_input_also_timed_on_its_own_to_the_next_frame() {
+        let t0 = Instant::now();
+        let mut l = Latency::default();
+        l.input(t0);
+        l.pointer(t0 + ms(1));
+        l.pointer(t0 + ms(3));
+        assert_eq!(l.presented(t0 + ms(6)), (Some(ms(6)), None));
+        assert_eq!(l.pointer_presented(t0 + ms(6)), Some(ms(5)));
+        assert_eq!(l.pointer_presented(t0 + ms(20)), None, "shown already");
+        l.input(t0 + ms(30));
+        assert_eq!(l.pointer_presented(t0 + ms(35)), None, "a key is no motion");
     }
 
     #[test]
@@ -552,7 +594,7 @@ mod tests {
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0"));
+        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0 -"));
     }
 
     #[test]
@@ -572,7 +614,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000"),
+            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000 -"),
             "{}",
             r.line()
         );

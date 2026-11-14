@@ -15,6 +15,7 @@
 //! | `menu_bar_auto_hide`, `edge_tiling`, `tile_margins` | boolean: the menu bar hides until the pointer reaches the top edge; dragging a window to a screen edge tiles it; tiled windows keep a margin around and between them |
 //! | `wallpaper_color` | `#rrggbb`: a solid colour in place of any picture |
 //! | `material_density` | number 0 to 1: how much denser (less see-through) every material is made, 0 leaving the recipes as they are |
+//! | `output_depth` | `8` or `10`: bits a channel of the displays' primary planes, 8 by default; 10 falls back to 8 where a display has no 10-bit format; read when the session starts |
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
 //! | `show_scroll_bars` | `automatic` (beside the content while a mouse is connected, else over it while it scrolls), `when-scrolling`, `always` |
@@ -210,6 +211,8 @@ pub struct CompositorSettings {
     pub wallpaper_color: Option<[u8; 4]>,
     /// How much denser every material is made, 0 to 1.
     pub material_density: Option<f64>,
+    /// Bits a channel of the primary planes: 8 or 10.
+    pub output_depth: Option<u8>,
     pub decorations: Option<bool>,
     pub minimize_effect: Option<MinimizeEffectName>,
     pub show_scroll_bars: Option<ScrollBarsName>,
@@ -549,6 +552,15 @@ const KEYS: &[JsonKey] = &[
         }),
         number_value
     ),
+    json_key!(
+        output_depth,
+        |v: &Value| match v.as_u64() {
+            Some(8) => Ok(8),
+            Some(10) => Ok(10),
+            _ => Err(format!("the output depth is 8 or 10 bits, not {v}")),
+        },
+        |b: &u8| Value::from(*b)
+    ),
     json_key!(wallpaper, absolute_path, |s: &String| Value::String(
         s.clone()
     )),
@@ -845,6 +857,23 @@ mod tests {
         assert_eq!(s.show_scroll_bars, None);
         assert_eq!(problems.len(), 1);
         assert_eq!(ScrollBarsName::default(), ScrollBarsName::Automatic);
+    }
+
+    #[test]
+    fn the_output_depth_is_8_or_10_bits() {
+        for bits in [8, 10] {
+            let (s, problems) =
+                CompositorSettings::parse(&format!(r#"{{"output_depth":{bits}}}"#), None);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(s.output_depth, Some(bits));
+        }
+        for bad in ["12", "10.5", "\"10\""] {
+            let (s, problems) =
+                CompositorSettings::parse(&format!(r#"{{"output_depth":{bad}}}"#), None);
+            assert_eq!(s.output_depth, None, "{bad}");
+            assert_eq!(problems.len(), 1, "{bad}");
+        }
+        assert_eq!(CompositorSettings::default().output_depth, None);
     }
 
     #[test]

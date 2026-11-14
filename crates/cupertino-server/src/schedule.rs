@@ -89,6 +89,8 @@ pub struct FrameScheduler {
     paced: bool,
     /// The time of the last vblank the display reported: the phase of its refresh grid.
     last_vblank: Option<Duration>,
+    /// No frame starts before this time: the late start after a vblank ([`FrameScheduler::hold_until`]).
+    held_until: Option<Duration>,
     failed: Option<FailedFrames>,
     in_flight: Option<InFlight>,
     generation: u64,
@@ -104,6 +106,7 @@ impl Default for FrameScheduler {
             next_due: None,
             paced: false,
             last_vblank: None,
+            held_until: None,
             failed: None,
             in_flight: None,
             generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
@@ -139,7 +142,10 @@ impl FrameScheduler {
     /// animation frame from its next grid point on, and neither before the retry time of a failed frame.
     pub fn due(&self, now: Duration, animating: bool) -> bool {
         let on_grid = self.next_due.is_none_or(|due| now >= due);
-        self.retry_due(now) && (self.damaged && (on_grid || !self.paced) || animating && on_grid)
+        let held = self.held_until.is_some_and(|until| now < until);
+        self.retry_due(now)
+            && !held
+            && (self.damaged && (on_grid || !self.paced) || animating && on_grid)
     }
 
     /// When the output is next due, if anything wants a frame: what the loop may sleep until.
@@ -151,13 +157,22 @@ impl FrameScheduler {
         } else {
             return None;
         };
+        let due = self.held_until.map_or(due, |until| due.max(until));
         Some(self.failed.map_or(due, |f| due.max(f.retry_at)))
+    }
+
+    /// The next frame starts no earlier than `until` (`None`: at once): a display whose vblank phase is known starts
+    /// its frame late, so it shows the latest input ([`crate::latch`]). The hold ends with the next frame cycle and with a
+    /// reset.
+    pub fn hold_until(&mut self, until: Option<Duration>) {
+        self.held_until = until;
     }
 
     /// A frame cycle began at `now`. On or after the grid point the grid moves one `refresh` on, or restarts from `now`
     /// when that point has passed too (an output that sat idle, or a pass that came late), so nothing catches up in a
     /// burst. A change drawn before the grid point leaves the grid as it is.
     pub fn cycle(&mut self, now: Duration, refresh: Duration) {
+        self.held_until = None;
         if self.next_due.is_some_and(|due| now < due) {
             return;
         }
@@ -270,6 +285,7 @@ impl FrameScheduler {
     /// never be shown, and a late event for it is stale. The output draws its next frame in full.
     pub fn reset(&mut self) {
         self.in_flight = None;
+        self.held_until = None;
         self.generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
         self.damaged = true;
     }
@@ -688,5 +704,33 @@ mod tests {
             "the frame that failed to submit was never shown"
         );
         assert!(s.damaged(), "the next frame is drawn in full");
+    }
+
+    #[test]
+    fn a_held_frame_waits_for_its_late_start_and_the_next_cycle_ends_the_hold() {
+        let mut s = FrameScheduler::default();
+        let vblank = 100 * MS;
+        s.vblank(vblank, REFRESH);
+        s.damage();
+        s.hold_until(Some(vblank + 8 * MS));
+        assert!(
+            !s.due(vblank + MS, false),
+            "a change waits for the late start"
+        );
+        assert!(!s.due(vblank + MS, true), "so does an animation frame");
+        assert_eq!(s.deadline(vblank + MS, false), Some(vblank + 8 * MS));
+        assert!(s.due(vblank + 8 * MS, false));
+        s.cycle(vblank + 8 * MS, REFRESH);
+        s.called_back();
+        s.damage();
+        assert!(
+            s.due(vblank + 9 * MS, false),
+            "the frame cycle ended the hold"
+        );
+        s.hold_until(Some(vblank + 30 * MS));
+        s.reset();
+        assert!(s.due(vblank + 10 * MS, false), "so does a reset");
+        s.hold_until(None);
+        assert!(s.due(vblank + 10 * MS, false), "no hold: at once");
     }
 }

@@ -19,7 +19,6 @@ use cupertino_render_api::{Completion as _, Failure, RenderFailure as _, RenderS
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{FrameError, FrameFlags, RenderFrameError};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{
@@ -56,6 +55,8 @@ use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
 use crate::gpu_reset::Loss;
+use crate::latch::LateLatch;
+use crate::output_depth::Depth;
 use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::schedule::{Overdue, PresentationId};
@@ -63,7 +64,6 @@ use crate::software_render;
 use crate::state::Cupertino;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
-const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Abgr8888, Fourcc::Argb8888];
 
 /// The DRM output of one display, as the renderer draws to it.
 pub(crate) type DrmSurfaceOutput =
@@ -95,6 +95,10 @@ struct Surface {
     /// A frame was queued and its vblank has not arrived yet.
     pending: bool,
     refresh: Duration,
+    /// The recent render times, and how late after a vblank the next frame may start ([`crate::latch`]).
+    latch: LateLatch,
+    /// The vblank the frame in flight was drawn for, where the vblank phase was known when it started.
+    target: Option<Duration>,
 }
 
 /// A connected display: its connector and the DRM modes behind its head's modes.
@@ -160,6 +164,10 @@ pub struct UdevBackend {
     /// A render reported the rendering context lost: nothing is drawn with it again, and the next frame makes a new one
     /// ([`recover_gpu`]) or ends the session.
     renderer_lost: bool,
+    /// The depth of the primary planes of every card, from the configuration at the start.
+    depth: Depth,
+    /// Frames start late after a vblank with a real timestamp ([`crate::latch`]); off by `CUPERTINO_LATE_LATCH=0`.
+    late_latch: bool,
 }
 
 /// Whether an output gets a frame now. A paused session or a lost renderer renders nothing: the device rejects the
@@ -358,6 +366,7 @@ fn card(
     prefix: String,
     opened: Opened,
     renders: bool,
+    depth: Depth,
 ) -> Result<Card> {
     let render_formats = opened
         .renderer
@@ -377,7 +386,7 @@ fn card(
         allocator,
         exporter,
         Some(opened.gbm.clone()),
-        COLOR_FORMATS,
+        depth.primary_formats().iter().copied(),
         render_formats,
     );
     let events = handle
@@ -412,8 +421,18 @@ fn open_display_card(state: &mut Cupertino, path: &Path, prefix: String) -> Opti
     let added = (|| -> Result<DrmNode> {
         let node = DrmNode::from_path(path).map_err(|e| anyhow!("drm node: {e}"))?;
         let devnum = DevT::from_raw(node.dev_id());
-        let opened = open_card(&udev(state).context("the TTY backend")?.session, path)?;
-        let card = card(&state.loop_handle, node, devnum, prefix, opened, false)?;
+        let u = udev(state).context("the TTY backend")?;
+        let depth = u.depth;
+        let opened = open_card(&u.session, path)?;
+        let card = card(
+            &state.loop_handle,
+            node,
+            devnum,
+            prefix,
+            opened,
+            false,
+            depth,
+        )?;
         udev(state)
             .context("the TTY backend")?
             .cards
@@ -541,9 +560,16 @@ pub fn run(
     if crate::drm_trace::requested(std::env::var(crate::drm_trace::ENV).ok().as_deref()) {
         state.drm_trace = Some(crate::drm_trace::DrmTrace::new());
         crate::drm_trace::log(
-            "on: presentation-time branch, missed flips, planes and input-to-flip latency follow",
+            "on: presentation-time branch, missed flips, planes, frame start delay and input-to-flip and pointer-to-flip latency follow",
         );
     }
+    let depth = state.config.output_depth;
+    let late_latch = crate::latch::requested(std::env::var(crate::latch::ENV).ok().as_deref());
+    tracing::info!(
+        primary_plane_bits = depth.bits(),
+        late_latch,
+        "the primary planes' depth asked for, and whether frames start late after a vblank with a real timestamp"
+    );
     let report = preflight()?;
     for note in &report.notes {
         tracing::info!("{note}");
@@ -656,6 +682,7 @@ pub fn run(
         card_prefix(&gpu, &primary),
         Opened { renderer, ..opened },
         true,
+        depth,
     )?;
     state.backend = Some(Backend::Udev(Box::new(UdevBackend {
         session: session.clone(),
@@ -665,6 +692,8 @@ pub fn run(
         paused: false,
         asleep: false,
         renderer_lost: false,
+        depth,
+        late_latch,
     })));
     state.gpu_recovers = true;
     for other in gpus.iter().filter(|g| g.device != gpu.device) {
@@ -1077,9 +1106,12 @@ pub(crate) fn head_op(
                             copy: None,
                             pending: false,
                             refresh,
+                            latch: LateLatch::default(),
+                            target: None,
                         },
                     );
-                    tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, "output initialised");
+                    let format = u.surfaces[&crtc].drm_output.format();
+                    tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, format = %format, bits = crate::output_depth::format_bits(format), "output initialised");
                     Ok(())
                 }
                 Err(e) => {
@@ -1382,6 +1414,14 @@ fn render_surface(
     crtc: crtc::Handle,
     idx: usize,
 ) -> Option<HeadId> {
+    // the frame's render time runs from here to its flip being queued, and the vblank it is drawn for is the first after
+    // this moment
+    let started = Instant::now();
+    let target = {
+        let refresh = state.refresh_of(idx);
+        let now = state.frame_now();
+        state.outputs[idx].scheduler.presentation_at(now, refresh)
+    };
     // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let drawn = if node == u.render_node {
         draw_direct(state, u, node, crtc, idx)?
@@ -1416,6 +1456,8 @@ fn render_surface(
         match surface.drm_output.queue_frame(frame) {
             Ok(()) => {
                 surface.pending = true;
+                surface.latch.rendered(started.elapsed());
+                surface.target = target;
                 let locked = state.scene_built_locked(idx);
                 let now = state.frame_now();
                 state.outputs[idx].scheduler.flip_queued(now, locked);
@@ -1628,6 +1670,7 @@ fn frame_finish(
     };
     surface.pending = false;
     let (output, refresh) = (surface.output, surface.refresh);
+    let target = surface.target.take();
     // `Ok(None)`: no frame of ours waited (it was dropped with its CRTC's state). An error comes after Smithay took the
     // shown frame, whose id goes with it, and failed to submit the frame parked behind it (queued while a dropped frame
     // was still pending): that is the flip in flight, and it never reaches the screen
@@ -1648,6 +1691,17 @@ fn frame_finish(
     // only the flip in flight is shown: a late event of a flip dropped by a reset confirms no frame, a lock frame least
     // of all, and the refresh grid does not follow it; its feedback is discarded
     let presented = shown.as_ref().and_then(|f| scheduler.presented(f.id));
+    // the late start needs the driver's timestamps on the presentation clock, which a test's fixed time is not
+    let stamp = hardware.filter(|_| state.fixed_time.is_none());
+    let late_latch = udev(state).is_some_and(|u| u.late_latch);
+    let flipped = match (presented.is_some(), udev(state)) {
+        (true, Some(u)) => u
+            .cards
+            .get_mut(&node)
+            .and_then(|c| c.surfaces.get_mut(&crtc))
+            .map(|s| s.latch.flipped(stamp, target, refresh, late_latch)),
+        _ => None,
+    };
     if let (Some(presented), Some(trace)) = (presented.as_ref(), state.drm_trace.as_mut()) {
         let now = std::time::Instant::now();
         let flip = hardware.map_or(now, |t| {
@@ -1660,7 +1714,15 @@ fn frame_finish(
         };
         let frame = shown.as_ref().and_then(|f| f.trace).unwrap_or(0);
         let name = state.outputs[idx].output.name();
-        for line in trace.flipped(&name, branch, presented.late_periods, frame, flip) {
+        let late = presented.late_periods.max(flipped.map_or(0, |f| f.late));
+        for line in trace.flipped(&name, branch, late, frame, flip) {
+            crate::drm_trace::log(&line);
+        }
+        let delay = flipped
+            .and_then(|f| f.start_at)
+            .zip(stamp)
+            .map_or(Duration::ZERO, |(at, vblank)| at - vblank);
+        if let Some(line) = trace.start_delay(&name, delay) {
             crate::drm_trace::log(&line);
         }
     }
@@ -1684,6 +1746,9 @@ fn frame_finish(
             _ => state.frame_now(),
         };
         state.outputs[idx].scheduler.vblank(vblank, refresh);
+        state.outputs[idx]
+            .scheduler
+            .hold_until(flipped.and_then(|f| f.start_at));
         state.note_frame_presented(idx, presented.locked);
     }
     state.outputs[idx].scheduler.damage();

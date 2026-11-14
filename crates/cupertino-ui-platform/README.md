@@ -22,6 +22,15 @@ lie between the two and read the content below them, so content that scrolls und
 row's glass without covering it. The layer is presented with the window's next `present` and `None` hides it; without
 the capability a layer is `Unsupported`.
 
+With `Capabilities::surface_layers` a window may show marked parts of it in surfaces of their own that the compositor
+places and animates (`WindowSystem::present_surface_layers`): each `SurfaceLayer` has a key, its rect in the window,
+its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radius, masks to its shape) and its frame at
+its rect's size, or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
+content, and a key left out goes. `WindowRequest::Layer { key, changes }` sets or animates a layer's properties
+(`LayerChange`, `LayerProperty`: x, y, width, height, opacity, scale, corner radius, content blur, along a
+`LayerCurve`) on the compositor's clock without a frame. Without the capability an empty list is all a window system
+takes.
+
 `PlatformEvent::ScrollBars` tells how the session wants scroll views to show their bars: `ScrollBars::WhenScrolling`
 (thin bars over the content while it scrolls) or `ScrollBars::Always` (tracks beside it that stay shown). A system
 that cannot tell never sends it, and each view keeps its own style.

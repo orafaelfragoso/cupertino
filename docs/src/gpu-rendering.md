@@ -219,6 +219,12 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 Scrolling and dock magnification follow the pointer, so they stay client-driven: a cheap commit per frame that moves
 layers, not a repaint.
 
+On the toolkit's side a widget marks a subtree a surface layer (`Widget::surface_layer`): the runtime paints it into a
+frame of its own at its layout size, with its own damage and renderer, and the window system makes it a layer of the
+window's surface, drawn from buffers of its own (shared memory, or dmabufs from the GPU renderer's texture). The
+application then sets or animates the layer's properties with `WindowRequest::Layer`, which costs no frame; layout,
+input and semantics keep the layout.
+
 ### 10. The compositor
 
 The compositor stays on Smithay's GLES renderer. Its own work, in order:

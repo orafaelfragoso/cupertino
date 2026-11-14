@@ -76,7 +76,9 @@ names no protocol beyond the standard ones.
   is dispatched; the extension then reads its queue. A burst of extension events costs one wait, not one each.
 - Surface roles: `Connection::external_surface(assign)` creates a `wl_surface` and calls `assign` with it, the queue
   handle and its `SurfaceId`, before the first commit; `assign` creates the role's objects and returns an
-  `ExternalRole`. Each configure of the role goes to `State::configure_external(surface, serial, size)` from the
+  `ExternalRole`. A role the compositor never configures (a layer of another surface) names the surface it is drawn
+  with (`ExternalRole::drawn_with`): it presents at once and leases buffers at that surface's scale. Each configure
+  of any other role goes to `State::configure_external(surface, serial, size)` from the
   extension's `Dispatch` impl (a 0 width or height leaves that dimension to the client, which `lease` fills from its
   `preferred` size; a serial that does not increase ends the next
   wait with `Error::InvalidSerial`). The surface then draws through `Connection::lease` like any other: present calls

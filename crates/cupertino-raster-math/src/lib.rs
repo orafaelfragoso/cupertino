@@ -8,6 +8,7 @@
 //! * [`shadow`]: drop and inner shadows of a rounded rectangle in closed form.
 //! * [`gradient`]: up to eight stops, interpolated in straight encoded sRGB, premultiplied after.
 //! * [`dither`]: dithering keyed to the pixel position, and its shader implementation.
+//! * [`placement`]: where an image drawn one source pixel per device pixel lands.
 //!
 //! Everything is `f32`, as the shaders compute it.
 
@@ -15,5 +16,6 @@ pub mod blur;
 pub mod coverage;
 pub mod dither;
 pub mod gradient;
+pub mod placement;
 pub mod shadow;
 pub mod vectors;

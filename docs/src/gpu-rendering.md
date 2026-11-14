@@ -75,13 +75,18 @@ an application that declares nothing takes); `CUPERTINO_RENDERER=cpu|gpu` overri
 Control Center were measured on both renderers with their layers (the plan's step 7 measurements): the overview's
 frames miss a refresh on the CPU and a typed letter's frame passes the animation budget there, both within it on the
 GPU; Control Center draws one frame as it opens and one as it closes, its motion the compositor's, and the GPU draws
-it little faster for the 70 MiB a context costs. The polkit agent, the keyring prompter and the portal's pick overlay
+it little faster for the 70 MiB a context costs. On the CPU the shadow's bands, most of a frame's raster, are drawn
+once into a picture the process keeps and laid over one texel per pixel, so a whole opening frame at 1.5 takes about
+3 ms on the new renderer each opening makes. The polkit agent, the keyring prompter and the portal's pick overlay
 draw with tiny-skia directly and never make a GPU device.
 
 Glass is drawn by the compositor for every class, so a CPU surface keeps the full material look. A GPU process paints
 its first frame on the CPU while its context and programs are prepared on a worker thread, then switches and frees the
 CPU renderer's frame, layers and caches; a fallback rebuilds them. A hidden GPU process drops its pools and atlases and
-keeps its context, because tearing a context down returns almost no memory.
+keeps its context, because tearing a context down returns almost no memory. The programs come from a per-user cache of
+saved binaries; the processes that start together make them in turn, so on a cold cache (a driver update, a shader
+change, a new user) only the first loads the driver's compiler, some 55 MiB it keeps until it exits, and the others
+load what it saved. With the cache warm a GPU process adds 7–24 MiB of private memory to what it takes on the CPU.
 
 ### 4. Our own thin GPU layer, shaped for Vulkan
 

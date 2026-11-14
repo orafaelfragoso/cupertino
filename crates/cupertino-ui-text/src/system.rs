@@ -1,5 +1,6 @@
 use crate::bidi;
 use crate::paragraph::Item;
+use crate::raster::{SharedRasterStats, SharedRasters};
 use crate::{
     AttributedText, Direction, FaceId, FontId, FontIndex, FontMetrics, FontStyle, Paragraph,
     ParagraphStyle, ShapeRequest, ShapedRun, TextError, TextStyle,
@@ -27,14 +28,16 @@ struct State {
     previous: HashMap<u64, CacheEntry>,
 }
 
-/// The fonts and the paragraph cache of one app. Methods take `&self`, so one `Arc<TextSystem>` serves measuring and
-/// painting.
+/// The fonts, the paragraph cache and the glyph rasters of one app. Methods take `&self`, so one `Arc<TextSystem>`
+/// serves measuring and painting, and every renderer's rasterizer on it shares the rasters.
 ///
 /// The cache keeps the plain text of every recent paragraph, so text that must not linger, a password above all, is
 /// never shaped: a secure field shapes only its mask.
 pub struct TextSystem {
     theme_family: Arc<str>,
     state: Mutex<State>,
+    /// The glyph rasters every rasterizer on this system shares.
+    rasters: Mutex<SharedRasters>,
 }
 
 impl fmt::Debug for TextSystem {
@@ -56,7 +59,19 @@ impl TextSystem {
                 current: HashMap::new(),
                 previous: HashMap::new(),
             }),
+            rasters: Mutex::new(SharedRasters::default()),
         }
+    }
+
+    pub(crate) fn rasters(&self) -> MutexGuard<'_, SharedRasters> {
+        self.rasters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// What the glyph rasters shared by this system's rasterizers hold and did.
+    pub fn shared_rasters(&self) -> SharedRasterStats {
+        self.rasters().stats()
     }
 
     fn state(&self) -> MutexGuard<'_, State> {

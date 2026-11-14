@@ -49,6 +49,10 @@ pub struct WarmTiming {
     pub cache: ProgramCacheStats,
 }
 
+/// How long a process's warm-up waits for another to finish making its programs before making its own. Making them
+/// all takes some 80 ms with the compiler and 5 ms from saved binaries; the frames meanwhile go out on the CPU.
+const PROGRAM_TURN_PATIENCE: Duration = Duration::from_secs(2);
+
 /// Make the device on `node` (or the driver's default device), with saved programs under `cache`, and its programs.
 pub fn warm(node: Option<&Path>, cache: Option<&Path>) -> Result<Warm, String> {
     let started = Instant::now();
@@ -60,7 +64,13 @@ pub fn warm(node: Option<&Path>, cache: Option<&Path>) -> Result<Warm, String> {
     let context = started.elapsed();
     device.set_program_cache(cache);
     let compiling = Instant::now();
+    // the processes of a session starting together make their programs in turn, so on a cold cache only the first
+    // loads the driver's compiler
+    let turn = device
+        .program_cache_dir()
+        .and_then(|dir| program_cache::take_turn(dir, PROGRAM_TURN_PATIENCE));
     let programs = Programs::new(&device).map_err(|e| e.to_string())?;
+    drop(turn);
     let timing = WarmTiming {
         context,
         programs: compiling.elapsed(),

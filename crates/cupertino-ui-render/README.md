@@ -21,7 +21,11 @@ pixels as words, two channels to a 16-bit lane (`effects::mul_px`, `effects::ove
 channel arithmetic, which a test checks on every value and on random pixels), skips runs of 16 empty pixels (or of
 pixels a mask covers fully) read a word at a time, and has no branch per pixel, so it vectorizes: a mostly empty layer
 the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond. A run of 16 opaque
-pixels laid over whole is copied. A group whose opacity
+pixels laid over whole is copied. An image drawn one texel per device pixel lands on the window pixel `floor(x +
+0.5)` (`cupertino_raster_math::placement`), whatever piece of the window is painted, and one whose whole source
+pixels fill a destination on whole pixels is laid over by a direct loop with the pattern fill's arithmetic and
+rounding (the same bytes, which a test checks on every alpha, under a clip and at four scales), its premultiplied
+pixels read where they are. A group whose opacity
 rounds to nothing (a panel fading in from 0) changes no pixel, so nothing of its subtree is painted.
 
 A paint node marks where a renderer may keep a layer (`PaintNode::layer`): `Layer::Scroll` is a scroll container's

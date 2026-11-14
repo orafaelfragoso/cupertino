@@ -20,6 +20,74 @@ struct Loaded {
     key: CacheKey,
 }
 
+/// Bytes of glyph rasters a [`TextSystem`] keeps for all its rasterizers together. A window made again (a panel that
+/// opens, a menu, a popup) draws through a renderer of its own, which finds its glyphs here instead of drawing them
+/// again.
+pub const SHARED_RASTER_BYTES: usize = 2 << 20;
+
+/// What the rasters a [`TextSystem`] shares between its rasterizers hold and did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SharedRasterStats {
+    pub glyphs: usize,
+    pub bytes: usize,
+    /// Glyphs found, and glyphs drawn because they were not there.
+    pub found: u64,
+    pub drawn: u64,
+}
+
+/// The glyph rasters of a [`TextSystem`], shared by every [`GlyphRaster`] on it, within [`SHARED_RASTER_BYTES`]: when
+/// full, the least recently used quarter goes. A key that draws nothing is kept too.
+#[derive(Default)]
+pub(crate) struct SharedRasters {
+    glyphs: HashMap<GlyphKey, (Option<RasterGlyph>, u64)>,
+    tick: u64,
+    stats: SharedRasterStats,
+}
+
+impl SharedRasters {
+    fn size(glyph: &Option<RasterGlyph>) -> usize {
+        // the key and its bookkeeping besides the pixels
+        64 + glyph.as_ref().map_or(0, |g| g.pixels.len())
+    }
+
+    fn get(&mut self, key: &GlyphKey) -> Option<Option<RasterGlyph>> {
+        self.tick += 1;
+        let tick = self.tick;
+        let (glyph, used) = self.glyphs.get_mut(key)?;
+        *used = tick;
+        self.stats.found += 1;
+        Some(glyph.clone())
+    }
+
+    fn insert(&mut self, key: GlyphKey, glyph: Option<RasterGlyph>) {
+        self.stats.drawn += 1;
+        let size = Self::size(&glyph);
+        if size > SHARED_RASTER_BYTES / 4 {
+            return;
+        }
+        if self.stats.bytes + size > SHARED_RASTER_BYTES {
+            let mut ticks: Vec<u64> = self.glyphs.values().map(|(_, t)| *t).collect();
+            ticks.sort_unstable();
+            let cut = ticks[ticks.len() / 4];
+            self.glyphs.retain(|_, (_, t)| *t > cut);
+            self.stats.bytes = self.glyphs.values().map(|(g, _)| Self::size(g)).sum();
+        }
+        self.tick += 1;
+        if let Some((old, _)) = self.glyphs.insert(key, (glyph, self.tick)) {
+            self.stats.bytes -= Self::size(&old);
+        }
+        self.stats.bytes += size;
+        self.stats.glyphs = self.glyphs.len();
+    }
+
+    pub(crate) fn stats(&self) -> SharedRasterStats {
+        SharedRasterStats {
+            glyphs: self.glyphs.len(),
+            ..self.stats
+        }
+    }
+}
+
 /// Rasterizes the glyphs of a [`TextSystem`]'s fonts: colour glyphs (emoji) as premultiplied RGBA, every other glyph
 /// as 8-bit coverage with the stem darkening its key names. Glyphs are unhinted, because the hinting programs of a
 /// variable font describe its default instance only.
@@ -59,7 +127,19 @@ fn load<'a>(
 }
 
 impl GlyphRasterizer for GlyphRaster {
+    /// The glyph from the rasters the text system shares, drawn and kept there when it is not yet.
     fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
+        if let Some(glyph) = self.system.rasters().get(key) {
+            return Ok(glyph);
+        }
+        let glyph = self.draw(key)?;
+        self.system.rasters().insert(*key, glyph.clone());
+        Ok(glyph)
+    }
+}
+
+impl GlyphRaster {
+    fn draw(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
         let size = key.size_q.min(MAX_SIZE_Q) as f32 / 64.0;
         let Ok(glyph) = u16::try_from(key.glyph.0) else {
             return Ok(None);
@@ -203,6 +283,63 @@ mod tests {
 
     fn coverage(glyph: &RasterGlyph) -> u32 {
         glyph.pixels.iter().map(|byte| u32::from(*byte)).sum()
+    }
+
+    /// A second rasterizer on the same text system, as a window made again has, finds the glyphs the first drew,
+    /// with the same pixels, and draws none of them again; a glyph it has not seen it draws once.
+    #[test]
+    fn rasterizers_on_one_text_system_share_their_glyphs() {
+        let (mut first, font, id) = raster();
+        let keys = [
+            key(font, id('H'), true, 0.0, 0.0),
+            key(font, id('l'), true, 0.0, 0.25),
+            key(font, id(' '), false, 1.0, 0.0),
+        ];
+        let drawn: Vec<_> = keys.iter().map(|k| first.rasterize(k).unwrap()).collect();
+        let system = Arc::clone(&first.system);
+        assert_eq!(system.shared_rasters().drawn, 3);
+        let mut second = GlyphRaster::new(Arc::clone(&system));
+        let found: Vec<_> = keys.iter().map(|k| second.rasterize(k).unwrap()).collect();
+        assert_eq!(found, drawn);
+        let stats = system.shared_rasters();
+        assert_eq!((stats.drawn, stats.found, stats.glyphs), (3, 3, 3));
+        // the same glyph drawn by a rasterizer that keeps nothing
+        let mut alone = GlyphRaster::new(Arc::clone(&system));
+        assert_eq!(alone.draw(&keys[0]).unwrap(), drawn[0]);
+        second
+            .rasterize(&key(font, id('H'), true, 0.0, 0.5))
+            .unwrap();
+        assert_eq!(system.shared_rasters().drawn, 4);
+    }
+
+    /// The shared rasters stay within their bytes: past them, the least recently used quarter goes, and a glyph
+    /// used since stays.
+    #[test]
+    fn the_shared_rasters_stay_within_their_bytes() {
+        let (raster, font, id) = raster();
+        let mut shared = SharedRasters::default();
+        let glyph = |side: u32| RasterGlyph {
+            format: GlyphFormat::Coverage,
+            width: side,
+            height: side,
+            stride: side,
+            bearing_x: 0,
+            bearing_y: 0,
+            pixels: vec![7; (side * side) as usize].into(),
+        };
+        let held = key(font, id('H'), true, 0.0, 0.0);
+        shared.insert(held, Some(glyph(64)));
+        for i in 0..2000u32 {
+            let k = GlyphKey::for_draw(font, GlyphId(1000 + i), 24.0, 0.0, true, [0.0; 3]);
+            shared.insert(k, Some(glyph(64)));
+            assert!(
+                shared.get(&held).is_some(),
+                "the glyph used every time stays"
+            );
+            assert!(shared.stats().bytes <= SHARED_RASTER_BYTES);
+        }
+        assert!(shared.stats().glyphs < 2001);
+        drop(raster);
     }
 
     #[test]

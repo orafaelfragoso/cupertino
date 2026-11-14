@@ -12,7 +12,8 @@ What it draws, and how:
   pixel.
 - Glyph runs from two atlases: coverage glyphs tinted by the run's colour, colour glyphs laid as they are.
 - Images and icons from textures kept by revision under a byte budget, sampled nearest or bilinear inside their
-  crop, edges covered as the CPU renderer covers them; one image pixel to one window pixel is laid unfiltered.
+  crop, edges covered as the CPU renderer covers them; one image pixel to one window pixel is laid unfiltered, on the
+  window pixel `floor(x + 0.5)` both renderers take (`cupertino_raster_math::placement`).
 - Paths as coverage masks in the mask atlas; a solid stroke along a path is drawn in its colour and laid as an image.
 - Clips: rectangles on whole pixels by the scissor, up to four rectangles or rounded rectangles in the program,
   multiplied in turn, and the rest (paths among them) in one clip mask in the mask atlas.
@@ -33,7 +34,8 @@ layer's second texture, moved, and paints only the rows or columns that come int
 move by a part of a pixel, a new viewport or a full frame paints it whole. The window lays the texture over where
 every clip around the layer lets pixels through whole and paints the content in place along a clip's partly covered
 edge, as the CPU renderer composites its kept images. The layers' textures stay within twice the window's bytes and
-16 MiB more; `trim` lets them go.
+16 MiB more; `trim` lets them go. The device counts the textures it made and has not destroyed
+(`Device::live_textures`): a dropped renderer gives back every one, and one trimmed keeps its frame alone.
 
 A window draws with `WindowRenderer`, a `UiRenderer` whose frames are `CpuFrame`s with empty `pixels` and the
 `WindowTexture` in `device`: the window-sized texture, shared between the renderer and its frames, which the

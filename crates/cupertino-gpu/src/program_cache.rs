@@ -79,6 +79,41 @@ pub fn default_dir() -> Option<PathBuf> {
     Some(base.join("cupertino").join("programs"))
 }
 
+/// The turn of one process to make its programs in a driver's directory, taken by [`take_turn`] and given up when
+/// dropped.
+#[derive(Debug)]
+pub struct Turn {
+    _held: std::fs::File,
+}
+
+/// How often a process waiting for its turn looks again.
+const TURN_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Waits up to `patience` for this process's turn to make programs in `dir`, a driver's directory
+/// ([`crate::Device::program_cache_dir`]): processes that start together then make their programs one after the other,
+/// so on a cold cache the first compiles and saves them and the rest load what it saved. Loading the driver's compiler
+/// costs a process some 50 MiB that it keeps until it exits; taking turns leaves that to one process. `None` when the
+/// directory cannot hold the turn's file or the turn did not come in time: the caller makes its programs anyway.
+pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Option<Turn> {
+    std::fs::create_dir_all(dir).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(".turn"))
+        .ok()?;
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(Turn { _held: file }),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(TURN_POLL);
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
 impl ProgramCache {
     pub(crate) fn new(base: &Path, driver: &str) -> ProgramCache {
         ProgramCache {
@@ -178,6 +213,28 @@ mod tests {
         assert_eq!(cache.load("q.bin"), None);
         cache.note_refused("p.bin");
         assert_eq!(cache.load("p.bin"), None, "a refused binary is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn processes_take_turns_and_one_kept_waiting_too_long_goes_ahead_without() {
+        use std::time::{Duration, Instant};
+        let dir = std::env::temp_dir().join(format!("cupertino-gpu-turn-{}", std::process::id()));
+        let first = take_turn(&dir, Duration::ZERO).expect("a free turn");
+        // another holder of the directory (the lock is the open file's, so this thread stands for another process)
+        let waited = Instant::now();
+        assert!(
+            take_turn(&dir, Duration::from_millis(30)).is_none(),
+            "taken"
+        );
+        assert!(waited.elapsed() >= Duration::from_millis(30), "it waited");
+        let later = std::thread::spawn({
+            let dir = dir.clone();
+            move || take_turn(&dir, Duration::from_secs(5)).is_some()
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        drop(first);
+        assert!(later.join().unwrap(), "the turn passes when given up");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

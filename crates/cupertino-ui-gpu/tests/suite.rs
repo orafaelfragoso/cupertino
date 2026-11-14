@@ -6,6 +6,8 @@ mod common;
 
 #[path = "goldens.rs"]
 mod goldens;
+#[path = "memory.rs"]
+mod memory;
 #[path = "parity.rs"]
 mod parity;
 #[path = "timing.rs"]

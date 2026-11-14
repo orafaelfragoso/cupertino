@@ -1213,6 +1213,21 @@ fn window_elements(
         clip,
         only: None,
     };
+    // its layers over it (cupertino_layers_v1), inside the window
+    let place = super::layers::LayerPlace {
+        origin: origin_local,
+        pivot: visual_local.loc,
+        scale: (plan.scale_x, plan.scale_y),
+        opacity: alpha,
+        clip,
+        kind: SceneKind::WindowContent,
+    };
+    out.extend(super::layers::layer_pieces(
+        p,
+        &surface,
+        &place,
+        |p, areas| window_backdrops(p, areas),
+    ));
     // the backdrops of its subsurfaces lie between the slices of the content, each reading the window below it
     out.extend(tree_pieces(p, tree, origin_local, |p, areas, bound| {
         let bound = rescaled_rect(bound, visual_local.loc, plan);
@@ -2050,6 +2065,21 @@ fn layer_elements(
         } else {
             popups.append(&mut own);
         }
+        // its layers over it (cupertino_layers_v1)
+        let place = super::layers::LayerPlace {
+            origin,
+            pivot: origin,
+            scale: (1.0, 1.0),
+            opacity,
+            clip: Clip::None,
+            kind: SceneKind::LayerContent,
+        };
+        out.extend(super::layers::layer_pieces(
+            p,
+            surface.wl_surface(),
+            &place,
+            |p, areas| backdrop_elements(p, &areas, opacity, WindowState::Active),
+        ));
         let tree = standalone_tree(surface.wl_surface(), SceneKind::LayerContent, loc, opacity);
         out.extend(tree_pieces(p, tree, origin, |p, areas, bound| {
             bounded_glass(

@@ -99,6 +99,16 @@ impl GlassContainer {
         for v in container.params.face.fill {
             v.to_bits().hash(&mut h);
         }
+        // a layer's glass: its lens, its blur ramp, where its rim is lit from and its lifted shadow
+        for v in [
+            container.lens,
+            container.blur_ramp[0],
+            container.blur_ramp[1],
+            container.params.highlight.angle,
+            container.params.shadow.opacity,
+        ] {
+            v.to_bits().hash(&mut h);
+        }
         for s in &container.shapes {
             for v in s.rect.iter().chain([&s.radius]) {
                 v.to_bits().hash(&mut h);

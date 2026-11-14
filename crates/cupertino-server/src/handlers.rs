@@ -138,6 +138,7 @@ impl CompositorHandler for Cupertino {
     fn destroyed(&mut self, surface: &WlSurface) {
         self.pending_activations.remove(&surface.id());
         self.menu_surface_destroyed(surface);
+        crate::layers_v1::surface_destroyed(self, surface);
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -195,6 +196,7 @@ impl CompositorHandler for Cupertino {
         self.lock_surface_committed(surface);
         self.toplevel_committed(surface);
         self.layer_committed(surface);
+        self.layers_committed(surface);
         self.surface_output_committed(surface);
         self.request_redraw_for(surface);
     }

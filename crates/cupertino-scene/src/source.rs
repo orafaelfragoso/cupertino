@@ -160,6 +160,20 @@ pub enum SurfaceRole {
     Standalone,
     /// A client's pointer image, enlarged by the placement scale and eligible for the cursor plane.
     Cursor,
+    /// A layer's content whose coverage is drawn in a colour taken from what lies behind it, rescaled and masked as
+    /// window content.
+    Vibrant(VibrantBlend),
+}
+
+/// How a vibrant layer mixes with what lies behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VibrantBlend {
+    /// Over a dark face the coverage lifts what lies behind towards white, over a light one it darkens it.
+    pub dark: bool,
+    /// The plain label colour of the appearance instead (reduced transparency, increased contrast).
+    pub plain: bool,
+    /// Weight of the coverage in thousandths: the label's opacity.
+    pub weight: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

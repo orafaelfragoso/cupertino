@@ -503,6 +503,36 @@ fn surface_tree(
                 }
             }
         }
+        SurfaceRole::Vibrant(blend) => {
+            let els = surface_elements(
+                ctx,
+                surface,
+                only.as_ref(),
+                origin,
+                scale,
+                alpha,
+                Kind::Unspecified,
+            );
+            let pivot = physical(place.pivot, ctx.scale);
+            let rescale = Scale::from((place.scale_x, place.scale_y));
+            // unclipped, the mask is the whole framebuffer and more
+            let shape = mask(ctx, item.clip, viewport).unwrap_or(ClipShape {
+                rect: Rectangle::new((-(1 << 20), -(1 << 20)).into(), (1 << 21, 1 << 21).into()),
+                extent: 0.0,
+                exponent: 2.0,
+                viewport,
+                exact: false,
+            });
+            let shape = ClipShape {
+                exact: false,
+                ..shape
+            };
+            for e in els {
+                let e = ReducedElement::direct(e);
+                let clip = clipped(ctx, e, shape).vibrant(ctx.programs.vibrant.clone(), blend);
+                out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
+            }
+        }
     }
 }
 

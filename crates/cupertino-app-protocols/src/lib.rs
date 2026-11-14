@@ -1,5 +1,5 @@
-//! Generated bindings of the public protocols `protocols/cupertino-app-effects-v1.xml` and
-//! `protocols/cupertino-scroll-v1.xml`: enable `client` in clients and `server` in the display server.
+//! Generated bindings of the public protocols `protocols/cupertino-app-effects-v1.xml`,
+//! `protocols/cupertino-scroll-v1.xml` and `protocols/cupertino-layers-v1.xml`: enable `client` in clients and `server` in the display server.
 
 #![allow(clippy::all)]
 
@@ -8,6 +8,7 @@
 const _: &[u8] = include_bytes!("../protocols/cupertino-app-effects-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-scroll-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-semantics-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-layers-v1.xml");
 
 #[cfg(feature = "client")]
 pub mod client {
@@ -60,6 +61,20 @@ pub mod client {
         use self::__interfaces::*;
 
         wayland_scanner::generate_client_code!("protocols/cupertino-app-effects-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-layers-v1.xml`.
+    pub mod layers {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-layers-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-layers-v1.xml");
     }
 }
 
@@ -114,5 +129,19 @@ pub mod server {
         use self::__interfaces::*;
 
         wayland_scanner::generate_server_code!("protocols/cupertino-app-effects-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-layers-v1.xml`.
+    pub mod layers {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-layers-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-layers-v1.xml");
     }
 }

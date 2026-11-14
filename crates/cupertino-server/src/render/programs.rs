@@ -38,6 +38,8 @@ pub struct Programs {
     pub clip_minify: GlesTexProgram,
     /// The reduced copies of windows drawn well below their size.
     pub reduced: super::reduce::Reductions,
+    /// The clip program drawing a vibrant layer's coverage ([`cupertino_scene::source::VibrantBlend`]).
+    pub vibrant: GlesTexProgram,
 }
 
 impl Programs {
@@ -93,6 +95,19 @@ impl Programs {
                 f("texels"),
             ],
         )?;
+        let vibrant = renderer.compile_custom_texture_shader(
+            format!(
+                "#version 100\n#define VIBRANT\n{}",
+                CLIP.replace("//_SDF_", SDF)
+            ),
+            &[
+                UniformName::new("inv_proj", UniformType::Matrix3x3),
+                f("viewport"),
+                v4("clip_rect"),
+                v4("clip_shape"),
+                v4("vibrant"),
+            ],
+        )?;
         Ok(Self {
             shadow,
             rrect,
@@ -100,6 +115,7 @@ impl Programs {
             clip,
             clip_minify,
             reduced: super::reduce::Reductions::default(),
+            vibrant,
         })
     }
 }

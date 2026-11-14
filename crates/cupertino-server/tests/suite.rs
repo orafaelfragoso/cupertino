@@ -74,6 +74,8 @@ mod hung_apps;
 mod kit_toolbar;
 #[path = "layer_input.rs"]
 mod layer_input;
+#[path = "layers_v1.rs"]
+mod layers_v1;
 #[path = "live_settings.rs"]
 mod live_settings;
 #[path = "lock_screen.rs"]

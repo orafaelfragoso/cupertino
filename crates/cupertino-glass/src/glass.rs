@@ -312,12 +312,18 @@ pub fn level_position(levels: &[f32], sigma: f32) -> f32 {
 
 /// Stage 1, second part: the blur fill `fill` blended over the blurred backdrop `c`.
 pub fn blur_fill(c: Rgb, fill: Rgb, p: &GlassParams) -> Rgb {
+    blur_fill_weighted(c, fill, p, 1.0)
+}
+
+/// [`blur_fill`] with each of its blends weighed by `w`, the share of its blur the glass keeps there
+/// ([`Container::blur_weight`]).
+pub fn blur_fill_weighted(c: Rgb, fill: Rgb, p: &GlassParams, w: f32) -> Rgb {
     let b = &p.blur;
     let darker: Rgb = std::array::from_fn(|i| c[i].min(fill[i]));
-    let c = mix(c, darker, b.fill_darken);
+    let c = mix(c, darker, b.fill_darken * w);
     let lighter: Rgb = std::array::from_fn(|i| c[i].max(fill[i]));
-    let c = mix(c, lighter, b.fill_lighten);
-    mix(c, fill, b.fill_normal)
+    let c = mix(c, lighter, b.fill_lighten * w);
+    mix(c, fill, b.fill_normal * w)
 }
 
 /// The luma compression of the face: `c − (1 − max_luma) · L · (0.75 c + 0.25 L)`, `L` the luma of `c`. A grey `x`
@@ -652,6 +658,11 @@ pub struct Container {
     pub sigmas: Vec<f32>,
     /// The outline the container is cut to besides its shapes ([`Cut`]).
     pub cut: Option<Cut>,
+    /// How much of its blur the glass keeps at the top and at the bottom of its first shape, smoothly between: `[1, 1]`
+    /// blurs evenly, a lower bottom fades the blur out towards it (a variable blur).
+    pub blur_ramp: [f32; 2],
+    /// How much the glass magnifies what lies behind it about its first shape's centre: 1 for none, more for a lens.
+    pub lens: f32,
 }
 
 impl Container {
@@ -684,6 +695,52 @@ impl Container {
             values,
             sigmas,
             cut: None,
+            blur_ramp: [1.0, 1.0],
+            lens: 1.0,
+        }
+    }
+
+    /// The container whose blur fades by `ramp` from its top to its bottom ([`Container::blur_ramp`]): a ramp below 1
+    /// adds an unblurred copy as the first level, so where the weight reaches 0 the glass shows what lies behind it
+    /// sharp.
+    pub fn with_blur_ramp(mut self, ramp: [f32; 2]) -> Self {
+        self.blur_ramp = ramp.map(|w| w.clamp(0.0, 1.0));
+        if ramp[0] < 1.0 || ramp[1] < 1.0 {
+            let mut all: Vec<f32> = self.values.iter().map(|v| v.blur_sigma).collect();
+            all.push(0.0);
+            self.sigmas = blur_levels(&all);
+            for v in &mut self.values {
+                v.blur_level = level_position(&self.sigmas, v.blur_sigma);
+            }
+        }
+        self
+    }
+
+    /// Where the glass reads what lies behind `q`: magnified by [`Container::lens`] about its first shape's centre.
+    pub fn lensed(&self, q: [f32; 2]) -> [f32; 2] {
+        match self.shapes.first() {
+            Some(s) if self.lens > 1.0 => {
+                let c = [s.rect[0] + 0.5 * s.rect[2], s.rect[1] + 0.5 * s.rect[3]];
+                [
+                    c[0] + (q[0] - c[0]) / self.lens,
+                    c[1] + (q[1] - c[1]) / self.lens,
+                ]
+            }
+            _ => q,
+        }
+    }
+
+    /// The share of its blur the glass keeps at `p` ([`Container::blur_ramp`]): from the top weight at the top of its
+    /// first shape to the bottom weight at its bottom, along a smoothstep.
+    pub fn blur_weight(&self, p: [f32; 2]) -> f32 {
+        let [top, bottom] = self.blur_ramp;
+        match self.shapes.first() {
+            Some(s) if top < 1.0 || bottom < 1.0 => {
+                let t = ((p[1] - s.rect[1]) / s.rect[3].max(1e-3)).clamp(0.0, 1.0);
+                let t = t * t * (3.0 - 2.0 * t);
+                top + (bottom - top) * t
+            }
+            _ => 1.0,
         }
     }
 
@@ -765,17 +822,19 @@ impl Container {
         if d > 0.5 {
             return self.outside(p, d, normal, backdrop());
         }
+        let weight = self.blur_weight(p);
         let face_at = |q: [f32; 2]| {
             let levels: [Rgb; BLUR_LEVELS] = std::array::from_fn(|i| sample(i, q));
-            let c = blur_fill(
-                level_mix(levels, v.blur_level),
+            let c = blur_fill_weighted(
+                level_mix(levels, v.blur_level * weight),
                 sample(BLUR_LEVELS, q),
                 params,
+                weight,
             );
             face_color(c, params, v.max_luma)
         };
         let off = refraction_offset(d, normal, v.refraction_amount, v.refraction_height);
-        let mut c = face_at([p[0] + off[0], p[1] + off[1]]);
+        let mut c = face_at(self.lensed([p[0] + off[0], p[1] + off[1]]));
         c = bleed(
             c,
             sample(BLUR_LEVELS, p),
@@ -893,6 +952,9 @@ pub struct GlassUniform {
     /// How far its corners reach along the sides, the exponent of their superellipse, 1 when the container is cut and
     /// 0 when not, and 1 when the edge line keeps its strength over any backdrop (0 when it follows its brightness).
     pub cut_shape: [f32; 4],
+    /// The blur's weight at the top and at the bottom of the shapes ([`Container::blur_ramp`]), the magnification
+    /// about the first shape's centre ([`Container::lens`]), unused.
+    pub lens: [f32; 4],
 }
 
 impl GlassUniform {
@@ -987,6 +1049,12 @@ impl GlassUniform {
             u.cut_shape = [cut.extent * scale, cut.exponent, 1.0, 0.0];
         }
         u.cut_shape[3] = if p.shadow.edge_line_even { 1.0 } else { 0.0 };
+        u.lens = [
+            container.blur_ramp[0].clamp(0.0, 1.0),
+            container.blur_ramp[1].clamp(0.0, 1.0),
+            container.lens.max(1.0),
+            0.0,
+        ];
         u
     }
 
@@ -1017,9 +1085,11 @@ impl Container {
     /// The deviation in points of each blurred copy of the backdrop, and whether a shape reads it.
     pub fn levels(&self) -> [(f32, bool); BLUR_LEVELS] {
         let mut used = [false; BLUR_LEVELS];
+        // a blur ramp reads every level from the sharp one up to the shape's
+        let ramp = self.blur_ramp[0] < 1.0 || self.blur_ramp[1] < 1.0;
         for v in &self.values {
-            for (u, w) in used.iter_mut().zip(level_weights(v.blur_level)) {
-                *u |= w > 1e-3;
+            for (i, (u, w)) in used.iter_mut().zip(level_weights(v.blur_level)).enumerate() {
+                *u |= w > 1e-3 || (ramp && i as f32 <= v.blur_level.ceil());
             }
         }
         let last = self.sigmas.last().copied().unwrap_or(0.0);
@@ -2428,10 +2498,63 @@ mod tests {
     }
 
     #[test]
+    fn a_lens_magnifies_about_the_centre_and_a_ramp_fades_the_blur() {
+        let mut c = Container::new(
+            vec![GlassShape::capsule([0.0, 0.0, 100.0, 40.0])],
+            0.0,
+            GlassMode::default(),
+        );
+        assert_eq!(c.lensed([10.0, 5.0]), [10.0, 5.0]);
+        assert_eq!(c.blur_weight([50.0, 40.0]), 1.0);
+        c.lens = 2.0;
+        let mut c = c.with_blur_ramp([1.0, 0.0]);
+        // the sharp copy comes first and the shape's blur after it, both read
+        assert_eq!(c.sigmas[0], 0.0);
+        assert_eq!(c.values[0].blur_level, 1.0);
+        assert!(c.levels()[0].1 && c.levels()[1].1);
+        c.lens = 2.0;
+        // half way from the centre (50, 20) in what it shows
+        assert_eq!(c.lensed([10.0, 0.0]), [30.0, 10.0]);
+        assert_eq!(c.lensed([50.0, 20.0]), [50.0, 20.0]);
+        assert_eq!(c.blur_weight([50.0, 0.0]), 1.0);
+        assert_eq!(c.blur_weight([50.0, 20.0]), 0.5);
+        assert_eq!(c.blur_weight([50.0, 40.0]), 0.0);
+        let u = GlassUniform::new(
+            &c,
+            2.0,
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [0.0; 4],
+            [200.0; 2],
+            1.0,
+        );
+        assert_eq!(u.lens, [1.0, 0.0, 2.0, 0.0]);
+        // a stripe behind the lens: the shaded colour at a point is the backdrop's nearer the centre
+        let stripe = |_: usize, q: [f32; 2]| {
+            if q[0] < 40.0 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        };
+        let plain = Container::new(
+            vec![GlassShape::capsule([0.0, 0.0, 100.0, 40.0])],
+            0.0,
+            GlassMode::default(),
+        );
+        let (seen_plain, _) = plain.shade([35.0, 20.0], &stripe);
+        let (seen_lens, _) = c.shade([35.0, 20.0], &stripe);
+        assert!(seen_plain[0] > seen_plain[2], "{seen_plain:?}");
+        assert!(
+            seen_lens[2] > seen_lens[0],
+            "the lens shows x = 42.5 at x = 35: {seen_lens:?}"
+        );
+    }
+
+    #[test]
     fn uniform_layout_and_scaling() {
         assert_eq!(
             std::mem::size_of::<GlassUniform>(),
-            (21 + 3 * MAX_SHAPES) * 16
+            (22 + 3 * MAX_SHAPES) * 16
         );
         let c = Container::new(
             vec![GlassShape::capsule([10.0, 20.0, 100.0, 40.0])],

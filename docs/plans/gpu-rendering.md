@@ -287,17 +287,17 @@ Gate:
 
 ## Step 9: layers and animation in the compositor
 
-- [ ] Protocol XML (new, versioned): fixed-point geometry atomic with the parent commit, glass attached to layers,
+- [x] Protocol XML (new, versioned): fixed-point geometry atomic with the parent commit, glass attached to layers,
       blend roles, timed and spring animations on the compositor clock, retargeting with value and velocity,
       `finished` and `replaced`, input and semantics against target values, clipping, per-client limits, the
       late-content rule.
-- [ ] Server global, with its entry in `docs/architecture/contracts.yaml`.
-- [ ] Protocol tests (atomicity, retargeting, limits, late content, time scale and fixed time).
-- [ ] Compositor animator.
+- [x] Server global, with its entry in `docs/architecture/contracts.yaml`.
+- [x] Protocol tests (atomicity, retargeting, limits, late content, time scale and fixed time).
+- [x] Compositor animator.
 - [ ] Toolkit support; shell and control transitions use it.
-- [ ] Vibrant foreground as a blend-role layer.
-- [ ] Lifted thumbs and lenses as glass in a raised layer.
-- [ ] Pointer-lit highlight and variable blur.
+- [x] Vibrant foreground as a blend-role layer.
+- [x] Lifted thumbs and lenses as glass in a raised layer.
+- [x] Pointer-lit highlight and variable blur.
 
 Gate:
 

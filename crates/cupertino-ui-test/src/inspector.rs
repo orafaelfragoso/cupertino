@@ -213,6 +213,7 @@ mod tests {
             accessibility_focus: Some(id(0)),
             display_list: DisplayList {
                 nodes: vec![PaintNode {
+                    layer: None,
                     id: PaintNodeId(7),
                     parent: None,
                     revision: PaintRevision(2),

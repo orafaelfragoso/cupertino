@@ -50,6 +50,7 @@ fn rows(count: u32, tick: u32) -> DisplayList {
                     .collect(),
             };
             PaintNode {
+                layer: None,
                 id: PaintNodeId(u64::from(i)),
                 parent: None,
                 revision: PaintRevision(u64::from(if i == 0 { tick } else { 0 })),
@@ -96,6 +97,7 @@ fn tile(index: u32) -> Rect {
 
 fn fill(id: u64, revision: u64, bounds: Rect, color: Color) -> PaintNode {
     PaintNode {
+        layer: None,
         id: PaintNodeId(id),
         parent: None,
         revision: PaintRevision(revision),

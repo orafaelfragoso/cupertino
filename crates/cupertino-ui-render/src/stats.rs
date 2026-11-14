@@ -44,8 +44,13 @@ pub struct RenderStats {
     /// Cache fills this frame: images decoded to premultiplied pixels, glyphs rasterized.
     pub image_decode: Tally,
     pub glyph_rasterize: Tally,
+    /// Pixels painted into kept scroll layers: what came into view and what changed in them.
+    pub layer_pixels: u64,
+    /// Kept scroll layers laid over the frame.
+    pub scroll_composite: Tally,
     /// Retained across frames, after this one.
     pub retained_glyphs: Tally,
     pub retained_images: Tally,
+    pub retained_layers: Tally,
     pub frame_bytes: u64,
 }

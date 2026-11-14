@@ -351,6 +351,96 @@ pub(crate) fn clip_holds(shape: &Shape, node: &Transform, scale: f64, area: &Bou
         || (down && inside(x0 + rx, x1 - rx, area.x0, area.x1))
 }
 
+/// The pixels the clip `shape` under `node` can let anything through, and the pieces of them it lets through whole: a
+/// rectangle, or a rounded rectangle less its corners, under a transform that only scales and moves; `None` for any
+/// other clip. An edge on a pixel edge cuts nothing on either side of it; one inside a pixel leaves that pixel and the
+/// next out of the whole ones, as [`clip_holds`] counts them.
+pub(crate) fn clip_cover(
+    shape: &Shape,
+    node: &Transform,
+    scale: f64,
+) -> Option<(Bounds, Vec<Bounds>)> {
+    let [a, b, c, d, e, f] = node.0;
+    if b != 0.0 || c != 0.0 || a <= 0.0 || d <= 0.0 {
+        return None;
+    }
+    let (rect, radius) = match shape {
+        Shape::Rect(rect) => (rect, 0.0),
+        Shape::RoundedRect { rect, radius } => (
+            rect,
+            radius.clamp(0.0, rect.width().min(rect.height()) / 2.0),
+        ),
+        Shape::Path { .. } => return None,
+    };
+    let cut = |v: f64| v.clamp(-f64::from(1 << 28), f64::from(1 << 28));
+    let on_edge = |v: f64| (v - v.round()).abs() < 1e-9;
+    // per edge: the first or last pixel anything reaches, and the first or last one wholly inside
+    let low = |v: f64| {
+        let v = cut(v);
+        if on_edge(v) {
+            (v.round() as i32, v.round() as i32)
+        } else {
+            (v.floor() as i32, v.ceil() as i32 + 1)
+        }
+    };
+    let high = |v: f64| {
+        let v = cut(v);
+        if on_edge(v) {
+            (v.round() as i32, v.round() as i32)
+        } else {
+            (v.ceil() as i32, v.floor() as i32 - 1)
+        }
+    };
+    let (rx0, ix0) = low((rect.min_x() * a + e) * scale);
+    let (rx1, ix1) = high((rect.max_x() * a + e) * scale);
+    let (ry0, iy0) = low((rect.min_y() * d + f) * scale);
+    let (ry1, iy1) = high((rect.max_y() * d + f) * scale);
+    let reach = Bounds {
+        x0: rx0,
+        y0: ry0,
+        x1: rx1,
+        y1: ry1,
+    };
+    let inner = Bounds {
+        x0: ix0,
+        y0: iy0,
+        x1: ix1,
+        y1: iy1,
+    };
+    if radius <= 0.0 {
+        return Some((reach, vec![inner]));
+    }
+    // a rounded rectangle less the squares its corners need: a band across between them and the middle of the rows
+    // beside them
+    let (cx, cy) = (
+        (radius * a * scale).ceil() as i32 + 1,
+        (radius * d * scale).ceil() as i32 + 1,
+    );
+    let pieces = vec![
+        Bounds {
+            x0: inner.x0 + cx,
+            x1: inner.x1 - cx,
+            y1: inner.y0 + cy,
+            ..inner
+        },
+        Bounds {
+            y0: inner.y0 + cy,
+            y1: inner.y1 - cy,
+            ..inner
+        },
+        Bounds {
+            x0: inner.x0 + cx,
+            x1: inner.x1 - cx,
+            y0: inner.y1 - cy,
+            ..inner
+        },
+    ];
+    Some((
+        reach,
+        pieces.into_iter().filter(|p| !p.is_empty()).collect(),
+    ))
+}
+
 /// The pixels a node's own operations can reach, before effects; empty for a node with no ops that paint.
 pub(crate) fn own_extent(node: &crate::PaintNode, scale: f64) -> Bounds {
     use crate::PaintOp;

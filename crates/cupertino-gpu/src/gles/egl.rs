@@ -685,3 +685,18 @@ impl Drop for Context {
         self.node.take();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_library_is_an_error_value_not_a_failed_start() {
+        match open("libcupertino-no-such-library.so.1") {
+            Err(Error::Unavailable(why)) => {
+                assert!(why.contains("libcupertino-no-such-library"), "{why}")
+            }
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+    }
+}

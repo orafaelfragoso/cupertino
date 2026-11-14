@@ -63,3 +63,11 @@ fn a_reset_or_a_purge_is_reported_and_the_lost_device_refuses_work_until_replace
     common::draw_shapes(&again, &t, [0.0; 4], &[]);
     again.destroy_texture(t);
 }
+
+#[test]
+fn a_render_node_that_cannot_be_opened_is_an_error_value() {
+    let r = Device::new(&DeviceDesc {
+        platform: Platform::RenderNode("/dev/dri/renderD-none".into()),
+    });
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+}

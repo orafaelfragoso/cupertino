@@ -46,9 +46,12 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it: an event, a frame (`animating`), or a
 /// deadline in `next_tick_deadline` ([`DEADLINES`] holds every deadline of the tick's clock and where it is read). A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a minute late (the loop's backstop).
-const AUDITED: [&str; 29] = [
+const AUDITED: [&str; 30] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
+    // a held observation waits for layers that animate, which draw frames, and at the latest for its end of wait, a
+    // deadline in control_deadline
+    "self.control_release_observations(",
     // a drag that ended is an event: the drop handler leaves it, and the tick only finishes what it left
     "self.drag_ended(",
     // publications arrive as client requests, which wake the loop; the tick only reads the newest one each sent

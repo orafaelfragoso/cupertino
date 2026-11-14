@@ -414,6 +414,8 @@ pub(crate) struct FakeSystem {
     /// The activated state the compositor states for every window ([`WindowSystem::activated`]); `None` where only
     /// the keyboard tells.
     pub(crate) activated: Option<bool>,
+    /// Runs popups' transitions on their presentations ([`Capabilities::present_popups`]).
+    pub(crate) present_popups: bool,
 }
 
 /// A raised layer as [`FakeSystem`] saw it presented.
@@ -475,6 +477,7 @@ impl WindowSystem for FakeSystem {
         Capabilities {
             app_effects: self.effects,
             raised_layer: self.layers,
+            present_popups: self.present_popups,
             ..Capabilities::default()
         }
     }

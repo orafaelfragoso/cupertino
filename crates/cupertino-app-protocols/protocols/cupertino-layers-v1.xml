@@ -11,14 +11,15 @@
     the display's rate while the client is busy and costs it no repaint per frame. A layer may
     carry glass that moves with it, a blend role that mixes its pixels with the glass behind it,
     a raised elevation that lifts it above its siblings, a pointer-lit rim and a blur that varies
-    across it. Scrolling and other motion that follows the pointer stay with the client: it moves
+    across it; the glass of several layers may join into one shape that moves as they do. A popup,
+    like a panel, may be moved, faded and scaled as a whole. Scrolling and other motion that follows the pointer stay with the client: it moves
     layers with a cheap commit per frame and no repaint.
 
     A request names surfaces of the client that sends it; the server never lets a client place
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="2">
+  <interface name="cupertino_layers_v1" version="3">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -78,15 +79,25 @@
         set_placeholder), post invalid_property on a presentation. Destroying it puts the surface
         back at rest with its next commit.
 
+        From version 3 the surface may also be an xdg_popup's surface: its presentation moves,
+        fades and scales the popup, its subsurfaces, its backdrops and its layers (popups of the
+        popup keep presentations of their own), so a popover
+        grows out of what it opened from and a menu fades as it closes without drawing a frame. A
+        popup's scale is about the centre of its window geometry (without one, of what its surfaces
+        cover); to grow it out of another point the client moves
+        it along the same curve: scaling by s about a point p of the popup is the scale s about its
+        centre c with x and y at (p - c) times (1 - s). Input stays with the popup at rest.
+
         Posts invalid_surface when the surface belongs to another client, and role when it is not a
-        layer shell surface or already has a presentation that is not destroyed.
+        layer shell surface (from version 3, nor an xdg_popup's surface) or already has a
+        presentation that is not destroyed.
       </description>
       <arg name="id" type="new_id" interface="cupertino_layer_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="2">
+  <interface name="cupertino_layer_v1" version="3">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it
@@ -126,7 +137,7 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, or a lens below 1"/>
+      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a lens below 1, or a glass group spacing outside 0 to 64"/>
       <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>
@@ -288,6 +299,24 @@
       <arg name="green" type="fixed"/>
       <arg name="blue" type="fixed"/>
       <arg name="alpha" type="fixed"/>
+    </request>
+
+    <!-- Version 3 additions -->
+
+    <request name="set_glass_group" since="3">
+      <description summary="join the glass of layers into one shape">
+        Layers of one parent that have glass and the same nonzero group draw it as one shape: the
+        union of their rounded bounds, as the scene shows them at each frame, whose outlines blend
+        into each other over spacing logical points (0 joins them with a hard edge). So a shape that
+        grows out of another (a button budding out of a field) comes out of its glass as the layers
+        move, scale and resize. The joined glass takes the style, lens, highlight, blur ramp and
+        elevation of the group's first layer in drawing order and the highest opacity of its
+        layers, and is drawn below the content of that layer. 0, the initial group, keeps the
+        layer's glass alone; a layer without glass adds nothing to its group. Posts invalid_value
+        for a negative spacing or one above 64.
+      </description>
+      <arg name="group" type="uint"/>
+      <arg name="spacing" type="fixed"/>
     </request>
 
     <event name="finished">

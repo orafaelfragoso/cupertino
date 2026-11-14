@@ -40,6 +40,10 @@ pub struct Capabilities {
     /// A window given its role by the application's surface roles may hand transitions of its presentation (offset,
     /// opacity and scale of all it draws) to the compositor, which runs them on its clock ([`WindowRequest::Present`]).
     pub present_animation: bool,
+    /// A popup may hand the transitions of its presentation to the compositor too ([`WindowRequest::Present`]): a
+    /// popover's growth out of its anchor and shrinking back, a closing menu's fade. Its scale is about the centre of
+    /// the popup's window.
+    pub present_popups: bool,
 }
 
 /// A property of a window's presentation ([`WindowRequest::Present`]).

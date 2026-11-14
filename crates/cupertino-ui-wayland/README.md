@@ -50,7 +50,9 @@ committed at once without a buffer, or with the window's first frame when it has
 offset, opacity and scale on its clock, with the session's time scale and Reduce Motion; the window draws nothing for
 it. The animations a change starts are followed through `finished`, `replaced` and `settled`
 (`WaylandWindowSystem::presentation_settled`). Without the global, or on a toplevel, the request is refused
-(`PlatformError::Unsupported`) and the application draws its transitions itself.
+(`PlatformError::Unsupported`) and the application draws its transitions itself. From version 3 a popup takes the same
+requests (`Capabilities::present_popups`): the runtime sends a popover's growth and shrinking and a closing menu's fade
+there, and an input region asked for meanwhile goes with the commit, so a closing popup takes no input as it fades.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was

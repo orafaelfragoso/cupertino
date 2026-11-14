@@ -1,5 +1,7 @@
 //! `cupertino_layers_v1`: surfaces the server places and animates on its own clock, and from version 2 the
-//! presentation of a layer shell surface as a whole, so a panel opens and closes without drawing a frame.
+//! presentation of a layer shell surface as a whole, so a panel opens and closes without drawing a frame. Version 3
+//! presents popups as a whole too, so a popover grows and a menu fades without one, and joins the glass of layers into
+//! one shape ([`Layer::set_glass_group`]).
 
 use crate::{AppEvent, Error, Quiet};
 use cupertino_animation::LayerCurve;
@@ -13,6 +15,10 @@ use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
 /// The version that adds [`Layers::presentation`].
 const PRESENTATION_VERSION: u32 = 2;
+/// The version that presents popups and joins layers' glass ([`Layers::presents_popups`], [`Layer::set_glass_group`]).
+const POPUP_VERSION: u32 = 3;
+/// Widest blend between the joined shapes of a glass group the server takes, in points.
+pub const MAX_GROUP_SPACING: f64 = 64.0;
 
 /// Names a [`Layer`] of this process in [`AppEvent::LayerFinished`], [`AppEvent::LayerReplaced`] and
 /// [`AppEvent::LayerSettled`].
@@ -94,13 +100,17 @@ pub struct Layers(CupertinoLayersV1);
 impl Layers {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<Layers> {
-        conn.bind_extension(1..=PRESENTATION_VERSION, Quiet)
-            .map(Layers)
+        conn.bind_extension(1..=POPUP_VERSION, Quiet).map(Layers)
     }
 
     /// Whether the server presents layer shell surfaces as a whole ([`Self::presentation`], version 2).
     pub fn presents_surfaces(&self) -> bool {
         self.0.version() >= PRESENTATION_VERSION
+    }
+
+    /// Whether the server presents popups as a whole too and joins layers' glass (version 3).
+    pub fn presents_popups(&self) -> bool {
+        self.0.version() >= POPUP_VERSION
     }
 
     /// Make `surface` a layer of `parent`: it shows with the parent's next commit. `None` when either surface is
@@ -117,8 +127,8 @@ impl Layers {
         )))
     }
 
-    /// The presentation of `surface`, a layer shell surface's main surface, which offsets, scales and fades all it
-    /// draws; `None` below version 2. Its values apply with the surface's own commit.
+    /// The presentation of `surface`, a layer shell surface's main surface or from version 3 a popup's, which offsets,
+    /// scales and fades all it draws; `None` below version 2. Its values apply with the surface's own commit.
     pub fn presentation(&self, conn: &Connection, surface: SurfaceId) -> Option<Layer> {
         if !self.presents_surfaces() {
             return None;
@@ -200,6 +210,19 @@ impl Layer {
     /// Clip the content to the layer's rounded bounds.
     pub fn set_masks_to_bounds(&self, masks: bool) {
         self.0.set_masks_to_bounds(u32::from(masks));
+    }
+
+    /// Join the layer's glass with that of the parent's other layers of `group` (0 for none) into one shape, whose
+    /// outlines blend over `spacing` points; refused below version 3.
+    pub fn set_glass_group(&self, group: u32, spacing: f64) -> Result<(), Error> {
+        if self.0.version() < POPUP_VERSION {
+            return Err(Error::Unsupported("cupertino_layer_v1.set_glass_group"));
+        }
+        if !(0.0..=MAX_GROUP_SPACING).contains(&spacing) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0.set_glass_group(group, spacing);
+        Ok(())
     }
 }
 

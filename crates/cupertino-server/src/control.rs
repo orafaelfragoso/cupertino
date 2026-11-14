@@ -1082,6 +1082,8 @@ impl Dispatch<CupertinoControlSessionV1, SessionData> for Cupertino {
             return;
         };
         let result = match request {
+            // answered once the compositor's transitions show their targets ([`Cupertino::control_release_observations`])
+            session::Request::Observe { .. } if state.control_hold_observation(i, serial) => return,
             session::Request::Observe { .. } => state.control_observe(i, serial),
             session::Request::Perform {
                 payload, length, ..

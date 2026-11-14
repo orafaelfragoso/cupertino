@@ -200,7 +200,8 @@ display's rate even while the application is busy. This needs a protocol of our 
 integer positions cannot land on device pixels at fractional scales. The protocol carries:
 
 - geometry in fixed point, applied atomically with the parent surface's commit;
-- glass attached to a layer, so a moving panel and its glass never separate;
+- glass attached to a layer, so a moving panel and its glass never separate, and the glass of several layers joined
+  into one shape from their bounds as shown, so a button buds out of a field's glass as both move;
 - a blend role per layer, so vibrant text and symbols are a layer the compositor blends against the glass behind it;
 - an animation as a curve (timed or spring) with start and target, started at the first presentation of its commit
   on the compositor's clock, honouring the time scale and the fixed time tests use;
@@ -208,6 +209,8 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 - input: animated layers take no input, and the client hit-tests against target values;
 - semantics: accessible bounds are target values, with a settled signal for desktop control;
 - clipping to the window, and per-client limits;
+- a presentation of a whole surface (a panel, a popup), so a panel's fade or a popover's growth out of its anchor runs
+  on the compositor's clock with no layer of the toolkit's;
 - a rule for content that arrives late while scrolling.
 
 Scrolling and dock magnification follow the pointer, so they stay client-driven: a cheap commit per frame that moves

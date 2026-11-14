@@ -12,6 +12,8 @@ pub enum Error {
     InvalidGlass,
     /// A layer value outside its property's range.
     InvalidLayerValue,
+    /// A request the server's version of the protocol does not have.
+    Unsupported(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -24,6 +26,7 @@ impl fmt::Display for Error {
             Self::InvalidAlpha => write!(f, "backdrop alpha is outside 0 to 1"),
             Self::InvalidGlass => write!(f, "glass spacing is negative or not finite"),
             Self::InvalidLayerValue => write!(f, "layer value is outside its property's range"),
+            Self::Unsupported(request) => write!(f, "the server does not take {request}"),
         }
     }
 }

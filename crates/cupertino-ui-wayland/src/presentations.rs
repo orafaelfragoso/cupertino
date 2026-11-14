@@ -1,5 +1,6 @@
 //! Windows' presentations on the compositor's clock (`cupertino_layers_v1` version 2): the offset, opacity and scale
-//! of all a window draws, animated by the compositor, so a panel opens and closes without a frame drawn.
+//! of all a window draws, animated by the compositor, so a panel opens and closes without a frame drawn. From version 3
+//! popups have them too, so a popover grows and shrinks and a menu fades without a frame drawn.
 //!
 //! A window's presentation is made on its first [`WindowRequest::Present`](cupertino_ui_platform::WindowRequest) and
 //! lives with the window. Each change is sent at once; the window system then commits the surface without a buffer,
@@ -47,6 +48,11 @@ impl Presentations {
 
     pub(crate) fn available(&self) -> bool {
         self.layers.is_some()
+    }
+
+    /// Whether popups have presentations too (version 3).
+    pub(crate) fn popups(&self) -> bool {
+        self.layers.as_ref().is_some_and(Layers::presents_popups)
     }
 
     /// Send `changes` to the presentation of `window` (its surface `surface`), made on its first change.

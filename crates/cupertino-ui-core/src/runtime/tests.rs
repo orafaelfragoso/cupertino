@@ -3870,6 +3870,8 @@ mod popup_release {
         children: Vec<Element<String>>,
         /// It draws its own glass and fades out as it closes.
         closes_as_menu: bool,
+        /// It is a popover: it grows out of its anchor and shrinks back into it.
+        grows: bool,
     }
 
     impl Widget<String> for Menu {
@@ -3896,6 +3898,10 @@ mod popup_release {
 
         fn closes_as_menu(&self) -> bool {
             self.closes_as_menu
+        }
+
+        fn grows_from_anchor(&self) -> bool {
+            self.grows
         }
 
         fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
@@ -3943,6 +3949,8 @@ mod popup_release {
         submenu: bool,
         /// The menus draw their own glass, so they fade out as they close.
         own_glass: bool,
+        /// The menu is a popover.
+        popover: bool,
         /// Every message, in order.
         heard: Vec<String>,
     }
@@ -3998,6 +4006,7 @@ mod popup_release {
                 "opener:Target:press" => model.menu = true,
                 "more:Target:motion" => model.submenu = true,
                 "other:Target:press" => model.own_glass = true,
+                "elsewhere:Target:press" => model.popover = true,
                 "menu dismissed" => model.menu = false,
                 _ => {}
             }
@@ -4028,6 +4037,7 @@ mod popup_release {
                         label: "menu",
                         children: vec![Element::new(leaf("item")), Element::new(leaf("more"))],
                         closes_as_menu: model.own_glass,
+                        grows: model.popover,
                     }),
                 ));
             }
@@ -4040,6 +4050,7 @@ mod popup_release {
                         label: "submenu",
                         children: vec![Element::new(leaf("deep"))],
                         closes_as_menu: model.own_glass,
+                        grows: false,
                     }),
                 ));
             }
@@ -4357,6 +4368,100 @@ mod popup_release {
             assert!(
                 desk.rt.window_system().destroyed.contains(&menu),
                 "gone after the fade"
+            );
+        }
+    }
+
+    /// Where the compositor presents popups, a popover's growth and shrinking and a menu's fade are changes of the
+    /// popup's presentation on the curves the runtime draws: the popup presents no frame for them, and goes once they
+    /// are over.
+    #[test]
+    fn a_popover_grows_and_shrinks_and_a_menu_fades_on_the_compositor_s_clock_without_a_frame() {
+        use cupertino_ui_platform::PresentProperty;
+        for popover in [false, true] {
+            let mut desk = Desk::new();
+            desk.rt.window_system_mut().present_popups = true;
+            let (flag, window, at) = if popover {
+                ("elsewhere", "second", Point::new(5.0, 5.0))
+            } else {
+                ("other", "main", Point::new(15.0, 5.0))
+            };
+            desk.button(window, at, true);
+            desk.button(window, at, false);
+            assert!(
+                desk.rt.model().heard.iter().any(|m| m.starts_with(flag)),
+                "{flag}"
+            );
+            desk.press_opener();
+            desk.frames();
+            let menu = desk.id("menu");
+            // by its id: a closing popup is known under another key
+            let presents = |desk: &Desk| {
+                let system = desk.rt.window_system();
+                system.presented.iter().filter(|(w, _)| *w == menu).count()
+            };
+            let first = presents(&desk);
+            assert!(first >= 1, "the menu showed its first frame");
+            let handed = |desk: &Desk| {
+                desk.rt
+                    .window_system()
+                    .requests
+                    .iter()
+                    .filter_map(|(w, r)| match r {
+                        WindowRequest::Present(changes) if *w == menu => Some(changes.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let grown = handed(&desk);
+            assert_eq!(
+                grown.len(),
+                usize::from(popover),
+                "only a popover grows: {grown:?}"
+            );
+            if popover {
+                let scale: Vec<_> = grown[0]
+                    .iter()
+                    .filter(|c| c.property == PresentProperty::Scale)
+                    .map(|c| (c.to, c.curve.is_some()))
+                    .collect();
+                assert_eq!(
+                    scale,
+                    [(0.1, false), (1.0, true)],
+                    "from a tenth, on a spring"
+                );
+            }
+            for ms in 1..=25 {
+                desk.at(PRESSED + ms * 16_000_000);
+                desk.frames();
+            }
+            assert_eq!(presents(&desk), first, "no frame while it grows or rests");
+            // it closes: the compositor fades it (and shrinks a popover) while it presents nothing
+            desk.rt
+                .window_system_mut()
+                .send(menu, WindowEvent::PopupDone);
+            desk.rt.step(steps()).unwrap();
+            let closing = handed(&desk);
+            let close = closing.last().expect("the close handed over");
+            assert!(close.iter().any(|c| c.property == PresentProperty::Opacity
+                && c.to == 0.0
+                && c.curve.is_some()));
+            assert_eq!(
+                close.iter().any(|c| c.property == PresentProperty::Scale),
+                popover,
+                "only a popover shrinks"
+            );
+            let closed = PRESSED + 25 * 16_000_000;
+            for ms in 1..=14 {
+                desk.at(closed + ms * 16_000_000);
+                desk.frames();
+            }
+            assert_eq!(presents(&desk), first, "no frame while it closes");
+            desk.at(closed + 300_000_000);
+            desk.rt.step(steps()).unwrap();
+            assert!(
+                desk.rt.window_system().destroyed.contains(&menu),
+                "gone once the compositor's fade is over"
             );
         }
     }

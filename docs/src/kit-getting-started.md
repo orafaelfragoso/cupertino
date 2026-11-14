@@ -45,7 +45,9 @@ checkout and was run on the commit this page was written against.
   (`Command::Window(key, WindowRequest::Present(changes))`, when `Capabilities::present_animation` says it can), which
   then fades, moves or scales all the window draws on its clock without the application drawing a frame; the request
   may be given in the update that opens the window and goes with its first frame. On any other compositor the
-  capability is off and the application animates the window itself, as before.
+  capability is off and the application animates the window itself, as before. Popups need nothing of the application:
+  where the compositor presents popups (`Capabilities::present_popups`) the runtime hands it a popover's growth out of
+  its anchor and shrinking back and a closing menu's fade, on the same curves, and draws no frame for them.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

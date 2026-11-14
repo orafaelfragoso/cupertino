@@ -4,7 +4,8 @@
 //! Only a menu's first level fades, and only when no other menu opens in its place; a submenu that closes while its
 //! menu stays open, and a menu that another one replaces, go at once, as does every menu with Reduce Motion.
 //! A popover that closes shrinks back into its anchor as it fades ([`super::morph`]), unless another opens in its
-//! place or Reduce Motion is on.
+//! place or Reduce Motion is on. Where the compositor presents popups, the fade and the shrinking are handed to it on
+//! the same curves ([`super::handover`]) and the popup draws no frame for them.
 
 use super::{morph, set_background, sync_backdrop, Runtime, WindowState};
 use crate::{Application, WindowBackground, WindowKey};
@@ -15,7 +16,7 @@ use cupertino_ui_theme::Surface;
 use std::collections::HashMap;
 
 /// How long a closing menu takes to fade out, in nanoseconds.
-const MENU_FADE_NS: u64 = 236_000_000;
+pub(super) const MENU_FADE_NS: u64 = 236_000_000;
 
 /// A popup that is closing: when it began and how much of its opacity it has left; a popover also shrinks into the
 /// point of its window it grew from, to `scale` of its size.
@@ -25,6 +26,8 @@ pub(super) struct Fade {
     pub(super) opacity: f32,
     pub(super) into: Option<Point>,
     pub(super) scale: f64,
+    /// The compositor runs it on the popup's presentation: the popup stays drawn as it was.
+    handed: bool,
 }
 
 impl Fade {
@@ -40,7 +43,7 @@ impl Fade {
 
 /// The opacity a closing menu has `elapsed` nanoseconds into its fade: `(1 - t / T)³`, which falls fast first and
 /// settles slowly.
-fn opacity_at(elapsed: u64) -> f32 {
+pub(super) fn opacity_at(elapsed: u64) -> f32 {
     let left = 1.0 - elapsed as f64 / MENU_FADE_NS as f64;
     left.clamp(0.0, 1.0).powi(3) as f32
 }
@@ -135,15 +138,25 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         now: Timestamp,
         renamed: &mut HashMap<WindowKey, WindowKey>,
     ) {
-        w.fade = Some(Fade {
-            start: now,
-            opacity: 1.0,
-            into: w.grows_from,
-            scale: 1.0,
-        });
         let _ = self
             .system
             .request(w.id, WindowRequest::SetInputRegion(Some(Vec::new())));
+        let into = w.grows_from;
+        let handed = self.system.capabilities().present_popups
+            && self
+                .system
+                .request(
+                    w.id,
+                    WindowRequest::Present(super::handover::close(into, w.size)),
+                )
+                .is_ok();
+        w.fade = Some(Fade {
+            start: now,
+            opacity: 1.0,
+            into,
+            scale: 1.0,
+            handed,
+        });
         if let Some(popup) = &w.popup {
             let parent = popup.parent.clone();
             let key = w.key.clone();
@@ -155,8 +168,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         // a menu declared under the same key meanwhile is another window
         let key = WindowKey(crate::Key::from(format!("closing-{}", w.id.0)));
         renamed.insert(std::mem::replace(&mut w.key, key.clone()), key);
-        w.invalidate_damage();
-        w.dirty = true;
+        if !handed {
+            w.invalidate_damage();
+            w.dirty = true;
+        }
     }
 
     /// Destroys the menus whose fade is over and sets the opacity of the others for the frame to come.
@@ -175,7 +190,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         for w in &mut self.windows {
-            let Some(fade) = &mut w.fade else { continue };
+            let Some(fade) = w.fade.as_mut().filter(|f| !f.handed) else {
+                continue;
+            };
             let elapsed = now.0.saturating_sub(fade.start.0);
             let opacity = if fade.into.is_some() {
                 fade.scale = morph::close_scale(elapsed);

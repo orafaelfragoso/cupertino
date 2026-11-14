@@ -8,7 +8,9 @@
 //! ([`present`], called by the scene) or [`START_AT_THE_LATEST`] after the commit; [`Cupertino::tick_layers`] sends
 //! `finished`, `replaced` and `settled`. The content is the layer surface's own buffer, which applies on its own commit.
 //! A presentation (version 2) is a layer model of a layer shell surface whose parent is itself: its offset, opacity
-//! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer.
+//! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer. From version
+//! 3 an xdg popup's surface may have one too, and layers of one parent may join their glass into one shape
+//! ([`LayerDraw::group`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,6 +53,12 @@ pub const LENS: (f64, f64) = (1.0, 4.0);
 pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
+/// The version of the global this server offers.
+pub const VERSION: u32 = 3;
+/// The version from which a popup may have a presentation and layers may join their glass.
+pub const POPUP_VERSION: u32 = 3;
+/// Widest blend between the joined shapes of a glass group, in logical points.
+pub const MAX_GROUP_SPACING: f64 = 64.0;
 
 /// The number of animatable properties ([`Property`]).
 pub const PROPERTIES: usize = 7;
@@ -134,6 +142,7 @@ enum Op {
     BlurRamp([f32; 2]),
     Masks(bool),
     Placeholder([f32; 4]),
+    Group(u32, f64),
 }
 
 /// The layer requests queued on a parent surface, by layer serial, in request order.
@@ -194,6 +203,9 @@ pub struct LayerModel {
     pub blur_ramp: [f32; 2],
     pub masks: bool,
     pub placeholder: [f32; 4],
+    /// The glass group (0 for none) and how far its shapes blend into each other, in points.
+    pub group: u32,
+    pub spacing: f64,
 }
 
 impl LayerModel {
@@ -218,6 +230,8 @@ impl LayerModel {
             blur_ramp: [1.0, 1.0],
             masks: false,
             placeholder: [0.0; 4],
+            group: 0,
+            spacing: 0.0,
         }
     }
 
@@ -337,6 +351,7 @@ impl LayerModel {
             Op::BlurRamp(r) => self.blur_ramp = r,
             Op::Masks(m) => self.masks = m,
             Op::Placeholder(c) => self.placeholder = c,
+            Op::Group(group, spacing) => (self.group, self.spacing) = (group, spacing),
         }
     }
 }
@@ -390,7 +405,7 @@ pub struct Layers {
 impl Layers {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoLayersV1, ()>(2, ()),
+            _global: dh.create_global::<Cupertino, CupertinoLayersV1, ()>(VERSION, ()),
             parents: Vec::new(),
             held: HashMap::new(),
         }
@@ -404,6 +419,14 @@ impl Layers {
                     layers.iter().any(|l| l.animating(now) || l.busy)
                 })
         })
+    }
+
+    /// Whether every layer and presentation of every client shows its target values at `now`: what desktop control reads
+    /// of the clients' layouts is what is shown.
+    pub fn settled(&self, now: f64) -> bool {
+        self.parents
+            .iter()
+            .all(|p| !p.is_alive() || settled(p, now))
     }
 
     /// Animations the client has running or waiting, those queued on its parents included.
@@ -459,6 +482,9 @@ pub struct LayerDraw {
     pub blur_ramp: [f32; 2],
     pub masks: bool,
     pub placeholder: [f32; 4],
+    /// The glass group, 0 for the layer's glass alone, and how far the group's shapes blend, in points.
+    pub group: u32,
+    pub spacing: f64,
 }
 
 /// The layers of `parent` as shown at `now`, back to front (flat ones in creation order, then raised ones), starting
@@ -488,6 +514,8 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
                     blur_ramp: l.blur_ramp,
                     masks: l.masks,
                     placeholder: l.placeholder,
+                    group: l.group,
+                    spacing: l.spacing,
                 }
             })
             .collect();
@@ -740,8 +768,12 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     init.init(id, inert);
                     return;
                 }
-                let layer_shell = get_role(&surface)
-                    == Some(smithay::wayland::shell::wlr_layer::LAYER_SURFACE_ROLE);
+                let role = get_role(&surface);
+                // a layer shell surface, and from version 3 a popup
+                let layer_shell = role
+                    == Some(smithay::wayland::shell::wlr_layer::LAYER_SURFACE_ROLE)
+                    || (global.version() >= POPUP_VERSION
+                        && role == Some(smithay::wayland::shell::xdg::XDG_POPUP_ROLE));
                 let taken = with_states(&surface, |s| {
                     let held = s
                         .data_map
@@ -756,7 +788,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 if !layer_shell || taken {
                     global.post_error(
                         LayersError::Role,
-                        "the surface is not a layer shell surface or already has a presentation",
+                        "the surface is not a layer shell surface or a popup, or already has a presentation",
                     );
                     init.init(id, inert);
                     return;
@@ -785,7 +817,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 }
             }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 2 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 3 has no other request"),
         }
     }
 }
@@ -961,7 +993,13 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 }
                 data.queue(Op::Placeholder(c.map(|v| v as f32)));
             }
-            _ => unreachable!("cupertino_layer_v1 version 2 has no other request"),
+            R::SetGlassGroup { group, spacing } => {
+                if !(0.0..=MAX_GROUP_SPACING).contains(&spacing) {
+                    return bad_value("a glass group spacing outside 0 to 64");
+                }
+                data.queue(Op::Group(group, spacing));
+            }
+            _ => unreachable!("cupertino_layer_v1 version 3 has no other request"),
         }
     }
 

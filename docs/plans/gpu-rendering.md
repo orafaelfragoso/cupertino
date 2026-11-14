@@ -941,6 +941,36 @@ the lead:
 
 Even revised, the budget half stays open: the work p99 at 1.5 is over 2 ms before and after.
 
+The revision was accepted. A second round on main as of `8603ae73`, five runs, other checkouts building and testing
+throughout (8 to 19 compilers and test runners beside the bench, no other headless session):
+
+| Drag over glass, 5 runs | Before (3 runs, quiet) | After: median (spread) |
+|---|---|---|
+| Compositor work p99 ms | 2.33 (0.11) | 7.08 (6.34); the two runs with the least beside it 2.65 and 2.95 |
+| Compositor GPU p99 ms | 2.09 (1.03) | 5.40 (5.69); 2.32 and 2.58 |
+| Texels the blurs write per frame | 1 221 263 | 561 233 (3 425) |
+| Blur passes per frame | 9.36 | 9.42 (0.11) |
+
+What remains of the work is waiting for the GPU. The compose is 40 µs a frame; the render is the GPU's frame plus
+0.5 ms (p50, 1.6 ms p99 with the compilers beside it). The frames past 2 ms are those whose blur passes take
+1.6 to 2 ms of GPU time instead of 0.3 ms for the same ten passes.
+
+The glass containers do not take the partial re-blur. In this drag every glass backdrop made again belongs to the
+dragged window: its sidebar (492 by 1266 pixels), its toolbar and its title area. Each moves with the window, and its
+capture is its own area at half scale, with the window's edge repeated past it. A move shifts each texel's place under
+the screen by a fraction of a texel and moves the repeated edge with it, so no texel of the last blur is one of the
+new blur, and there is nothing to keep. The same holds for the stationary dock while it resizes.
+
+Next steps, in order:
+
+1. Capture a window's glass on a grid fixed to the output, with a margin as the materials have, and repeat the
+   window's edge in the composite rather than in the capture. A dragged window's glass then keeps every texel away
+   from the edges it uncovers, as its material does. This changes pixels at the glass edges, so it re-records the
+   goldens that show window glass.
+2. Measure the work without waiting for the GPU: CPU time to submit, GPU time from timestamps, each against its own
+   budget. The budget then holds unless the GPU itself is over.
+3. Bench on a quiet machine before ticking the gate.
+
 Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
 the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a
 window drawn below half its size. Nothing is re-recorded.

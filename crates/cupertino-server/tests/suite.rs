@@ -122,6 +122,8 @@ mod quit;
 mod record;
 #[path = "sandbox_globals.rs"]
 mod sandbox_globals;
+#[path = "scaled_output.rs"]
+mod scaled_output;
 #[path = "scene_composition.rs"]
 mod scene_composition;
 #[path = "scene_cost.rs"]
@@ -168,6 +170,8 @@ mod socket_names;
 mod standard_clients;
 #[path = "subsurface_backdrops.rs"]
 mod subsurface_backdrops;
+#[path = "supersample_gl.rs"]
+mod supersample_gl;
 #[path = "surface_output.rs"]
 mod surface_output;
 #[path = "text_input.rs"]

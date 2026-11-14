@@ -104,21 +104,28 @@ fn a_window_keeps_its_logical_frame_through_several_scale_changes() {
             "{scale}: the window's frame in points"
         );
 
-        // the window is asked to draw at the output's scale, so its buffer is its points at that scale
+        // the window is asked to draw at the scale the output is drawn at, the next whole one above a fractional
+        // scale, so its buffer is its points at that scale
+        let asked = entry.render_scale;
+        assert_eq!(
+            asked,
+            scale.ceil(),
+            "{scale}: drawn at the next whole scale"
+        );
         let surface = d.state.windows[0].surface().clone();
         let preferred = with_states(&surface, |s| {
             with_fractional_scale(s, |fs| fs.preferred_scale())
         });
-        assert_eq!(preferred, Some(scale), "{scale}");
+        assert_eq!(preferred, Some(asked), "{scale}");
         let size = Extent::new(now.w as u32, now.h as u32);
-        let buffer = raster(size, scale_in_120ths(scale).unwrap()).unwrap();
+        let buffer = raster(size, scale_in_120ths(asked).unwrap()).unwrap();
         let exact = (
-            f64::from(size.width) * scale,
-            f64::from(size.height) * scale,
+            f64::from(size.width) * asked,
+            f64::from(size.height) * asked,
         );
         assert!(
-            (f64::from(buffer.width) - exact.0).abs() <= scale
-                && (f64::from(buffer.height) - exact.1).abs() <= scale,
+            (f64::from(buffer.width) - exact.0).abs() <= asked
+                && (f64::from(buffer.height) - exact.1).abs() <= asked,
             "{scale}: a {buffer:?} buffer for {size:?} points"
         );
 

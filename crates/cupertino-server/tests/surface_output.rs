@@ -1021,10 +1021,22 @@ fn a_window_across_the_seam_is_on_both_displays_and_a_minimized_one_on_none() {
 }
 
 /// A display's scale changes under a window: the exact scale follows it and the whole-number one is the exact one
-/// rounded up, sent only when it changes.
+/// rounded up, sent only when it changes. Drawn at the next whole scale and shrunk (the default), a fractional display
+/// tells its windows that whole scale as the exact one too.
 #[test]
 fn a_scale_change_sends_the_exact_scale_and_the_whole_number_one_rounded_up() {
+    for direct in [true, false] {
+        scale_change_sends(direct);
+    }
+}
+
+/// [`a_scale_change_sends_the_exact_scale_and_the_whole_number_one_rounded_up`] drawn straight at the display's scale
+/// or at the next whole one.
+fn scale_change_sends(direct: bool) {
     let Some(mut h) = Harness::new() else { return };
+    if direct {
+        common::draw_direct(&mut h.state);
+    }
     let (client, window) = h.map();
     h.put(window, "headless-2", Rect::new(1100.0, 100.0, 400.0, 300.0));
     h.wait("scale 2", &client, |_, c| c.scale(WINDOW) == 2);
@@ -1037,7 +1049,8 @@ fn a_scale_change_sends_the_exact_scale_and_the_whole_number_one_rounded_up() {
         h.settle();
         h.wait("the new scale", &client, |_, c| c.scale(WINDOW) == whole);
         h.sync(&client);
-        assert_eq!(h.fractional(), Some(scale), "{scale}: exact");
+        let exact = if direct { scale } else { f64::from(whole) };
+        assert_eq!(h.fractional(), Some(exact), "{scale}: exact");
         assert_eq!(client.on(WINDOW), ["headless-2"], "{scale}");
     }
     assert_eq!(client.scales(WINDOW), [2, 3, 1], "only changes are sent");

@@ -1176,6 +1176,8 @@ fn a_layer_s_content_blur_is_in_points_and_scales_with_the_layer_at_a_fractional
     let Some(mut h) = Harness::new(1.5, false) else {
         return;
     };
+    // the edges and the blur measured at the display's own pixels
+    common::draw_direct(&mut h.state);
     let client = one_layer(&mut h);
     client.send(|c, _| {
         c.l(0).set_value(Property::X, 200.0);
@@ -1596,11 +1598,11 @@ fn captures() {
     }
 }
 
-/// The toolkit's window system against the server (`cupertino-ui-wayland`'s `surface-layers`), at scale 1.5: a window
-/// hands over a surface layer with its frame, which the server shows as a layer of the window's surface at the rect
-/// the window gave it, drawn from the layer's own buffer at the window's scale; the fade the window then asks for runs
-/// on the server's clock to its end while the window commits no new buffer, and the content blur it sends as samples
-/// goes up and back down with it.
+/// The toolkit's window system against the server (`cupertino-ui-wayland`'s `surface-layers`), at scale 1.5, drawn
+/// at 2: a window hands over a surface layer with its frame, which the server shows as a layer of the window's surface
+/// at the rect the window gave it, drawn from the layer's own buffer at the window's scale; the fade the window then
+/// asks for runs on the server's clock to its end while the window commits no new buffer, and the content blur it
+/// sends as samples goes up and back down with it.
 #[test]
 fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer(
 ) {
@@ -1652,7 +1654,8 @@ fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_cl
     let pixels = with_renderer_surface_state(&layer.surface, |s| s.buffer_size())
         .flatten()
         .expect("the layer's buffer");
-    assert_eq!((pixels.w, pixels.h), (180, 90), "at the window's scale");
+    // the display is drawn at 2 and shrunk to its pixels, so the window draws at 2
+    assert_eq!((pixels.w, pixels.h), (240, 120), "at the window's scale");
     assert_eq!(
         (layer.x, layer.y, layer.width, layer.height, layer.opacity),
         (40.0, 30.0, 120.0, 60.0, 1.0),
@@ -1801,7 +1804,8 @@ fn gpu_layer_at(scale: f64) -> bool {
         .size;
     assert_eq!(
         (source.w, source.h),
-        (120.0 * scale, 60.0 * scale),
+        // a fractional display is drawn at the next whole scale and shrunk, so the window draws at that
+        (120.0 * scale.ceil(), 60.0 * scale.ceil()),
         "at {scale}: drawn at the window's scale"
     );
     assert_eq!(

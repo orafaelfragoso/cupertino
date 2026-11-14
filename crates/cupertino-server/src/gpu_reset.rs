@@ -90,6 +90,8 @@ impl Cupertino {
             output.tracker = smithay::backend::renderer::damage::OutputDamageTracker::from_output(
                 &output.output,
             );
+            // the offscreen frame of a supersampled output lived in the lost context too
+            output.cache.supersample.reset();
             output.scheduler.reset();
         }
         self.request_redraw();

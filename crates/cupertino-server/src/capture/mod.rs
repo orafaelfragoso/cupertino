@@ -150,7 +150,8 @@ impl Cupertino {
                 })?;
                 let window = self.wm.window(entry.id)?;
                 let idx = self.outputs.iter().position(|o| o.id == window.output)?;
-                let scale = self.outputs[idx].scale;
+                // a window is captured at the scale its output is drawn at
+                let scale = self.outputs[idx].render_scale;
                 let geo = entry.window.geometry();
                 let ins = entry.insets();
                 // the size `capture_window` renders the window at

@@ -165,9 +165,11 @@ block. Each backend has an orientation test.
 
 Texture programs compiled through Smithay's shader interface sample client buffers, including import-only ones through
 `samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, its
-vibrant variant, the reduced copy and the minification filter. Every other program of ours is generated: the
-backdrop passes (downsample, blur, colour, copy), the material region, the glass composite, the vibrant glyphs and
-the mesh of the window effects, which the compositor links itself and the headless glass renderer draws on
+vibrant variant, the reduced copy, the minification filter and the output's resample (the final pass that shrinks a
+fractional display's frame drawn at the next whole scale, by the area each panel pixel covers). Every other program
+of ours is generated: the backdrop passes (downsample, blur, colour, copy), the material region, the glass
+composite, the vibrant glyphs and the mesh of the window effects, which the compositor links itself and the headless
+glass renderer draws on
 `cupertino-gpu`, and the compositor's rectangle passes, which sample no client texture: the window shadow, the
 rounded rectangle and the procedural wallpaper (a third set, `crates/cupertino-server/shaders/passes/`, sharing one
 placement block and vertex stage), drawn by a device borrowed from the compositor's context into the framebuffer
@@ -315,7 +317,10 @@ margin 2 ms; a frame that misses its vblank counts as a whole period, which turn
 those 60; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison). A 10-bit primary plane is a setting
 (`output_depth`), off until the probe decides; captures draw into 8-bit targets of their own. Direct scanout and
 the cursor plane are already permitted by the DRM path; they are verified on the target driver rather than built.
-Overlay planes stay off on the proprietary NVIDIA driver. Variable refresh and colour management are out of scope
+A display at a fractional scale is drawn at the next whole scale into a frame of its own (10 bits a channel where the
+device renders to it) and shrunk to its pixels by a final pass that dithers at the display's depth; it gives up
+direct scanout, keeps the cursor plane, and draws only the damage of the frame mapped to its pixels and widened by
+one pixel (`fractional_scale_mode`, `render::supersample`, `docs/plans/scaled-output.md`). Overlay planes stay off on the proprietary NVIDIA driver. Variable refresh and colour management are out of scope
 while the target display supports neither.
 
 **Vulkan in the compositor** means implementing Smithay's renderer traits for Vulkan, so `DrmCompositor`, damage

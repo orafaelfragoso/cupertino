@@ -328,6 +328,8 @@ fn the_outline_meets_the_device_pixels_of_the_window_s_content_at_a_fractional_s
     let mut fractional = 0;
     for scale in [1.25, 1.5, 1.75] {
         let mut d = Desktop::new(scale);
+        // drawn straight at the fractional scale, where the frame need not lie on device pixels
+        common::draw_direct(&mut d.state);
         d.window();
         d.at(3000);
         let mut backend = d.state.backend.take().unwrap();

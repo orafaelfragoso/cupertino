@@ -1111,6 +1111,10 @@ pub(crate) fn head_op(
                         },
                     );
                     let format = u.surfaces[&crtc].drm_output.format();
+                    // a frame shrunk to the display's pixels is dithered at the display's depth
+                    if let Some(entry) = state.outputs.iter_mut().find(|o| o.id == id) {
+                        entry.cache.supersample.depth = crate::output_depth::format_bits(format);
+                    }
                     tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, format = %format, bits = crate::output_depth::format_bits(format), "output initialised");
                     Ok(())
                 }
@@ -1498,7 +1502,7 @@ fn draw_direct(
         return Some(Drawn::NOTHING);
     };
     let surface = card.surfaces.get_mut(&crtc)?;
-    let buffers = crate::frame::drawn_buffers(&composed.resources.surfaces);
+    let buffers = crate::frame::frame_buffers(&composed.resources);
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
     let result = Gles.render(
@@ -1562,7 +1566,7 @@ fn draw_copy(
     let Some(composed) = state.compose_for_present(&mut render.renderer, idx) else {
         return Some(Ok(Drawn::NOTHING));
     };
-    let buffers = crate::frame::drawn_buffers(&composed.resources.surfaces);
+    let buffers = crate::frame::frame_buffers(&composed.resources);
     let (res, cache, _) = state.gles_parts(idx)?;
     let mut resources = GlesResources::new(res, cache, composed.resources);
     let result = match &mut target {

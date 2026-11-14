@@ -7,7 +7,7 @@
 //! call and no borrowed framebuffer leaks into the trait.
 
 use cupertino_render_api::{Completion, Failure, RenderFailure, RenderStatus, Renderer};
-use cupertino_scene::SceneFrame;
+use cupertino_scene::{Output, SceneFrame};
 use image::RgbaImage;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 #[cfg(feature = "udev")]
@@ -17,9 +17,9 @@ use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{Bind, Color32F};
 use smithay::backend::SwapBuffersError;
-use smithay::utils::{Physical, Rectangle};
+use smithay::utils::{Physical, Rectangle, Size};
 
-use super::compose::FrameResources;
+use super::compose::{Composed, FrameResources};
 use super::lower::{lower, Lowering};
 use super::material::SharedMaterial;
 use super::mesh::{capture, SharedMesh};
@@ -41,16 +41,23 @@ impl Gles {
         scene: &SceneFrame,
         resources: &mut GlesResources<'_>,
     ) -> Result<Vec<CupertinoElement>, RenderError> {
-        if resources
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.frame != scene.id)
-        {
-            return Err(RenderError::Resources("resources belong to another frame"));
-        }
-        let frame = resources.frame.take().ok_or(RenderError::Resources(
-            "the frame's resources were used by an earlier render",
-        ))?;
+        let frame = take_frame(scene, resources)?;
+        let (elements, _) = Self::lower_parts(renderer, scene, frame, resources);
+        Ok(elements)
+    }
+
+    /// The elements of `scene` front to back, and, of a frame drawn at a whole scale above its display's, the
+    /// elements of what lies over the shrunk frame, at the display's own scale, with the output they are drawn for.
+    fn lower_parts(
+        renderer: &mut GlesRenderer,
+        scene: &SceneFrame,
+        mut frame: FrameResources,
+        resources: &mut GlesResources<'_>,
+    ) -> (
+        Vec<CupertinoElement>,
+        Option<(Vec<CupertinoElement>, Output)>,
+    ) {
+        let top = frame.top.take();
         let mut ctx = Lowering {
             renderer,
             programs: resources.programs,
@@ -61,10 +68,93 @@ impl Gles {
             scale: scene.output.scale,
         };
         let mut elements = lower(scene, frame, &mut ctx);
-        finalize_materials(&mut elements, scene.output.scale, resources.cache);
+        finalize_materials(&mut elements, scene.output.scale, ctx.cache);
+        let top = top.map(|top| {
+            let Composed { frame, resources } = *top;
+            ctx.scale = frame.output.scale;
+            let mut elements = lower(&frame, resources, &mut ctx);
+            finalize_materials(&mut elements, frame.output.scale, ctx.cache);
+            (elements, frame.output)
+        });
         resources.cache.end_frame();
-        Ok(elements)
+        (elements, top)
     }
+
+    /// What `scene` comes to on its target: its elements at its own size, scale and transform; or, for a frame drawn at
+    /// a whole scale above its display's, the frame drawn into the output's offscreen frame now and shown shrunk to the
+    /// display's pixels, under the pointer and what lies above it. With `fresh`, through an offscreen frame of its own
+    /// (an image of the output), so the display's keeps what the display shows.
+    fn final_elements(
+        renderer: &mut GlesRenderer,
+        scene: &SceneFrame,
+        resources: &mut GlesResources<'_>,
+        clear: Color32F,
+        fresh: bool,
+    ) -> Result<Final, RenderError> {
+        let frame = take_frame(scene, resources)?;
+        let (elements, top) = Self::lower_parts(renderer, scene, frame, resources);
+        let own = |output: &Output, elements| Final {
+            elements,
+            size: (output.physical_size.width, output.physical_size.height).into(),
+            scale: output.scale,
+            transform: output_transform(output.transform),
+        };
+        let Some((mut over, output)) = top else {
+            return Ok(own(&scene.output, elements));
+        };
+        let panel = output_transform(output.transform).transform_size(Size::<i32, Physical>::from(
+            (output.physical_size.width, output.physical_size.height),
+        ));
+        let mut own_frame = None;
+        let supersample = match fresh {
+            true => own_frame.insert(resources.cache.supersample.for_image()),
+            false => &mut resources.cache.supersample,
+        };
+        let resampled = {
+            let _frame = resources.programs.passes.frame();
+            supersample
+                .draw(
+                    renderer,
+                    &resources.programs.resample,
+                    &elements,
+                    (
+                        scene.output.physical_size.width,
+                        scene.output.physical_size.height,
+                    ),
+                    scene.output.scale,
+                    (panel.w, panel.h),
+                    clear,
+                )
+                .map_err(RenderError::Target)?
+        };
+        over.push(CupertinoElement::Resampled(resampled));
+        Ok(own(&output, over))
+    }
+}
+
+/// The resources of `scene`, taken by its first render.
+fn take_frame(
+    scene: &SceneFrame,
+    resources: &mut GlesResources<'_>,
+) -> Result<FrameResources, RenderError> {
+    if resources
+        .frame
+        .as_ref()
+        .is_some_and(|frame| frame.frame != scene.id)
+    {
+        return Err(RenderError::Resources("resources belong to another frame"));
+    }
+    resources.frame.take().ok_or(RenderError::Resources(
+        "the frame's resources were used by an earlier render",
+    ))
+}
+
+/// The elements a target draws, at the size, scale and transform it draws them.
+struct Final {
+    elements: Vec<CupertinoElement>,
+    size: Size<i32, Physical>,
+    scale: f64,
+    transform: smithay::utils::Transform,
 }
 
 /// What a frame's handles resolve against, and the caches of the output: the shader programs, the material and mesh
@@ -254,12 +344,6 @@ impl Renderer for Gles {
         resources: &mut GlesResources<'_>,
         target: GlesTarget<'_>,
     ) -> Result<GlesCompletion, RenderError> {
-        let size = (
-            scene.output.physical_size.width,
-            scene.output.physical_size.height,
-        )
-            .into();
-        let scale = scene.output.scale;
         match target {
             GlesTarget::Texture {
                 renderer,
@@ -268,13 +352,13 @@ impl Renderer for Gles {
                 age,
                 clear,
             } => {
-                let elements = Gles::lower(renderer, scene, resources)?;
+                let fin = Gles::final_elements(renderer, scene, resources, clear, false)?;
                 let mut framebuffer = renderer
                     .bind(texture)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let _frame = resources.programs.passes.frame();
                 tracker
-                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
+                    .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Drawn {
                         damage: r.damage.cloned(),
                     })
@@ -287,13 +371,13 @@ impl Renderer for Gles {
                 age,
                 clear,
             } => {
-                let elements = Gles::lower(renderer, scene, resources)?;
+                let fin = Gles::final_elements(renderer, scene, resources, clear, false)?;
                 let mut framebuffer = renderer
                     .bind(dmabuf)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let _frame = resources.programs.passes.frame();
                 tracker
-                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
+                    .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Offscreen {
                         damage: r.damage.cloned(),
                         sync: r.sync,
@@ -307,13 +391,15 @@ impl Renderer for Gles {
                 age,
                 clear,
             } => {
+                // a supersampled frame is drawn into its offscreen frame before the window's is bound
+                let fin =
+                    Gles::final_elements(graphics.renderer(), scene, resources, clear, false)?;
                 let (renderer, mut framebuffer) = graphics
                     .bind()
                     .map_err(|e| RenderError::Target(e.to_string()))?;
-                let elements = Gles::lower(renderer, scene, resources)?;
                 let _frame = resources.programs.passes.frame();
                 tracker
-                    .render_output(renderer, &mut framebuffer, age, &elements, clear)
+                    .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Drawn {
                         damage: r.damage.cloned(),
                     })
@@ -325,13 +411,13 @@ impl Renderer for Gles {
                 output,
                 clear,
             } => {
-                let elements = Gles::lower(renderer, scene, resources)?;
+                let fin = Gles::final_elements(renderer, scene, resources, clear, false)?;
                 // the primary plane's one frame (the cursor plane is drawn on the CPU)
                 let _frame = resources.programs.passes.frame();
                 output
                     .render_frame(
                         renderer,
-                        &elements,
+                        &fin.elements,
                         clear,
                         smithay::backend::drm::compositor::FrameFlags::DEFAULT,
                     )
@@ -352,21 +438,23 @@ impl Renderer for Gles {
                     })
             }
             GlesTarget::Image { renderer, clear } => {
-                let elements = Gles::lower(renderer, scene, resources)?;
+                // drawn through a frame of its own: the display's offscreen frame keeps what the display shows
+                let fin = Gles::final_elements(renderer, scene, resources, clear, true)?;
                 render_shown_image(
                     renderer,
-                    &elements,
-                    size,
-                    scale,
-                    output_transform(scene.output.transform),
+                    &fin.elements,
+                    fin.size,
+                    fin.scale,
+                    fin.transform,
                     clear,
                 )
                 .map(GlesCompletion::Image)
                 .map_err(|e| RenderError::Target(format!("{e:#}")))
             }
             GlesTarget::Snapshot { renderer } => {
-                let elements = Gles::lower(renderer, scene, resources)?;
-                capture(renderer, &elements, size, scale)
+                let fin =
+                    Gles::final_elements(renderer, scene, resources, Color32F::TRANSPARENT, true)?;
+                capture(renderer, &fin.elements, fin.size, fin.scale)
                     .map(GlesCompletion::Snapshot)
                     .map_err(|e| RenderError::Target(format!("{e:#}")))
             }

@@ -38,14 +38,18 @@ fn mode_for(logical: (i32, i32), transform: Transform) -> (i32, i32) {
     }
 }
 
-/// The desktop with two windows on an output of framebuffer `mode`, turned by `transform`.
-fn desktop(mode: (i32, i32), transform: Transform, scale: f64) -> Desktop {
+/// The desktop with two windows on an output of framebuffer `mode`, turned by `transform`; with `direct`, drawn
+/// straight at a fractional scale rather than at the next whole one and shrunk.
+fn desktop(mode: (i32, i32), transform: Transform, scale: f64, direct: bool) -> Desktop {
     let display = headless::HeadlessDisplay {
         name: "headless-1".into(),
         size: mode,
         physical_mm: (0, 0),
     };
     let mut d = Desktop::with_displays(std::slice::from_ref(&display), scale);
+    if direct {
+        common::draw_direct(&mut d.state);
+    }
     let id = d.state.outputs[0].id;
     d.state.configure_output(
         id,
@@ -64,9 +68,11 @@ fn desktop(mode: (i32, i32), transform: Transform, scale: f64) -> Desktop {
     d
 }
 
-/// The frame of the desktop with two windows on an output of framebuffer `mode`, turned by `transform`.
+/// The frame of the desktop with two windows on an output of framebuffer `mode`, turned by `transform`: the lowered
+/// elements drawn through a tracker of that transform, so drawn straight at the output's scale (the frame drawn at the
+/// next whole scale and shrunk is turned by the final pass, which the screenshots below go through).
 fn frame(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
-    let mut d = desktop(mode, transform, scale);
+    let mut d = desktop(mode, transform, scale, true);
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
     let Backend::Headless(ref mut h) = backend
@@ -159,7 +165,7 @@ fn every_transform_of_an_output_shows_the_upright_frame_turned() {
 
 /// The screenshot of that desktop: what screenshots and screen captures hand out.
 fn screenshot(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
-    let mut d = desktop(mode, transform, scale);
+    let mut d = desktop(mode, transform, scale, false);
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
     let Backend::Headless(ref mut h) = backend

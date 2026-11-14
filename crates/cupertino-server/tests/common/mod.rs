@@ -182,6 +182,21 @@ pub fn allow_data_control(state: &mut Cupertino) {
     state.set_data_control_allowed(vec![entry]);
 }
 
+/// `fractional_scale_mode` `direct` on every display: what a test of drawing straight at a fractional scale needs.
+pub fn direct_modes() -> cupertino_defaults::compositor::FractionalScaleModes {
+    cupertino_defaults::compositor::FractionalScaleModes {
+        others: Some(cupertino_defaults::compositor::FractionalScaleMode::Direct),
+        ..Default::default()
+    }
+}
+
+/// Draw every display straight at its own scale (`fractional_scale_mode` `direct`), for a test of the pixels a
+/// fractional scale gives without the frame drawn at the next whole scale and shrunk.
+pub fn draw_direct(state: &mut Cupertino) {
+    state.config.fractional_scale_mode = direct_modes();
+    state.refresh_render_scales();
+}
+
 fn solid_buffer(
     shm: &wl_shm::WlShm,
     size: (i32, i32),

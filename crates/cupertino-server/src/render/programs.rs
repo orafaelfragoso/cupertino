@@ -41,6 +41,8 @@ pub struct Programs {
     pub blurred: super::content_blur::ContentBlurs,
     /// The clip program drawing a vibrant layer's coverage ([`cupertino_scene::source::VibrantBlend`]).
     pub vibrant: GlesTexProgram,
+    /// The final pass of an output drawn at a whole scale above its own ([`super::supersample`]).
+    pub resample: GlesTexProgram,
 }
 
 impl Programs {
@@ -108,6 +110,7 @@ impl Programs {
                 ],
             )
             .map_err(named("clip, vibrant"))?;
+        let resample = super::supersample::compile(renderer).map_err(named("resample"))?;
         Ok(Self {
             passes,
             clip,
@@ -115,6 +118,7 @@ impl Programs {
             reduced: super::reduce::Reductions::default(),
             blurred: super::content_blur::ContentBlurs::default(),
             vibrant,
+            resample,
         })
     }
 }
@@ -222,8 +226,8 @@ mod tests {
 
     #[test]
     fn the_hand_written_programs_left_are_the_texture_programs_of_the_renderer_s_interface() {
-        // the clip program and its variants, GLSL ES 1.00 with the distance put in place; the rectangle passes are
-        // generated ([`super::super::passes`])
+        // the clip program and its variants, GLSL ES 1.00 with the distance put in place, and the output's final
+        // shrink ([`super::super::supersample`]); the rectangle passes are generated ([`super::super::passes`])
         let clip = CLIP.replace("//_SDF_", SDF);
         assert!(clip.contains("float rounded_sdf(") && !clip.contains("//_SDF_"));
         assert!(clip.contains("uniform sampler2D tex;") && clip.contains("samplerExternalOES"));
@@ -233,6 +237,6 @@ mod tests {
             .filter_map(|e| e.ok()?.file_name().into_string().ok())
             .collect();
         files.sort();
-        assert_eq!(files, ["clip.frag", "sdf.glsl"]);
+        assert_eq!(files, ["clip.frag", "resample.frag", "sdf.glsl"]);
     }
 }

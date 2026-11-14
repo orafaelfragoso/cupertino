@@ -172,6 +172,9 @@ pub struct FrameResources {
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub glass: Vec<Rc<GlassContainer>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
+    /// Of an output drawn at a whole scale above its own: the pointer and what lies above it, composed at the output's
+    /// own scale to be drawn over the shrunk frame.
+    pub top: Option<Box<Composed>>,
 }
 
 /// A composed frame and the resources its items refer to.
@@ -196,6 +199,7 @@ impl Composition {
                 recipes: Vec::new(),
                 glass: Vec::new(),
                 snapshots: Vec::new(),
+                top: None,
             },
         }
     }
@@ -392,7 +396,11 @@ impl Composition {
                 height: p.output_px.1,
             },
             scale: p.scale,
-            transform: transform(p.output.current_transform()),
+            // a frame drawn above the display's scale is drawn upright; the final pass turns it
+            transform: match p.panel {
+                Some(_) => cupertino_scene::Transform::Normal,
+                None => transform(p.output.current_transform()),
+            },
         };
         self.finish_with(output, Duration::from_secs_f64(p.now.max(0.0)))
     }

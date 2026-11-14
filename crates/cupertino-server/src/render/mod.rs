@@ -30,6 +30,7 @@ pub mod scene;
 pub mod screenshot;
 pub mod shader_rect;
 pub mod snapshots;
+pub mod supersample;
 pub mod ui;
 pub mod uploads;
 pub mod wallpaper;
@@ -73,6 +74,8 @@ render_elements! {
     Mesh = MeshElement,
     /// A layer's content drawn from its blurred copy, masked and rescaled as window content.
     Blurred = RescaleRenderElement<ClipElement<content_blur::BlurredContent>>,
+    /// The output's frame drawn at its render scale, shrunk to the display's pixels.
+    Resampled = supersample::ResampledElement,
 }
 
 pub use cupertino_scene::{LayerStack, SceneLayer};

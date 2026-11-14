@@ -2372,7 +2372,10 @@ fn a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_
 /// side it covers, as a box filter gives it, not the two texels a filtered lookup happens to fall between.
 #[test]
 fn a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture() {
-    let Some(mut h) = Harness::at_scale(|_| {}, 1.5) else {
+    // drawn straight at 1.5: drawn at 2 and shrunk, the window's pixels are shrunk by the same box but from where
+    // its frame lies, not rounded to a device pixel
+    let Some(mut h) = Harness::at_scale(|c| c.fractional_scale_mode = common::direct_modes(), 1.5)
+    else {
         return;
     };
     let size = (300, 200);

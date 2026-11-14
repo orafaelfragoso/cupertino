@@ -981,6 +981,8 @@ fn content_changing_under_the_window_repaints_no_more_than_its_damage_and_the_to
         let Some(mut h) = Harness::one(Appearance::Dark, scale) else {
             return;
         };
+        // the scene's damage in the display's own pixels
+        common::draw_direct(&mut h.state);
         let app = App::spawn(h.socket(), 11, RED);
         let (_, frame) = placed(&mut h, &app);
         let size = h.state.outputs[0].output.current_mode().unwrap().size;

@@ -403,6 +403,10 @@ pub struct OutputEntry {
     /// Rectangle in the global logical space.
     pub rect: Rect,
     pub scale: f64,
+    /// The scale the output is drawn at and its surfaces are asked to draw at: the next whole number above a
+    /// fractional `scale` when the output is supersampled (`fractional_scale_mode`), else `scale`
+    /// ([`Cupertino::refresh_render_scales`]).
+    pub render_scale: f64,
     /// Counts the scale changes of the output: whoever keeps something drawn for the output's scale (a raster, a
     /// cursor image, an input transform) compares it with the value it was made at.
     pub scale_generation: u64,
@@ -1061,6 +1065,7 @@ impl Cupertino {
             id,
             rect,
             scale,
+            render_scale: scale,
             scale_generation: 0,
             tracker,
             cache: ElementCache::default(),
@@ -1082,7 +1087,39 @@ impl Cupertino {
         );
         self.apply_effects(fx);
         self.refresh_usable_area(id);
+        self.refresh_render_scales();
         id
+    }
+
+    /// Work out again the scale each output is drawn at from its scale and `fractional_scale_mode`; an output whose
+    /// render scale changed is drawn again whole and its surfaces are told the scale to draw at.
+    pub fn refresh_render_scales(&mut self) {
+        let modes = &self.config.fractional_scale_mode;
+        let mut changed = false;
+        for o in &mut self.outputs {
+            let name = o.output.name();
+            let mode = modes.of(std::iter::once(name.as_str()).chain(o.identity.as_deref()));
+            let render = crate::render::supersample::render_scale(o.scale, mode);
+            if render != o.render_scale {
+                tracing::info!(output = %name, scale = o.scale, render, "the output's render scale changed");
+                o.render_scale = render;
+                o.scale_generation += 1;
+                o.cache.supersample.reset();
+                o.scheduler.damage();
+                changed = true;
+            }
+        }
+        if changed {
+            self.refresh_surface_outputs();
+            self.request_redraw();
+        }
+    }
+
+    /// Whether output `idx` is drawn at a whole scale above its own and shrunk to its pixels.
+    pub fn supersampled(&self, idx: usize) -> bool {
+        self.outputs
+            .get(idx)
+            .is_some_and(|o| o.render_scale != o.scale)
     }
 
     /// Remove an output (hot-unplug): its windows move to the first remaining output and its layer surfaces let go of
@@ -1204,6 +1241,7 @@ impl Cupertino {
         entry.scheduler.damage();
         let rect = entry.rect;
         layer_map_for_output(&entry.output).arrange();
+        self.refresh_render_scales();
         self.configure_lock_surface(idx);
         self.menu_bars.set.set_output_rect(id, rect);
         let usable = self.usable_area(id);

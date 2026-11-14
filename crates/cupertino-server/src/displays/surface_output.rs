@@ -232,12 +232,12 @@ impl Cupertino {
                 .outputs
                 .iter()
                 .zip(&self.outputs)
-                .all(|(f, o)| *f == (o.id, o.rect, o.scale, o.output.current_transform()));
+                .all(|(f, o)| *f == (o.id, o.rect, o.render_scale, o.output.current_transform()));
         if !same_outputs {
             self.surface_outputs.outputs = self
                 .outputs
                 .iter()
-                .map(|o| (o.id, o.rect, o.scale, o.output.current_transform()))
+                .map(|o| (o.id, o.rect, o.render_scale, o.output.current_transform()))
                 .collect();
         }
         let outputs: Vec<(OutputId, Rect)> = self.outputs.iter().map(|o| (o.id, o.rect)).collect();
@@ -275,7 +275,7 @@ impl Cupertino {
                 Vec::new()
             };
             let (scale, transform) = match scale_output.and_then(|o| self.output_entry(o)) {
-                Some(o) => (o.scale, o.output.current_transform()),
+                Some(o) => (o.render_scale, o.output.current_transform()),
                 None => (self.output_scale(None), Transform::Normal),
             };
             let now = Placement {
@@ -323,15 +323,15 @@ impl Cupertino {
             let entered = std::slice::from_ref(&o.output);
             let map = smithay::desktop::layer_map_for_output(&o.output);
             for layer in map.layers() {
-                tell_tree(layer.wl_surface(), entered, &[], o.scale, transform);
+                tell_tree(layer.wl_surface(), entered, &[], o.render_scale, transform);
                 for (popup, _) in
                     smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
                 {
-                    tell_tree(popup.wl_surface(), entered, &[], o.scale, transform);
+                    tell_tree(popup.wl_surface(), entered, &[], o.render_scale, transform);
                 }
             }
             if let Some(surface) = o.lock.wl_surface() {
-                tell_tree(surface, entered, &[], o.scale, transform);
+                tell_tree(surface, entered, &[], o.render_scale, transform);
             }
         }
     }
@@ -446,6 +446,11 @@ impl Cupertino {
         }
         let outputs: Vec<(OutputId, Rect)> = self.outputs.iter().map(|o| (o.id, o.rect)).collect();
         let mut now = Vec::new();
+        // the cursor is drawn at the display's own pixels, every other loose surface at the output's render scale
+        let cursor = match self.cursor_choice() {
+            CursorChoice::Surface(s) => Some(s),
+            _ => None,
+        };
         for (surface, area, scale_output) in self.loose_now() {
             let entered = area
                 .map(|r| overlapping(r, &outputs))
@@ -454,7 +459,10 @@ impl Cupertino {
                 .filter_map(|id| self.output_entry(id).map(|o| o.output.clone()))
                 .collect();
             let (scale, transform) = match scale_output.and_then(|o| self.output_entry(o)) {
-                Some(o) => (o.scale, o.output.current_transform()),
+                Some(o) if cursor.as_ref() == Some(&surface) => {
+                    (o.scale, o.output.current_transform())
+                }
+                Some(o) => (o.render_scale, o.output.current_transform()),
                 None => (self.output_scale(None), Transform::Normal),
             };
             now.push(Loose {
@@ -563,7 +571,7 @@ impl Cupertino {
         })?;
         Some(RootPlacement {
             entered: vec![o.output.clone()],
-            scale: o.scale,
+            scale: o.render_scale,
             transform: o.output.current_transform(),
         })
     }

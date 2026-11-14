@@ -66,6 +66,8 @@ pub struct ElementCache {
     slots: HashMap<ElementKey, Slot>,
     /// What each material and glass element's backdrop signature was made from, and whether it was used since the last frame.
     backdrops: HashMap<ElementKey, (crate::render::material::glass::BackdropRecord, bool)>,
+    /// The output's offscreen frame while it is drawn at a whole scale above its own.
+    pub supersample: crate::render::supersample::Supersample,
 }
 
 impl ElementCache {

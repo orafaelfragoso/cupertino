@@ -103,6 +103,7 @@ impl Cupertino {
         idx: usize,
         f: impl FnOnce(&mut GlesRenderer, SceneParams<'_>) -> R,
     ) -> Option<R> {
+        // the pointer is drawn at the display's own scale, also over a frame drawn above it
         let scale = self.outputs[idx].scale;
         let cursor = self.cursor_plan(scale);
         let pointer: Point<f64, Logical> = self.pointer.current_location();
@@ -126,12 +127,30 @@ impl Cupertino {
             .current_mode()
             .map(|m| m.size)
             .unwrap_or_default();
+        // a fractional scale supersampled: the scene drawn upright at the render scale, the display's own kept
+        let (scene_scale, output_px, panel) = if out.render_scale != scale {
+            let upright = out.output.current_transform().transform_size(mode);
+            (
+                out.render_scale,
+                crate::render::supersample::render_size(
+                    (upright.w, upright.h),
+                    scale,
+                    out.render_scale,
+                ),
+                Some(crate::render::scene::Panel {
+                    scale,
+                    px: (mode.w, mode.h),
+                }),
+            )
+        } else {
+            (scale, (mode.w, mode.h), None)
+        };
         let params = SceneParams {
             output: &out.output,
             output_id: out.id,
             rect: out.rect,
-            scale,
-            output_px: (mode.w, mode.h),
+            scale: scene_scale,
+            output_px,
             now,
             wm: &self.wm,
             windows: &self.windows,
@@ -152,6 +171,7 @@ impl Cupertino {
             lock,
             session_overlays,
             for_capture: false,
+            panel,
         };
         let result = f(renderer, params);
         // a new image was put up, perhaps for another output: that output draws it, and the colour under its bar,
@@ -946,6 +966,16 @@ pub fn refresh_count(time: Duration, refresh: Option<Duration>) -> u64 {
         Some(period) if !period.is_zero() => (time.as_nanos() / period.as_nanos()) as u64,
         _ => 0,
     }
+}
+
+/// The current buffers of the surfaces a composed frame draws ([`drawn_buffers`]), those over a supersampled frame's
+/// shrink included.
+pub fn frame_buffers(resources: &crate::render::compose::FrameResources) -> Vec<Buffer> {
+    let mut buffers = drawn_buffers(&resources.surfaces);
+    if let Some(top) = &resources.top {
+        buffers.extend(drawn_buffers(&top.resources.surfaces));
+    }
+    buffers
 }
 
 /// The current buffers of the surface trees of `surfaces`, for a frame drawn from them to hold until it is shown:

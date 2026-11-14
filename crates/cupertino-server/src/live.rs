@@ -10,7 +10,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals; `dev_folder` of the system file, read again through its root-only check, for each shell process's next start | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, scroll bars, key bindings, terminals, the fractional scale mode; `dev_folder` of the system file, read again through its root-only check, for each shell process's next start | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 //! | `/etc/cupertino/accessibility.conf` | its keys, for an account without an `accessibility.conf` of its own and the login screen (`crate::accessibility`) | — |
@@ -401,6 +401,10 @@ impl Cupertino {
             self.config.material_density = target.material_density;
             self.apply_shell_options();
             self.request_redraw();
+        }
+        if changed!(fractional_scale_mode) {
+            self.config.fractional_scale_mode = target.fractional_scale_mode.clone();
+            self.refresh_render_scales();
         }
         if changed!(decorations) {
             self.config.window.decorations = target.window.decorations;

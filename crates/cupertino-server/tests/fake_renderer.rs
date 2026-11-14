@@ -131,6 +131,18 @@ impl Renderer for Fake {
                 | Source::Wallpaper { .. } => {}
             }
         }
+        // an output drawn at a whole scale above its own composes the pointer and what lies above it apart, with
+        // resources of its own
+        if let Some(mut top) = resources.top.take() {
+            let above = self.render(&top.frame, &mut top.resources, ())?;
+            seen.items += above.items;
+            seen.kinds.extend(above.kinds);
+            seen.surfaces += above.surfaces;
+            seen.images += above.images;
+            seen.recipes += above.recipes;
+            seen.snapshots += above.snapshots;
+            resources.top = Some(top);
+        }
         Ok(seen)
     }
 }

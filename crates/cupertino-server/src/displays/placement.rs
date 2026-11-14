@@ -48,7 +48,7 @@ impl Cupertino {
     pub(crate) fn output_scale(&self, id: Option<OutputId>) -> f64 {
         id.and_then(|id| self.output_entry(id))
             .or_else(|| self.active_output().and_then(|o| self.output_entry(o)))
-            .map_or(1.0, |o| o.scale)
+            .map_or(1.0, |o| o.render_scale)
     }
 
     /// The scale window `window` draws at: its scale output's (`surface_output`).
@@ -72,7 +72,7 @@ impl Cupertino {
                     .is_some()
         });
         match layer_output {
-            Some(o) => o.scale,
+            Some(o) => o.render_scale,
             None => self.output_scale(None),
         }
     }

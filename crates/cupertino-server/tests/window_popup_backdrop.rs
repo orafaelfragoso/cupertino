@@ -699,7 +699,12 @@ fn a_line_the_client_draws_along_its_sidebar_s_edge_meets_the_glass_wherever_the
     // the sidebar ends half way across a pixel; the window's left edge lies on a whole pixel and half way across one
     let width = 161;
     for x in [100.0, 101.0, 102.0, 103.0] {
-        let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
+        // the rounding to the display's own pixels, drawn straight at 1.5
+        let config = Config {
+            fractional_scale_mode: common::direct_modes(),
+            ..Config::default()
+        };
+        let Some(mut h) = Harness::with_scale(config, scale) else {
             return;
         };
         h.state.cursor_status = CursorImageStatus::Hidden;

@@ -557,6 +557,16 @@ pub struct SceneParams<'a> {
     /// The frame leaves the compositor (screen capture, screenshot files, recordings): the surfaces of the
     /// authentication prompt are left out.
     pub for_capture: bool,
+    /// The display's own scale and pixels when the output is drawn at a whole scale above it (`scale` and
+    /// `output_px` are then the render scale and the size of the frame drawn at it, upright).
+    pub panel: Option<Panel>,
+}
+
+/// A display drawn at a whole scale above its own: its own scale and its mode's pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Panel {
+    pub scale: f64,
+    pub px: (i32, i32),
 }
 
 /// A black overlay of the session over the whole output.
@@ -841,13 +851,15 @@ fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
     p.overlays
         .wallpaper
         .set_bar_material((appearance, p.display.reduce_transparency), Vec::new);
-    // the image is laid in the logical space, which a quarter-turned output has on its side
-    let px = p
-        .output
-        .current_transform()
-        .transform_size(smithay::utils::Size::<i32, smithay::utils::Physical>::from(
-            p.output_px,
-        ));
+    // the image is laid in the logical space, which a quarter-turned output has on its side (a frame drawn above the
+    // display's scale is upright already)
+    let turn = match p.panel {
+        Some(_) => smithay::utils::Transform::Normal,
+        None => p.output.current_transform(),
+    };
+    let px = turn.transform_size(smithay::utils::Size::<i32, smithay::utils::Physical>::from(
+        p.output_px,
+    ));
     if let Some(colour) = p.config.wallpaper_color {
         let rgb = colour.map(|c| f32::from(c) / 255.0);
         p.overlays.wallpaper.solid(p.output_id.0, rgb, p.now);
@@ -3114,18 +3126,48 @@ pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Co
         .set_density((p.config.material_density * 100.0).round() as u8);
     p.res.set_tint_windows(p.config.tint_windows);
     let mut stack = Composition::new(p.scale);
+    let locked = matches!(p.lock, LockView::Locked { .. });
     match std::mem::replace(&mut p.lock, LockView::Unlocked) {
         LockView::Locked { surface } => locked_scene(p, &mut stack, surface),
         LockView::Unlocked => desktop_scene(renderer, p, &mut stack),
     }
-    session_overlays(p, &mut stack);
+    // drawn at a whole scale above the display's: the pointer and what lies above it at the display's own, over the
+    // shrunk frame
+    let top = match p.panel {
+        Some(panel) => Some(top_scene(p, panel, locked)),
+        None => {
+            session_overlays(p, &mut stack);
+            None
+        }
+    };
     // what the composition used this frame is all it keeps for the next one
     p.decor.end_frame();
     p.overlays.images.end_frame();
     if !p.for_capture {
         p.res.end_minimize_frame(p.output_id);
     }
-    stack.finish(p)
+    let mut composed = stack.finish(p);
+    composed.resources.top = top.map(Box::new);
+    composed
+}
+
+/// The pointer, the compositor's notices (but on a locked frame) and the session's overlays of an output drawn at a
+/// whole scale above its display's, composed at the display's own scale and pixels.
+fn top_scene(p: &mut SceneParams<'_>, panel: Panel, locked: bool) -> Composed {
+    let main = (p.scale, p.output_px, p.panel.take());
+    (p.scale, p.output_px) = (panel.scale, panel.px);
+    let mut top = Composition::new(p.scale);
+    if !locked {
+        top.extend(
+            SceneLayer::CompositorOverlay,
+            crate::kbd_ui::shortcut_notice(p),
+        );
+    }
+    cursor(p, &mut top);
+    session_overlays(p, &mut top);
+    let composed = top.finish(p);
+    (p.scale, p.output_px, p.panel) = main;
+    composed
 }
 
 fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
@@ -3247,10 +3289,12 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     snap_preview(p, stack);
     stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));
     stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(p));
-    stack.extend(
-        SceneLayer::CompositorOverlay,
-        crate::kbd_ui::shortcut_notice(p),
-    );
+    if p.panel.is_none() {
+        stack.extend(
+            SceneLayer::CompositorOverlay,
+            crate::kbd_ui::shortcut_notice(p),
+        );
+    }
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);
@@ -3263,7 +3307,9 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
     }
     drag_return_element(p, stack);
     display_filter(p, stack);
-    cursor(p, stack);
+    if p.panel.is_none() {
+        cursor(p, stack);
+    }
 }
 
 /// The scene while the session is locked: black, the lock surface and the pointer; nothing else may show.
@@ -3276,7 +3322,9 @@ fn locked_scene(p: &mut SceneParams<'_>, stack: &mut Composition, surface: Optio
         );
     }
     display_filter(p, stack);
-    cursor(p, stack);
+    if p.panel.is_none() {
+        cursor(p, stack);
+    }
 }
 
 /// The display filter pass: everything below the pointer, captured and passed through the colour

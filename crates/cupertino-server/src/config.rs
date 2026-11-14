@@ -539,6 +539,9 @@ pub struct Config {
     pub material_density: f64,
     /// Bits a channel of the displays' primary planes (`output_depth`), read when the session starts.
     pub output_depth: crate::output_depth::Depth,
+    /// How each display at a fractional scale is drawn (`fractional_scale_mode`): at the next whole scale and shrunk
+    /// to its pixels by default.
+    pub fractional_scale_mode: cupertino_defaults::compositor::FractionalScaleModes,
     /// Whether the server makes the toolkit's GPU programs into the per-user program cache when the session starts
     /// (`prepare_toolkit_programs`, [`crate::toolkit_programs`]), read then.
     pub prepare_toolkit_programs: bool,
@@ -699,6 +702,7 @@ impl Default for Config {
             tile_margins: true,
             material_density: 0.0,
             output_depth: crate::output_depth::Depth::Eight,
+            fractional_scale_mode: Default::default(),
             prepare_toolkit_programs: true,
             tint_windows: true,
             titlebar_double_click: cupertino_defaults::appearance::TitlebarAction::Zoom,
@@ -971,6 +975,9 @@ impl Config {
         }
         if let Some(bits) = f.output_depth {
             self.output_depth = crate::output_depth::Depth::from_setting(Some(bits));
+        }
+        if let Some(m) = &f.fractional_scale_mode {
+            self.fractional_scale_mode = m.clone();
         }
         if let Some(b) = f.prepare_toolkit_programs {
             self.prepare_toolkit_programs = b;

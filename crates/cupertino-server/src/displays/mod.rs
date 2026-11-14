@@ -606,6 +606,7 @@ impl Cupertino {
             entry.identity = Some(key.clone());
         }
         self.restore_departed(output, &key);
+        self.refresh_render_scales();
         self.refresh_surface_scales();
         output
     }

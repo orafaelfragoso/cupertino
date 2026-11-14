@@ -38,10 +38,6 @@ use state::{background_channel, Background, Result, State};
 
 /// The window's identifier for the server and the name of its desktop entry.
 pub const APP_ID: &str = "cupertino-settings";
-/// The window loop reads the live services again this often, as a safety net (the control panel's 1 s, approximate).
-const REFRESH: Duration = Duration::from_secs(1);
-/// How often the input level meter reads the level while it shows.
-const METER_REFRESH: Duration = Duration::from_millis(100);
 /// The level slider's waiting write is checked this often while it is dragged.
 const LEVEL_TICK: Duration = Duration::from_millis(17);
 /// How often a dragged slider without stops checks whether it has settled.
@@ -213,6 +209,8 @@ pub struct Shell {
     /// The pop-up button whose menu is open.
     open: Option<ControlId>,
     full_screen: bool,
+    /// Whether a [`Message::Refresh`] is on its way: one is, while the pane shown polls ([`State::poll`]).
+    refresh_armed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -453,9 +451,19 @@ impl Shell {
                 });
             }
             Message::Woken => {
+                // a burst of change signals reads the pane again once
+                let mut changes = Vec::new();
                 while let Ok(event) = self.background.try_recv() {
-                    self.state.background_event(event)?;
+                    match event {
+                        Background::Changed(changed) => {
+                            if !changes.contains(&changed) {
+                                changes.push(changed);
+                            }
+                        }
+                        event => self.state.background_event(event)?,
+                    }
                 }
+                self.state.changed(&changes)?;
                 let mut commands = vec![wait(&self.woken)];
                 if let Some(token) = self.state.activation.take() {
                     commands.push(Command::Window(
@@ -466,9 +474,14 @@ impl Shell {
                 return Ok(commands);
             }
             Message::Refresh => {
+                self.refresh_armed = false;
+                // the pane that asked for it may have given way to one that waits for change signals
+                if self.state.poll().is_none() {
+                    return Ok(Vec::new());
+                }
                 let now = self.state.now();
                 let listening = self.state.meter_running();
-                if listening && now - self.state.refreshed < REFRESH.as_secs_f64() {
+                if listening && now - self.state.refreshed < state::POLL {
                     self.state.refresh_meter();
                 } else if self.state.level.is_none() {
                     let apps = |state: &state::State| {
@@ -482,11 +495,16 @@ impl Shell {
                         self.open = None;
                     }
                 }
-                let next = if listening { METER_REFRESH } else { REFRESH };
-                return Ok(vec![after(next, Message::Refresh)]);
             }
         }
         Ok(Vec::new())
+    }
+
+    /// The next [`Message::Refresh`], when the pane shown polls and none is on its way.
+    fn arm_refresh(&mut self) -> Option<Command<Message>> {
+        let every = self.state.poll().filter(|_| !self.refresh_armed)?;
+        self.refresh_armed = true;
+        Some(after(Duration::from_secs_f64(every), Message::Refresh))
     }
 
     /// Choose search result `i`: its pane shows and the search ends.
@@ -668,17 +686,14 @@ impl Application for SettingsApp {
             .expect("no thread panics holding the start")
             .take()
             .expect("the Settings window is launched with its start");
-        let mut commands = vec![
-            wait(&woken),
-            Command::Perform(Box::pin(async { Message::Refresh })),
-        ];
+        let mut commands = vec![wait(&woken)];
         if !activation.is_empty() {
             commands.push(Command::Window(
                 main_window(),
                 WindowRequest::Activate(Some(activation)),
             ));
         }
-        let shell = Shell {
+        let mut shell = Shell {
             state,
             background,
             woken,
@@ -693,15 +708,20 @@ impl Application for SettingsApp {
             query_revision: 0,
             open: None,
             full_screen: false,
+            refresh_armed: false,
         };
+        commands.extend(shell.arm_refresh());
         (shell, commands)
     }
 
     fn update(shell: &mut Shell, message: Message) -> Vec<Command<Message>> {
-        shell.handle(message).unwrap_or_else(|e| {
+        let mut commands = shell.handle(message).unwrap_or_else(|e| {
             eprintln!("cupertino-settings: {e}");
             Vec::new()
-        })
+        });
+        // a pane that polls is read again on a timer; the others wait for their change signals
+        commands.extend(shell.arm_refresh());
+        commands
     }
 
     fn view(shell: &Shell) -> Vec<Window<Message>> {
@@ -1943,5 +1963,57 @@ mod tests {
             send(&mut driver, window, at(time, event));
         }
         assert_eq!(moves(&mut driver), before + 1);
+    }
+
+    /// The work a window at rest waits on: its tasks (the background queue's wait, and a timer when one is armed).
+    fn waiting_tasks(driver: &mut TestDriver<SettingsApp>) -> usize {
+        match driver.run_until_idle(budget()).unwrap() {
+            cupertino_kit::core::StepStatus::Waiting(pending) => pending.tasks,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn a_pane_whose_readings_have_change_signals_or_that_shows_none_arms_no_timer_and_a_polling_pane_one(
+    ) {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let mut at_rest = Vec::new();
+        for pane in [
+            PaneId::Account,
+            PaneId::Appearance,
+            PaneId::Mouse,
+            PaneId::Keyboard,
+            PaneId::Sound,
+            PaneId::Displays,
+        ] {
+            let (mut driver, _window) = start(dir.path(), pane);
+            let poll = driver.runtime().model().state.poll();
+            at_rest.push((pane, waiting_tasks(&mut driver), poll));
+        }
+        let queue_only = at_rest[0].1;
+        for (pane, tasks, poll) in &at_rest {
+            match pane {
+                PaneId::Sound | PaneId::Displays => {
+                    assert_eq!(
+                        *poll,
+                        Some(state::POLL),
+                        "{pane:?} reads its readings once a second"
+                    );
+                    assert_eq!(*tasks, queue_only + 1, "{pane:?} waits on its timer too");
+                }
+                _ => {
+                    assert_eq!(*poll, None, "{pane:?}");
+                    assert_eq!(
+                        *tasks, queue_only,
+                        "{pane:?} waits on its background queue only"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            queue_only, 1,
+            "at rest, only the background queue's wait: {at_rest:?}"
+        );
     }
 }

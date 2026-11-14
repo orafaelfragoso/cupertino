@@ -160,8 +160,10 @@ fn subtract_all(rects: &[Bounds], cut: &Bounds) -> Vec<Bounds> {
 }
 
 /// A transform that only scales by positive factors and translates.
+/// Whether `ts` only moves and scales, by the same amount both ways: under a stretch the coverage of a pixel wholly
+/// inside an edge can fall short of full, the distance being measured in the shape's units.
 fn axis_aligned(ts: &tiny_skia::Transform) -> bool {
-    ts.kx == 0.0 && ts.ky == 0.0 && ts.sx > 0.0 && ts.sy > 0.0
+    ts.kx == 0.0 && ts.ky == 0.0 && ts.sx > 0.0 && ts.sx == ts.sy
 }
 
 /// Where `ts` puts the point, computed as the rasterizer computes it.
@@ -574,6 +576,33 @@ mod tests {
             interior_rounded(&ts, &cupertino_geometry::Rect::new(0.0, 0.0, 0.2, 9.0), 2.0)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_stretched_node_keeps_its_scratch_image() {
+        // across a stretch a pixel wholly inside an edge can be short of full coverage: the span path stays out
+        let node = crate::PaintNode {
+            layer: None,
+            id: crate::PaintNodeId(1),
+            parent: None,
+            revision: crate::PaintRevision(1),
+            transform: crate::Transform([1.1, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            clip: None,
+            group: None,
+            bounds: cupertino_geometry::Rect::new(0.0, 0.0, 40.0, 40.0),
+            hit: cupertino_geometry::Rect::new(0.0, 0.0, 0.0, 0.0),
+            ops: vec![PaintOp::Fill {
+                shape: Shape::Rect(cupertino_geometry::Rect::new(0.0, 0.0, 30.0, 30.0)),
+                paint: Paint::Solid(cupertino_theme::Color::new(0.2, 0.3, 0.4, 1.0)),
+            }],
+        };
+        let area = b(0, 0, 80, 80);
+        assert!(solid(&node, &[], 2.0, (0, 0), &area, &[None]).is_none());
+        let even = crate::PaintNode {
+            transform: crate::Transform([1.1, 0.0, 0.0, 1.1, 0.0, 0.0]),
+            ..node
+        };
+        assert!(solid(&even, &[], 2.0, (0, 0), &area, &[None]).is_some());
     }
 
     #[test]

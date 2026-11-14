@@ -2152,6 +2152,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-ui-gpu"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-gpu",
+ "cupertino-raster-math",
+ "cupertino-theme",
+ "cupertino-ui-render",
+ "cupertino-ui-text",
+ "image",
+ "tiny-skia",
+]
+
+[[package]]
 name = "cupertino-ui-layout"
 version = "0.1.0"
 dependencies = [

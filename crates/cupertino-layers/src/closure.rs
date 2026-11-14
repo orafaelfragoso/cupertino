@@ -35,6 +35,7 @@ pub const REQUIRED_MPL_ROOTS: &[&str] = &[
     "cupertino-ui-core",
     "cupertino-ui-layout",
     "cupertino-ui-platform",
+    "cupertino-ui-gpu",
     "cupertino-ui-render",
     "cupertino-ui-test",
     "cupertino-ui-text",

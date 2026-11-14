@@ -301,18 +301,21 @@ Gate:
 
 ## Step 6: the GPU renderer and presenter
 
-`GpuRenderer` implements `UiRenderer` over layers. Each primitive lands with its golden subset passing on both
-renderers:
+`GpuRenderer` (`crates/cupertino-ui-gpu`) implements `UiRenderer` over layers. Each primitive lands with its golden
+subset passing on both renderers and its generated scenes (`tests/parity.rs`, one test per group) matching the CPU
+renderer at scales 1, 1.5 and 2 on odd sizes:
 
-- [ ] Rectangles and rounded rectangles (fill and stroke).
-- [ ] Gradients.
-- [ ] Glyph runs.
-- [ ] Images and icons.
-- [ ] Path masks.
-- [ ] Clips: analytic, nested by multiplied coverage, path clips through the mask atlas, stencil only for
-      pixel-aligned rectangles.
-- [ ] Layers with opacity.
-- [ ] Blur, drop shadow, inner shadow.
+- [x] Rectangles and rounded rectangles (fill and stroke).
+- [x] Gradients.
+- [x] Glyph runs.
+- [x] Images and icons.
+- [x] Path masks.
+- [x] Clips: analytic, nested by multiplied coverage, path clips through the mask atlas, stencil only for
+      pixel-aligned rectangles. A rectangle on whole pixels is the scissor (the stencil is not needed), up to four
+      rectangles or rounded rectangles are multiplied in the program, the rest go into one clip mask.
+- [x] Layers with opacity: groups and operation layers as targets from the pool, ready to carry step 4's layer
+      boundaries.
+- [x] Blur, drop shadow, inner shadow.
 
 Presenter and process:
 
@@ -327,10 +330,18 @@ Presenter and process:
 - [x] `cupertino-diagnose` and the frame statistics report the renderer per process.
 - [x] Local GPU tier, presenter: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import
       fallback, resize storm, fence soak on the NVIDIA GPU.
-- [ ] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`).
+- [x] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`): `cupertino-ui-gpu`'s suite, slow tier.
 - [x] Renderer selection wired with every process on the CPU by default: the single switch `GPU_BY_DEFAULT`
       (`crates/cupertino-ui-wayland/src/renderer.rs`), which step 7 turns on.
-- [ ] Parity at scales 1, 1.5 and 2 with odd sizes.
+- [x] Parity at scales 1, 1.5 and 2 with odd sizes, whole frames and frames repainting damage.
+- [ ] The presenter draws through `GpuRenderer` when the process is on the GPU, so `CUPERTINO_RENDERER=gpu` gives a
+      GPU-drawn window: the kit's renderer factory makes a `GpuRenderer` on the presenter's device (`GpuDevice` holds
+      it in an `Rc`), its frame carries the window texture to `GpuSurface::present`, which draws it into the buffer
+      instead of uploading pixels (the blit reading texels by position, the buffer being allocated in size steps),
+      and a surface that falls back to shared memory reads the texture back; a headless test in `gpu_presenter`.
+- [ ] A whole frame's recording on the CPU under 4 ms at 1.5 (13 ms for the timed window, "Measurements",
+      "Step 6: the renderer"): draws of one program into one target batched into one instanced draw, bind groups
+      kept from frame to frame, glyph quads cached per run.
 
 Gate:
 
@@ -976,6 +987,52 @@ in the runtime are fast tests.
 | short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
 
 8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
+
+### Step 6: the renderer
+
+Taken at `27c8c02c` on the target machine's GPU (GeForce RTX 3060, proprietary driver) and on the host's llvmpipe
+(`LIBGL_ALWAYS_SOFTWARE=1`, the Mesa EGL vendor forced, surfaceless), release builds.
+
+**Where it is.** `cupertino-ui-gpu`: `GpuRenderer` records a frame's draws (`record`) and then runs them (`exec`): its
+uniforms and instances in one buffer each, a pass per target. Three programs, written in WGSL and generated like the
+others: `ui_fill` (a rectangle's or rounded rectangle's distance, or a coverage image, under up to four analytic clips
+and a clip mask, in solid or gradient paint, all in the CPU renderer's byte arithmetic), `ui_texture` (colour glyphs,
+layers, images) and `ui_effect` (a blurred level resolved into a blur, drop shadow or inner shadow). Glyphs go into a
+coverage and a colour atlas, path masks and clip masks into a mask atlas, images into textures kept by revision under a
+byte budget; layers and blur levels (32-bit floats where the device renders to them) come from the target pool. A frame
+repaints the rectangles every renderer repaints (`cupertino_ui_render::damage_rects`). `ui-render` gained the shared
+request check and damage rectangles, its golden scenes in their own file for both suites, and one fix found by the
+comparison: under a stretch (different horizontal and vertical scales) its span path laid pixels at full coverage
+that its general path covers a little less, so a stretched node keeps its scratch image.
+
+**Goldens** (`goldens::every_golden_scene_matches_its_baseline_on_the_gpu`, the CPU renderer's 13 scenes against its
+baselines, tolerance 2/255): all within 1/255 on the NVIDIA GPU (`CUPERTINO_GPU_REQUIRED=1`) and on llvmpipe
+(`CUPERTINO_EGL_REQUIRED=1`); the incremental clip frames included.
+
+**Parity** (`parity::*`, 9 tests, 76 seeds, 3 scales, 3 frames each, the last two repainting one to three damaged
+rectangles after a change): every pixel within 2/255 of the CPU renderer, but for at most 4 pixels a frame at 3/255
+(`STRAY_PIXELS`). Those few come from what the CPU renderer lays through its rasterizer's own pipeline, an operation's
+layer (`PushLayer`) and a solid stroke along a path, whose products round each piece apart; the GPU renderer lays the
+stroke drawn by the same stroker and the layer with exact products. The same on both devices.
+
+**A large window** (`timing::a_large_windows_damaged_frame_stays_within_the_gpu_budget`: 1600 x 1000 points at 1.5,
+2400 x 1500 pixels, tiled with the golden scenes, 325 nodes; medians; a GPU frame timed from the request to the
+device finishing it):
+
+| | NVIDIA GPU | llvmpipe | CPU renderer |
+|---|---|---|---|
+| making the renderer (its programs) | 16.7 ms | 12.6 ms | |
+| first frame (caches and atlases filled) | 16.4 ms | 75.3 ms | 14.7 ms |
+| whole frame | 13.4 ms, of which 13.3 ms before the request returns | 42.3 ms | 10.8 ms |
+| a control's worth of damage | 0.24 ms, of which 0.17 ms before the request returns | 1.7 ms | 0.51 ms |
+
+The GPU's own share of a frame is under a tenth of a millisecond after the request returns: client GPU time is far
+under its 4 ms. The whole frame's time is the recording and issuing of its draws on the CPU, one draw and bind group
+per operation, which the batching item above takes down. The first frame still goes out on the CPU while the device
+warms (step 6's presenter), so the first-frame budget holds; a switch with a warm cache costs making the renderer and
+its first frame, about 33 ms on the NVIDIA GPU, within the 150 ms. Under heavy load from other builds the GPU
+renderer's whole frame once took 420 ms on the CPU side, the driver's threads starved; the CPU renderer's did not
+move.
 
 ### Step 1: the look freeze
 

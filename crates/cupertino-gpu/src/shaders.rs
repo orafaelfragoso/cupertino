@@ -103,6 +103,21 @@ program!(
     "dither_fill"
 );
 program!(
+    /// The toolkit renderer's coverage draws: shapes, glyph coverage and path masks, tinted, under clips.
+    UI_FILL,
+    "ui_fill"
+);
+program!(
+    /// The toolkit renderer's colour draws: colour glyphs, layers and images, under clips.
+    UI_TEXTURE,
+    "ui_texture"
+);
+program!(
+    /// The toolkit renderer's last step of a layer's blur or shadow.
+    UI_EFFECT,
+    "ui_effect"
+);
+program!(
     /// Test program: shared distance and coverage at given points.
     PROBE_COVERAGE,
     "probe_coverage"
@@ -130,6 +145,9 @@ pub const ALL: &[ShaderSource] = &[
     BLUR_HALVE,
     BLUR_GAUSS,
     DITHER_FILL,
+    UI_FILL,
+    UI_TEXTURE,
+    UI_EFFECT,
     PROBE_COVERAGE,
     PROBE_SHADOW,
     PROBE_GRADIENT,

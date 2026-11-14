@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 91 crates, 439 internal dependencies
-// per layer: foundation 23, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 13, core 1, shell 12, services 4, apps 2, tools 6
+// 92 crates, 445 internal dependencies
+// per layer: foundation 23, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -84,12 +84,13 @@ digraph "layers" {
     "cupertino-glass";
   }
   subgraph "cluster_ui" {
-    label="ui (13)";
+    label="ui (14)";
     "cupertino-kit";
     "cupertino-ui-abi";
     "cupertino-ui-atspi";
     "cupertino-ui-controls";
     "cupertino-ui-core";
+    "cupertino-ui-gpu";
     "cupertino-ui-layout";
     "cupertino-ui-menus";
     "cupertino-ui-platform";
@@ -524,6 +525,12 @@ digraph "layers" {
   "cupertino-ui-core" -> "cupertino-ui-render";
   "cupertino-ui-core" -> "cupertino-ui-text";
   "cupertino-ui-core" -> "cupertino-ui-theme";
+  "cupertino-ui-gpu" -> "cupertino-geometry";
+  "cupertino-ui-gpu" -> "cupertino-gpu";
+  "cupertino-ui-gpu" -> "cupertino-raster-math";
+  "cupertino-ui-gpu" -> "cupertino-theme";
+  "cupertino-ui-gpu" -> "cupertino-ui-render";
+  "cupertino-ui-gpu" -> "cupertino-ui-text";
   "cupertino-ui-layout" -> "cupertino-geometry";
   "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-menus" -> "cupertino-modifiers";

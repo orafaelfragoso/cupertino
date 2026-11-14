@@ -351,6 +351,38 @@ pub enum RenderError {
     UnknownFrame(RenderFrameId),
 }
 
+/// Checks `request` as every renderer does before it draws anything: the scale, the size, the tree, balanced scopes,
+/// finite values and the resources the operations name.
+pub fn check_request(request: &RenderRequest<'_>) -> Result<(), RenderError> {
+    validate::check(
+        request.list,
+        request.resources,
+        request.scale,
+        request.width,
+        request.height,
+    )
+}
+
+/// The rectangles every renderer repaints for `rects` damaged on a `width` by `height` target at `scale`: each grown
+/// to whole pixels with a pixel of margin, cut to the target, and those that touch merged, sorted top to bottom.
+pub fn damage_rects(rects: &[Rect], scale: f64, width: u32, height: u32) -> Vec<PixelRect> {
+    let whole = geometry::Bounds::of_size(width, height);
+    geometry::merge(
+        rects
+            .iter()
+            .map(|r| geometry::Bounds::of_rect(r, scale).intersect(&whole))
+            .collect(),
+    )
+    .iter()
+    .map(|d| PixelRect {
+        x: d.x0 as u32,
+        y: d.y0 as u32,
+        width: d.width(),
+        height: d.height(),
+    })
+    .collect()
+}
+
 pub trait UiRenderer {
     type Frame;
 

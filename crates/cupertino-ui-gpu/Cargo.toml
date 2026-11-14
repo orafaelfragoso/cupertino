@@ -1,0 +1,26 @@
+[package]
+name = "cupertino-ui-gpu"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "CupertinoKit's GPU renderer: the display list drawn with cupertino-gpu into a window-sized texture, with the CPU renderer's arithmetic, glyph and path coverage from the CPU rasterizers through atlases"
+autotests = false
+
+[package.metadata.cupertino]
+layer = "ui"
+
+[dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-gpu = { path = "../cupertino-gpu" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-ui-render = { path = "../cupertino-ui-render" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

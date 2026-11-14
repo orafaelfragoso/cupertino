@@ -184,7 +184,9 @@ impl SurfaceLayers {
                     state.damage.invalidate();
                     changed = true;
                 }
-                let damage = state.damage.damage_of(&p.list, &p.own, &p.blank);
+                let damage = state
+                    .damage
+                    .damage_of(&p.list, &p.own, &p.blank, &Default::default());
                 let repaint = !matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
                     || state.damage.repainted();
                 changed |= repaint;

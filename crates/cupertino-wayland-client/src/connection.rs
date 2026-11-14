@@ -96,7 +96,9 @@ const ANIMATION_GAP: Duration = Duration::from_millis(100);
 /// buffers of the layout (`of_layout` with the one leased) are all in use, none `free` besides it and the compositor
 /// holding the others, will want one more soon, so its memory is made meanwhile, unless a `fitting` spare is there
 /// already. The first buffer of a layout (`created` alone) makes none, so a resize, whose every frame is of a new size,
-/// makes no memory it does not use; a surface that draws again after a pause lets an unused spare go.
+/// makes no memory it does not use; a surface that draws again after a pause lets an unused spare go, unless it had to
+/// make a buffer beside one the compositor still holds, as the first frame of an animation does, so its second frame
+/// finds its buffer made.
 fn spare_wanted(
     animating: bool,
     created: bool,
@@ -104,7 +106,7 @@ fn spare_wanted(
     free: bool,
     fitting: bool,
 ) -> Option<bool> {
-    if !animating {
+    if !animating && !(created && of_layout > 1) {
         return Some(false);
     }
     let wanted = of_layout < MAX_SLOTS && !(created && of_layout == 1) && !free && !fitting;
@@ -3324,6 +3326,16 @@ mod tests {
             spare_wanted(false, false, 2, false, true),
             Some(false),
             "after a pause"
+        );
+        assert_eq!(
+            spare_wanted(false, true, 2, false, false),
+            Some(true),
+            "the first frame after a pause made a second, so the next is made ahead"
+        );
+        assert_eq!(
+            spare_wanted(false, true, 1, false, false),
+            Some(false),
+            "the first buffer after a pause"
         );
     }
 }

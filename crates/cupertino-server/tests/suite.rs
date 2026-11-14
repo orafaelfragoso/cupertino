@@ -24,6 +24,8 @@ mod clipboard;
 mod content_type;
 #[path = "contracts.rs"]
 mod contracts;
+#[path = "coverage_gl.rs"]
+mod coverage_gl;
 #[path = "cursor.rs"]
 mod cursor;
 #[path = "data_control.rs"]

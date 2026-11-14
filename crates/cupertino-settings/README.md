@@ -61,9 +61,11 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
 ## Open issues
 
 - Every pane has content. Every file the panes write is applied at once by its process, so no pane shows the
-  restart footer. The live panes are read again every second (approximate) and the Wi-Fi pane scans on open and every
-  10 s (approximate); property change signals are not subscribed to, so a change by another client shows within a
-  second.
+  restart footer. A reading with a change signal is read again when the signal comes (`src/watch.rs`: one thread a
+  bus, rules on the objects the panes read, signals the shown pane does not read dropped there); a device plugged in
+  or removed is heard from udev's announcements (`src/hotplug.rs`). The readings without a change signal (the sound
+  server's, the display list, the interface addresses, a new notification's application) are read again every
+  second (approximate) while their pane shows, and the Wi-Fi pane scans on open and every 10 s (approximate).
 - Displays sets only the size a display looks like: modes, refresh rate, rotation and arrangement are shown but not
   set, and the choice applies at once, without a confirmation that reverts it.
 - The pane open and close hooks (scan, discovery, agent registration and unregistration) run in the window process and are

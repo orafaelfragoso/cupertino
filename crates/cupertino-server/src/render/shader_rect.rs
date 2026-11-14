@@ -159,6 +159,8 @@ pub struct ShaderRect {
     alpha: f32,
     uniforms: Vec<Uniform<'static>>,
     opaque: bool,
+    /// A rectangle inside the area where the program draws nothing.
+    hole: Option<Rectangle<f64, Logical>>,
 }
 
 impl ShaderRect {
@@ -183,11 +185,28 @@ impl ShaderRect {
             alpha,
             uniforms,
             opaque,
+            hole: None,
         }
     }
 
     pub fn area(&self) -> Rectangle<f64, Logical> {
         self.area
+    }
+
+    /// The same element, saying it draws nothing inside `hole` (a shadow cut out under its window).
+    pub fn with_hole(mut self, hole: Rectangle<f64, Logical>) -> Self {
+        self.hole = Some(hole);
+        self
+    }
+
+    /// The device pixels wholly inside the hole, a pixel in from its edge, where the element draws nothing.
+    pub fn hole(&self, scale: Scale<f64>) -> Option<Rectangle<i32, Physical>> {
+        let hole = self.hole?;
+        let x0 = (hole.loc.x * scale.x).ceil() as i32 + 1;
+        let y0 = (hole.loc.y * scale.y).ceil() as i32 + 1;
+        let x1 = ((hole.loc.x + hole.size.w) * scale.x).floor() as i32 - 1;
+        let y1 = ((hole.loc.y + hole.size.h) * scale.y).floor() as i32 - 1;
+        (x1 > x0 && y1 > y0).then(|| Rectangle::new((x0, y0).into(), (x1 - x0, y1 - y0).into()))
     }
 }
 

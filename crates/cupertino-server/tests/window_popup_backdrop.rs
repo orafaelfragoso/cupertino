@@ -24,7 +24,7 @@ use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
 use cupertino_server::Cupertino;
 use cupertino_theme::recipe::WINDOW_BACKGROUND_MATERIAL;
-use cupertino_wm::{Command, Rect};
+use cupertino_wm::{Command, Rect, WindowId};
 use smithay::backend::input::ButtonState;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::calloop::EventLoop;
@@ -624,4 +624,103 @@ fn a_window_s_sidebar_glass_meets_the_content_s_backdrop_with_no_line_between_th
             }
         }
     }
+}
+
+/// The white window and the sidebar window over it, opened in that order, the sidebar window at `frame`; and the
+/// sidebar window's id.
+fn sidebar_over_a_window(h: &mut Harness, frame: Rect) -> (WindowId, [App; 2]) {
+    let white = App::spawn(h.socket_path(), None);
+    h.wait_until("the white window to map", |s| {
+        s.windows.iter().any(|w| w.mapped)
+    });
+    let sidebar = App::spawn(h.socket_path(), Some(10.0));
+    h.wait_until("the sidebar window to map", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 2
+    });
+    let ids: Vec<WindowId> = h
+        .state
+        .windows
+        .iter()
+        .filter(|w| w.mapped)
+        .map(|w| w.id)
+        .collect();
+    let output = h.state.outputs[0].id;
+    for (id, frame) in [
+        (ids[0], Rect::new(60.0, 60.0, 500.0, 300.0)),
+        (ids[1], frame),
+    ] {
+        h.state.command(Command::MoveWindowToOutput {
+            window: id,
+            output,
+            frame,
+        });
+    }
+    let t = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, t);
+    h.state.tick();
+    h.step(20);
+    (ids[1], [white, sidebar])
+}
+
+fn reblurs(h: &Harness) -> u64 {
+    let render = h.state.render.as_ref().expect("a renderer");
+    render
+        .material
+        .as_ref()
+        .map_or(0, |m| m.borrow().stats.reblurs)
+}
+
+#[test]
+fn a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole() {
+    let end = Rect::new(348.0, 232.0, 500.0, 300.0);
+    let Some(mut h) = Harness::new() else { return };
+    h.state.cursor_status = CursorImageStatus::Hidden;
+    let (id, _apps) = sidebar_over_a_window(&mut h, Rect::new(300.0, 200.0, 500.0, 300.0));
+    let output = h.state.outputs[0].id;
+    let before = reblurs(&h);
+    // dragged a few points a frame, its backdrop reaching over the white window's edge and corner
+    for i in 1..=8 {
+        let frame = Rect::new(
+            300.0 + 6.0 * f64::from(i),
+            200.0 + 4.0 * f64::from(i),
+            500.0,
+            300.0,
+        );
+        h.state.command(Command::MoveWindowToOutput {
+            window: id,
+            output,
+            frame,
+        });
+        h.step(3);
+    }
+    assert_eq!(h.state.wm.window(id).unwrap().geometry(), end);
+    assert!(
+        reblurs(&h) > before,
+        "the dragged sidebar's backdrop is made again only where it moved to"
+    );
+    let dragged = h.screenshot();
+    drop(_apps);
+    drop(h);
+    // the same windows put where the drag ended, blurred whole there
+    let Some(mut h) = Harness::new() else { return };
+    h.state.cursor_status = CursorImageStatus::Hidden;
+    let (_, _apps) = sidebar_over_a_window(&mut h, end);
+    assert_eq!(reblurs(&h), 0, "nothing kept to make again in part");
+    let whole = h.screenshot();
+    let worst = dragged
+        .pixels()
+        .zip(whole.pixels())
+        .map(|(a, b)| {
+            a.0.iter()
+                .zip(&b.0)
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap()
+        })
+        .max()
+        .unwrap();
+    assert!(
+        worst <= 1,
+        "the dragged sidebar differs from one blurred whole by {worst}"
+    );
 }

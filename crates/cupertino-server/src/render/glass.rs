@@ -217,6 +217,22 @@ pub struct Below {
     /// The opacity the element is drawn at: a window can fade without a new commit.
     pub alpha: f32,
     pub geometry: Rectangle<i32, Physical>,
+    /// A rectangle inside the geometry where the element draws nothing (a shadow under its window), if any.
+    pub hole: Option<Rectangle<i32, Physical>>,
+}
+
+impl Below {
+    /// The parts of the element's place it may draw on: its geometry but the hole it shares with `other`.
+    fn drawn(&self, other: &Below) -> Vec<Rectangle<i32, Physical>> {
+        let hole = self
+            .hole
+            .zip(other.hole)
+            .and_then(|(a, b)| a.intersection(b));
+        match hole {
+            Some(hole) => self.geometry.subtract_rect(hole),
+            None => vec![self.geometry],
+        }
+    }
 }
 
 /// The signature of the backdrop of an element covering `area`: of the elements below it (`below`, bottom to top)
@@ -260,24 +276,102 @@ pub fn backdrop_generation(
     area: Rectangle<i32, Physical>,
     overlapping: &[Below],
     last: Option<&BackdropRecord>,
-    mut damage: impl FnMut(usize, u64) -> Vec<Rectangle<i32, Physical>>,
+    damage: impl FnMut(usize, u64) -> Vec<Rectangle<i32, Physical>>,
 ) -> u64 {
-    let fresh = || area_generation(area, overlapping.iter().copied());
-    let Some(last) = last.filter(|l| l.below.len() == overlapping.len()) else {
-        return fresh();
+    backdrop_change(area, overlapping, last, damage).generation
+}
+
+/// A backdrop signature and what changed under the area since the last one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackdropChange {
+    pub generation: u64,
+    /// The last frame's signature and the rectangles (output pixels, within the area) whose pixels may differ from
+    /// what lay there then; none when that is not known (no last frame, or the elements changed order).
+    pub since: Option<(u64, Vec<Rectangle<i32, Physical>>)>,
+}
+
+/// [`backdrop_generation`] together with where the backdrop changed since the last frame: the places an element left
+/// or took, the old and new places of one that moved or changed opacity, and the damage of one that committed.
+pub fn backdrop_change(
+    area: Rectangle<i32, Physical>,
+    overlapping: &[Below],
+    last: Option<&BackdropRecord>,
+    mut damage: impl FnMut(usize, u64) -> Vec<Rectangle<i32, Physical>>,
+) -> BackdropChange {
+    let Some(last) = last else {
+        return BackdropChange {
+            generation: area_generation(area, overlapping.iter().copied()),
+            since: None,
+        };
     };
-    for (i, (was, now)) in last.below.iter().zip(overlapping).enumerate() {
-        let same_place = was.id == now.id
-            && was.alpha.to_bits() == now.alpha.to_bits()
-            && was.geometry == now.geometry;
-        if !same_place {
-            return fresh();
-        }
-        if was.commit != now.commit && damage(i, was.commit).iter().any(|d| d.overlaps(area)) {
-            return fresh();
+    let unique = |list: &[Below]| {
+        let mut ids: Vec<u64> = list.iter().map(|b| b.id).collect();
+        ids.sort_unstable();
+        ids.windows(2).all(|w| w[0] != w[1])
+    };
+    // the elements in both frames, in the order of each: the same order, or the change is not known
+    let kept_was: Vec<u64> = last
+        .below
+        .iter()
+        .filter(|w| overlapping.iter().any(|n| n.id == w.id))
+        .map(|w| w.id)
+        .collect();
+    let kept_now: Vec<u64> = overlapping
+        .iter()
+        .filter(|n| last.below.iter().any(|w| w.id == n.id))
+        .map(|n| n.id)
+        .collect();
+    let ordered = unique(&last.below) && unique(overlapping) && kept_was == kept_now;
+    let mut changed = Vec::new();
+    let mut held = last.below.len() == overlapping.len();
+    for was in &last.below {
+        if !overlapping.iter().any(|n| n.id == was.id) {
+            changed.extend(was.drawn(was));
         }
     }
-    last.generation
+    for (i, now) in overlapping.iter().enumerate() {
+        match last.below.iter().find(|w| w.id == now.id) {
+            None => {
+                held = false;
+                changed.extend(now.drawn(now));
+            }
+            Some(was)
+                if was.alpha.to_bits() != now.alpha.to_bits() || was.geometry != now.geometry =>
+            {
+                // where it was and where it is, but where it draws nothing in both
+                held = false;
+                changed.extend(was.drawn(now));
+                changed.extend(now.drawn(was));
+            }
+            Some(was) if was.commit != now.commit => {
+                let inside: Vec<_> = damage(i, was.commit)
+                    .into_iter()
+                    .filter_map(|d| d.intersection(area))
+                    .collect();
+                held &= inside.is_empty();
+                changed.extend(inside);
+            }
+            Some(_) => {}
+        }
+    }
+    held &= last
+        .below
+        .iter()
+        .zip(overlapping)
+        .all(|(w, n)| w.id == n.id);
+    let generation = if held {
+        last.generation
+    } else {
+        area_generation(area, overlapping.iter().copied())
+    };
+    let since = ordered.then(|| {
+        let inside = changed
+            .into_iter()
+            .filter_map(|c| c.intersection(area))
+            .collect();
+        (last.generation, inside)
+    });
+    BackdropChange { generation, since }
 }
 
 /// The framebuffer rectangle (x, y, w, h in framebuffer pixels, rows from the bottom) that `area` (output pixels)
@@ -1583,6 +1677,7 @@ mod tests {
             commit,
             alpha: 1.0,
             geometry,
+            hole: None,
         };
         let inside = |commit| below(1, commit, rect(150, 120, 50, 50));
         let outside = |commit| below(2, commit, rect(400, 400, 50, 50));
@@ -1625,12 +1720,14 @@ mod tests {
             commit: 0,
             alpha: 1.0,
             geometry: rect(0, 0, 1000, 800),
+            hole: None,
         };
         let window = Below {
             id: 2,
             commit: 0,
             alpha: 1.0,
             geometry: rect(50, 50, 600, 400),
+            hole: None,
         };
         let first = backdrop_generation(area, &[wall, window], None, |_, _| vec![]);
         let record = BackdropRecord {
@@ -1683,6 +1780,100 @@ mod tests {
     }
 
     #[test]
+    fn a_new_backdrop_signature_says_where_the_backdrop_changed() {
+        let area = rect(100, 100, 400, 300);
+        let at = |id: u64, geometry: Rectangle<i32, Physical>| Below {
+            id,
+            commit: 0,
+            alpha: 1.0,
+            geometry,
+            hole: None,
+        };
+        let (wall, window, panel) = (
+            at(1, rect(0, 0, 1000, 800)),
+            at(2, rect(150, 150, 100, 80)),
+            at(3, rect(300, 300, 100, 50)),
+        );
+        let record = BackdropRecord {
+            generation: 7,
+            below: vec![wall, window, panel],
+        };
+        let change = |now: &[Below], damage: Vec<Rectangle<i32, Physical>>| {
+            backdrop_change(area, now, Some(&record), |_, _| damage.clone())
+        };
+        // nothing changed: the signature holds and nothing is made again
+        let same = change(&[wall, window, panel], vec![]);
+        assert_eq!(same.generation, 7);
+        assert_eq!(same.since, Some((7, vec![])));
+        // a window dragged: where it was and where it is
+        let dragged = Below {
+            geometry: rect(160, 140, 100, 80),
+            ..window
+        };
+        let moved = change(&[wall, dragged, panel], vec![]);
+        assert_ne!(moved.generation, 7);
+        assert_eq!(
+            moved.since,
+            Some((7, vec![window.geometry, dragged.geometry]))
+        );
+        // a commit: its damage within the area, and none past it
+        let drawn = Below { commit: 1, ..panel };
+        let committed = change(
+            &[wall, window, drawn],
+            vec![rect(320, 310, 10, 10), rect(900, 700, 5, 5)],
+        );
+        assert_ne!(committed.generation, 7);
+        assert_eq!(committed.since, Some((7, vec![rect(320, 310, 10, 10)])));
+        // a window closed, and one opened, cut to the area
+        let opened = at(4, rect(450, 350, 200, 200));
+        let swapped = change(&[wall, window, opened], vec![]);
+        assert_eq!(
+            swapped.since,
+            Some((7, vec![panel.geometry, rect(450, 350, 50, 50)]))
+        );
+        // a shadow cut out under its window, moved: not where it draws nothing before and after
+        let shadow = Below {
+            hole: Some(rect(200, 200, 200, 150)),
+            ..at(5, rect(150, 150, 300, 250))
+        };
+        let shadow_record = BackdropRecord {
+            generation: 7,
+            below: vec![wall, shadow],
+        };
+        let shifted = Below {
+            geometry: rect(160, 150, 300, 250),
+            hole: Some(rect(210, 200, 200, 150)),
+            ..shadow
+        };
+        let ring = backdrop_change(area, &[wall, shifted], Some(&shadow_record), |_, _| vec![]);
+        let (_, rects) = ring.since.expect("known");
+        let common = rect(210, 200, 190, 150);
+        assert!(
+            rects.iter().all(|r| r.intersection(common).is_none()),
+            "{rects:?}"
+        );
+        let covered: i32 = rects.iter().map(|r| r.size.w * r.size.h).sum();
+        assert!(covered < 2 * 300 * 250 - 2 * 190 * 150 + 1, "{rects:?}");
+        // restacked, or with nothing kept from the last frame: not known
+        assert_eq!(change(&[wall, panel, window], vec![]).since, None);
+        assert_eq!(
+            backdrop_change(area, &[wall], None, |_, _| vec![]).since,
+            None
+        );
+        // the signature is the one the generation alone gives
+        for now in [
+            &[wall, dragged, panel][..],
+            &[wall, window, opened],
+            &[wall, panel, window],
+        ] {
+            assert_eq!(
+                change(now, vec![]).generation,
+                backdrop_generation(area, now, Some(&record), |_, _| vec![])
+            );
+        }
+    }
+
+    #[test]
     fn dragging_a_window_blurs_again_only_the_glass_it_passes_under() {
         let bar = rect(0, 0, 1000, 60);
         let dock = rect(300, 700, 400, 100);
@@ -1691,12 +1882,14 @@ mod tests {
             commit: 0,
             alpha: 1.0,
             geometry: rect(0, 0, 1000, 800),
+            hole: None,
         };
         let window = |y| Below {
             id: 2,
             commit: 0,
             alpha: 1.0,
             geometry: rect(200, y, 500, 400),
+            hole: None,
         };
         let generation =
             |area: Rectangle<i32, Physical>, below: &[Below], last: Option<&BackdropRecord>| {

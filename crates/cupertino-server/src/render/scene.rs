@@ -33,9 +33,7 @@ use super::compose::{
 };
 use super::gles::{Gles, GlesCompletion, GlesResources, GlesTarget};
 use super::lower::id_hash;
-use super::material::glass::{
-    backdrop_generation, BackdropRecord, Below, GlassContainer, ToneProbe,
-};
+use super::material::glass::{backdrop_change, BackdropRecord, Below, GlassContainer, ToneProbe};
 use super::material::{GpuRecipe, MaterialMask, MaterialStage, SharedMaterial};
 use super::mesh::{MeshGl, SharedMesh};
 use super::motion::{
@@ -3176,31 +3174,31 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
             }
             _ => None,
         };
-        let generation = sampled.map(|(key, area)| {
+        let change = sampled.map(|(key, area)| {
             let (overlapping, at): (Vec<Below>, Vec<usize>) = below
                 .iter()
                 .filter(|(b, _)| b.geometry.overlaps(area))
                 .map(|(b, j)| (*b, *j))
                 .unzip();
-            let generation =
-                backdrop_generation(area, &overlapping, cache.backdrop(key), |k, since| {
-                    // `lower` starts at index `i + 1` of `elements`
-                    let e = &lower[at[k] - i - 1];
-                    let origin = e.geometry(scale).loc;
-                    e.damage_since(scale, Some(CommitCounter::from(since as usize)))
-                        .iter()
-                        .map(|d| smithay::utils::Rectangle::new(d.loc + origin, d.size))
-                        .collect()
-                });
+            let change = backdrop_change(area, &overlapping, cache.backdrop(key), |k, since| {
+                // `lower` starts at index `i + 1` of `elements`
+                let e = &lower[at[k] - i - 1];
+                let origin = e.geometry(scale).loc;
+                e.damage_since(scale, Some(CommitCounter::from(since as usize)))
+                    .iter()
+                    .map(|d| smithay::utils::Rectangle::new(d.loc + origin, d.size))
+                    .collect()
+            });
             cache.set_backdrop(
                 key,
                 BackdropRecord {
-                    generation,
+                    generation: change.generation,
                     below: overlapping,
                 },
             );
-            generation
+            change
         });
+        let generation = change.as_ref().map(|c| c.generation);
         match e {
             CupertinoElement::Glass(g) => {
                 g.finalize(generation.expect("glass samples an area"), cache);
@@ -3222,6 +3220,9 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
                     }
                 };
                 m.finalize(generation, cache);
+                if let Some(change) = change {
+                    m.changed_since(change.since);
+                }
             }
             _ => {}
         }
@@ -3235,6 +3236,10 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
                 commit: c,
                 alpha: e.alpha(),
                 geometry: e.geometry(scale),
+                hole: match &*e {
+                    CupertinoElement::Shader(s) => s.hole(scale),
+                    _ => None,
+                },
             },
             i,
         ));

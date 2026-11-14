@@ -256,7 +256,23 @@ fn rounded(ctx: &mut Lowering<'_>, key: ElementKey, rect: &RoundedRect, alpha: f
         border_falloff: rect.border_falloff,
         alpha,
     };
-    rounded_rect(ctx.programs, ctx.cache, ctx.scale, key, &spec)
+    let shape = rounded_rect(ctx.programs, ctx.cache, ctx.scale, key, &spec);
+    match rect.border {
+        // a ring: nothing inside its border, the corners' curves but half the radius in
+        Some((width, _)) if rect.fill[3] <= 0.0 => {
+            let r = logical_rect(rect.rect);
+            let inset = width + rect.radius * rect.style.expansion() * 0.5;
+            shape.with_hole(smithay::utils::Rectangle::new(
+                (r.loc.x + inset, r.loc.y + inset).into(),
+                (
+                    (r.size.w - 2.0 * inset).max(0.0),
+                    (r.size.h - 2.0 * inset).max(0.0),
+                )
+                    .into(),
+            ))
+        }
+        _ => shape,
+    }
 }
 
 pub fn shadow_rect(
@@ -307,7 +323,7 @@ pub fn shadow_rect(
         .u(shadow.cutout as u64)
         .finish();
     let (id, commit) = cache.slot(key, sig);
-    ShaderRect::new(
+    let rect = ShaderRect::new(
         programs.shadow.clone(),
         id,
         commit,
@@ -315,7 +331,21 @@ pub fn shadow_rect(
         alpha as f32,
         uniforms,
         false,
-    )
+    );
+    if !shadow.cutout {
+        return rect;
+    }
+    // cut out under the window's shape: nothing drawn inside it, the corners' curves but half their extent in
+    let window = logical_rect(shadow.caster);
+    let inset = extent * 0.5;
+    rect.with_hole(smithay::utils::Rectangle::new(
+        (window.loc.x + inset, window.loc.y + inset).into(),
+        (
+            (window.size.w - 2.0 * inset).max(0.0),
+            (window.size.h - 2.0 * inset).max(0.0),
+        )
+            .into(),
+    ))
 }
 
 fn wallpaper(

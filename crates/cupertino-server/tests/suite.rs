@@ -66,6 +66,8 @@ mod goldens;
 mod gpu_presenter;
 #[path = "gpu-reset.rs"]
 mod gpu_reset;
+#[path = "gpu_resize.rs"]
+mod gpu_resize;
 #[path = "gpu_slice.rs"]
 mod gpu_slice;
 #[path = "headless.rs"]

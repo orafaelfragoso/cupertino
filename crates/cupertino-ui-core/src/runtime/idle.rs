@@ -119,15 +119,19 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// When the loop, waiting with idle work left because a frame was due, gives up on the frame and goes on with the
-    /// work: once the frame is a whole period late. `None` with no idle work.
+    /// work: once the frame is a whole period late. `None` with no idle work. A frame already that late holds nothing
+    /// back, so it is left out: with two windows, one of them not drawn, its frame would otherwise name a time past and
+    /// the loop would wait for nothing, over and over, until the other's frame came.
     pub(super) fn idle_resume(&self) -> Option<Timestamp> {
         if !self.has_idle_work() {
             return None;
         }
+        let now = self.options.clock.now();
         self.windows
             .iter()
             .filter(|w| waits_for_frame(w))
             .filter_map(|w| w.frame_clock.held_back())
+            .filter(|&at| at > now)
             .min()
     }
 

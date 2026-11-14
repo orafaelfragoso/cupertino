@@ -135,6 +135,9 @@ struct LayerSurface {
     carried: Vec<PixelRect>,
     /// The pixel size of the layer frame shown last.
     shown: Option<(u32, u32)>,
+    /// A frame was committed that waits for the window's commit, as a synchronized subsurface's does: the compositor
+    /// holds its buffer until then.
+    waiting: bool,
 }
 
 /// A toplevel's menus as the runtime asked for them, and their publication.
@@ -950,8 +953,18 @@ impl WaylandWindowSystem {
             surface,
             carried: Vec::new(),
             shown: None,
+            waiting: false,
         });
         Ok(surface)
+    }
+
+    /// Whether `surface` has a buffer to present a frame into now: one of its GPU buffers where it draws on the GPU,
+    /// else one of its shared-memory buffers.
+    fn surface_can_present(&mut self, surface: SurfaceId) -> bool {
+        match self.gpu.buffer_free(&self.conn, surface) {
+            Some(free) => free,
+            None => matches!(self.conn.buffer_free(surface), Ok(true)),
+        }
     }
 
     /// The window at `i` may draw again; whether the frame it asked for meanwhile is due now.
@@ -1014,6 +1027,9 @@ impl WaylandWindowSystem {
         }
         w.frame_pending = true;
         w.shown = Some(size);
+        if let Some(layer) = w.layer.as_mut() {
+            layer.waiting = false;
+        }
         let surface = w.surface;
         // a process of the size and repaint rule's class counts what its windows present
         let now = self.now().0;
@@ -1031,7 +1047,25 @@ impl WaylandWindowSystem {
         let w = self.window_mut(window)?;
         w.carried.extend(damage);
         bound(&mut w.carried, frame.width, frame.height);
-        Ok(())
+        self.apply_layer(window)
+    }
+
+    /// The window's frame was not shown after its raised layer committed one: the window commits what it shows again,
+    /// so the layer's frame applies and the compositor lets go of the buffer it showed before. Left waiting, the layer
+    /// would draw each next frame into another buffer until the compositor held them all, and the window, whose frame
+    /// goes after its layer's, would never commit again.
+    fn apply_layer(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        let w = self.window_mut(window)?;
+        let surface = w.surface;
+        let shown = w.shown.is_some();
+        let Some(layer) = w.layer.as_mut().filter(|l| l.waiting) else {
+            return Ok(());
+        };
+        if !shown {
+            return Ok(());
+        }
+        layer.waiting = false;
+        self.conn.commit_state(surface).map_err(platform_error)
     }
 
     /// When a presented frame turned visible, `time_ns` on the compositor's presentation clock, on the window system's
@@ -2009,6 +2043,7 @@ impl WindowSystem for WaylandWindowSystem {
                 w.carried.extend(damage.iter().map(wire_rect));
                 bound(&mut w.carried, size.0, size.1);
                 w.stalled = stall;
+                self.apply_layer(window)?;
                 Ok(Lent::Drawn(PresentOutcome::NotReady))
             }
         }
@@ -2032,6 +2067,16 @@ impl WindowSystem for WaylandWindowSystem {
             }
             return Ok(PresentOutcome::Presented);
         };
+        // the layer's commit is cached until the window's own applies it, and the compositor holds its buffer until
+        // then: committed while the window has no buffer to present into, it would be committed again frame after
+        // frame until the compositor held every buffer of the layer, and the window, whose frame waits for its layer,
+        // would never commit again
+        let parent = self.window(window)?.surface;
+        if !self.surface_can_present(parent) {
+            // the runtime draws the layer whole when it is ready
+            self.window_mut(window)?.stalled = Some(Stall::Buffer);
+            return Ok(PresentOutcome::NotReady);
+        }
         let surface = self.layer_surface(window)?;
         let width = self.window(window)?.size.0;
         let size = (width, layer.height);
@@ -2078,10 +2123,14 @@ impl WindowSystem for WaylandWindowSystem {
             Ok(()) => {
                 let state = self.window_mut(window)?.layer.as_mut().expect("made above");
                 state.shown = Some((frame.width, frame.height));
+                state.waiting = true;
                 Ok(PresentOutcome::Presented)
             }
-            Err(_) => {
-                let state = self.window_mut(window)?.layer.as_mut().expect("made above");
+            Err(stall) => {
+                let w = self.window_mut(window)?;
+                // a layer waiting for a buffer stalls its window, which goes on once both have one
+                w.stalled = stall;
+                let state = w.layer.as_mut().expect("made above");
                 state.carried.extend(damage);
                 bound(&mut state.carried, frame.width, frame.height);
                 Ok(PresentOutcome::NotReady)
@@ -2266,12 +2315,14 @@ impl WindowSystem for WaylandWindowSystem {
         events.extend(changes);
         for i in 0..self.windows.len() {
             let w = &self.windows[i];
-            let surface = w.surface;
-            let free = match self.gpu.buffer_free(&self.conn, surface) {
-                Some(free) => free,
-                None => matches!(self.conn.buffer_free(surface), Ok(true)),
-            };
-            if self.windows[i].stalled == Some(Stall::Buffer) && free && self.resume(i) {
+            if w.stalled != Some(Stall::Buffer) {
+                continue;
+            }
+            // the window's surface and its raised layer's, which presents with it
+            let (surface, layer) = (w.surface, w.layer.as_ref().map(|l| l.surface));
+            let free = self.surface_can_present(surface)
+                && layer.is_none_or(|l| self.surface_can_present(l));
+            if free && self.resume(i) {
                 events.push(PlatformEvent::Window {
                     window: self.windows[i].id,
                     event: WindowEvent::Frame(self.now()),

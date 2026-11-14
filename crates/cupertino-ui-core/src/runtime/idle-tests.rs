@@ -556,8 +556,14 @@ fn slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_
         .iter()
         .all(|c| c.at >= due && c.until <= due + PERIOD - FRAME_MARGIN_NS));
     assert!(rt.has_idle_work());
-    // a frame a period late, held back as for a window not shown: the work no longer waits for it
+    // a frame a period late, held back as for a window not shown: the work no longer waits for it, nor names a time
+    // to go on at that is already past
     set_now(due + 2 * PERIOD);
+    assert_eq!(
+        rt.idle_resume(),
+        None,
+        "a frame that late holds nothing back"
+    );
     rt.run_idle().unwrap();
     assert!(!rt.has_idle_work(), "done");
 

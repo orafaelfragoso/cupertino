@@ -416,6 +416,20 @@ pub(crate) struct FakeSystem {
     pub(crate) activated: Option<bool>,
     /// Runs popups' transitions on their presentations ([`Capabilities::present_popups`]).
     pub(crate) present_popups: bool,
+    /// Shows marked subtrees in surfaces of their own ([`WindowSystem::present_surface_layers`]).
+    pub(crate) surface_layers: bool,
+    /// Every list of surface layers presented, in order, with the window.
+    pub(crate) surface_presents: Vec<(WindowId, Vec<SurfacePresent>)>,
+}
+
+/// A surface layer as [`FakeSystem`] saw it presented: its key, rect and look, and its frame's size, damage and pixels
+/// when it drew one.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SurfacePresent {
+    pub(crate) key: u64,
+    pub(crate) rect: cupertino_geometry::Rect,
+    pub(crate) look: cupertino_ui_platform::SurfaceLayerLook,
+    pub(crate) frame: Option<LayerPresent>,
 }
 
 /// A raised layer as [`FakeSystem`] saw it presented.
@@ -478,6 +492,7 @@ impl WindowSystem for FakeSystem {
             app_effects: self.effects,
             raised_layer: self.layers,
             present_popups: self.present_popups,
+            surface_layers: self.surface_layers,
             ..Capabilities::default()
         }
     }
@@ -658,6 +673,32 @@ impl WindowSystem for FakeSystem {
                 pixels: l.frame.pixels.clone(),
             }),
         ));
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn present_surface_layers(
+        &mut self,
+        window: WindowId,
+        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !layers.is_empty() && !self.surface_layers {
+            return Err(PlatformError::Unsupported);
+        }
+        let presents = layers
+            .iter()
+            .map(|l| SurfacePresent {
+                key: l.key,
+                rect: l.rect,
+                look: l.look,
+                frame: l.frame.map(|f| LayerPresent {
+                    height: 0,
+                    size: (f.width, f.height),
+                    damage: f.damage.clone(),
+                    pixels: f.pixels.clone(),
+                }),
+            })
+            .collect();
+        self.surface_presents.push((window, presents));
         Ok(PresentOutcome::Presented)
     }
 

@@ -85,6 +85,15 @@ pub trait Widget<M>: 'static {
     fn obscures(&self, _state: &Self::State) -> bool {
         true
     }
+    /// Whether the widget's subtree draws into a surface layer of its own, which the compositor places, fades, scales
+    /// and blurs on its clock ([`SurfaceLayerMark`](crate::SurfaceLayerMark)), where the window system shows them
+    /// ([`Capabilities::surface_layers`](cupertino_ui_platform::Capabilities)); elsewhere the subtree paints in place
+    /// and the application draws its motion itself. Its layout, input and semantics stay the window's. A mark inside
+    /// a marked subtree draws in the outer layer. A widget whose answer changes returns [`Change::Paint`] from its
+    /// update.
+    fn surface_layer(&self, _state: &Self::State) -> Option<crate::SurfaceLayerMark> {
+        None
+    }
     /// Whether the window whose root this widget is grows out of what it opened from: a popup that is a popover
     /// starts small at the point of its anchor nearest to it, springs to its full size, and shrinks back into that
     /// point as it closes, its glass with it. Under Reduce Motion it shows and goes at once.
@@ -311,6 +320,7 @@ pub(crate) trait AnyWidget<M> {
     fn overlay(&self, state: &dyn Any, cx: &mut OverlayCx<'_>);
     fn raised(&self, state: &dyn Any) -> bool;
     fn obscures(&self, state: &dyn Any) -> bool;
+    fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
     fn grows_from_anchor(&self) -> bool;
     fn closes_as_menu(&self) -> bool;
 }
@@ -397,6 +407,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn obscures(&self, state: &dyn Any) -> bool {
         Widget::obscures(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark> {
+        Widget::surface_layer(self, state.downcast_ref().expect(STATE))
     }
 
     fn grows_from_anchor(&self) -> bool {

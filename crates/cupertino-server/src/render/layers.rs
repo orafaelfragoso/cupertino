@@ -3,9 +3,10 @@
 //! scaling and fading with it. Raised layers come in front of the flat ones and lift their glass with a soft shadow; a
 //! vibrant layer draws its coverage blended with the glass behind it ([`SurfaceRole::Vibrant`]). The glass of the layers
 //! of one glass group is one container of their shapes as shown, drawn below the content of its first layer
-//! ([`glass_anchors`]).
+//! ([`glass_anchors`]). A layer of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`],
+//! `super::content_blur`).
 
-use cupertino_scene::{Clip, SceneKind, SurfaceRole, VibrantBlend};
+use cupertino_scene::{Clip, ContentBlur, SceneKind, SurfaceRole, VibrantBlend};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 
@@ -117,6 +118,16 @@ pub fn vibrant_blend(role: BlendRole, dark: bool, plain: bool) -> Option<Vibrant
     })
 }
 
+/// The role of a layer's content of the normal blend: blurred by `sigma` points, or as it is when it does not blur.
+pub fn content_role(sigma: f64) -> SurfaceRole {
+    let blur = ContentBlur::of_points(sigma);
+    if blur.sigma_milli == 0 {
+        SurfaceRole::WindowContent
+    } else {
+        SurfaceRole::Blurred(blur)
+    }
+}
+
 /// Whether a layer drawn at `opacity` and `scale` shows at all.
 fn shows(opacity: f32, l: &LayerDraw) -> bool {
     opacity > 0.0 && l.scale > 0.0
@@ -200,7 +211,7 @@ pub fn layer_pieces(
             place.clip
         };
         let role = vibrant_blend(l.blend, dark, plain)
-            .map_or(SurfaceRole::WindowContent, SurfaceRole::Vibrant);
+            .map_or_else(|| content_role(l.content_blur), SurfaceRole::Vibrant);
         out.push(Piece::Tree(Box::new(Tree {
             surface: l.surface.clone(),
             kind: place.kind,
@@ -333,6 +344,16 @@ mod tests {
         let below_left = pointer_light(c, Point::from((50.0, 150.0))).unwrap();
         assert!((below_left + 3.0 * std::f32::consts::FRAC_PI_4).abs() < 1e-6);
         assert_eq!(pointer_light(c, c), None);
+    }
+
+    #[test]
+    fn a_blurred_layer_s_content_is_drawn_blurred_and_a_sharp_one_as_it_is() {
+        assert_eq!(content_role(0.0), SurfaceRole::WindowContent);
+        assert_eq!(content_role(0.0001), SurfaceRole::WindowContent);
+        assert_eq!(
+            content_role(4.5),
+            SurfaceRole::Blurred(ContentBlur { sigma_milli: 4500 })
+        );
     }
 
     #[test]

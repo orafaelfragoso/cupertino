@@ -383,7 +383,7 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=3, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=4, ()).unwrap();
             let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let ls = shell.get_layer_surface(
@@ -1038,6 +1038,172 @@ fn a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move() {
     );
 }
 
+/// The share of a unit Gaussian below `z` standard deviations (its integral), from the error function's rational
+/// approximation, good to well under a thousandth.
+fn gaussian_share(z: f64) -> f64 {
+    let x = z.abs() / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let erf = 1.0 - poly * (-x * x).exp();
+    0.5 * (1.0 + erf.copysign(z))
+}
+
+#[test]
+fn a_layer_s_content_blur_is_in_points_and_scales_with_the_layer_at_a_fractional_scale() {
+    let Some(mut h) = Harness::new(1.5, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 200.0);
+        c.l(0).set_value(Property::Y, 100.0);
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur", |h| h.layers()[0].content_blur == 4.0);
+    // the right edge lies at the parent's 300 points: 600 device pixels from the output's left edge at 1.5
+    let edge = f64::from(MARGIN.0 + 300) * 1.5;
+    let row = ((f64::from(MARGIN.1) + 125.0) * 1.5) as u32;
+    let profile = |shot: &image::RgbaImage, sigma_px: f64| {
+        for x in (edge as u32 - 16)..(edge as u32 + 16) {
+            let share = gaussian_share((edge - (f64::from(x) + 0.5)) / sigma_px);
+            let red = 255.0 * share + 128.0 * (1.0 - share);
+            let shown = shot.get_pixel(x, row).0;
+            assert!(
+                (f64::from(shown[0]) - red).abs() <= 3.0,
+                "{x}: {shown:?} against {red:.1} for a deviation of {sigma_px} pixels"
+            );
+        }
+    };
+    // four points are six device pixels
+    profile(&h.screenshot("blur-fractional"), 6.0);
+    // scaled to half about its centre, the layer's blur is half as wide on the output, as its content is, and centred
+    // on the edge the scaled content is drawn at (which the output's pixel grid rounds)
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Scale, 0.5);
+        c.l(0).set_value(Property::ContentBlur, 0.0);
+        c.parent.commit();
+    });
+    h.wait_until("the scale", |h| h.layers()[0].scale == 0.5);
+    let sharp = h.screenshot("blur-scaled-sharp");
+    // the content's centre stays at the parent's (250, 125); its right edge comes in to about 275 points
+    let near = (f64::from(MARGIN.0 + 275) * 1.5) as u32;
+    let edge = (near - 4..near + 4)
+        .find(|&x| sharp.get_pixel(x, row).0[0] < 192)
+        .expect("the scaled content's edge");
+    assert!(
+        edge.abs_diff(near) <= 1,
+        "the scaled edge at {edge}, not by {near}"
+    );
+    client.send(|c, _| {
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur again", |h| h.layers()[0].content_blur == 4.0);
+    let shot = h.screenshot("blur-scaled");
+    let edge = f64::from(edge);
+    for x in (edge as u32 - 10)..(edge as u32 + 10) {
+        let share = gaussian_share((edge - (f64::from(x) + 0.5)) / 3.0);
+        let red = 255.0 * share + 128.0 * (1.0 - share);
+        let shown = shot.get_pixel(x, row).0;
+        assert!(
+            (f64::from(shown[0]) - red).abs() <= 3.0,
+            "{x}: {shown:?} against {red:.1} scaled"
+        );
+    }
+}
+
+#[test]
+fn a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_and_the_parent_stays_sharp(
+) {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 200.0);
+        c.l(0).set_value(Property::Y, 100.0);
+        c.parent.commit();
+    });
+    h.wait_until("the layer placed", |h| h.layers()[0].x == 200.0);
+    // the red content covers the parent's (200, 100) to (300, 150)
+    let (inside, outside, middle) = ((298, 125), (303, 125), (250, 125));
+    let sharp = h.screenshot("blur-sharp");
+    assert_eq!(at(&sharp, inside.0, inside.1), [255, 0, 0, 255]);
+    assert_eq!(at(&sharp, outside.0, outside.1), grey(0, 0));
+    // blurred by four points the edge softens both ways: the parent beside it reddens, the content by it pales
+    client.send(|c, _| {
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur", |h| h.layers()[0].content_blur == 4.0);
+    let soft = h.screenshot("blur-soft");
+    // across the right edge the colour follows the Gaussian's integral, the red's share of each pixel
+    for x in 288..314 {
+        let share = gaussian_share((300.0 - (f64::from(x) + 0.5)) / 4.0);
+        let red = 255.0 * share + 128.0 * (1.0 - share);
+        let shown = at(&soft, x, 125);
+        assert!(
+            (f64::from(shown[0]) - red).abs() <= 3.0
+                && (f64::from(shown[1]) - 128.0 * (1.0 - share)).abs() <= 3.0,
+            "{x}: {shown:?} against {red:.1}"
+        );
+    }
+    let (i, o, m) = (
+        at(&soft, inside.0, inside.1),
+        at(&soft, outside.0, outside.1),
+        at(&soft, middle.0, middle.1),
+    );
+    assert!(
+        o[0] > 150 && o[1] < 110,
+        "the blur reaches past the edge: {o:?}"
+    );
+    assert!(i[0] < 255 && i[1] > 10, "the edge's inside softens: {i:?}");
+    assert!(
+        m[0] >= 252 && m[1] <= 3,
+        "well inside the content stays as it is: {m:?}"
+    );
+    assert_eq!(at(&soft, 120, 125), grey(0, 0), "the parent is not blurred");
+    // a blur animates on the server's clock like any property
+    h.state.fixed_time = Some(40.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(9, Property::ContentBlur, 12.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur's animation", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 40.0))
+    });
+    h.state.fixed_time = Some(40.5);
+    assert!((h.layers()[0].content_blur - 8.0).abs() < 1e-6);
+    let wider = h.screenshot("blur-wider");
+    assert!(
+        at(&wider, 310, 125)[0] > at(&soft, 310, 125)[0],
+        "a wider blur reaches further"
+    );
+    h.state.fixed_time = Some(41.0);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [9]));
+    // under reduce motion a blur goes to its target at once
+    h.state.accessibility.settings.display.reduce_motion = true;
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(10, Property::ContentBlur, 0.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("sharp again", |h| h.layers()[0].content_blur == 0.0);
+    // past the widest blur the server takes is refused
+    client.send(|c, _| c.l(0).set_value(Property::ContentBlur, 64.5));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
+    );
+}
+
 #[test]
 fn a_popup_s_presentation_scales_and_fades_it_on_the_server_clock() {
     let Some(mut h) = Harness::new(1.0, false) else {
@@ -1308,4 +1474,295 @@ fn captures() {
             .unwrap();
         drop(client);
     }
+}
+
+/// The toolkit's window system against the server (`cupertino-ui-wayland`'s `surface-layers`), at scale 1.5: a window
+/// hands over a surface layer with its frame, which the server shows as a layer of the window's surface at the rect
+/// the window gave it, drawn from the layer's own buffer at the window's scale; the fade the window then asks for runs
+/// on the server's clock to its end while the window commits no new buffer, and the content blur it sends as samples
+/// goes up and back down with it.
+#[test]
+fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer(
+) {
+    use smithay::backend::renderer::utils::with_renderer_surface_state;
+    use std::process::Stdio;
+    let Some(mut h) = Harness::new(1.5, false) else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let runtime = home.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let report = home.path().join("report");
+    let binary = common::fixtures::artifact("cupertino-ui-wayland", "example", "surface-layers");
+    /// The window's process, ended with the test.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _window = Kill(
+        common::spawn::cleared(binary, home.path())
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("WAYLAND_DISPLAY", h.socket_path())
+            .arg("--report")
+            .arg(&report)
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("the window"),
+    );
+    let toplevel = |h: &Harness| {
+        h.state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .map(|w| w.toplevel.wl_surface().clone())
+    };
+    let drawn = |h: &Harness| {
+        toplevel(h).map_or_else(Vec::new, |s| {
+            present(&s, h.state.now(), h.state.display_options().reduce_motion)
+        })
+    };
+    h.wait_until("the window's layer and its frame", |h| {
+        drawn(h).first().is_some_and(|l| l.content != (0.0, 0.0))
+    });
+    let layer = drawn(&h)[0].clone();
+    assert_eq!(layer.content, (120.0, 60.0), "its frame, in points");
+    let pixels = with_renderer_surface_state(&layer.surface, |s| s.buffer_size())
+        .flatten()
+        .expect("the layer's buffer");
+    assert_eq!((pixels.w, pixels.h), (180, 90), "at the window's scale");
+    assert_eq!(
+        (layer.x, layer.y, layer.width, layer.height, layer.opacity),
+        (40.0, 30.0, 120.0, 60.0, 1.0),
+        "at the rect the window gave it"
+    );
+    let surface = toplevel(&h).unwrap();
+    let commit = |s: &ServerSurface| with_renderer_surface_state(s, |state| state.current_commit());
+    h.wait_until("the fade asked for", |_| {
+        std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
+    });
+    let r = std::fs::read_to_string(&report).unwrap();
+    assert!(r.contains("surface_layers 1"), "{r}");
+    assert!(r.contains("layer_frames 1"), "{r}");
+    let first = commit(&surface);
+    let (mut between, mut new_buffers, mut last) = (0, 0, first);
+    let mut blurred = 0.0_f64;
+    h.wait_until("the layer faded out", |h| {
+        let Some((shown, blur)) = drawn(h).first().map(|l| (l.opacity, l.content_blur)) else {
+            return false;
+        };
+        blurred = blurred.max(blur);
+        if shown > 0.0 && shown < 1.0 {
+            between += 1;
+        }
+        let now = commit(&surface);
+        if now != last {
+            new_buffers += 1;
+            last = now;
+        }
+        shown == 0.0
+    });
+    eprintln!(
+        "trace: fade: {between} server steps part way, {new_buffers} new buffers of the window, blur up to {blurred:.2}"
+    );
+    assert!(between > 0, "the fade ran on the server");
+    assert_eq!(
+        new_buffers, 0,
+        "the window drew no frame while its layer faded"
+    );
+    assert!(
+        blurred > 2.0 && blurred <= 8.0,
+        "the blur went up through its samples: {blurred}"
+    );
+    let end = drawn(&h)[0].content_blur;
+    assert!(end < 0.5, "and back down towards its last: {end}");
+}
+
+/// The same window on the GPU (`--renderer`, `CUPERTINO_RENDERER=gpu`): the layer's frames are drawn by the toolkit's
+/// GPU renderer on the presenter's device and shown from dmabufs of the layer's own surface. Skips (or with
+/// `CUPERTINO_GPU_REQUIRED=1` fails) without a render node.
+#[test]
+fn a_toolkit_window_s_surface_layer_drawn_on_the_gpu_shows_from_dmabufs_of_its_own() {
+    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::dmabuf::get_dmabuf;
+    use std::process::Stdio;
+    let required = std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() == Ok("1");
+    let Some(mut h) = Harness::new(1.0, false) else {
+        assert!(!required, "CUPERTINO_GPU_REQUIRED=1: no EGL device");
+        return;
+    };
+    let renderer = h.state.backend.as_mut().unwrap().renderer();
+    if cupertino_server::backend::render_node(renderer).is_none() {
+        assert!(
+            !required,
+            "CUPERTINO_GPU_REQUIRED=1: the device has no render node"
+        );
+        eprintln!(
+            "SKIPPED: the device has no render node; set CUPERTINO_GPU_REQUIRED=1 to fail instead"
+        );
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let runtime = home.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let report = home.path().join("report");
+    let binary = common::fixtures::artifact("cupertino-ui-wayland", "example", "surface-layers");
+    /// The window's process, ended with the test.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut command = common::spawn::cleared(binary, home.path());
+    command
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("WAYLAND_DISPLAY", h.socket_path())
+        .env("CUPERTINO_RENDERER", "gpu")
+        .args(["--renderer", "--report"])
+        .arg(&report)
+        .stdout(Stdio::null());
+    for var in [
+        "LIBGL_ALWAYS_SOFTWARE",
+        "__EGL_VENDOR_LIBRARY_FILENAMES",
+        "GALLIUM_DRIVER",
+    ] {
+        if let Some(value) = std::env::var_os(var) {
+            command.env(var, value);
+        }
+    }
+    let _window = Kill(command.spawn().expect("the window"));
+    let layer_surface = |h: &Harness| {
+        let window = h.state.windows.iter().find(|w| w.mapped)?;
+        let surface = window.toplevel.wl_surface().clone();
+        present(&surface, h.state.now(), false)
+            .first()
+            .map(|l| l.surface.clone())
+    };
+    let on_dmabuf = |surface: &ServerSurface| {
+        with_states(surface, |states| {
+            let buffer = states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .and_then(|s| s.lock().unwrap().buffer().cloned());
+            buffer.is_some_and(|b| get_dmabuf(&b).is_ok())
+        })
+    };
+    let mut from_dmabuf = 0;
+    h.wait_until("the GPU frames handed over", |h| {
+        if layer_surface(h).is_some_and(|s| on_dmabuf(&s)) {
+            from_dmabuf += 1;
+        }
+        std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
+    });
+    // the last frame handed over is shown once the server has taken it
+    h.wait_until("the layer's frame from a dmabuf", |h| {
+        layer_surface(h).is_some_and(|s| on_dmabuf(&s))
+    });
+    let r = std::fs::read_to_string(&report).unwrap();
+    eprintln!("trace: {from_dmabuf} server steps showed the layer from a dmabuf; {r}");
+    assert!(r.contains("surface_layers 1"), "{r}");
+    assert!(
+        r.contains(&format!("layer_gpu_frames {}", 8)),
+        "every GPU frame was handed over: {r}"
+    );
+}
+
+/// Samples as the protocol carries them: 32-bit floats in the host's byte order.
+fn sample_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_ne_bytes()).collect()
+}
+
+#[test]
+fn a_property_moves_through_samples_in_straight_lines_on_the_server_clock_from_its_first_to_its_last(
+) {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 500.0);
+        c.parent.commit();
+    });
+    h.wait_until("the layer placed", |h| x_of(h) == 500.0);
+    // three steps over 0.3 s, which no single curve draws: out, back and further out
+    h.state.fixed_time = Some(50.0);
+    client.send(|c, _| {
+        c.l(0).animate_samples(
+            21,
+            Property::X,
+            300,
+            sample_bytes(&[200.0, 300.0, 250.0, 400.0]),
+        );
+        c.parent.commit();
+    });
+    h.wait_until("the samples' animation", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 50.0))
+    });
+    assert_eq!(x_of(&h), 200.0, "it starts at its first sample");
+    for (t, x) in [(50.05, 250.0), (50.15, 275.0), (50.25, 325.0)] {
+        h.state.fixed_time = Some(t);
+        assert!((x_of(&h) - x).abs() < 1e-3, "{t}: {} against {x}", x_of(&h));
+    }
+    h.state.fixed_time = Some(50.4);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [21]));
+    assert_eq!(x_of(&h), 400.0, "it rests at its last sample");
+    // a curve after it, replacing it part way, starts from what the samples show
+    h.state.fixed_time = Some(60.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(22, Property::X, 300, sample_bytes(&[400.0, 100.0]));
+        c.parent.commit();
+    });
+    h.wait_until("the second", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 60.0))
+    });
+    h.state.fixed_time = Some(60.15);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(23, Property::X, 0.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("replaced", |_| !client.heard(|e| e.replaced.is_empty()));
+    let (serial, value, velocity) = client.heard(|e| e.replaced[0]);
+    assert_eq!(serial, 22);
+    assert!((value - 250.0).abs() < 0.01, "{value}");
+    assert!(
+        (velocity + 1000.0).abs() < 0.5,
+        "the samples' slope: {velocity}"
+    );
+    // under reduce motion a spatial property goes to its last sample at once
+    h.state.accessibility.settings.display.reduce_motion = true;
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(24, Property::X, 300, sample_bytes(&[10.0, 90.0, 30.0]));
+        c.parent.commit();
+    });
+    h.wait_until("at its last sample", |h| x_of(h) == 30.0);
+    // one sample is not a motion, and an opacity past 1 is out of its range
+    client.send(|c, _| {
+        c.l(0)
+            .animate_samples(25, Property::Opacity, 300, sample_bytes(&[0.5]))
+    });
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidCurve as u32
+    );
+    let other = one_layer(&mut h);
+    other.send(|c, _| {
+        c.l(0)
+            .animate_samples(26, Property::Opacity, 300, sample_bytes(&[0.5, 1.5]))
+    });
+    h.wait_until("the error", |_| other.heard(|e| e.error.is_some()));
+    assert_eq!(
+        other.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
+    );
 }

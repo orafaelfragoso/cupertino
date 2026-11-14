@@ -210,6 +210,9 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 - geometry in fixed point, applied atomically with the parent surface's commit;
 - glass attached to a layer, so a moving panel and its glass never separate, and the glass of several layers joined
   into one shape from their bounds as shown, so a button buds out of a field's glass as both move;
+- a blur of a layer's own content, a Gaussian in points animated like any property, which the compositor draws from an
+  offscreen copy of the content through the backdrop blur's pyramid and passes (keeping the content's alpha), so a
+  panel's text softens as it closes without a frame of the application's;
 - a blend role per layer, so vibrant text and symbols are a layer the compositor blends against the glass behind it;
 - an animation as a curve (timed or spring) with start and target, started at the first presentation of its commit
   on the compositor's clock, honouring the time scale and the fixed time tests use;
@@ -223,6 +226,14 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 
 Scrolling and dock magnification follow the pointer, so they stay client-driven: a cheap commit per frame that moves
 layers, not a repaint.
+
+On the toolkit's side a widget marks a subtree a surface layer (`Widget::surface_layer`): the runtime paints it into a
+frame of its own at its layout size, with its own damage and renderer, and the window system makes it a layer of the
+window's surface, drawn from buffers of its own (shared memory, or dmabufs from the GPU renderer's texture). The
+application then sets or animates the layer's properties with `WindowRequest::Layer`, which costs no frame; layout,
+input and semantics keep the layout. A motion that is no single curve of one property (a product of two springs, a
+clamped ramp) goes as its values at even steps of its duration, which the compositor follows in straight lines on its
+clock.
 
 ### 10. The compositor
 

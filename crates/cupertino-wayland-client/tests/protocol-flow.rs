@@ -5865,3 +5865,66 @@ fn a_subsurface_shows_with_its_window_at_its_scale_and_takes_no_input() {
         }
     }
 }
+
+/// A surface of a role the compositor never configures, drawn at another surface's scale (a layer of a window): it
+/// presents at once with no configure to answer, its buffers sized by the window's scale though it entered no output
+/// itself; a role drawn at its own scale still waits for its configure.
+#[test]
+fn a_surface_drawn_with_a_window_presents_without_a_configure_at_the_window_s_scale() {
+    /// A role with no protocol object of its own, drawn at `0`'s scale when it names one.
+    struct Drawn(Option<SurfaceId>);
+    impl cupertino_wayland_client::ExternalRole for Drawn {
+        fn ack_configure(&self, _: u32) {}
+        fn destroy(&self) {}
+        fn initial_commit(&self) -> bool {
+            false
+        }
+        fn drawn_with(&self) -> Option<SurfaceId> {
+            self.0
+        }
+    }
+    let (mut conn, control, seen) = connect(Globals {
+        output_scale: Some(2),
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    let configure = configured(&mut conn, &mut stash, w);
+    control.send(Control::EnterOutput).unwrap();
+    wait_for(&mut conn, &mut stash, |e| {
+        matches!(e, Event::ScaleChanged { .. }).then_some(())
+    });
+    present(&mut conn, w.surface(), (320, 240));
+    assert_eq!(next_seen(&seen), Seen::Ack(configure.serial));
+    assert!(matches!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (640, 480),
+            scale: 2,
+            ..
+        }
+    ));
+
+    let layer = conn.external_surface(|_, _, _| Drawn(Some(w.surface())));
+    present(&mut conn, layer, (60, 30));
+    assert!(
+        matches!(
+            next_seen(&seen),
+            Seen::Commit {
+                size: (120, 60),
+                scale: 2,
+                ..
+            }
+        ),
+        "at the window's scale, with no configure"
+    );
+
+    let own = conn.external_surface(|_, _, _| Drawn(None));
+    assert!(
+        matches!(
+            conn.lease(own, (60, 30), BufferFormat::Xrgb8888),
+            Err(Error::NotConfigured)
+        ),
+        "a role drawn at its own scale waits for its configure"
+    );
+}

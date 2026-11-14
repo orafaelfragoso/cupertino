@@ -232,6 +232,32 @@ impl Backdrop {
     }
 }
 
+impl GlassStyle {
+    /// The style's wire value at the protocol's current version, as other extensions of the same server name glass
+    /// styles by it.
+    pub(crate) fn wire(self) -> u32 {
+        let style = match self {
+            GlassStyle::Regular => WireStyle::Regular,
+            GlassStyle::Clear => WireStyle::Clear,
+            GlassStyle::LargePanel => WireStyle::LargePanel,
+            GlassStyle::Bar => WireStyle::Bar,
+            GlassStyle::Dense => WireStyle::Dense,
+            GlassStyle::Module => WireStyle::Module,
+            GlassStyle::Card => WireStyle::Card,
+            GlassStyle::Track => WireStyle::Track,
+            GlassStyle::Popover => WireStyle::Popover,
+            GlassStyle::Switcher => WireStyle::Switcher,
+            GlassStyle::Sidebar => WireStyle::Sidebar,
+            GlassStyle::SubduedModule => WireStyle::SubduedModule,
+            GlassStyle::Snippet => WireStyle::Snippet,
+            GlassStyle::Veiled => WireStyle::Veiled,
+            GlassStyle::Toolbar => WireStyle::Toolbar,
+            GlassStyle::Menu => WireStyle::Menu,
+        };
+        style as u32
+    }
+}
+
 /// The version of `cupertino_backdrop_v1` that has the `tone` event.
 const TONE_VERSION: u32 = 7;
 
@@ -361,6 +387,32 @@ impl Drop for Backdrop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_glass_style_names_its_own_wire_style_for_the_other_extensions() {
+        let all = [
+            GlassStyle::Regular,
+            GlassStyle::Clear,
+            GlassStyle::LargePanel,
+            GlassStyle::Bar,
+            GlassStyle::Dense,
+            GlassStyle::Module,
+            GlassStyle::Card,
+            GlassStyle::Track,
+            GlassStyle::Popover,
+            GlassStyle::Switcher,
+            GlassStyle::Sidebar,
+            GlassStyle::SubduedModule,
+            GlassStyle::Snippet,
+            GlassStyle::Veiled,
+            GlassStyle::Toolbar,
+            GlassStyle::Menu,
+        ];
+        let wired: std::collections::HashSet<u32> = all.iter().map(|s| s.wire()).collect();
+        assert_eq!(wired.len(), all.len());
+        assert_eq!(GlassStyle::LargePanel.wire(), WireStyle::LargePanel as u32);
+        assert_eq!(GlassStyle::Menu.wire(), WireStyle::Menu as u32);
+    }
 
     #[test]
     fn shape_rounds_to_whole_points() {

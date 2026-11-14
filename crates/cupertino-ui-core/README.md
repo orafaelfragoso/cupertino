@@ -192,6 +192,15 @@ all on one thread.
   draw there), and a scroll container tells assistive technology only its part below it, while its items keep their
   true bounds. Without a layer the raised nodes draw in place, after the rest of the window, their materials after the rest's
   too (`paint_order`), and scroll containers outside them clip what they scroll to the part the raised nodes leave.
+- **Surface layers.** A node whose `Widget::surface_layer` returns a `SurfaceLayerMark` (a key unique in its window
+  and a look) draws its subtree into a surface layer of its own where the window system shows them
+  (`Capabilities::surface_layers`): after each paint the runtime moves the marked subtrees out of the window's list
+  into lists of their own at their layer's origin (`runtime/surface_layers.rs`; a mark inside a marked subtree draws in
+  the outer layer, and a subtree's root leaves its ancestors' clips and groups to the layer's shape and properties),
+  keeps a damage tracker and a renderer per layer, draws a layer only where it changed, at its layout size, and hands
+  the frames to the window system with the window's (`present_surface_layers`). The application moves, fades, scales
+  and blurs a layer with `WindowRequest::Layer`, which draws no frame. Layout, input and semantics keep the layout.
+  Without the capability the subtree paints in place.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
   sends `on_activate`'s message. A popup's menus are ignored.

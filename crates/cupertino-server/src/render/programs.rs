@@ -37,6 +37,8 @@ pub struct Programs {
     pub clip_minify: GlesTexProgram,
     /// The reduced copies of windows drawn well below their size.
     pub reduced: super::reduce::Reductions,
+    /// The blurred copies of layers' content.
+    pub blurred: super::content_blur::ContentBlurs,
     /// The clip program drawing a vibrant layer's coverage ([`cupertino_scene::source::VibrantBlend`]).
     pub vibrant: GlesTexProgram,
 }
@@ -111,6 +113,7 @@ impl Programs {
             clip,
             clip_minify,
             reduced: super::reduce::Reductions::default(),
+            blurred: super::content_blur::ContentBlurs::default(),
             vibrant,
         })
     }

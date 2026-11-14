@@ -361,10 +361,7 @@ impl Connection {
         preferred: (u32, u32),
     ) -> Result<FrameSize, Error> {
         let s = &self.state;
-        let parent_scale = match &s.surface(surface)?.role {
-            Role::Subsurface { parent, .. } => Some(s.surface(*parent)?.scale),
-            _ => None,
-        };
+        let parent_scale = s.drawn_scale(surface)?;
         let surf = s.surface(surface)?;
         if !matches!(surf.role, Role::Subsurface { .. }) {
             surf.serials.latest().ok_or(Error::NotConfigured)?;

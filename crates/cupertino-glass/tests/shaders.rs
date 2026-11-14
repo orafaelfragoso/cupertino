@@ -199,3 +199,34 @@ fn the_generated_passes_bind_their_block_and_source_by_the_names_beside_them() {
         );
     }
 }
+
+#[test]
+fn only_the_downsample_and_the_blur_keep_their_source_s_alpha_and_only_when_asked() {
+    use cupertino_glass::ops::{PassParams, PASS_KEEP_ALPHA};
+    use cupertino_glass::shaders::{BLIT, BLUR, COLOR, DOWNSAMPLE};
+    // a pass is opaque, as a backdrop is, unless its flag asks to keep the alpha
+    assert_eq!(PassParams::new((8, 8), (4, 4)).flags, [0; 4]);
+    assert_ne!(PASS_KEEP_ALPHA, 0);
+    for program in [DOWNSAMPLE, BLUR] {
+        let name = program.source.name;
+        assert!(program.wgsl.contains("if (P.flags.y != 0)"), "{name}");
+        assert!(
+            program.source.fragment_glsl.contains(".flags.y;"),
+            "{name}: the generated program reads the flag"
+        );
+        assert!(
+            program.wgsl.contains("vec4<f32>(c.rgb, 1.0)")
+                || program.wgsl.contains("vec4<f32>(rgb, 1.0)"),
+            "{name}: opaque without it"
+        );
+    }
+    // the blur's colour stays within its alpha, so what it keeps is premultiplied
+    assert!(BLUR.wgsl.contains("min(rgb, vec3<f32>(acc.a))"));
+    for program in [COLOR, BLIT] {
+        assert!(
+            !program.source.fragment_glsl.contains(".flags.y;"),
+            "{}",
+            program.source.name
+        );
+    }
+}

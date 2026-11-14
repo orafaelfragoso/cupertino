@@ -244,6 +244,7 @@ pub fn lower(
         }
     }
     ctx.programs.reduced.end_lowering();
+    ctx.programs.blurred.end_lowering();
     elements
 }
 
@@ -370,12 +371,12 @@ fn wallpaper(
     )
 }
 
-fn physical(point: OutputPoint, scale: f64) -> Point<i32, Physical> {
+pub(super) fn physical(point: OutputPoint, scale: f64) -> Point<i32, Physical> {
     Point::<f64, Logical>::from((point.0.x, point.0.y)).to_physical_precise_round(scale)
 }
 
 /// The elements of the tree of `surface`, front to back; with `only`, those of the slice's surfaces alone.
-fn surface_elements(
+pub(super) fn surface_elements(
     ctx: &mut Lowering<'_>,
     surface: &WlSurface,
     only: Option<&TreeSlice>,
@@ -496,6 +497,9 @@ fn surface_tree(
                     }
                 }
             }
+        }
+        SurfaceRole::Blurred(blur) => {
+            super::content_blur::lower(ctx, surface, only.as_ref(), blur, item, viewport, out)
         }
         SurfaceRole::Vibrant(blend) => {
             let els = surface_elements(
@@ -646,7 +650,7 @@ fn picture(
 }
 
 /// The device-pixel mask of a rounded clip.
-fn mask(ctx: &Lowering<'_>, clip: Clip, viewport: (i32, i32)) -> Option<ClipShape> {
+pub(super) fn mask(ctx: &Lowering<'_>, clip: Clip, viewport: (i32, i32)) -> Option<ClipShape> {
     let Clip::Rounded {
         rect,
         radius,

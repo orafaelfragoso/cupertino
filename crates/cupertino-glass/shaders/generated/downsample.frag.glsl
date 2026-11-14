@@ -329,6 +329,11 @@ void main() {
     vec4 _e16 = ld((p_8 + ivec2(0, 1)));
     vec4 _e22 = ld((p_8 + ivec2(1, 1)));
     vec4 c_1 = ((((_e5 + _e10) + _e16) + _e22) * 0.25);
+    int _e29 = _group_0_binding_0_fs.flags.y;
+    if ((_e29 != 0)) {
+        _fs2p_location0 = c_1;
+        return;
+    }
     _fs2p_location0 = vec4(c_1.xyz, 1.0);
     return;
 }

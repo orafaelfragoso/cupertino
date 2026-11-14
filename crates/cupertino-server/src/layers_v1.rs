@@ -10,11 +10,12 @@
 //! A presentation (version 2) is a layer model of a layer shell surface whose parent is itself: its offset, opacity
 //! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer. From version
 //! 3 an xdg popup's surface may have one too, and layers of one parent may join their glass into one shape
-//! ([`LayerDraw::group`]).
+//! ([`LayerDraw::group`]). Version 4 blurs a layer's own content by an animatable Gaussian
+//! ([`LayerDraw::content_blur`], drawn by `render::content_blur`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cupertino_animation::{CubicBezier, LayerCurve, LayerProperty};
 use cupertino_protocols::server::layers::cupertino_layer_v1::{
@@ -54,21 +55,30 @@ pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
 /// The version of the global this server offers.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
 /// Widest blend between the joined shapes of a glass group, in logical points.
 pub const MAX_GROUP_SPACING: f64 = 64.0;
+/// The version from which a layer's content blurs ([`CONTENT_BLUR`]).
+pub const CONTENT_BLUR_VERSION: u32 = 4;
+/// The widest blur of a layer's content: the standard deviation of its Gaussian, in the layer's logical points.
+pub const MAX_CONTENT_BLUR: f64 = 64.0;
 
 /// The number of animatable properties ([`Property`]).
-pub const PROPERTIES: usize = 7;
+pub const PROPERTIES: usize = 8;
+/// The index of the content blur property.
+pub const CONTENT_BLUR: usize = 7;
 
 /// Source of layer serials: identity of a layer for the element cache.
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
 
-/// The index of a property on the wire.
-fn property_index(p: WEnum<Property>) -> Option<usize> {
+/// The index of a property on the wire, for a layer object of `version`.
+fn property_index(p: WEnum<Property>, version: u32) -> Option<usize> {
     match p {
+        WEnum::Value(Property::ContentBlur) => {
+            (version >= CONTENT_BLUR_VERSION).then_some(CONTENT_BLUR)
+        }
         WEnum::Value(p) => Some(match p {
             Property::X => 0,
             Property::Y => 1,
@@ -88,7 +98,7 @@ fn presented(prop: usize) -> bool {
     matches!(prop, 0 | 1 | 4 | 5)
 }
 
-/// Properties that move or reshape the layer, which reduced motion does not animate.
+/// Properties that move, reshape or blur the layer, which reduced motion does not animate.
 fn spatial(prop: usize) -> bool {
     prop != 4
 }
@@ -98,6 +108,7 @@ fn in_range(prop: usize, v: f64) -> bool {
     match prop {
         0 | 1 => v.is_finite(),
         4 => (0.0..=1.0).contains(&v),
+        CONTENT_BLUR => (0.0..=MAX_CONTENT_BLUR).contains(&v),
         _ => v >= 0.0 && v.is_finite(),
     }
 }
@@ -133,6 +144,9 @@ enum Op {
         to: f64,
         curve: LayerCurve,
         velocity: f64,
+        /// An animation through samples (`animate_samples`): the values at even steps of `curve`'s duration, the
+        /// last of them `to`.
+        samples: Option<Arc<[f32]>>,
     },
     Cancel(usize),
     Glass(Option<(GlassStyle, f64)>),
@@ -171,13 +185,14 @@ impl Cacheable for LayerOps {
 }
 
 /// An animation asked for but not started: it starts when its commit is first shown.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Waiting {
     serial: u32,
     prop: usize,
     to: f64,
     curve: LayerCurve,
     velocity: f64,
+    samples: Option<Arc<[f32]>>,
     since: f64,
 }
 
@@ -210,9 +225,9 @@ pub struct LayerModel {
 
 impl LayerModel {
     fn new(serial: u64, surface: WlSurface, resource: CupertinoLayerV1, whole: bool) -> Self {
-        let mut props = [LayerProperty::new(0.0); PROPERTIES];
-        props[4] = LayerProperty::new(1.0);
-        props[5] = LayerProperty::new(1.0);
+        // opacity and scale start at 1, the rest at 0
+        let props =
+            std::array::from_fn(|i| LayerProperty::new(if i == 4 || i == 5 { 1.0 } else { 0.0 }));
         Self {
             serial,
             surface,
@@ -308,6 +323,9 @@ impl LayerModel {
             self.replace(w.prop, now);
             if reduce_motion && spatial(w.prop) {
                 self.props[w.prop].set(w.to);
+            } else if let (Some(samples), LayerCurve::Timed { duration, .. }) = (w.samples, w.curve)
+            {
+                self.props[w.prop].animate_samples(samples, duration, now);
             } else {
                 self.props[w.prop].animate(w.to, w.curve, now, w.velocity);
             }
@@ -330,12 +348,14 @@ impl LayerModel {
                 to,
                 curve,
                 velocity,
+                samples,
             } => self.waiting.push(Waiting {
                 serial,
                 prop,
                 to,
                 curve,
                 velocity,
+                samples,
                 since: now,
             }),
             Op::Cancel(prop) => {
@@ -485,6 +505,8 @@ pub struct LayerDraw {
     /// The glass group, 0 for the layer's glass alone, and how far the group's shapes blend, in points.
     pub group: u32,
     pub spacing: f64,
+    /// The standard deviation of the blur of the layer's content, in the layer's points; 0 draws it sharp.
+    pub content_blur: f64,
 }
 
 /// The layers of `parent` as shown at `now`, back to front (flat ones in creation order, then raised ones), starting
@@ -516,6 +538,7 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
                     placeholder: l.placeholder,
                     group: l.group,
                     spacing: l.spacing,
+                    content_blur: l.value(CONTENT_BLUR, now).clamp(0.0, MAX_CONTENT_BLUR),
                 }
             })
             .collect();
@@ -817,7 +840,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 }
             }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 3 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 4 has no other request"),
         }
     }
 }
@@ -831,6 +854,24 @@ fn timed(duration: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> Option<LayerCurve
             bezier: CubicBezier::new(x1, y1, x2, y2),
         }
     })
+}
+
+/// The fewest and the most samples an `animate_samples` takes.
+const SAMPLES: (usize, usize) = (2, 1024);
+
+/// The samples of `animate_samples`, floats in the host's byte order, or `None` when the request is refused for its
+/// duration or its array.
+fn sampled(duration: u32, bytes: &[u8]) -> Option<Arc<[f32]>> {
+    let (chunks, rest) = bytes.as_chunks::<4>();
+    if duration == 0
+        || duration > MAX_DURATION_MS
+        || !rest.is_empty()
+        || !(SAMPLES.0..=SAMPLES.1).contains(&chunks.len())
+    {
+        return None;
+    }
+    let values: Vec<f32> = chunks.iter().map(|&b| f32::from_ne_bytes(b)).collect();
+    values.iter().all(|v| v.is_finite()).then(|| values.into())
 }
 
 /// The curve of `animate_spring`, or the reason it is refused.
@@ -861,7 +902,8 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                          to: f64,
                          curve: Option<LayerCurve>,
                          velocity: f64| {
-            let Some(prop) = property_index(property).filter(|&p| !data.whole || presented(p))
+            let Some(prop) =
+                property_index(property, layer.version()).filter(|&p| !data.whole || presented(p))
             else {
                 return bad_property("property");
             };
@@ -886,12 +928,15 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 to,
                 curve,
                 velocity,
+                samples: None,
             });
         };
         match request {
             R::Destroy => {}
             R::SetValue { property, value } => {
-                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                match property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                {
                     None => bad_property("property"),
                     Some(prop) if !in_range(prop, value) => {
                         bad_value("the value is outside the property's range")
@@ -931,8 +976,49 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 spring(response, damping),
                 velocity,
             ),
+            R::AnimateSamples {
+                serial,
+                property,
+                duration,
+                samples,
+            } => {
+                let Some(prop) = property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                else {
+                    return bad_property("property");
+                };
+                let Some(values) = sampled(duration, &samples) else {
+                    return layer.post_error(
+                        Error::InvalidCurve,
+                        "a duration outside 1 to 10000 ms, or not 2 to 1024 samples of 4 bytes",
+                    );
+                };
+                if !values.iter().all(|&v| in_range(prop, f64::from(v))) {
+                    return bad_value("a sample is outside the property's range");
+                }
+                if state.layers.animations(&data.client) >= MAX_ANIMATIONS {
+                    return layer.post_error(
+                        Error::TooManyAnimations,
+                        format!("a client has at most {MAX_ANIMATIONS} animations"),
+                    );
+                }
+                let to = f64::from(*values.last().expect("two samples at least"));
+                data.queue(Op::Animate {
+                    serial,
+                    prop,
+                    to,
+                    curve: LayerCurve::Timed {
+                        duration: f64::from(duration) / 1000.0,
+                        bezier: CubicBezier::new(0.0, 0.0, 1.0, 1.0),
+                    },
+                    velocity: 0.0,
+                    samples: Some(values),
+                });
+            }
             R::Cancel { property } => {
-                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                match property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                {
                     Some(prop) => data.queue(Op::Cancel(prop)),
                     None => bad_property("property"),
                 }
@@ -999,7 +1085,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 }
                 data.queue(Op::Group(group, spacing));
             }
-            _ => unreachable!("cupertino_layer_v1 version 3 has no other request"),
+            _ => unreachable!("cupertino_layer_v1 version 4 has no other request"),
         }
     }
 
@@ -1045,5 +1131,21 @@ mod tests {
         assert!(!spatial(4) && spatial(0) && spatial(5));
         assert!(presented(0) && presented(1) && presented(4) && presented(5));
         assert!(!presented(2) && !presented(3) && !presented(6));
+    }
+
+    #[test]
+    fn content_blur_is_a_property_from_version_4_from_sharp_to_its_widest_and_reduced_motion_ends_it(
+    ) {
+        let blur = WEnum::Value(Property::ContentBlur);
+        assert_eq!(property_index(blur, 3), None);
+        assert_eq!(property_index(blur, 4), Some(CONTENT_BLUR));
+        assert_eq!(property_index(WEnum::Value(Property::Opacity), 3), Some(4));
+        assert!(in_range(CONTENT_BLUR, 0.0) && in_range(CONTENT_BLUR, MAX_CONTENT_BLUR));
+        assert!(!in_range(CONTENT_BLUR, -0.5) && !in_range(CONTENT_BLUR, 64.5));
+        assert!(!presented(CONTENT_BLUR), "a presentation does not blur");
+        assert!(
+            spatial(CONTENT_BLUR),
+            "reduced motion ends a blur at its target"
+        );
     }
 }

@@ -22,6 +22,7 @@ mod presentations;
 mod presenter;
 pub mod renderer;
 mod roles;
+mod surface_layers;
 mod window_system;
 
 pub use cupertino_wayland_client::PixelRect;

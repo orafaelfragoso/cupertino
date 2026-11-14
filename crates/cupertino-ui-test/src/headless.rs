@@ -58,6 +58,18 @@ struct HeadlessWindow {
     keyboard: bool,
     /// Every raised layer presented over it, in order; `None` hid the layer.
     layers: Vec<Option<PresentedLayer>>,
+    /// Every list of surface layers presented with it, in order.
+    surface_layers: Vec<Vec<PresentedSurfaceLayer>>,
+}
+
+/// A surface layer as the window system received it ([`WindowSystem::present_surface_layers`]): its key, rect and look,
+/// and its frame when it drew one (`None`: unchanged).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentedSurfaceLayer {
+    pub key: u64,
+    pub rect: cupertino_geometry::Rect,
+    pub look: cupertino_ui_platform::SurfaceLayerLook,
+    pub frame: Option<PresentedLayer>,
 }
 
 /// A raised layer as the window system received it ([`WindowSystem::present_layer`]).
@@ -299,6 +311,7 @@ impl HeadlessWindowSystem {
                 by_keyboard: false,
                 keyboard: false,
                 layers: Vec::new(),
+                surface_layers: Vec::new(),
             },
         );
         id
@@ -570,6 +583,14 @@ impl HeadlessWindowSystem {
 
     pub fn unacknowledged(&self, window: WindowId) -> Result<&[ConfigureId], PlatformError> {
         Ok(&self.window(window)?.unacknowledged)
+    }
+
+    /// Every list of surface layers presented with `window`, in order. Only with [`Capabilities::surface_layers`].
+    pub fn surface_layers(
+        &self,
+        window: WindowId,
+    ) -> Result<&[Vec<PresentedSurfaceLayer>], PlatformError> {
+        Ok(&self.window(window)?.surface_layers)
     }
 
     /// Every raised layer presented over `window`, in order; `None` hid it. Only with
@@ -1030,6 +1051,40 @@ impl WindowSystem for HeadlessWindowSystem {
         Ok(PresentOutcome::Presented)
     }
 
+    fn present_surface_layers(
+        &mut self,
+        window: WindowId,
+        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !layers.is_empty() && !self.capabilities.surface_layers {
+            return Err(PlatformError::Unsupported);
+        }
+        let accepting = self.accepting_frames;
+        let w = self.window_mut(window)?;
+        if !accepting {
+            return Ok(PresentOutcome::NotReady);
+        }
+        w.surface_layers.push(
+            layers
+                .iter()
+                .map(|l| PresentedSurfaceLayer {
+                    key: l.key,
+                    rect: l.rect,
+                    look: l.look,
+                    frame: l.frame.map(|f| PresentedLayer {
+                        height: l.rect.height().ceil() as u32,
+                        width: f.width,
+                        pixel_height: f.height,
+                        stride: f.stride,
+                        pixels: f.pixels.clone(),
+                        damage: f.damage.clone(),
+                    }),
+                })
+                .collect(),
+        );
+        Ok(PresentOutcome::Presented)
+    }
+
     /// Kept as a [`SolidPresent`] while [`set_solid_colors`](Self::set_solid_colors) allows it, and paced like
     /// [`present`](WindowSystem::present).
     fn present_solid(
@@ -1424,5 +1479,61 @@ mod tests {
         started.send(()).unwrap();
         assert!(system.wait_for_wake(Duration::from_secs(10)));
         thread.join().unwrap();
+    }
+
+    #[test]
+    fn surface_layers_are_kept_as_presented_only_with_their_capability() {
+        use cupertino_ui_platform::{SurfaceLayer, SurfaceLayerLook};
+        fn layer(f: Option<&CpuFrame>) -> SurfaceLayer<'_> {
+            SurfaceLayer {
+                key: 7,
+                rect: cupertino_geometry::Rect::new(10.0, 20.0, 2.0, 0.5),
+                look: SurfaceLayerLook {
+                    radius: 4.0,
+                    masks: true,
+                    ..SurfaceLayerLook::default()
+                },
+                frame: f,
+            }
+        }
+        let drawn = frame(1);
+        let mut without = HeadlessWindowSystem::default();
+        let window = without.create_window(&spec()).unwrap();
+        assert_eq!(
+            without.present_surface_layers(window, &[layer(Some(&drawn))]),
+            Err(PlatformError::Unsupported)
+        );
+        assert_eq!(
+            without.present_surface_layers(window, &[]),
+            Ok(PresentOutcome::Presented),
+            "an empty list is all a window system without them takes"
+        );
+
+        let mut ws = HeadlessWindowSystem::new(Capabilities {
+            surface_layers: true,
+            ..Capabilities::default()
+        });
+        let window = ws.create_window(&spec()).unwrap();
+        ws.set_accepting_frames(false);
+        assert_eq!(
+            ws.present_surface_layers(window, &[layer(Some(&drawn))]),
+            Ok(PresentOutcome::NotReady)
+        );
+        ws.set_accepting_frames(true);
+        ws.present_surface_layers(window, &[layer(Some(&drawn))])
+            .unwrap();
+        ws.present_surface_layers(window, &[layer(None)]).unwrap();
+        let shown = ws.surface_layers(window).unwrap();
+        assert_eq!(shown.len(), 2, "the list not ready is not kept");
+        let first = &shown[0][0];
+        assert_eq!((first.key, first.look.radius), (7, 4.0));
+        let pixels = first.frame.as_ref().expect("its frame");
+        assert_eq!(
+            (pixels.width, pixels.pixel_height, pixels.height),
+            (2, 1, 1),
+            "its frame as drawn, its height in whole points"
+        );
+        assert_eq!(pixels.pixels, drawn.pixels);
+        assert_eq!(shown[1][0].frame, None, "unchanged");
     }
 }

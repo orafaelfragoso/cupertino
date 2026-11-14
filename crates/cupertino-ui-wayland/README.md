@@ -53,6 +53,14 @@ it. The animations a change starts are followed through `finished`, `replaced` a
 (`PlatformError::Unsupported`) and the application draws its transitions itself. From version 3 a popup takes the same
 requests (`Capabilities::present_popups`): the runtime sends a popover's growth and shrinking and a closing menu's fade
 there, and an input region asked for meanwhile goes with the commit, so a closing popup takes no input as it fades.
+From version 4 a window has surface layers (`Capabilities::surface_layers`, `surface_layers.rs`): each `SurfaceLayer`
+is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn from buffers of its own at the window's
+scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
+layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
+without a buffer when the window shows a frame, or with the layer's first values); their animations count for
+`presentation_settled`; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
+with one layer that fades on the compositor's clock while its content blur goes up and back down through samples, or
+with `--renderer` is drawn by the GPU renderer; the server's tests run it.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was

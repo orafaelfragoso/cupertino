@@ -195,7 +195,7 @@ fn set_look(
 }
 
 /// The protocol's glass style for a region's.
-fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
+pub(crate) fn protocol_style(style: GlassStyle) -> cupertino_protocol_app::GlassStyle {
     match style {
         GlassStyle::Regular => cupertino_protocol_app::GlassStyle::Regular,
         GlassStyle::Clear => cupertino_protocol_app::GlassStyle::Clear,
@@ -332,6 +332,8 @@ pub struct WaylandWindowSystem {
     gpu: GpuPath,
     /// The windows' presentations the compositor animates ([`WindowRequest::Present`]).
     presentations: Presentations,
+    /// The windows' surface layers ([`WindowSystem::present_surface_layers`]).
+    surface_layers: crate::surface_layers::SurfaceLayers,
 }
 
 /// Take the session's appearance or display options from `event` into `appearance`; false for any other event, and
@@ -458,6 +460,7 @@ impl WaylandWindowSystem {
             menus: AppMenus::default(),
             gpu,
             presentations,
+            surface_layers: crate::surface_layers::SurfaceLayers::default(),
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -879,9 +882,35 @@ impl WaylandWindowSystem {
         Ok(())
     }
 
-    /// Whether what `window` shows is its layout: no animation of its presentation runs.
+    /// Whether what `window` shows is its layout: no animation of its presentation or its surface layers runs.
     pub fn presentation_settled(&self, window: WindowId) -> bool {
-        self.presentations.settled(window)
+        self.presentations.settled(window) && self.surface_layers.settled(window)
+    }
+
+    /// Whether windows may have surface layers: the layers global at the version that blurs content.
+    fn surface_layers_drawn(&self) -> bool {
+        self.presentations
+            .layers()
+            .is_some_and(cupertino_protocol_app::Layers::blurs_content)
+    }
+
+    /// Sends `changes` to `window`'s surface layer `key` and commits the window without a buffer when it shows a frame,
+    /// so they apply at once; a layer not made yet takes them with its first values.
+    fn change_surface_layer(
+        &mut self,
+        window: WindowId,
+        key: u64,
+        changes: Vec<cupertino_ui_platform::LayerChange>,
+    ) -> Result<(), PlatformError> {
+        if !self.surface_layers_drawn() {
+            return Err(PlatformError::Unsupported);
+        }
+        let w = self.window(window)?;
+        let (surface, shown) = (w.surface, w.shown.is_some());
+        if self.surface_layers.change(window, key, changes)? && shown {
+            self.conn.commit_state(surface).map_err(platform_error)?;
+        }
+        Ok(())
     }
 
     fn layer_surface(&mut self, window: WindowId) -> Result<SurfaceId, PlatformError> {
@@ -1156,6 +1185,7 @@ impl WaylandWindowSystem {
                                 ScrollBars::WhenScrolling
                             }));
                         }
+                        Some(event) if self.surface_layers.heard(event) => {}
                         Some(event) if self.presentations.heard(event) => {}
                         Some(AppEvent::BuffersLost) => {
                             self.gpu.buffers_lost(&mut self.conn);
@@ -1361,6 +1391,7 @@ impl WindowSystem for WaylandWindowSystem {
             raised_layer: layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)),
             present_animation: self.presentations.available() && self.roles.is_some(),
             present_popups: self.presentations.popups(),
+            surface_layers: self.surface_layers_drawn(),
         }
     }
 
@@ -1472,8 +1503,12 @@ impl WindowSystem for WaylandWindowSystem {
         for s in gone_surfaces {
             self.gpu.forget(&mut self.conn, s);
         }
-        // the presentation goes before its surface
+        // the presentation and the layers go before its surface
         self.presentations.forget(window);
+        for s in self.surface_layers.forget(window) {
+            self.gpu.forget(&mut self.conn, s);
+            let _ = self.conn.destroy(s);
+        }
         // the transport destroys a window's popups with it
         let _ = self.conn.destroy(surface);
         if let Some(roles) = self.roles.as_mut() {
@@ -1500,6 +1535,9 @@ impl WindowSystem for WaylandWindowSystem {
                 return Ok(());
             }
             WindowRequest::Present(changes) => return self.present_changes(window, &changes),
+            WindowRequest::Layer { key, changes } => {
+                return self.change_surface_layer(window, key, changes)
+            }
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)
@@ -1900,6 +1938,96 @@ impl WindowSystem for WaylandWindowSystem {
                 Ok(PresentOutcome::NotReady)
             }
         }
+    }
+
+    /// The layers' values go with the window's next commit; each frame commits its layer's surface now, which the
+    /// compositor shows as soon as it arrives.
+    fn present_surface_layers(
+        &mut self,
+        window: WindowId,
+        layers: &[cupertino_ui_platform::SurfaceLayer<'_>],
+    ) -> Result<PresentOutcome, PlatformError> {
+        if !self.surface_layers_drawn() {
+            return if layers.is_empty() {
+                Ok(PresentOutcome::Presented)
+            } else {
+                Err(PlatformError::Unsupported)
+            };
+        }
+        let parent = self.window(window)?.surface;
+        let global = self
+            .presentations
+            .layers()
+            .ok_or(PlatformError::Unsupported)?;
+        let gone = self
+            .surface_layers
+            .sync(&mut self.conn, global, window, parent, layers)?;
+        for s in gone {
+            self.gpu.forget(&mut self.conn, s);
+            let _ = self.conn.destroy(s);
+        }
+        let mut ready = true;
+        for layer in layers {
+            let Some(frame) = layer.frame else { continue };
+            let Some(state) = self
+                .surface_layers
+                .shown_mut(window)
+                .iter_mut()
+                .find(|s| s.key == layer.key)
+            else {
+                continue;
+            };
+            let (surface, size) = (state.surface, state.size());
+            let resized = state.shown != Some((frame.width, frame.height));
+            let mut damage = std::mem::take(&mut state.carried);
+            damage.extend(frame.damage.iter().map(|r| PixelRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            }));
+            let copying = self.copy_time.is_some().then(Instant::now);
+            let on_gpu = self
+                .gpu
+                .present(&mut self.conn, surface, size, frame, &damage, resized)
+                .map_err(platform_error)?;
+            let shown = match on_gpu {
+                Presented::Gpu => Ok(()),
+                Presented::Busy => Err(Some(Stall::Buffer)),
+                Presented::Resized => Err(None),
+                Presented::Shm => copy_and_present(
+                    &mut self.conn,
+                    surface,
+                    size,
+                    frame,
+                    &damage,
+                    resized,
+                    self.copy_time.as_mut(),
+                )?,
+            };
+            if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
+                *total += since.elapsed();
+            }
+            let state = self
+                .surface_layers
+                .shown_mut(window)
+                .iter_mut()
+                .find(|s| s.key == layer.key)
+                .expect("found above");
+            match shown {
+                Ok(()) => state.shown = Some((frame.width, frame.height)),
+                Err(_) => {
+                    state.carried.extend(damage);
+                    bound(&mut state.carried, frame.width, frame.height);
+                    ready = false;
+                }
+            }
+        }
+        Ok(if ready {
+            PresentOutcome::Presented
+        } else {
+            PresentOutcome::NotReady
+        })
     }
 
     /// One pixel of `color` the compositor stretches over the window ([`Connection::present_solid`]), with the input

@@ -163,6 +163,30 @@ pub enum SurfaceRole {
     /// A layer's content whose coverage is drawn in a colour taken from what lies behind it, rescaled and masked as
     /// window content.
     Vibrant(VibrantBlend),
+    /// A layer's content blurred as one picture, transparent beyond its edges, by a Gaussian, then rescaled and masked
+    /// as window content.
+    Blurred(ContentBlur),
+}
+
+/// The blur of a layer's content: the standard deviation of its Gaussian in thousandths of a logical point, before
+/// the placement's scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ContentBlur {
+    pub sigma_milli: u32,
+}
+
+impl ContentBlur {
+    /// The blur of `sigma` points, to a thousandth.
+    pub fn of_points(sigma: f64) -> Self {
+        Self {
+            sigma_milli: (sigma.max(0.0) * 1000.0).round().min(f64::from(u32::MAX)) as u32,
+        }
+    }
+
+    /// The standard deviation in logical points.
+    pub fn sigma(self) -> f64 {
+        f64::from(self.sigma_milli) / 1000.0
+    }
 }
 
 /// How a vibrant layer mixes with what lies behind it.
@@ -238,5 +262,13 @@ mod tests {
         });
         assert_ne!(old, new);
         assert_eq!(HashSet::from([old, new]).len(), 2);
+    }
+
+    #[test]
+    fn a_content_blur_keeps_its_deviation_to_a_thousandth_of_a_point() {
+        assert_eq!(ContentBlur::of_points(2.5).sigma_milli, 2500);
+        assert_eq!(ContentBlur::of_points(0.0004).sigma_milli, 0);
+        assert_eq!(ContentBlur::of_points(-3.0).sigma_milli, 0);
+        assert_eq!(ContentBlur::of_points(1.2344).sigma(), 1.234);
     }
 }

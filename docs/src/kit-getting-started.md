@@ -47,7 +47,15 @@ checkout and was run on the commit this page was written against.
   may be given in the update that opens the window and goes with its first frame. On any other compositor the
   capability is off and the application animates the window itself, as before. Popups need nothing of the application:
   where the compositor presents popups (`Capabilities::present_popups`) the runtime hands it a popover's growth out of
-  its anchor and shrinking back and a closing menu's fade, on the same curves, and draws no frame for them.
+  its anchor and shrinking back and a closing menu's fade, on the same curves, and draws no frame for them. A part of
+  a window can move on the compositor's clock too: a widget whose `Widget::surface_layer` returns a
+  `SurfaceLayerMark` (a key and a look: glass style, glass group, corner radius, masks) draws its subtree into a
+  surface of its own at its layout size, when `Capabilities::surface_layers` says the compositor can; the application
+  then sets or animates that layer's place, size, opacity, scale, corner radius and content blur with
+  `Command::Window(key, WindowRequest::Layer { key, changes })`, which draws no frame; a motion no single curve
+  draws (a product of two springs, a clamped ramp) goes as values at even steps of its duration
+  (`LayerChange::through`). Elsewhere the subtree paints in
+  place and the application draws its motion itself.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

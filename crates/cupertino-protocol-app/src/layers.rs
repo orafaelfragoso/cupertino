@@ -1,7 +1,7 @@
 //! `cupertino_layers_v1`: surfaces the server places and animates on its own clock, and from version 2 the
 //! presentation of a layer shell surface as a whole, so a panel opens and closes without drawing a frame. Version 3
 //! presents popups as a whole too, so a popover grows and a menu fades without one, and joins the glass of layers into
-//! one shape ([`Layer::set_glass_group`]).
+//! one shape ([`Layer::set_glass_group`]). Version 4 blurs a layer's own content ([`LayerProperty::ContentBlur`]).
 
 use crate::{AppEvent, Error, Quiet};
 use cupertino_animation::LayerCurve;
@@ -17,8 +17,12 @@ use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 const PRESENTATION_VERSION: u32 = 2;
 /// The version that presents popups and joins layers' glass ([`Layers::presents_popups`], [`Layer::set_glass_group`]).
 const POPUP_VERSION: u32 = 3;
+/// The version that blurs a layer's content ([`Layers::blurs_content`], [`LayerProperty::ContentBlur`]).
+const CONTENT_BLUR_VERSION: u32 = 4;
 /// Widest blend between the joined shapes of a glass group the server takes, in points.
 pub const MAX_GROUP_SPACING: f64 = 64.0;
+/// Widest blur of a layer's content the server takes: the standard deviation of its Gaussian, in points.
+pub const MAX_CONTENT_BLUR: f64 = 64.0;
 
 /// Names a [`Layer`] of this process in [`AppEvent::LayerFinished`], [`AppEvent::LayerReplaced`] and
 /// [`AppEvent::LayerSettled`].
@@ -61,6 +65,9 @@ pub enum LayerProperty {
     Scale,
     /// The bounds' corner radius (not of a presentation).
     CornerRadius,
+    /// The standard deviation of a Gaussian blur of the layer's own content, in its points, from 0 (sharp) to
+    /// [`MAX_CONTENT_BLUR`] (not of a presentation; from version 4).
+    ContentBlur,
 }
 
 impl LayerProperty {
@@ -73,6 +80,15 @@ impl LayerProperty {
             LayerProperty::Opacity => WireProperty::Opacity,
             LayerProperty::Scale => WireProperty::Scale,
             LayerProperty::CornerRadius => WireProperty::CornerRadius,
+            LayerProperty::ContentBlur => WireProperty::ContentBlur,
+        }
+    }
+
+    /// The version of the protocol from which the server takes the property.
+    pub fn since(self) -> u32 {
+        match self {
+            LayerProperty::ContentBlur => CONTENT_BLUR_VERSION,
+            _ => 1,
         }
     }
 
@@ -89,6 +105,7 @@ impl LayerProperty {
         match self {
             LayerProperty::X | LayerProperty::Y => value.is_finite(),
             LayerProperty::Opacity => (0.0..=1.0).contains(&value),
+            LayerProperty::ContentBlur => (0.0..=MAX_CONTENT_BLUR).contains(&value),
             _ => value.is_finite() && value >= 0.0,
         }
     }
@@ -100,7 +117,8 @@ pub struct Layers(CupertinoLayersV1);
 impl Layers {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<Layers> {
-        conn.bind_extension(1..=POPUP_VERSION, Quiet).map(Layers)
+        conn.bind_extension(1..=CONTENT_BLUR_VERSION, Quiet)
+            .map(Layers)
     }
 
     /// Whether the server presents layer shell surfaces as a whole ([`Self::presentation`], version 2).
@@ -111,6 +129,11 @@ impl Layers {
     /// Whether the server presents popups as a whole too and joins layers' glass (version 3).
     pub fn presents_popups(&self) -> bool {
         self.0.version() >= POPUP_VERSION
+    }
+
+    /// Whether the server blurs a layer's own content ([`LayerProperty::ContentBlur`], version 4).
+    pub fn blurs_content(&self) -> bool {
+        self.0.version() >= CONTENT_BLUR_VERSION
     }
 
     /// Make `surface` a layer of `parent`: it shows with the parent's next commit. `None` when either surface is
@@ -159,8 +182,17 @@ impl Layer {
         self.0.data::<LayerData>().map_or(LayerId(0), |d| d.0)
     }
 
+    /// Whether the layer object takes `property`: refused below the version that defines it.
+    fn takes(&self, property: LayerProperty) -> Result<(), Error> {
+        if self.0.version() < property.since() {
+            return Err(Error::Unsupported("cupertino_layer_v1.content_blur"));
+        }
+        Ok(())
+    }
+
     /// Set `property` to `value` at once; a running animation of it is replaced.
     pub fn set(&self, property: LayerProperty, value: f64) -> Result<(), Error> {
+        self.takes(property)?;
         if !property.accepts(value) {
             return Err(Error::InvalidLayerValue);
         }
@@ -178,6 +210,7 @@ impl Layer {
         curve: LayerCurve,
         velocity: f64,
     ) -> Result<(), Error> {
+        self.takes(property)?;
         if !property.accepts(value) {
             return Err(Error::InvalidLayerValue);
         }
@@ -202,9 +235,49 @@ impl Layer {
         Ok(())
     }
 
-    /// Stop `property` where it is shown when the commit applies.
+    /// Move `property` through `samples` over `duration` seconds (version 4): its values at even steps of the duration,
+    /// the first at its start and the last, where it rests, at its end, in a straight line between two. It starts at
+    /// the first sample, not from what is shown. `serial` names the animation in the events.
+    pub fn animate_samples(
+        &self,
+        serial: u32,
+        property: LayerProperty,
+        duration: f64,
+        samples: &[f32],
+    ) -> Result<(), Error> {
+        if self.0.version() < CONTENT_BLUR_VERSION {
+            return Err(Error::Unsupported("cupertino_layer_v1.animate_samples"));
+        }
+        self.takes(property)?;
+        let ms = (duration * 1000.0).round();
+        if !(1.0..=10_000.0).contains(&ms) || !(2..=MAX_SAMPLES).contains(&samples.len()) {
+            return Err(Error::InvalidLayerValue);
+        }
+        if !samples.iter().all(|&v| property.accepts(f64::from(v))) {
+            return Err(Error::InvalidLayerValue);
+        }
+        let bytes = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        self.0
+            .animate_samples(serial, property.wire(), ms as u32, bytes);
+        Ok(())
+    }
+
+    /// Stop `property` where it is shown when the commit applies; a property the layer object does not take is left.
     pub fn cancel(&self, property: LayerProperty) {
-        self.0.cancel(property.wire());
+        if self.takes(property).is_ok() {
+            self.0.cancel(property.wire());
+        }
+    }
+
+    /// Draw `style` of glass below the layer's content, in its bounds, magnified by `lens` (1 for none); `None` draws
+    /// none.
+    pub fn set_glass(&self, style: Option<crate::GlassStyle>, lens: f64) -> Result<(), Error> {
+        if !(lens.is_finite() && lens >= 1.0) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0
+            .set_glass(style.map_or(u32::MAX, crate::GlassStyle::wire), lens);
+        Ok(())
     }
 
     /// Clip the content to the layer's rounded bounds.
@@ -225,6 +298,9 @@ impl Layer {
         Ok(())
     }
 }
+
+/// The most samples one animation through samples takes ([`Layer::animate_samples`]).
+pub const MAX_SAMPLES: usize = 1024;
 
 impl Drop for Layer {
     fn drop(&mut self) {
@@ -291,6 +367,7 @@ mod tests {
             LayerProperty::Opacity,
             LayerProperty::Scale,
             LayerProperty::CornerRadius,
+            LayerProperty::ContentBlur,
         ]
         .into_iter()
         .filter(|p| p.presented())
@@ -304,6 +381,14 @@ mod tests {
                 LayerProperty::Scale
             ]
         );
+        assert!(
+            LayerProperty::ContentBlur.accepts(0.0) && LayerProperty::ContentBlur.accepts(64.0)
+        );
+        assert!(
+            !LayerProperty::ContentBlur.accepts(64.5) && !LayerProperty::ContentBlur.accepts(-1.0)
+        );
+        assert_eq!(LayerProperty::ContentBlur.since(), 4);
+        assert_eq!(LayerProperty::Scale.since(), 1);
         assert_eq!(Fixed::from_f64(0.5).to_f64(), 0.5);
         assert_eq!(Fixed::from_f64(-1.25), Fixed(-320));
     }

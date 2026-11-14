@@ -5,6 +5,12 @@
 //! velocity as its initial velocity, and a timed curve adds a correction that starts at the velocity's difference from
 //! the curve's own and fades out by the curve's end (a cubic `c(t) = Δv · t · (1 − t/D)²`, zero in value at both ends
 //! and in slope at the end). Time is an absolute timestamp in seconds, so the same motion is sampled alike at any rate.
+//!
+//! A property may also move through samples, its values at even steps of a duration, in a straight line between two
+//! of them ([`LayerProperty::animate_samples`]): the motion a client works out itself (a product of two springs, a
+//! clamped ramp) carried as it is. It starts at its first sample rather than from what is shown.
+
+use std::sync::Arc;
 
 use crate::spring::{Spring, SpringParams};
 use crate::timing::CubicBezier;
@@ -22,9 +28,14 @@ pub enum LayerCurve {
 /// Distance below which a spring counts as at its target, in the property's units.
 const SPRING_REST: f64 = 1e-3;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Motion {
     Rest,
+    Samples {
+        start: f64,
+        duration: f64,
+        values: Arc<[f32]>,
+    },
     Timed {
         from: f64,
         to: f64,
@@ -47,7 +58,7 @@ enum Motion {
 }
 
 /// A property of a layer: its value at any time, its target and its velocity.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LayerProperty {
     motion: Motion,
     target: f64,
@@ -76,7 +87,10 @@ impl LayerProperty {
     pub fn end(&self) -> Option<f64> {
         match self.motion {
             Motion::Rest => None,
-            Motion::Timed {
+            Motion::Samples {
+                start, duration, ..
+            }
+            | Motion::Timed {
                 start, duration, ..
             } => Some(start + duration.max(0.0)),
             Motion::Spring { start, settle, .. } => Some(start + settle),
@@ -87,6 +101,11 @@ impl LayerProperty {
     pub fn value(&self, now: f64) -> f64 {
         match self.motion {
             Motion::Rest => self.target,
+            Motion::Samples {
+                start,
+                duration,
+                ref values,
+            } => sampled(values, (now - start) / duration),
             Motion::Timed {
                 from,
                 to,
@@ -124,6 +143,19 @@ impl LayerProperty {
     pub fn velocity(&self, now: f64) -> f64 {
         match self.motion {
             Motion::Rest => 0.0,
+            Motion::Samples {
+                start,
+                duration,
+                ref values,
+            } => {
+                if duration <= 0.0 || now < start || now >= start + duration {
+                    return 0.0;
+                }
+                // the slope of the segment the time falls in
+                let steps = (values.len() - 1) as f64;
+                let i = (((now - start) / duration * steps).floor() as usize).min(values.len() - 2);
+                f64::from(values[i + 1] - values[i]) * steps / duration
+            }
             Motion::Timed {
                 start, duration, ..
             } => {
@@ -164,6 +196,25 @@ impl LayerProperty {
     pub fn cancel(&mut self, now: f64) {
         let v = self.value(now);
         self.set(v);
+    }
+
+    /// Move through `values` (at least two) over `duration` seconds from `start`: the value at even steps of the
+    /// duration, the first at its start and the last, the target, at its end, in a straight line between two. The
+    /// motion starts at the first value, whatever is shown before it.
+    pub fn animate_samples(&mut self, values: Arc<[f32]>, duration: f64, start: f64) {
+        let Some(&last) = values.last() else {
+            return;
+        };
+        self.target = f64::from(last);
+        self.motion = if values.len() < 2 || duration <= 0.0 {
+            Motion::Rest
+        } else {
+            Motion::Samples {
+                start,
+                duration,
+                values,
+            }
+        };
     }
 
     /// Start moving to `to` along `curve` at `start`, from the value and velocity shown then. `velocity` is the
@@ -223,6 +274,22 @@ impl LayerProperty {
     }
 }
 
+/// The value of `values` (at least two, at even steps) at the fraction `x` of their span, in a straight line between the
+/// two around it; before the span the first, after it the last.
+fn sampled(values: &[f32], x: f64) -> f64 {
+    let n = values.len();
+    if x.is_nan() || x <= 0.0 {
+        return f64::from(values[0]);
+    }
+    if x >= 1.0 {
+        return f64::from(values[n - 1]);
+    }
+    let at = x * (n - 1) as f64;
+    let i = (at.floor() as usize).min(n - 2);
+    let f = at - i as f64;
+    f64::from(values[i]) + (f64::from(values[i + 1]) - f64::from(values[i])) * f
+}
+
 /// The time from which the spring stays within [`SPRING_REST`] of its target, sampled every millisecond up to a
 /// minute: the step and impulse responses share an envelope, so after it the motion never comes back out.
 fn settle_time(from: f64, to: f64, v0: f64, step: &Spring, impulse: &Spring) -> f64 {
@@ -246,6 +313,31 @@ fn settle_time(from: f64, to: f64, v0: f64, step: &Spring, impulse: &Spring) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn samples_are_followed_in_straight_lines_from_the_first_to_the_last_whatever_was_shown() {
+        let mut p = LayerProperty::new(500.0);
+        p.animate(900.0, EASE, 0.0, 0.0);
+        // a motion of three steps over 0.3 s, replacing the curve under way
+        p.animate_samples(Arc::from([0.0_f32, 100.0, 50.0, 200.0]), 0.3, 1.0);
+        assert_eq!(p.target(), 200.0);
+        assert_eq!(p.value(0.9), 0.0, "before it starts, its first sample");
+        assert_eq!(p.value(1.0), 0.0);
+        assert!((p.value(1.05) - 50.0).abs() < 1e-9);
+        assert!((p.value(1.15) - 75.0).abs() < 1e-9);
+        assert!((p.value(1.25) - 125.0).abs() < 1e-9);
+        assert!(
+            (p.velocity(1.25) - 1500.0).abs() < 1e-6,
+            "the last step's slope"
+        );
+        assert!(p.is_animating(1.29) && !p.is_animating(1.3));
+        assert_eq!(p.value(1.3), 200.0);
+        assert_eq!(p.velocity(1.3), 0.0);
+        // a curve after it starts from the value and the slope the samples show
+        let mut q = p.clone();
+        q.animate(0.0, EASE, 1.25, 0.0);
+        continuous(&q, 125.0, 1500.0, 1.25);
+    }
 
     const EASE: LayerCurve = LayerCurve::Timed {
         duration: 0.3,

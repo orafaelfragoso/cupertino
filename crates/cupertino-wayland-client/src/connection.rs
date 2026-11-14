@@ -420,6 +420,13 @@ pub trait ExternalRole {
     fn initial_commit(&self) -> bool {
         true
     }
+
+    /// The surface this one is drawn at the scale of, for a role the compositor never configures (a layer of that
+    /// surface): it may present at once, its frames sized by that surface's scale. `None` (the default): the
+    /// compositor configures it and it is drawn at its own scale.
+    fn drawn_with(&self) -> Option<SurfaceId> {
+        None
+    }
 }
 
 struct Surface {
@@ -1537,10 +1544,7 @@ impl Connection {
         let s = &mut self.state;
         let shm = s.shm.clone();
         // a subsurface is drawn at its parent's scale and answers no configure
-        let parent_scale = match &s.surface(surface)?.role {
-            Role::Subsurface { parent, .. } => Some(s.surface(*parent)?.scale),
-            _ => None,
-        };
+        let parent_scale = s.drawn_scale(surface)?;
         let surf = s.surface_mut(surface)?;
         let serial = match surf.role {
             Role::Subsurface { .. } => 0,
@@ -2133,6 +2137,11 @@ impl State {
             Role::Subsurface { .. } => false,
             Role::Toplevel { .. } | Role::Popup { .. } => true,
         };
+        // a role the compositor never configures presents at once
+        let mut serials = Serials::default();
+        if matches!(&role, Role::External { role, .. } if role.drawn_with().is_some()) {
+            let _ = serials.receive(0);
+        }
         if configured {
             // the initial commit without a buffer asks for the first configure
             wl.commit();
@@ -2149,13 +2158,26 @@ impl State {
             preferred_scale: None,
             entered: Vec::new(),
             scale: Scale::ONE,
-            serials: Serials::default(),
+            serials,
             slots: Vec::new(),
             next_slot: 0,
             spare: None,
             presented_at: None,
             syncobj: None,
         });
+    }
+
+    /// The scale of the surface `surface` is drawn with, when it is drawn at another's: a subsurface's parent's, or
+    /// that of the surface an external role names ([`ExternalRole::drawn_with`]).
+    pub(crate) fn drawn_scale(&self, surface: SurfaceId) -> Result<Option<Scale>, Error> {
+        Ok(match &self.surface(surface)?.role {
+            Role::Subsurface { parent, .. } => Some(self.surface(*parent)?.scale),
+            Role::External { role, .. } => match role.drawn_with() {
+                Some(other) => Some(self.surface(other)?.scale),
+                None => None,
+            },
+            _ => None,
+        })
     }
 
     pub(crate) fn has_surface(&self, id: SurfaceId) -> bool {

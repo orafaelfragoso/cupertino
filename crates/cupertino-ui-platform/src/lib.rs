@@ -11,7 +11,11 @@ use std::task::Waker;
 use std::time::Duration;
 
 pub use cupertino_modifiers::Mods;
+
+mod surface_layers;
+pub use cupertino_animation::{CubicBezier, LayerCurve};
 pub use cupertino_ui_render::Color;
+pub use surface_layers::{LayerChange, LayerProperty, SurfaceLayer, SurfaceLayerLook};
 
 /// A toplevel window or a popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -44,6 +48,9 @@ pub struct Capabilities {
     /// popover's growth out of its anchor and shrinking back, a closing menu's fade. Its scale is about the centre of
     /// the popup's window.
     pub present_popups: bool,
+    /// A window may draw marked subtrees into surfaces of its own that the compositor places and animates
+    /// ([`WindowSystem::present_surface_layers`], [`WindowRequest::Layer`]).
+    pub surface_layers: bool,
 }
 
 /// A property of a window's presentation ([`WindowRequest::Present`]).
@@ -202,6 +209,13 @@ pub enum WindowRequest {
     /// semantics stay with the window's layout, the presentation's target. Needs
     /// [`Capabilities::present_animation`].
     Present(Vec<PresentChange>),
+    /// Changes the window's surface layer `key` ([`SurfaceLayer`]) on the compositor's clock, all the changes together
+    /// and without drawing a frame: with the layer's first frame when it has not shown one, at once otherwise. Needs
+    /// [`Capabilities::surface_layers`].
+    Layer {
+        key: u64,
+        changes: Vec<LayerChange>,
+    },
 }
 
 /// A window's menus as the desktop's menu bar shows them.
@@ -892,6 +906,23 @@ pub trait WindowSystem {
         match layer {
             Some(_) => Err(PlatformError::Unsupported),
             None => Ok(PresentOutcome::Presented),
+        }
+    }
+    /// Shows `layers` with the window's next [`present`](WindowSystem::present), in their order back to front over
+    /// the window's content (and its raised layer), and takes away any shown before that is not among them. A layer's
+    /// frame, when it has one, is copied as a present's is, its damage and whatever its buffer missed. `NotReady`
+    /// keeps nothing: the window presents neither these frames nor its content's until they can be drawn again. Needs
+    /// [`Capabilities::surface_layers`]; without it (the default) only an empty list is taken.
+    fn present_surface_layers(
+        &mut self,
+        window: WindowId,
+        layers: &[SurfaceLayer<'_>],
+    ) -> Result<PresentOutcome, PlatformError> {
+        let _ = window;
+        if layers.is_empty() {
+            Ok(PresentOutcome::Presented)
+        } else {
+            Err(PlatformError::Unsupported)
         }
     }
     /// Shows `window` as `color` all over, without a frame of its size: the compositor stretches one pixel of the

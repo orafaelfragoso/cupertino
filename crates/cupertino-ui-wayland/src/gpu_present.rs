@@ -3,7 +3,8 @@
 //! A [`GpuSurface`] keeps the buffers of one surface: two with explicit sync (each with a syncobj timeline: the
 //! frame's native fence becomes its acquire point, and the buffer is drawn into again once its release point
 //! signalled), three without (the client waits for its own fence before it commits, and draws into a buffer again only
-//! after the compositor released it and one further frame went out). Buffers are allocated in size steps
+//! after the compositor released it and one further frame went out, or, with none such, into the one it released
+//! first: [`pick`]). Buffers are allocated in size steps
 //! ([`allocation`]) and cropped to the frame by the surface's viewport, so a live resize allocates once a step, not
 //! once a frame. A buffer uses only a modifier the compositor offers and the driver renders to; linear is never added
 //! on a hardware driver ([`usable_modifiers`]).
@@ -106,6 +107,26 @@ impl Reuse {
             Reuse::ReleasedAt(at) => commits > at,
         }
     }
+}
+
+/// The buffer to draw the next frame into, of buffers in states `reuses` when `commits` frames were committed in all:
+/// the first free one, else the one released longest ago. Waiting for a later commit gains nothing once every buffer
+/// is either released or held: only a commit raises the count, and a buffer the compositor releases meanwhile is
+/// stamped with the same count, so two frames committed back to back (as a configure lets a window do) would otherwise
+/// leave none free for good while the third is shown. `None` while the compositor holds them all.
+pub fn pick(reuses: impl IntoIterator<Item = Reuse>, commits: u64) -> Option<usize> {
+    let mut oldest: Option<(u64, usize)> = None;
+    for (i, reuse) in reuses.into_iter().enumerate() {
+        if reuse.free(commits) {
+            return Some(i);
+        }
+        if let Reuse::ReleasedAt(at) = reuse {
+            if oldest.is_none_or(|(o, _)| at < o) {
+                oldest = Some((at, i));
+            }
+        }
+    }
+    oldest.map(|(_, i)| i)
 }
 
 /// Why a frame was not shown from a GPU buffer.
@@ -321,7 +342,7 @@ impl GpuSurface {
         self.refresh(gpu, conn);
         let commits = self.commits;
         self.slots.len() < buffer_count(gpu.explicit())
-            || self.slots.iter().any(|s| s.reuse.free(commits))
+            || pick(self.slots.iter().map(|s| s.reuse), commits).is_some()
     }
 
     /// The staging texture no longer holds the last frame (after a purge): the next present uploads all of it.
@@ -475,7 +496,10 @@ impl GpuSurface {
                 self.allocate(gpu, conn, allocated)?;
                 self.slots.len() - 1
             }
-            None => return Err(PresentError::Busy),
+            None => match pick(self.slots.iter().map(|s| s.reuse), commits) {
+                Some(i) => i,
+                None => return Err(PresentError::Busy),
+            },
         };
         if let Some(source) = source {
             self.draw_from(gpu, index, source.texture())?;
@@ -735,6 +759,22 @@ mod tests {
         assert!(!Reuse::ReleasePoint.free(10));
         assert!(!Reuse::ReleasedAt(5).free(5));
         assert!(Reuse::ReleasedAt(5).free(6));
+    }
+
+    #[test]
+    fn with_none_free_the_buffer_released_longest_ago_is_drawn_into() {
+        use Reuse::*;
+        // two frames committed back to back: both spare buffers released at the same count while the third is shown,
+        // and no commit to come raises it
+        assert_eq!(pick([ReleasedAt(3), ReleasedAt(3), Release], 3), Some(0));
+        assert_eq!(pick([Release, ReleasedAt(7), ReleasedAt(6)], 7), Some(2));
+        // a free buffer goes first, wherever it lies
+        assert_eq!(pick([ReleasedAt(4), Free, Release], 4), Some(1));
+        assert_eq!(pick([ReleasedAt(4), Release, ReleasedAt(2)], 5), Some(0));
+        // the compositor holds them all: nothing to draw into until it releases one
+        assert_eq!(pick([Release, Release, Release], 9), None);
+        assert_eq!(pick([ReleasePoint, ReleasePoint], 9), None);
+        assert_eq!(pick([], 0), None);
     }
 
     #[test]

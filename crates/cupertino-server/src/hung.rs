@@ -2,7 +2,8 @@
 //! person uses the desktop, and one that has not answered a ping for two seconds is unresponsive until it answers. A ping
 //! goes out only after input that came since the last one: on a desktop nobody touches, no event waits for an application
 //! to handle it, so nothing shows whether it hangs, and neither the server nor the applications wake for pings.
-//! The first input after a rest pings again at once. The timing is [`Liveness`], pure and driven by the
+//! The first input after a rest pings again at once, and pinging goes on until a ping has gone out a second after the
+//! last input. The timing is [`Liveness`], pure and driven by the
 //! model clock; [`Pings`] holds one per client and does the sending. What the person sees of it, the busy cursor over the
 //! windows and "Not Responding" in the dock, is built on [`Pings::unresponsive`].
 
@@ -25,18 +26,21 @@ pub struct Liveness {
 }
 
 impl Liveness {
-    /// A ping is due: none is outstanding, the interval has passed since the last and input came after it (`input`: the
-    /// last input's time).
+    /// A ping is due: none is outstanding, the interval has passed since the last and the last input still wants one
+    /// (`input`: the last input's time).
     pub fn ping_due(&self, now: f64, input: Option<f64>) -> bool {
         self.outstanding.is_none()
             && self.last_ping.is_none_or(|t| now - t >= PING_INTERVAL)
             && self.input_since_ping(input)
     }
 
-    /// Whether input came since the last ping (or there was input and no ping yet). Input at the ping's own moment
-    /// counts, as the ping may have gone out before it: the last input is followed by one more ping.
+    /// Whether the last input still wants a ping: there was input and no ping has gone out [`PING_INTERVAL`] or more
+    /// after it. The ping sent in the loop pass that handled the input reads the clock a moment after the input did,
+    /// and the client may answer it before it handles the input; so pinging goes on until a ping has gone out an
+    /// interval after the last input, the one that shows whether handling the input hung the client: one more ping per
+    /// rest.
     fn input_since_ping(&self, input: Option<f64>) -> bool {
-        input.is_some_and(|i| self.last_ping.is_none_or(|t| i >= t))
+        input.is_some_and(|i| self.last_ping.is_none_or(|t| t < i + PING_INTERVAL))
     }
 
     pub fn pinged(&mut self, now: f64) {
@@ -66,8 +70,8 @@ impl Liveness {
     }
 
     /// When the clock next matters to this client: its next ping, or the moment an outstanding one makes it
-    /// unresponsive. `None` for a client never pinged (the next tick pings it), one no input came for since its last
-    /// ping (input wakes the loop and pings it) or one already unresponsive.
+    /// unresponsive. `None` for a client never pinged (the next tick pings it), one the last input wants no more pings
+    /// for (input wakes the loop and pings it) or one already unresponsive.
     pub fn next_deadline(&self, input: Option<f64>) -> Option<f64> {
         match (self.outstanding, self.last_ping) {
             (Some(sent), _) => (!self.unresponsive).then_some(sent + PONG_TIMEOUT),
@@ -332,5 +336,34 @@ mod tests {
         assert_eq!(l.next_deadline(Some(600.0)), Some(600.0 + PONG_TIMEOUT));
         // an outstanding ping times out whether or not input comes
         assert!(l.check(600.0 + PONG_TIMEOUT));
+    }
+
+    #[test]
+    fn a_client_that_hangs_on_the_first_input_after_a_rest_is_found_unresponsive() {
+        let mut l = Liveness::default();
+        // the input is read a hair before the ping its loop pass sends, and the client answers that ping at once
+        let input = Some(600.0);
+        let sent = 600.0 + 1e-6;
+        assert!(l.ping_due(sent, input));
+        l.pinged(sent);
+        l.ponged();
+        // then it blocks handling the input: one more ping goes out, and its silence shows
+        assert_eq!(l.next_deadline(input), Some(sent + PING_INTERVAL));
+        assert!(
+            !l.ping_due(sent + 0.5, input),
+            "the interval has not passed"
+        );
+        assert!(l.ping_due(sent + PING_INTERVAL, input));
+        l.pinged(sent + PING_INTERVAL);
+        assert!(l.check(sent + PING_INTERVAL + PONG_TIMEOUT));
+        assert!(l.is_unresponsive());
+        // a client that answers that ping too is left alone until the next input
+        let mut l = Liveness::default();
+        l.pinged(sent);
+        l.ponged();
+        l.pinged(sent + PING_INTERVAL);
+        l.ponged();
+        assert!(!l.ping_due(sent + 10.0, input));
+        assert_eq!(l.next_deadline(input), None, "the desktop rests");
     }
 }

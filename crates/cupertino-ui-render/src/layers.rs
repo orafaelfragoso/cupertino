@@ -13,7 +13,7 @@
 
 use crate::geometry::Bounds;
 use crate::PaintNodeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tiny_skia::Pixmap;
 
 /// How many bytes the kept layers of one renderer hold at most beyond one image the size of its frame: a window keeps
@@ -71,6 +71,9 @@ pub(crate) fn ring_pieces(y0: i32, y1: i32, height: i32) -> Vec<(i32, i32, i32)>
 #[derive(Default)]
 pub(crate) struct Kept {
     pub(crate) scrolls: HashMap<PaintNodeId, ScrollImage>,
+    /// The scroll layers of the last frame drawn, kept or not. A layer new in a frame shows what its nodes, all new
+    /// to it, damage; one the frame had before, with no image, shows what it did there only if laid over whole.
+    pub(crate) seen: HashSet<PaintNodeId>,
 }
 
 impl Kept {
@@ -78,6 +81,7 @@ impl Kept {
         self.scrolls.values().map(ScrollImage::bytes).sum()
     }
 
+    /// Lets the images go; the layers stay seen, so the next frame lays them over whole.
     pub(crate) fn clear(&mut self) {
         self.scrolls.clear();
     }

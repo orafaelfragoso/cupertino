@@ -273,6 +273,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         layer_nodes.sort_unstable();
         layer_nodes.dedup();
         let mut before = std::mem::take(&mut self.kept.scrolls);
+        let seen = std::mem::take(&mut self.kept.seen);
         let mut budget = self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES;
         let mut plans = Vec::with_capacity(layer_nodes.len());
         for index in layer_nodes {
@@ -280,6 +281,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             let (Some(Layer::Scroll { offset }), Some(clip)) = (node.layer, &node.clip) else {
                 continue;
             };
+            self.kept.seen.insert(node.id);
             let viewport = geometry::clip_bounds(clip, &node.transform, scale).intersect(&whole);
             let shift = device_shift(offset, scale);
             let previous = before.remove(&node.id);
@@ -298,7 +300,11 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 plans.push(plan);
                 continue;
             }
-            plan.frame.push(viewport);
+            // a layer new to this frame has only new nodes in it, or nodes that came from elsewhere, and those damage
+            // what they draw: what the frame showed there is still right
+            if previous.is_some() || seen.contains(&node.id) {
+                plan.frame.push(viewport);
+            }
             let bytes = u64::from(viewport.width()) * u64::from(viewport.height()) * 4;
             if bytes > budget {
                 // past the cap: the frame paints what the layer shows every frame, as if it were not one
@@ -3299,6 +3305,60 @@ mod tests {
             );
             assert_eq!(r.stats().layer_pixels, 0);
             assert_eq!(r.stats().scroll_composite.count, 0);
+        }
+    }
+
+    /// A layer new to a frame lays over only the damage, which is what its nodes, all new to it, draw: the frame
+    /// before shows the rest of it. Once it scrolls it is laid over whole.
+    #[test]
+    fn a_layer_new_to_a_frame_lays_over_only_the_damage() {
+        let renamed = |offset: f64| {
+            let mut list = scrolled(
+                &scene(2),
+                cupertino_geometry::Point::new(0.0, offset),
+                Shape::Rect(VIEW),
+            );
+            for node in &mut list.nodes {
+                if node.id == PaintNodeId(9000) {
+                    node.id = PaintNodeId(9001);
+                }
+                if node.parent == Some(PaintNodeId(9000)) {
+                    node.parent = Some(PaintNodeId(9001));
+                }
+            }
+            list
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let offset = 14.0 / scale;
+            let first = scrolled(
+                &scene(2),
+                cupertino_geometry::Point::new(0.0, offset),
+                Shape::Rect(VIEW),
+            );
+            let mut r = CpuRenderer::new(layer_config(), NoGlyphs);
+            draw_frame(&mut r, &first, &DamageRegion::Full, scale);
+            // the same picture under a layer of another node: nothing to lay over
+            let after = draw_frame(
+                &mut r,
+                &renamed(offset),
+                &DamageRegion::Rects(Vec::new()),
+                scale,
+            );
+            assert!(after.damage.is_empty(), "scale {scale}: {:?}", after.damage);
+            assert_eq!(r.kept_layers().0, 1);
+            let next = draw_frame(
+                &mut r,
+                &renamed(offset + 3.0 / scale),
+                &DamageRegion::Rects(Vec::new()),
+                scale,
+            );
+            let whole = draw_frame(
+                &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                &renamed(offset + 3.0 / scale),
+                &DamageRegion::Full,
+                scale,
+            );
+            assert!(next.pixels == whole.pixels, "scale {scale}");
         }
     }
 

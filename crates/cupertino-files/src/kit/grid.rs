@@ -124,11 +124,9 @@ pub(super) fn cell_index(key: &Key) -> Option<u64> {
     index.parse().ok()
 }
 
-/// An item the grid shows: its name and the renditions of its icon or thumbnail.
-pub(super) struct Item {
-    pub name: String,
-    pub icon: Vec<ImageSource>,
-}
+/// The renditions of an item's icon or thumbnail, made only for the items a grid builds or drags: a folder of thousands
+/// of items makes a few hundred icons a view, not one for each item.
+pub(super) type ItemIcon = Rc<dyn Fn(&crate::Entry) -> Vec<ImageSource>>;
 
 /// The content of the grid's scroll view: as tall as every cell, holding the cells that are built.
 pub(super) struct IconGrid {
@@ -138,7 +136,9 @@ pub(super) struct IconGrid {
     pub label: String,
     pub layout: Rc<IconLayout>,
     pub params: IconParams,
-    pub items: Rc<[Item]>,
+    /// The items, in the layout's order, and how each one's icon is made.
+    pub items: Rc<[crate::Entry]>,
+    pub icon: ItemIcon,
     pub scroll: ScrollState,
     pub selection: Selection,
     /// The items a context menu is open on, which wear an accent ring.
@@ -448,7 +448,7 @@ impl IconGrid {
             icons: press
                 .dragged
                 .iter()
-                .map(|&i| self.items[i].icon.clone())
+                .map(|&i| (self.icon)(&self.items[i]))
                 .collect(),
             offset: Point::new(
                 press.at.x - bounds.min_x() - left,
@@ -540,7 +540,7 @@ impl Widget<Message> for IconGrid {
                 let (x, y) = (icon.min_x() - frame.min_x(), icon.min_y() - frame.min_y());
                 let children = vec![
                     Element::new(Image {
-                        sources: self.items[index].icon.clone(),
+                        sources: (self.icon)(&self.items[index]),
                         size: Size::new(self.params.icon_size, self.params.icon_size),
                         fit: ImageFit::Contain,
                         radius: 0.0,
@@ -1340,6 +1340,51 @@ mod tests {
         );
         assert_eq!(layout.columns, 4);
         layout
+    }
+
+    #[test]
+    fn a_grid_of_thousands_of_items_makes_icons_only_for_the_cells_it_builds() {
+        let params = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
+        let width = 8.0 * 112.0 + 2.0 * icon::MARGIN;
+        let count = 3000;
+        let layout = icon::layout(
+            &params,
+            width,
+            &[SectionSpec { title: None, count }],
+            Flow::Leading,
+        );
+        let made = Rc::new(std::cell::Cell::new(0));
+        let counted = Rc::clone(&made);
+        let viewport = Size::new(width, 600.0);
+        let mut grid = IconGrid {
+            window: 1,
+            label: "Items".into(),
+            params,
+            items: (0..count)
+                .map(|i| crate::Entry::synthetic(&format!("item {i}.txt"), false, 1))
+                .collect(),
+            icon: Rc::new(move |_| {
+                counted.set(counted.get() + 1);
+                Vec::new()
+            }),
+            scroll: ScrollState {
+                offset: Point::new(0.0, layout.content.h / 2.0),
+                content: Size::new(layout.content.w, layout.content.h),
+                viewport,
+            },
+            layout: Rc::new(layout),
+            selection: Selection::new([], None, None),
+            ringed: Selection::new([], None, None),
+            band: None,
+            lead: 0.0,
+            name: Box::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            strip: false,
+        };
+        let built = grid.built().len();
+        let cells = grid.take_children().len();
+        assert_eq!(cells, built);
+        assert_eq!(made.get(), built, "one icon a cell built");
+        assert!(built < count / 10, "{built} cells built of {count}");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use cupertino_kit::layout::{
 use cupertino_kit::text::{AttributedText, TextStyle};
 
 use super::columns;
-use super::grid::{IconGrid, Item};
+use super::grid::{IconGrid, ItemIcon};
 use super::view::{name_field, shown_selection, under_row};
 use super::{BrowserWindow, Event as WindowEvent, Message, Session};
 use crate::layout::icon::{self, FontMetrics, IconLayout, IconParams};
@@ -186,21 +186,17 @@ fn stage(
 fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let (params, layout) = strip_layout(win);
     let height = layout.content.h;
-    let items: Rc<[Item]> = win
-        .browser
-        .entries()
-        .iter()
-        .map(|e| Item {
-            name: e.name.clone(),
-            icon: session.icons.icon(e, params.icon_size),
-        })
-        .collect();
+    let items: Rc<[crate::Entry]> = win.browser.entries().into();
+    let item_icons = Rc::clone(&session.icons);
+    let side = params.icon_size;
+    let icon: ItemIcon = Rc::new(move |e| item_icons.icon(e, side));
     let grid = Element::new(IconGrid {
         window: id,
         label: window_title(win.browser.dir(), &session.places),
         layout: Rc::new(layout),
         params,
         items,
+        icon,
         scroll: win.scroll,
         selection: shown_selection(win),
         ringed: Default::default(),

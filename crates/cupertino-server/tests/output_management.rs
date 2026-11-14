@@ -1051,8 +1051,13 @@ fn a_display_that_cannot_show_its_mode_announces_only_the_output_it_falls_back_t
         Some(1.0),
     )
     .unwrap();
-    h.wait_until(&client, "headless-3", |_, seen| {
-        seen.head("headless-3").is_some_and(|h| h.enabled)
+    // the head and the output global come on different queues, so either may arrive first
+    h.wait_until(&client, "headless-3 and its output", |_, seen| {
+        seen.head("headless-3").is_some_and(|h| h.enabled) && !seen.outputs.is_empty()
+    });
+    let settle = Instant::now() + Duration::from_millis(100);
+    h.wait_until(&client, "a while for any later global", |_, _| {
+        Instant::now() >= settle
     });
     let outputs = client.seen.lock().unwrap().outputs.clone();
     assert!(

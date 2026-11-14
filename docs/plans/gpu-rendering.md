@@ -94,13 +94,13 @@ Gate:
 
 ## Step 2: compositor wins
 
-- [ ] Non-glass materials use the overlap-limited backdrop generation glass uses.
-- [ ] The minimize effect reuses one captured texture.
-- [ ] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
-- [ ] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
+- [x] Non-glass materials use the overlap-limited backdrop generation glass uses.
+- [x] The minimize effect reuses one captured texture.
+- [x] Per-frame waste removed: HUD signature string, cursor image clone, wallpaper path bookkeeping.
+- [x] Reduced copies per window for windows drawn below half their size (overview, switcher, minimize, zoom), as a
       hand-written texture program with the external-sampler variant.
-- [ ] A better minification filter for integer-scale clients shown at a fractional scale.
-- [ ] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
+- [x] A better minification filter for integer-scale clients shown at a fractional scale.
+- [x] Objective checks: a reduced window against a box-filtered reference (shimmer); run-length check of a captured
       gradient under glass (banding).
 
 Gate:
@@ -635,6 +635,49 @@ The whole desktop at rest wakes about 50 times a minute, all of it the clock's m
 stay armed without firing in a minute (one in the server, one in the menu bar): long deadlines, not periods. The
 headless sessions keep the server's settings in a folder of their own, as a machine does (`/etc/cupertino`): beside
 `/tmp` every file another process made there woke the settings watch.
+
+### Step 2: compositor wins
+
+Taken at `30ef514a` (before: `2b119fa4`) on the target machine's GPU, release builds, `scripts/dev/bench --scenario
+drag --size 3840x2160 --scale 1.5 --runs 3`, no build running. Medians of the three runs, spread in brackets where it
+is not zero.
+
+| Drag over glass | Before | After |
+|---|---|---|
+| Blur passes per frame | 9.36 | 9.33 |
+| Backdrops blurred again / reused per frame | 1.87 / 3.13 | 2.79 / 6.21 |
+| Compositor work p50 / p99 ms | 1.24 (0.21) / 1.60 (0.78) | 1.24 (0.01) / 2.55 (0.29) |
+| Compositor GPU p50 / p99 ms | 0.92 / 0.94 (0.01) | 0.98 / 2.26 (0.14) |
+| Server CPU ms/s | 80.0 (20.0) | 86.7 (6.7) |
+| Missed refreshes | 0 | 0 |
+
+The gate is not met. The dragged window lies above every material that blurs, so what it uncovers is re-blurred with
+either generation: the overlap-limited one takes away only the regions elsewhere (0.03 passes a frame). The GPU p99 is
+three frames a run (the drag's turns) at 2.3–2.5 ms with the same blur counters as the frames around them, so the
+added work there is drawing, not blurring; still inside the 4 ms budget. The CPU p99 is over 2 ms in both, and within
+the run-to-run noise of the baseline's spread. A build with every step 2 change but the overlap-limited generation
+measured 9.36 passes, GPU p99 1.05 ms and work p99 2.35 ms (one run), so the GPU p99 change comes with that
+generation.
+
+**Checks of our own output** (headless, GPU tier):
+
+- A window of one-pixel stripes shown at 0.27 of its size in the overview, against its box-filtered picture computed in
+  Rust: mean difference 6.0, worst 10.7 of 255 (plain filtered lookups: 37.5 and 112). While it moves into place, the
+  stripes stray 0.5 of 255 from their average on every frame (plain lookups: 63), so nothing shimmers
+  (`headless::a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_not_shimmer`). The copy is
+  made once and kept while the window does not commit.
+- A scale 2 window on a scale 1.5 output against its box-filtered picture: mean 0.29, worst 0.5 of 255 (plain lookups:
+  9.4 and 20.8) (`headless::a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture`).
+- A grey gradient (64 to 96 over the output's height) under a large glass panel: down the panel the value steps one
+  level at a time, the longest run 35 rows where its 3 levels over 90 rows give 30 a level; the bare wall beside it
+  runs 16 rows over 6 levels (`backdrop_tone::a_gradient_under_glass_shows_no_bands`). The check passes without
+  dithering: the glass adds no bands of its own. The glass halves the gradient's contrast, so its 8-bit steps are
+  twice as tall as the wall's; dithering is what breaks those up.
+- One snapshot a minimize and one a restore, whatever the frames in between
+  (`headless::a_minimize_captures_the_window_once_and_a_restore_once_more`); a steady frame copies no cursor image
+  (`scene_cost::a_steady_frame_copies_no_cursor_image`), an overlay's signature allocates nothing
+  (`scene_cost::an_overlay_signature_allocates_nothing`) and a frame that changes nothing copies no wallpaper path
+  (`wallpaper::tests::a_frame_that_changes_nothing_copies_no_wallpaper_path`).
 
 ## Decisions taken
 

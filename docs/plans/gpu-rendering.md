@@ -75,17 +75,18 @@ One owner review, one re-recording of the goldens.
       alpha and intermediate precision; drop and inner shadow; gradient interpolation (at most eight stops);
       position-keyed dithering.
 - [x] The blur planner moves from `cupertino-glass` into it; the compositor uses it from there.
-- [ ] CPU renderer: rectangle, rounded-rectangle, stroke and clip coverage from the distance function; nested clips
+- [x] CPU renderer: rectangle, rounded-rectangle, stroke and clip coverage from the distance function; nested clips
       multiply coverage.
-- [ ] CPU renderer: blur and shadows from the shared kernel.
-- [ ] CPU renderer: gradients per pixel from the shared rule.
-- [ ] CPU renderer: scroll offsets rounded to device pixels when drawn.
-- [ ] `cupertino-decorations` shapes (title bar, window buttons) from the shared distance function, so the later move
+- [x] CPU renderer: blur and shadows from the shared kernel.
+- [x] CPU renderer: gradients per pixel from the shared rule.
+- [x] CPU renderer: scroll offsets rounded to device pixels when drawn.
+- [x] `cupertino-decorations` shapes (title bar, window buttons) from the shared distance function, so the later move
       to GPU pipelines changes no pixel.
 - [x] Compositor dithering from the shared definition (blur, material, glass and shadow outputs), tested against the
-      vectors. Off until the look freeze (see "The definitions and where the renderers disagree").
-- [ ] Before/after sheet of every golden at scales 1, 1.5 and 2, reviewed by the owner.
-- [ ] One re-recording of every golden.
+      vectors. On from the look freeze (see "The definitions and where the renderers disagree").
+- [ ] Before/after sheet of every golden at scales 1, 1.5 and 2, reviewed by the owner. The sheet is made (see "The
+      look freeze"); the owner's review is pending.
+- [x] One re-recording of every golden.
 
 ### The definitions and where the renderers disagree
 
@@ -129,16 +130,68 @@ review:
   the half step either way (the local driver does), so a shader test compares such stores within one step and the
   matrix itself exactly.
 
-Dithering changes pixels, so it is behind the look-freeze switch: `cupertino_raster_math::dither::BY_DEFAULT` is
-`false`, and the compositor compiles its blur (into 8-bit levels only), material, glass and shadow programs without it
-(byte-identical sources) unless `CUPERTINO_DITHER=1` is set. The freeze turns `BY_DEFAULT` on with the one re-recording
-of the goldens. The GL tests (`dither::` in the server's suite, slow tier) draw the shader's matrix and dithered stores
-and the dithered shadow against the definition.
+Dithering changes pixels, so it waited for the look freeze: `cupertino_raster_math::dither::BY_DEFAULT` is now
+`true`, and the compositor compiles its blur (into 8-bit levels only), material, glass and shadow programs with it;
+`CUPERTINO_DITHER=0` turns it off and `=1` on, to compare. The GL tests (`dither::` in the server's suite, slow tier)
+draw the shader's matrix and dithered stores and the dithered shadow against the definition.
+
+### The look freeze
+
+What each renderer now computes, and what it was tested against (rule 4):
+
+- **CPU renderer coverage.** Fills and strokes of rectangles and rounded rectangles, and clips of those shapes, take
+  each pixel's coverage from its centre's distance to the outline under the node's transform (distance in the shape's
+  units times the transform's scale); a pixel's coverage depends on its position only, so the span path, the scratch
+  path and any damage give the same bytes. Strokes stay centred on the outline: the shared stroke of the outline moved
+  out by half the width (a rectangle's corners stay square). Nested clips multiply. Paths (continuous corners in the
+  toolkit are paths), images and glyphs keep their rasterizers (rule 7). Each row is read in from both ends to the
+  fully covered (or hollow) run, which is written at once. Tested against `coverage.txt`.
+- **CPU renderer gradients.** Per pixel at its centre in node coordinates, by the shared rule, on every shape and on
+  paths (their coverage as a mask). Offsets are held to 0 to 1 and made to increase; one stop is that colour; **more
+  than eight stops are refused and the paint draws nothing**. Tested against `gradient.txt`.
+- **CPU renderer blur and shadows.** A layer's blur and shadows take the shared plan with no capture halving (2x
+  halvings while the variance is above 64, the Gaussian on the last level), transparent edges, levels in `f32` (finer
+  than the half floats the definition allows), the last level read back linearly at every pixel, moved by a shadow's
+  offset unrounded. The inner shadow is one minus the blurred silhouette, times the caster's coverage. Tested against
+  `blur.txt` and, for a rounded rectangle, the closed form of `shadow.txt`'s definitions (within 0.012; the closed form
+  leaves the tails past 3σ out and approximates the error function).
+- **Dithering.** Blur colour channels and shadow alpha, as the definition names; the definition now also names a
+  gradient's colour channels (premultiplied, held at its alpha, which is rounded), so the CPU renderer and the
+  decorations dither gradients. Keyed to the window's (or buffer's) pixel.
+- **Scroll offsets.** A scroll container places its content by its offset rounded to the window's device pixels; its
+  content size and scroll events read the same drawn offset.
+- **Decorations.** The title bar's fill, the rim inside the frame (now the shared inside stroke of the frame's
+  outline, its continuous corners from the outline's extents and exponent), the buttons' discs and their two edge
+  rings (inside strokes) and the button faces' and rings' gradients come from the shared functions. The buttons'
+  glyphs stay paths.
+
+The freeze was taken pending the owner's review of the before/after sheet: every golden image (before: the base
+commit's, after: re-recorded), the preview scenes at scales 1, 1.5 and 2 in both appearances, and the review sheet's
+windows, corners, dock, menus and Control Center in both appearances, side by side with the changed pixels and
+enlarged crops of the most changed places.
+
+The one re-recording changed 67 golden images: 46 of the kit's 52 control fixtures (and the text box's semantics dump, whose scrolled text now sits on a whole point), 5 of
+Control Center's, Files' icon view, the menu bar's 3, 5 of the renderer's 10 (its chrome and clip scenes) and 7 of the
+compositor's 8 (all but the empty desktop; the launcher's drawn region is one pixel taller). Edge pixels of
+rectangles and rounded rectangles move by up to about 30/255, fully covered and empty pixels not at all; shadows and
+blurs move by the Gaussian against three box passes; gradients and the compositor's blurred and glass outputs move by
+the dither, a step at most.
+
+Two server goldens already failed before the freeze, for changes of their own, and the re-recording takes those up too;
+the sheet names them apart from the shared maths: the overview no longer dims the desktop behind it (561 thousand of its
+pixels are lighter), and the launcher's large panel is 177 rows instead of 176, with its dark edge and bevel.
+Step 2's work merged before the re-recording (reduced copies and the minification filter of shrunk windows, partial
+blurs again) changes no golden past the comparison's tolerance. A gradient with more than eight stops draws nothing, so the scroll
+edge's veil, the one gradient that had nine, now has eight; its opacity is linear down the band, so it draws the same.
+Revealing a scrolled target (the caret, a focused row) measures it by the offset itself, not by its whole-pixel place.
+The GL test `coverage_gl::` (server suite, slow tier) draws the compositor's rounded rectangles, a continuous corner
+and an inside border at scales 1, 1.5 and 2 and compares every pixel with the shared coverage.
 
 Gate:
 
 - [ ] The owner approved the look, the goldens are re-recorded, and no bench scenario's client CPU p99 is more than
-      10% above its baseline.
+      10% above its baseline. The goldens are re-recorded and the bench holds (see "Step 1: the look freeze" under
+      Measurements); the owner's review of the before/after sheet is pending.
 
 ## Step 2: compositor wins
 
@@ -891,6 +944,29 @@ in the runtime are fast tests.
 | short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
 
 8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
+
+### Step 1: the look freeze
+
+`scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 3 --idle-seconds 30`, the base commit's programs and then the
+freeze's, one after the other on the same machine (other builds ran beside them; drag and idle were measured again
+after a run the machine disturbed, whose spread was 0.6 and 0.8 ms). Client frame p99 ms, median of the three runs
+(spread):
+
+| Scenario | Client | Before | After | After / before |
+|---|---|---|---|---|
+| idle | menu bar | 0.49 (0.07) | 0.44 (0.09) | 0.90 |
+| drag | Settings | 0.75 (0.03) | 0.77 (0.26) | 1.02 |
+| hover | Settings | 1.27 (0.05) | 0.96 (0.00) | 0.76 |
+| resize | Files | 17.61 (6.16) | 17.05 (2.61) | 0.97 |
+| control-center | Control Center | 14.99 (18.08) | 16.12 (5.88) | 1.08 |
+| launcher-typing | launcher | 6.77 (0.46) | 5.99 (0.55) | 0.88 |
+| files-scroll | Files | 7.64 (6.06) | 8.03 (2.20) | 1.05 |
+
+No scenario is more than 10% above its before. The first run of the freeze put launcher-typing at 8.51 ms (1.26): its
+open and close blur the whole panel as a group, and the Gaussian's first version split, read back and rounded every
+pixel through the general paths (46 ms for a 1000 x 640 layer at the widest blur, against the box blur's 21). Rounding a
+store without the library call, splitting the planes in one pass and reading back and dithering a row at a time, with
+the same bytes, brought it to 21 ms at the widest and less below it, and a drop shadow from 15 to 3 ms.
 
 ### Step 2: compositor wins
 

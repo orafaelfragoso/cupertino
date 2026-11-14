@@ -60,6 +60,8 @@ mod frame_pacing;
 mod goldens;
 #[path = "gpu-reset.rs"]
 mod gpu_reset;
+#[path = "gpu_slice.rs"]
+mod gpu_slice;
 #[path = "headless.rs"]
 mod headless;
 #[path = "hung_apps.rs"]

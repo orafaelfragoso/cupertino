@@ -503,7 +503,10 @@ mod tests {
     #[test]
     fn the_blocking_pool_ends_its_threads_once_idle() {
         if std::env::var_os(POOL_ALONE).is_none() {
-            let name = concat!(module_path!(), "::the_blocking_pool_ends_its_threads_once_idle");
+            let name = concat!(
+                module_path!(),
+                "::the_blocking_pool_ends_its_threads_once_idle"
+            );
             let name = name.split_once("::").map_or(name, |(_, path)| path);
             let out = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", name, "--test-threads=1", "--nocapture"])

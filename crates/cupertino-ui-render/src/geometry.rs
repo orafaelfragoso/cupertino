@@ -88,43 +88,118 @@ impl Bounds {
 }
 
 /// The most separate rectangles a frame repaints. Every rectangle walks the whole display list, so a damage of many
-/// small pieces (each item of a scrolled grid, say) costs the list's length times their number; past this many, one
-/// rectangle around them all is repainted instead, which costs at most a repaint of the whole frame.
+/// small pieces (each item of a scrolled grid, say) costs the list's length times their number; past this many, the
+/// pieces closest together are repainted as one rectangle around both.
 pub(crate) const MAX_DAMAGE_RECTS: usize = 16;
 
-/// Merges overlapping or touching rectangles until none remain, then orders the rest by row and column; more than
-/// [`MAX_DAMAGE_RECTS`] become the one rectangle around them.
+/// The most rectangles the touching pass pairs up, each against each. Past this many, the rectangles are first gathered
+/// into the cells of a [`GATHER_CELLS`]-square grid over them, one rectangle around each cell's pieces.
+const MAX_PAIRED: usize = 256;
+
+/// The most rectangles the closest-pair pass starts from, each step trying every pair. Past this many once touching
+/// pieces are merged, they are gathered into a [`GATHER_CELLS_CLOSE`]-square grid first.
+const MAX_CLOSE_PAIRED: usize = 64;
+
+/// The columns (and rows) of the grid a damage of more than [`MAX_PAIRED`] rectangles is gathered into.
+const GATHER_CELLS: i64 = 16;
+
+/// The columns (and rows) of the grid a damage of more than [`MAX_CLOSE_PAIRED`] rectangles is gathered into.
+const GATHER_CELLS_CLOSE: i64 = 8;
+
+/// Merges overlapping or touching rectangles, then the pairs whose merge adds the least repainted area until at most
+/// [`MAX_DAMAGE_RECTS`] remain, and orders them by row and column. The result covers every input pixel, and no two of
+/// its rectangles touch. The cost stays bounded for any number of inputs: past [`MAX_PAIRED`] (and again past
+/// [`MAX_CLOSE_PAIRED`]) the pieces are gathered by a coarse grid, one pass over them, before any pairing.
 pub(crate) fn merge(mut rects: Vec<Bounds>) -> Vec<Bounds> {
     rects.retain(|r| !r.is_empty());
-    if rects.len() > MAX_DAMAGE_RECTS * MAX_DAMAGE_RECTS {
-        // so many that pairing them up costs more than the repaint they could save
-        return around(&rects);
+    if rects.len() > MAX_PAIRED {
+        rects = gather(&rects, GATHER_CELLS);
     }
-    loop {
-        let pair = (0..rects.len()).find_map(|i| {
-            (i + 1..rects.len())
-                .find(|&j| rects[i].outset(1).touches(&rects[j]))
-                .map(|j| (i, j))
-        });
-        let Some((i, j)) = pair else { break };
-        let other = rects.swap_remove(j);
+    merge_touching(&mut rects);
+    if rects.len() > MAX_CLOSE_PAIRED {
+        rects = gather(&rects, GATHER_CELLS_CLOSE);
+        merge_touching(&mut rects);
+    }
+    while rects.len() > MAX_DAMAGE_RECTS {
+        let mut best = (0, 1, u64::MAX);
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                let added = added_area(&rects[i], &rects[j]);
+                if added < best.2 {
+                    best = (i, j, added);
+                }
+            }
+        }
+        let (i, j, _) = best;
+        let other = rects.remove(j);
         rects[i] = rects[i].union(&other);
-    }
-    if rects.len() > MAX_DAMAGE_RECTS {
-        return around(&rects);
+        absorb_touching(&mut rects, i);
     }
     rects.sort_by_key(|r| (r.y0, r.x0, r.y1, r.x1));
     rects
 }
 
-/// The one rectangle around `rects`; none when there are none.
-fn around(rects: &[Bounds]) -> Vec<Bounds> {
-    rects
-        .iter()
-        .copied()
-        .reduce(|a, b| a.union(&b))
-        .into_iter()
-        .collect()
+/// Whether two rectangles are repainted as one: they overlap, touch or lie a pixel apart.
+fn joins(a: &Bounds, b: &Bounds) -> bool {
+    a.outset(1).touches(b)
+}
+
+fn area(r: &Bounds) -> u64 {
+    u64::from(r.width()) * u64::from(r.height())
+}
+
+/// The pixels a repaint of the one rectangle around `a` and `b` adds to repainting both.
+fn added_area(a: &Bounds, b: &Bounds) -> u64 {
+    let both = area(a) + area(b) - area(&a.intersect(b));
+    area(&a.union(b)).saturating_sub(both)
+}
+
+/// Merges rectangles until no two of them join: each in turn grows over every one that joins it, so the ones before
+/// it never join each other again.
+fn merge_touching(rects: &mut Vec<Bounds>) {
+    let mut i = 0;
+    while i < rects.len() {
+        i = absorb_touching(rects, i) + 1;
+    }
+}
+
+/// Grows `rects[i]` over every rectangle that joins it, until none does, keeping the others in order; where it ends.
+fn absorb_touching(rects: &mut Vec<Bounds>, mut i: usize) -> usize {
+    let mut j = 0;
+    while j < rects.len() {
+        if j != i && joins(&rects[i], &rects[j]) {
+            let other = rects.remove(j);
+            if j < i {
+                i -= 1;
+            }
+            rects[i] = rects[i].union(&other);
+            // the grown rectangle may now join one already passed
+            j = 0;
+        } else {
+            j += 1;
+        }
+    }
+    i
+}
+
+/// One rectangle around the pieces whose centres fall in each cell of a `cells`-square grid over all of `rects`.
+fn gather(rects: &[Bounds], cells: i64) -> Vec<Bounds> {
+    let Some(all) = rects.iter().copied().reduce(|a, b| a.union(&b)) else {
+        return Vec::new();
+    };
+    let (w, h) = (
+        i64::from(all.width()).max(1),
+        i64::from(all.height()).max(1),
+    );
+    let mut grid: Vec<Option<Bounds>> = vec![None; (cells * cells) as usize];
+    for r in rects {
+        let cx = (i64::from(r.x0) + i64::from(r.x1)) / 2 - i64::from(all.x0);
+        let cy = (i64::from(r.y0) + i64::from(r.y1)) / 2 - i64::from(all.y0);
+        let cell = ((cy * cells / h).clamp(0, cells - 1) * cells
+            + (cx * cells / w).clamp(0, cells - 1)) as usize;
+        grid[cell] = Some(grid[cell].map_or(*r, |c| c.union(r)));
+    }
+    grid.into_iter().flatten().collect()
 }
 
 pub(crate) fn transform(t: &Transform) -> tiny_skia::Transform {
@@ -352,14 +427,141 @@ mod tests {
         );
     }
 
+    /// Whether every pixel of `input` lies in one of `output`.
+    fn covers(output: &[Bounds], input: &[Bounds]) -> bool {
+        input.iter().filter(|r| !r.is_empty()).all(|r| {
+            (r.y0..r.y1).all(|y| {
+                (r.x0..r.x1).all(|x| {
+                    output
+                        .iter()
+                        .any(|o| o.x0 <= x && x < o.x1 && o.y0 <= y && y < o.y1)
+                })
+            })
+        })
+    }
+
+    fn pixels(rects: &[Bounds]) -> u64 {
+        rects.iter().map(area).sum()
+    }
+
+    /// A made-up spread of `n` small rectangles, some overlapping, over a frame of 4000 by 2500 pixels.
+    fn scattered(n: u32, seed: u32) -> Vec<Bounds> {
+        let mut state = seed.wrapping_mul(2_654_435_761).max(1);
+        let mut next = move |below: u32| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state % below) as i32
+        };
+        (0..n)
+            .map(|_| {
+                let (x, y) = (next(3900), next(2400));
+                px(x, y, x + 2 + next(60), y + 2 + next(60))
+            })
+            .collect()
+    }
+
     #[test]
-    fn many_separate_pieces_become_the_one_rectangle_around_them() {
+    fn scattered_pieces_stay_separate_and_only_the_closest_merge_past_the_limit() {
+        // seventeen pieces far apart: the two nearest merge, the other fifteen stay as they are
+        let mut pieces: Vec<Bounds> = (0..15).map(|i| px(i * 200, 0, i * 200 + 10, 10)).collect();
+        pieces.push(px(3000, 900, 3010, 910));
+        pieces.push(px(3000, 915, 3010, 925));
+        let merged = merge(pieces.clone());
+        assert_eq!(merged.len(), MAX_DAMAGE_RECTS, "{merged:?}");
+        assert!(merged.contains(&px(3000, 900, 3010, 925)), "{merged:?}");
+        assert!(covers(&merged, &pieces));
+        assert_eq!(
+            pixels(&merged),
+            pixels(&pieces) + 50,
+            "only the gap between the two closest is added"
+        );
+    }
+
+    #[test]
+    fn a_scrolled_grid_of_separate_items_is_repainted_in_a_few_rows_not_one_rectangle_around_them()
+    {
         // a scrolled grid damages each of its items: each rectangle would walk the whole display list again
         for n in [MAX_DAMAGE_RECTS as i32 + 1, 700] {
-            let merged = merge(grid(n));
-            let all = grid(n).into_iter().reduce(|a, b| a.union(&b)).unwrap();
-            assert_eq!(merged, vec![all], "{n} pieces");
+            let pieces = grid(n);
+            let merged = merge(pieces.clone());
+            assert!(
+                merged.len() <= MAX_DAMAGE_RECTS,
+                "{n} pieces: {}",
+                merged.len()
+            );
+            assert!(covers(&merged, &pieces), "{n} pieces");
+            let all = pieces.iter().copied().reduce(|a, b| a.union(&b)).unwrap();
+            if n == MAX_DAMAGE_RECTS as i32 + 1 {
+                // seventeen in a row, ten pixels apart: one gap is painted over, the rest stay apart
+                assert_eq!(merged.len(), MAX_DAMAGE_RECTS);
+                assert_eq!(pixels(&merged), pixels(&pieces) + 100);
+            }
+            assert!(
+                pixels(&merged) < area(&all),
+                "{n} pieces: no more than the rectangle around them"
+            );
         }
+    }
+
+    #[test]
+    fn the_rectangle_around_everything_comes_only_when_the_pieces_fill_it() {
+        // pieces that tile a block are repainted as that block; pieces spread over it are not
+        let tiles: Vec<Bounds> = (0..400)
+            .map(|i| px(i % 20 * 10, i / 20 * 10, i % 20 * 10 + 10, i / 20 * 10 + 10))
+            .collect();
+        assert_eq!(merge(tiles), vec![px(0, 0, 200, 200)]);
+        let pieces = scattered(40, 1);
+        let all = pieces.iter().copied().reduce(|a, b| a.union(&b)).unwrap();
+        let merged = merge(pieces);
+        assert!(
+            merged.len() > 1 && pixels(&merged) * 4 < area(&all),
+            "{merged:?}"
+        );
+    }
+
+    #[test]
+    fn the_merged_damage_always_covers_every_piece_and_no_two_of_its_rectangles_touch() {
+        for (n, seed) in [
+            (0, 1),
+            (1, 2),
+            (5, 3),
+            (17, 4),
+            (63, 5),
+            (65, 6),
+            (255, 7),
+            (257, 8),
+            (700, 9),
+            (3000, 10),
+        ] {
+            let pieces = scattered(n, seed);
+            let merged = merge(pieces.clone());
+            assert!(
+                merged.len() <= MAX_DAMAGE_RECTS,
+                "{n}: {} rectangles",
+                merged.len()
+            );
+            assert!(covers(&merged, &pieces), "{n} pieces");
+            for (i, a) in merged.iter().enumerate() {
+                for b in &merged[i + 1..] {
+                    assert!(!joins(a, b), "{n}: {a:?} touches {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn many_pieces_merge_within_a_bounded_time() {
+        // the frame budget: a damage of thousands of pieces must not cost more than a repaint would save
+        let pieces = scattered(20_000, 11);
+        let start = std::time::Instant::now();
+        let merged = merge(pieces.clone());
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(covers(&merged, &pieces[..200]));
     }
 
     #[test]

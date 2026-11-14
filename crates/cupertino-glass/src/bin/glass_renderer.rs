@@ -1,4 +1,4 @@
-//! glass-renderer: render material recipes with the wgpu `MaterialRenderer` (headless).
+//! glass-renderer: render material recipes with the `MaterialRenderer` on a `cupertino-gpu` device (headless).
 //!
 //! Usage:
 //!   glass-renderer [--spec-dir DIR] [--appearance light|dark|light-high-contrast|dark-high-contrast]
@@ -52,17 +52,16 @@ fn default_rect(material: &str, w: u32, h: u32, scale: f32) -> [f32; 4] {
 fn render_frame(
     gpu: &HeadlessGpu,
     renderer: &mut MaterialRenderer,
-    src: &wgpu::TextureView,
-    dst: &wgpu::TextureView,
+    src: &cupertino_gpu::Texture,
+    dst: &cupertino_gpu::Texture,
     size: (u32, u32),
     scale: f32,
     generation: u64,
     tint: [f32; 3],
     regions: &[MaterialRegion],
 ) -> cupertino_glass::RenderStats {
-    let mut enc = gpu.device.create_command_encoder(&Default::default());
     let stats = renderer.render(
-        &mut enc,
+        &gpu.device,
         &FrameDesc {
             source: src,
             source_size: size,
@@ -75,8 +74,7 @@ fn render_frame(
         },
         regions,
     );
-    gpu.queue.submit([enc.finish()]);
-    stats
+    stats.expect("a frame drawn")
 }
 
 fn bench(
@@ -89,20 +87,15 @@ fn bench(
     label: &str,
 ) {
     let (w, h) = wall.dimensions();
-    let src = gpu.upload(wall);
-    let dst = gpu.target(w, h);
-    let (sv, dv) = (
-        src.create_view(&Default::default()),
-        dst.create_view(&Default::default()),
-    );
-    let mut renderer =
-        MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
+    let src = gpu.upload(wall).unwrap();
+    let dst = gpu.target(w, h).unwrap();
+    let mut renderer = MaterialRenderer::new(&gpu.device).unwrap();
     for g in 0..10 {
         render_frame(
             gpu,
             &mut renderer,
-            &sv,
-            &dv,
+            &src,
+            &dst,
             (w, h),
             scale,
             g,
@@ -110,7 +103,7 @@ fn bench(
             regions,
         );
     }
-    gpu.device.poll(wgpu::Maintain::Wait);
+    gpu.device.finish().unwrap();
     let run = |renderer: &mut MaterialRenderer, bump: bool| {
         let t0 = Instant::now();
         let mut gen = 1000u64;
@@ -118,9 +111,9 @@ fn bench(
             if bump {
                 gen += 1;
             }
-            render_frame(gpu, renderer, &sv, &dv, (w, h), scale, gen, tint, regions);
+            render_frame(gpu, renderer, &src, &dst, (w, h), scale, gen, tint, regions);
         }
-        gpu.device.poll(wgpu::Maintain::Wait);
+        gpu.device.finish().unwrap();
         t0.elapsed().as_secs_f64() / n as f64
     };
     let miss = run(&mut renderer, true);
@@ -221,7 +214,7 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
             ),
             MaterialRegion::from_recipe([14.0, 2.0, 70.0, 20.0], &sel, scale),
         ];
-        let img = gpu.render_once(&wall, &regions, scale, tint);
+        let img = gpu.render_once(&wall, &regions, scale, tint).unwrap();
         let path = out.join(format!("{name}_materials.png"));
         img.save(&path)?;
         println!("wrote {}", path.display());
@@ -231,12 +224,14 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
             ([60.0, 80.0, 220.0, 420.0], &side, "sidebar"),
         ] {
             let radius = if tag == "menubar" { 0.0 } else { 12.0 };
-            let img = gpu.render_once(
-                &wall,
-                &[reg(rect, rc, radius, CornerStyle::continuous())],
-                scale,
-                tint,
-            );
+            let img = gpu
+                .render_once(
+                    &wall,
+                    &[reg(rect, rc, radius, CornerStyle::continuous())],
+                    scale,
+                    tint,
+                )
+                .unwrap();
             let path = out.join(format!("{name}_{tag}.png"));
             img.save(&path)?;
             println!("wrote {}", path.display());
@@ -262,7 +257,7 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
             .with_corner(90.0, CornerStyle::continuous())
             .with_opacity(0.8),
     ];
-    let img = gpu.render_once(&flat, &regions, 1.0, [0.5; 3]);
+    let img = gpu.render_once(&flat, &regions, 1.0, [0.5; 3]).unwrap();
     let path = out.join("corner_styles.png");
     img.save(&path)?;
     println!("wrote {}", path.display());
@@ -273,25 +268,17 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
         (Appearance::Light, VibrantMode::Light, "vibrant_light"),
     ] {
         let side = recipe(theme, appearance, "Sidebar", &opts)?;
-        let src = gpu.upload(&wall);
-        let a = gpu.target(w, h);
-        let b = gpu.target(w, h);
-        let glyphs = gpu.upload(&glyph_template(256, 64));
-        let mut renderer =
-            MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
-        let (sv, av, bv, gv) = (
-            src.create_view(&Default::default()),
-            a.create_view(&Default::default()),
-            b.create_view(&Default::default()),
-            glyphs.create_view(&Default::default()),
-        );
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        let src = gpu.upload(&wall).unwrap();
+        let a = gpu.target(w, h).unwrap();
+        let b = gpu.target(w, h).unwrap();
+        let glyphs = gpu.upload(&glyph_template(256, 64)).unwrap();
+        let mut renderer = MaterialRenderer::new(&gpu.device)?;
         renderer.render(
-            &mut enc,
+            &gpu.device,
             &FrameDesc {
-                source: &sv,
+                source: &src,
                 source_size: (w, h),
-                target: &av,
+                target: &a,
                 target_size: (w, h),
                 display_scale: 1.0,
                 damage_generation: 1,
@@ -300,33 +287,21 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
             },
             &[MaterialRegion::new([100.0, 100.0, 520.0, 300.0], &side)
                 .with_corner(14.0, CornerStyle::continuous())],
-        );
-        enc.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &a,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &b,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        )?;
+        renderer.copy(&gpu.device, &a, &b)?;
         let style = VibrantStyle::new(mode);
         let draws: Vec<VibrantDraw> = (0..3)
-            .map(|i| VibrantDraw::new(&gv, [130.0, 130.0 + i as f32 * 80.0, 256.0, 64.0], style))
+            .map(|i| {
+                VibrantDraw::new(
+                    &glyphs,
+                    [130.0, 130.0 + i as f32 * 80.0, 256.0, 64.0],
+                    style,
+                )
+            })
             .collect();
-        renderer.draw_vibrant(&mut enc, &bv, &av, (w, h), &draws);
-        gpu.queue.submit([enc.finish()]);
-        let img = gpu.read(&a);
+        renderer.draw_vibrant(&gpu.device, &b, &a, &draws)?;
+        renderer.destroy(&gpu.device);
+        let img = gpu.read(&a).unwrap();
         let path = out.join(format!("{name}.png"));
         img.save(&path)?;
         println!("wrote {}", path.display());
@@ -342,7 +317,7 @@ fn main() -> Result<()> {
     }
     .map_err(|e| anyhow!("{e}"))
     .context("loading specification")?;
-    let gpu = HeadlessGpu::new().ok_or_else(|| anyhow!("no GPU adapter"))?;
+    let gpu = HeadlessGpu::new().ok_or_else(|| anyhow!("no GPU device"))?;
     println!("adapter: {}", gpu.adapter_name);
     if args.flag("--demo") {
         return demo(&gpu, &theme);
@@ -405,7 +380,7 @@ fn main() -> Result<()> {
     }
     let tint = average_color(&wall);
     println!("recipe {}: {:#?}", r.name, r);
-    let img = gpu.render_once(&wall, &[region], scale, tint);
+    let img = gpu.render_once(&wall, &[region], scale, tint).unwrap();
     let default_name = format!(
         "{}_{}.png",
         appearance.as_str().replace('-', "_"),

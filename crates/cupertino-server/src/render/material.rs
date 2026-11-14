@@ -1,6 +1,6 @@
 //! Material pass on GLES: backdrop capture → downsample pyramid → separable Gaussian → colour
-//! operations → composite with a rounded mask, using the GLSL ES 3.00 ports of the
-//! `cupertino-glass` shaders (compositor copies in `shaders/, see the README for the changes).
+//! operations → composite with a rounded mask, with the programs `cupertino-glass` generates from WGSL
+//! ([`cupertino_glass::shaders`]), their blocks and samplers bound by the names generated beside them.
 //!
 //! All GL work happens inside [`MaterialElement::draw`], on the renderer's own context, while the
 //! frame's target framebuffer is bound. The capture reads that framebuffer, so the element must be
@@ -16,10 +16,13 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_glass::ops::{color_ops, fill_ops, Op, PassParams, RegionParams, PASS_DITHER};
-use cupertino_glass::shaders::{Program, PASS_BLOCK, PASS_SOURCE};
+use cupertino_glass::ops::{
+    color_ops, fill_ops, Op, PassParams, Placement, RegionParams, PASS_DITHER,
+};
+use cupertino_glass::shaders::{
+    Program, PASS_BLOCK, PASS_SOURCE, PLACEMENT, REGION_BACKDROP, REGION_BLOCK,
+};
 use cupertino_raster_math::blur::{plan_blur, BlurPlan};
-use cupertino_raster_math::dither::with_dither;
 use cupertino_theme::recipe::Recipe;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer};
@@ -31,9 +34,6 @@ use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 #[path = "glass.rs"]
 pub mod glass;
 
-const MATERIAL_VERT: &str = include_str!("../../shaders/material.vert");
-const MATERIAL_FRAG: &str = include_str!("../../shaders/material.frag");
-
 type GLuint = ffi::types::GLuint;
 type GLint = ffi::types::GLint;
 type GLenum = ffi::types::GLenum;
@@ -41,6 +41,8 @@ type GLenum = ffi::types::GLenum;
 /// Uniform block bindings.
 const BIND_PASS: GLuint = 0;
 const BIND_REGION: GLuint = 1;
+/// The binding of the placement block of the material and glass programs.
+const BIND_PLACE: GLuint = 3;
 
 /// Released render targets always kept for reuse, the most recently released first.
 const FREE_KEPT: usize = 12;
@@ -109,17 +111,13 @@ struct Programs {
     blur: GLuint,
     color: GLuint,
     material: GLuint,
-    material_loc: MaterialLocs,
+    /// The location of the material program's backdrop sampler.
+    material_backdrop: GLint,
     src_loc: [GLint; 3],
     /// The blur dithers its result by pixel: its levels are 8 bits a channel and dithering is on.
     blur_dither: bool,
-}
-
-#[derive(Clone, Copy, Default)]
-struct MaterialLocs {
-    proj: GLint,
-    quad: GLint,
-    backdrop: GLint,
+    /// The material and glass composites dither their results by pixel.
+    place_dither: bool,
 }
 
 /// Identity of a processed backdrop: recipe, capture size, pixel scale, for backdrops captured by a
@@ -476,6 +474,8 @@ pub struct MaterialGl {
     progs: Option<Programs>,
     ubo_pass: GLuint,
     ubo_region: GLuint,
+    /// The placement block of the material and glass composites, written for each quad drawn.
+    ubo_place: GLuint,
     float_targets: bool,
     free: Vec<Target>,
     cache: Vec<CachedBackdrop>,
@@ -551,6 +551,45 @@ unsafe fn link(gl: &ffi::Gles2, vert: &str, frag: &str) -> Result<GLuint, String
         return Err(String::from_utf8_lossy(&buf[..w.max(0) as usize]).into_owned());
     }
     Ok(p)
+}
+
+/// Link a generated program and bind each of its blocks, by the names generated beside it, to the binding point given
+/// for its WGSL group and binding.
+unsafe fn link_generated(
+    gl: &ffi::Gles2,
+    program: &Program,
+    blocks: &[((u32, u32), GLuint)],
+) -> Result<GLuint, String> {
+    let name = program.source.name;
+    let p = link(gl, program.source.vertex_glsl, program.source.fragment_glsl)
+        .map_err(|e| format!("{name}: {e}"))?;
+    for &((group, binding), point) in blocks {
+        let names = program.blocks(group, binding);
+        if names.is_empty() {
+            gl.DeleteProgram(p);
+            return Err(format!("{name}: no block at {group}, {binding}"));
+        }
+        for block in names {
+            if let Err(e) = bind_block(gl, p, &block, point) {
+                gl.DeleteProgram(p);
+                return Err(format!("{name}: {e}"));
+            }
+        }
+    }
+    Ok(p)
+}
+
+/// The location of the sampler of a generated program that reads the texture at `at` (group, binding).
+unsafe fn sampler_loc(
+    gl: &ffi::Gles2,
+    p: GLuint,
+    program: &Program,
+    at: (u32, u32),
+) -> Result<GLint, String> {
+    let sampler = program
+        .sampler(at.0, at.1)
+        .ok_or_else(|| format!("{}: no sampler at {}, {}", program.source.name, at.0, at.1))?;
+    Ok(uniform_loc(gl, p, &sampler))
 }
 
 unsafe fn uniform_loc(gl: &ffi::Gles2, p: GLuint, name: &str) -> GLint {
@@ -700,6 +739,7 @@ impl MaterialGl {
             progs: None,
             ubo_pass: 0,
             ubo_region: 0,
+            ubo_place: 0,
             float_targets: false,
             free: Vec::new(),
             cache: Vec::new(),
@@ -755,29 +795,30 @@ impl MaterialGl {
         let (downsample, downsample_src) = pass(&cupertino_glass::shaders::DOWNSAMPLE)?;
         let (blur, blur_src) = pass(&cupertino_glass::shaders::BLUR)?;
         let (color, color_src) = pass(&cupertino_glass::shaders::COLOR)?;
-        let material = link(gl, MATERIAL_VERT, &with_dither(MATERIAL_FRAG, dither))
-            .map_err(|e| format!("material: {e}"))?;
-        bind_block(gl, material, "Region", BIND_REGION)?;
-        self.glass = glass::GlassGl::init(gl, dither)?;
+        let program = &cupertino_glass::shaders::MATERIAL;
+        let material = link_generated(
+            gl,
+            program,
+            &[(REGION_BLOCK, BIND_REGION), (PLACEMENT, BIND_PLACE)],
+        )?;
+        let material_backdrop = sampler_loc(gl, material, program, REGION_BACKDROP)?;
+        self.glass = glass::GlassGl::init(gl)?;
         let src_loc = [downsample_src, blur_src, color_src];
-        let material_loc = MaterialLocs {
-            proj: uniform_loc(gl, material, "u_proj"),
-            quad: uniform_loc(gl, material, "u_quad"),
-            backdrop: uniform_loc(gl, material, "u_backdrop"),
-        };
         self.progs = Some(Programs {
             downsample,
             blur,
             color,
             material,
-            material_loc,
+            material_backdrop,
             src_loc,
             blur_dither: dither && !self.float_targets,
+            place_dither: dither,
         });
-        let mut bufs = [0; 2];
-        gl.GenBuffers(2, bufs.as_mut_ptr());
+        let mut bufs = [0; 3];
+        gl.GenBuffers(3, bufs.as_mut_ptr());
         self.ubo_pass = bufs[0];
         self.ubo_region = bufs[1];
+        self.ubo_place = bufs[2];
         tracing::info!(version = %version, float_targets = self.float_targets, "material pipeline initialised");
         Ok(())
     }
@@ -807,6 +848,7 @@ impl MaterialGl {
             progs: None,
             ubo_pass: 0,
             ubo_region: 0,
+            ubo_place: 0,
             float_targets: false,
             free: Vec::new(),
             cache: Vec::new(),
@@ -908,6 +950,18 @@ impl MaterialGl {
         for t in self.free.drain(..excess).collect::<Vec<_>>() {
             self.destroy_target(gl, t);
         }
+    }
+
+    /// Write the placement of one quad of a composite: `quad` (x, y, w, h in target pixels) through `projection`.
+    unsafe fn place(&self, gl: &ffi::Gles2, projection: &[f32; 9], quad: [f32; 4]) {
+        let dither = self.progs.as_ref().is_some_and(|p| p.place_dither);
+        let placement = Placement::new(projection, quad, dither);
+        Self::upload_ubo(
+            gl,
+            self.ubo_place,
+            BIND_PLACE,
+            bytemuck::bytes_of(&placement),
+        );
     }
 
     unsafe fn upload_ubo(gl: &ffi::Gles2, buf: GLuint, binding: GLuint, data: &[u8]) {
@@ -1413,15 +1467,9 @@ impl MaterialGl {
             BIND_REGION,
             bytemuck::bytes_of(&region),
         );
-        gl.UniformMatrix3fv(
-            progs.material_loc.proj,
-            1,
-            ffi::FALSE,
-            p.projection.as_ptr(),
-        );
         gl.ActiveTexture(ffi::TEXTURE0);
         gl.BindTexture(ffi::TEXTURE_2D, backdrop_tex);
-        gl.Uniform1i(progs.material_loc.backdrop, 0);
+        gl.Uniform1i(progs.material_backdrop, 0);
         // a pixel more for the mask's antialiased edge, where the mask is the region's own; a region cut to a window
         // ends at its own rectangle
         let grow = i32::from(p.area == p.rect);
@@ -1433,12 +1481,15 @@ impl MaterialGl {
             let Some(q) = d.intersection(bounds) else {
                 continue;
             };
-            gl.Uniform4f(
-                progs.material_loc.quad,
-                q.loc.x as f32,
-                q.loc.y as f32,
-                q.size.w as f32,
-                q.size.h as f32,
+            self.place(
+                gl,
+                &p.projection,
+                [
+                    q.loc.x as f32,
+                    q.loc.y as f32,
+                    q.size.w as f32,
+                    q.size.h as f32,
+                ],
             );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             self.stats.composites += 1;
@@ -1494,7 +1545,7 @@ impl MaterialGl {
         free.extend(self.glass.targets());
         let cache = std::mem::take(&mut self.cache);
         let progs = self.progs.take();
-        let bufs = [self.ubo_pass, self.ubo_region];
+        let bufs = [self.ubo_pass, self.ubo_region, self.ubo_place];
         let _ = renderer.with_context(|gl| unsafe {
             for t in free
                 .into_iter()
@@ -1508,7 +1559,7 @@ impl MaterialGl {
                     gl.DeleteProgram(prog);
                 }
             }
-            gl.DeleteBuffers(2, bufs.as_ptr());
+            gl.DeleteBuffers(3, bufs.as_ptr());
             for q in self
                 .timers
                 .free
@@ -2232,55 +2283,65 @@ mod tests {
         assert_ne!(e.current_commit(), before);
     }
 
-    /// The source of a shader of `cupertino-glass`'s GLSL ES port, which the server's shaders copy.
-    fn glass_shader(name: &str) -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../cupertino-glass/shaders/gles")
-            .join(name);
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-    }
-
-    /// The text of `source` from the line holding `start` through the first line after it holding `end`.
-    fn span<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-        let from = source.find(start).unwrap_or_else(|| panic!("no {start:?}"));
-        let to = source[from..]
-            .find(end)
-            .unwrap_or_else(|| panic!("no {end:?} after {start:?}"))
-            + from
-            + end.len();
-        &source[from..to]
-    }
-
     #[test]
-    fn the_shaders_shared_with_the_glass_crate_stay_its_copies() {
-        // drawn by the server exactly as the glass crate draws them
-        for (name, server) in [
-            ("glass.vert", super::glass::GLASS_VERT),
-            ("glass.frag", super::glass::GLASS_FRAG),
+    fn the_composites_are_the_glass_crates_generated_programs_placed_by_the_frame_projection() {
+        use cupertino_glass::shaders::{
+            GLASS, GLASS_BLOCK, GLASS_FILL, GLASS_LEVELS, MATERIAL, PLACEMENT, REGION_BACKDROP,
+            REGION_BLOCK,
+        };
+        for (program, block, samplers) in [
+            (MATERIAL, REGION_BLOCK, vec![REGION_BACKDROP]),
+            (
+                GLASS,
+                GLASS_BLOCK,
+                GLASS_LEVELS.into_iter().chain([GLASS_FILL]).collect(),
+            ),
         ] {
+            let name = program.source.name;
+            let (vert, frag) = (program.source.vertex_glsl, program.source.fragment_glsl);
+            // the quad and the projection come from the placement block, read by both stages under a name each
+            let placement = program.blocks(PLACEMENT.0, PLACEMENT.1);
+            assert_eq!(placement.len(), 2, "{name}: {placement:?}");
             assert!(
-                server == glass_shader(name),
-                "shaders/{name} is no longer a copy of cupertino-glass/shaders/gles/{name}"
+                placement
+                    .iter()
+                    .any(|b| vert.contains(&format!("uniform {b} {{ Placement "))),
+                "{name}"
             );
-        }
-        // the material region is placed and sampled through the compositor's frame projection, but its uniform block,
-        // mask, blend modes and fill layers are the glass crate's
-        let (vert, frag) = (glass_shader("material.vert"), glass_shader("material.frag"));
-        let block = |s: &str| span(s, "layout(std140) uniform Region", "} R;").to_owned();
-        assert_eq!(block(MATERIAL_VERT), block(&vert), "material.vert block");
-        assert_eq!(block(MATERIAL_FRAG), block(&frag), "material.frag block");
-        for (start, end) in [
-            ("float region_sdf(", "\n}\n"),
-            ("float soft_light(", "\n}\n"),
-            ("vec3 blend(", "\n}\n"),
-            ("int n = int(R.info.x);", "frag_color = "),
-        ] {
+            assert!(
+                vert.contains("mat3x3") && !vert.contains("uniform mat3 "),
+                "{name}"
+            );
+            // the dither of the result is the placement's flag, not a second program text
+            assert!(
+                frag.contains("dither_rgb(") && !frag.contains("CUPERTINO_DITHER"),
+                "{name}"
+            );
+            let blocks = program.blocks(block.0, block.1);
             assert_eq!(
-                span(MATERIAL_FRAG, start, end),
-                span(&frag, start, end),
-                "material.frag: {start}"
+                blocks.len(),
+                1,
+                "{name}: only the fragment stage reads its block"
             );
+            assert!(
+                frag.contains(&format!("uniform {} {{ ", blocks[0])),
+                "{name}"
+            );
+            for at in samplers {
+                let sampler = program.sampler(at.0, at.1).unwrap();
+                assert!(frag.contains(&format!("sampler2D {sampler};")), "{name}");
+            }
         }
+        // every block of the compositor's programs has a binding point of its own
+        let points = [
+            BIND_PASS,
+            BIND_REGION,
+            super::glass::BIND_GLASS,
+            BIND_PLACE,
+            crate::render::mesh::BIND_MESH,
+        ];
+        let distinct: std::collections::BTreeSet<u32> = points.into_iter().collect();
+        assert_eq!(distinct.len(), points.len(), "{points:?}");
     }
 
     #[test]
@@ -2320,15 +2381,11 @@ mod tests {
     fn uniform_layouts_match_the_shader_blocks() {
         assert_eq!(std::mem::size_of::<PassParams>(), 448);
         assert_eq!(std::mem::size_of::<RegionParams>(), 336);
+        assert_eq!(std::mem::size_of::<Placement>(), 80);
     }
 
     #[test]
     fn shaders_declare_the_expected_blocks() {
-        assert!(MATERIAL_VERT.contains("uniform mat3 u_proj") && MATERIAL_VERT.contains("u_quad"));
-        assert!(
-            MATERIAL_FRAG.contains("in vec2 v_uv")
-                && !MATERIAL_FRAG.contains("texelFetch(u_source")
-        );
         // the backdrop passes are the glass crate's generated programs, bound by the names generated beside them
         for program in [
             cupertino_glass::shaders::DOWNSAMPLE,

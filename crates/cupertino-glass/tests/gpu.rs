@@ -1,5 +1,5 @@
 //! GPU tests: GPU vs CPU reference, rounded mask, backdrop cache, vibrant blending.
-//! Every test skips (passes) when no wgpu adapter is available.
+//! Every test skips (passes) when no device is available, and fails then with `CUPERTINO_GPU_REQUIRED=1`.
 
 use cupertino_geometry::{CornerStyle, Point};
 use cupertino_glass::gpu::{average_color, procedural_wallpaper, psnr, HeadlessGpu};
@@ -11,7 +11,11 @@ use cupertino_theme::{Appearance, Backdrop, Blend, Fill, MaterialOptions, Recipe
 fn gpu() -> Option<HeadlessGpu> {
     let g = HeadlessGpu::new();
     if g.is_none() {
-        eprintln!("skipping: no GPU adapter available");
+        assert!(
+            std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() != Ok("1"),
+            "no device"
+        );
+        eprintln!("skipping: no device available");
     }
     g
 }
@@ -54,7 +58,7 @@ fn gpu_matches_cpu_reference_psnr_at_least_60_db() {
                 .with_corner(10.0, CornerStyle::continuous()),
             MaterialRegion::from_recipe([440.0, 4.0, 60.0, 16.0], &sel, 1.0),
         ];
-        let gpu_img = g.render_once(&wall, &regions, scale, tint);
+        let gpu_img = g.render_once(&wall, &regions, scale, tint).unwrap();
         let cpu_img = cpu::render_regions(&wall, &regions, scale, tint, false, false);
         let db = psnr(&gpu_img, &cpu_img);
         println!("{appearance:?} scale {scale}: GPU vs CPU {db:.2} dB");
@@ -74,7 +78,7 @@ fn partial_opacity_stays_within_two_levels_of_cpu() {
     let regions = [MaterialRegion::new([20.0, 20.0, 150.0, 160.0], &side)
         .with_corner(12.0, CornerStyle::continuous())
         .with_opacity(0.9)];
-    let a = g.render_once(&wall, &regions, 1.0, tint);
+    let a = g.render_once(&wall, &regions, 1.0, tint).unwrap();
     let b = cpu::render_regions(&wall, &regions, 1.0, tint, false, false);
     let worst = a
         .as_raw()
@@ -102,7 +106,7 @@ fn rounded_mask_matches_geometry_coverage() {
         CornerStyle::Continuous { expansion: 1.25 },
     ] {
         let region = MaterialRegion::new([16.0, 16.0, 96.0, 96.0], &red).with_corner(28.0, style);
-        let img = g.render_once(&wall, &[region], 1.0, [0.5; 3]);
+        let img = g.render_once(&wall, &[region], 1.0, [0.5; 3]).unwrap();
         let shape = region.rounded_rect();
         let mut worst_approx = 0.0f32;
         let mut worst_exact = 0.0f32;
@@ -148,14 +152,16 @@ fn circle_area_and_opacity() {
     let white = solid([1.0, 1.0, 1.0, 1.0]);
     let region = MaterialRegion::new([8.0, 8.0, 112.0, 112.0], &white)
         .with_corner(56.0, CornerStyle::Circular);
-    let img = g.render_once(&wall, &[region], 1.0, [0.5; 3]);
+    let img = g.render_once(&wall, &[region], 1.0, [0.5; 3]).unwrap();
     let area: f64 = img.pixels().map(|p| p[0] as f64 / 255.0).sum();
     let expect = std::f64::consts::PI * 56.0 * 56.0;
     assert!(
         (area - expect).abs() / expect < 0.005,
         "area {area} vs {expect}"
     );
-    let half = g.render_once(&wall, &[region.with_opacity(0.5)], 1.0, [0.5; 3]);
+    let half = g
+        .render_once(&wall, &[region.with_opacity(0.5)], 1.0, [0.5; 3])
+        .unwrap();
     let centre = half.get_pixel(64, 64).0[0] as i32;
     assert!((centre - 128).abs() <= 1, "opacity 0.5 → {centre}");
 }
@@ -169,21 +175,16 @@ fn backdrop_cache_keyed_by_generation() {
     let side = recipe(&theme, Appearance::Light, "Sidebar");
     let menu = recipe(&theme, Appearance::Light, "Menu");
     let bar = recipe(&theme, Appearance::Light, "MenuBar");
-    let src = g.upload(&wall);
-    let dst = g.target(w, h);
-    let (sv, dv) = (
-        src.create_view(&Default::default()),
-        dst.create_view(&Default::default()),
-    );
-    let mut r = MaterialRenderer::new(&g.device, &g.queue, wgpu::TextureFormat::Rgba8Unorm);
+    let src = g.upload(&wall).unwrap();
+    let dst = g.target(w, h).unwrap();
+    let mut r = MaterialRenderer::new(&g.device).unwrap();
     let frame = |r: &mut MaterialRenderer, generation: u64, regions: &[MaterialRegion]| {
-        let mut enc = g.device.create_command_encoder(&Default::default());
-        let s = r.render(
-            &mut enc,
+        r.render(
+            &g.device,
             &FrameDesc {
-                source: &sv,
+                source: &src,
                 source_size: (w, h),
-                target: &dv,
+                target: &dst,
                 target_size: (w, h),
                 display_scale: 1.0,
                 damage_generation: generation,
@@ -191,9 +192,8 @@ fn backdrop_cache_keyed_by_generation() {
                 init: TargetInit::CopySource,
             },
             regions,
-        );
-        g.queue.submit([enc.finish()]);
-        s
+        )
+        .unwrap()
     };
     let a = MaterialRegion::new([10.0, 10.0, 100.0, 120.0], &side)
         .with_corner(8.0, CornerStyle::Circular);
@@ -209,7 +209,7 @@ fn backdrop_cache_keyed_by_generation() {
         "two regions share one backdrop"
     );
     assert!(s1.passes_encoded > 0);
-    let img1 = g.read(&dst);
+    let img1 = g.read(&dst).unwrap();
 
     let s2 = frame(&mut r, 1, &[a, b]);
     assert_eq!(
@@ -217,7 +217,11 @@ fn backdrop_cache_keyed_by_generation() {
         (0, 2, 0),
         "unchanged generation reuses the backdrop"
     );
-    assert_eq!(g.read(&dst), img1, "cached frame is pixel-identical");
+    assert_eq!(
+        g.read(&dst).unwrap(),
+        img1,
+        "cached frame is pixel-identical"
+    );
 
     let s3 = frame(&mut r, 2, &[a, b]);
     assert_eq!(
@@ -225,7 +229,7 @@ fn backdrop_cache_keyed_by_generation() {
         (1, 1),
         "new generation recomputes once"
     );
-    assert_eq!(g.read(&dst), img1);
+    assert_eq!(g.read(&dst).unwrap(), img1);
 
     let s4 = frame(&mut r, 2, &[a, c, d]);
     assert_eq!(
@@ -236,10 +240,11 @@ fn backdrop_cache_keyed_by_generation() {
     assert!(r.cached_backdrops() >= 3);
     assert_eq!(s4.regions_drawn, 3);
 
-    r.invalidate();
+    r.invalidate(&g.device);
     assert_eq!(r.cached_backdrops(), 0);
     let s5 = frame(&mut r, 2, &[a]);
     assert_eq!(s5.backdrop_misses, 1);
+    r.destroy(&g.device);
 }
 
 #[test]
@@ -257,18 +262,20 @@ fn opaque_and_empty_frames() {
             },
         )
         .unwrap();
-    let img = g.render_once(
-        &wall,
-        &[MaterialRegion::new([8.0, 8.0, 40.0, 40.0], &opaque)],
-        1.0,
-        [0.5; 3],
-    );
+    let img = g
+        .render_once(
+            &wall,
+            &[MaterialRegion::new([8.0, 8.0, 40.0, 40.0], &opaque)],
+            1.0,
+            [0.5; 3],
+        )
+        .unwrap();
     let centre = img.get_pixel(28, 28).0;
     assert!(
         (centre[0] as i32 - 246).abs() <= 1 && centre[0] == centre[1],
         "opaque fill 0.965 gray, got {centre:?}"
     );
-    let none = g.render_once(&wall, &[], 1.0, [0.5; 3]);
+    let none = g.render_once(&wall, &[], 1.0, [0.5; 3]).unwrap();
     assert_eq!(none, wall, "no regions: target is a copy of the source");
 }
 
@@ -294,30 +301,23 @@ fn vibrant_blend_matches_cpu_reference() {
         image::Rgba([(x * 255 / w) as u8, (y * 255 / h) as u8, 120, 255])
     });
     let glyphs = glyph_texture(w, h);
-    let src = g.upload(&dest);
-    let a = g.target(w, h);
-    let b = g.target(w, h);
-    let gt = g.upload(&glyphs);
-    let (sv, av, bv, gv) = (
-        src.create_view(&Default::default()),
-        a.create_view(&Default::default()),
-        b.create_view(&Default::default()),
-        gt.create_view(&Default::default()),
-    );
+    let src = g.upload(&dest).unwrap();
+    let a = g.target(w, h).unwrap();
+    let b = g.target(w, h).unwrap();
+    let gt = g.upload(&glyphs).unwrap();
     for (mode, reversed) in [
         (VibrantMode::Dark, false),
         (VibrantMode::Dark, true),
         (VibrantMode::Light, false),
         (VibrantMode::Light, true),
     ] {
-        let mut r = MaterialRenderer::new(&g.device, &g.queue, wgpu::TextureFormat::Rgba8Unorm);
-        let mut enc = g.device.create_command_encoder(&Default::default());
+        let mut r = MaterialRenderer::new(&g.device).unwrap();
         r.render(
-            &mut enc,
+            &g.device,
             &FrameDesc {
-                source: &sv,
+                source: &src,
                 source_size: (w, h),
-                target: &av,
+                target: &a,
                 target_size: (w, h),
                 display_scale: 1.0,
                 damage_generation: 1,
@@ -325,26 +325,9 @@ fn vibrant_blend_matches_cpu_reference() {
                 init: TargetInit::CopySource,
             },
             &[],
-        );
-        enc.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &a,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &b,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        )
+        .unwrap();
+        r.copy(&g.device, &a, &b).unwrap();
         let style = VibrantStyle {
             mode,
             reversed,
@@ -352,14 +335,14 @@ fn vibrant_blend_matches_cpu_reference() {
             c1: [1.0, 0.9, 0.7, 1.0],
         };
         r.draw_vibrant(
-            &mut enc,
-            &bv,
-            &av,
-            (w, h),
-            &[VibrantDraw::new(&gv, [0.0, 0.0, w as f32, h as f32], style)],
-        );
-        g.queue.submit([enc.finish()]);
-        let out = g.read(&a);
+            &g.device,
+            &b,
+            &a,
+            &[VibrantDraw::new(&gt, [0.0, 0.0, w as f32, h as f32], style)],
+        )
+        .unwrap();
+        r.destroy(&g.device);
+        let out = g.read(&a).unwrap();
         let mut worst = 0i32;
         for y in 0..h {
             for x in 0..w {
@@ -433,7 +416,9 @@ fn the_cpu_colour_chain_matches_the_gpu_colour_pass_within_one_level() {
             ..Default::default()
         };
         let regions = [MaterialRegion::new([0.0, 0.0, 256.0, 66.0], &unblurred)];
-        let out = g.render_once(&wall, &regions, 1.0, average_color(&wall));
+        let out = g
+            .render_once(&wall, &regions, 1.0, average_color(&wall))
+            .unwrap();
         let packed = color_ops(&ops);
         let mut worst = 0;
         for (src, got) in wall.pixels().zip(out.pixels()) {

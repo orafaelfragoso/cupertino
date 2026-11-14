@@ -1,43 +1,29 @@
-// Material regions: rounded mask from a signed distance field, backdrop (or source) as the base
-// colour, then the recipe's fill layers with their compositing filters.
+// Material region: a rounded mask from a signed distance field, the backdrop as the base colour, then the recipe's
+// fill layers with their compositing filters. Blend with (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) for colour and (ZERO, ONE)
+// for alpha.
 //
-// fill layers and blend modes follow the decoded layer archives;
-// plus-lighter / plus-darker and the separable blend modes are as designed; the tint layer colour
-// (wallpaper average) is approximate. The continuous-corner shape is approximate
-// (cupertino-geometry).
+// The backdrop is always bound (a recipe without a backdrop filter reads an unfiltered copy of the target) and shares
+// the target's orientation; it may cover only part of the target, the part around the region it was made for:
+// Region.info.zw is its origin and Region.sizes.zw its size, in target pixels.
 
+// include place.wgsl
+
+// Uniform block of the region (std140, mirrored by `RegionParams` in ops.rs).
 struct Region {
   rect: vec4<f32>,      // x, y, w, h in target pixels (y down)
-  shape: vec4<f32>,     // corner extent (px), superellipse exponent, opacity, AA width (px)
-  info: vec4<f32>,      // number of fill layers, has backdrop (0/1), source rows start at the bottom (0/1), 0
-  sizes: vec4<f32>,     // target w, h, source w, h
+  shape: vec4<f32>,     // corner extent (px), superellipse exponent, opacity, antialiasing width (px)
+  info: vec4<f32>,      // number of fill layers, 1, the backdrop's origin x, y
+  sizes: vec4<f32>,     // target w, h, the backdrop's w, h
   tint: vec4<f32>,      // tint layer colour (rgb)
   fills: array<vec4<f32>, 16>,  // per fill: (blend id, tint flag, 0, 0), straight rgba
 };
 
 @group(0) @binding(0) var<uniform> R: Region;
-@group(0) @binding(1) var source: texture_2d<f32>;
-@group(0) @binding(2) var backdrop: texture_2d<f32>;
-@group(0) @binding(3) var samp: sampler;
+@group(0) @binding(1) var backdrop: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
 
-struct VsOut {
-  @builtin(position) pos: vec4<f32>,
-  @location(0) px: vec2<f32>,
-};
-
-@vertex
-fn vs_region(@builtin(vertex_index) vi: u32) -> VsOut {
-  let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
-  let pad = 1.0 + R.shape.w;
-  let p = R.rect.xy - vec2<f32>(pad) + corner * (R.rect.zw + vec2<f32>(2.0 * pad));
-  var o: VsOut;
-  o.pos = vec4<f32>(p.x / R.sizes.x * 2.0 - 1.0, 1.0 - p.y / R.sizes.y * 2.0, 0.0, 1.0);
-  o.px = p;
-  return o;
-}
-
-// Signed distance (negative inside) to a rounded rectangle centred at the origin with half extents
-// `hs`. `e` is the corner extent; `n` the superellipse exponent (2 = circular). Same formula as
+// Signed distance (negative inside) to a rounded rectangle centred at the origin with half extents `hs`. `e` is the
+// corner extent; `n` the superellipse exponent (2 = circular). Same formula as
 // cupertino_geometry::RoundedRect::sdf_approx.
 fn region_sdf(p: vec2<f32>, hs: vec2<f32>, e: f32, n: f32) -> f32 {
   let q = abs(p) - (hs - vec2<f32>(e));
@@ -78,20 +64,13 @@ fn blend(mode: i32, s: vec3<f32>, a: f32, d: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
-fn fs_material(fin: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(fin: VsOut) -> @location(0) vec4<f32> {
   let hs = R.rect.zw * 0.5;
   let d = region_sdf(fin.px - (R.rect.xy + hs), hs, R.shape.x, R.shape.y);
   let cov = clamp(0.5 - d / R.shape.w, 0.0, 1.0) * R.shape.z;
   if (cov <= 0.0) { discard; }
-  var uv = fin.px / R.sizes.xy;
-  uv.y = mix(uv.y, 1.0 - uv.y, R.info.z);
-  var base: vec3<f32>;
-  if (R.info.y > 0.5) {
-    base = textureSampleLevel(backdrop, samp, uv, 0.0).rgb;
-  } else {
-    let sz = vec2<i32>(R.sizes.zw);
-    base = textureLoad(source, clamp(vec2<i32>(uv * R.sizes.zw), vec2<i32>(0), sz - vec2<i32>(1)), 0).rgb;
-  }
+  let uv = (fin.uv * R.sizes.xy - R.info.zw) / R.sizes.zw;
+  var base = textureSampleLevel(backdrop, samp, uv, 0.0).rgb;
   let n = i32(R.info.x);
   for (var i = 0; i < n; i++) {
     let a = R.fills[2 * i];
@@ -100,5 +79,5 @@ fn fs_material(fin: VsOut) -> @location(0) vec4<f32> {
     if (a.y > 0.5) { s = R.tint.rgb; }
     base = blend(i32(a.x), s, b.w, base);
   }
-  return vec4<f32>(clamp(base, vec3<f32>(0.0), vec3<f32>(1.0)), cov);
+  return placed(vec4<f32>(clamp(base, vec3<f32>(0.0), vec3<f32>(1.0)), cov), fin.pos.xy);
 }

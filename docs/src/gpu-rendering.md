@@ -132,8 +132,11 @@ block. Each backend has an orientation test.
 
 Texture programs compiled through Smithay's shader interface sample client buffers, including import-only ones through
 `samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, its
-vibrant variant, the reduced copy and the minification filter. Shadow, rounded-rectangle and wallpaper passes, which sample no client texture, move
-to borrowed-context passes generated from WGSL. The CPU model in `cupertino-glass` stays as the model the glass
+vibrant variant, the reduced copy and the minification filter. Every other program of ours is generated: the
+backdrop passes (downsample, blur, colour, copy), the material region, the glass composite, the vibrant glyphs and
+the mesh of the window effects, which the compositor links itself and the headless glass renderer draws on
+`cupertino-gpu`. Shadow, rounded-rectangle and wallpaper passes, which sample no client texture, move to
+borrowed-context passes generated from WGSL. The CPU model in `cupertino-glass` stays as the model the glass
 shader is tested against.
 
 ### 7. Same pixels on both paths

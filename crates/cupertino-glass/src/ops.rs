@@ -127,7 +127,7 @@ impl PassParams {
     }
 }
 
-/// Uniform block of a material region (`material.wgsl`, `Region`).
+/// Uniform block of a material region (`shaders/material.wgsl`, `Region`).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RegionParams {
@@ -150,6 +150,61 @@ impl RegionParams {
             self.fills[2 * i + 1] = f.b;
         }
         self.info[0] = fills.len().min(MAX_FILLS) as f32;
+    }
+}
+
+/// Uniform block of where a region program (material, glass) draws (`shaders/include/place.wgsl`, `Placement`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Placement {
+    /// The frame's projection from target pixels to clip space, column-major, each column padded to four floats.
+    pub proj: [[f32; 4]; 3],
+    /// x, y, w, h of the quad drawn, in target pixels.
+    pub quad: [f32; 4],
+    /// [`PLACE_DITHER`] when the result is dithered by its pixel before an 8-bit store; 0, 0, 0
+    pub flags: [i32; 4],
+}
+
+/// `Placement::flags[0]`: the program dithers its result by pixel position.
+pub const PLACE_DITHER: i32 = 1;
+
+impl Placement {
+    /// The placement of `quad` through the column-major 3 x 3 `projection`, dithered or not.
+    pub fn new(projection: &[f32; 9], quad: [f32; 4], dither: bool) -> Self {
+        let column = |c: usize| {
+            [
+                projection[3 * c],
+                projection[3 * c + 1],
+                projection[3 * c + 2],
+                0.0,
+            ]
+        };
+        Self {
+            proj: [column(0), column(1), column(2)],
+            quad,
+            flags: [if dither { PLACE_DITHER } else { 0 }, 0, 0, 0],
+        }
+    }
+}
+
+/// Uniform block of a mesh draw (`shaders/mesh.wgsl`, `Mesh`): a window snapshot drawn through an effect mesh.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MeshUniform {
+    /// The frame's projection from output pixels to clip space, column-major, each column padded to four floats.
+    pub proj: [[f32; 4]; 3],
+    /// The element's opacity, 0, 0, 0.
+    pub alpha: [f32; 4],
+}
+
+impl MeshUniform {
+    /// The block of a draw through the column-major 3 x 3 `projection` at `alpha`.
+    pub fn new(projection: &[f32; 9], alpha: f32) -> Self {
+        let place = Placement::new(projection, [0.0; 4], false);
+        Self {
+            proj: place.proj,
+            alpha: [alpha, 0.0, 0.0, 0.0],
+        }
     }
 }
 
@@ -182,6 +237,27 @@ mod tests {
         assert_eq!(std::mem::size_of::<PassParams>(), 16 + 16 + 144 + 256 + 16);
         assert_eq!(std::mem::size_of::<RegionParams>(), 5 * 16 + 256);
         assert_eq!(std::mem::size_of::<VibrantUniform>(), 96);
+        // a 3 x 3 matrix in std140 is three columns of four floats
+        assert_eq!(std::mem::size_of::<Placement>(), 48 + 16 + 16);
+        assert_eq!(std::mem::size_of::<MeshUniform>(), 48 + 16);
+    }
+
+    #[test]
+    fn a_projection_is_written_column_by_column_each_padded() {
+        let m = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let p = Placement::new(&m, [1.0, 2.0, 3.0, 4.0], true);
+        assert_eq!(
+            p.proj,
+            [
+                [1.0, 2.0, 3.0, 0.0],
+                [4.0, 5.0, 6.0, 0.0],
+                [7.0, 8.0, 9.0, 0.0]
+            ]
+        );
+        assert_eq!(p.flags, [PLACE_DITHER, 0, 0, 0]);
+        assert_eq!(Placement::new(&m, [0.0; 4], false).flags, [0; 4]);
+        let mesh = MeshUniform::new(&m, 0.25);
+        assert_eq!((mesh.proj, mesh.alpha), (p.proj, [0.25, 0.0, 0.0, 0.0]));
         assert_eq!(std::mem::size_of::<Op>(), 32);
     }
 

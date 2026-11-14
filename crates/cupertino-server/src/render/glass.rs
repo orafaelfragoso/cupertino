@@ -3,8 +3,8 @@
 //! The element covers what of the backdrop the container reads, its shapes grown by the reach of the blur and the
 //! refraction (`Container::sample_area`). When it draws with a new backdrop, that area of the bound framebuffer is
 //! captured at half scale, blurred into the levels its recipe uses and the blur fill, and kept; the composite then
-//! shades the union of the shapes from those textures with the GLSL ES glass shader (`shaders/glass.frag`, a copy of
-//! the one in `cupertino-glass`). The textures are kept per container and made again only when the backdrop below the
+//! shades the union of the shapes from those textures with the glass program `cupertino-glass` generates
+//! ([`cupertino_glass::shaders::GLASS`]). The textures are kept per container and made again only when the backdrop below the
 //! sampled area changed: [`area_generation`] signs the elements below that overlap it, so a change elsewhere on the
 //! output, or above the glass, leaves them alone.
 //!
@@ -21,6 +21,7 @@ use std::rc::Rc;
 use cupertino_geometry::CornerStyle;
 use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
 use cupertino_glass::ops::PassParams;
+use cupertino_glass::shaders::{GLASS_BLOCK, GLASS_FILL, GLASS_LEVELS, PLACEMENT};
 use cupertino_raster_math::blur::plan_blur;
 use cupertino_theme::glass::{
     relative_luminance, GlassMode, GlassParams, BLUR_LEVELS, GLASS_BACKDROP_SCALE,
@@ -31,16 +32,13 @@ use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size};
 
 use super::{
-    bind_block, link, uniform_loc, GLint, GLuint, MaterialGl, MaterialMask, SavedState,
-    SharedMaterial, Target,
+    link_generated, sampler_loc, GLuint, MaterialGl, MaterialMask, SavedState, SharedMaterial,
+    Target, BIND_PLACE,
 };
 use crate::render::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 
-pub(super) const GLASS_VERT: &str = include_str!("../../shaders/glass.vert");
-pub(super) const GLASS_FRAG: &str = include_str!("../../shaders/glass.frag");
-
 /// Uniform block binding of the glass composite.
-const BIND_GLASS: GLuint = 2;
+pub(super) const BIND_GLASS: GLuint = 2;
 /// Containers whose textures are kept once they no longer show; past it the least recently drawn goes first. Containers
 /// the frame being built shows are kept even past it.
 const MAX_CACHED: usize = 16;
@@ -487,8 +485,6 @@ pub fn capture_uv(projection: &[f32; 9], viewport: [i32; 4], fb: [i32; 4]) -> [[
 #[derive(Default)]
 pub(super) struct GlassGl {
     program: GLuint,
-    proj: GLint,
-    quad: GLint,
     ubo: GLuint,
     cache: GlassCache<CachedGlass>,
     /// Readbacks of faces under small shapes, oldest first, until the GPU finished them.
@@ -759,24 +755,33 @@ impl<T> GlassCache<T> {
 }
 
 impl GlassGl {
-    pub(super) unsafe fn init(gl: &ffi::Gles2, dither: bool) -> Result<Self, String> {
-        let frag = cupertino_raster_math::dither::with_dither(GLASS_FRAG, dither);
-        let program = link(gl, GLASS_VERT, &frag).map_err(|e| format!("glass: {e}"))?;
-        bind_block(gl, program, "Glass", BIND_GLASS)?;
+    pub(super) unsafe fn init(gl: &ffi::Gles2) -> Result<Self, String> {
+        let source = &cupertino_glass::shaders::GLASS;
+        let program = link_generated(
+            gl,
+            source,
+            &[(GLASS_BLOCK, BIND_GLASS), (PLACEMENT, BIND_PLACE)],
+        )?;
+        // the four blurred copies on the first four units, the blur fill on the fifth
+        let mut units = Vec::new();
+        for at in GLASS_LEVELS.into_iter().chain([GLASS_FILL]) {
+            match sampler_loc(gl, program, source, at) {
+                Ok(loc) => units.push(loc),
+                Err(e) => {
+                    gl.DeleteProgram(program);
+                    return Err(e);
+                }
+            }
+        }
         gl.UseProgram(program);
-        for (unit, name) in ["u_level0", "u_level1", "u_level2", "u_level3", "u_fill"]
-            .iter()
-            .enumerate()
-        {
-            gl.Uniform1i(uniform_loc(gl, program, name), unit as GLint);
+        for (unit, loc) in units.into_iter().enumerate() {
+            gl.Uniform1i(loc, unit as i32);
         }
         gl.UseProgram(0);
         let mut ubo = 0;
         gl.GenBuffers(1, &mut ubo);
         Ok(Self {
             program,
-            proj: uniform_loc(gl, program, "u_proj"),
-            quad: uniform_loc(gl, program, "u_quad"),
             ubo,
             ..Self::default()
         })
@@ -1126,7 +1131,6 @@ impl MaterialGl {
         );
         gl.UseProgram(self.glass.program);
         Self::upload_ubo(gl, self.glass.ubo, BIND_GLASS, bytemuck::bytes_of(&uniform));
-        gl.UniformMatrix3fv(self.glass.proj, 1, ffi::FALSE, p.projection.as_ptr());
         for (unit, tex) in textures.iter().enumerate() {
             gl.ActiveTexture(ffi::TEXTURE0 + unit as u32);
             gl.BindTexture(ffi::TEXTURE_2D, *tex);
@@ -1135,12 +1139,15 @@ impl MaterialGl {
             let Some(q) = d.intersection(p.area) else {
                 continue;
             };
-            gl.Uniform4f(
-                self.glass.quad,
-                q.loc.x as f32,
-                q.loc.y as f32,
-                q.size.w as f32,
-                q.size.h as f32,
+            self.place(
+                gl,
+                &p.projection,
+                [
+                    q.loc.x as f32,
+                    q.loc.y as f32,
+                    q.size.w as f32,
+                    q.size.h as f32,
+                ],
             );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             self.stats.composites += 1;

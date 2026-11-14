@@ -1362,6 +1362,16 @@ impl<'a> Pass<'a> {
                     gl.blend_equation(glow::FUNC_ADD);
                     gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
                 }
+                Blend::StraightOver => {
+                    gl.enable(glow::BLEND);
+                    gl.blend_equation(glow::FUNC_ADD);
+                    gl.blend_func_separate(
+                        glow::SRC_ALPHA,
+                        glow::ONE_MINUS_SRC_ALPHA,
+                        glow::ZERO,
+                        glow::ONE,
+                    );
+                }
             }
         }
         self.pipeline = Some(pipeline);

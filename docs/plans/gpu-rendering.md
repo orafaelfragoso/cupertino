@@ -430,26 +430,28 @@ Gate:
 
 ## Step 10: retire the duplicates
 
-- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split:
+- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split (open
+      at the end of the step's second session; the next session takes them in this order):
   - [ ] A borrowed device's pass can draw into the framebuffer its owner has bound, with its viewport and scissor
         (the element's damage), under the state-restore contract; `cupertino-gpu` today draws only into its own
         textures.
   - [ ] The shadow pass, dithered as before.
   - [ ] The rounded-rectangle pass.
   - [ ] The wallpaper pass.
-- [ ] The hand-written GLSL ES 3.00 programs of the glass crate and the compositor replaced by generated ones; the
+- [x] The hand-written GLSL ES 3.00 programs of the glass crate and the compositor replaced by generated ones; the
       tests that pinned the copies pin the generated output. Split:
   - [x] The build step generates a second set, `cupertino-glass`'s programs (the shared module ahead of each, include
         files, and the assembled WGSL for the wgpu renderer); the backdrop passes (downsample, blur, colour, blit) are
         generated, the compositor and the wgpu renderer draw them, their hand-written copies in both crates are gone,
         and the blur's dither for 8-bit levels is a flag of its block instead of a second program.
-  - [ ] The material region program (the glass crate's and the compositor's, which differ in how the region is placed
-        and sampled).
-  - [ ] The vibrant program.
-  - [ ] The glass program.
-  - [ ] The compositor's mesh program of the minimize and close effects (GLSL ES 1.00, compiled by the compositor
+  - [x] The material region program (the glass crate's and the compositor's, which differ in how the region is placed
+        and sampled): one program, placed by a block of its own (the frame's projection, the quad and the dither
+        flag), the compositor's placement for both.
+  - [x] The vibrant program.
+  - [x] The glass program.
+  - [x] The compositor's mesh program of the minimize and close effects (GLSL ES 1.00, compiled by the compositor
         itself, not through Smithay's interface).
-- [ ] `wgpu` removed from `cupertino-glass`; the headless glass renderer and its tests run on `cupertino-gpu`.
+- [x] `wgpu` removed from `cupertino-glass`; the headless glass renderer and its tests run on `cupertino-gpu`.
 
 Gate:
 
@@ -1340,6 +1342,19 @@ The assembled WGSL leaves out every function its entry points do not reach: the 
 crashed (a segmentation fault in its SPIR-V compiler, inside pipeline creation) on the backdrop passes with the whole
 shared module in them, and no longer does once the unused gradient function, which takes arrays by value, is left out.
 A Vulkan backend (step 12) compiling `cupertino-gpu`'s own SPIR-V, which keeps every function, will meet the same.
+
+**The region programs generated, `wgpu` gone.** The material, glass, vibrant and mesh programs are generated from
+WGSL; the compositor links them and binds by the generated names, and the headless glass renderer draws the same
+material and glass programs on `cupertino-gpu` (Cargo.lock: 378 lines and every `wgpu` crate gone). Material and
+glass are placed by one block (`ops::Placement`: the projection, the quad, the dither flag), so the compositor's
+dithered and plain variants are one program each instead of two texts. The GLSL writer named a second local `gl` of
+the glass program `gl_1`, which GLSL reserves: the target machine's driver refused it and the compositor fell back
+to plain fills with no error a test saw; the generator now refuses such a name. Pixels: the
+server's headless goldens pass unchanged in the pinned image, and every preview scenario, shot headless on the target
+machine's GPU with a build of the commit before the step and with this one (118 shots, 1, 1.5 and 2 times, light and
+dark), is unchanged except where two runs of the same build differ too: which of two windows started together holds
+the focus in the overview scenarios (the set of changed shots moves between runs), and the caret's blink in the
+launcher.
 
 ### Step 11: output timing and depth
 

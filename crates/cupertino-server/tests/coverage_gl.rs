@@ -2,7 +2,7 @@
 //! path, every pixel's alpha is the coverage of its centre's distance to the outline, for the shapes of the coverage
 //! vectors with circular corners and for the continuous corner the shell draws, at scales 1, 1.5 and 2; and the
 //! passes of one frame read the context's state once and draw what they draw one by one; and the chrome drawn on the
-//! GPU from its list of draws is the list painted on the CPU.
+//! GPU from its list of draws is the list painted on the CPU, shown in frames of 8 and of 10 bits a channel alike.
 
 use cupertino_assets::Assets;
 use cupertino_decorations::{
@@ -21,12 +21,14 @@ use cupertino_server::render::ui::{rounded_rect, RoundedRectSpec};
 use cupertino_server::render::uploads::Drawer;
 use cupertino_server::render::CupertinoElement;
 use cupertino_theme::Appearance;
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::texture::TextureRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::Color32F;
-use smithay::utils::Rectangle;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::{Bind, Color32F, ExportMem, Offscreen};
+use smithay::utils::{Rectangle, Transform};
 
 /// Where the shape's top-left corner lies, in points.
 const AT: f64 = 3.0;
@@ -171,13 +173,12 @@ fn the_passes_of_a_frame_read_the_context_s_state_once_and_draw_what_they_draw_e
     assert_eq!(programs.passes.state_reads() - reads, 4);
 }
 
-/// The chrome's list drawn on the GPU (`chrome`) and shown through its element at one pixel a texel: what the
-/// output shows of it.
-fn drawn(
+/// The element that shows the chrome's list drawn on the GPU (`chrome`) at one pixel a texel.
+fn chrome_element(
     renderer: &mut GlesRenderer,
     programs: &Programs,
     image: &ChromeImage,
-) -> image::RgbaImage {
+) -> CupertinoElement {
     let Resolved::Texture(buffer) = image.resolve(renderer, &programs.passes) else {
         panic!("the chrome is painted on the CPU: the device could not draw it");
     };
@@ -189,11 +190,21 @@ fn drawn(
         None,
         Kind::Unspecified,
     );
-    let element = CupertinoElement::Chrome(RescaleRenderElement::from_element(
+    CupertinoElement::Chrome(RescaleRenderElement::from_element(
         element,
         (0, 0).into(),
         1.0,
-    ));
+    ))
+}
+
+/// The chrome's list drawn on the GPU (`chrome`) and shown through its element at one pixel a texel: what the
+/// output shows of it.
+fn drawn(
+    renderer: &mut GlesRenderer,
+    programs: &Programs,
+    image: &ChromeImage,
+) -> image::RgbaImage {
+    let element = chrome_element(renderer, programs, image);
     let (w, h) = image.size();
     render_to_image(
         renderer,
@@ -203,6 +214,57 @@ fn drawn(
         Color32F::TRANSPARENT,
     )
     .expect("render")
+}
+
+/// The chrome's list drawn on the GPU and shown over an opaque `ground` in a frame of `format`, as a display's plane
+/// of that format holds it, read back 8 bits a channel.
+fn shown_in(
+    renderer: &mut GlesRenderer,
+    programs: &Programs,
+    image: &ChromeImage,
+    format: Fourcc,
+    ground: [f32; 4],
+) -> image::RgbaImage {
+    let element = chrome_element(renderer, programs, image);
+    let (w, h) = image.size();
+    let mut frame: GlesTexture = renderer
+        .create_buffer(format, (w, h).into())
+        .unwrap_or_else(|e| panic!("a frame of {format}: {e}"));
+    let mut tracker = OutputDamageTracker::new((w, h), 1.0, Transform::Normal);
+    let mapping = {
+        let mut target = renderer.bind(&mut frame).expect("bind the frame");
+        tracker
+            .render_output(
+                renderer,
+                &mut target,
+                0,
+                &[element],
+                Color32F::new(ground[0], ground[1], ground[2], ground[3]),
+            )
+            .expect("render");
+        renderer
+            .copy_framebuffer(
+                &target,
+                Rectangle::from_size((w, h).into()),
+                Fourcc::Abgr8888,
+            )
+            .expect("read the frame back")
+    };
+    let bytes = renderer.map_texture(&mapping).expect("map the frame");
+    image::RgbaImage::from_raw(w as u32, h as u32, bytes.to_vec()).expect("the frame's size")
+}
+
+/// `painted` (premultiplied) laid over the opaque `ground` and stored in 8 bits: what a frame shows of it.
+fn over_ground(painted: &tiny_skia::Pixmap, ground: [f32; 4]) -> tiny_skia::Pixmap {
+    let mut out = painted.clone();
+    for px in out.data_mut().as_chunks_mut::<4>().0 {
+        let keep = 1.0 - f32::from(px[3]) / 255.0;
+        for c in 0..3 {
+            px[c] = quantize(f32::from(px[c]) / 255.0 + ground[c] * keep);
+        }
+        px[3] = 255;
+    }
+    out
 }
 
 /// The largest difference of any channel of any pixel between `got` and `want` (premultiplied RGBA both), and where.
@@ -309,6 +371,89 @@ fn the_chrome_drawn_on_the_gpu_is_its_list_painted_on_the_cpu_within_two_steps_a
         first.as_raw(),
         "the hovered buttons show their glyphs"
     );
+}
+
+#[test]
+fn window_buttons_drawn_on_the_gpu_show_in_8_and_10_bit_frames_as_painted_on_the_cpu_with_smooth_edges(
+) {
+    use cupertino_decorations::coverage::{Outline, Shade};
+    use cupertino_decorations::{Draw, DrawList};
+    let mut renderer = headless::create_renderer().expect("headless renderer");
+    let programs = Programs::compile_with(&mut renderer, false).expect("programs");
+    let assets = Assets::builtin();
+    let ground = [0.93, 0.9, 0.9, 1.0];
+    let states = [
+        DecorationState::default(),
+        DecorationState {
+            group_hovered: true,
+            ..DecorationState::default()
+        },
+    ];
+    // the title bar with its three buttons, at rest and hovered, laid over an opaque ground in a frame of 8 and of 10
+    // bits a channel (whose alpha has 2 bits): what each frame shows is the CPU painting over that ground
+    for appearance in Appearance::ALL {
+        let mut d = Decorations::new(
+            DecorationConfig::builtin(appearance, TitlebarStyle::Standard),
+            &assets,
+        )
+        .expect("decorations");
+        for scale in [1.0, 1.5, 2.0] {
+            for state in &states {
+                let list = d.titlebar_draws(420.0, scale, state, false);
+                let want = over_ground(&list.paint(), ground);
+                let image = ChromeImage::new(list, Drawer::Decoration);
+                for format in [Fourcc::Abgr8888, Fourcc::Abgr2101010] {
+                    let got = shown_in(&mut renderer, &programs, &image, format, ground);
+                    let (diff, at) = worst(&got, &want);
+                    assert!(
+                        diff <= 2,
+                        "{appearance:?} hovered {} at {scale} in {format}: {diff} steps apart at {at:?}",
+                        state.group_hovered
+                    );
+                }
+            }
+        }
+    }
+    // a white disc the size of a button, off the pixel grid, over black: each edge pixel shows the share of it the
+    // disc covers, in many levels, in either frame
+    for scale in [1.0f32, 1.5, 2.0] {
+        let side = (32.0 * scale) as u32;
+        let centre = [16.0 * scale + 0.3, 12.0 * scale + 0.1];
+        let mut list = DrawList::new(side, side);
+        list.draws.push(Draw::Shape {
+            outline: Outline::circle(centre, 7.0 * scale),
+            shade: Shade::Solid([1.0; 4]),
+            stroke: None,
+        });
+        let want = over_ground(&list.paint(), [0.0, 0.0, 0.0, 1.0]);
+        let image = ChromeImage::new(list, Drawer::Decoration);
+        for format in [Fourcc::Abgr8888, Fourcc::Abgr2101010] {
+            let got = shown_in(
+                &mut renderer,
+                &programs,
+                &image,
+                format,
+                [0.0, 0.0, 0.0, 1.0],
+            );
+            let (diff, at) = worst(&got, &want);
+            assert!(
+                diff <= 1,
+                "at {scale} in {format}: {diff} steps apart at {at:?}"
+            );
+            let edge: Vec<u8> = got
+                .pixels()
+                .map(|p| p.0[0])
+                .filter(|&v| v > 0 && v < 255)
+                .collect();
+            let levels: std::collections::BTreeSet<u8> = edge.iter().copied().collect();
+            assert!(
+                levels.len() * 3 >= edge.len(),
+                "at {scale} in {format}: {} edge pixels in only {} levels: {levels:?}",
+                edge.len(),
+                levels.len()
+            );
+        }
+    }
 }
 
 #[test]

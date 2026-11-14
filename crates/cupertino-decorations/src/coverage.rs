@@ -202,6 +202,64 @@ mod tests {
         }
     }
 
+    /// The share of pixel `(x, y)` inside the circle, from a grid of 32 x 32 samples.
+    fn circle_area(centre: [f32; 2], radius: f32, x: u32, y: u32) -> f32 {
+        let n = 32;
+        let mut inside = 0;
+        for i in 0..n {
+            for j in 0..n {
+                let px = x as f32 + (i as f32 + 0.5) / n as f32 - centre[0];
+                let py = y as f32 + (j as f32 + 0.5) / n as f32 - centre[1];
+                if px * px + py * py <= radius * radius {
+                    inside += 1;
+                }
+            }
+        }
+        inside as f32 / (n * n) as f32
+    }
+
+    #[test]
+    fn a_window_button_s_disc_has_a_smooth_edge_at_every_scale() {
+        // the disc of a window button, 14 points across, its centre on a pixel corner, a pixel centre and neither
+        // (device pixels from a corner)
+        for scale in [1.0f32, 1.5, 2.0] {
+            let radius = 7.0 * scale;
+            for offset in [[0.0, 0.0], [0.5, 0.5], [0.3, 0.1]] {
+                let centre = [16.0 * scale + offset[0], 12.0 * scale + offset[1]];
+                let side = (32.0 * scale) as u32;
+                let mut pm = Pixmap::new(side, side).unwrap();
+                let outline = Outline::circle(centre, radius);
+                fill(&mut pm, &outline, &Shade::Solid([1.0; 4]), None);
+                let mut levels = std::collections::BTreeSet::new();
+                let mut edge = 0;
+                for y in 0..side {
+                    for x in 0..side {
+                        let alpha = pm.data()[((y * side + x) * 4 + 3) as usize];
+                        let area = circle_area(centre, radius, x, y);
+                        // within a twentieth of the share of the pixel the disc covers
+                        assert!(
+                            (f32::from(alpha) / 255.0 - area).abs() < 0.05,
+                            "at {scale}, centre {centre:?}: ({x}, {y}) is {alpha}, the area {area}"
+                        );
+                        if alpha > 0 && alpha < 255 {
+                            edge += 1;
+                            levels.insert(alpha);
+                        }
+                    }
+                }
+                // an edge drawn in a few steps would show as stairs round the disc; off the pixel grid's symmetries
+                // the edge pixels take many levels
+                if offset == [0.3, 0.1] {
+                    assert!(
+                        levels.len() * 3 >= edge,
+                        "at {scale}: {edge} edge pixels in only {} levels: {levels:?}",
+                        levels.len()
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_title_bar_has_round_top_corners_and_square_bottom_ones() {
         let outline = Outline::rounded(

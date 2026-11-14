@@ -1056,6 +1056,14 @@ fn window_surface_origin(
     v_phys.loc + inset_phys - geo_phys
 }
 
+/// The output-local point of a surface tree drawn at `origin` (device pixels): its backdrops and layers are placed from
+/// it, so an edge the client lays on a whole pixel of its buffer is where the compositor puts its edge too. Placed from
+/// the window's visual origin instead, which lies between two pixels when it is a half pixel off, a backdrop's edge
+/// rounds the other way to the content's and a column of one shows beside a line the client draws along it.
+fn surface_points(origin: Point<i32, Physical>, scale: f64) -> Point<f64, Logical> {
+    Point::from((f64::from(origin.x) / scale, f64::from(origin.y) / scale))
+}
+
 /// Elements of one window's popups, front to back, each with its own backdrop directly below it: moved and scaled
 /// with the window's plan. On the desktop the key window's go to [`SceneLayer::Popups`], above every window and the bars
 /// ([`raised_popups_window`]).
@@ -1067,7 +1075,6 @@ fn window_popup_elements(
     let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
     let geo = entry.window.geometry();
-    let ins = entry.insets();
     let visual_local = local(plan.visual, &p.rect);
     let v_phys = to_physical_rect(visual_local, scale);
     let origin = window_surface_origin(entry, plan, p);
@@ -1079,10 +1086,7 @@ fn window_popup_elements(
     for (popup, popup_offset) in crate::popup_linger::shown(&surface, p.now) {
         let offset: Point<i32, Physical> =
             (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
-        let popup_origin = Point::<f64, Logical>::from((
-            visual_local.loc.x + ins.left + f64::from(popup_offset.x - popup.geometry().loc.x),
-            visual_local.loc.y + ins.top + f64::from(popup_offset.y - popup.geometry().loc.y),
-        ));
+        let popup_origin = surface_points(origin + offset, p.scale);
         // the popup's own presentation (cupertino_layers_v1 version 3) moves, scales and fades it, then the window's
         // rescale applies
         let own = popup_presentation(p, &popup, popup_origin);
@@ -1142,8 +1146,6 @@ fn window_elements(
 ) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
-    let geo = entry.window.geometry();
-    let ins = entry.insets();
     let style = p.config.window;
     let visual_local = local(plan.visual, &p.rect);
     let v_phys = to_physical_rect(visual_local, scale);
@@ -1171,11 +1173,8 @@ fn window_elements(
     } else {
         Clip::Rect(output_rect(visual_local))
     };
-    // backdrops follow the window's rescale about its visual origin
-    let origin_local = Point::<f64, Logical>::from((
-        visual_local.loc.x + ins.left - f64::from(geo.loc.x),
-        visual_local.loc.y + ins.top - f64::from(geo.loc.y),
-    ));
+    // backdrops follow the window's rescale about its visual origin, and lie where the content lands
+    let origin_local = surface_points(origin, p.scale);
     let state = if active {
         WindowState::Active
     } else {

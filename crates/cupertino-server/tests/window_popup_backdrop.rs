@@ -34,6 +34,7 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
@@ -144,9 +145,47 @@ struct Window {
     fill: u8,
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface)>,
     press_serial: Option<u32>,
+    /// The window drawn in device pixels through a viewport, transparent but for a black line one pixel wide.
+    rim: Option<Rim>,
+}
+
+/// A line a client draws in its own device pixels, as a sidebar window's divider draws its rim: the column of the
+/// buffer at `points` along the window, rounded as a client rounds it, at `scale` device pixels a point.
+#[derive(Clone, Copy)]
+struct Rim {
+    points: f64,
+    scale: f64,
+}
+
+impl Rim {
+    /// The column of the window's buffer the line takes.
+    fn column(&self) -> i32 {
+        (self.points * self.scale).round() as i32
+    }
 }
 
 impl Window {
+    /// Attach a buffer of `size` points in device pixels, transparent but for the rim's black column, and commit it.
+    fn draw_rim(&self, rim: Rim, (w, h): (i32, i32), qh: &QueueHandle<Self>) {
+        let pw = (f64::from(w) * rim.scale).round() as i32;
+        let ph = (f64::from(h) * rim.scale).round() as i32;
+        let mut pixels = vec![0u8; (pw * ph * 4) as usize];
+        for y in 0..ph {
+            let at = ((y * pw + rim.column()) * 4) as usize;
+            pixels[at..at + 4].copy_from_slice(&[0, 0, 0, 255]);
+        }
+        let fd =
+            rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+        let mut file = std::fs::File::from(fd);
+        file.write_all(&pixels).unwrap();
+        let pool = self.shm.create_pool(file.as_fd(), pw * ph * 4, qh, ());
+        let buffer = pool.create_buffer(0, pw, ph, pw * 4, wl_shm::Format::Argb8888, qh, ());
+        pool.destroy();
+        self.window.attach(Some(&buffer), 0, 0);
+        self.window.damage_buffer(0, 0, pw, ph);
+        self.window.commit();
+    }
+
     /// Attach a buffer of one byte value (white or transparent) and commit it.
     fn draw(
         &self,
@@ -196,6 +235,8 @@ ignore_events!(
     xdg_popup::XdgPopup,
     zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
     zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
+    wp_viewporter::WpViewporter,
+    wp_viewport::WpViewport,
     CupertinoAppEffectsV1,
     CupertinoBackdropV1
 );
@@ -246,7 +287,9 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Window {
             return;
         };
         xdg.ack_configure(serial);
-        if *xdg == state.window_xdg {
+        if let (true, Some(rim)) = (*xdg == state.window_xdg, state.rim) {
+            state.draw_rim(rim, state.size, qh);
+        } else if *xdg == state.window_xdg {
             state.draw(&state.window, state.size, state.fill, qh);
         } else if let Some((surface, _)) = state.popup.as_ref().filter(|(_, p)| p == xdg) {
             let (_, _, w, h) = POPUP;
@@ -312,6 +355,18 @@ impl App {
     /// in points) the sidebar covers only that much of the window's left and the content's window background backdrop
     /// begins where it ends, as in a sidebar window.
     fn spawn_with(socket: PathBuf, sidebar: Option<f64>, glass: bool, split: Option<i32>) -> App {
+        Self::spawn_drawn(socket, sidebar, glass, split, None)
+    }
+
+    /// The same app drawing its window in device pixels with `rim`'s line (the window's viewport keeps it `SIZE`
+    /// points large).
+    fn spawn_drawn(
+        socket: PathBuf,
+        sidebar: Option<f64>,
+        glass: bool,
+        split: Option<i32>,
+        rim: Option<Rim>,
+    ) -> App {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         std::thread::spawn(move || {
@@ -330,6 +385,12 @@ impl App {
                 .bind(&qh, if glass { 18..=18 } else { 1..=1 }, ())
                 .unwrap();
             let window = compositor.create_surface(&qh, ());
+            let viewport = rim.map(|_| {
+                let viewporter: wp_viewporter::WpViewporter = globals.bind(&qh, 1..=1, ()).unwrap();
+                let viewport = viewporter.get_viewport(&window, &qh, ());
+                viewport.set_destination(SIZE.0 as i32, SIZE.1 as i32);
+                viewport
+            });
             let window_xdg = wm_base.get_xdg_surface(&window, &qh, ());
             let toplevel = window_xdg.get_toplevel(&qh, ());
             toplevel.set_app_id("org.example.popup".into());
@@ -364,6 +425,7 @@ impl App {
                 fill: if sidebar { 0 } else { 255 },
                 popup: None,
                 press_serial: None,
+                rim,
             };
             while !flag.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
@@ -394,6 +456,7 @@ impl App {
             for b in backdrop.into_iter().chain(content) {
                 b.destroy();
             }
+            drop(viewport);
         });
         App { stop }
     }
@@ -623,6 +686,74 @@ fn a_window_s_sidebar_glass_meets_the_content_s_backdrop_with_no_line_between_th
                 );
             }
         }
+    }
+}
+
+/// A line the client draws in its own pixels along its sidebar's edge, as a sidebar window's divider draws its rim,
+/// lies beside the sidebar's glass with no pixel of the content's backdrop between them, wherever the window lies: at
+/// 1.5 a window whose left edge is a half pixel off lands on the next whole pixel, and the glass and the content's
+/// backdrop are placed from where its content lands, so they round as the client rounds the line.
+#[test]
+fn a_line_the_client_draws_along_its_sidebar_s_edge_meets_the_glass_wherever_the_window_lies() {
+    let scale = 1.5;
+    // the sidebar ends half way across a pixel; the window's left edge lies on a whole pixel and half way across one
+    let width = 161;
+    for x in [100.0, 101.0, 102.0, 103.0] {
+        let Some(mut h) = Harness::with_scale(Config::default(), scale) else {
+            return;
+        };
+        h.state.cursor_status = CursorImageStatus::Hidden;
+        let rim = Rim {
+            points: f64::from(width),
+            scale,
+        };
+        let _app = App::spawn_drawn(h.socket_path(), Some(0.0), true, Some(width), Some(rim));
+        h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+        let id = h.state.wm.key_window().expect("a key window");
+        let output = h.state.outputs[0].id;
+        h.state.command(Command::MoveWindowToOutput {
+            window: id,
+            output,
+            frame: Rect::new(x, 120.0, f64::from(SIZE.0), f64::from(SIZE.1)),
+        });
+        let t = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, t);
+        h.state.tick();
+        h.step(20);
+        let frame = h.state.wm.window(id).unwrap().geometry();
+        assert_eq!(frame.x, x, "the window lies where it was put");
+        let shot = h.screenshot();
+        let luma = |x: u32, y: u32| {
+            let p = shot.get_pixel(x, y).0;
+            0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2])
+        };
+        let y = ((frame.y + frame.h * 0.5) * scale) as u32;
+        // the line: the one black column near the sidebar's edge
+        let edge = ((frame.x + f64::from(width)) * scale) as u32;
+        let row: Vec<f64> = (edge - 4..edge + 5).map(|x| luma(x, y)).collect();
+        let line = (edge - 4..edge + 5)
+            .find(|&x| luma(x, y) < 8.0)
+            .unwrap_or_else(|| panic!("at x {x} no line near the sidebar's edge: {row:.1?}"));
+        // the glass a little way in, the content's backdrop a little way past the line
+        let glass = luma(line - 12, y);
+        let content = luma(line + 12, y);
+        assert!(
+            (glass - content).abs() > 8.0,
+            "the glass ({glass:.1}) and the content's backdrop ({content:.1}) differ"
+        );
+        let before = luma(line - 1, y);
+        let after = luma(line + 1, y);
+        eprintln!("window at {x}: {row:.1?}, line at {line}");
+        assert!(
+            (before - glass).abs() < (before - content).abs(),
+            "with the window at {x} points the pixel left of the line is {before:.1}, the content's backdrop \
+             ({content:.1}) rather than the glass ({glass:.1}): {row:.1?}"
+        );
+        assert!(
+            (after - content).abs() <= 3.0,
+            "with the window at {x} points the pixel right of the line is {after:.1}, not the content's backdrop \
+             ({content:.1}): {row:.1?}"
+        );
     }
 }
 

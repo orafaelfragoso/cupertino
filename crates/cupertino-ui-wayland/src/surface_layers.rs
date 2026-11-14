@@ -16,6 +16,10 @@ use cupertino_ui_platform::{
 };
 use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
 
+// a change through samples the toolkit takes is one the wire carries
+const _: () =
+    assert!(cupertino_protocol_app::MAX_SAMPLES == cupertino_ui_platform::MAX_LAYER_SAMPLES);
+
 fn wire(p: LayerProperty) -> Wire {
     match p {
         LayerProperty::X => Wire::X,

@@ -814,7 +814,7 @@ Gate:
       timed curve or a spring per property cannot carry a product or a clamp of two curves, so these need the
       protocol to carry them first. Split:
       - [x] Curves the protocol carries as samples: version 4's `animate_samples(serial, property, duration,
-            samples)` takes 2 to 1024 values at even steps of a duration of 1 ms to 10 s (32-bit floats in the host's
+            samples)` takes 2 to 1000 values at even steps of a duration of 1 ms to 10 s (32-bit floats in the host's
             byte order, each in the property's range), which the server follows in straight lines on its clock from
             the first to the last, where the property rests; an animation that replaces it starts from the value and
             the slope shown, and reduce motion ends a spatial one at its last value
@@ -878,7 +878,7 @@ Gate:
             place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
             unscaled, its fade on the content's curve; the files scope's width dip as samples. Not reached in this
             run; split by what each needs:
-        - [ ] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
+        - [x] The open from hidden (`ToggleApplications`, the files scope's shortcut): the shape is set at once and
               only the scale moves (1.1 to 1 on the open spring, both ways), and every value the open draws is affine
               in that scale, so each property is the open spring from where the first frame has it: the glass's place,
               size and corner, the edge layer's scale about the pivot, the content's place (it keeps its size), all
@@ -899,7 +899,9 @@ Gate:
               size past its edge, `Overflow::Crop`, set while the panel scales); and the compositor's spring comes to
               rest within a thousandth of the property's unit, the scaled edge then 172 of 255 off at 317 ms, and its
               glass 0.05 points off at 500 ms where the panel's spring had settled (the glass and the edge's scale
-              now go through 1024 samples of the panel's own values, `layers::OPEN_SAMPLES`). The at-rest drawing
+              now go through 1000 samples of the panel's own values, `layers::OPEN_SAMPLES`, as many as one request
+              carries: the protocol had allowed 1024, which no request of at most 4096 bytes can carry, and the
+              server cut the launcher off at its first such request). The at-rest drawing
               and every golden are unchanged. At the same moments, every other frame of the open and its last at 1.5
               in both scopes and appearances: the glass is the panel's own (rect, corner, opacity, within 0.05) at
               every frame, the first frame and the last the panel's pixels within 0, and part way every pixel
@@ -909,7 +911,11 @@ Gate:
               the line's opacity (95 and 28)
               (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, run with
               `CUPERTINO_LAUNCHER_MOMENTS` for the pairs). The handover is on in the process
-              (`hand_scope_opens`). Left: the real process's count against the server.
+              (`hand_scope_opens`). The real process against the server: no buffer of the window or its layers while
+              the open is part way, 0 in 3 runs over 92 to 93 server steps part way
+              (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`, the
+              browser opened once and closed first, as a resident launcher's has been, so the renderer's warm-up,
+              whose first frames the CPU draws and the GPU then draws again, is behind it).
         - [ ] The fold and the unfold: the header switches part way (the query row's symbol and placeholder), a frame
               of the content's layer, and the content's body fades on its own curve while the query row does not, so
               the row and the body are layers of their own; the shape changes both ways with its corner held to half
@@ -929,7 +935,9 @@ Gate:
               14 to 16 server steps part way
               (`shell_processes::the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer`); settled, the
               compositor's panel is the application's within 2 of 255 ("Measurements", "Step 9", "The sheet").
-        - [ ] The open: waits on the two items above.
+        - [ ] The open: from hidden it holds, 0 new buffers in 3 runs over 92 to 93 server steps part way
+              (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the
+              fold and unfold and the search field's open with its buttons wait on their items above.
         - [ ] The look mid-way within 2 of 255, compared at the same moment. Split:
           - [x] The close: at each frame the launcher draws of its own close, the compositor's layers at that same
                 moment, worked out from the curves the panel sent with the compositor's own animator
@@ -943,7 +951,12 @@ Gate:
                 onto whole device pixels, differs by up to 33 part way; the caret, which the application's own drawing
                 moves a device pixel as its enclosure moves, by 44 at 17 ms and 1 from 50 ms on ("Measurements",
                 "Step 9", "The sheet").
-          - [ ] The open: waits on the open's items above.
+          - [ ] The open: from hidden, at each frame the launcher draws of its own open (every other one and its
+                last, at 1.5, both scopes and appearances), the compositor's layers at that moment are its pixels
+                within 1 of 255 but along the outline, where the scaled edge is within two fifths of the line's
+                opacity (90 and 26 of 255 at most), and their glass its glass at every moment
+                (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`); the fold and unfold
+                and the search field's open with its buttons wait on their items above.
   - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
         centre of its window geometry, after its window's rescale or its layer surface's presentation
         (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of

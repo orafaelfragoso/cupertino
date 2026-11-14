@@ -876,8 +876,9 @@ fn timed(duration: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> Option<LayerCurve
     })
 }
 
-/// The fewest and the most samples an `animate_samples` takes.
-const SAMPLES: (usize, usize) = (2, 1024);
+/// The fewest and the most samples an `animate_samples` takes: as many as one request carries, a request being at
+/// most 4096 bytes.
+const SAMPLES: (usize, usize) = (2, 1000);
 
 /// The samples of `animate_samples`, floats in the host's byte order, or `None` when the request is refused for its
 /// duration or its array.
@@ -1010,7 +1011,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 let Some(values) = sampled(duration, &samples) else {
                     return layer.post_error(
                         Error::InvalidCurve,
-                        "a duration outside 1 to 10000 ms, or not 2 to 1024 samples of 4 bytes",
+                        "a duration outside 1 to 10000 ms, or not 2 to 1000 samples of 4 bytes",
                     );
                 };
                 if !values.iter().all(|&v| in_range(prop, f64::from(v))) {

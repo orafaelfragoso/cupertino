@@ -2457,6 +2457,125 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
     );
 }
 
+/// The launcher's application browser opens from hidden on the compositor's clock: its window draws one frame, with
+/// its layers (the glass, the content and the edge) at rest, and while the compositor scales and fades them in from
+/// where the open starts neither the window nor any of its layers commits a buffer. The browser opens once first and
+/// closes, as a resident launcher's has by the time it is asked again, so the renderer has warmed up (its first frames
+/// are the CPU's, then the GPU draws them again). Run with `--no-capture` for the counts.
+#[test]
+fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
+    use cupertino_server::layers_v1::present;
+    // the browser's window, with the room for its shadow
+    const BROWSER: i32 = 844 + 120;
+    // the browser's glass, its content and its edge
+    const LAYERS: usize = 3;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("launcher-open-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
+        return;
+    };
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    let connection = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .expect("connect to the test bus");
+    let owned = || {
+        zbus::block_on(connection.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "NameHasOwner",
+            &"org.cupertino.Launcher1",
+        ))
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false)
+    };
+    server.wait_until(
+        "the launcher to map its hidden window and own its name",
+        |s| committed_buffer(s, "cupertino-launcher").is_some() && owned(),
+    );
+    let toggle = |server: &mut Server| {
+        server.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::ToggleAppGrid],
+        })
+    };
+    // the open's first frame: the window and its layers at rest, which the compositor shows from where the open starts
+    let first_frame = |server: &mut Server| {
+        server.wait_until("the browser's first frame with its layers", |s| {
+            launcher_surfaces(s, BROWSER).is_some_and(|(panel, layers)| {
+                buffer_commit(&panel).is_some()
+                    && layers.len() == LAYERS
+                    && layers.iter().all(|l| buffer_commit(l).is_some())
+            })
+        });
+        launcher_surfaces(&server.state, BROWSER).unwrap()
+    };
+    let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
+    // the first open, the renderer's warm-up in it, then the close
+    toggle(&mut server);
+    let (panel, layers) = first_frame(&mut server);
+    let all: Vec<_> = std::iter::once(panel).chain(layers).collect();
+    let mut last = commits(&all);
+    let mut quiet = Instant::now();
+    server.wait_until("the browser to stop drawing", |_| {
+        let now = commits(&all);
+        if now != last {
+            last = now;
+            quiet = Instant::now();
+        }
+        quiet.elapsed() > Duration::from_millis(500)
+    });
+    toggle(&mut server);
+    server.wait_until("the browser to close", |s| !launcher_panel(s, BROWSER));
+    // the open counted
+    toggle(&mut server);
+    let (panel, layers) = first_frame(&mut server);
+    let all: Vec<_> = std::iter::once(panel.clone()).chain(layers).collect();
+    let (mut steps, mut between, mut new_buffers, mut largest) = (0, 0, 0, 0.0_f64);
+    let mut last = commits(&all);
+    server.wait_until("the open to be over", |s| {
+        let shown = present(&panel, s.now(), false);
+        // part way: a layer fading in, or scaled from where the open starts
+        let part_way = shown
+            .iter()
+            .any(|l| l.opacity < 1.0 || (l.scale - 1.0).abs() > 1e-9);
+        steps += 1;
+        let commit = commits(&all);
+        if part_way {
+            between += 1;
+            largest = shown.iter().fold(largest, |m, l| m.max(l.scale));
+            new_buffers += commit.iter().zip(&last).filter(|(a, b)| a != b).count();
+        }
+        last = commit;
+        steps > 1 && !part_way
+    });
+    eprintln!(
+        "trace: open: {steps} server steps, {between} of them part way, {new_buffers} new buffers of the window and its \
+         layers"
+    );
+    assert!(between > 0, "the open ran on the server");
+    assert!(
+        largest > 1.05,
+        "the edge scaled from where the open starts: {largest}"
+    );
+    assert_eq!(
+        new_buffers, 0,
+        "the window and its layers drew no frame while they opened"
+    );
+}
+
 /// The window manager process with the stage on puts the older of two applications in the strip;
 /// killed, its windows are back at once, and the restarted process places them again.
 #[test]

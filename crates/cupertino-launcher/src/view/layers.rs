@@ -516,7 +516,7 @@ pub fn open_changes(
 
 /// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight
 /// line between two of them stands off the spring by about a thousandth of a point.
-pub const OPEN_SAMPLES: usize = 1024;
+pub const OPEN_SAMPLES: usize = cupertino_kit::platform::MAX_LAYER_SAMPLES;
 
 /// A value of the panel through an open from `start` as `motion` presents it, to where nothing moves: the open's
 /// duration and the value at [`OPEN_SAMPLES`] even steps of it, the first where the open starts and the last at rest.

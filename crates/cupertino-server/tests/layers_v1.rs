@@ -1911,6 +1911,13 @@ fn a_property_moves_through_samples_in_straight_lines_on_the_server_clock_from_i
         c.parent.commit();
     });
     h.wait_until("at its last sample", |h| x_of(h) == 30.0);
+    // as many samples as one request carries go through
+    let most = sample_bytes(&(0..1000).map(|i| i as f32).collect::<Vec<_>>());
+    client.send(move |c, _| {
+        c.l(0).animate_samples(27, Property::X, 300, most.clone());
+        c.parent.commit();
+    });
+    h.wait_until("at the last of the most samples", |h| x_of(h) == 999.0);
     // one sample is not a motion, and an opacity past 1 is out of its range
     client.send(|c, _| {
         c.l(0)
@@ -1930,5 +1937,14 @@ fn a_property_moves_through_samples_in_straight_lines_on_the_server_clock_from_i
     assert_eq!(
         other.heard(|e| e.error.clone()).unwrap().1,
         cupertino_layer_v1::Error::InvalidValue as u32
+    );
+    // nor is one more than the most
+    let past = one_layer(&mut h);
+    let more = sample_bytes(&(0..1001).map(|i| i as f32).collect::<Vec<_>>());
+    past.send(move |c, _| c.l(0).animate_samples(28, Property::X, 300, more.clone()));
+    h.wait_until("the error", |_| past.heard(|e| e.error.is_some()));
+    assert_eq!(
+        past.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidCurve as u32
     );
 }

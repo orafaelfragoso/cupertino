@@ -12,6 +12,8 @@ use crate::effects::{div255, mul_px, over_px};
 use crate::geometry::Bounds;
 use crate::Shape;
 use cupertino_raster_math::coverage::{coverage, rect_distance, rounded_distance, stroke_coverage};
+use cupertino_raster_math::dither;
+use cupertino_raster_math::gradient::{linear_t, radial_t, Stop, Stops, MAX_STOPS};
 use tiny_skia::{Mask, PixmapMut};
 
 /// Coordinates past this many pixels are not placed; the shape draws nothing.
@@ -230,6 +232,121 @@ impl Shade<'_> {
     }
 }
 
+/// A gradient paint placed on the window's pixels: the shared rule (`cupertino_raster_math::gradient`), evaluated at
+/// each pixel's centre in the node's coordinates. Offsets are held to 0 to 1 and made to increase, as they were given
+/// in order; a single stop is that colour everywhere. More than [`MAX_STOPS`] stops are refused by the definition,
+/// and such a paint draws nothing.
+pub(crate) struct Gradient {
+    stops: Stops,
+    /// Window pixel position to node coordinates.
+    inv: [f32; 6],
+    kind: GradientKind,
+}
+
+enum GradientKind {
+    Linear { start: [f32; 2], end: [f32; 2] },
+    Radial { centre: [f32; 2], radius: f32 },
+}
+
+impl Gradient {
+    /// `paint` placed by `window` (node coordinates to window pixels); `None` for a solid paint, a paint with no stops
+    /// or more than [`MAX_STOPS`], or a transform that cannot be inverted.
+    pub(crate) fn new(paint: &crate::Paint, window: tiny_skia::Transform) -> Option<Gradient> {
+        let (given, kind) = match paint {
+            crate::Paint::Solid(_) => return None,
+            crate::Paint::Linear { start, end, stops } => (
+                stops,
+                GradientKind::Linear {
+                    start: [start.x as f32, start.y as f32],
+                    end: [end.x as f32, end.y as f32],
+                },
+            ),
+            crate::Paint::Radial {
+                center,
+                radius,
+                stops,
+            } => (
+                stops,
+                GradientKind::Radial {
+                    centre: [center.x as f32, center.y as f32],
+                    radius: *radius as f32,
+                },
+            ),
+        };
+        if given.is_empty() || given.len() > MAX_STOPS {
+            return None;
+        }
+        let mut last = 0.0f32;
+        let mut stops: Vec<Stop> = given
+            .iter()
+            .map(|s| {
+                last = s.offset.clamp(0.0, 1.0).max(last);
+                let c = s.color;
+                Stop {
+                    offset: last,
+                    color: [c.r, c.g, c.b, c.a].map(|v| v.clamp(0.0, 1.0)),
+                }
+            })
+            .collect();
+        if stops.len() == 1 {
+            stops.push(stops[0]);
+        }
+        let stops = Stops::new(&stops).ok()?;
+        let (a, b, c, d, e, f) = (window.sx, window.ky, window.kx, window.sy, window.tx, window.ty);
+        let det = a * d - b * c;
+        if !(det.abs() > 1e-12 && det.is_finite()) {
+            return None;
+        }
+        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+        Some(Gradient {
+            stops,
+            inv: [ia, ib, ic, id, -(ia * e + ic * f), -(ib * e + id * f)],
+            kind,
+        })
+    }
+
+    /// The premultiplied colour at window pixel `(x, y)`.
+    #[inline]
+    fn at(&self, x: i32, y: i32) -> [f32; 4] {
+        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+        let [a, b, c, d, e, f] = self.inv;
+        let p = [a * fx + c * fy + e, b * fx + d * fy + f];
+        let t = match self.kind {
+            GradientKind::Linear { start, end } => linear_t(p, start, end),
+            GradientKind::Radial { centre, radius } => radial_t(p, centre, radius),
+        };
+        self.stops.at(t)
+    }
+
+    /// The colour of every pixel of `area` (window pixels), row after row, in premultiplied bytes; with `dithered`
+    /// its colour channels are dithered by position before they are stored (its alpha is rounded).
+    pub(crate) fn shade(&self, area: &Bounds, dithered: bool) -> Vec<u32> {
+        let mut out = Vec::with_capacity(area.width() as usize * area.height() as usize);
+        for y in area.y0..area.y1 {
+            for x in area.x0..area.x1 {
+                let c = self.at(x, y);
+                let alpha = dither::quantize(c[3]);
+                let channel = |v: f32| {
+                    let stored = if dithered {
+                        dither::store(v, x as u32, y as u32)
+                    } else {
+                        dither::quantize(v)
+                    };
+                    // premultiplied: no channel above the alpha
+                    stored.min(alpha)
+                };
+                out.push(u32::from_le_bytes([
+                    channel(c[0]),
+                    channel(c[1]),
+                    channel(c[2]),
+                    alpha,
+                ]));
+            }
+        }
+        out
+    }
+}
+
 /// A colour premultiplied and in bytes, as fills lay it.
 pub(crate) fn premultiplied(c: cupertino_theme::Color) -> Option<[u8; 4]> {
     if ![c.r, c.g, c.b, c.a].iter().all(|v| v.is_finite()) {
@@ -303,6 +420,32 @@ pub(crate) fn fill(
             }
         }
     });
+}
+
+/// Lays `shade` through `cover` alone (a pixmap-sized coverage mask, a path's and its clips' together) over the pixmap
+/// whose top-left pixel is window pixel `origin`, inside `area` (window pixels).
+pub(crate) fn fill_masked(
+    pm: &mut PixmapMut<'_>,
+    origin: (i32, i32),
+    area: &Bounds,
+    shade: &Shade<'_>,
+    cover: &Mask,
+) {
+    let stride = pm.width() as usize;
+    let pixels = pm.data_mut().as_chunks_mut::<4>().0;
+    let cover = cover.data();
+    for y in area.y0..area.y1 {
+        for x in area.x0..area.x1 {
+            let i = (y - origin.1) as usize * stride + (x - origin.0) as usize;
+            let k = u32::from(cover[i]);
+            if k == 0 {
+                continue;
+            }
+            let s = shade.at(x, y);
+            let s = if k == 255 { s } else { mul_px(s, k) };
+            pixels[i] = over_px(s, u32::from_le_bytes(pixels[i])).to_le_bytes();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -393,5 +536,80 @@ mod tests {
         assert_eq!(outline.at(49, 30).0, 0);
         let edge = outline.at(50, 36).0;
         assert!(edge > 0 && edge < 255, "{edge}");
+    }
+    #[test]
+    fn gradients_match_the_shared_vectors() {
+        use crate::{GradientStop, Paint};
+        use cupertino_geometry::Point;
+        let sets = vectors::gradient_stops();
+        let mut checked = 0;
+        for row in vectors::rows(vectors::GRADIENT) {
+            let [g, t, r, gr, b, a] = row[..].try_into().expect("six columns");
+            let stops: Vec<GradientStop> = sets[g as usize]
+                .as_slice()
+                .iter()
+                .map(|s| GradientStop {
+                    offset: s.offset,
+                    color: cupertino_theme::Color::new(s.color[0], s.color[1], s.color[2], s.color[3]),
+                })
+                .collect();
+            // a linear gradient 1000 pixels long placed so that the centre of pixel 0 lies at the vector's `t`
+            let start = 0.5 - 1000.0 * t;
+            let paint = Paint::Linear {
+                start: Point::new(start, 0.0),
+                end: Point::new(start + 1000.0, 0.0),
+                stops,
+            };
+            let gradient = Gradient::new(&paint, tiny_skia::Transform::identity()).expect("placed");
+            let at = gradient.at(0, 0);
+            let want = [r, gr, b, a].map(|v| v as f32);
+            for c in 0..4 {
+                assert!((at[c] - want[c]).abs() < 1e-3, "{row:?}: {at:?}");
+            }
+            checked += 1;
+        }
+        assert!(checked > 20, "{checked}");
+    }
+
+    #[test]
+    fn a_gradient_is_dithered_by_position_and_keeps_its_exact_values() {
+        use crate::{GradientStop, Paint};
+        use cupertino_geometry::Point;
+        let grey = |v: f32| cupertino_theme::Color::new(v, v, v, 1.0);
+        // a shallow ramp, from 100 to 101 over 64 pixels
+        let paint = Paint::Linear {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(64.0, 0.0),
+            stops: vec![
+                GradientStop { offset: 0.0, color: grey(100.0 / 255.0) },
+                GradientStop { offset: 1.0, color: grey(101.0 / 255.0) },
+            ],
+        };
+        let g = Gradient::new(&paint, tiny_skia::Transform::identity()).unwrap();
+        let area = Bounds { x0: 0, y0: 0, x1: 64, y1: 8 };
+        let plain = g.shade(&area, false);
+        let dithered = g.shade(&area, true);
+        let red = |v: &u32| v.to_le_bytes()[0];
+        // undithered, the ramp is one step at its middle; dithered, every column's mean follows the ramp
+        assert_eq!(plain.iter().filter(|v| red(v) == 101).count(), 32 * 8);
+        for x in [8usize, 24, 40, 56] {
+            let column: u32 = (0..8).map(|y| u32::from(red(&dithered[y * 64 + x]))).sum();
+            let want = 100.0 + (x as f32 + 0.5) / 64.0;
+            assert!((column as f32 / 8.0 - want).abs() <= 0.25, "{x}: {column}");
+        }
+        // the alpha is never dithered, and every pixel is the definition's store of the colour at its centre
+        for (i, v) in dithered.iter().enumerate() {
+            let (x, y) = ((i % 64) as u32, (i / 64) as u32);
+            let c = g.at(x as i32, y as i32);
+            assert_eq!(v.to_le_bytes()[3], 255);
+            assert_eq!(red(v), dither::store(c[0], x, y));
+        }
+        // more than eight stops are refused
+        let many = Paint::Linear {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1.0, 0.0),
+            stops: vec![GradientStop { offset: 0.0, color: grey(0.0) }; 9],
+        };
+        assert!(Gradient::new(&many, tiny_skia::Transform::identity()).is_none());
     }
 }

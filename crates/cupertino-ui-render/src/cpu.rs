@@ -3,6 +3,7 @@ use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
 use crate::raster;
+use cupertino_raster_math::dither;
 use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
@@ -967,7 +968,11 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return;
         }
         let (path, ts) = self::holed(geometry::path(shape), self.ts(t, node), &holes, t.origin);
-        let (Some(path), Some(paint)) = (path, skia_paint(paint)) else {
+        let Some(path) = path else { return };
+        if !matches!(paint, Paint::Solid(_)) {
+            return self.lay_path(t, node, &path, geometry::fill_rule(shape), ts, paint);
+        }
+        let Some(paint) = skia_paint(paint) else {
             return;
         };
         t.pixmap.fill_path(
@@ -977,6 +982,48 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             ts,
             t.clips.last(),
         );
+    }
+
+    /// Lays the gradient `paint` through the coverage of `path` (placed by `ts` on the target) and the target's clip.
+    fn lay_path(
+        &self,
+        t: &mut Target<'_, '_>,
+        node: &PaintNode,
+        path: &tiny_skia::Path,
+        rule: tiny_skia::FillRule,
+        ts: tiny_skia::Transform,
+        paint: &Paint,
+    ) {
+        let (w, h) = (t.pixmap.width(), t.pixmap.height());
+        let Some(mut cover) = Mask::new(w, h) else {
+            return;
+        };
+        cover.fill_path(path, rule, true, ts);
+        if let Some(clip) = t.clips.last() {
+            for (c, m) in cover.data_mut().iter_mut().zip(clip.data()) {
+                *c = div255(u32::from(*c) * u32::from(*m)) as u8;
+            }
+        }
+        let Some(placed) = path.clone().transform(ts) else {
+            return;
+        };
+        let b = placed.bounds();
+        let reach = Bounds {
+            x0: b.left().floor() as i32 - 1 + t.origin.0,
+            y0: b.top().floor() as i32 - 1 + t.origin.1,
+            x1: b.right().ceil() as i32 + 1 + t.origin.0,
+            y1: b.bottom().ceil() as i32 + 1 + t.origin.1,
+        };
+        let area = t.limit.intersect(&t.rect).intersect(&reach);
+        let Some(gradient) = raster::Gradient::new(paint, self.window_ts(node)) else {
+            return;
+        };
+        if area.is_empty() {
+            return;
+        }
+        let data = gradient.shade(&area, dither::BY_DEFAULT);
+        let shade = raster::Shade::Pixels { data: &data, area };
+        raster::fill_masked(t.pixmap, t.origin, &area, &shade, &cover);
     }
 
     fn stroke(
@@ -993,7 +1040,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             }
             return;
         }
-        let (Some(path), Some(paint)) = (geometry::path(shape), skia_paint(paint)) else {
+        let Some(path) = geometry::path(shape) else {
             return;
         };
         let stroke = Stroke {
@@ -1001,6 +1048,17 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             ..Stroke::default()
         };
         let ts = self.ts(t, node);
+        if !matches!(paint, Paint::Solid(_)) {
+            // the stroker's outline, filled
+            let scale = ts.get_scale();
+            let Some(outline) = path.stroke(&stroke, scale.0.max(scale.1)) else {
+                return;
+            };
+            return self.lay_path(t, node, &outline, tiny_skia::FillRule::Winding, ts, paint);
+        }
+        let Some(paint) = skia_paint(paint) else {
+            return;
+        };
         t.pixmap
             .stroke_path(&path, &paint, &stroke, ts, t.clips.last());
     }
@@ -1028,9 +1086,10 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 raster::fill(t.pixmap, t.origin, &area, outline, &shade, mask, holes);
             }
             _ => {
-                let Some(data) = shade_pixels(paint, &self.window_ts(node), &area) else {
+                let Some(gradient) = raster::Gradient::new(paint, self.window_ts(node)) else {
                     return;
                 };
+                let data = gradient.shade(&area, dither::BY_DEFAULT);
                 let shade = raster::Shade::Pixels { data: &data, area };
                 raster::fill(t.pixmap, t.origin, &area, outline, &shade, mask, holes);
             }
@@ -1292,30 +1351,6 @@ fn clip_by(mask: &mut Mask, shape: &Shape, window: tiny_skia::Transform, origin:
         Some(outline) => outline.clip(mask, origin),
         None => mask.clear(),
     }
-}
-
-/// The premultiplied colour of the gradient `paint` (placed by `window`, node coordinates to window pixels) at every
-/// pixel of `area` (window pixels), row after row.
-fn shade_pixels(paint: &Paint, window: &tiny_skia::Transform, area: &Bounds) -> Option<Vec<u32>> {
-    let mut paint = skia_paint(paint)?;
-    let mut pixmap = Pixmap::new(area.width(), area.height())?;
-    let ts = window.post_translate(-area.x0 as f32, -area.y0 as f32);
-    paint.shader.transform(ts);
-    pixmap.fill_rect(
-        tiny_skia::Rect::from_xywh(0.0, 0.0, area.width() as f32, area.height() as f32)?,
-        &paint,
-        tiny_skia::Transform::identity(),
-        None,
-    );
-    Some(
-        pixmap
-            .data()
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| u32::from_le_bytes(*p))
-            .collect(),
-    )
 }
 
 fn full_mask(w: u32, h: u32) -> Result<Mask, RenderError> {

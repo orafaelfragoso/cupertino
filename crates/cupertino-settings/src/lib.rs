@@ -16,6 +16,8 @@ pub mod geom;
 pub mod hardware;
 pub mod history;
 #[cfg(feature = "app")]
+pub mod hotplug;
+#[cfg(feature = "app")]
 pub mod inflight;
 #[cfg(feature = "app")]
 pub mod instance;

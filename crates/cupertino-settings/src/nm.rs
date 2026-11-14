@@ -12,7 +12,7 @@ use crate::live::{display_name, Device, KnownNetwork, Network, Vpn, Wifi};
 
 pub const NAME: &str = "org.freedesktop.NetworkManager";
 pub const PATH: &str = "/org/freedesktop/NetworkManager";
-const SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
+pub const SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
 const DEVICE: &str = "org.freedesktop.NetworkManager.Device";
 const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 const ACCESS_POINT: &str = "org.freedesktop.NetworkManager.AccessPoint";

@@ -14,7 +14,10 @@ use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{Control, Value};
 use cupertino_settings::live::{Live, Reading};
 use cupertino_settings::panes::{change, sections, Call, ControlId, Effect, Section, Session};
-use cupertino_settings::services::{Bus, Services, NETWORK_NAME, SESSION_NAME, SESSION_PATH};
+use cupertino_settings::services::{
+    Bus, Services, NETWORK_NAME, NETWORK_PATH, SESSION_NAME, SESSION_PATH, UPOWER_DISPLAY_DEVICE,
+    UPOWER_NAME,
+};
 use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::sheet::{Answer, Prompt};
 use cupertino_settings::watch::{Changed, Which};
@@ -1357,6 +1360,7 @@ fn the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_
     services.watch(Arc::new(move |changed| {
         let _ = tx.lock().unwrap().send(changed);
     }));
+    services.want(&[Changed::Network]);
     assert!(services.watched(Which::Session) && services.watched(Which::System));
 
     // the session interface starts and its appearance changes
@@ -1390,7 +1394,7 @@ fn the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_
     network
         .emit_signal(
             None::<&str>,
-            "/org/cupertino/Network1",
+            NETWORK_PATH,
             "org.freedesktop.DBus.Properties",
             "PropertiesChanged",
             &(
@@ -1400,5 +1404,111 @@ fn the_watch_tells_a_service_starting_its_property_changes_and_a_system_service_
             ),
         )
         .unwrap();
-    heard(&rx, Changed::System);
+    heard(&rx, Changed::Network);
+}
+
+/// An empty `PropertiesChanged` of `interface` at `path`, sent by `connection`.
+fn properties_changed(connection: &zbus::blocking::Connection, path: &str, interface: &str) {
+    connection
+        .emit_signal(
+            None::<&str>,
+            path,
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(
+                interface,
+                HashMap::<&str, Variant>::new(),
+                Vec::<&str>::new(),
+            ),
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_signal_the_shown_pane_does_not_read_never_reaches_the_window() {
+    let Some(bus) = common::bus() else { return };
+    // one connection holds both names, so its signals arrive in the order sent
+    let service = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name(UPOWER_NAME)
+        .unwrap()
+        .name(SESSION_NAME)
+        .unwrap()
+        .build()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let mut services = services(&bus);
+    services.watch(Arc::new(move |changed| {
+        let _ = tx.lock().unwrap().send(changed);
+    }));
+    // a pane that reads no power reading shows: the battery's change is dropped, the session's (the appearance)
+    // comes after it
+    services.want(&[Changed::Network]);
+    properties_changed(
+        &service,
+        UPOWER_DISPLAY_DEVICE,
+        "org.freedesktop.UPower.Device",
+    );
+    properties_changed(&service, SESSION_PATH, SESSION_NAME);
+    let told: Vec<Changed> = std::iter::from_fn(|| rx.recv_timeout(Duration::from_secs(10)).ok())
+        .take_while(|c| *c != Changed::Session)
+        .collect();
+    assert!(
+        !told.contains(&Changed::Battery),
+        "the battery woke the window on a pane without it: {told:?}"
+    );
+    // the Battery pane shows: the same signal comes through
+    services.want(&[Changed::Battery]);
+    properties_changed(
+        &service,
+        UPOWER_DISPLAY_DEVICE,
+        "org.freedesktop.UPower.Device",
+    );
+    heard(&rx, Changed::Battery);
+}
+
+#[test]
+fn a_burst_of_signals_while_the_watch_starts_stalls_neither_the_watch_nor_the_connection() {
+    let Some(bus) = common::bus() else { return };
+    let network = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .name(NETWORK_NAME)
+        .unwrap()
+        .build()
+        .unwrap();
+    // a scan's burst: far more signals than a queue holds, sent all along the watch's start
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let senders: Vec<_> = (0..4)
+        .map(|_| {
+            let (network, stop) = (network.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    properties_changed(&network, NETWORK_PATH, NETWORK_NAME);
+                }
+            })
+        })
+        .collect();
+    let (done, finished) = mpsc::channel();
+    let address = bus.address.clone();
+    std::thread::spawn(move || {
+        let mut services = Services::on(Bus::address(&address), Bus::address(&address));
+        services.watch(Arc::new(|_| {}));
+        services.want(&[Changed::Network]);
+        // the connection still answers: the reply is not stuck behind the queued signals
+        let backends = services.detect();
+        let _ = done.send((
+            services.watched(Which::Session) && services.watched(Which::System),
+            backends.network.is_some(),
+        ));
+    });
+    let outcome = finished.recv_timeout(Duration::from_secs(10));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for sender in senders {
+        sender.join().unwrap();
+    }
+    assert_eq!(
+        outcome.expect("the watch's start or the next call hung behind the burst"),
+        (true, true)
+    );
 }

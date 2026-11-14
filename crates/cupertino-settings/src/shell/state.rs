@@ -175,6 +175,24 @@ pub(crate) const METER_POLL: f64 = 0.1;
 /// How often the Focus pane reads again the durations it offers, which follow the time of day, in seconds.
 const LIFETIMES_POLL: f64 = 60.0;
 
+/// How soon a bus whose watch ended and could not start again is tried again, in seconds; each failed try doubles it
+/// up to [`REWATCH_MAX`].
+pub(crate) const REWATCH_FIRST: f64 = 1.0;
+pub(crate) const REWATCH_MAX: f64 = 60.0;
+
+/// The change signals `pane` reads, besides those every pane reads ([`crate::watch::Interest`]).
+pub(crate) fn reads(pane: PaneId) -> &'static [Changed] {
+    match pane {
+        PaneId::Focus => &[Changed::Centre],
+        PaneId::Wifi | PaneId::Network | PaneId::Vpn => &[Changed::Network],
+        PaneId::Bluetooth => &[Changed::Bluetooth],
+        PaneId::Battery => &[Changed::Battery],
+        PaneId::Displays => &[Changed::Brightness],
+        PaneId::Keyboard => &[Changed::KeyboardBacklight],
+        _ => &[],
+    }
+}
+
 /// The level slider being dragged: its control, its writer, when it last moved and where its knob is.
 pub(crate) struct LevelDrag {
     id: ControlId,
@@ -244,6 +262,12 @@ pub struct State {
     pub(crate) read_video_memory: ReadVideoMemory,
     /// An activation token another start of Settings handed over, for the window to raise itself with.
     pub(crate) activation: Option<String>,
+    /// The buses whose watch ended and has not started again, and how long until the next try, in seconds.
+    lost: Vec<Which>,
+    rewatch_in: f64,
+    /// Every refresh fails (tests).
+    #[cfg(test)]
+    pub(crate) fail_refresh: bool,
     _files: Option<ConfigWatcher>,
     /// Watches `desktop-control.conf`, which the compositor writes when an app first asks, on its own: a file that
     /// can't be read stops no other file's watch.
@@ -352,6 +376,10 @@ impl State {
             read_video_memory: std::sync::Arc::new(read_video_memory),
             login_saving: false,
             activation: None,
+            lost: Vec::new(),
+            rewatch_in: REWATCH_FIRST,
+            #[cfg(test)]
+            fail_refresh: false,
             _files: files,
             _answers: answers,
         };
@@ -401,30 +429,28 @@ impl State {
     /// Whether the shown pane shows a reading `changed` is about.
     fn shows(&self, changed: Changed) -> bool {
         match changed {
-            // the backends name the sidebar's rows, whatever the pane
-            Changed::Owner(_) => true,
+            // the backends and the hardware name the sidebar's rows, whatever the pane
+            Changed::Owner(_) | Changed::Hardware => true,
             Changed::Session => self.content_pane == PaneId::Mouse,
-            Changed::Centre => self.content_pane == PaneId::Focus,
-            Changed::System => matches!(
-                self.content_pane,
-                PaneId::Wifi
-                    | PaneId::Network
-                    | PaneId::Vpn
-                    | PaneId::Bluetooth
-                    | PaneId::Battery
-                    | PaneId::Keyboard
-                    | PaneId::Displays
-            ),
             Changed::Ended(_) => false,
+            changed => reads(self.content_pane).contains(&changed),
         }
     }
 
-    /// Services sent change signals: read again what they changed, once, if the window shows it.
+    /// Services sent change signals: read again what they changed, once, if the window shows it. A bus whose watch
+    /// ended is watched again on its new connection, or later ([`State::rewatch_after`]).
     pub(crate) fn changed(&mut self, changes: &[Changed]) -> Result<()> {
         let mut appearance = false;
         for changed in changes {
             match changed {
-                Changed::Ended(bus) => self.services.watch_ended(*bus),
+                Changed::Ended(bus) => {
+                    self.services.watch_ended(*bus);
+                    self.services.keep_watching();
+                    if !self.services.watched(*bus) && !self.lost.contains(bus) {
+                        self.lost.push(*bus);
+                        self.rewatch_in = REWATCH_FIRST;
+                    }
+                }
                 Changed::Owner(Which::Session) | Changed::Session => appearance = true,
                 _ => {}
             }
@@ -436,6 +462,23 @@ impl State {
             self.refresh(self.now())?;
         }
         Ok(())
+    }
+
+    /// How soon to try again to watch a bus whose watch ended; `None` while every such bus is watched again.
+    pub(crate) fn rewatch_after(&self) -> Option<f64> {
+        (!self.lost.is_empty()).then_some(self.rewatch_in)
+    }
+
+    /// Try again to watch the buses whose watch ended; the next try waits twice as long.
+    pub(crate) fn rewatch(&mut self) {
+        self.services.keep_watching();
+        let services = &self.services;
+        self.lost.retain(|bus| !services.watched(*bus));
+        self.rewatch_in = if self.lost.is_empty() {
+            REWATCH_FIRST
+        } else {
+            (self.rewatch_in * 2.0).min(REWATCH_MAX)
+        };
     }
 
     pub(crate) fn now(&self) -> f64 {
@@ -494,6 +537,10 @@ impl State {
     /// Read the live services of the pane shown again; draw again when something changed. The battery is read on the
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_refresh {
+            return Err("the refresh fails".into());
+        }
         self.refreshed = now;
         let backends = self.services.detect();
         self.live.hardware = Some(backends.hardware);
@@ -577,6 +624,7 @@ impl State {
 
     /// The content now shows `to` (`from` before): start what the new pane needs and stop what the old one started.
     pub(crate) fn enter_pane(&mut self, from: Option<PaneId>, to: PaneId) -> Result<()> {
+        self.services.want(reads(to));
         if let Some(from) = from.filter(|f| *f != to) {
             self.leave_pane(from);
         }

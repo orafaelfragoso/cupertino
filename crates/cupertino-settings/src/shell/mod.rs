@@ -211,6 +211,8 @@ pub struct Shell {
     full_screen: bool,
     /// Whether a [`Message::Refresh`] is on its way: one is, while the pane shown polls ([`State::poll`]).
     refresh_armed: bool,
+    /// Whether a [`Message::Rewatch`] is on its way.
+    rewatch_armed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,6 +239,8 @@ pub enum Message {
     Menu(ActionName),
     /// Another thread has something for the window.
     Woken,
+    /// Try again to watch a bus whose watch ended ([`State::rewatch_after`]).
+    Rewatch,
     Refresh,
     LevelTick,
     /// The slider without stops of `ControlId` moved, committed once it settles.
@@ -451,6 +455,8 @@ impl Shell {
                 });
             }
             Message::Woken => {
+                // the wait is armed again before anything that can fail: a failure ends no background work
+                let mut commands = vec![wait(&self.woken)];
                 // a burst of change signals reads the pane again once
                 let mut changes = Vec::new();
                 while let Ok(event) = self.background.try_recv() {
@@ -460,11 +466,16 @@ impl Shell {
                                 changes.push(changed);
                             }
                         }
-                        event => self.state.background_event(event)?,
+                        event => {
+                            if let Err(e) = self.state.background_event(event) {
+                                eprintln!("cupertino-settings: {e}");
+                            }
+                        }
                     }
                 }
-                self.state.changed(&changes)?;
-                let mut commands = vec![wait(&self.woken)];
+                if let Err(e) = self.state.changed(&changes) {
+                    eprintln!("cupertino-settings: {e}");
+                }
                 if let Some(token) = self.state.activation.take() {
                     commands.push(Command::Window(
                         main_window(),
@@ -472,6 +483,10 @@ impl Shell {
                     ));
                 }
                 return Ok(commands);
+            }
+            Message::Rewatch => {
+                self.rewatch_armed = false;
+                self.state.rewatch();
             }
             Message::Refresh => {
                 self.refresh_armed = false;
@@ -505,6 +520,13 @@ impl Shell {
         let every = self.state.poll().filter(|_| !self.refresh_armed)?;
         self.refresh_armed = true;
         Some(after(Duration::from_secs_f64(every), Message::Refresh))
+    }
+
+    /// The next [`Message::Rewatch`], while a bus whose watch ended is not watched again and none is on its way.
+    fn arm_rewatch(&mut self) -> Option<Command<Message>> {
+        let delay = self.state.rewatch_after().filter(|_| !self.rewatch_armed)?;
+        self.rewatch_armed = true;
+        Some(after(Duration::from_secs_f64(delay), Message::Rewatch))
     }
 
     /// Choose search result `i`: its pane shows and the search ends.
@@ -709,6 +731,7 @@ impl Application for SettingsApp {
             open: None,
             full_screen: false,
             refresh_armed: false,
+            rewatch_armed: false,
         };
         commands.extend(shell.arm_refresh());
         (shell, commands)
@@ -721,6 +744,7 @@ impl Application for SettingsApp {
         });
         // a pane that polls is read again on a timer; the others wait for their change signals
         commands.extend(shell.arm_refresh());
+        commands.extend(shell.arm_rewatch());
         commands
     }
 
@@ -824,6 +848,7 @@ mod tests {
     use crate::services::Bus;
     use crate::settings::Settings;
     use crate::sheet::Sheet;
+    use crate::watch::{Changed, Which};
 
     const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
     const RETURN: u32 = 0xff0d;
@@ -1971,6 +1996,161 @@ mod tests {
             cupertino_kit::core::StepStatus::Waiting(pending) => pending.tasks,
             _ => 0,
         }
+    }
+
+    /// Run the window until `done` holds, the background threads having their turn; false if it never does.
+    fn until(driver: &mut TestDriver<SettingsApp>, done: impl Fn(&State) -> bool) -> bool {
+        within(driver, Duration::from_secs(5), done)
+    }
+
+    /// [`until`] for at most `wait`.
+    fn within(
+        driver: &mut TestDriver<SettingsApp>,
+        wait: Duration,
+        done: impl Fn(&State) -> bool,
+    ) -> bool {
+        let end = std::time::Instant::now() + wait;
+        while std::time::Instant::now() < end {
+            driver.run_until_idle(budget()).unwrap();
+            if done(&driver.runtime().model().state) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn a_failure_while_the_window_reads_the_background_queue_keeps_its_wait() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let (mut driver, _window) = start_state(dir.path(), PaneId::General, services, |state| {
+            state.fail_refresh = true
+        });
+        assert_eq!(waiting_tasks(&mut driver), 1, "the background queue's wait");
+        let notify = driver.runtime().model().state.notify.clone();
+        // a hot-plug reads the pane again, which fails here, and so does every read after it
+        notify(Background::Changed(Changed::Hardware));
+        assert_eq!(
+            waiting_tasks(&mut driver),
+            1,
+            "the failed read ended the wait: no file change, pane request or change signal would reach the window"
+        );
+        notify(Background::ShowPane(PaneId::Appearance, String::new()));
+        assert!(until(&mut driver, |state| state.pane() == PaneId::Appearance));
+    }
+
+    #[test]
+    fn a_device_plugged_in_adds_its_row_whatever_pane_shows() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let sources = crate::hardware::Sources {
+            sysfs: root.path().join("sys"),
+            udev_data: root.path().join("udev"),
+        };
+        let services =
+            Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE)).with_hardware(sources);
+        // a pane that reads nothing again on its own
+        let (mut driver, _window) = start_state(dir.path(), PaneId::Appearance, services, |_| {});
+        assert_eq!(driver.runtime().model().state.poll(), None);
+        assert!(!driver
+            .runtime()
+            .model()
+            .state
+            .rows()
+            .contains(&PaneId::Trackpad));
+        // a touchpad is plugged in: udev writes its record, then announces it
+        let event = root.path().join("sys/class/input/event9");
+        std::fs::create_dir_all(&event).unwrap();
+        std::fs::write(event.join("dev"), "13:73\n").unwrap();
+        std::fs::create_dir_all(root.path().join("udev")).unwrap();
+        std::fs::write(
+            root.path().join("udev/c13:73"),
+            "E:ID_INPUT=1\nE:ID_INPUT_TOUCHPAD=1\n",
+        )
+        .unwrap();
+        let notify = driver.runtime().model().state.notify.clone();
+        notify(Background::Changed(Changed::Hardware));
+        assert!(
+            until(&mut driver, |state| state
+                .rows()
+                .contains(&PaneId::Trackpad)),
+            "the Trackpad row did not come"
+        );
+    }
+
+    #[test]
+    fn a_watch_that_ends_watches_the_bus_again_and_keeps_trying_while_the_bus_is_gone() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            eprintln!("skipped: dbus-daemon is not available");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let services = Services::on(Bus::address(&bus.address), Bus::address(&bus.address));
+        let (mut driver, _window) = start_state(dir.path(), PaneId::Appearance, services, |_| {});
+        let watched = |state: &State| {
+            state.services.watched(Which::Session) && state.services.watched(Which::System)
+        };
+        assert!(watched(&driver.runtime().model().state));
+        let notify = driver.runtime().model().state.notify.clone();
+        // the system bus's watch ends with its connection: the window watches a new one at once, on a pane that
+        // reads nothing again on its own
+        notify(Background::Changed(Changed::Ended(Which::System)));
+        assert!(
+            within(&mut driver, Duration::from_millis(500), |state| watched(
+                state
+            ) && state
+                .rewatch_after()
+                .is_none()),
+            "the bus was not watched again at once"
+        );
+        let at_rest = waiting_tasks(&mut driver);
+
+        // the bus goes away: both watches end, and the window tries again later, less often each time
+        drop(bus);
+        assert!(
+            until(&mut driver, |state| state.rewatch_after()
+                == Some(state::REWATCH_FIRST)),
+            "the window gave up on the buses"
+        );
+        assert_eq!(
+            waiting_tasks(&mut driver),
+            at_rest + 1,
+            "the next try's timer"
+        );
+    }
+
+    #[test]
+    fn each_failed_try_to_watch_a_bus_again_waits_twice_as_long_up_to_a_minute() {
+        let dir = tempfile::tempdir().unwrap();
+        let (notify, _background) = background_channel(|| {});
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let mut state = State::new(
+            paths(dir.path()),
+            services,
+            PaneId::Appearance,
+            1080.0,
+            notify,
+        )
+        .unwrap();
+        state.services.watch(Arc::new(|_| {}));
+        assert_eq!(
+            state.rewatch_after(),
+            None,
+            "a bus never reached is not one whose watch ended"
+        );
+        state.changed(&[Changed::Ended(Which::System)]).unwrap();
+        let mut waits = vec![state.rewatch_after().unwrap()];
+        for _ in 0..8 {
+            state.rewatch();
+            waits.push(state.rewatch_after().unwrap());
+        }
+        assert_eq!(waits, [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0, 60.0]);
+        assert_eq!(waits[0], state::REWATCH_FIRST);
+        assert_eq!(waits[8], state::REWATCH_MAX);
     }
 
     #[test]

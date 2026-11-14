@@ -588,6 +588,8 @@ pub struct PanelView<'a> {
     pub show_location: bool,
     /// The panel's parts draw into compositor layers of their own ([`layers`]), with the same pixels.
     pub layered: bool,
+    /// The compositor runs the panel's close on its layers: the panel takes every key, so nothing in it draws again.
+    pub handed: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -979,6 +981,7 @@ where
         size: Size::new(frame.shape.width, frame.shape.height),
         offset: (rect.width() - frame.shape.width) / 2.0,
         layer: view.layered,
+        handed: view.handed,
         children,
     });
     let mut children = vec![inner.key("content")];
@@ -1536,6 +1539,9 @@ struct PanelRoot<M> {
     offset: f64,
     /// It is the content's own compositor layer ([`layers::CONTENT_LAYER`]).
     layer: bool,
+    /// The compositor runs the close ([`PanelView::handed`]): a key, its release included, reaches nothing inside, as
+    /// a field would restart its caret's blink and draw again.
+    handed: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1576,6 +1582,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         match event {
+            Event::Key(..) if self.handed => Propagation::Stop,
             // the primary modifier alone, held and let go: the preview shows a file's location meanwhile
             Event::Key(key, _)
                 if matches!(key.keysym.0, SUPER_L | SUPER_R)

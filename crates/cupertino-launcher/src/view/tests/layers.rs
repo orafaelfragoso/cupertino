@@ -292,8 +292,8 @@ fn a_resting_panel_closes_on_the_compositor_s_clock_without_a_frame() {
     let before = m.presents();
     let requests = m.layer_requests().len();
     assert!(m.model().layered(), "the resting panel is drawn as layers");
-    send(Message::Toggle);
-    m.step(|_, _| {});
+    // Escape on the field closes it, as the person does
+    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
     assert!(!m.model().nav.is_visible(), "the panel closes");
     assert!(m.model().close_handed(), "the close is the compositor's");
     let asked = m.layer_requests();

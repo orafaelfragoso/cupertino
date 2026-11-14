@@ -2333,6 +2333,130 @@ fn the_app_grid_action_opens_the_launcher_s_browser_and_escape_folds_then_closes
     });
 }
 
+/// The launcher's window `width` points wide, with its layers: the window's surface and each layer's, the layers in
+/// the order they were made.
+fn launcher_surfaces(
+    state: &Cupertino,
+    width: i32,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    Vec<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+)> {
+    let output = state.outputs.first()?;
+    let map = layer_map_for_output(&output.output);
+    let panel = map
+        .layers()
+        .filter(|l| l.namespace() == "cupertino-launcher")
+        .find(|l| map.layer_geometry(l).is_some_and(|g| g.size.w == width))?
+        .wl_surface()
+        .clone();
+    let layers = cupertino_server::layers_v1::with_parent(&panel, |layers| {
+        layers
+            .iter()
+            .filter(|l| l.surface.is_alive() && !l.whole)
+            .map(|l| l.surface.clone())
+            .collect()
+    });
+    Some((panel, layers))
+}
+
+/// The launcher's search field at rest closes on the compositor's clock: the field draws itself as layers once it
+/// has settled, and from Escape until the panel goes neither its window nor any of its layers commits a buffer while
+/// the compositor fades them part way. Run with `--no-capture` for the counts.
+#[test]
+fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
+    use cupertino_server::layers_v1::{present, settled};
+    const ESCAPE: u32 = 1 + 8;
+    // the search field's window, with the room for its shadow
+    const SEARCH: i32 = 640 + 120;
+    // the field's glass, its edge, its content and the mode button's glass and face
+    const LAYERS: usize = 5;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("launcher-close-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
+        return;
+    };
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    server.wait_until("the launcher to map its hidden window", |s| {
+        committed_buffer(s, "cupertino-launcher").is_some()
+    });
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::ToggleLauncher],
+    });
+    // the field opens drawn by the application, then rests as layers
+    server.wait_until("the search field to rest as layers", |s| {
+        launcher_surfaces(s, SEARCH).is_some_and(|(_, layers)| {
+            layers.len() == LAYERS && layers.iter().all(|l| buffer_commit(l).is_some())
+        })
+    });
+    let (panel, layers) = launcher_surfaces(&server.state, SEARCH).unwrap();
+    let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
+    let all: Vec<_> = std::iter::once(panel.clone()).chain(layers).collect();
+    // the last frames of the switch to layers are let through
+    let mut last = commits(&all);
+    let quiet_since = Instant::now();
+    let mut quiet = Instant::now();
+    server.wait_until("the layers to stop drawing", |_| {
+        let now = commits(&all);
+        if now != last {
+            last = now;
+            quiet = Instant::now();
+        }
+        quiet.elapsed() > Duration::from_millis(300)
+    });
+    eprintln!(
+        "trace: the layers were quiet {} ms after they showed",
+        (quiet - quiet_since).as_millis()
+    );
+    for state in [KeyState::Pressed, KeyState::Released] {
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+        server.step();
+    }
+    let (mut steps, mut between, mut new_buffers) = (0, 0, 0);
+    let mut last = commits(&all);
+    server.wait_until("the panel to go after its close", |s| {
+        if !panel.is_alive() || launcher_surfaces(s, SEARCH).is_none() {
+            return true;
+        }
+        let now = s.now();
+        let shown = present(&panel, now, false);
+        // the close is over once every layer has faded out; the hidden window that follows is not the close's
+        let closing = shown.iter().any(|l| l.opacity > 0.0) || !settled(&panel, now);
+        if !closing {
+            return true;
+        }
+        steps += 1;
+        if shown.iter().any(|l| l.opacity > 0.0 && l.opacity < 1.0) {
+            between += 1;
+        }
+        let commit = commits(&all);
+        if commit != last {
+            new_buffers += commit.iter().zip(&last).filter(|(a, b)| a != b).count();
+            last = commit;
+        }
+        false
+    });
+    eprintln!(
+        "trace: close: {steps} server steps, {between} of them part way, {new_buffers} new buffers of the window and its layers"
+    );
+    assert!(between > 0, "the close ran on the server");
+    assert_eq!(
+        new_buffers, 0,
+        "the window and its layers drew no frame while they closed"
+    );
+}
+
 /// The window manager process with the stage on puts the older of two applications in the strip;
 /// killed, its windows are back at once, and the restarted process places them again.
 #[test]

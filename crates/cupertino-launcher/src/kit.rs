@@ -2031,6 +2031,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         select_query: model.select_query,
         show_location: model.primary_held,
         layered: model.layered(),
+        handed: model.close_handed(),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

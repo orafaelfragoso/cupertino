@@ -58,7 +58,14 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   the compositor draws the glass's soft shadow outside its shape. Without the desktop's effects it paints `Surface::Menu`'s
   fill and a shadow of its own instead. While the browser shows, the panel fades by giving the glass, the search bar and
   the browser's body each their opacity rather than compositing the whole window as one group, which keeps every frame of
-  the fade within the frame budget at 2x;
+  the fade within the frame budget at 2x. Where the window system has surface layers and the desktop's effects, a panel
+  at rest is drawn as compositor layers (`view::layers`): the enclosure's glass (a layer that draws only its glass, so the
+  window stands on none), its content, its dark edge (a layer on a 4 pt grid around the enclosure with room for the
+  stroke, centred on the point the panel grows about), and each mode button's glass and face. Closing it then hands the
+  close to the compositor (`view::layers::close_changes`): the glass grows to the close's end rect and fades, the edge
+  scales and blurs, the content blurs to a deviation of 4 pt and fades, all on the close's ease-out over 0.1 s, and the
+  panel draws no frame until the compositor is done and the window goes. While the panel moves, under Reduce Motion and
+  without the capability it draws its own close;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);

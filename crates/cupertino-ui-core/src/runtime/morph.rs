@@ -262,6 +262,7 @@ mod tests {
         let at = Point::new(120.0, 0.0);
         let mut list = DisplayList::default();
         list.nodes.push(PaintNode {
+            layer: None,
             id: PaintNodeId(1),
             parent: None,
             revision: PaintRevision(1),

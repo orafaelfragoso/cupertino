@@ -8,9 +8,10 @@ use crate::route::Geometry;
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_ui_layout::{ContainerKind, LayoutDirection};
 use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
-    DisplayList, Effect, Group, ImageResource, Paint, PaintNode, PaintNodeId, PaintOp,
+    DisplayList, Effect, Group, ImageResource, Layer, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
@@ -952,7 +953,34 @@ impl Painter {
                     "resource {image:?} names two images; new pixels take a new id"
                 );
             }
+            // a scroll container that clips keeps its content as a layer the renderer moves by the drawn offset
+            let layer = match node.spec.kind {
+                ContainerKind::Scroll {
+                    horizontal,
+                    vertical,
+                } if placement.own_clip.is_some() => {
+                    let drawn = crate::layout_view::drawn_offset(
+                        node.widget.scroll_offset(&*node.state),
+                        input.env.scale,
+                    );
+                    let x = match (horizontal, input.env.direction) {
+                        (false, _) => 0.0,
+                        (true, LayoutDirection::Ltr) => drawn.x,
+                        (true, LayoutDirection::Rtl) => -drawn.x,
+                    };
+                    let y = if vertical { drawn.y } else { 0.0 };
+                    Some(Layer::Scroll {
+                        offset: Point::new(x, y),
+                    })
+                }
+                _ => painted
+                    .group
+                    .as_ref()
+                    .filter(|g| g.effects.is_empty() && g.opacity < 1.0)
+                    .map(|_| Layer::Opacity),
+            };
             list.nodes.push(PaintNode {
+                layer,
                 id: id.into(),
                 parent: node.parent.map(PaintNodeId::from),
                 revision: painted.revision,
@@ -1017,7 +1045,12 @@ impl Painter {
                     ))),
                     (clip, cut) => clip.or(cut),
                 };
-                if let Some(overlay) = self.overlay(id, fills, clip, placement.clip) {
+                if let Some(mut overlay) = self.overlay(id, fills, clip, placement.clip) {
+                    // a scroll container's own overlay (its scroll bars) stays where it is as the content moves: it
+                    // lies beside the content's layer, over it, not in it
+                    if matches!(layer, Some(Layer::Scroll { .. })) {
+                        overlay.parent = node.parent.map(PaintNodeId::from);
+                    }
                     pending.push(Pending {
                         owner: id,
                         node: overlay,
@@ -1099,6 +1132,7 @@ impl Painter {
                         let id = layer_clip_id(roots);
                         roots += 1;
                         to.0.nodes.push(PaintNode {
+                            layer: None,
                             id,
                             parent: None,
                             revision: PaintRevision(0),
@@ -1229,6 +1263,7 @@ impl Painter {
         };
         self.overlays.insert(owner, (ops.clone(), revision));
         Some(PaintNode {
+            layer: None,
             id: overlay_id(owner),
             parent: Some(owner.into()),
             revision,

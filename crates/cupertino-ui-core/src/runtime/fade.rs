@@ -10,7 +10,7 @@ use super::{morph, set_background, sync_backdrop, Runtime, WindowState};
 use crate::{Application, WindowBackground, WindowKey};
 use cupertino_geometry::Point;
 use cupertino_ui_platform::{Timestamp, WindowRequest, WindowSystem};
-use cupertino_ui_render::{DisplayList, Group};
+use cupertino_ui_render::{DisplayList, Group, Layer};
 use cupertino_ui_theme::Surface;
 use std::collections::HashMap;
 
@@ -48,6 +48,8 @@ fn opacity_at(elapsed: u64) -> f32 {
 /// Shows the display list at `opacity`, each of its roots as one layer.
 pub(super) fn dim(list: &mut DisplayList, opacity: f32) {
     for node in list.nodes.iter_mut().filter(|n| n.parent.is_none()) {
+        // its content stays as it was while the opacity falls: the renderer keeps it
+        node.layer = node.layer.or(Some(Layer::Opacity));
         node.group = Some(match node.group.take() {
             Some(group) => Group {
                 opacity: group.opacity * opacity,

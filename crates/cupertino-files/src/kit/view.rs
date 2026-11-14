@@ -1074,8 +1074,22 @@ fn tree_items(outline: &[RowSpec]) -> Vec<TreeItem> {
         .collect()
 }
 
-/// The icon grid's parameters at the icon view's default settings, and its layout as wide as the viewport.
-fn icon_layout(win: &BrowserWindow) -> (IconParams, IconLayout) {
+/// How many icon layouts the views of one thread keep, one a window size and folder size: a scroll or any other
+/// change that keeps both builds the grid's cells near the viewport alone, not the layout of every item again.
+const KEPT_ICON_LAYOUTS: usize = 4;
+
+/// An icon layout kept for the views to come: the viewport width (its bits) and item count it was made for, its
+/// parameters and the layout.
+type KeptIconLayout = ((u64, usize), IconParams, Rc<IconLayout>);
+
+thread_local! {
+    /// The icon layouts made last, the latest last.
+    static ICON_LAYOUTS: std::cell::RefCell<Vec<KeptIconLayout>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The icon grid's parameters at the icon view's default settings, and its layout as wide as the viewport: the same
+/// layout as the last view's while the width and the number of items stay, so the grid sees it unchanged at once.
+fn icon_layout(win: &BrowserWindow) -> (IconParams, Rc<IconLayout>) {
     let settings = IconViewSettings::default();
     let params = IconParams::new(
         settings.icon_size,
@@ -1085,16 +1099,36 @@ fn icon_layout(win: &BrowserWindow) -> (IconParams, IconLayout) {
         settings.show_item_info,
         FontMetrics::estimate(f64::from(settings.text_size)),
     );
-    let layout = icon::layout(
+    let layout = kept_icon_layout(
         &params,
         win.scroll.viewport.width,
-        &[SectionSpec {
-            title: None,
-            count: win.browser.entries().len(),
-        }],
-        Flow::Leading,
+        win.browser.entries().len(),
     );
     (params, layout)
+}
+
+/// The icon layout of `count` items `width` points wide: the one made last for them, or a new one kept in its place.
+fn kept_icon_layout(params: &IconParams, width: f64, count: usize) -> Rc<IconLayout> {
+    let key = (width.to_bits(), count);
+    ICON_LAYOUTS.with_borrow_mut(|kept| {
+        if let Some(at) = kept.iter().position(|(k, p, _)| *k == key && p == params) {
+            let entry = kept.remove(at);
+            let layout = Rc::clone(&entry.2);
+            kept.push(entry);
+            return layout;
+        }
+        let layout = Rc::new(icon::layout(
+            params,
+            width,
+            &[SectionSpec { title: None, count }],
+            Flow::Leading,
+        ));
+        if kept.len() >= KEPT_ICON_LAYOUTS {
+            kept.remove(0);
+        }
+        kept.push((key, *params, Rc::clone(&layout)));
+        layout
+    })
 }
 
 /// The items in view or near it, the topmost first, and the side of their icons in points.
@@ -1177,7 +1211,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let content = Element::new(IconGrid {
         window: id,
         label: window_title(browser.dir(), &session.places),
-        layout: Rc::new(layout),
+        layout,
         params,
         items,
         scroll: win.scroll,
@@ -1424,4 +1458,44 @@ fn selection(selected: &crate::Selection) -> Selection {
         }
     }
     Selection::new(ranges, selected.focus(), selected.anchor())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_view_of_the_same_width_and_items_takes_the_icon_layout_it_made_before() {
+        let settings = IconViewSettings::default();
+        let params = IconParams::new(
+            settings.icon_size,
+            settings.grid_spacing,
+            settings.text_size,
+            settings.label_on_bottom,
+            settings.show_item_info,
+            FontMetrics::estimate(f64::from(settings.text_size)),
+        );
+        let first = kept_icon_layout(&params, 800.0, 3000);
+        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+        let wider = kept_icon_layout(&params, 1200.0, 3000);
+        assert!(!Rc::ptr_eq(&first, &wider));
+        assert_eq!(
+            *wider,
+            icon::layout(
+                &params,
+                1200.0,
+                &[SectionSpec {
+                    title: None,
+                    count: 3000
+                }],
+                Flow::Leading
+            )
+        );
+        assert!(Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+        // past the layouts kept, the oldest is made again
+        for width in [300.0, 400.0, 500.0, 600.0] {
+            kept_icon_layout(&params, width, 3000);
+        }
+        assert!(!Rc::ptr_eq(&first, &kept_icon_layout(&params, 800.0, 3000)));
+    }
 }

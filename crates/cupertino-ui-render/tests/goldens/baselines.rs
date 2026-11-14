@@ -57,6 +57,7 @@ fn solid(r: f32, g: f32, b: f32, a: f32) -> Paint {
 
 fn node(id: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
     PaintNode {
+        layer: None,
         id: PaintNodeId(id),
         parent: None,
         revision: PaintRevision(0),
@@ -71,6 +72,7 @@ fn node(id: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
 
 fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
     PaintNode {
+        layer: None,
         parent: Some(PaintNodeId(parent)),
         ..node(id, bounds, ops)
     }
@@ -156,6 +158,7 @@ fn chrome() -> DisplayList {
                 )],
             ),
             PaintNode {
+                layer: None,
                 group: Some(Group {
                     opacity: 1.0,
                     effects: vec![Effect::DropShadow {
@@ -215,6 +218,7 @@ fn faded(shift: f64) -> DisplayList {
         nodes: vec![
             backdrop(solid(1.0, 1.0, 1.0, 1.0)),
             PaintNode {
+                layer: None,
                 group: Some(Group {
                     opacity: 0.5,
                     effects: vec![],
@@ -257,6 +261,7 @@ fn clipped(system: &TextSystem) -> DisplayList {
         nodes: vec![
             backdrop(solid(0.9, 0.9, 0.9, 1.0)),
             PaintNode {
+                layer: None,
                 clip: Some(rounded(sheet, 18.0)),
                 ..node(2, sheet, vec![])
             },

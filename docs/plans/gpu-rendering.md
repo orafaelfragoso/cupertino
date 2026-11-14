@@ -242,19 +242,42 @@ Gate:
 
 Works with the CPU renderer; no GPU needed.
 
-- [ ] The paint tree marks layer boundaries: scroll content, animated subtrees, opacity groups.
-- [ ] The CPU renderer keeps layers as images between frames and composites them.
-- [ ] Scrolling moves a layer and paints only the exposed strip.
-- [ ] Opacity and transform animations change layer properties, not pixels.
-- [ ] Minimized and fully covered windows drop their layers.
-- [ ] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2.
-- [ ] Incremental view and layout for the Files listing: step 0 found update, view and layout above 4 ms in the worst
-      frame of a full-screen scroll of 3000 files (5.5–6.1 ms at scales 1 and 1.5; 0.6–1.2 ms at p50).
+- [x] The paint tree marks layer boundaries: scroll content (`Layer::Scroll` with its drawn offset, the scroll bars
+      beside it) and opacity groups (`Layer::Opacity`, fades included).
+- [ ] The paint tree marks animated subtrees: a node whose transform animates.
+- [x] The CPU renderer keeps scroll layers as images between frames and composites them, within one frame's bytes and
+      8 MiB more (`kept_layers_stay_within_their_cap_and_can_be_dropped`).
+- [x] Scrolling moves a layer and paints only the exposed strip
+      (`a_scroll_paints_only_the_rows_that_come_into_view`).
+- [ ] Opacity and transform animations change layer properties, not pixels: a kept group image laid over at each
+      opacity and transform, within the same cap.
+- [x] A window told it is suspended drops its renderers' layers and keeps its frame
+      (`a_window_told_it_is_suspended_lets_its_layers_go`).
+- [ ] The server tells minimized and fully covered windows they are suspended (`xdg_toplevel` state `suspended`), so
+      they drop their layers.
+- [x] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2
+      (`a_frame_drawn_over_the_last_has_the_bytes_of_one_drawn_whole` at 1, 1.25, 1.5 and 2, and, through kept
+      layers, `a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset` at 1, 1.5 and 2).
+- [x] Incremental layout for the Files listing: the icon layout is kept between views while the width and the number
+      of items stay, and the grid takes it without comparing its cells.
+- [ ] Files view and layout under 4 ms in the worst frame of a full-screen scroll: step 0 found 5.5–6.1 ms at
+      scales 1 and 1.5; after the step view p99 is 5.9–6.3 ms and layout p99 6.0–6.5 ms at scale 1 (4.8–5.3 and
+      1.6–3.1 ms at 1.5), with the view made again for every frame that shows other rows.
+- [ ] The toolkit's paint and damage phase made incremental: a scroll frame of Files at scale 1 builds and compares
+      its whole paint tree (4.2–4.4 ms p50, 6.4–6.5 ms p99).
+- [ ] A kept opaque scroll layer laid over by copy rather than by blending, or with the background behind it baked in:
+      a scroll frame lays the whole viewport over (raster p50 7.2–10.2 ms, of it the composite of about 33 MB at
+      scale 1).
+- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy of a scroll frame,
+      whose damage is the whole moved viewport, is 8.7–10.3 ms p50 and 20–26 ms p99 (rendered straight into the
+      buffer, or the GPU path of step 6).
 
 Gate:
 
 - [ ] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
-      cover only the exposed strip.
+      cover only the exposed strip. Not met: client frame p99 41.2 ms at scale 1 and 44.1 ms at 1.5 against 8 ms (it
+      was 79.3 and 126.4 ms); painting covers the exposed strip, compositing the whole viewport ("Measurements",
+      "Step 4"). The four unticked items above are what remains of it.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1199,6 +1222,44 @@ prints each session's branch, planes, flips, missed refreshes per thousand flips
 pointer-to-flip p50, p95 and p99, then `pass` when the second session's input-to-flip p50 and p95 are below the
 baseline's and it missed no more refreshes per thousand flips; record its output here. If the branch is `own-clock`,
 the late start never engaged and the gate cannot pass on this driver.
+
+### Step 4: retained layers
+
+Taken on the target machine, release builds, CPU renderer, `scripts/dev/bench --size 3840x2160 --scale S --scenario
+files-full-scroll --runs 3`, other checkouts building beside it. Before is `6e9ab377`; after is `e4c989bc`. The
+step's commits are `96c21721`, `0059c4cb`, `89f790a7`, `e4c989bc`, `a6d1ec27` (a layer new to a frame, which no scroll
+frame has) and `1a070506`. Medians of the three runs; the phases are the Files client's own.
+
+| Files two-finger scroll, client frame ms | Scale 1 before | Scale 1 after | Scale 1.5 before | Scale 1.5 after |
+|---|---|---|---|---|
+| Frames drawn in the scroll | 40 | 94 | 32 | 98 |
+| Frame p50 / p99 | 60.8 / 79.3 | 29.5 / 41.2 | 77.0 / 126.4 | 24.6 / 44.1 |
+| Update + view + layout p99 | 11.4 | 11.3 | 21.0 | 6.8 |
+| Paint p50 / p99 | 4.4 / 5.5 | 4.3 / 6.5 | 1.9 / 4.6 | 1.8 / 2.8 |
+| Raster p50 / p99 | 36.5 / 46.4 | 7.2 / 10.1 | 50.6 / 76.3 | 9.2 / 13.5 |
+| Copy p50 / p99 | 12.2 / 28.6 | 8.8 / 19.9 | 17.1 / 47.3 | 9.7 / 25.5 |
+
+The budget (p99 under 8 ms) is not met. What a scroll frame costs now:
+
+- Painting into the layer: the rows that came into view and what changed in the layer, nothing else. The renderer's
+  frame statistics (`layer_pixels`) count about 80 000 pixels a frame at scale 1 (a dozen rows of the 3617-pixel
+  viewport and the strip under the scroll bars), against 7.5 million before the scroll bars moved beside the layer.
+- Compositing the layer: the whole viewport is laid over every frame the layer moves, about 33 MB at scale 1, and the
+  background under it is filled first. Most of the raster that is left.
+- The copy into the shared-memory buffer: the damage of a scroll is the whole moved viewport, so the copy stays at
+  about 9 ms p50 however little is painted.
+- Paint: the toolkit builds and compares the whole paint tree of about 5000 nodes every frame. An early cut of the
+  damage tracker searched every node for each node's layer; with the lookup by node (`e4c989bc`) the paint phase at
+  scale 1 is back from 11.2 to 4.3 ms p50.
+- View and layout: the view is made again for every frame that shows other rows. More frames are drawn in the same
+  scroll (94 against 40), so more of them pay for it.
+
+The layer's pixels are those of the content drawn in place: kept rows are the bytes of a layer drawn whole at the same
+offset (`a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset`, seeds 0 to 3, scales 1, 1.5 and 2, plain and
+rounded clips, effects and a translucent bar over the layer's edge). Pixels at fractional clip edges are painted in
+place through the frame, as without layers. Inside, the composite rounds once where painting in place rounds node by
+node, within the goldens' 2 of 255 (`a_kept_layer_draws_the_picture_of_its_content_drawn_in_place`). No golden is
+re-recorded.
 
 ## Decisions taken
 

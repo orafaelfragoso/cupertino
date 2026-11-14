@@ -580,7 +580,9 @@ impl Widget<Message> for IconGrid {
     }
 
     fn update(&self, old: &Self, _: &mut TypeSelect) -> Change {
-        if self.layout != old.layout || self.scroll.viewport != old.scroll.viewport {
+        // the view hands the same layout on while it holds (`view::icon_layout`): no cell is compared then
+        let relaid = !Rc::ptr_eq(&self.layout, &old.layout) && self.layout != old.layout;
+        if relaid || self.scroll.viewport != old.scroll.viewport {
             Change::Layout
         } else {
             Change::None

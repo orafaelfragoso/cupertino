@@ -2,12 +2,13 @@ use crate::effects::{self, div255};
 use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
+use crate::layers::{self, Kept, ScrollImage};
 use crate::raster;
 use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
 use crate::{
-    CpuFrame, DamageRegion, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, PixelRect,
+    CpuFrame, DamageRegion, Layer, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, PixelRect,
     RenderError, RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
 };
 use cupertino_geometry::Rect;
@@ -15,6 +16,7 @@ use cupertino_raster_math::dither;
 use cupertino_theme::Color;
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use tiny_skia::{
     FilterQuality, GradientStop, LinearGradient, Mask, Pattern, Pixmap, PixmapMut, PixmapPaint,
     Point, RadialGradient, SpreadMode, Stroke,
@@ -47,6 +49,39 @@ pub struct CpuRenderer<R> {
     stats: RenderStats,
     /// Takes the span path and skips what an opaque node hides; off only to check both give the same pixels.
     fast: bool,
+    /// The layers kept from the last frame.
+    kept: Kept,
+}
+
+/// The pixels a target painted in content coordinates may size its scratch images against: all of them, so a node's
+/// scratch image follows its own extent alone.
+const EVERYWHERE: Bounds = Bounds {
+    x0: -(1 << 28),
+    y0: -(1 << 28),
+    x1: 1 << 28,
+    y1: 1 << 28,
+};
+
+/// What a frame does with one scroll layer ([`crate::scroll_layers`]).
+struct ScrollPlan {
+    /// The layer's node, by index into the list.
+    index: usize,
+    id: PaintNodeId,
+    /// The content's offset in points, and in device pixels.
+    offset: cupertino_geometry::Point,
+    /// Its image is kept (in [`Kept::scrolls`]); otherwise the frame paints its content where it shows every frame.
+    kept: bool,
+    /// Content pixels to paint into the kept image.
+    paint: Vec<Bounds>,
+    /// Window pixels the frame repaints for the layer besides the damage.
+    frame: Vec<Bounds>,
+}
+
+/// A kept scroll layer as a frame lays it over.
+struct View<'a> {
+    image: &'a ScrollImage,
+    /// The drawn offset, in device pixels.
+    shift: (i32, i32),
 }
 
 impl<R: GlyphRasterizer> CpuRenderer<R> {
@@ -70,7 +105,13 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             next_id: 1,
             stats: RenderStats::default(),
             fast: true,
+            kept: Kept::default(),
         }
+    }
+
+    /// How many layers the renderer keeps, and their bytes.
+    pub fn kept_layers(&self) -> (u64, u64) {
+        (self.kept.count(), self.kept.bytes())
     }
 
     /// The renderer that paints every node the general way, to compare the fast paths against.
@@ -135,12 +176,33 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         request: &RenderRequest<'_>,
         dirty: &[Bounds],
         zeroed: bool,
+        kept_in: &[Option<usize>],
+        plans: &[ScrollPlan],
     ) -> Result<(), RenderError> {
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
         let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
             .ok_or(RenderError::InvalidSize)?;
-        let tree = Tree::new(&request.list.nodes, scale);
+        let mut tree = Tree::new(&request.list.nodes, scale);
+        let mut views: Vec<Option<View<'_>>> = Vec::new();
+        for plan in plans.iter().filter(|p| p.kept) {
+            let Some(image) = self.kept.scrolls.get(&plan.id) else {
+                continue;
+            };
+            if views.is_empty() {
+                views.resize_with(request.list.nodes.len(), || None);
+            }
+            views[plan.index] = Some(View {
+                image,
+                shift: device_shift(plan.offset, scale),
+            });
+            // the layer's content is laid over with it: none of it covers the frame on its own
+            for (j, layer) in kept_in.iter().enumerate() {
+                if *layer == Some(plan.index) {
+                    tree.grouped[j] = true;
+                }
+            }
+        }
         let mut painter = Painter {
             stats: &mut self.stats,
             config: &self.config,
@@ -151,6 +213,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             rasterizer: &mut self.rasterizer,
             fast: self.fast,
             pending: spans::Pending::over_zero(zeroed),
+            views: &views,
         };
         for d in dirty {
             let hidden = if self.fast {
@@ -174,6 +237,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 pixmap: &mut base,
                 origin: (0, 0),
                 rect: whole,
+                space: whole,
                 limit: *d,
                 clips: Vec::new(),
                 hidden,
@@ -191,6 +255,251 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
     }
 }
 
+impl<R: GlyphRasterizer> CpuRenderer<R> {
+    /// What this frame does with each scroll layer, given the damage in window pixels: which pixels of its kept image
+    /// it paints (what came into view and what changed) and which window pixels it lays over again (all it shows, when
+    /// it moved). Images are made, kept or let go here, within the cap ([`layers::LAYER_SLACK_BYTES`] beyond the
+    /// frame's own size).
+    fn plan_scrolls(
+        &mut self,
+        request: &RenderRequest<'_>,
+        kept_in: &[Option<usize>],
+        full: bool,
+        damage: &[Bounds],
+    ) -> Vec<ScrollPlan> {
+        let scale = request.scale;
+        let whole = Bounds::of_size(request.width, request.height);
+        let mut layer_nodes: Vec<usize> = kept_in.iter().flatten().copied().collect();
+        layer_nodes.sort_unstable();
+        layer_nodes.dedup();
+        let mut before = std::mem::take(&mut self.kept.scrolls);
+        let seen = std::mem::take(&mut self.kept.seen);
+        let mut budget = self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES;
+        let mut plans = Vec::with_capacity(layer_nodes.len());
+        for index in layer_nodes {
+            let node = &request.list.nodes[index];
+            let (Some(Layer::Scroll { offset }), Some(clip)) = (node.layer, &node.clip) else {
+                continue;
+            };
+            self.kept.seen.insert(node.id);
+            let viewport = geometry::clip_bounds(clip, &node.transform, scale).intersect(&whole);
+            let shift = device_shift(offset, scale);
+            let previous = before.remove(&node.id);
+            let mut plan = ScrollPlan {
+                index,
+                id: node.id,
+                offset,
+                kept: false,
+                paint: Vec::new(),
+                frame: Vec::new(),
+            };
+            if let Some(p) = previous.as_ref().filter(|p| p.viewport != viewport) {
+                plan.frame.push(p.viewport);
+            }
+            if viewport.is_empty() {
+                plans.push(plan);
+                continue;
+            }
+            // a layer new to this frame has only new nodes in it, or nodes that came from elsewhere, and those damage
+            // what they draw: what the frame showed there is still right
+            if previous.is_some() || seen.contains(&node.id) {
+                plan.frame.push(viewport);
+            }
+            let bytes = u64::from(viewport.width()) * u64::from(viewport.height()) * 4;
+            if bytes > budget {
+                // past the cap: the frame paints what the layer shows every frame, as if it were not one
+                plans.push(plan);
+                continue;
+            }
+            let content = viewport.offset(shift.0, shift.1);
+            let reused = previous.filter(|p| {
+                !full
+                    && p.scale == scale
+                    && p.viewport == viewport
+                    && p.x == content.x0
+                    && p.content().touches(&content)
+            });
+            let image = match reused {
+                Some(mut image) => {
+                    let rows = image.content();
+                    if content.y0 < rows.y0 {
+                        plan.paint.push(Bounds {
+                            y1: rows.y0,
+                            ..content
+                        });
+                    }
+                    if content.y1 > rows.y1 {
+                        plan.paint.push(Bounds {
+                            y0: rows.y1,
+                            ..content
+                        });
+                    }
+                    if image.top == content.y0 {
+                        // it stays where it was: only the damage is painted again and laid over
+                        plan.frame.clear();
+                    }
+                    plan.paint.extend(
+                        damage
+                            .iter()
+                            .map(|d| d.intersect(&viewport))
+                            .filter(|d| !d.is_empty())
+                            .map(|d| d.offset(shift.0, shift.1)),
+                    );
+                    image.top = content.y0;
+                    image
+                }
+                None => {
+                    let Some(pixels) = Pixmap::new(viewport.width(), viewport.height()) else {
+                        plans.push(plan);
+                        continue;
+                    };
+                    plan.paint.push(content);
+                    ScrollImage {
+                        pixels,
+                        scale,
+                        viewport,
+                        x: content.x0,
+                        top: content.y0,
+                    }
+                }
+            };
+            budget -= bytes;
+            plan.kept = true;
+            self.kept.scrolls.insert(node.id, image);
+            plans.push(plan);
+        }
+        plans
+    }
+
+    /// Paints what each plan names into its layer's kept image, in content pixels: the layer's content that reaches
+    /// those pixels, moved by the layer's offset, over transparent pixels.
+    fn paint_scrolls(
+        &mut self,
+        request: &RenderRequest<'_>,
+        kept_in: &[Option<usize>],
+        plans: &[ScrollPlan],
+    ) -> Result<(), RenderError> {
+        let scale = request.scale;
+        for plan in plans.iter().filter(|p| p.kept && !p.paint.is_empty()) {
+            let Some(image) = self.kept.scrolls.get_mut(&plan.id) else {
+                continue;
+            };
+            let held = image.content();
+            // the pieces of what is to be painted, each pixel once, none grown over pixels kept
+            let mut rects: Vec<Bounds> = Vec::new();
+            for r in &plan.paint {
+                let new = spans::subtract(r.intersect(&held), &rects);
+                rects.extend(new.into_iter().filter(|r| !r.is_empty()));
+            }
+            if rects.is_empty() {
+                continue;
+            }
+            let content = in_content(request.list, kept_in, plan, scale, &rects);
+            let tree = Tree::new(&content, scale);
+            let mut painter = Painter {
+                stats: &mut self.stats,
+                config: &self.config,
+                scale,
+                resources: request.resources,
+                glyphs: &mut self.glyphs,
+                images: &mut self.images,
+                rasterizer: &mut self.rasterizer,
+                fast: self.fast,
+                pending: spans::Pending::over_zero(false),
+                views: &[],
+            };
+            let (width, height) = (image.pixels.width(), image.pixels.height());
+            let stride = width as usize * 4;
+            for r in rects {
+                for (y0, y1, row) in layers::ring_pieces(r.y0, r.y1, height as i32) {
+                    let rows = (y1 - y0) as usize;
+                    let start = row as usize * stride;
+                    let bytes = &mut image.pixels.data_mut()[start..start + rows * stride];
+                    let mut pm = PixmapMut::from_bytes(bytes, width, rows as u32)
+                        .ok_or(RenderError::InvalidSize)?;
+                    let piece = Bounds {
+                        x0: held.x0,
+                        y0,
+                        x1: held.x1,
+                        y1,
+                    };
+                    let limit = Bounds { y0, y1, ..r };
+                    clear(&mut pm, &limit.offset(-piece.x0, -piece.y0));
+                    painter.stats.layer_pixels +=
+                        u64::from(limit.width()) * u64::from(limit.height());
+                    let mut target = Target {
+                        pixmap: &mut pm,
+                        origin: (piece.x0, piece.y0),
+                        rect: piece,
+                        space: EVERYWHERE,
+                        limit,
+                        clips: Vec::new(),
+                        hidden: None,
+                        holes: Vec::new(),
+                        covering: Vec::new(),
+                        missing: Vec::new(),
+                        frame: false,
+                    };
+                    for &root in &tree.roots {
+                        painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A scroll offset in points as the device pixels it moves the content by.
+fn device_shift(offset: cupertino_geometry::Point, scale: f64) -> (i32, i32) {
+    let px = |v: f64| {
+        (v * scale)
+            .round()
+            .clamp(-f64::from(1 << 28), f64::from(1 << 28)) as i32
+    };
+    (px(offset.x), px(offset.y))
+}
+
+/// The nodes of `plan`'s layer that reach `rects` (content pixels), moved by its offset into content coordinates, its
+/// direct children as roots. A node is taken only with its parent, as painting culls a subtree by its root's bounds.
+fn in_content(
+    list: &crate::DisplayList,
+    kept_in: &[Option<usize>],
+    plan: &ScrollPlan,
+    scale: f64,
+    rects: &[Bounds],
+) -> Vec<PaintNode> {
+    let layer = list.nodes[plan.index].id;
+    let (dx, dy) = (plan.offset.x, plan.offset.y);
+    let mut taken: HashSet<PaintNodeId> = HashSet::new();
+    let mut nodes = Vec::new();
+    for (node, _) in list
+        .nodes
+        .iter()
+        .zip(kept_in)
+        .filter(|(_, l)| **l == Some(plan.index))
+    {
+        let parent_taken =
+            node.parent == Some(layer) || node.parent.is_some_and(|p| taken.contains(&p));
+        let bounds = node.bounds.translate(dx, dy);
+        let reach = Bounds::of_rect(&bounds, scale);
+        if !parent_taken || !rects.iter().any(|r| reach.touches(r)) {
+            continue;
+        }
+        taken.insert(node.id);
+        let mut moved = node.clone();
+        moved.transform.0[4] += dx;
+        moved.transform.0[5] += dy;
+        moved.bounds = bounds;
+        moved.hit = node.hit.translate(dx, dy);
+        if moved.parent == Some(layer) {
+            moved.parent = None;
+        }
+        nodes.push(moved);
+    }
+    nodes
+}
+
 impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
     type Frame = CpuFrame;
 
@@ -199,14 +508,22 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         let (full, zeroed) = self.prepare(request)?;
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
-        let dirty = match (full, request.damage) {
-            (false, DamageRegion::Rects(rects)) => geometry::merge(
-                rects
-                    .iter()
-                    .map(|r| Bounds::of_rect(r, scale).intersect(&whole))
-                    .collect(),
-            ),
+        let damage: Vec<Bounds> = match (full, request.damage) {
+            (false, DamageRegion::Rects(rects)) => rects
+                .iter()
+                .map(|r| Bounds::of_rect(r, scale).intersect(&whole))
+                .filter(|r| !r.is_empty())
+                .collect(),
             _ => vec![whole],
+        };
+        let kept_in = crate::scroll_layers(request.list);
+        let plans = self.plan_scrolls(request, &kept_in, full, &damage);
+        let dirty = if full {
+            vec![whole]
+        } else {
+            let mut dirty = damage;
+            dirty.extend(plans.iter().flat_map(|p| p.frame.iter().copied()));
+            geometry::merge(dirty)
         };
         self.stats = RenderStats {
             dirty_rects: dirty.len() as u32,
@@ -217,10 +534,20 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             frame_bytes: self.frame.pixels.len() as u64,
             ..RenderStats::default()
         };
-        let painted = self.paint(request, &dirty, zeroed);
+        let painted = self
+            .paint_scrolls(request, &kept_in, &plans)
+            .and_then(|()| self.paint(request, &dirty, zeroed, &kept_in, &plans));
         self.stats.glyph_rasterize = self.glyphs.take_filled();
         self.stats.image_decode = self.images.take_filled();
+        if painted.is_err() {
+            // a layer may be half painted: the next frame paints every one whole
+            self.kept.clear();
+        }
         painted?;
+        self.stats.retained_layers = crate::Tally {
+            count: self.kept.count(),
+            bytes: self.kept.bytes(),
+        };
         self.glyphs.trim();
         self.images.trim();
         self.stats.retained_glyphs = self.glyphs.retained();
@@ -247,6 +574,10 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             Err(RenderError::UnknownFrame(id))
         }
     }
+
+    fn drop_layers(&mut self) {
+        self.kept.clear();
+    }
 }
 
 fn clear(base: &mut PixmapMut<'_>, d: &Bounds) {
@@ -263,6 +594,9 @@ struct Target<'a, 'b> {
     origin: (i32, i32),
     /// The window pixels the pixmap covers.
     rect: Bounds,
+    /// The pixels scratch images may cover: `rect`, except in a scroll layer, whose scratch images follow each node's
+    /// extent alone so a row of content is painted the same whatever part of the layer is painted.
+    space: Bounds,
     /// The window pixels whose result is needed.
     limit: Bounds,
     clips: Vec<Mask>,
@@ -386,6 +720,8 @@ struct Painter<'a, R> {
     fast: bool,
     /// Span writes to the frame not made yet.
     pending: spans::Pending,
+    /// The kept scroll layers the frame lays over, by node index (empty when there are none, and inside a layer).
+    views: &'a [Option<View<'a>>],
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
@@ -540,7 +876,90 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return self.group(t, tree, i, group, chain);
         }
         self.own(t, tree, i, chain)?;
+        if let Some(Some(view)) = self.views.get(i).filter(|_| t.frame) {
+            return self.composite(t, tree, i, chain, view);
+        }
         self.children(t, tree, i, chain)
+    }
+
+    /// Lays a kept scroll layer over the frame where its node's clip shows it. The pixels every clip above it and its
+    /// own let through whole come straight from the image; at a clip's edge, where it covers part of a pixel, the
+    /// content is painted in place as a frame without layers paints it, so the edge is cut node by node.
+    fn composite<'n>(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        tree: &Tree<'n>,
+        i: usize,
+        chain: &mut Vec<&'n PaintNode>,
+        view: &View<'_>,
+    ) -> Result<(), RenderError> {
+        let node = &tree.nodes[i];
+        let mut area = view.image.viewport.intersect(&t.limit);
+        let mut whole = vec![area];
+        for owner in chain.iter().copied().chain(std::iter::once(node)) {
+            let Some(clip) = &owner.clip else { continue };
+            match geometry::clip_cover(clip, &owner.transform, self.scale) {
+                Some((reach, inside)) => {
+                    area = area.intersect(&reach);
+                    whole = whole
+                        .iter()
+                        .flat_map(|w| inside.iter().map(move |p| w.intersect(p)))
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                }
+                None => whole.clear(),
+            }
+        }
+        if area.is_empty() {
+            return Ok(());
+        }
+        let whole: Vec<Bounds> = whole
+            .iter()
+            .map(|w| w.intersect(&area))
+            .filter(|w| !w.is_empty())
+            .collect();
+        self.pending.flush(t.pixmap, t.origin, &area);
+        for piece in &whole {
+            self.lay_rows(t, view, piece);
+        }
+        for rim in spans::subtract(area, &whole) {
+            let mut edge = Target {
+                pixmap: &mut *t.pixmap,
+                origin: t.origin,
+                rect: t.rect,
+                space: t.space,
+                limit: rim,
+                clips: Vec::new(),
+                hidden: None,
+                holes: Vec::new(),
+                covering: Vec::new(),
+                missing: Vec::new(),
+                frame: true,
+            };
+            self.children(&mut edge, tree, i, chain)?;
+            self.pending.flush(edge.pixmap, edge.origin, &rim);
+        }
+        Ok(())
+    }
+
+    /// Lays the window pixels `area` of a kept scroll layer over the target.
+    fn lay_rows(&mut self, t: &mut Target<'_, '_>, view: &View<'_>, area: &Bounds) {
+        let image = view.image;
+        let height = image.pixels.height() as i32;
+        self.stats
+            .scroll_composite
+            .add(u64::from(area.width()) * u64::from(area.height()) * 4);
+        let content = area.offset(view.shift.0, view.shift.1);
+        for (y0, y1, row) in layers::ring_pieces(content.y0, content.y1, height) {
+            let part = Bounds {
+                x0: content.x0 - image.x,
+                y0: row,
+                x1: content.x1 - image.x,
+                y1: row + (y1 - y0),
+            };
+            let at = (area.x0 - t.origin.0, y0 - view.shift.1 - t.origin.1);
+            source_over_part(t.pixmap, at, &image.pixels, &part, 1.0);
+        }
     }
 
     /// Paints the children under the node's own clip, which cuts descendants but not the node's operations.
@@ -578,7 +997,12 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let node = &tree.nodes[i];
         // the whole group, whatever the damage: its descendants are rasterized into the same pixels and its blurs and
         // shadows read the same ones in every frame
-        let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&t.rect);
+        let halo = node_support(node, self.scale);
+        let area = bounded(
+            Bounds::of_rect(&node.bounds, self.scale).intersect(&t.space),
+            t,
+            halo,
+        );
         // laid over at no opacity, the group changes no pixel (a panel's first frame as it fades in), so nothing of it
         // is painted
         if area.is_empty()
@@ -595,6 +1019,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
                 rect: area,
+                space: area,
                 limit: area,
                 clips: Vec::new(),
                 hidden: None,
@@ -644,19 +1069,56 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         chain: &[&PaintNode],
     ) -> Result<(), RenderError> {
         let node = &tree.nodes[i];
-        let extent = tree.extents[i];
         if self.own_area(tree, i, chain, &t.rect, &t.limit).is_none() {
             return Ok(());
         }
         // the pixels the node is painted into are the same whatever the damage, so its paths are rasterized the same
         // way and cut in the same places in every frame; the damage only picks which of them are kept
-        let Some(area) = self.own_area(tree, i, chain, &t.rect, &t.rect) else {
+        let Some(area) = self.own_area(tree, i, chain, &t.space, &t.space) else {
             return Ok(());
         };
+        if t.space == EVERYWHERE
+            && u64::from(area.width()) * u64::from(area.height()) > layers::LAYER_SCRATCH_PIXELS
+        {
+            // too large for one scratch image: painted in squares fixed in the content, the same in every frame
+            let tile = layers::LAYER_TILE;
+            let needed = area.intersect(&t.limit.outset(node_support(node, self.scale)));
+            for ty in needed.y0.div_euclid(tile)..=(needed.y1 - 1).div_euclid(tile) {
+                for tx in needed.x0.div_euclid(tile)..=(needed.x1 - 1).div_euclid(tile) {
+                    let square = Bounds {
+                        x0: tx * tile,
+                        y0: ty * tile,
+                        x1: (tx + 1) * tile,
+                        y1: (ty + 1) * tile,
+                    };
+                    let piece = area.intersect(&square);
+                    if !piece.is_empty() {
+                        self.own_in(t, tree, i, chain, piece)?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+        self.own_in(t, tree, i, chain, area)
+    }
+
+    /// [`Self::own`] into the scratch image `area`.
+    fn own_in(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        tree: &Tree<'_>,
+        i: usize,
+        chain: &[&PaintNode],
+        area: Bounds,
+    ) -> Result<(), RenderError> {
+        let node = &tree.nodes[i];
+        let extent = tree.extents[i];
         self.stats.nodes_painted += 1;
         let halo = node_support(node, self.scale);
         let reach = Reach { extent, halo };
-        if self.direct(tree, i, chain, t.frame) {
+        // in a scroll layer, whose targets are the rows being painted, a fill straight into the target would be cut at
+        // their edges: only glyphs are, as in the frame
+        if self.direct(tree, i, chain, t.frame || t.space == EVERYWHERE) {
             let needed = extent.outset(halo).intersect(&t.rect).intersect(&t.limit);
             if t.frame {
                 self.pending.flush(t.pixmap, t.origin, &needed);
@@ -665,6 +1127,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 pixmap: &mut *t.pixmap,
                 origin: t.origin,
                 rect: t.rect,
+                space: t.space,
                 limit: needed,
                 clips: Vec::new(),
                 hidden: None,
@@ -747,6 +1210,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
                 rect: *area,
+                space: *area,
                 // only the pixels kept are needed: glyphs are blended there alone, which changes no other pixel
                 limit: area.intersect(&t.limit),
                 clips: self.chain_mask(chain, area, &holes)?.into_iter().collect(),
@@ -1227,7 +1691,11 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         effects: &[crate::Effect],
     ) -> Result<(), RenderError> {
         // the layer's whole reach, whatever the damage, as for a group
-        let area = reach.extent.outset(reach.halo).intersect(&t.rect);
+        let area = bounded(
+            reach.extent.outset(reach.halo).intersect(&t.space),
+            t,
+            reach.halo,
+        );
         if area.is_empty() || area.intersect(&t.limit.outset(reach.halo)).is_empty() {
             skip_layer(node, pos);
             return Ok(());
@@ -1245,6 +1713,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
                 rect: area,
+                space: area,
                 limit: area,
                 clips: Vec::new(),
                 hidden: None,
@@ -1272,6 +1741,18 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             t.clips.last(),
         );
         Ok(())
+    }
+}
+
+/// A group's or an operation layer's `area`: in a scroll layer, where it follows its own bounds, no larger than one
+/// scratch image allows, else cut to what the target needs of it (with `halo` around) as in the frame.
+fn bounded(area: Bounds, t: &Target<'_, '_>, halo: i32) -> Bounds {
+    if t.space == EVERYWHERE
+        && u64::from(area.width()) * u64::from(area.height()) > layers::LAYER_SCRATCH_PIXELS
+    {
+        area.intersect(&t.rect.outset(halo))
+    } else {
+        area
     }
 }
 
@@ -1676,6 +2157,7 @@ mod tests {
 
     fn plain(id: u64, parent: Option<u64>, transform: (f64, f64), ops: Vec<PaintOp>) -> PaintNode {
         PaintNode {
+            layer: None,
             id: PaintNodeId(id),
             parent: parent.map(PaintNodeId),
             revision: PaintRevision(1),
@@ -2554,5 +3036,393 @@ mod tests {
                 .unwrap();
             assert!(delta <= 1, "opacity {opacity}: {delta} steps apart");
         }
+    }
+
+    /// The viewport of the scroll layer the layer tests put a scene under, in points.
+    const VIEW: Rect = Rect {
+        origin: cupertino_geometry::Point { x: 9.0, y: 7.5 },
+        size: cupertino_geometry::Size {
+            width: 96.0,
+            height: 66.0,
+        },
+    };
+
+    /// `list` scrolled by `offset` under a layer clipped to `clip`: every root moved up and left by it, a backdrop
+    /// before the layer and a translucent bar over its top edge after it.
+    fn scrolled(list: &DisplayList, offset: cupertino_geometry::Point, clip: Shape) -> DisplayList {
+        let mut nodes = vec![plain(
+            8000,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, SCENE.0, SCENE.1)),
+                paint: Paint::Solid(Color::new(0.3, 0.5, 0.7, 1.0)),
+            }],
+        )];
+        let mut layer = plain(9000, None, (0.0, 0.0), Vec::new());
+        layer.clip = Some(clip);
+        layer.layer = Some(Layer::Scroll { offset });
+        nodes.push(layer);
+        for node in &list.nodes {
+            let mut moved = node.clone();
+            moved.transform.0[4] -= offset.x;
+            moved.transform.0[5] -= offset.y;
+            moved.bounds = node.bounds.translate(-offset.x, -offset.y);
+            moved.parent = Some(node.parent.unwrap_or(PaintNodeId(9000)));
+            nodes.push(moved);
+        }
+        nodes.push(plain(
+            8001,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect: Rect::new(0.0, 0.0, SCENE.0, 14.0),
+                    radius: 5.0,
+                },
+                paint: Paint::Solid(Color::new(0.95, 0.9, 0.8, 0.6)),
+            }],
+        ));
+        DisplayList { nodes }
+    }
+
+    fn layer_config() -> CpuConfig {
+        CpuConfig {
+            max_pixels: 1 << 22,
+            glyph_cache_bytes: 1 << 16,
+            image_cache_bytes: 1 << 16,
+            font_smoothing: true,
+        }
+    }
+
+    fn draw_frame(
+        r: &mut CpuRenderer<NoGlyphs>,
+        list: &DisplayList,
+        damage: &DamageRegion,
+        scale: f64,
+    ) -> CpuFrame {
+        let (width, height) = (
+            (SCENE.0 * scale).ceil() as u32,
+            (SCENE.1 * scale).ceil() as u32,
+        );
+        let request = RenderRequest {
+            list,
+            resources: &resources(),
+            scale,
+            width,
+            height,
+            damage,
+        };
+        let id = r.render(&request).unwrap();
+        r.frame(id).unwrap().clone()
+    }
+
+    /// Scrolls `list` under a kept layer frame by frame, by whole device pixels up, down, sideways and past the whole
+    /// viewport, changing a node's colours now and then with only that node's box damaged, and checks each frame byte
+    /// for byte against a fresh renderer drawing the same list whole.
+    fn scrolled_matches_whole(seed: u64, scale: f64, list: DisplayList, clip: Shape) {
+        let mut draw = Draw(seed ^ 0x5c40);
+        let mut list = list;
+        let mut step = CpuRenderer::new(layer_config(), NoGlyphs);
+        let mut offset = cupertino_geometry::Point::new(0.0, 0.0);
+        let mut before = draw_frame(
+            &mut step,
+            &scrolled(&list, offset, clip.clone()),
+            &DamageRegion::Full,
+            scale,
+        );
+        for frame in 1..12 {
+            let px = |n: i32| f64::from(n) / scale;
+            let (dx, dy) = match draw.pick(6) {
+                0 => (0, 200),
+                1 => (3 + draw.pick(5) as i32, 0),
+                2 => (0, 0),
+                _ => (0, draw.pick(41) as i32 - 20),
+            };
+            offset = cupertino_geometry::Point::new(offset.x + px(dx), offset.y + px(dy));
+            let mut rects = Vec::new();
+            if frame % 3 == 0 {
+                // unclipped: a node's box reaches past the layer's clip, as a frame's damage reaches past it
+                let open = Shape::Rect(Rect::new(-50.0, -50.0, SCENE.0 + 100.0, SCENE.1 + 100.0));
+                let unchanged = scrolled(&list, offset, open.clone());
+                let i = draw.pick(list.nodes.len() as u32) as usize;
+                for op in &mut list.nodes[i].ops {
+                    if let PaintOp::Fill { paint, .. } = op {
+                        *paint = Paint::Solid(draw.color());
+                    }
+                }
+                // what the change alters where the content now shows, as a frame's damage covers it
+                let fresh = |l: &DisplayList| {
+                    draw_frame(
+                        &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                        l,
+                        &DamageRegion::Full,
+                        scale,
+                    )
+                };
+                let (a, b) = (fresh(&unchanged), fresh(&scrolled(&list, offset, open)));
+                let changed = (0..a.pixels.len() / 4)
+                    .filter(|&p| a.pixels[4 * p..4 * p + 4] != b.pixels[4 * p..4 * p + 4])
+                    .map(|p| (p as u32 % a.width, p as u32 / a.width))
+                    .fold(None, |r: Option<(u32, u32, u32, u32)>, (x, y)| {
+                        Some(r.map_or((x, y, x, y), |(x0, y0, x1, y1)| {
+                            (x0.min(x), y0.min(y), x1.max(x), y1.max(y))
+                        }))
+                    });
+                if let Some((x0, y0, x1, y1)) = changed {
+                    rects.push(Rect::from_ltrb(
+                        f64::from(x0) / scale,
+                        f64::from(y0) / scale,
+                        f64::from(x1 + 1) / scale,
+                        f64::from(y1 + 1) / scale,
+                    ));
+                }
+            }
+            let current = scrolled(&list, offset, clip.clone());
+            let after = draw_frame(&mut step, &current, &DamageRegion::Rects(rects), scale);
+            let mut fresh = CpuRenderer::new(layer_config(), NoGlyphs);
+            let whole = draw_frame(&mut fresh, &current, &DamageRegion::Full, scale);
+            if let Some(p) = (0..after.pixels.len() / 4)
+                .find(|&p| after.pixels[4 * p..4 * p + 4] != whole.pixels[4 * p..4 * p + 4])
+            {
+                panic!(
+                    "seed {seed}, scale {scale}, frame {frame}, offset {offset:?}: pixel ({}, {}) is {:?} scrolled and \
+                     {:?} drawn whole",
+                    p as u32 % after.width,
+                    p as u32 / after.width,
+                    &after.pixels[4 * p..4 * p + 4],
+                    &whole.pixels[4 * p..4 * p + 4],
+                );
+            }
+            for p in 0..after.pixels.len() / 4 {
+                let (x, y) = (p as u32 % after.width, p as u32 / after.width);
+                let reported = after
+                    .damage
+                    .iter()
+                    .any(|d| x >= d.x && x < d.x + d.width && y >= d.y && y < d.y + d.height);
+                assert!(
+                    reported || after.pixels[4 * p..4 * p + 4] == before.pixels[4 * p..4 * p + 4],
+                    "seed {seed}, scale {scale}, frame {frame}: pixel ({x}, {y}) changed outside the damage reported"
+                );
+            }
+            before = after;
+        }
+    }
+
+    #[test]
+    fn a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset() {
+        for seed in 0..4 {
+            for scale in [1.0, 1.5, 2.0] {
+                scrolled_matches_whole(seed, scale, scene(seed), Shape::Rect(VIEW));
+                scrolled_matches_whole(
+                    seed,
+                    scale,
+                    harsh(seed),
+                    Shape::RoundedRect {
+                        rect: VIEW,
+                        radius: 6.0,
+                    },
+                );
+            }
+        }
+    }
+
+    /// The kept layer is the same picture a list without layers draws, but for the rounding of laying the content
+    /// over its backdrop at once rather than node by node: within the goldens' tolerance.
+    #[test]
+    fn a_kept_layer_draws_the_picture_of_its_content_drawn_in_place() {
+        for seed in 0..12 {
+            for scale in [1.0, 1.5, 2.0] {
+                let offset = cupertino_geometry::Point::new(0.0, 14.0 / scale);
+                let layered = scrolled(&scene(seed), offset, Shape::Rect(VIEW));
+                let mut plain_list = layered.clone();
+                for node in &mut plain_list.nodes {
+                    node.layer = None;
+                }
+                let a = draw_frame(
+                    &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                    &layered,
+                    &DamageRegion::Full,
+                    scale,
+                );
+                let b = draw_frame(
+                    &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                    &plain_list,
+                    &DamageRegion::Full,
+                    scale,
+                );
+                let worst = a
+                    .pixels
+                    .iter()
+                    .zip(&b.pixels)
+                    .map(|(x, y)| x.abs_diff(*y))
+                    .max()
+                    .unwrap();
+                assert!(
+                    worst <= 2,
+                    "seed {seed}, scale {scale}: {worst}/255 from the picture drawn in place"
+                );
+            }
+        }
+    }
+
+    /// A scroll of a few rows paints those rows of the layer and nothing else of it, and moves no pixel it keeps.
+    #[test]
+    fn a_scroll_paints_only_the_rows_that_come_into_view() {
+        for scale in [1.0, 1.5, 2.0] {
+            let list = scene(3);
+            let mut r = CpuRenderer::new(layer_config(), NoGlyphs);
+            let mut offset = cupertino_geometry::Point::new(0.0, 0.0);
+            draw_frame(
+                &mut r,
+                &scrolled(&list, offset, Shape::Rect(VIEW)),
+                &DamageRegion::Full,
+                scale,
+            );
+            let viewport = geometry::clip_bounds(&Shape::Rect(VIEW), &Transform::IDENTITY, scale);
+            for rows in [1_u32, 7, 20] {
+                offset.y += f64::from(rows) / scale;
+                draw_frame(
+                    &mut r,
+                    &scrolled(&list, offset, Shape::Rect(VIEW)),
+                    &DamageRegion::Rects(Vec::new()),
+                    scale,
+                );
+                let stats = *r.stats();
+                assert_eq!(
+                    stats.layer_pixels,
+                    u64::from(rows * viewport.width()),
+                    "scale {scale}, {rows} rows"
+                );
+                assert_eq!(stats.retained_layers.count, 1);
+            }
+            // a frame that does not scroll and changes nothing paints nothing of the layer
+            draw_frame(
+                &mut r,
+                &scrolled(&list, offset, Shape::Rect(VIEW)),
+                &DamageRegion::Rects(Vec::new()),
+                scale,
+            );
+            assert_eq!(r.stats().layer_pixels, 0);
+            assert_eq!(r.stats().scroll_composite.count, 0);
+        }
+    }
+
+    /// A layer new to a frame lays over only the damage, which is what its nodes, all new to it, draw: the frame
+    /// before shows the rest of it. Once it scrolls it is laid over whole.
+    #[test]
+    fn a_layer_new_to_a_frame_lays_over_only_the_damage() {
+        let renamed = |offset: f64| {
+            let mut list = scrolled(
+                &scene(2),
+                cupertino_geometry::Point::new(0.0, offset),
+                Shape::Rect(VIEW),
+            );
+            for node in &mut list.nodes {
+                if node.id == PaintNodeId(9000) {
+                    node.id = PaintNodeId(9001);
+                }
+                if node.parent == Some(PaintNodeId(9000)) {
+                    node.parent = Some(PaintNodeId(9001));
+                }
+            }
+            list
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let offset = 14.0 / scale;
+            let first = scrolled(
+                &scene(2),
+                cupertino_geometry::Point::new(0.0, offset),
+                Shape::Rect(VIEW),
+            );
+            let mut r = CpuRenderer::new(layer_config(), NoGlyphs);
+            draw_frame(&mut r, &first, &DamageRegion::Full, scale);
+            // the same picture under a layer of another node: nothing to lay over
+            let after = draw_frame(
+                &mut r,
+                &renamed(offset),
+                &DamageRegion::Rects(Vec::new()),
+                scale,
+            );
+            assert!(after.damage.is_empty(), "scale {scale}: {:?}", after.damage);
+            assert_eq!(r.kept_layers().0, 1);
+            let next = draw_frame(
+                &mut r,
+                &renamed(offset + 3.0 / scale),
+                &DamageRegion::Rects(Vec::new()),
+                scale,
+            );
+            let whole = draw_frame(
+                &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                &renamed(offset + 3.0 / scale),
+                &DamageRegion::Full,
+                scale,
+            );
+            assert!(next.pixels == whole.pixels, "scale {scale}");
+        }
+    }
+
+    /// Kept layers hold at most one frame's bytes and [`layers::LAYER_SLACK_BYTES`] more: past that a layer is not kept,
+    /// and still draws the same bytes. Dropping them keeps the frame; the next frame paints them whole again.
+    #[test]
+    fn kept_layers_stay_within_their_cap_and_can_be_dropped() {
+        let scale = 16.0;
+        let list = scene(5);
+        let layered = |offset: f64| {
+            let mut nodes = Vec::new();
+            for k in 0..5_u64 {
+                let one = scrolled(
+                    &list,
+                    cupertino_geometry::Point::new(0.0, offset),
+                    Shape::Rect(VIEW),
+                );
+                nodes.extend(one.nodes.into_iter().map(|mut n| {
+                    n.id = PaintNodeId(n.id.0 + 100_000 * (k + 1));
+                    n.parent = n.parent.map(|p| PaintNodeId(p.0 + 100_000 * (k + 1)));
+                    n
+                }));
+            }
+            DisplayList { nodes }
+        };
+        let config = CpuConfig {
+            max_pixels: 1 << 23,
+            ..layer_config()
+        };
+        let mut r = CpuRenderer::new(config, NoGlyphs);
+        let first = draw_frame(&mut r, &layered(0.0), &DamageRegion::Full, scale);
+        let cap = first.pixels.len() as u64 + layers::LAYER_SLACK_BYTES;
+        let (count, bytes) = r.kept_layers();
+        assert!(
+            bytes <= cap && (1..5).contains(&count),
+            "{count} layers of {bytes} bytes, cap {cap}"
+        );
+        let after = draw_frame(
+            &mut r,
+            &layered(2.0),
+            &DamageRegion::Rects(Vec::new()),
+            scale,
+        );
+        let whole = draw_frame(
+            &mut CpuRenderer::new(config, NoGlyphs),
+            &layered(2.0),
+            &DamageRegion::Full,
+            scale,
+        );
+        assert!(after.pixels == whole.pixels);
+        r.drop_layers();
+        assert_eq!(r.kept_layers(), (0, 0));
+        let again = draw_frame(
+            &mut r,
+            &layered(3.0),
+            &DamageRegion::Rects(Vec::new()),
+            scale,
+        );
+        let whole = draw_frame(
+            &mut CpuRenderer::new(config, NoGlyphs),
+            &layered(3.0),
+            &DamageRegion::Full,
+            scale,
+        );
+        assert!(again.pixels == whole.pixels);
     }
 }

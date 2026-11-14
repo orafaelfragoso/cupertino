@@ -61,6 +61,7 @@ fn solid(r: f32, g: f32, b: f32, a: f32) -> Paint {
 
 fn node(id: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
     PaintNode {
+        layer: None,
         id: PaintNodeId(id),
         parent: None,
         revision: PaintRevision(0),
@@ -523,6 +524,7 @@ fn cost_follows_damage_and_content_not_target_area() {
 
 fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
     PaintNode {
+        layer: None,
         parent: Some(PaintNodeId(parent)),
         ..node(id, bounds, ops)
     }
@@ -538,6 +540,7 @@ fn red_square(x: f64) -> PaintOp {
 fn faded_sheet(shift: f64) -> DisplayList {
     let all = rect(0.0, 0.0, 96.0, 64.0);
     let sheet = PaintNode {
+        layer: None,
         group: Some(cupertino_ui_render::Group {
             opacity: 0.5,
             effects: vec![Effect::DropShadow {
@@ -586,6 +589,7 @@ fn a_parents_rounded_clip_clips_its_descendants() {
     let list = DisplayList {
         nodes: vec![
             PaintNode {
+                layer: None,
                 clip: Some(Shape::RoundedRect {
                     rect: rect(0.0, 0.0, 40.0, 40.0),
                     radius: 20.0,
@@ -666,6 +670,7 @@ fn a_nodes_clip_cuts_its_descendants_but_not_its_own_operations() {
     let list = DisplayList {
         nodes: vec![
             PaintNode {
+                layer: None,
                 clip: Some(Shape::Rect(rect(0.0, 0.0, 10.0, 10.0))),
                 ..node(1, area, vec![wide.clone()])
             },
@@ -704,6 +709,7 @@ fn a_nodes_clip_cuts_its_descendants_but_not_its_own_operations() {
 #[test]
 fn duplicate_ids_and_runaway_depth_are_refused() {
     let leaf = |id: u64, parent: Option<u64>| PaintNode {
+        layer: None,
         parent: parent.map(PaintNodeId),
         ..node(id, rect(0.0, 0.0, 8.0, 8.0), vec![])
     };
@@ -851,10 +857,12 @@ fn under_a_clip(square: PaintNode) -> DisplayList {
     DisplayList {
         nodes: vec![
             PaintNode {
+                layer: None,
                 clip: Some(Shape::Rect(rect(0.0, 0.0, 20.0, 20.0))),
                 ..node(9, rect(0.0, 0.0, 96.0, 64.0), vec![])
             },
             PaintNode {
+                layer: None,
                 parent: Some(PaintNodeId(9)),
                 ..square
             },
@@ -937,6 +945,7 @@ fn a_full_repaint_costs_in_proportion_to_its_area() {
                 ],
             ),
             PaintNode {
+                layer: None,
                 clip: Some(Shape::RoundedRect {
                     rect: sheet,
                     radius: 16.0,

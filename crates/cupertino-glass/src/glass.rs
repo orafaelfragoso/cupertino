@@ -1170,10 +1170,16 @@ impl GlassUniform {
     }
 }
 
-/// `[x, y, w, h]` with each edge on the nearest whole pixel.
+/// How far below a half pixel an edge still counts as on it: the error of a shape placed from its surface's device
+/// origin, which is no exact number of points at a fractional scale, carried in single precision.
+const HALF_PIXEL_TOLERANCE: f32 = 1.0 / 1024.0;
+
+/// `[x, y, w, h]` with each edge on the nearest whole pixel, a half towards positive infinity (within
+/// [`HALF_PIXEL_TOLERANCE`]), as the content of the surface the shape belongs to rounds it in its own pixels.
 fn whole_pixels([x, y, w, h]: [f32; 4]) -> [f32; 4] {
-    let (x0, y0) = (x.round(), y.round());
-    [x0, y0, (x + w).round() - x0, (y + h).round() - y0]
+    let pixel = |v: f32| (v + 0.5 + HALF_PIXEL_TOLERANCE).floor();
+    let (x0, y0) = (pixel(x), pixel(y));
+    [x0, y0, pixel(x + w) - x0, pixel(y + h) - y0]
 }
 
 impl Container {

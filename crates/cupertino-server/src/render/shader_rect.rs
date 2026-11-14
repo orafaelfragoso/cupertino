@@ -138,12 +138,23 @@ impl ElementCache {
     }
 }
 
-/// Physical rectangle of a logical one, rounding both edges (no gaps between neighbours).
+/// How far below a half pixel an edge still counts as on it: the error a point placed from a surface's device origin
+/// carries (an origin over a fractional scale is no exact number of points), far less than any edge a client sets.
+pub const HALF_PIXEL_TOLERANCE: f64 = 1.0 / 1024.0;
+
+/// `v` (device pixels) on the nearest whole pixel, a half towards positive infinity, within
+/// [`HALF_PIXEL_TOLERANCE`]. Moving by whole pixels commutes with it, so an edge a client sets in its surface lands on
+/// the pixel the client rounds it to, wherever the surface lies; rounding halves away from zero does not.
+pub fn nearest_pixel(v: f64) -> f64 {
+    (v + 0.5 + HALF_PIXEL_TOLERANCE).floor()
+}
+
+/// Physical rectangle of a logical one, each edge on its nearest pixel (no gaps between neighbours).
 pub fn to_physical_rect(r: Rectangle<f64, Logical>, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-    let x0 = (r.loc.x * scale.x).round();
-    let y0 = (r.loc.y * scale.y).round();
-    let x1 = ((r.loc.x + r.size.w) * scale.x).round();
-    let y1 = ((r.loc.y + r.size.h) * scale.y).round();
+    let x0 = nearest_pixel(r.loc.x * scale.x);
+    let y0 = nearest_pixel(r.loc.y * scale.y);
+    let x1 = nearest_pixel((r.loc.x + r.size.w) * scale.x);
+    let y1 = nearest_pixel((r.loc.y + r.size.h) * scale.y);
     Rectangle::new(
         (x0 as i32, y0 as i32).into(),
         ((x1 - x0) as i32, (y1 - y0) as i32).into(),
@@ -384,6 +395,23 @@ mod tests {
         assert_eq!(p, Rectangle::new((10, 21).into(), (101, 50).into()));
         let p2 = to_physical_rect(r, Scale::from(2.0));
         assert_eq!(p2.loc, (21, 41).into());
+    }
+
+    /// A backdrop edge a client sets half way across a pixel of its surface lands on the pixel the client rounds it to,
+    /// wherever the surface lies: placed from the surface's device origin, which is no exact number of points at 1.5.
+    #[test]
+    fn an_edge_placed_from_a_surface_s_origin_lands_on_the_pixel_the_surface_rounds_it_to() {
+        let scale = 1.5;
+        for origin in -400..3000 {
+            let at = f64::from(origin) / scale;
+            for edge in 0..400 {
+                let local = f64::from(edge) / 2.0;
+                let r = Rectangle::<f64, Logical>::new((at + local, at).into(), (1.0, 1.0).into());
+                let p = to_physical_rect(r, Scale::from(scale));
+                let want = origin + (local * scale + 0.5).floor() as i32;
+                assert_eq!(p.loc.x, want, "{local} points into a surface at {origin}");
+            }
+        }
     }
 
     #[test]

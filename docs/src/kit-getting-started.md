@@ -33,7 +33,9 @@ checkout and was run on the commit this page was written against.
   (`ci/capture.sh` says so in its header).
 - No GPU. The kit rasterizes each window on the CPU (`cupertino-ui-render`), repainting only what changed and keeping
   scrolled content as an image it moves, and hands it to the compositor in shared memory (`wl_shm`). Rendering on the GPU, with the CPU kept as the fallback, is planned
-  ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
+  ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)). A long list or grid keeps scrolling cheap by
+  building only the rows near its viewport, each as `Element::kept(key, mark, build)`: a row whose mark is the same
+  as last time keeps its nodes and their layout and is not built again.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

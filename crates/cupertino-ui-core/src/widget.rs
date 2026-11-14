@@ -176,6 +176,46 @@ impl<M: 'static> Element<M> {
         }
     }
 
+    /// An element made only when its place needs it: when the node at its place among its siblings (found by `key`)
+    /// was made by `kept` with the same `mark`, that node and its subtree stay as they are, nothing of them is compared
+    /// or laid out again, and `build` is not called. `mark` stands for everything `build` reads: when what it would make
+    /// changes, so must the mark. A long list keeps its rows this way while it only scrolls, and makes only those
+    /// that come into view.
+    pub fn kept(
+        key: impl Into<Key>,
+        mark: u64,
+        build: impl FnOnce() -> Element<M> + 'static,
+    ) -> Self {
+        Element::new(Kept {
+            mark,
+            build: Box::new(build),
+        })
+        .key(key)
+    }
+
+    /// The mark of an element made by [`Element::kept`], `None` for any other.
+    pub fn kept_mark(&self) -> Option<u64> {
+        self.widget
+            .as_any()
+            .downcast_ref::<Kept<M>>()
+            .map(|kept| kept.mark)
+    }
+
+    /// The element itself, or the one an element made by [`Element::kept`] builds, at its key, with its mark: what the
+    /// tree makes of it when the node at its place cannot be kept.
+    pub fn built(self) -> (Self, Option<u64>) {
+        if !self.widget.as_any().is::<Kept<M>>() {
+            return (self, None);
+        }
+        let key = self.key;
+        let Ok(kept) = self.widget.into_any().downcast::<Kept<M>>() else {
+            unreachable!("the widget was checked to be kept");
+        };
+        let mut element = (kept.build)();
+        element.key = key;
+        (element, Some(kept.mark))
+    }
+
     pub(crate) fn layout(&self) -> LayoutSpec {
         let mut spec = self.widget.layout();
         if self.fill {
@@ -207,6 +247,42 @@ impl<M> fmt::Debug for Element<M> {
             .field("fill", &self.fill)
             .finish()
     }
+}
+
+/// What [`Element::kept`] makes: the mark and how to build the element, which the tree takes apart before the element
+/// reaches a node. It never is a node's widget.
+struct Kept<M> {
+    mark: u64,
+    build: Box<dyn FnOnce() -> Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Kept<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(cupertino_ui_layout::ContainerKind::Leaf)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::Layout
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
 
 /// A widget with its type erased, so nodes of every kind live in one tree. Core only pairs a widget with the state

@@ -22,6 +22,8 @@ pub(crate) struct Node<M> {
     pub(crate) generation: Generation,
     /// Changes when this node's paint does.
     pub(crate) paint_revision: u64,
+    /// The mark of the [`Element::kept`] that made the node, which an element of the same mark keeps as it is.
+    pub(crate) kept: Option<u64>,
 }
 
 enum Slot<M> {
@@ -94,19 +96,31 @@ impl<M: 'static> Tree<M> {
         current: Option<NodeId>,
         element: Element<M>,
     ) -> Result<NodeId, UiError> {
-        match current {
+        if let Some(root) = current.filter(|&root| self.keeps(root, &element)) {
+            return Ok(root);
+        }
+        let (element, mark) = element.built();
+        let root = match current {
             Some(root) if self.matches(root, &element) => {
                 self.update(root, element)?;
-                Ok(root)
+                root
             }
             _ => {
                 if let Some(root) = current {
                     self.unmount(root);
                 }
                 self.layout_dirty = true;
-                self.mount(None, element)
+                self.mount(None, element)?
             }
-        }
+        };
+        self.node_mut(root).kept = mark;
+        Ok(root)
+    }
+
+    /// Whether the node `id` stays as it is for `element`: both made by [`Element::kept`] with one key and one mark.
+    fn keeps(&self, id: NodeId, element: &Element<M>) -> bool {
+        let node = self.node(id);
+        node.kept.is_some() && node.kept == element.kept_mark() && node.key == element.key
     }
 
     fn matches(&self, id: NodeId, element: &Element<M>) -> bool {
@@ -119,14 +133,11 @@ impl<M: 'static> Tree<M> {
         self.revision
     }
 
-    fn mount(
-        &mut self,
-        parent: Option<NodeId>,
-        mut element: Element<M>,
-    ) -> Result<NodeId, UiError> {
+    fn mount(&mut self, parent: Option<NodeId>, element: Element<M>) -> Result<NodeId, UiError> {
         if self.live >= self.limit {
             return Err(UiError::NodeLimit(self.limit));
         }
+        let (mut element, kept) = element.built();
         let children = element.widget.take_children();
         let revision = self.next_revision();
         let spec = element.layout();
@@ -139,6 +150,7 @@ impl<M: 'static> Tree<M> {
             widget: element.widget,
             generation: Generation(revision),
             paint_revision: revision,
+            kept,
         });
         let id = match self.free.pop() {
             Some(index) => {
@@ -212,11 +224,21 @@ impl<M: 'static> Tree<M> {
                 Some(key) => keyed.remove(key).map(|(_, id)| id),
                 None => unkeyed.pop_front(),
             };
+            // a node kept as it is: nothing of its subtree is made, compared or marked
+            if let Some(old) = candidate.filter(|&old| self.keeps(old, &element)) {
+                children.push(old);
+                continue;
+            }
             let id = match candidate {
-                Some(old) if self.matches(old, &element) => self.update(old, element).map(|()| old),
                 Some(old) => {
-                    self.unmount(old);
-                    self.mount(Some(parent), element)
+                    let (element, mark) = element.built();
+                    let id = if self.matches(old, &element) {
+                        self.update(old, element).map(|()| old)
+                    } else {
+                        self.unmount(old);
+                        self.mount(Some(parent), element)
+                    };
+                    id.inspect(|&id| self.node_mut(id).kept = mark)
                 }
                 None => self.mount(Some(parent), element),
             };

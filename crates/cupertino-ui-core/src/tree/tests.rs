@@ -12,6 +12,74 @@ fn keyed(keys: &[u64]) -> Element<M> {
     ))
 }
 
+/// A group of rows made by `Element::kept`, each `(key, mark)`, counting in `built` the rows built.
+fn kept_rows(rows: &[(u64, u64)], built: &std::rc::Rc<std::cell::Cell<u32>>) -> Element<M> {
+    Element::new(group(
+        rows.iter()
+            .map(|&(key, mark)| {
+                let built = std::rc::Rc::clone(built);
+                Element::kept(key, mark, move || {
+                    built.set(built.get() + 1);
+                    Element::new(group(vec![Element::new(leaf("x"))]))
+                })
+            })
+            .collect(),
+    ))
+}
+
+#[test]
+fn a_kept_element_of_the_same_mark_keeps_its_node_unbuilt_and_a_new_mark_builds_it_again() {
+    let built = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut tree = Tree::<M>::new(100);
+    let root = tree
+        .reconcile(None, kept_rows(&[(1, 10), (2, 20)], &built))
+        .unwrap();
+    assert_eq!(built.get(), 2);
+    let (one, two) = (child_by_key(&tree, root, 1), child_by_key(&tree, root, 2));
+    let leaf_of = |tree: &Tree<M>, id: NodeId| tree.get(id).unwrap().children[0];
+    let (leaf_one, leaf_two) = (leaf_of(&tree, one), leaf_of(&tree, two));
+    tree.take_layout_dirty();
+    tree.take_paint_dirty();
+
+    // the same marks: nothing is built, compared or marked
+    tree.reconcile(Some(root), kept_rows(&[(1, 10), (2, 20)], &built))
+        .unwrap();
+    assert_eq!(built.get(), 2);
+    assert_eq!(
+        (child_by_key(&tree, root, 1), child_by_key(&tree, root, 2)),
+        (one, two)
+    );
+    assert_eq!((updates(&tree, leaf_one), updates(&tree, leaf_two)), (0, 0));
+    assert!(!tree.take_layout_dirty());
+    assert!(tree.take_paint_dirty().is_empty());
+
+    // a new mark builds its row again and takes its node over; a new row is made; the rest stays
+    tree.reconcile(Some(root), kept_rows(&[(1, 10), (2, 21), (3, 30)], &built))
+        .unwrap();
+    assert_eq!(built.get(), 4);
+    assert_eq!(
+        (child_by_key(&tree, root, 1), child_by_key(&tree, root, 2)),
+        (one, two)
+    );
+    assert_eq!((updates(&tree, leaf_one), updates(&tree, leaf_two)), (0, 1));
+    assert_eq!(tree.get(root).unwrap().children.len(), 3);
+
+    // a row made as any element in its place is no longer kept: the next kept one is built whatever its mark
+    let plain = Element::new(group(vec![
+        Element::new(group(vec![Element::new(leaf("x"))])).key(1u64),
+        Element::new(group(vec![Element::new(leaf("x"))])).key(2u64),
+    ]));
+    tree.reconcile(Some(root), plain).unwrap();
+    tree.reconcile(Some(root), kept_rows(&[(1, 10), (2, 21)], &built))
+        .unwrap();
+    assert_eq!(built.get(), 6);
+    assert_eq!(child_by_key(&tree, root, 1), one);
+    assert!(tree
+        .take_removed()
+        .iter()
+        .all(|&gone| gone != one && gone != two));
+}
+
 fn child_by_key(tree: &Tree<M>, root: NodeId, key: u64) -> NodeId {
     *tree
         .get(root)

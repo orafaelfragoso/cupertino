@@ -655,3 +655,146 @@ fn blur_and_shadows_match_the_cpu() {
 fn scenes_of_everything_match_the_cpu() {
     compare(Kind::All, 800..812);
 }
+
+/// Where the scroll layer's clip shows its content, in points.
+const VIEW: Rect = Rect {
+    origin: Point { x: 4.0, y: 8.0 },
+    size: cupertino_geometry::Size {
+        width: 55.0,
+        height: 36.0,
+    },
+};
+
+/// `list` as the content of a kept scroll layer (`Layer::Scroll`) moved by `offset`, over a background and under a
+/// translucent bar across the layer's top edge, as a scroll view paints it.
+fn scrolled(list: &DisplayList, offset: Point, clip: Shape) -> DisplayList {
+    let whole = Shape::Rect(Rect::new(0.0, 0.0, SIZE.0, SIZE.1));
+    let mut nodes = vec![node(
+        8000,
+        None,
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        vec![PaintOp::Fill {
+            shape: whole,
+            paint: Paint::Solid(Color::new(0.3, 0.5, 0.7, 1.0)),
+        }],
+    )];
+    let mut layer = node(
+        9000,
+        None,
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        Vec::new(),
+    );
+    layer.clip = Some(clip);
+    layer.layer = Some(cupertino_ui_render::Layer::Scroll { offset });
+    nodes.push(layer);
+    for n in &list.nodes {
+        let mut moved = n.clone();
+        moved.transform.0[4] -= offset.x;
+        moved.transform.0[5] -= offset.y;
+        moved.bounds = n.bounds.translate(-offset.x, -offset.y);
+        moved.parent = Some(n.parent.unwrap_or(PaintNodeId(9000)));
+        nodes.push(moved);
+    }
+    nodes.push(node(
+        8001,
+        None,
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        vec![PaintOp::Fill {
+            shape: Shape::RoundedRect {
+                rect: Rect::new(0.0, 4.0, SIZE.0, 9.0),
+                radius: 3.0,
+            },
+            paint: Paint::Solid(Color::new(0.95, 0.9, 0.8, 0.6)),
+        }],
+    ));
+    DisplayList { nodes }
+}
+
+/// A scroll layer scrolled frame by frame by whole device pixels (down, up, sideways, past its whole viewport, not at
+/// all), its frames' damage leaving out what only moved with it as a frame's damage does, now and then a node of it
+/// changed with the layer's view damaged: every frame of the GPU renderer, which paints a layer's content in place,
+/// is the CPU renderer's picture of the same list drawn whole without the layer. (The CPU renderer's kept image of a
+/// layer is the content painted in its own coordinates, so a blur or shadow of content past the window's edge reaches
+/// into it, which a picture drawn in place cuts off; the two part there.)
+#[test]
+fn scroll_layers_repaint_what_moved_as_the_content_drawn_in_place() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let resources = resources();
+    let mut failures = Vec::new();
+    for seed in 900..906 {
+        for scale in SCALES {
+            for clip in [
+                Shape::Rect(VIEW),
+                Shape::RoundedRect {
+                    rect: VIEW,
+                    radius: 6.0,
+                },
+            ] {
+                let mut content = scene(seed, Kind::All);
+                let size = (
+                    ((SIZE.0 * scale).ceil() as u32) | 1,
+                    ((SIZE.1 * scale).ceil() as u32) | 1,
+                );
+                let mut gpu = common::gpu(&device, Boxes);
+                let mut draw = Draw(seed ^ 0x5c40);
+                let mut offset = Point::new(0.0, 0.0);
+                for frame in 0..10 {
+                    let damage = if frame == 0 {
+                        DamageRegion::Full
+                    } else {
+                        let px = |n: i32| f64::from(n) / scale;
+                        let (dx, dy) = match draw.pick(6) {
+                            0 => (0, 120),
+                            1 => (3 + draw.pick(5) as i32, 0),
+                            2 => (0, 0),
+                            _ => (0, draw.pick(41) as i32 - 20),
+                        };
+                        offset = Point::new(offset.x + px(dx), offset.y + px(dy));
+                        let mut rects = Vec::new();
+                        if frame % 3 == 0 {
+                            let i = 1 + draw.pick(content.nodes.len() as u32 - 1) as usize;
+                            for op in &mut content.nodes[i].ops {
+                                if let PaintOp::Fill { paint, .. } = op {
+                                    *paint = Paint::Solid(draw.color());
+                                }
+                            }
+                            // the changed node shows inside the layer's view
+                            rects.push(VIEW);
+                        }
+                        DamageRegion::Rects(rects)
+                    };
+                    let list = scrolled(&content, offset, clip.clone());
+                    let f = Frame {
+                        list: &list,
+                        resources: &resources,
+                        scale,
+                        size,
+                        damage: &damage,
+                    };
+                    let b = common::draw_gpu(&mut gpu, &f);
+                    // the same list without the layer, drawn whole
+                    let mut plain = list.clone();
+                    plain.nodes[1].layer = None;
+                    let whole = Frame {
+                        list: &plain,
+                        damage: &DamageRegion::Full,
+                        ..f
+                    };
+                    let a = common::draw_cpu(&mut common::cpu(Boxes), &whole);
+                    let (beyond, most, first) = common::difference(&a, &b, size.0);
+                    if beyond > STRAY_PIXELS || most > TOLERANCE + 1 {
+                        let (x, y, p, q) = first.unwrap();
+                        failures.push(format!(
+                            "seed {seed} scale {scale} {clip:?} frame {frame} offset {offset:?}: {beyond} pixels \
+                             beyond, largest {most}; first at ({x}, {y}): cpu {p:?} gpu {q:?}"
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

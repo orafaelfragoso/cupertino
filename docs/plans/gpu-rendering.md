@@ -334,14 +334,25 @@ Presenter and process:
 - [x] Renderer selection wired with every process on the CPU by default: the single switch `GPU_BY_DEFAULT`
       (`crates/cupertino-ui-wayland/src/renderer.rs`), which step 7 turns on.
 - [x] Parity at scales 1, 1.5 and 2 with odd sizes, whole frames and frames repainting damage.
-- [ ] The presenter draws through `GpuRenderer` when the process is on the GPU, so `CUPERTINO_RENDERER=gpu` gives a
+- [x] The presenter draws through `GpuRenderer` when the process is on the GPU, so `CUPERTINO_RENDERER=gpu` gives a
       GPU-drawn window: the kit's renderer factory makes a `GpuRenderer` on the presenter's device (`GpuDevice` holds
       it in an `Rc`), its frame carries the window texture to `GpuSurface::present`, which draws it into the buffer
       instead of uploading pixels (the blit reading texels by position, the buffer being allocated in size steps),
-      and a surface that falls back to shared memory reads the texture back; a headless test in `gpu_presenter`.
-- [ ] A whole frame's recording on the CPU under 4 ms at 1.5 (13 ms for the timed window, "Measurements",
-      "Step 6: the renderer"): draws of one program into one target batched into one instanced draw, bind groups
-      kept from frame to frame, glyph quads cached per run.
+      and a surface that falls back to shared memory reads the texture back; a headless test in `gpu_presenter`
+      (`the_presenter_shows_what_the_gpu_renderer_drew_from_its_texture_in_dmabufs`).
+- [x] A whole frame's recording on the CPU under 4 ms at 1.5 (13 ms for the timed window, "Measurements",
+      "Step 6: the renderer"). The time was not the draws: 117 of the frame's 125 offscreen targets were made and
+      destroyed every frame, the pool's cap (eight 2 MiB granules) holding fewer than the frame had alive. A target
+      the frame has finished with now gives its texture to the next of its size and format: 2.5 ms, no target made
+      (`timing::a_large_windows_damaged_frame_stays_within_the_gpu_budget`, which holds both budgets). Batching
+      draws is not needed for the budget.
+- [ ] `GpuRenderer` keeps scroll layers (`Layer::Scroll`) as textures between frames and moves them, painting only the
+      rows that come into view, as the CPU renderer keeps its images (ring of rows, the cap, a layer new to a frame
+      laid over only where damaged), with the parity tests of step 4 run on both renderers. Split from the batching
+      item: the GPU path meets the scroll's budget without it (see "Step 6: the renderer"), so it is an
+      optimisation of GPU time and power, not a gate.
+- [ ] The raised layer's subsurface presented from GPU buffers too: on the GPU path its frame is read back into
+      shared memory today (`CpuFrame::in_memory`).
 
 Gate:
 

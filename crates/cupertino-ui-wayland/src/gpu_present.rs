@@ -541,7 +541,9 @@ impl GpuSurface {
             pass.draw(0..3, 1).map_err(gpu_error)?;
             pass.end();
         }
-        self.commit(gpu, conn, surface, index, pixels, damage, whole)
+        self.commit(gpu, conn, surface, index, pixels, damage, whole)?;
+        self.stale = false;
+        Ok(())
     }
 
     /// Draws `texture` (a renderer's frame) into the buffer of slot `index`, texel for texel.
@@ -627,7 +629,6 @@ impl GpuSurface {
         )?;
         self.commits += 1;
         self.stats.frames += 1;
-        self.stale = false;
         Ok(())
     }
 }

@@ -38,8 +38,8 @@ use cupertino_gpu::{
     TextureFormat, TextureUsage, Topology, VertexAttribute, VertexFormat, VertexLayout,
 };
 use cupertino_ui_render::{
-    damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, PixelFormat, PixelRect,
-    RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
+    damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, Layer, PaintNodeId,
+    PixelFormat, PixelRect, RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
 };
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer};
 
@@ -255,6 +255,9 @@ pub struct GpuRenderer<R> {
     next_id: u64,
     frame: GpuFrame,
     stats: GpuStats,
+    /// Each scroll layer of the last frame ([`cupertino_ui_render::scroll_layers`]): the window pixels its clip
+    /// showed and its drawn offset in device pixels.
+    scrolls: HashMap<PaintNodeId, (Bounds, (i32, i32))>,
 }
 
 /// A GPU failure as a render error: the frame is not drawn and the next one is drawn whole. A lost device is also
@@ -376,6 +379,7 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
                 damage: Vec::new(),
             },
             stats: GpuStats::default(),
+            scrolls: HashMap::new(),
         }
     }
 
@@ -519,9 +523,12 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
             width: request.width,
             height: request.height,
         };
+        let moved = self.moved_layers(request);
         let dirty = match (full, request.damage) {
             (false, DamageRegion::Rects(rects)) => {
-                damage_rects(rects, request.scale, request.width, request.height)
+                let mut dirty = damage_rects(rects, request.scale, request.width, request.height);
+                dirty.extend(moved);
+                dirty
             }
             _ => vec![whole],
         };
@@ -564,6 +571,52 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
 }
 
 impl<R> GpuRenderer<R> {
+    /// The window pixels this frame repaints for its scroll layers besides the damage. A frame's damage leaves out
+    /// what only moved with a scroll layer's offset, as the renderers keep a layer's content between frames; this one
+    /// paints that content in place, so a layer of the last frame that moved or changed its viewport repaints all it
+    /// showed and shows. A layer new to the frame has only nodes new to it, which the damage covers.
+    fn moved_layers(&mut self, request: &RenderRequest<'_>) -> Vec<PixelRect> {
+        let whole = Bounds::of_size(request.width, request.height);
+        let mut layers: Vec<usize> = cupertino_ui_render::scroll_layers(request.list)
+            .into_iter()
+            .flatten()
+            .collect();
+        layers.sort_unstable();
+        layers.dedup();
+        let before = std::mem::take(&mut self.scrolls);
+        let mut repaint = Vec::new();
+        for index in layers {
+            let node = &request.list.nodes[index];
+            let (Some(Layer::Scroll { offset }), Some(clip)) = (node.layer, &node.clip) else {
+                continue;
+            };
+            let viewport =
+                geometry::clip_bounds(clip, &node.transform, request.scale).intersect(&whole);
+            let px = |v: f64| {
+                (v * request.scale)
+                    .round()
+                    .clamp(-f64::from(1 << 28), f64::from(1 << 28)) as i32
+            };
+            let shift = (px(offset.x), px(offset.y));
+            match before.get(&node.id) {
+                Some(&(was, _)) if was != viewport => repaint.extend([was, viewport]),
+                Some(&(_, was)) if was != shift => repaint.push(viewport),
+                _ => {}
+            }
+            self.scrolls.insert(node.id, (viewport, shift));
+        }
+        repaint
+            .into_iter()
+            .filter(|b| !b.is_empty())
+            .map(|b| PixelRect {
+                x: b.x0 as u32,
+                y: b.y0 as u32,
+                width: b.width(),
+                height: b.height(),
+            })
+            .collect()
+    }
+
     /// Drops image textures past the budget, those used least recently first, never one of this frame.
     fn trim_images(&mut self) {
         let bytes = |t: &ImageTexture| {

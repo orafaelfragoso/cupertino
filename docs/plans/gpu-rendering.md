@@ -541,15 +541,26 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
       `greeter::renderer_class` and `dialog::tests::the_chooser_and_the_overlays_draw_on_the_cpu`. The polkit agent,
       the keyring prompter and the pick overlay draw with tiny-skia directly and never make a device. Why each is on
       the CPU is in `docs/src/gpu-rendering.md` ("Who draws on the GPU: classes of surface").
-- [ ] The same pixels on both renderers in the preview scenarios. Split from turning the GPU on: every preview shot
-      but these is the same before and after this step (beyond 1/255), and the build before it with
-      `CUPERTINO_RENDERER=gpu` gives this step's pixels. The symbol of a sidebar's selected row lands one device pixel
-      apart (Files at scale 1, Settings at 1.5), and one pixel of a minimized window's thumbnail in the dock is 7/255
-      apart. Not yet confirmed, the likely cause: an image drawn one texel per device pixel is moved onto whole
-      pixels, the CPU renderer rounding its position in 32-bit floats in the coordinates of the piece of the window it
-      draws, the GPU renderer in the window's, so a position a hair under a half pixel can round differently in the
-      two. To do: find it with the selected row added to the parity scenes, then round the same way on both (naming
-      any golden that moves).
+- [x] The same pixels on both renderers in the preview scenarios. The symbol of a sidebar's selected row landed one
+      device pixel apart (Files at scale 1, Settings at 1.5), and one pixel of a minimized window's thumbnail in the
+      dock was 7/255 apart (the same symbol, in the thumbnail of the Files window). The cause: the CPU renderer moved
+      an image drawn one texel per device pixel onto whole pixels in the coordinates of the piece of the window it
+      painted, rounding a half away from zero, so a piece whose origin lay past the image (a negative position)
+      rounded a half pixel up, the others down; the GPU renderer rounded in the window's. Both now take the window
+      pixel `floor(x + 0.5)` (`cupertino_raster_math::placement::whole_pixel`, which commutes with whole-pixel moves).
+      Files' `icon-view` golden moves 38 pixels: the home row's 20-pixel symbol, whose last two rows had been drawn a
+      row too high, is whole. Tests: `parity::a_selected_rows_symbol_on_a_half_pixel_lands_where_the_cpu_puts_it`
+      (`cupertino-ui-gpu`, scales 1 and 1.5, positions on and off the half pixel, whole frames and damage through the
+      symbol) and `cpu::tests::an_image_on_a_half_pixel_lands_on_one_window_pixel_whatever_piece_paints_it`. The
+      preview with every process on the CPU against the classes, both shot in one run (`PREVIEW_BEFORE`): Files,
+      Settings, the dock's thumbnail and every other shot the same within 2/255, but for shots whose moment differs
+      between two sessions (the overview and its band mid-motion; which of them differ changes between runs) and the
+      launcher's, below.
+- [ ] The launcher's round buttons on both renderers: their rims part by exactly 3/255, one step past the tolerance,
+      on 1 to 22 pixels a shot (launcher at 1.5 and 2), as they did before this step. They are the parity tests' stray
+      pixels (the CPU's roundings of an operation's layer stacking on one pixel) on more pixels than the four those
+      allow. Split: find which of the buttons' operations stacks them and draw it so they do not, then shoot the
+      preview pair again.
 - [ ] A week of daily use on the target machine without a fallback. BLOCKED (owner action): a week of use. A
       fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
       `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
@@ -561,16 +572,38 @@ Gate:
 - [ ] The resize, animation-frame, memory and idle budgets hold across a full session. Resize holds (client CPU
       beyond the raster 3.8 ms p99 at 1.5, under 8 ms); launcher typing holds (1.9 ms p99, under 4 ms); idle holds
       (one menu bar frame a minute, the clock's wakeups only, GPU processes 0 wakeups). Not held:
-  - Control Center's opening frames take 14.7 ms p50 and 16.9 ms p99 on the CPU (11.8 and 17.9 ms on the GPU), most
-    of it the raster of two whole frames, against the 4 ms animation budget. Split: draw the opening's second frame
-    from the first's kept layers, or start the panel's first frame before the press (it is the same frame every
-    opening), then measure again.
-  - Added private memory per GPU process, under 80 MiB: in the bench the dock adds 78.5 MiB, the launcher 76.0,
-    Settings 64–69 and Files' window 55; in the full session the dock adds 81.0 MiB and the launcher 87.4 (after it
-    opened and searched), Files' window 75.4 and Settings 71.8. Split: find what of a GPU process's private memory
-    beyond its context is the toolkit's (atlases, pools, the program cache) and bound it, then measure again.
-  - GPU memory per GPU window was read per process (`nvidia-smi`: dock 16, launcher 28, Files 45, Settings 45 MiB in
-    the session), not as the change with the window open and closed that the budget names. Split with the item above.
+  - Control Center's opening frames took 14.7 ms p50 and 16.9 ms p99 on the CPU (11.8 and 17.9 ms on the GPU)
+    against the 4 ms animation budget. What they drew: each opening makes the card's window, so a new renderer, and
+    its whole frames; 7.8 of a warm whole frame's 8.1 ms at 1.5 (654 x 969 pixels) was the shadow, 26 even-odd rings
+    each as large as the window filled through the rasterizer, and a new renderer added the glyphs' rasters (0.4 ms)
+    and its scratch images. Now the rings are drawn once into a picture of the window's device pixels while the
+    panel rests and kept for the process (`controlcenter::view`, two at most), the picture is laid over one texel per
+    pixel by a direct loop with the pattern fill's arithmetic (`cupertino-ui-render`, byte for byte the same), and the
+    glyph rasters are the text system's, shared by every renderer on it (`cupertino-ui-text`, 2 MiB). A whole opening
+    frame at 1.5 on a new renderer, in the panel's test driver: 13.8 ms before, 2.5–3.2 ms after (the first opening
+    of a process about 5 ms, its picture drawn once). Tests:
+    `the_bands_laid_as_one_picture_have_the_pixels_of_the_bands_filled_in_place` (within 2/255 at four scales),
+    `a_band_picture_is_made_at_rest_and_found_again_by_a_later_frame`,
+    `an_image_laid_over_directly_has_the_bytes_of_its_pattern_fill`,
+    `rasterizers_on_one_text_system_share_their_glyphs`. The bench's frame times: measured at the end.
+  - Added private memory per GPU process, under 80 MiB. The session's 81.0 (dock), 87.4 (launcher), 75.4 (Files'
+    window) and 71.8 MiB (Settings) were taken with a cold program cache: the session's home is new each run, so each
+    GPU process compiled its programs and loaded the driver's compiler, some 55 MiB it keeps until it exits. One
+    headless session at 3840 x 2160 and 1.5 with Files and Settings open, private MiB (CPU / warm cache / cold):
+    dock 53.5 / 77.6 / 133.6, launcher 15.9 / 38.7 / 92.0, Files' window 29.4 / 37.8 / 97.2, Settings 44.4 / 51.3 /
+    103.7. With a warm cache a GPU process adds 7–24 MiB (`[anon]` 37 against 92 MiB for the dock: the compiler's).
+    The processes now make their programs in turn (`program_cache::take_turn`, a lock in the driver's directory
+    waited on up to 2 s), so on a cold cache only the first compiles and the rest load what it saved: cold, the
+    processes that load take 40–92 MiB (adding 19–39), the one that compiles 92–133 (adding 76–79). The floor is
+    the driver's compiler in that one process after a driver update, a shader change or a new user. OWNER DECISION:
+    keep it, or have the compositor make the toolkit's programs into the cache at its start (it loads the compiler
+    for its own programs anyway) so that no toolkit process compiles.
+  - GPU memory per GPU window, open and closed (`nvidia-smi`, Files with a second window opened and closed twice):
+    51, 116, 84, 116, 84 MiB. A window adds 65 MiB; closed, 33 MiB stay and serve the next window, never growing.
+    What stays is the driver's reservation step 0 measured (a process's first targets reserve one more target's
+    size, kept when they are deleted): the renderer gives back every texture it made when it is dropped and keeps
+    its frame alone when its window is not seen, which the device's texture count holds
+    (`memory::a_dropped_renderer_gives_back_every_texture_it_made_and_a_hidden_one_keeps_only_its_frame`).
 
 ## Step 8: the compositor's own drawing on the GPU pipelines
 
@@ -1552,6 +1585,27 @@ session with `CUPERTINO_RENDERER=cpu`). The renderer records:
 
 Over the session's last 30 s at rest no process woke. The GPU was ready 180–302 ms after each GPU process started (a
 cold program cache in the session's own home; the first frames go out on the CPU meanwhile). No fallback was recorded.
+
+**After the split items** (one-off checks of single processes; the bench's numbers are measured at the end).
+Memory: one headless session at 3840 x 2160 and 1.5, `--spawn cupertino-files --spawn cupertino-settings`, private
+MiB 20 s in (`/proc/<pid>/smaps`, clean + dirty); the warm cache is the cold run's `.cache` copied into the next
+session's home, both the program binaries and the driver's own cache.
+
+| Process | All on the CPU | GPU, warm cache | GPU, cold cache, before | GPU, cold cache, in turn | GPU memory (`nvidia-smi`) |
+|---|---|---|---|---|---|
+| Dock | 53.5 | 77.6 | 133.6 | 132.5 compiling, 92.1 loading | 16–17 MiB |
+| Launcher (not opened) | 15.9 | 38.7 | 92.0 | 91.9 compiling, about 40 loading | 2 MiB |
+| Files window | 29.4 | 37.8 | 97.2 | 49.8–53 | 51 MiB |
+| Settings | 44.4 | 51.3 | 103.7 | 63.4–74.8 | 48 MiB |
+
+In the cold sessions with turns the GPU was ready 161–387 ms after each process started, one process compiling
+("1 loaded and 7 compiled"), the others loading ("8 loaded and 0 compiled"). Files' GPU memory with a second window
+opened and closed twice (warm cache): 51, 116, 84, 116, 84 MiB.
+
+Control Center: a whole frame of the panel at rest at 1.5 (654 x 969 pixels, dark), in the panel's test driver with
+a timing renderer, release build: 13.8 ms on a new renderer and 8.1–9.0 ms warm before (the shadow's rings 7.8 ms of
+it); after, 2.5–3.2 ms on the new renderer each opening makes (the shadow's picture laid over 0.9 ms; the first
+opening of a process 5.0 ms).
 
 ### Step 8: the compositor's own drawing
 

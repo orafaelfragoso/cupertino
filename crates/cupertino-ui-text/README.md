@@ -75,7 +75,10 @@ buffer follow.
 - `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of
-  1.25), and colour glyphs as premultiplied RGBA without dilation.
+  1.25), and colour glyphs as premultiplied RGBA without dilation. The rasters are the `TextSystem`'s, shared by
+  every `GlyphRaster` on it within `SHARED_RASTER_BYTES` (2 MiB, the least recently used quarter let go when full), so
+  a window made again, whose renderer is new, finds its glyphs instead of drawing them
+  (`TextSystem::shared_rasters` tells what they hold and did).
 - Timing, release, medians of 15 (`cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`; the
   shape figure is cold and includes loading the font and the break data, and the grouping of glyphs into clusters
   that every layout reuses): 200 characters shape 85-105 us, reflow 4-5 us; 5000 characters shape 940-980 us, reflow

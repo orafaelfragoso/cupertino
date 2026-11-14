@@ -54,8 +54,8 @@ pixels. Layers exist in both renderers, so they cut paint and raster cost on eve
 Scroll offsets are rounded to device pixels when drawn, so a moved layer is pixel-identical to a repaint. Minimized and
 fully covered windows drop their layers; a toolkit window declares the part its pixels cover whole as its opaque
 region, so it covers the windows under it as any client that declares one does. A kept subtree that did not change is
-laid into the next paint as it was and compared with the last frame's in one go, so a scroll walks and compares only
-the rows that changed.
+placed from what it was placed from, its semantics laid in as the last pass left them, laid into the next paint as it
+was and compared with the last frame's in one go, so a scroll walks, places and compares only the rows that changed.
 
 ### 3. Who draws on the GPU: classes of surface
 

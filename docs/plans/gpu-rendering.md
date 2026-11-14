@@ -316,11 +316,17 @@ Works with the CPU renderer; no GPU needed.
         follow scroll offsets and what lies over them, which the subtree revision does not cover)
         (`a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it`: scrolls at
         whole and fractional offsets, a row made anew, a row dropped and a resize, against placing every node).
-  - [ ] Semantics nodes kept for the same subtrees: a node's semantics take its size and whether it can scroll, both
-        the same while its subtree is, and its bounds, moved by the kept node's offset; the runs of focusable nodes,
-        scopes, roving groups and items, the descriptions handed down and the keyed relations are kept with it and
-        laid in in order. Test: the semantics, the focus order and the accessibility diff are those of a full build
-        after the same frames.
+  - [x] Semantics nodes kept for the same subtrees: a kept node with no scroll container in its subtree keeps a run
+        of what the pass did for it (the size each node was asked at, its accessibility nodes as the walk left them
+        with the bounds each declared, the children and descriptions it handed the node above it, its Tab stops,
+        fallbacks, scopes, roving groups and items, hidden roots and keyed relations, in order) with the subtree's
+        revision and mark; a pass where they are the same, its nodes of the same sizes, the focus outside it and no
+        description handed down to it from above, lays the run in unwalked, each node's bounds taken from where it
+        lies now, and the keyed relations, fallbacks and focus are worked out over the whole tree after it as before
+        (`kept_semantics_laid_in_from_their_runs_are_those_of_a_full_build`: scrolls at whole and fractional offsets,
+        the focus into a row and out, a row made anew, a row dropped and a resize, the nodes, the focus order, the
+        scopes, roving groups and items, the hidden roots and the accessibility diff against a full build). Its time
+        in a scroll frame: measured at the end.
   - [ ] The names of a row measured before it comes into view. Files' grid already builds the cells 200 points past
         the viewport (`OVERSCAN` in `crates/cupertino-files/src/kit/grid.rs`), so a row's names are shaped in the frame
         it enters that band, not the frame it shows; what is left is to shape them outside any frame: the runtime

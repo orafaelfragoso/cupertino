@@ -40,6 +40,14 @@ all on one thread.
   hit size) with the subtree's revision and size. A kept node of the same revision and size next frame has its
   descendants placed from the run by the sums placing them from the layout makes, met with the clip the node gets
   from above, unwalked; the placements are those of placing every node (`layout_view.rs`).
+- **Kept semantics.** The semantics pass keeps the same for each kept node's subtree with no scroll container: the
+  size each node was asked at, the accessibility nodes as the walk left them with the bounds each declared, what the
+  subtree handed the node above it (children, descriptions) and its Tab stops, fallbacks, scopes, roving groups and
+  items, hidden roots and keyed relations, in order. A kept node of the same subtree revision and mark next pass, whose
+  nodes have the same sizes, that holds no focus and is handed no description from above, lays them in unwalked with
+  their bounds from where they lie now; the keyed relations, fallbacks and focus are worked out over the whole tree
+  after, as before, so the semantics, the focus order and the accessibility diff are those of a full build
+  (`semantics.rs`).
 - **Kept paint.** The painter keeps the paint nodes of each kept node's subtree with the subtree's revision (which
   changes when it or any descendant is marked or built again) and the ground it was painted on (what lies under it,
   its layer, the window's state). A kept node whose subtree revision and ground are the same next frame has its paint

@@ -13,7 +13,9 @@ use crate::paint::{raised_nodes, same_environment, PaintInput, Painter};
 use crate::pointer::Pointer;
 use crate::route::{hit_test, Geometry, Route};
 use crate::scroll::{geometry_events, reveal_events};
-use crate::semantics::{build, composing, diff, dismissible, keeps_editing, protected, text_input};
+use crate::semantics::{
+    build_kept, composing, diff, dismissible, keeps_editing, protected, text_input, KeptSemantics,
+};
 use crate::task::Executor;
 use crate::tree::Tree;
 use crate::{
@@ -255,6 +257,8 @@ struct WindowState<M> {
     measured_in: Option<Environment>,
     /// The kept subtrees' placements, good for the environment the layout cache is.
     placements: KeptPlacements,
+    /// The kept subtrees' semantics, good for the environment the layout cache is.
+    semantics: KeptSemantics,
     painter: Painter,
     damage: DamageTracker,
     /// The raised nodes ([`Widget::raised`]) of the last layout with their rects, in window coordinates.
@@ -1048,6 +1052,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             layout: LayoutStats::default(),
             layout_cache: LayoutCache::new(),
             placements: KeptPlacements::default(),
+            semantics: KeptSemantics::default(),
             measured_in: None,
             painter: Painter::default(),
             damage: DamageTracker::default(),
@@ -2323,6 +2328,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     {
                         w.layout_cache.clear();
                         w.placements.clear();
+                        w.semantics.clear();
                         w.measured_in = Some(w.env.clone());
                     }
                     let result = layout_cached(
@@ -2384,7 +2390,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             w.laid_out = Some(result);
 
-            let semantics = build(
+            let semantics = build_kept(
                 &self.tree,
                 root,
                 &w.geometry,
@@ -2392,6 +2398,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.env.direction,
                 w.env.scale,
                 &w.obscuring,
+                &mut w.semantics,
             );
             w.focusable = semantics.focusable;
             w.roving_groups = semantics.roving_groups;
@@ -2423,7 +2430,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 now,
             ));
             let (nodes, accessibility_focus) = if refocused {
-                let pass = build(
+                let pass = build_kept(
                     &self.tree,
                     root,
                     &w.geometry,
@@ -2431,6 +2438,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.env.direction,
                     w.env.scale,
                     &w.obscuring,
+                    &mut w.semantics,
                 );
                 (pass.nodes, pass.focus)
             } else {

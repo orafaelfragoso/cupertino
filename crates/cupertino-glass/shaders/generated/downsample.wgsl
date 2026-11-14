@@ -71,7 +71,8 @@ struct Shadow {
 
 
 // ---- downsample.wgsl ----
-// 2x box downsample of the backdrop pyramid (variance 1/4 source texel² per axis).
+// 2x box downsample of the backdrop pyramid (variance 1/4 source texel² per axis). Opaque, as a backdrop is, unless
+// `P.flags.y` keeps the source's (premultiplied) alpha, as a layer's content is blurred.
 
 // ---- pass.wgsl ----
 // What every backdrop pass shares: its uniform block, its source texture and the full-screen triangle it is drawn
@@ -86,7 +87,7 @@ struct Op { a: vec4<f32>, b: vec4<f32> };
 //   weights    = one-sided Gaussian weights, weights[i/4][i%4] for tap i
 //   ops        = colour filter chain: a.x = kind (1 saturate, 2 luminance curve, 3 monochrome, 4 linear matrix,
 //                5 invert, 6 contrast, 7 matrix tail), a.y = amount, b = kind-specific parameters
-//   flags      = (dither the result by its pixel before an 8-bit store: 1, 0, 0, 0)
+//   flags      = (dither the result by its pixel before an 8-bit store: 1, keep the source's alpha: 1, 0, 0)
 struct PassParams {
   sizes: vec4<i32>,
   dir_radius: vec4<i32>,
@@ -120,5 +121,8 @@ fn ld(p: vec2<i32>) -> vec4<f32> {
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
   let p = vec2<i32>(frag.xy) * 2;
   let c = (ld(p) + ld(p + vec2<i32>(1, 0)) + ld(p + vec2<i32>(0, 1)) + ld(p + vec2<i32>(1, 1))) * 0.25;
+  if (P.flags.y != 0) {
+    return c;
+  }
   return vec4<f32>(c.rgb, 1.0);
 }

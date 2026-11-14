@@ -97,12 +97,16 @@ pub struct PassParams {
     pub dir_radius: [i32; 4],
     pub weights: [[f32; 4]; 9],
     pub ops: [Op; MAX_OPS],
-    /// [`PASS_DITHER`] when the blur's result is dithered by its pixel before an 8-bit store; 0, 0, 0
+    /// [`PASS_DITHER`] when the blur's result is dithered by its pixel before an 8-bit store; [`PASS_KEEP_ALPHA`] when
+    /// the downsample and the blur keep their source's alpha; 0, 0
     pub flags: [i32; 4],
 }
 
 /// `PassParams::flags[0]`: the blur dithers its result by pixel position (its target holds 8 bits a channel).
 pub const PASS_DITHER: i32 = 1;
+/// `PassParams::flags[1]`: the downsample and the blur keep the premultiplied alpha of what they blur (a layer's content,
+/// transparent around it) instead of writing an opaque backdrop; the blur's colour stays within its alpha.
+pub const PASS_KEEP_ALPHA: i32 = 1;
 
 impl PassParams {
     pub fn new(src: (u32, u32), dst: (u32, u32)) -> Self {

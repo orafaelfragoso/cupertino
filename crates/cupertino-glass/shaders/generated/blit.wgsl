@@ -86,7 +86,7 @@ struct Op { a: vec4<f32>, b: vec4<f32> };
 //   weights    = one-sided Gaussian weights, weights[i/4][i%4] for tap i
 //   ops        = colour filter chain: a.x = kind (1 saturate, 2 luminance curve, 3 monochrome, 4 linear matrix,
 //                5 invert, 6 contrast, 7 matrix tail), a.y = amount, b = kind-specific parameters
-//   flags      = (dither the result by its pixel before an 8-bit store: 1, 0, 0, 0)
+//   flags      = (dither the result by its pixel before an 8-bit store: 1, keep the source's alpha: 1, 0, 0)
 struct PassParams {
   sizes: vec4<i32>,
   dir_radius: vec4<i32>,

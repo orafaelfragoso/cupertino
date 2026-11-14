@@ -1,4 +1,6 @@
 // One separable pass of the backdrop's Gaussian, clamped to the edge; dithered by pixel when its target has 8 bits.
+// Opaque, as a backdrop is, unless `P.flags.y` keeps the blurred (premultiplied) alpha, as a layer's content is
+// blurred: its colour then stays within its alpha.
 
 // include pass.wgsl
 
@@ -19,6 +21,9 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
   var rgb = acc.rgb;
   if (P.flags.x != 0) {
     rgb = dither_rgb(rgb, frag.xy);
+  }
+  if (P.flags.y != 0) {
+    return vec4<f32>(min(rgb, vec3<f32>(acc.a)), acc.a);
   }
   return vec4<f32>(rgb, 1.0);
 }

@@ -11,7 +11,8 @@
     the display's rate while the client is busy and costs it no repaint per frame. A layer may
     carry glass that moves with it, a blend role that mixes its pixels with the glass behind it,
     a raised elevation that lifts it above its siblings, a pointer-lit rim and a blur that varies
-    across it; the glass of several layers may join into one shape that moves as they do. A popup,
+    across it; the glass of several layers may join into one shape that moves as they do, and a
+    layer's own content may blur as it goes. A popup,
     like a panel, may be moved, faded and scaled as a whole. Scrolling and other motion that follows the pointer stay with the client: it moves
     layers with a cheap commit per frame and no repaint.
 
@@ -19,7 +20,7 @@
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="3">
+  <interface name="cupertino_layers_v1" version="4">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -97,7 +98,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="3">
+  <interface name="cupertino_layer_v1" version="4">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it
@@ -114,8 +115,8 @@
       value or animation of a property retargets it from the value and velocity shown at its
       start: the motion stays continuous in both. While reduce_motion is on
       (cupertino_appearance_v1), animations of the spatial properties (x, y, width, height, scale,
-      corner_radius) end at their target in their first frame; opacity animates as asked, so a
-      transition becomes a fade.
+      corner_radius) and of content_blur end at their target in their first frame; opacity
+      animates as asked, so a transition becomes a fade.
 
       Input: a layer takes no input. Pointer and touch go to the surfaces below, the parent's, in
       the parent's coordinates, and the client hit-tests against the layers' target values, not the
@@ -125,6 +126,15 @@
 
       Clipping: a layer is drawn only inside its parent's window, its rounded corners included,
       and with masks_to_bounds inside its own rounded bounds.
+
+      Content blur (version 4): content_blur blurs the layer's own content, not its glass nor what
+      lies behind it, by a Gaussian whose standard deviation is in the layer's points, so a panel's
+      text and symbols soften as it closes without a frame drawn for each step. The content is
+      blurred as a whole picture, transparent beyond its edges, and scales, moves, fades and is
+      clipped with the layer as its sharp content is. It applies to a layer of the normal blend
+      role; a vibrant layer draws its content sharp. 0, the initial value, draws the content as it
+      is; a client's blurred layers count towards its limits as its other layers do. On a layer
+      object below version 4, content_blur is an invalid_property.
 
       Late content: the parent's commit never waits for a layer's content. When a commit shows a
       part of the layer's bounds its content does not cover (a scroll that outruns the drawing),
@@ -137,7 +147,7 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a lens below 1, or a glass group spacing outside 0 to 64"/>
+      <entry name="invalid_value" value="0" summary="opacity outside 0 to 1, a negative size, scale, radius or blur, a content blur over 64, a lens below 1, or a glass group spacing outside 0 to 64"/>
       <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>
@@ -151,6 +161,7 @@
       <entry name="opacity" value="4" summary="opacity of the layer, its glass included, from 0 to 1"/>
       <entry name="scale" value="5" summary="scale of the layer, its glass included, about the bounds' centre"/>
       <entry name="corner_radius" value="6" summary="the radius of the bounds' continuous corners, in logical points"/>
+      <entry name="content_blur" value="7" since="4" summary="the standard deviation of a Gaussian blur of the layer's own content, in the layer's logical points before its scale, from 0 (sharp) to 64; a layer of the normal blend role only, its glass and what lies behind it never blurred"/>
     </enum>
 
     <enum name="blend">

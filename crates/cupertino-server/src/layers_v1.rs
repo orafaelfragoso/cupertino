@@ -10,7 +10,8 @@
 //! A presentation (version 2) is a layer model of a layer shell surface whose parent is itself: its offset, opacity
 //! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer. From version
 //! 3 an xdg popup's surface may have one too, and layers of one parent may join their glass into one shape
-//! ([`LayerDraw::group`]).
+//! ([`LayerDraw::group`]). Version 4 blurs a layer's own content by an animatable Gaussian
+//! ([`LayerDraw::content_blur`], drawn by `render::content_blur`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -54,21 +55,30 @@ pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
 /// The version of the global this server offers.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
 /// Widest blend between the joined shapes of a glass group, in logical points.
 pub const MAX_GROUP_SPACING: f64 = 64.0;
+/// The version from which a layer's content blurs ([`CONTENT_BLUR`]).
+pub const CONTENT_BLUR_VERSION: u32 = 4;
+/// The widest blur of a layer's content: the standard deviation of its Gaussian, in the layer's logical points.
+pub const MAX_CONTENT_BLUR: f64 = 64.0;
 
 /// The number of animatable properties ([`Property`]).
-pub const PROPERTIES: usize = 7;
+pub const PROPERTIES: usize = 8;
+/// The index of the content blur property.
+pub const CONTENT_BLUR: usize = 7;
 
 /// Source of layer serials: identity of a layer for the element cache.
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
 
-/// The index of a property on the wire.
-fn property_index(p: WEnum<Property>) -> Option<usize> {
+/// The index of a property on the wire, for a layer object of `version`.
+fn property_index(p: WEnum<Property>, version: u32) -> Option<usize> {
     match p {
+        WEnum::Value(Property::ContentBlur) => {
+            (version >= CONTENT_BLUR_VERSION).then_some(CONTENT_BLUR)
+        }
         WEnum::Value(p) => Some(match p {
             Property::X => 0,
             Property::Y => 1,
@@ -88,7 +98,7 @@ fn presented(prop: usize) -> bool {
     matches!(prop, 0 | 1 | 4 | 5)
 }
 
-/// Properties that move or reshape the layer, which reduced motion does not animate.
+/// Properties that move, reshape or blur the layer, which reduced motion does not animate.
 fn spatial(prop: usize) -> bool {
     prop != 4
 }
@@ -98,6 +108,7 @@ fn in_range(prop: usize, v: f64) -> bool {
     match prop {
         0 | 1 => v.is_finite(),
         4 => (0.0..=1.0).contains(&v),
+        CONTENT_BLUR => (0.0..=MAX_CONTENT_BLUR).contains(&v),
         _ => v >= 0.0 && v.is_finite(),
     }
 }
@@ -485,6 +496,8 @@ pub struct LayerDraw {
     /// The glass group, 0 for the layer's glass alone, and how far the group's shapes blend, in points.
     pub group: u32,
     pub spacing: f64,
+    /// The standard deviation of the blur of the layer's content, in the layer's points; 0 draws it sharp.
+    pub content_blur: f64,
 }
 
 /// The layers of `parent` as shown at `now`, back to front (flat ones in creation order, then raised ones), starting
@@ -516,6 +529,7 @@ pub fn present(parent: &WlSurface, now: f64, reduce_motion: bool) -> Vec<LayerDr
                     placeholder: l.placeholder,
                     group: l.group,
                     spacing: l.spacing,
+                    content_blur: l.value(CONTENT_BLUR, now).clamp(0.0, MAX_CONTENT_BLUR),
                 }
             })
             .collect();
@@ -817,7 +831,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 }
             }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 3 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 4 has no other request"),
         }
     }
 }
@@ -861,7 +875,8 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                          to: f64,
                          curve: Option<LayerCurve>,
                          velocity: f64| {
-            let Some(prop) = property_index(property).filter(|&p| !data.whole || presented(p))
+            let Some(prop) =
+                property_index(property, layer.version()).filter(|&p| !data.whole || presented(p))
             else {
                 return bad_property("property");
             };
@@ -891,7 +906,9 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
         match request {
             R::Destroy => {}
             R::SetValue { property, value } => {
-                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                match property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                {
                     None => bad_property("property"),
                     Some(prop) if !in_range(prop, value) => {
                         bad_value("the value is outside the property's range")
@@ -932,7 +949,9 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 velocity,
             ),
             R::Cancel { property } => {
-                match property_index(property).filter(|&p| !data.whole || presented(p)) {
+                match property_index(property, layer.version())
+                    .filter(|&p| !data.whole || presented(p))
+                {
                     Some(prop) => data.queue(Op::Cancel(prop)),
                     None => bad_property("property"),
                 }
@@ -999,7 +1018,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 }
                 data.queue(Op::Group(group, spacing));
             }
-            _ => unreachable!("cupertino_layer_v1 version 3 has no other request"),
+            _ => unreachable!("cupertino_layer_v1 version 4 has no other request"),
         }
     }
 
@@ -1045,5 +1064,21 @@ mod tests {
         assert!(!spatial(4) && spatial(0) && spatial(5));
         assert!(presented(0) && presented(1) && presented(4) && presented(5));
         assert!(!presented(2) && !presented(3) && !presented(6));
+    }
+
+    #[test]
+    fn content_blur_is_a_property_from_version_4_from_sharp_to_its_widest_and_reduced_motion_ends_it(
+    ) {
+        let blur = WEnum::Value(Property::ContentBlur);
+        assert_eq!(property_index(blur, 3), None);
+        assert_eq!(property_index(blur, 4), Some(CONTENT_BLUR));
+        assert_eq!(property_index(WEnum::Value(Property::Opacity), 3), Some(4));
+        assert!(in_range(CONTENT_BLUR, 0.0) && in_range(CONTENT_BLUR, MAX_CONTENT_BLUR));
+        assert!(!in_range(CONTENT_BLUR, -0.5) && !in_range(CONTENT_BLUR, 64.5));
+        assert!(!presented(CONTENT_BLUR), "a presentation does not blur");
+        assert!(
+            spatial(CONTENT_BLUR),
+            "reduced motion ends a blur at its target"
+        );
     }
 }

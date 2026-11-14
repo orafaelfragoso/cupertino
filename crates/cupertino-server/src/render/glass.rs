@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
 use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
-use cupertino_glass::ops::PassParams;
+use cupertino_glass::ops::{PassParams, PASS_KEEP_ALPHA};
 use cupertino_glass::shaders::{GLASS_BLOCK, GLASS_FILL, GLASS_LEVELS, PLACEMENT};
 use cupertino_raster_math::blur::plan_blur;
 use cupertino_theme::glass::{
@@ -868,14 +868,17 @@ pub struct GlassDraw<'a> {
 }
 
 impl MaterialGl {
-    /// `src` blurred with a Gaussian of `sigma_pt` points at `px_per_pt` texels per point, into a new target.
+    /// `src` blurred with a Gaussian of `sigma_pt` points at `px_per_pt` texels per point, into a new target; opaque as a
+    /// backdrop, or keeping the alpha of `src` with `keep_alpha`.
     unsafe fn blurred(
         &mut self,
         gl: &ffi::Gles2,
         src: (GLuint, (i32, i32)),
         sigma_pt: f32,
         px_per_pt: f32,
+        keep_alpha: bool,
     ) -> Option<Target> {
+        let alpha = if keep_alpha { PASS_KEEP_ALPHA } else { 0 };
         let (ds, ds_loc, bl, bl_loc) = {
             let progs = self.progs.as_ref()?;
             (
@@ -891,10 +894,11 @@ impl MaterialGl {
         for lvl in &plan.levels {
             let next_size = (lvl.0 as i32, lvl.1 as i32);
             let next = self.take_target(gl, next_size)?;
-            let params = PassParams::new(
+            let mut params = PassParams::new(
                 (size.0 as u32, size.1 as u32),
                 (next_size.0 as u32, next_size.1 as u32),
             );
+            params.flags[1] = alpha;
             self.pass(gl, ds, ds_loc, tex, &next, &params);
             (tex, size) = (next.tex, next.size);
             if let Some(o) = owned.replace(next) {
@@ -906,6 +910,7 @@ impl MaterialGl {
             (size.0 as u32, size.1 as u32),
         );
         params.set_weights(&plan.weights);
+        params.flags[1] = alpha;
         let radius = plan.weights.len() as i32 - 1;
         let tmp = self.take_target(gl, size)?;
         let out = self.take_target(gl, size)?;
@@ -918,6 +923,72 @@ impl MaterialGl {
             self.free.push(o);
         }
         Some(out)
+    }
+
+    /// The texture `src` of `size` texels blurred by a Gaussian of `sigma_pt` points at `px_per_pt` texels a point, as
+    /// [`blurred`](Self::blurred) makes it, and stretched back to `size` into the texture `dst`: a layer's content blur
+    /// (`crate::render::content_blur`). The GL state is as it was after it; false when the passes are unavailable.
+    pub(crate) unsafe fn blur_texture(
+        &mut self,
+        gl: &ffi::Gles2,
+        src: GLuint,
+        dst: GLuint,
+        size: (i32, i32),
+        sigma_pt: f32,
+        px_per_pt: f32,
+    ) -> bool {
+        if self.progs.is_none() {
+            return false;
+        }
+        let saved = SavedState::capture(gl);
+        gl.Disable(ffi::SCISSOR_TEST);
+        gl.Disable(ffi::BLEND);
+        // a texture made as a render target has no sampling state of its own yet: without it the passes read nothing
+        gl.ActiveTexture(ffi::TEXTURE0);
+        gl.BindTexture(ffi::TEXTURE_2D, src);
+        for (name, value) in [
+            (ffi::TEXTURE_MIN_FILTER, ffi::LINEAR),
+            (ffi::TEXTURE_MAG_FILTER, ffi::LINEAR),
+            (ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE),
+            (ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE),
+        ] {
+            gl.TexParameteri(ffi::TEXTURE_2D, name, value as i32);
+        }
+        let done = match self.blurred(gl, (src, size), sigma_pt, px_per_pt, true) {
+            Some(out) => {
+                let mut fbo = 0;
+                gl.GenFramebuffers(1, &mut fbo);
+                gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, fbo);
+                gl.FramebufferTexture2D(
+                    ffi::DRAW_FRAMEBUFFER,
+                    ffi::COLOR_ATTACHMENT0,
+                    ffi::TEXTURE_2D,
+                    dst,
+                    0,
+                );
+                gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, out.fbo);
+                gl.BlitFramebuffer(
+                    0,
+                    0,
+                    out.size.0,
+                    out.size.1,
+                    0,
+                    0,
+                    size.0,
+                    size.1,
+                    ffi::COLOR_BUFFER_BIT,
+                    ffi::LINEAR,
+                );
+                gl.BindFramebuffer(ffi::FRAMEBUFFER, 0);
+                gl.DeleteFramebuffers(1, &fbo);
+                self.stats.passes += 1;
+                self.free.push(out);
+                true
+            }
+            None => false,
+        };
+        saved.restore(gl);
+        done
     }
 
     /// Capture framebuffer rectangle `fb` of `src_fbo` at the recipe's capture scale and blur it into the copies (one per distinct
@@ -974,12 +1045,12 @@ impl MaterialGl {
         let mut slots = [usize::MAX; BLUR_LEVELS + 1];
         for (i, (sigma, used)) in glass.levels().into_iter().enumerate() {
             if used {
-                targets.push(self.blurred(gl, src, sigma, px_per_pt)?);
+                targets.push(self.blurred(gl, src, sigma, px_per_pt, false)?);
                 slots[i] = targets.len() - 1;
             }
         }
         if let Some(sigma) = glass.fill_sigma() {
-            targets.push(self.blurred(gl, src, sigma, px_per_pt)?);
+            targets.push(self.blurred(gl, src, sigma, px_per_pt, false)?);
             slots[BLUR_LEVELS] = targets.len() - 1;
         }
         // a level no shape reads has no weight: any texture will do

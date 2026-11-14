@@ -383,7 +383,7 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=3, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=4, ()).unwrap();
             let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let ls = shell.get_layer_surface(
@@ -1031,6 +1031,107 @@ fn a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move() {
     );
     // a spacing past the most the server blends is refused
     client.send(|c, _| c.l(0).set_glass_group(1, 65.0));
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    assert_eq!(
+        client.heard(|e| e.error.clone()).unwrap().1,
+        cupertino_layer_v1::Error::InvalidValue as u32
+    );
+}
+
+/// The share of a unit Gaussian below `z` standard deviations (its integral), from the error function's rational
+/// approximation, good to well under a thousandth.
+fn gaussian_share(z: f64) -> f64 {
+    let x = z.abs() / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let erf = 1.0 - poly * (-x * x).exp();
+    0.5 * (1.0 + erf.copysign(z))
+}
+
+#[test]
+fn a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_and_the_parent_stays_sharp(
+) {
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 200.0);
+        c.l(0).set_value(Property::Y, 100.0);
+        c.parent.commit();
+    });
+    h.wait_until("the layer placed", |h| h.layers()[0].x == 200.0);
+    // the red content covers the parent's (200, 100) to (300, 150)
+    let (inside, outside, middle) = ((298, 125), (303, 125), (250, 125));
+    let sharp = h.screenshot("blur-sharp");
+    assert_eq!(at(&sharp, inside.0, inside.1), [255, 0, 0, 255]);
+    assert_eq!(at(&sharp, outside.0, outside.1), grey(0, 0));
+    // blurred by four points the edge softens both ways: the parent beside it reddens, the content by it pales
+    client.send(|c, _| {
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur", |h| h.layers()[0].content_blur == 4.0);
+    let soft = h.screenshot("blur-soft");
+    // across the right edge the colour follows the Gaussian's integral, the red's share of each pixel
+    for x in 288..314 {
+        let share = gaussian_share((300.0 - (f64::from(x) + 0.5)) / 4.0);
+        let red = 255.0 * share + 128.0 * (1.0 - share);
+        let shown = at(&soft, x, 125);
+        assert!(
+            (f64::from(shown[0]) - red).abs() <= 3.0
+                && (f64::from(shown[1]) - 128.0 * (1.0 - share)).abs() <= 3.0,
+            "{x}: {shown:?} against {red:.1}"
+        );
+    }
+    let (i, o, m) = (
+        at(&soft, inside.0, inside.1),
+        at(&soft, outside.0, outside.1),
+        at(&soft, middle.0, middle.1),
+    );
+    assert!(
+        o[0] > 150 && o[1] < 110,
+        "the blur reaches past the edge: {o:?}"
+    );
+    assert!(i[0] < 255 && i[1] > 10, "the edge's inside softens: {i:?}");
+    assert!(
+        m[0] >= 252 && m[1] <= 3,
+        "well inside the content stays as it is: {m:?}"
+    );
+    assert_eq!(at(&soft, 120, 125), grey(0, 0), "the parent is not blurred");
+    // a blur animates on the server's clock like any property
+    h.state.fixed_time = Some(40.0);
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(9, Property::ContentBlur, 12.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur's animation", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 40.0))
+    });
+    h.state.fixed_time = Some(40.5);
+    assert!((h.layers()[0].content_blur - 8.0).abs() < 1e-6);
+    let wider = h.screenshot("blur-wider");
+    assert!(
+        at(&wider, 310, 125)[0] > at(&soft, 310, 125)[0],
+        "a wider blur reaches further"
+    );
+    h.state.fixed_time = Some(41.0);
+    h.wait_until("finished", |_| client.heard(|e| e.finished == [9]));
+    // under reduce motion a blur goes to its target at once
+    h.state.accessibility.settings.display.reduce_motion = true;
+    client.send(|c, _| {
+        c.l(0)
+            .animate_timed(10, Property::ContentBlur, 0.0, 1000, 0.0, 0.0, 1.0, 1.0);
+        c.parent.commit();
+    });
+    h.wait_until("sharp again", |h| h.layers()[0].content_blur == 0.0);
+    // past the widest blur the server takes is refused
+    client.send(|c, _| c.l(0).set_value(Property::ContentBlur, 64.5));
     h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
     assert_eq!(
         client.heard(|e| e.error.clone()).unwrap().1,

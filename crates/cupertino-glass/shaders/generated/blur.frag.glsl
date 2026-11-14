@@ -369,8 +369,16 @@ void main() {
         vec3 _e46 = dither_rgb(_e44, frag.xy);
         rgb = _e46;
     }
-    vec3 _e47 = rgb;
-    _fs2p_location0 = vec4(_e47, 1.0);
+    int _e50 = _group_0_binding_0_fs.flags.y;
+    if ((_e50 != 0)) {
+        vec3 _e53 = rgb;
+        float _e55 = acc.w;
+        float _e59 = acc.w;
+        _fs2p_location0 = vec4(min(_e53, vec3(_e55)), _e59);
+        return;
+    }
+    vec3 _e61 = rgb;
+    _fs2p_location0 = vec4(_e61, 1.0);
     return;
 }
 

@@ -87,6 +87,8 @@ fn dither_rgb(c: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
 
 // ---- blur.wgsl ----
 // One separable pass of the backdrop's Gaussian, clamped to the edge; dithered by pixel when its target has 8 bits.
+// Opaque, as a backdrop is, unless `P.flags.y` keeps the blurred (premultiplied) alpha, as a layer's content is
+// blurred: its colour then stays within its alpha.
 
 // ---- pass.wgsl ----
 // What every backdrop pass shares: its uniform block, its source texture and the full-screen triangle it is drawn
@@ -101,7 +103,7 @@ struct Op { a: vec4<f32>, b: vec4<f32> };
 //   weights    = one-sided Gaussian weights, weights[i/4][i%4] for tap i
 //   ops        = colour filter chain: a.x = kind (1 saturate, 2 luminance curve, 3 monochrome, 4 linear matrix,
 //                5 invert, 6 contrast, 7 matrix tail), a.y = amount, b = kind-specific parameters
-//   flags      = (dither the result by its pixel before an 8-bit store: 1, 0, 0, 0)
+//   flags      = (dither the result by its pixel before an 8-bit store: 1, keep the source's alpha: 1, 0, 0)
 struct PassParams {
   sizes: vec4<i32>,
   dir_radius: vec4<i32>,
@@ -148,6 +150,9 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
   var rgb = acc.rgb;
   if (P.flags.x != 0) {
     rgb = dither_rgb(rgb, frag.xy);
+  }
+  if (P.flags.y != 0) {
+    return vec4<f32>(min(rgb, vec3<f32>(acc.a)), acc.a);
   }
   return vec4<f32>(rgb, 1.0);
 }

@@ -527,11 +527,18 @@ Gate:
     - [x] Glass groups (version 3, `set_glass_group`): the layers of one group draw their glass as one container of
           their shapes as shown each frame, blended over the group's spacing, so a button grows out of the field's
           glass as the layers move (`a_glass_group_joins_the_glass_of_its_layers_into_one_shape_as_they_move`).
-    - [ ] Content blur: an animatable property that blurs a layer's own content (not its backdrop) by a Gaussian in
-          points, with the compositor's blur and within the per-client limits. It needs an offscreen pass of the
-          layer's content in the compositor's render path (the content drawn into a target, the blur's pyramid over
-          it, the result drawn in its place), added beside the material passes with the render work under way there;
-          version 4 of the protocol then offers it.
+    - [x] Content blur (version 4, `content_blur`): an animatable property that blurs a layer's own content (not its
+          glass nor what lies behind it) by a Gaussian in the layer's points, 0 to 64, ended at its target under Reduce
+          Motion. The compositor draws each surface of the layer into a texture with room for three deviations around
+          it, blurs it by the backdrop passes' pyramid and separable Gaussian and draws it in the content's place through
+          the layer's mask, scale and opacity (`render/content_blur.rs`), keeping a blur until the surface, the deviation
+          or the scale changes. The backdrop passes wrote an opaque result; under a new pass flag (`PASS_KEEP_ALPHA`)
+          the downsample and the blur keep the premultiplied alpha of what they blur, the colour within it, and a
+          backdrop's passes are as they were. A vibrant layer draws its content sharp. Across a straight edge the blurred
+          content is within 3/255 of the Gaussian's integral
+          (`a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_and_the_parent_stays_sharp`,
+          `content_blur_is_a_property_from_version_4_from_sharp_to_its_widest_and_reduced_motion_ends_it`); the client
+          side is `LayerProperty::ContentBlur`.
     - [ ] The launcher as layers: the enclosure a layer whose width, height and corner animate with its glass, its
           content a sibling that does not scale, the search field's layer animating its width, each mode button a layer
           on its own spring in a glass group with the field, and the close animating the content blur; its look at

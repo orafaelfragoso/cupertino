@@ -12,6 +12,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 
 pub mod clip;
 pub mod compose;
+pub mod content_blur;
 pub mod gles;
 pub mod image;
 pub mod layers;
@@ -62,6 +63,8 @@ render_elements! {
     ClippedDecoration = RescaleRenderElement<ClipElement<MemoryRenderBufferRenderElement<GlesRenderer>>>,
     /// Window snapshot drawn through an effect mesh (minimize, closing).
     Mesh = MeshElement,
+    /// A layer's content drawn from its blurred copy, masked and rescaled as window content.
+    Blurred = RescaleRenderElement<ClipElement<content_blur::BlurredContent>>,
 }
 
 pub use cupertino_scene::{LayerStack, SceneLayer};

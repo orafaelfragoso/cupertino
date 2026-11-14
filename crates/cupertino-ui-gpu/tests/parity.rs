@@ -656,6 +656,155 @@ fn scenes_of_everything_match_the_cpu() {
     compare(Kind::All, 800..812);
 }
 
+/// A symbol image, `side` texels square, with rows and columns of their own so a move by one pixel shows.
+fn symbol(side: u32) -> ImageResource {
+    let pixels: Vec<u8> = (0..side * side)
+        .flat_map(|i| {
+            let (x, y) = (i % side, i / side);
+            let a = if (x + 2 * y) % 5 == 0 {
+                0
+            } else {
+                40 + (x * 31 + y * 57) % 216
+            };
+            let c = |k: u32| ((y * k + x * 7) % 256 * a / 255) as u8;
+            [c(3), c(11), a as u8, a as u8]
+        })
+        .collect();
+    ImageResource {
+        revision: 1,
+        width: side,
+        height: side,
+        stride: side * 4,
+        format: PixelFormat::Rgba8Premultiplied,
+        pixels: Arc::from(pixels),
+    }
+}
+
+const SYMBOL: ResourceId = ResourceId(40);
+
+/// The sidebar's size in points.
+const SIDEBAR: (f64, f64) = (121.0, 83.0);
+
+/// A sidebar with one selected row at `row` (its top-left corner in points): an opaque background, the selection's
+/// rounded fill and, over it, a 20-point symbol at `symbol` in the row drawn one texel per device pixel, as a sidebar
+/// draws its rows' symbols.
+fn sidebar(row: Point, symbol: Point, scale: f64) -> DisplayList {
+    let side = (20.0 * scale).round();
+    let mut background = node(
+        1,
+        None,
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        vec![PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, SIDEBAR.0, SIDEBAR.1)),
+            paint: Paint::Solid(Color::new(0.92, 0.91, 0.9, 1.0)),
+        }],
+    );
+    background.bounds = Rect::new(0.0, 0.0, SIDEBAR.0, SIDEBAR.1);
+    let mut selected = node(
+        2,
+        Some(1),
+        Transform([1.0, 0.0, 0.0, 1.0, row.x, row.y]),
+        vec![
+            PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect: Rect::new(0.0, 0.0, 100.0, 32.0),
+                    radius: 6.0,
+                },
+                paint: Paint::Solid(Color::new(0.0, 0.48, 1.0, 0.2)),
+            },
+            PaintOp::Image {
+                image: ResourceRef {
+                    id: SYMBOL,
+                    revision: 1,
+                },
+                src: Rect::new(0.0, 0.0, side, side),
+                dst: Rect::new(symbol.x, symbol.y, 20.0, 20.0),
+                sampling: Sampling::Linear,
+            },
+        ],
+    );
+    selected.bounds = Rect::new(row.x, row.y, 100.0, 32.0);
+    DisplayList {
+        nodes: vec![background, selected],
+    }
+}
+
+/// A selected sidebar row's symbol, drawn one texel per device pixel at positions that fall on half pixels and
+/// between them at scales 1 and 1.5, lands on the same whole pixels on both renderers: drawn whole, and repainted
+/// under damage that cuts through the symbol, so the CPU renderer draws it into pieces whose origin lies inside it or
+/// past it. Each repaint, which changes nothing, is also the frame drawn whole.
+#[test]
+fn a_selected_rows_symbol_on_a_half_pixel_lands_where_the_cpu_puts_it() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let mut failures = Vec::new();
+    for scale in [1.0_f64, 1.5] {
+        let mut resources = resources();
+        resources
+            .images
+            .insert(SYMBOL, symbol((20.0 * scale).round() as u32));
+        let size = (
+            (SIDEBAR.0 * scale).ceil() as u32,
+            (SIDEBAR.1 * scale).ceil() as u32,
+        );
+        // rows on whole and half points, and on thirds (half pixels at 1.5)
+        for row in [
+            Point::new(10.0, 21.5),
+            Point::new(10.5, 21.0),
+            Point::new(10.0, 20.0 + 1.0 / 3.0),
+            Point::new(9.0 + 2.0 / 3.0, 21.25),
+        ] {
+            for at in [
+                Point::new(8.75, 6.0),
+                Point::new(8.5, 6.5),
+                Point::new(9.0 + 1.0 / 3.0, 5.0 + 2.0 / 3.0),
+            ] {
+                let (left, top) = (row.x + at.x, row.y + at.y);
+                // the symbol's lower half, its upper half, a band through its middle, its right half
+                let cuts = [
+                    Rect::new(0.0, top + 9.5, SIDEBAR.0, 20.0),
+                    Rect::new(0.0, top - 5.0, SIDEBAR.0, 14.75),
+                    Rect::new(left - 3.0, top + 7.0, 30.0, 3.0),
+                    Rect::new(left + 11.0, 0.0, 20.0, SIDEBAR.1),
+                ];
+                let mut cpu = common::cpu(Boxes);
+                let mut gpu = common::gpu(&device, Boxes);
+                let list = sidebar(row, at, scale);
+                let mut frames = vec![DamageRegion::Full];
+                frames.extend(cuts.iter().map(|cut| DamageRegion::Rects(vec![*cut])));
+                for (frame, damage) in frames.iter().enumerate() {
+                    let f = Frame {
+                        list: &list,
+                        resources: &resources,
+                        scale,
+                        size,
+                        damage,
+                    };
+                    let a = common::draw_cpu(&mut cpu, &f);
+                    let b = common::draw_gpu(&mut gpu, &f);
+                    let whole = Frame {
+                        damage: &DamageRegion::Full,
+                        ..f
+                    };
+                    let w = common::draw_cpu(&mut common::cpu(Boxes), &whole);
+                    for (what, other) in [("gpu", &b), ("cpu drawn whole", &w)] {
+                        let (beyond, most, first) = common::difference(&a, other, size.0);
+                        if beyond > 0 {
+                            let (x, y, p, q) = first.unwrap();
+                            failures.push(format!(
+                                "scale {scale} row {row:?} symbol at {at:?} frame {frame} ({damage:?}): {what} \
+                                 {beyond} pixels beyond, largest {most}; first at ({x}, {y}): cpu {p:?} {what} {q:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Where the scroll layer's clip shows its content, in points.
 const VIEW: Rect = Rect {
     origin: Point { x: 4.0, y: 8.0 },

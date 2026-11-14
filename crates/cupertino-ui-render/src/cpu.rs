@@ -13,6 +13,7 @@ use crate::{
 };
 use cupertino_geometry::Rect;
 use cupertino_raster_math::dither;
+use cupertino_raster_math::placement::whole_pixel;
 use cupertino_theme::Color;
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph};
 use std::collections::HashMap;
@@ -1791,14 +1792,18 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return Ok(());
         };
         let mut ts = self.ts(t, node);
-        // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled
+        // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled; the
+        // pixel is chosen in window pixels, so every piece of the window it is drawn into puts it in the same place
         let device = ts.pre_concat(place);
         if device.kx == 0.0
             && device.ky == 0.0
             && (device.sx - 1.0).abs() < 1e-4
             && (device.sy - 1.0).abs() < 1e-4
         {
-            ts = ts.post_translate(device.tx.round() - device.tx, device.ty.round() - device.ty);
+            let window = self.window_ts(node).pre_concat(place);
+            let x = whole_pixel(window.tx) - t.origin.0 as f32;
+            let y = whole_pixel(window.ty) - t.origin.1 as f32;
+            ts = ts.post_translate(x - device.tx, y - device.ty);
         }
         t.pixmap.fill_path(
             &path,
@@ -3225,6 +3230,86 @@ mod tests {
                     incremental_matches_full(seed, scale, scene(seed), fast);
                     incremental_matches_full(seed, scale, harsh(seed), fast);
                 }
+            }
+        }
+    }
+
+    /// The row a list draws at, in points.
+    const ROW: (f64, f64) = (10.0, 20.0);
+
+    /// An opaque background and a row at [`ROW`]: a rounded fill under the 8 x 8 picture drawn one texel per device
+    /// pixel at `image` (points in the row).
+    fn picture_row(image: (f64, f64), scale: f64) -> DisplayList {
+        let side = 8.0 / scale;
+        let background = plain(
+            1,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, SCENE.0, SCENE.1)),
+                paint: Paint::Solid(Color::new(0.92, 0.91, 0.9, 1.0)),
+            }],
+        );
+        let row = plain(
+            2,
+            Some(1),
+            ROW,
+            vec![
+                PaintOp::Fill {
+                    shape: Shape::RoundedRect {
+                        rect: Rect::new(0.0, 0.0, 60.0, 16.0),
+                        radius: 5.0,
+                    },
+                    paint: Paint::Solid(Color::new(0.0, 0.48, 1.0, 0.2)),
+                },
+                PaintOp::Image {
+                    image: ResourceRef {
+                        id: PICTURE,
+                        revision: 1,
+                    },
+                    src: Rect::new(0.0, 0.0, 8.0, 8.0),
+                    dst: Rect::new(image.0, image.1, side, side),
+                    sampling: Sampling::Linear,
+                },
+            ],
+        );
+        DisplayList {
+            nodes: vec![background, row],
+        }
+    }
+
+    /// An image drawn one texel per device pixel lands on the window pixel nearest its position, a half pixel moving
+    /// down and right, whatever piece of the window it is painted in: drawn whole, and repainted under damage whose
+    /// edge cuts through it (the piece's origin inside the image, so its position there is negative), it has the
+    /// bytes of the image drawn on that whole pixel.
+    #[test]
+    fn an_image_on_a_half_pixel_lands_on_one_window_pixel_whatever_piece_paints_it() {
+        // the image in the row so its corner falls on x.5 device pixels on both axes, and the device pixel it lands on
+        for (scale, image, landed) in [
+            (1.0, (3.5, 3.5), (14.0, 24.0)),
+            (1.5, (5.0, 3.0), (23.0, 35.0)),
+            (2.0, (2.25, 3.75), (25.0, 48.0)),
+        ] {
+            let on_whole = picture_row((landed.0 / scale - ROW.0, landed.1 / scale - ROW.1), scale);
+            let renderer = || CpuRenderer::new(layer_config(), NoGlyphs);
+            let expected = draw_frame(&mut renderer(), &on_whole, &DamageRegion::Full, scale);
+            let list = picture_row(image, scale);
+            let mut r = renderer();
+            let (left, top) = (ROW.0 + image.0, ROW.1 + image.1);
+            for (frame, damage) in [
+                DamageRegion::Full,
+                DamageRegion::Rects(vec![Rect::new(0.0, top + 2.0, SCENE.0, 20.0)]),
+                DamageRegion::Rects(vec![Rect::new(left + 1.5, 0.0, 30.0, SCENE.1)]),
+                DamageRegion::Rects(vec![Rect::new(left + 1.0, top + 1.0, 2.0, 2.0)]),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let f = draw_frame(&mut r, &list, damage, scale);
+                assert!(
+                    f.pixels == expected.pixels,
+                    "scale {scale} frame {frame} ({damage:?}): the image is not on device pixel {landed:?}"
+                );
             }
         }
     }

@@ -17,6 +17,7 @@ use cupertino_raster_math::blur::{plan_blur, MAX_BLUR_RADIUS};
 use cupertino_raster_math::coverage::{coverage, rect_distance, rounded_distance};
 use cupertino_raster_math::dither;
 use cupertino_raster_math::gradient::{Stop, Stops, MAX_STOPS};
+use cupertino_raster_math::placement::whole_pixel;
 use cupertino_theme::Color;
 use cupertino_ui_render::{
     Effect, Group, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, RenderError, RenderRequest,
@@ -1867,13 +1868,17 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             (dst.min_y() + (y0 - src.min_y()) * sy) as f32,
         );
         let mut ts = geometry::to_target(&node.transform, self.scale, (0, 0));
+        // one source pixel per device pixel: on the whole window pixel the CPU renderer puts it on
         let device = ts.pre_concat(place);
         if device.kx == 0.0
             && device.ky == 0.0
             && (device.sx - 1.0).abs() < 1e-4
             && (device.sy - 1.0).abs() < 1e-4
         {
-            ts = ts.post_translate(device.tx.round() - device.tx, device.ty.round() - device.ty);
+            ts = ts.post_translate(
+                whole_pixel(device.tx) - device.tx,
+                whole_pixel(device.ty) - device.ty,
+            );
         }
         let Some(inv) = geometry::inverse(ts.pre_concat(place)) else {
             return Ok(());

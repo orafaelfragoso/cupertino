@@ -483,7 +483,7 @@ fn a_window_declares_its_opaque_background_and_takes_it_back_on_none() {
     let mut rt = Runtime::<Glassy, FakeSystem>::new(FakeSystem::default(), options(&damage));
     rt.step(steps()).unwrap();
     let window = rt.windows()[0].1;
-    configure_at(&mut rt, window, 1, Size::new(200.0, 100.0));
+    configure_at(&mut rt, window, 1, Size::new(400.0, 300.0));
     let regions = |rt: &Runtime<Glassy, FakeSystem>| -> Vec<Vec<Rect>> {
         rt.window_system()
             .requests
@@ -510,7 +510,7 @@ fn a_window_declares_its_opaque_background_and_takes_it_back_on_none() {
     );
     assert_eq!(
         regions(&rt),
-        [vec![Rect::new(1.0, 1.0, 198.0, 98.0)]],
+        [vec![Rect::new(1.0, 1.0, 398.0, 298.0)]],
         "the window less a point"
     );
     frame(

@@ -2648,19 +2648,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 .as_ref()
                 .is_some_and(|d| !matches!(d, DamageRegion::Rects(r) if r.is_empty()))
             || (painting.layer.is_some() && w.layer.damage.repainted());
-        lap(&mut self.frame_timing, Phase::Paint, painting_since);
-        // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
-        // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage
-        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
-            && !w.damage.repainted()
-            && !layer_changed
-            && !materials_changed
-            && w.ack.is_none()
-            && !w.owed
-        {
-            return Ok(());
-        }
-        // a toplevel says which of its parts its pixels cover whole, with this frame: the compositor leaves out what lies
+        // a toplevel says which of its parts its pixels cover whole, with the next frame: the compositor leaves out what lies
         // under them and tells a window they cover all of that it is not seen
         if w.popup.is_none() {
             let opaque = crate::opaque::region(&w.display_list, w.size, &w.materials);
@@ -2672,6 +2660,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             {
                 w.opaque = opaque;
             }
+        }
+        lap(&mut self.frame_timing, Phase::Paint, painting_since);
+        // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
+        // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage
+        if matches!(&damage, DamageRegion::Rects(r) if r.is_empty())
+            && !w.damage.repainted()
+            && !layer_changed
+            && !materials_changed
+            && w.ack.is_none()
+            && !w.owed
+        {
+            return Ok(());
         }
         let scale = w.env.scale;
         let width = physical(w.size.width, scale);

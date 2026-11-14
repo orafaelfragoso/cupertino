@@ -11,9 +11,10 @@ use cupertino_geometry::{Rect, Size};
 use cupertino_ui_platform::MaterialRegion;
 use cupertino_ui_render::{DisplayList, Paint, PaintNodeId, PaintOp, Shape, Transform};
 
-/// The shortest side a rectangle of the region may have, in points: smaller fills are left out, and a subtree whose
-/// bounds are smaller is not walked, so a frame of thousands of rows looks at only the few large surfaces.
-const LEAST_SIDE: f64 = 64.0;
+/// The shortest side a rectangle of the region may have, in points: smaller fills are left out, and the operations of
+/// a node whose bounds are smaller are not looked at, so a frame of thousands of rows and cells looks only at the few
+/// panes that cover most of a window.
+const LEAST_SIDE: f64 = 128.0;
 /// How many rectangles a window's region holds at most: the largest, so a window says what covers most of it in a
 /// region the compositor can test quickly.
 const MOST_RECTS: usize = 16;
@@ -28,6 +29,7 @@ pub(crate) fn region(list: &DisplayList, size: Size, materials: &[MaterialRegion
     // the nodes above the one being looked at, each with the clip it leaves its descendants (in window points; `None`
     // for no clip) and whether its descendants may count at all
     let mut stack: Vec<(PaintNodeId, Option<Rect>, bool)> = Vec::new();
+    let mut clips: Vec<Option<Rect>> = Vec::new();
     for node in &list.nodes {
         while stack
             .last()
@@ -51,7 +53,8 @@ pub(crate) fn region(list: &DisplayList, size: Size, materials: &[MaterialRegion
         };
         let place = |r: Rect| r.translate(dx, dy);
         // the node's own operations, under its ancestors' clips and the clips they push themselves
-        let mut clips = vec![clip];
+        clips.clear();
+        clips.push(clip);
         let mut groups = 0usize;
         for op in &node.ops {
             match op {
@@ -70,7 +73,7 @@ pub(crate) fn region(list: &DisplayList, size: Size, materials: &[MaterialRegion
                     paint: Paint::Solid(color),
                 } if groups == 0 && color.a >= 1.0 => {
                     let top = *clips.last().expect("the ancestors' clip stays");
-                    for r in cross(shape) {
+                    for r in cross(shape).into_iter().flatten() {
                         if let Some(r) = top.and_then(|c| c.intersection(&place(r))) {
                             if r.width() >= LEAST_SIDE && r.height() >= LEAST_SIDE {
                                 found.push(r);
@@ -126,18 +129,18 @@ fn inside(shape: &Shape) -> Option<Rect> {
     }
 }
 
-/// The rectangles a fill of `shape` covers whole: a rectangle, or the two bars of a rounded rectangle's cross.
-fn cross(shape: &Shape) -> Vec<Rect> {
+/// The rectangles a fill of `shape` covers whole: a rectangle, or the two bars of a rounded rectangle's cross; none
+/// for a path or a fill too small to count.
+fn cross(shape: &Shape) -> [Option<Rect>; 2] {
     match shape {
-        Shape::Rect(r) => vec![*r],
-        Shape::RoundedRect { rect, radius } => {
+        Shape::Rect(r) => [Some(*r), None],
+        Shape::RoundedRect { rect, radius }
+            if rect.width() >= LEAST_SIDE && rect.height() >= LEAST_SIDE =>
+        {
             let r = corner(rect, *radius);
             [inset_by(*rect, r, 0.0), inset_by(*rect, 0.0, r)]
-                .into_iter()
-                .flatten()
-                .collect()
         }
-        Shape::Path { .. } => Vec::new(),
+        _ => [None, None],
     }
 }
 
@@ -366,7 +369,7 @@ mod tests {
                 Some(1),
                 (i as f64, 0.0),
                 vec![fill(
-                    Shape::Rect(Rect::new(0.0, 0.0, 100.0 + i as f64, 100.0)),
+                    Shape::Rect(Rect::new(0.0, 0.0, 200.0 + i as f64, 200.0)),
                     OPAQUE,
                 )],
             ));

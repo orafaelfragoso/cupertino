@@ -1052,6 +1052,71 @@ fn gaussian_share(z: f64) -> f64 {
 }
 
 #[test]
+fn a_layer_s_content_blur_is_in_points_and_scales_with_the_layer_at_a_fractional_scale() {
+    let Some(mut h) = Harness::new(1.5, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, 200.0);
+        c.l(0).set_value(Property::Y, 100.0);
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur", |h| h.layers()[0].content_blur == 4.0);
+    // the right edge lies at the parent's 300 points: 600 device pixels from the output's left edge at 1.5
+    let edge = f64::from(MARGIN.0 + 300) * 1.5;
+    let row = ((f64::from(MARGIN.1) + 125.0) * 1.5) as u32;
+    let profile = |shot: &image::RgbaImage, sigma_px: f64| {
+        for x in (edge as u32 - 16)..(edge as u32 + 16) {
+            let share = gaussian_share((edge - (f64::from(x) + 0.5)) / sigma_px);
+            let red = 255.0 * share + 128.0 * (1.0 - share);
+            let shown = shot.get_pixel(x, row).0;
+            assert!(
+                (f64::from(shown[0]) - red).abs() <= 3.0,
+                "{x}: {shown:?} against {red:.1} for a deviation of {sigma_px} pixels"
+            );
+        }
+    };
+    // four points are six device pixels
+    profile(&h.screenshot("blur-fractional"), 6.0);
+    // scaled to half about its centre, the layer's blur is half as wide on the output, as its content is, and centred
+    // on the edge the scaled content is drawn at (which the output's pixel grid rounds)
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Scale, 0.5);
+        c.l(0).set_value(Property::ContentBlur, 0.0);
+        c.parent.commit();
+    });
+    h.wait_until("the scale", |h| h.layers()[0].scale == 0.5);
+    let sharp = h.screenshot("blur-scaled-sharp");
+    // the content's centre stays at the parent's (250, 125); its right edge comes in to about 275 points
+    let near = (f64::from(MARGIN.0 + 275) * 1.5) as u32;
+    let edge = (near - 4..near + 4)
+        .find(|&x| sharp.get_pixel(x, row).0[0] < 192)
+        .expect("the scaled content's edge");
+    assert!(
+        edge.abs_diff(near) <= 1,
+        "the scaled edge at {edge}, not by {near}"
+    );
+    client.send(|c, _| {
+        c.l(0).set_value(Property::ContentBlur, 4.0);
+        c.parent.commit();
+    });
+    h.wait_until("the blur again", |h| h.layers()[0].content_blur == 4.0);
+    let shot = h.screenshot("blur-scaled");
+    let edge = f64::from(edge);
+    for x in (edge as u32 - 10)..(edge as u32 + 10) {
+        let share = gaussian_share((edge - (f64::from(x) + 0.5)) / 3.0);
+        let red = 255.0 * share + 128.0 * (1.0 - share);
+        let shown = shot.get_pixel(x, row).0;
+        assert!(
+            (f64::from(shown[0]) - red).abs() <= 3.0,
+            "{x}: {shown:?} against {red:.1} scaled"
+        );
+    }
+}
+
+#[test]
 fn a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_and_the_parent_stays_sharp(
 ) {
     let Some(mut h) = Harness::new(1.0, false) else {

@@ -515,13 +515,32 @@ Gate:
         (`the_compositor_runs_the_same_fades`,
         `the_compositor_runs_the_card_s_fades_and_the_card_asks_for_no_frame`); no fade is handed over under Reduce
         Motion, where the card appears and goes at once.
-  - [ ] Paint-tree subtrees as layers of their own surface: a subtree marked `Layer::Opacity` or `Layer::Transform`
-        (or a mark of its own for the launcher's parts) drawn into a child surface the server places and animates, in
-        both presenters, its animations sent to the compositor instead of repainted, hit-testing and semantics on the
-        target values, and the client-side drawing kept where the server lacks version 3. The presenters draw the
-        raised layer into a subsurface of its own already (`present_layer`); this generalises it to a list of layer
-        surfaces, each `cupertino_layer_v1` with its own frame, through the runtime, both renderers' frame split and
-        both presenters, which is the next reviewable change of this step.
+  - Paint-tree subtrees as layers of their own surface: a subtree marked `Layer::Opacity` or `Layer::Transform`
+    (or a mark of its own for the launcher's parts) drawn into a child surface the server places and animates, in both
+    presenters, its animations sent to the compositor instead of repainted, hit-testing and semantics on the target
+    values, and the client-side drawing kept where the server lacks the protocol. The presenters draw the raised layer
+    into a subsurface of its own already (`present_layer`); this generalises it to a list of layer surfaces, each
+    `cupertino_layer_v1` with its own frame. Too large for one reviewable change; split:
+    - [ ] The mark and the runtime: a widget marks its subtree a surface layer with a key, its look (glass style,
+          glass group and spacing, corner radius, masks to bounds) and the changes of its properties (`x`, `y`,
+          `width`, `height`, `opacity`, `scale`, `corner_radius`, `content_blur`, each set or animated along a
+          `LayerCurve`, as `WindowRequest::Present` carries a window's). The painter leaves a marked subtree out of the
+          window's list and paints it into a list of its own, at its layout size whatever its animated values; the
+          runtime keeps a damage tracker and a renderer per layer key (as `LayerState` does for the raised layer) and
+          hands the window system the layers' frames, bounds and changes with the window's frame
+          (`WindowSystem::present_surface_layers`, `Capabilities::surface_layers`; unsupported by default, where the
+          subtree is painted in place with its values applied by the toolkit, as today). Hit-testing and semantics keep
+          the layout, the target values. Tests over the headless window system: a marked subtree's pixels are in its
+          layer's frame and not the window's, a change of its animated values alone presents no frame, and without the
+          capability the window's frame is the one drawn today. New modules beside `runtime/handover.rs`, to stay apart
+          from the layout and damage work in `cupertino-ui-core`.
+    - [ ] The shared-memory presenter: each layer a `wl_surface` made a `cupertino_layer_v1` of the window's surface,
+          its frame copied into buffers of its own as the raised layer's is, its changes sent as the layer's requests
+          before the window's commit (so they apply with it), its events (`finished`, `replaced`, `settled`) back to the
+          runtime as a presentation's are; a layer the server lacks the version for is painted in place.
+    - [ ] The GPU presenter: the layers' frames drawn from the GPU renderer's textures into dmabufs of their own, as
+          the raised layer's subsurface is, and the GPU renderer's frame split by layer as the CPU renderer's is; the
+          local GPU tier covers it.
   - The launcher's open and close as compositor layers, keeping its look (the owner's choice: the look as it is drawn
     now, run by the compositor). Split:
     - [x] Glass groups (version 3, `set_glass_group`): the layers of one group draw their glass as one container of
@@ -537,13 +556,38 @@ Gate:
           backdrop's passes are as they were. A vibrant layer draws its content sharp. Across a straight edge the blurred
           content is within 3/255 of the Gaussian's integral
           (`a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_and_the_parent_stays_sharp`,
-          `content_blur_is_a_property_from_version_4_from_sharp_to_its_widest_and_reduced_motion_ends_it`); the client
-          side is `LayerProperty::ContentBlur`.
-    - [ ] The launcher as layers: the enclosure a layer whose width, height and corner animate with its glass, its
-          content a sibling that does not scale, the search field's layer animating its width, each mode button a layer
-          on its own spring in a glass group with the field, and the close animating the content blur; its look at
-          every moment that of the launcher's drawing within the goldens' tolerance, and no application buffer for the
-          open or the close (counted as Control Center's is). It needs the two items above.
+          `content_blur_is_a_property_from_version_4_from_sharp_to_its_widest_and_reduced_motion_ends_it`); at scale
+          1.5 a deviation of 4 points is 6 pixels, and a layer scaled to half blurs half as wide about the edge its
+          content is drawn at (`a_layer_s_content_blur_is_in_points_and_scales_with_the_layer_at_a_fractional_scale`);
+          the client side is `LayerProperty::ContentBlur`.
+    - The launcher as layers: the enclosure a layer whose width, height and corner animate with its glass, its
+      content a sibling that does not scale, the search field's layer animating its width, each mode button a layer on
+      its own spring in a glass group with the field, and the close animating the content blur; its look at every
+      moment that of the launcher's drawing within the goldens' tolerance, and no application buffer for the open or the
+      close (counted as Control Center's is, a test like
+      `shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`). It needs the subtree
+      layers above. Not every value the launcher draws is one curve of one property: where the search field opens with
+      its mode buttons, the enclosure's drawn width is the opening spring's scale (response 0.30, damping 0.74, from
+      1.1) times the field's width drawing back on a spring of its own (0.305, 0.68), a button's centre is that scale
+      times its place along the split spring (0.575, 0.69), and a button's size is a clamped ramp of the split spring
+      (`modes::button_rect`, `bud_size`); its corner radius is the radius times the smaller of the two axes' scales. A
+      timed curve or a spring per property cannot carry a product or a clamp of two curves, so these need the
+      protocol to carry them first. Split:
+      - [ ] Curves the protocol carries as samples: an animation given as values at even steps of its duration (the
+            client sampling its own motion at, say, 240 a second), which the server interpolates, retargeting from the
+            value and the slope shown as other animations do; `LayerCurve` gains it, the server's animator and the
+            transport with it. Then every value the launcher draws is carried exactly, on the compositor's clock.
+      - [ ] The close: the enclosure's opacity on the ease-out over 0.1 s, its width and height growing to 1.02 of
+            the shape on the same curve (a timed curve per property, exact), and the content's blur to 4 points on it
+            (`CLOSE_BLUR` is a blur radius of 8 points, a deviation of 4); no buffer for it.
+      - [ ] A scope's open and folding (the browser, the files scope): the enclosure's width, height, corner and
+            place on the opening and shape springs, which are linear in the springs' values (exact); the content layer
+            unscaled, its fade on the content's curve; the files scope's width dip as samples.
+      - [ ] The search field's open with its mode buttons: the field's layer and each button's on sampled curves of
+            the products above, in one glass group with the field, each button's symbol sharpening as its layer's
+            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`.
+      - [ ] The test that the open and the close make no new application buffer, and the look at several points of
+            each within the goldens' tolerance of the launcher's drawing.
   - [x] Control transitions in popups: version 3 takes a popup's surface in `get_presentation`, its scale about the
         centre of its window geometry, after its window's rescale or its layer surface's presentation
         (`a_popup_s_presentation_scales_and_fades_it_on_the_server_clock`). The runtime hands a popover's growth out of
@@ -572,7 +616,8 @@ Gate:
 - [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
-      own fade from before its presentation.
+      own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
+      the launcher's pairs are in it with both sides drawn by the application until its layers land.
 
 ## Step 10: retire the duplicates
 
@@ -1302,6 +1347,26 @@ toolkit's runtime over its in-memory window system, frame callbacks answered eve
 | Popover growing (0.35 s) | 25 | 0 | one per frame until it rests |
 | Popover shrinking (0.22 s) | 14 | 0 | one per frame until it goes |
 | Menu fading (0.236 s) | 14 | 0 | one per frame until it goes |
+
+**The sheet.** Headless server at 1280 x 720 points, scale 1.5, release builds, recorded at 60 frames a second:
+"before" from the commit before Control Center's presentation (the card drawing its own fade), "after" from this step's
+branch (the compositor fading the card). Each pair is taken the same number of frames after the first frame that
+changes, the after frame the closest of that frame and its two neighbours, as the two runs start up to a frame apart;
+the number is the largest difference of any channel in the crop, out of 255.
+
+| Control Center | Mid-way pairs (frames after the start) | Largest mid-way | Settled |
+|---|---|---|---|
+| Open, dark | 1, 2, 4, 7, 10 | 7 | 1 |
+| Close, dark | 1, 3, 5, 8 | 14 | 0 |
+| Open, light | 1, 2, 4, 7, 10 | 10 | 0 |
+| Close, light | 1, 3, 5, 8 | 19 | 0 |
+
+Settled, the card is the same within a step of one channel. Mid-way, the two fades sit at slightly different moments:
+each run's frames land at their own phase of the fade's clock (the card's own frames before, the compositor's after),
+so a pair compares two moments up to a frame apart, and the differences fall to 2 or 3 as the fade slows. The
+launcher's pairs (open at 1, 2, 3, 5, 8, 14 and 24 frames, close at 1 to 4, settled) are drawn by the application on
+both sides: settled within 2, mid-way up to 255 at the moving edge of the field, as the launcher's own frames land at
+different moments in the two runs.
 
 ### Step 1: the look freeze
 

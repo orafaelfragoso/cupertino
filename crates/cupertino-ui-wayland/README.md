@@ -41,6 +41,14 @@ callback's time, for an animation clock, is `FrameCallback::time` of the transpo
 ## The window system
 
 Windows and popups map one to one onto the transport's toplevels and popups; destroying a window destroys its popups.
+A window with a role from `SurfaceRoles` (a shell's layer surface) may hand transitions of its presentation to the
+compositor when it offers `cupertino_layers_v1` version 2 (`Capabilities::present_animation`): each
+`WindowRequest::Present` goes to the window's presentation, made on its first change (`presentations.rs`), and is
+committed at once without a buffer, or with the window's first frame when it has not drawn one. The compositor runs the
+offset, opacity and scale on its clock, with the session's time scale and Reduce Motion; the window draws nothing for
+it. The animations a change starts are followed through `finished`, `replaced` and `settled`
+(`WaylandWindowSystem::presentation_settled`). Without the global, or on a toplevel, the request is refused
+(`PlatformError::Unsupported`) and the application draws its transitions itself.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
 of the window whose surface they name. A popup's configure comes after a `WindowEvent::PopupPlaced` with the rectangle
 the compositor placed it at in its parent, after any flip or slide. Key modifiers are logical (`Mods`), through the `Profile` the window system was

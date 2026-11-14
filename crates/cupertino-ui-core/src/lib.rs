@@ -351,6 +351,8 @@ pub enum Command<M> {
     /// the keyboard follows a click to another part of the window without the ring a click never shows.
     MoveFocus(Key),
     CloseWindow(WindowKey),
+    /// Sends `request` to the window keyed so; to a window the view that follows this command opens, before its first
+    /// frame (a [`WindowRequest::Present`] then starts with the window). Nowhere when the view has no such window.
     Window(WindowKey, WindowRequest),
     SetClipboard(String),
     /// Asks for an activation token for `window`, to hand to the application `app_id` names when it is started; the

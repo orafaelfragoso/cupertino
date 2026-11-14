@@ -34,7 +34,10 @@ impl SessionChange {
             | AppEvent::MenuBar { .. }
             | AppEvent::MenuReader { .. }
             | AppEvent::BackdropTone { .. }
-            | AppEvent::BuffersLost => None,
+            | AppEvent::BuffersLost
+            | AppEvent::LayerFinished { .. }
+            | AppEvent::LayerReplaced { .. }
+            | AppEvent::LayerSettled { .. } => None,
         }
     }
 

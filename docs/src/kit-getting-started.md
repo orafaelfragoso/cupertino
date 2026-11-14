@@ -36,6 +36,11 @@ checkout and was run on the commit this page was written against.
   ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)). A long list or grid keeps scrolling cheap by
   building only the rows near its viewport, each as `Element::kept(key, mark, build)`: a row whose mark is the same
   as last time keeps its nodes and their layout and is not built again.
+- No Cupertino compositor for transitions. A window with a shell role may hand its open and close to the compositor
+  (`Command::Window(key, WindowRequest::Present(changes))`, when `Capabilities::present_animation` says it can), which
+  then fades, moves or scales all the window draws on its clock without the application drawing a frame; the request
+  may be given in the update that opens the window and goes with its first frame. On any other compositor the
+  capability is off and the application animates the window itself, as before.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

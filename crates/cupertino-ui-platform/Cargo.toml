@@ -9,6 +9,7 @@ description = "CupertinoKit's window-system interface: windows and popups, input
 layer = "ui"
 
 [dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
 cupertino-semantics = { path = "../cupertino-semantics" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }

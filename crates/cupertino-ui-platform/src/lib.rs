@@ -37,6 +37,33 @@ pub struct Capabilities {
     /// A window may show a raised layer above its content ([`WindowSystem::present_layer`]), with the materials of its
     /// raised regions ([`MaterialRegion::raised`]) between the two, reading what of the content lies below them.
     pub raised_layer: bool,
+    /// A window given its role by the application's surface roles may hand transitions of its presentation (offset,
+    /// opacity and scale of all it draws) to the compositor, which runs them on its clock ([`WindowRequest::Present`]).
+    pub present_animation: bool,
+}
+
+/// A property of a window's presentation ([`WindowRequest::Present`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PresentProperty {
+    /// Moves all the window draws across, in points.
+    OffsetX,
+    /// Moves all the window draws down, in points.
+    OffsetY,
+    /// Fades all the window draws, its materials included, from 0 to 1.
+    Opacity,
+    /// Scales all the window draws about the window's centre.
+    Scale,
+}
+
+/// One change of a window's presentation: `property` goes to `to` at once (`curve` `None`), or along `curve` from what
+/// is shown when the change is first drawn, keeping its velocity; `velocity` (units per second) starts a spring from
+/// rest.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresentChange {
+    pub property: PresentProperty,
+    pub to: f64,
+    pub curve: Option<cupertino_animation::LayerCurve>,
+    pub velocity: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -166,6 +193,11 @@ pub enum WindowRequest {
     Menus(Option<MenuDescription>),
     /// Sets [`WindowSpec::input_region`]; it applies with the next present.
     SetInputRegion(Option<Vec<Rect>>),
+    /// Changes the window's presentation on the compositor's clock, all the changes together and without drawing a
+    /// frame: with the window's first frame when it has not shown one, at once otherwise. Input and the published
+    /// semantics stay with the window's layout, the presentation's target. Needs
+    /// [`Capabilities::present_animation`].
+    Present(Vec<PresentChange>),
 }
 
 /// A window's menus as the desktop's menu bar shows them.

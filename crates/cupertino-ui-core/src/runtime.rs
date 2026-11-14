@@ -367,6 +367,8 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     held: Vec<DropToken>,
     /// The messages to send once a window has presented its first frame ([`Command::OnPresented`]).
     on_presented: Vec<(WindowKey, A::Message)>,
+    /// Requests for windows the view that follows opens ([`Command::Window`]), sent as each is made.
+    to_open: Vec<(WindowKey, WindowRequest)>,
     /// The messages of [`Command::After`], by when they are due and then in the order they were asked for.
     timers: BTreeMap<(Timestamp, u64), A::Message>,
     /// The order of the next [`Command::After`].
@@ -425,6 +427,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             finishing: Vec::new(),
             held: Vec::new(),
             on_presented: Vec::new(),
+            to_open: Vec::new(),
             timers: BTreeMap::new(),
             next_timer: 0,
             semantic_finishing: Vec::new(),
@@ -688,6 +691,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 if let Some(w) = self.windows.iter().find(|w| w.key == key) {
                     // A request the compositor refuses changes nothing the application relies on.
                     let _ = self.system.request(w.id, request);
+                } else {
+                    // a window the view that follows opens takes it before its first frame
+                    self.to_open.push((key, request));
                 }
             }
             Command::SetClipboard(text) => Self::set_clipboard(&mut self.system, text),
@@ -858,6 +864,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         .system
                         .create_window(&spec)
                         .map_err(UiError::Platform)?;
+                    for (_, request) in self.to_open.extract_if(.., |(k, _)| *k == key) {
+                        let _ = self.system.request(id, request);
+                    }
                     self.new_window(key, id, spec)
                 }
             };
@@ -954,6 +963,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let windows = &self.windows;
         self.on_presented
             .retain(|(key, _)| windows.iter().any(|w| &w.key == key));
+        // a request for a window the view did not open goes nowhere
+        self.to_open.clear();
         if self.windows.is_empty() && !A::RESIDENT {
             self.exit = true;
         }

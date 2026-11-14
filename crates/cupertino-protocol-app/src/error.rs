@@ -10,6 +10,8 @@ pub enum Error {
     InvalidAlpha,
     /// A glass spacing that is negative or not finite.
     InvalidGlass,
+    /// A layer value outside its property's range.
+    InvalidLayerValue,
 }
 
 impl fmt::Display for Error {
@@ -21,6 +23,7 @@ impl fmt::Display for Error {
             ),
             Self::InvalidAlpha => write!(f, "backdrop alpha is outside 0 to 1"),
             Self::InvalidGlass => write!(f, "glass spacing is negative or not finite"),
+            Self::InvalidLayerValue => write!(f, "layer value is outside its property's range"),
         }
     }
 }

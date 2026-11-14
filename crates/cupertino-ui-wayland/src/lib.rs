@@ -5,7 +5,9 @@
 //! missed) into the buffer it presents. [`popup::placement`] places a popup at a rectangle of its parent, and
 //! [`clipboard`] reads and writes the text clipboard. [`WaylandWindowSystem`] is CupertinoKit's window system on the
 //! transport; [`SurfaceRoles`] lets the application give its windows roles from protocols the window system does not
-//! speak. It binds no protocol beyond the transport's standard set.
+//! speak. Beyond the transport's standard set it binds the desktop's public protocols when the compositor offers them:
+//! effects, semantics, and layers, which run the transitions of a window with a role from [`SurfaceRoles`] on the
+//! compositor's clock (`WindowRequest::Present`), so it opens and closes without drawing a frame.
 
 mod action_grab;
 pub mod clipboard;
@@ -16,6 +18,7 @@ pub mod gpu_path;
 pub mod gpu_present;
 mod pixels;
 pub mod popup;
+mod presentations;
 mod presenter;
 pub mod renderer;
 mod roles;

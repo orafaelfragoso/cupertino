@@ -37,6 +37,7 @@ use rustix::time::ClockId;
 use crate::convert::{self, InputTimeline};
 use crate::gpu_path::{GpuPath, Presented};
 use crate::pixels::{convert_rects, disjoint, rgba_to_argb8888};
+use crate::presentations::Presentations;
 use crate::roles::{RoleEvent, SurfaceRoles};
 
 enum Kind {
@@ -329,6 +330,8 @@ pub struct WaylandWindowSystem {
     role_configures: u32,
     /// The process's renderer and, while it draws on the GPU, every surface's GPU buffers.
     gpu: GpuPath,
+    /// The windows' presentations the compositor animates ([`WindowRequest::Present`]).
+    presentations: Presentations,
 }
 
 /// Take the session's appearance or display options from `event` into `appearance`; false for any other event, and
@@ -424,6 +427,7 @@ impl WaylandWindowSystem {
             (effects, observer)
         });
         let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
+        let presentations = Presentations::bind(&mut conn);
         let gpu = GpuPath::start(&mut conn);
         let mut system = WaylandWindowSystem {
             conn,
@@ -453,6 +457,7 @@ impl WaylandWindowSystem {
             role_configures: 0,
             menus: AppMenus::default(),
             gpu,
+            presentations,
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -840,6 +845,31 @@ impl WaylandWindowSystem {
 
     /// The subsurface of `window`'s raised layer, made the first time it is needed. Its shapes and frames are in the
     /// window's coordinates, as it lies at the window's top left corner.
+    /// Hand `changes` to the presentation of `window`, a surface with a role from [`SurfaceRoles`]; a window that showed
+    /// a frame commits them at once without a buffer, one that did not with its first frame.
+    fn present_changes(
+        &mut self,
+        window: WindowId,
+        changes: &[cupertino_ui_platform::PresentChange],
+    ) -> Result<(), PlatformError> {
+        let w = self.window(window)?;
+        if !matches!(w.kind, Kind::External) {
+            return Err(PlatformError::Unsupported);
+        }
+        let (surface, shown) = (w.surface, w.shown.is_some());
+        self.presentations
+            .change(&self.conn, window, surface, changes)?;
+        if shown {
+            self.conn.commit_state(surface).map_err(platform_error)?;
+        }
+        Ok(())
+    }
+
+    /// Whether what `window` shows is its layout: no animation of its presentation runs.
+    pub fn presentation_settled(&self, window: WindowId) -> bool {
+        self.presentations.settled(window)
+    }
+
     fn layer_surface(&mut self, window: WindowId) -> Result<SurfaceId, PlatformError> {
         if !layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)) {
             return Err(PlatformError::Unsupported);
@@ -1112,6 +1142,7 @@ impl WaylandWindowSystem {
                                 ScrollBars::WhenScrolling
                             }));
                         }
+                        Some(event) if self.presentations.heard(event) => {}
                         Some(AppEvent::BuffersLost) => {
                             self.gpu.buffers_lost(&mut self.conn);
                             for w in &mut self.windows {
@@ -1314,6 +1345,7 @@ impl WindowSystem for WaylandWindowSystem {
             activation: has(Capability::Activation),
             app_effects: self.effects.is_some(),
             raised_layer: layers_drawn(&self.conn, self.effects.as_ref().map(|(e, _)| e)),
+            present_animation: self.presentations.available() && self.roles.is_some(),
         }
     }
 
@@ -1418,6 +1450,8 @@ impl WindowSystem for WaylandWindowSystem {
         for s in gone_surfaces {
             self.gpu.forget(&mut self.conn, s);
         }
+        // the presentation goes before its surface
+        self.presentations.forget(window);
         // the transport destroys a window's popups with it
         let _ = self.conn.destroy(surface);
         if let Some(roles) = self.roles.as_mut() {
@@ -1443,6 +1477,7 @@ impl WindowSystem for WaylandWindowSystem {
                 self.window_mut(window)?.input_region = Some(region);
                 return Ok(());
             }
+            WindowRequest::Present(changes) => return self.present_changes(window, &changes),
             WindowRequest::SetTitle(title) => {
                 let t = self.toplevel(window)?;
                 self.conn.set_title(t, &title)

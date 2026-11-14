@@ -2,7 +2,7 @@
 //! disabled window controls.
 
 use crate::backdrop::BackdropData;
-use crate::{Backdrop, BackdropId, BackdropTone, Quiet};
+use crate::{Backdrop, BackdropId, BackdropTone, Fixed, LayerId, Quiet};
 use cupertino_app_protocols::client::app_effects::cupertino_app_effects_v1::{
     CupertinoAppEffectsV1, TitlebarStyle, WindowControl,
 };
@@ -72,6 +72,18 @@ pub enum AppEvent {
     },
     /// The server's GPU was reset or its memory purged: draw every surface whole again and commit it (version 21).
     BuffersLost,
+    /// The animation `serial` of `layer` reached its target (`cupertino_layers_v1`).
+    LayerFinished { layer: LayerId, serial: u32 },
+    /// The animation `serial` of `layer` was replaced before it finished, showing `value` and moving at `velocity`
+    /// (units per second): where the motion that follows starts.
+    LayerReplaced {
+        layer: LayerId,
+        serial: u32,
+        value: Fixed,
+        velocity: Fixed,
+    },
+    /// Every property of `layer` shows its target: what is drawn is again what the client hit-tests and publishes.
+    LayerSettled { layer: LayerId },
 }
 
 /// The app effects global (`cupertino_app_effects_v1`).

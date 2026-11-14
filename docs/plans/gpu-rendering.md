@@ -511,19 +511,66 @@ Gate:
 
 ## Step 7: turn it on
 
-- [ ] Files windows on the GPU; live resize meets its budget.
-- [ ] Settings on the GPU.
-- [ ] Third-party toolkit applications and the C ABI by the size and repaint rule; sandboxed apps without render-node
-      access take the fallback.
-- [ ] Dock (and overview), launcher and Control Center measured on both renderers with layers; each assigned to the
-      class that meets its budgets; numbers recorded.
-- [ ] CPU classes confirmed in a full session: OSD, banners, menu bar, prompts, portal overlays and chooser, screenshot
-      toolbar and overlay, lock screen, login, the Files desktop instance.
-- [ ] A week of daily use on the target machine without a fallback.
+There is no switch for every process: each declares its class (`RendererClass`, `Application::RENDERER`) when it
+connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
+
+- [x] Files windows on the GPU; live resize meets its budget. Files' class is the GPU's; its desktop instance keeps
+      the CPU's. At 3840 x 2160 the resize's p99 client frame is 5.3 ms at 1.5 and 4.5 ms at 1, 3.8 ms of it beyond
+      the raster, no slow frame (the CPU: 15.8 ms and 7.8 ms); nothing in the GPU path needed a fix
+      ("Measurements", step 7). Tests: `kit::renderer_class` (`cupertino-files`).
+- [x] Settings on the GPU (`shell::tests::the_settings_window_draws_on_the_gpu`); the About window keeps the CPU.
+- [x] Third-party toolkit applications and the C ABI by the size and repaint rule; sandboxed apps without render-node
+      access take the fallback. An application that declares nothing (`ByUse`, the C ABI's included) starts on the
+      CPU and moves to the GPU for good once a window covers more than a quarter of the largest output it is on, or
+      presents more than 30 frames a second in each of two whole seconds. A process that cannot see the named
+      device's render node draws on the CPU ("no render node for the dmabuf device") and records the fallback. Tests:
+      `renderer::tests` (`cupertino-ui-wayland`), `gpu_presenter::the_rule_moves_*`, `a_cpu_class_*`,
+      `a_sandboxed_process_*` (a process in a user namespace with an empty `/dev/dri`), and
+      `a_c_application_takes_the_size_and_repaint_rule` (`cupertino-ui-abi`).
+- [x] Dock (and overview), launcher and Control Center measured on both renderers with layers; each assigned to the
+      class that meets its budgets; numbers recorded. The dock and the launcher on the GPU: the overview's frames miss
+      a refresh on the CPU (p99 27.7 ms, 4 slow frames a run) and a typed letter's frame passes the 4 ms there (p99
+      5.4 ms), both under 2.1 ms on the GPU. Control Center on the CPU: it draws two whole frames an opening and its
+      motion is the compositor's; the GPU's p99 is no better (17.9 against 16.9 ms) for about 73 MiB.
+- [x] CPU classes confirmed in a full session: OSD, banners, menu bar, prompts, portal overlays and chooser, screenshot
+      toolbar and overlay, lock screen, login, the Files desktop instance. In a headless session at 1.5 with a banner,
+      the volume overlay, Control Center and the screenshot toolbar shown, each records `renderer=cpu`, "its class
+      draws on the CPU"; the lock screen's record is checked by
+      `lock_screen::the_right_password_unlocks_the_session_and_the_application_gets_its_input_back`. Login and the
+      portal's chooser need the system bus the headless session lacks; their classes are checked by
+      `greeter::renderer_class` and `dialog::tests::the_chooser_and_the_overlays_draw_on_the_cpu`. The polkit agent,
+      the keyring prompter and the pick overlay draw with tiny-skia directly and never make a device. Why each is on
+      the CPU is in `docs/src/gpu-rendering.md` ("Who draws on the GPU: classes of surface").
+- [ ] The same pixels on both renderers in the preview scenarios. Split from turning the GPU on: every preview shot
+      but these is the same before and after this step (beyond 1/255), and the build before it with
+      `CUPERTINO_RENDERER=gpu` gives this step's pixels. The symbol of a sidebar's selected row lands one device pixel
+      apart (Files at scale 1, Settings at 1.5), and one pixel of a minimized window's thumbnail in the dock is 7/255
+      apart. Not yet confirmed, the likely cause: an image drawn one texel per device pixel is moved onto whole
+      pixels, the CPU renderer rounding its position in 32-bit floats in the coordinates of the piece of the window it
+      draws, the GPU renderer in the window's, so a position a hair under a half pixel can round differently in the
+      two. To do: find it with the selected row added to the parity scenes, then round the same way on both (naming
+      any golden that moves).
+- [ ] A week of daily use on the target machine without a fallback. BLOCKED (owner action): a week of use. A
+      fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
+      `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
+      lists any, and `cupertino-diagnose`'s `gpu.client_renderers` names a process on the CPU after a failure. Purges
+      are not recorded.
 
 Gate:
 
-- [ ] The resize, animation-frame, memory and idle budgets hold across a full session.
+- [ ] The resize, animation-frame, memory and idle budgets hold across a full session. Resize holds (client CPU
+      beyond the raster 3.8 ms p99 at 1.5, under 8 ms); launcher typing holds (1.9 ms p99, under 4 ms); idle holds
+      (one menu bar frame a minute, the clock's wakeups only, GPU processes 0 wakeups). Not held:
+  - Control Center's opening frames take 14.7 ms p50 and 16.9 ms p99 on the CPU (11.8 and 17.9 ms on the GPU), most
+    of it the raster of two whole frames, against the 4 ms animation budget. Split: draw the opening's second frame
+    from the first's kept layers, or start the panel's first frame before the press (it is the same frame every
+    opening), then measure again.
+  - Added private memory per GPU process, under 80 MiB: in the bench the dock adds 78.5 MiB, the launcher 76.0,
+    Settings 64–69 and Files' window 55; in the full session the dock adds 81.0 MiB and the launcher 87.4 (after it
+    opened and searched), Files' window 75.4 and Settings 71.8. Split: find what of a GPU process's private memory
+    beyond its context is the toolkit's (atlases, pools, the program cache) and bound it, then measure again.
+  - GPU memory per GPU window was read per process (`nvidia-smi`: dock 16, launcher 28, Files 45, Settings 45 MiB in
+    the session), not as the change with the window open and closed that the budget names. Split with the item above.
 
 ## Step 8: the compositor's own drawing on the GPU pipelines
 
@@ -1438,6 +1485,73 @@ warms (step 6's presenter), so the first-frame budget holds; a switch with a war
 its first frame, about 33 ms on the NVIDIA GPU, within the 150 ms. Under heavy load from other builds the GPU
 renderer's whole frame once took 420 ms on the CPU side, the driver's threads starved; the CPU renderer's did not
 move.
+
+### Step 7: turn it on
+
+Taken on the target machine (GeForce RTX 3060, proprietary driver), release builds, headless at 3840 x 2160 and 60
+Hz, `scripts/dev/bench --runs 3`; medians of the three runs, their range after them; client frame times are each
+process's own. "Both renderers" is the merge before this step (`1fa757fe`) with `CUPERTINO_RENDERER=gpu` and with
+`cpu`; "classes" is this step at `d3b7846b`, no override, each process on its class's renderer. The load average (1, 5
+and 15 minutes) before and after each run is given.
+
+| Client frame ms, scale 1.5 | GPU | CPU | Classes | Assigned |
+|---|---|---|---|---|
+| Files live resize: frame p50 / p99 | 2.3 / 5.1 (4.5–5.3) | 9.6 / 15.8 | GPU 3.0 / 5.3 (5.0–5.4) | GPU |
+| Files live resize: raster p99, copy p99, beyond the raster p99 | 2.9, 2.8, 4.7 | 8.9, 5.8, 6.8 (1 slow frame) | 2.8, 3.0, 3.8 | |
+| Control Center, six frames (two an opening, none at the close): p50 / p99 | 11.8 / 17.9 (17.7–28.0), raster p50 11.3 | 14.7 / 16.9 (16.6–17.4), raster p50 12.5 | CPU 14.7 / 16.9 (15.8–22.3) | CPU |
+| Dock sweep p99 | 1.7 | 0.5 | GPU 1.6 | GPU |
+| Overview: p50 / p99, slow frames | 0.7 / 2.0, 0 | 19.1 / 27.7 (27.3–33.3), 4 (copy p99 17.3) | GPU 0.7 / 2.0, 0 | GPU |
+| Overview: compositor work p99 | 4.1 | 9.2 | 3.8 | |
+| Launcher open and close p99 | 1.9 | 6.9 (raster 6.6) | GPU 2.1 | GPU |
+| Launcher typing p99 | 1.7 | 5.4 (raster 5.3) | GPU 1.9 | GPU |
+
+Scale 1, live resize: GPU p99 4.3 ms (3.1 beyond the raster), CPU 7.8 ms (4.1); classes 4.5 ms. No missed refresh by
+the compositor in any run. Loads: both renderers 2.3 / 6.1 / 7.4 falling to 0.6 / 3.4 / 6.1 (resize) and 0.6 / 3.4 /
+6.1 to 1.5 / 1.8 / 4.2 (shell scenarios); classes at 1.5 from 7.7 / 7.5 / 6.1 to 1.9 / 3.4 / 4.6, at 1 to 0.9 / 2.9 /
+4.3.
+
+**Memory**, private MiB at the end of each scenario, medians (private dirty in brackets):
+
+| Process | All on the CPU | All on the GPU | Classes | Added by the GPU |
+|---|---|---|---|---|
+| Dock | 54.9 (42.4) | 131.5 (119.8) | 133.4 (121.0) | 78.5 |
+| Launcher | 16.1 (4.9) | 91.8 (80.7) | 92.1 (80.6) | 76.0 |
+| Settings | 37.5–42.2 (20.4–25.7) | 113.8 (97.0) | 106.6 (89.5) | 64–69 |
+| Files, window and desktop together | 55.9 (53.0) | 184.0 (180.6) | 111.0 (107.9) | 55 (the window only) |
+| Control Center | 13.9 (4.3) | 87.1 (77.5) | 13.9 (4.3) | none: CPU |
+| Menu bar | 21.2 (6.7) | 97.1 (82.3) | 21.1 (6.7) | none: CPU |
+| Notifications | 14.3 (4.3) | 86.8 (76.8) | 14.3 (4.3) | none: CPU |
+| OSD | 13.6 (4.4) | 89.5 (80.2) | 14.0 (4.4) | none: CPU |
+| Server | 177.7–188.9 | 122.5–124.7 | 124.6 | |
+
+A GPU process costs 64–78 MiB of private memory more than on the CPU, nearly all of it dirty: the driver's context
+and the toolkit's pools. The CPU-class processes are unchanged. The server's private memory falls by about 55 MiB
+once the large windows come as dmabufs.
+
+**Idle** (the bench's idle scenario, 60 s, classes at 1.5): one menu bar frame and its composite in two runs of three,
+none in the third (no minute turned). Wakeups a minute over each process's threads: menu bar 44 (0–56), notifications
+16 (0–30), Control Center 4, the server 2, the bus daemon 18, all the clock's minute; the GPU-class processes 0.
+
+**A full session** (`crates/cupertino-server/scripts/session.sh --scale 1.5`, Files and Settings opened, then the
+launcher with two letters typed, Control Center opened and closed, the volume raised and lowered, the screenshot
+toolbar, a banner; load 0.5 / 2.6 / 4.2 to 0.3 / 2.1 / 3.9, and 0.7 / 1.4 / 2.8 to 0.5 / 1.2 / 2.6 for the same
+session with `CUPERTINO_RENDERER=cpu`). The renderer records:
+
+| Process | Renderer, reason | Private MiB, classes | Private MiB, all on the CPU | Added | GPU memory (`nvidia-smi`) |
+|---|---|---|---|---|---|
+| Dock | gpu, the GPU | 133.7 | 52.7 | 81.0 | 16 MiB |
+| Launcher | gpu, the GPU | 109.6 | 22.2 | 87.4 | 28 MiB |
+| Files window | gpu, the GPU | 101.4 | 26.0 | 75.4 | 45 MiB |
+| Settings | gpu, the GPU | 114.5 | 42.7 | 71.8 | 45 MiB |
+| Menu bar | cpu, its class draws on the CPU | 20.6 | 20.5 | | |
+| Notifications (a banner shown) | cpu, its class draws on the CPU | 18.9 | 19.1 | | |
+| Control Center | cpu, its class draws on the CPU | 25.8 | 25.5 | | |
+| OSD | cpu, its class draws on the CPU | 16.3 | 16.3 | | |
+| Files desktop | cpu, its class draws on the CPU | 17.0 | 16.9 | | |
+| Screenshot toolbar | cpu, its class draws on the CPU | | | | |
+
+Over the session's last 30 s at rest no process woke. The GPU was ready 180–302 ms after each GPU process started (a
+cold program cache in the session's own home; the first frames go out on the CPU meanwhile). No fallback was recorded.
 
 ### Step 8: the compositor's own drawing
 

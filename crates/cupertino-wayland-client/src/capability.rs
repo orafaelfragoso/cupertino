@@ -50,10 +50,14 @@ pub enum Capability {
     /// `wp_single_pixel_buffer_manager_v1` together with `wp_viewporter`: a surface of one colour shown without drawing
     /// a buffer of its size ([`crate::Connection::present_solid`]).
     SolidColor,
+    /// `zwp_linux_dmabuf_v1`: buffers drawn on a GPU ([`crate::Connection::create_dmabuf_buffer`]).
+    Dmabuf,
+    /// `wp_linux_drm_syncobj_manager_v1`: explicit synchronisation of dmabufs ([`crate::Connection::import_timeline`]).
+    ExplicitSync,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 11] = [
+    pub const ALL: [Capability; 13] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
@@ -65,6 +69,8 @@ impl Capability {
         Capability::Presentation,
         Capability::Subsurface,
         Capability::SolidColor,
+        Capability::Dmabuf,
+        Capability::ExplicitSync,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -81,6 +87,8 @@ impl Capability {
             Capability::Presentation => &["wp_presentation"],
             Capability::Subsurface => &["wl_subcompositor"],
             Capability::SolidColor => &["wp_single_pixel_buffer_manager_v1", "wp_viewporter"],
+            Capability::Dmabuf => &["zwp_linux_dmabuf_v1"],
+            Capability::ExplicitSync => &["wp_linux_drm_syncobj_manager_v1"],
         }
     }
 

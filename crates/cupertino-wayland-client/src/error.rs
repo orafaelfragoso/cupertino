@@ -33,6 +33,9 @@ pub enum Error {
     NotConfigured,
     /// The compositor still holds every buffer of the surface; draw again after the next frame callback.
     NoFreeBuffer,
+    /// The compositor could not import a dmabuf ([`crate::Connection::create_dmabuf_buffer`]); the surface draws into
+    /// shared memory instead.
+    BufferRejected,
     /// The optional protocol the request needs is not advertised; check [`crate::CapabilitySet`] first.
     Unsupported(crate::Capability),
     /// The compositor sent a value the protocol forbids.
@@ -76,6 +79,7 @@ impl fmt::Display for Error {
             Self::UnknownSurface => write!(f, "unknown surface"),
             Self::NotConfigured => write!(f, "the surface has not been configured yet"),
             Self::NoFreeBuffer => write!(f, "the compositor holds every buffer of the surface"),
+            Self::BufferRejected => write!(f, "the compositor could not import the dmabuf"),
             Self::Unsupported(capability) => {
                 write!(f, "the compositor does not offer {capability:?}")
             }

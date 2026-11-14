@@ -29,6 +29,9 @@ pub use clipboard::{
     ClipboardOffer, DragEvent, DragIcon, DragOffer, DragSource, DragSourceEvent, ReadId,
 };
 pub use configure::{Decorations, WindowConfigure, WindowStates, WmCapabilities};
+pub use connection::gpu::{
+    DmabufAttributes, DmabufFeedback, DmabufPlaneRef, FrameSize, GpuBufferId, GpuFrame, TimelineId,
+};
 pub use connection::{
     BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, HeldPress, Popup,
     PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId, TokenRequest, Toplevel,

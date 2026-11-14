@@ -1,5 +1,8 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
+#[path = "gpu.rs"]
+pub(crate) mod gpu;
+
 use std::any::Any;
 use std::fmt;
 use std::io::{ErrorKind, Read, Write};
@@ -413,6 +416,8 @@ struct Surface {
     serials: Serials,
     slots: Vec<Slot>,
     next_slot: u64,
+    /// The surface's `wp_linux_drm_syncobj_surface_v1` while it shows dmabufs with explicit sync.
+    syncobj: Option<wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1>,
 }
 
 /// Dispatch state of the connection. Extensions implement `Dispatch` for it with user data of their own type, so their
@@ -471,6 +476,8 @@ pub struct State {
     input_clock: InputClock,
     pub(crate) events: Vec<Event>,
     fault: Option<Error>,
+    /// Dmabuf buffers, timelines and the dmabuf and syncobj globals, bound on first use.
+    gpu: gpu::GpuState,
 }
 
 /// A connection to a Wayland compositor using standard protocols only. One loop calls [`Connection::wait`] and
@@ -597,6 +604,7 @@ impl Connection {
             input_clock: InputClock::default(),
             events: Vec::new(),
             fault: None,
+            gpu: gpu::GpuState::default(),
         };
         let registry = globals.registry();
         for g in globals
@@ -854,6 +862,10 @@ impl Connection {
             }
             Role::External { role, .. } => role.destroy(),
             Role::Subsurface { subsurface, .. } => subsurface.destroy(),
+        }
+        if let Some(o) = &s.syncobj {
+            o.destroy();
+            self.state.gpu.syncobj_surfaces.1 += 1;
         }
         if let Some(v) = &s.viewport {
             v.destroy();
@@ -1551,6 +1563,8 @@ impl Connection {
         if logical.0 == 0 || logical.1 == 0 {
             return Err(Error::InvalidScale);
         }
+        s.drop_syncobj(surface)?;
+        let surf = s.surface_mut(surface)?;
         if let Some(serial) = surf.serials.present()? {
             match &surf.role {
                 Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
@@ -1815,6 +1829,8 @@ impl BufferLease<'_> {
     pub fn present_damage(self, damage: Option<&[PixelRect]>) -> Result<(), Error> {
         let qh = self.connection.queue.handle();
         let presentation = self.connection.state.presentation.clone();
+        // a commit without points on a surface with a syncobj object is a protocol error
+        self.connection.state.drop_syncobj(self.surface)?;
         let surf = self.connection.state.surface_mut(self.surface)?;
         let subsurface = matches!(surf.role, Role::Subsurface { .. });
         if !subsurface {
@@ -1981,6 +1997,17 @@ pub(crate) fn round_out(r: &Rect) -> (i32, i32, i32, i32) {
 }
 
 impl State {
+    /// Destroy the syncobj object of `surface`, if it has one, before it shows anything but a dmabuf with points.
+    fn drop_syncobj(&mut self, surface: SurfaceId) -> Result<(), Error> {
+        let State { surfaces, gpu, .. } = self;
+        let surf = surfaces
+            .iter_mut()
+            .find(|s| s.id == surface)
+            .ok_or(Error::UnknownSurface)?;
+        surf.drop_syncobj(gpu);
+        Ok(())
+    }
+
     /// Record a configure of an [`Connection::external_surface`]: its `serial`, acknowledged with the next present, and
     /// its logical `size`, where a 0 width or height leaves that dimension to the client. A serial that does not
     /// increase, or a surface that is not external, ends the next [`Connection::wait`] with the error.
@@ -2058,6 +2085,7 @@ impl State {
             serials: Serials::default(),
             slots: Vec::new(),
             next_slot: 0,
+            syncobj: None,
         });
     }
 

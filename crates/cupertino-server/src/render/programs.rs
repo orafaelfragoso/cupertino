@@ -77,7 +77,7 @@ impl Programs {
                 v4("clip_rect"),
                 v4("clip_shape"),
                 f("footprint"),
-                f("taps"),
+                f("texels"),
             ],
         )?;
         Ok(Self {

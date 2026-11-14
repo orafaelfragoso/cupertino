@@ -98,18 +98,20 @@ pub fn texels_per_pixel(part: (f64, f64), dst: (f64, f64)) -> f64 {
 /// lookups show no shimmer.
 pub const MINIFY_FROM: f64 = 1.05;
 
+/// The most texels a side the minifying filter averages for a pixel.
+pub const MINIFY_MOST: f64 = 16.0;
+
 /// The uniforms of the minifying filter for a texture of `texture` texels of which each pixel covers `texels` a side:
-/// the box it covers, in texture coordinates, and the lookups an axis, each a filtered one between four texels, so
-/// they are spaced at most a texel apart up to eight.
+/// the box it covers, in texels (at most [`MINIFY_MOST`]), and the texture's size.
 pub fn minify_uniforms(texture: (f64, f64), texels: f64) -> [Uniform<'static>; 2] {
-    let taps = texels.ceil().clamp(2.0, 8.0) as f32;
+    let side = texels.clamp(1.0, MINIFY_MOST) as f32;
     [
+        u2("footprint", side, side),
         u2(
-            "footprint",
-            (texels / texture.0.max(1.0)) as f32,
-            (texels / texture.1.max(1.0)) as f32,
+            "texels",
+            texture.0.max(1.0) as f32,
+            texture.1.max(1.0) as f32,
         ),
-        u2("taps", taps, taps),
     ]
 }
 

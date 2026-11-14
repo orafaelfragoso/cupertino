@@ -60,6 +60,11 @@ impl Harness {
     }
 
     fn with_config(tweak: impl FnOnce(&mut Config)) -> Option<Harness> {
+        Self::at_scale(tweak, 1.0)
+    }
+
+    /// [`Self::with_config`] on an output of `scale`.
+    fn at_scale(tweak: impl FnOnce(&mut Config), scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -74,7 +79,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .expect("creating the compositor");
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        match headless::init(&mut state, OUTPUT, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -147,6 +152,7 @@ struct ClientState {
     color: [u8; 4],
     /// Draw [`stripes`] in place of `color`.
     stripes: bool,
+    buffer_scale: i32,
     buffer: Option<wl_buffer::WlBuffer>,
     /// The popup, once requested: its surfaces and size.
     popup: Option<(wl_surface::WlSurface, xdg_surface::XdgSurface, (i32, i32))>,
@@ -215,10 +221,14 @@ impl ClientState {
     fn attach(&mut self, qh: &QueueHandle<ClientState>) {
         let (w, h) = self.size;
         let m = self.margin;
+        let k = self.buffer_scale;
+        if k > 1 {
+            self.surface.set_buffer_scale(k);
+        }
         self.buffer = Some(attach_buffer(
             &self.shm,
             &self.surface,
-            (w + 2 * m, h + 2 * m),
+            ((w + 2 * m) * k, (h + 2 * m) * k),
             self.color,
             self.stripes,
             qh,
@@ -366,6 +376,8 @@ struct Options {
     sizing: Sizing,
     /// Draw [`stripes`] in place of the colour.
     stripes: bool,
+    /// Draw at this buffer scale (`wl_surface.set_buffer_scale`; 0 is 1).
+    buffer_scale: i32,
 }
 
 struct TestClient {
@@ -457,6 +469,7 @@ impl TestClient {
                 margin: options.margin,
                 color,
                 stripes: options.stripes,
+                buffer_scale: options.buffer_scale.max(1),
                 buffer: None,
                 popup: None,
                 popup_buffer: None,
@@ -2168,13 +2181,18 @@ fn box_filtered_stripes(size: (i32, i32), at: Rect, px: (u32, u32)) -> [f64; 3] 
 }
 
 /// The mean absolute difference, a channel, between the window drawn in `shot` at `at` and the box-filtered
-/// picture, over its pixels at least 3 pixels inside its edges, and the largest.
-fn against_box_filter(shot: &image::RgbaImage, size: (i32, i32), at: Rect) -> (f64, f64) {
+/// picture, over its pixels at least `inset` pixels inside its edges (past its rounded corners), and the largest.
+fn against_box_filter(
+    shot: &image::RgbaImage,
+    size: (i32, i32),
+    at: Rect,
+    inset: f64,
+) -> (f64, f64) {
     let (mut sum, mut worst, mut n) = (0.0f64, 0.0f64, 0.0f64);
-    let (x0, y0) = ((at.x + 3.0).ceil() as u32, (at.y + 3.0).ceil() as u32);
+    let (x0, y0) = ((at.x + inset).ceil() as u32, (at.y + inset).ceil() as u32);
     let (x1, y1) = (
-        (at.right() - 3.0).floor() as u32,
-        (at.bottom() - 3.0).floor() as u32,
+        (at.right() - inset).floor() as u32,
+        (at.bottom() - inset).floor() as u32,
     );
     for y in y0..y1 {
         for x in x0..x1 {
@@ -2289,7 +2307,7 @@ fn a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_
         "the overview shows the window at {at:?}"
     );
     let shot = h.screenshot("stripes-rest");
-    let (mean, worst) = against_box_filter(&shot, size, at);
+    let (mean, worst) = against_box_filter(&shot, size, at, 3.0);
     eprintln!(
         "reduced window against the box-filtered picture: mean {mean:.2}, worst {worst:.1} of 255"
     );
@@ -2311,6 +2329,43 @@ fn a_window_shown_well_below_its_size_matches_its_box_filtered_picture_and_does_
         "a window that does not commit keeps its copy"
     );
     drop(clients);
+}
+
+/// A client drawing at scale 2 on an output of scale 1.5 shows each pixel the average of the four-thirds of a texel a
+/// side it covers, as a box filter gives it, not the two texels a filtered lookup happens to fall between.
+#[test]
+fn a_scale_2_window_on_a_scale_1_5_output_matches_its_box_filtered_picture() {
+    let Some(mut h) = Harness::at_scale(|_| {}, 1.5) else {
+        return;
+    };
+    let size = (300, 200);
+    let client = TestClient::spawn_with(
+        h.socket_path(),
+        "org.example.stripes",
+        size,
+        [0, 0, 0, 255],
+        Options {
+            stripes: true,
+            buffer_scale: 2,
+            ..Options::default()
+        },
+    );
+    let (_, frame) = h.mapped_window(1);
+    let shot = h.screenshot("stripes-scale-2");
+    // the window's corner lands on the nearest device pixel
+    let at = Rect::new(
+        (frame.x * 1.5).round(),
+        (frame.y * 1.5).round(),
+        frame.w * 1.5,
+        frame.h * 1.5,
+    );
+    let (mean, worst) = against_box_filter(&shot, (size.0 * 2, size.1 * 2), at, 24.0);
+    eprintln!("a scale-2 window at scale 1.5 against the box-filtered picture: mean {mean:.2}, worst {worst:.1} of 255");
+    assert!(
+        mean < 2.0 && worst < 4.0,
+        "mean {mean:.2}, worst {worst:.1} at {at:?}"
+    );
+    drop(client);
 }
 
 // ---- resize band (3 pt inside, 4 pt outside the frame, corner zones 12 / 15 pt) -------------------------------

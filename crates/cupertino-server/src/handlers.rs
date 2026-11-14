@@ -150,6 +150,8 @@ impl CompositorHandler for Cupertino {
             }
             if let Some(e) = self.windows.iter().find(|w| w.has_surface(&root)) {
                 e.window.on_commit();
+                // its opaque region, size or popups may have changed
+                self.suspension.invalidate();
             }
         }
         self.popups.commit(surface);

@@ -317,6 +317,7 @@ impl Cupertino {
     /// popups its output and that output's scale, each lock surface the output it covers.
     pub fn refresh_surface_outputs(&mut self) {
         self.refresh_window_outputs(true);
+        self.suspension.invalidate();
         for o in &self.outputs {
             let transform = o.output.current_transform();
             let entered = std::slice::from_ref(&o.output);

@@ -489,6 +489,8 @@ pub struct Cupertino {
     pub fractional_scale_state: FractionalScaleManagerState,
     /// The outputs each window is on and the output whose scale it draws at (`displays::surface_output`).
     pub surface_outputs: crate::displays::surface_output::SurfaceOutputs,
+    /// Which windows were told they are suspended, and when to look again (`suspended`).
+    pub suspension: crate::suspended::Suspension,
     pub presentation_state: PresentationState,
     /// `wp_content_type_manager_v1`: the kind of content a window says it shows (`WindowEntry::content_type`).
     pub content_type_state: ContentTypeState,
@@ -885,6 +887,7 @@ impl Cupertino {
             single_pixel_buffer_state,
             fractional_scale_state,
             surface_outputs: Default::default(),
+            suspension: Default::default(),
             presentation_state,
             content_type_state,
             xdg_activation_state,
@@ -2271,6 +2274,11 @@ impl Cupertino {
         }
         // the outputs each window is on and the scale it draws at follow its frame (`displays::surface_output`)
         self.refresh_window_outputs(false);
+        if redraw {
+            self.suspension.invalidate();
+        }
+        // a window nobody sees is told so (`suspended`)
+        self.refresh_suspended();
         if redraw {
             self.request_redraw();
             self.refresh_overview_windows();

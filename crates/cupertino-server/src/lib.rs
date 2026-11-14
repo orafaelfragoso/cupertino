@@ -76,6 +76,7 @@ pub mod software_render;
 pub mod state;
 pub mod store_later;
 pub mod supervisor;
+pub mod suspended;
 pub mod toplevel_icon;
 pub mod window_manager;
 pub mod xwayland;

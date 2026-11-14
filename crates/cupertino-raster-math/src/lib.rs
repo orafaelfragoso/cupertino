@@ -9,6 +9,7 @@
 //! * [`gradient`]: up to eight stops, interpolated in straight encoded sRGB, premultiplied after.
 //! * [`dither`]: dithering keyed to the pixel position, and its shader implementation.
 //! * [`placement`]: where an image drawn one source pixel per device pixel lands.
+//! * [`resample`]: shrinking a frame drawn at a whole scale to the pixels of a display at a fractional one.
 //!
 //! Everything is `f32`, as the shaders compute it.
 
@@ -17,5 +18,6 @@ pub mod coverage;
 pub mod dither;
 pub mod gradient;
 pub mod placement;
+pub mod resample;
 pub mod shadow;
 pub mod vectors;

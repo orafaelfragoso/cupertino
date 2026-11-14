@@ -16,6 +16,7 @@
 //! | `wallpaper_color` | `#rrggbb`: a solid colour in place of any picture |
 //! | `material_density` | number 0 to 1: how much denser (less see-through) every material is made, 0 leaving the recipes as they are |
 //! | `output_depth` | `8` or `10`: bits a channel of the displays' primary planes, 8 by default; 10 falls back to 8 where a display has no 10-bit format; read when the session starts |
+//! | `fractional_scale_mode` | `supersample` (the default) or `direct`: how a display at a fractional scale is drawn, at the next whole scale and shrunk to its pixels, or straight at its scale; or an object of display names (the connector, such as `DP-1`, or the display's identity) to those, `*` for the others |
 //! | `prepare_toolkit_programs` | boolean, `true` by default: the compositor makes the toolkit's GPU programs into the per-user program cache on a thread of its own when the session starts, so no application process compiles them; read when the session starts |
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
@@ -81,6 +82,95 @@ pub enum MinimizeEffectName {
     Scale,
     /// No effect (`plain`, also written `none`).
     Plain,
+}
+
+/// How a display at a fractional scale is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FractionalScaleMode {
+    /// At the next whole scale, the frame shrunk to the display's pixels by one last pass.
+    #[default]
+    Supersample,
+    /// Straight at the display's scale.
+    Direct,
+}
+
+impl FractionalScaleMode {
+    pub const ALL: [FractionalScaleMode; 2] = [
+        FractionalScaleMode::Supersample,
+        FractionalScaleMode::Direct,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            FractionalScaleMode::Supersample => "supersample",
+            FractionalScaleMode::Direct => "direct",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<FractionalScaleMode> {
+        Self::ALL.into_iter().find(|m| m.name() == name)
+    }
+}
+
+/// `fractional_scale_mode`: one mode for every display, or a mode for each display named (its connector or identity),
+/// `*` for the others.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FractionalScaleModes {
+    /// The mode of a display not named in `displays`; the default mode when `None`.
+    pub others: Option<FractionalScaleMode>,
+    /// Display name to its mode.
+    pub displays: BTreeMap<String, FractionalScaleMode>,
+}
+
+impl FractionalScaleModes {
+    /// The mode of the display with these names (its connector, then its identity); the first one named wins.
+    pub fn of<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> FractionalScaleMode {
+        names
+            .into_iter()
+            .find_map(|n| self.displays.get(n).copied())
+            .or(self.others)
+            .unwrap_or_default()
+    }
+}
+
+fn fractional_scale_modes(v: &Value) -> Result<FractionalScaleModes, String> {
+    let mode = |v: &Value| {
+        let name = string(v)?;
+        FractionalScaleMode::from_name(name).ok_or_else(|| {
+            format!("the fractional scale mode is supersample or direct, not {name:?}")
+        })
+    };
+    if let Some(obj) = v.as_object() {
+        let mut modes = FractionalScaleModes::default();
+        for (name, value) in obj {
+            let m = mode(value)?;
+            if name == "*" {
+                modes.others = Some(m);
+            } else {
+                modes.displays.insert(name.clone(), m);
+            }
+        }
+        return Ok(modes);
+    }
+    Ok(FractionalScaleModes {
+        others: Some(mode(v)?),
+        displays: BTreeMap::new(),
+    })
+}
+
+fn fractional_scale_modes_value(m: &FractionalScaleModes) -> Value {
+    if let (true, Some(others)) = (m.displays.is_empty(), m.others) {
+        return Value::String(others.name().to_string());
+    }
+    let mut obj: Map<String, Value> = m
+        .displays
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.name().to_string())))
+        .collect();
+    if let Some(others) = m.others {
+        obj.insert("*".to_string(), Value::String(others.name().to_string()));
+    }
+    Value::Object(obj)
 }
 
 /// When applications show their scroll bars.
@@ -214,6 +304,8 @@ pub struct CompositorSettings {
     pub material_density: Option<f64>,
     /// Bits a channel of the primary planes: 8 or 10.
     pub output_depth: Option<u8>,
+    /// How displays at a fractional scale are drawn.
+    pub fractional_scale_mode: Option<FractionalScaleModes>,
     /// The compositor makes the toolkit's GPU programs into the per-user program cache when the session starts.
     pub prepare_toolkit_programs: Option<bool>,
     pub decorations: Option<bool>,
@@ -564,6 +656,11 @@ const KEYS: &[JsonKey] = &[
         },
         |b: &u8| Value::from(*b)
     ),
+    json_key!(
+        fractional_scale_mode,
+        fractional_scale_modes,
+        fractional_scale_modes_value
+    ),
     json_key!(prepare_toolkit_programs, boolean, bool_value),
     json_key!(wallpaper, absolute_path, |s: &String| Value::String(
         s.clone()
@@ -878,6 +975,52 @@ mod tests {
             assert_eq!(problems.len(), 1, "{bad}");
         }
         assert_eq!(CompositorSettings::default().output_depth, None);
+    }
+
+    #[test]
+    fn the_fractional_scale_mode_is_one_for_every_display_or_one_a_display_and_is_written_as_read()
+    {
+        let (s, problems) =
+            CompositorSettings::parse(r#"{"fractional_scale_mode":"direct"}"#, None);
+        assert!(problems.is_empty(), "{problems:?}");
+        let modes = s.fractional_scale_mode.clone().unwrap();
+        assert_eq!(modes.of(["DP-1"]), FractionalScaleMode::Direct);
+        assert_eq!(
+            fractional_scale_modes_value(&modes),
+            Value::String("direct".into())
+        );
+        let (s, problems) = CompositorSettings::parse(
+            r#"{"fractional_scale_mode":{"DP-1":"direct","*":"supersample","Maker Panel 7":"direct"}}"#,
+            None,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let modes = s.fractional_scale_mode.clone().unwrap();
+        assert_eq!(modes.of(["DP-1", "x"]), FractionalScaleMode::Direct);
+        assert_eq!(
+            modes.of(["HDMI-A-1", "Maker Panel 7"]),
+            FractionalScaleMode::Direct
+        );
+        assert_eq!(modes.of(["HDMI-A-1"]), FractionalScaleMode::Supersample);
+        let written = format!(
+            r#"{{"fractional_scale_mode":{}}}"#,
+            fractional_scale_modes_value(&modes)
+        );
+        let again = CompositorSettings::parse(&written, None).0;
+        assert_eq!(again.fractional_scale_mode, s.fractional_scale_mode);
+        for bad in [r#""sharp""#, "2", r#"{"DP-1":"none"}"#] {
+            let (s, problems) =
+                CompositorSettings::parse(&format!(r#"{{"fractional_scale_mode":{bad}}}"#), None);
+            assert_eq!(
+                (s.fractional_scale_mode, problems.len()),
+                (None, 1),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            FractionalScaleModes::default().of(["DP-1"]),
+            FractionalScaleMode::Supersample,
+            "supersampled by default"
+        );
     }
 
     #[test]

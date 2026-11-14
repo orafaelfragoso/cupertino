@@ -456,35 +456,49 @@ in `cupertino-gpu` (the `ui_fill` and `ui_texture` programs, the coverage and pa
 buttons have continuous corners, per-corner radii (the bar's top corners alone), linear gradients (button faces and
 rings) and strokes (the rim, the rings). Split (open at the end of step 10's third session):
 
-- [ ] Title bars and window buttons through the renderer's rectangle and glyph pipelines in borrowed-context mode.
+- [x] Title bars and window buttons through the renderer's rectangle and glyph pipelines in borrowed-context mode.
       Split:
-  - [ ] `cupertino-decorations` records a title bar, its buttons and the rim as a list of draws (an outline with
+  - [x] `cupertino-decorations` records a title bar, its buttons and the rim as a list of draws (an outline with
         per-corner extents and an exponent, a solid or linear shade, a stroke width; a coverage image of a glyph run
         or a button glyph) and its CPU path paints that list, the same pixels as today (its tests and the server
         goldens unchanged).
-  - [ ] The `ui_fill` block carries the corner exponent in a lane unused today (zero, circular, for every draw the
-        toolkit records), so a continuous corner is the shared distance on both renderers; per-corner extents by a
-        shape taller than the strip, held to it by the scissor.
-  - [ ] The block layout of `ui_fill` and `ui_texture` as one Rust type in `cupertino-gpu`, which
+  - [x] The `ui_fill` block carries the corner exponent in a lane unused today (zero, circular, for every draw the
+        toolkit records), so a continuous corner is the shared distance on both renderers; and per-corner radii
+        (`FillBlock::corners`, used when the clips' fourth lane is set), so the bar's top corners alone are round
+        without a taller shape and a scissor.
+  - [x] The block layout of `ui_fill` and `ui_texture` as one Rust type in `cupertino-gpu`, which
         `cupertino-ui-gpu` and the compositor both fill, so neither keeps a copy.
-  - [ ] The compositor draws a title bar's list into a texture of its own through those pipelines on the borrowed
-        device (title glyphs and button glyphs rasterized once into the coverage and path mask atlases, kept across
-        frames), when its state changes, and lays the texture over the window as the uploaded buffer was; the frame
-        statistics count GPU draws apart from CPU rasters.
-- [ ] Keyboard HUDs the same way (the input-source HUD, the accent popup, the shortcut notice: rounded fills and
-      centred text).
-- [ ] The procedural cursor last, kept a cursor-plane element: on the GPU into the plane's buffer where the plane
-      takes a GPU buffer, else the CPU image kept for the plane, the choice recorded here.
-- [ ] The rectangle passes of a frame (shadows, outlines, rounded rectangles, title bars) drawn inside one enter and
+  - [x] The compositor draws a title bar's list into a texture of its own on the borrowed device (title glyphs and
+        button glyphs rasterized once into an 8-bit atlas, kept across frames), when its state changes, and lays the
+        texture over the window as the uploaded buffer was; the frame statistics count GPU draws apart from CPU
+        rasters (`deco_draws`). The shapes take the shared distance as `ui_fill` does, but through a program of the
+        compositor's own (`shaders/passes/chrome.wgsl`): `ui_fill`'s results go through the driver's blending, whose
+        precision on the target driver (about 16-bit floats) rounds a pixel of a stack of four button layers three
+        steps away from the CPU painter. The chrome program lays each draw over what the draws before it made with
+        the painter's own arithmetic, reading the image below from a second texture, blending off, so the GPU image
+        is the CPU painting byte for byte on the target driver (every title bar and rim of the four appearances,
+        standard and unified, at scales 1, 1.5 and 2). The rim is drawn the same way. Where the device cannot draw,
+        the list is painted on the CPU and uploaded as before.
+- [x] Keyboard HUDs the same way (the input-source HUD, the accent popup, the shortcut notice: rounded fills and
+      centred text). Each is recorded as a list of draws (its rounded fills as paths, its text as glyph runs) in the
+      overlay image cache and drawn by the chrome program; the frame statistics count them as `hud_draws`.
+- [x] The procedural cursor last, kept a cursor-plane element: on the GPU into the plane's buffer where the plane
+      takes a GPU buffer, else the CPU image kept for the plane, the choice recorded here. Kept on the CPU: the DRM
+      compositor fills the cursor plane's buffer on the CPU, with its software renderer into a mapped buffer, so a
+      GPU image of the cursor would have to come back to the CPU to reach the plane.
+- [x] The rectangle passes of a frame (shadows, outlines, rounded rectangles, title bars) drawn inside one enter and
       leave of the borrowed device instead of one each, so the state is read and put back once a frame
-      ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today).
-- [ ] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
+      ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today). The device notes the groups of state its
+      calls change and `Device::pause` puts back only those, without reading; `Device::resume` enters on what the
+      frame's first enter read.
+- [x] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
       it reports that the hover drew no title bar (the window's place differs between runs), so its median counts
       none. The baseline from the run that hit them, before step 8: 36 decoration rasters and 36 uploads, 12 MiB.
+      The hover now moves relative to Settings' frame (`--pointer-on`), wherever the session placed it.
 
 Gate:
 
-- [ ] The hover scenario shows no CPU raster and no upload.
+- [GATE] The hover scenario shows no CPU raster and no upload.
 
 ## Step 9: layers and animation in the compositor
 

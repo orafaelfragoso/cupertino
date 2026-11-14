@@ -35,6 +35,7 @@ struct Draw {
     vec4 mask_rect;
     vec4 mask_at;
     Clip clips[4];
+    vec4 corners;
 };
 struct Instance {
     vec4 rect;
@@ -122,9 +123,9 @@ float gauss(float x_1, float sigma) {
     return (exp((-((x_1 * x_1)) / ((2.0 * sigma) * sigma))) / (2.5066283 * sigma));
 }
 
-float box_x(float x_2, float y, float sigma_1, float corner, vec2 half_2) {
-    float delta = min(((half_2.y - corner) - abs(y)), 0.0);
-    float curved = ((half_2.x - corner) + sqrt(max(((corner * corner) - (delta * delta)), 0.0)));
+float box_x(float x_2, float y, float sigma_1, float corner_1, vec2 half_2) {
+    float delta = min(((half_2.y - corner_1) - abs(y)), 0.0);
+    float curved = ((half_2.x - corner_1) + sqrt(max(((corner_1 * corner_1) - (delta * delta)), 0.0)));
     float k_3 = (0.70710677 / sigma_1);
     float _e24 = erf_approx(((x_2 - curved) * k_3));
     float low = (0.5 + (0.5 * _e24));
@@ -133,7 +134,7 @@ float box_x(float x_2, float y, float sigma_1, float corner, vec2 half_2) {
     return (high - low);
 }
 
-float rounded_box_blur(vec2 p_2, vec2 half_3, float sigma_2, float corner_1) {
+float rounded_box_blur(vec2 p_2, vec2 half_3, float sigma_2, float corner_2) {
     float y_1 = 0.0;
     float value = 0.0;
     int i = 0;
@@ -158,7 +159,7 @@ float rounded_box_blur(vec2 p_2, vec2 half_3, float sigma_2, float corner_1) {
         {
             float _e30 = value;
             float _e33 = y_1;
-            float _e35 = box_x(p_2.x, (p_2.y - _e33), sigma_2, corner_1, half_3);
+            float _e35 = box_x(p_2.x, (p_2.y - _e33), sigma_2, corner_2, half_3);
             float _e36 = y_1;
             float _e37 = gauss(_e36, sigma_2);
             value = (_e30 + ((_e35 * _e37) * step_1));
@@ -200,8 +201,8 @@ float blur_mass(float sigma_3) {
 float drop_shadow(vec2 p_3, Caster caster, Shadow shadow, bool cut_out, float px_2) {
     float a = 0.0;
     float radius = min(caster.radius, min(caster.half_.x, caster.half_.y));
-    vec2 q = (p_3 - shadow.offset);
-    float _e16 = rounded_box_blur(q, caster.half_, shadow.sigma, radius);
+    vec2 q_1 = (p_3 - shadow.offset);
+    float _e16 = rounded_box_blur(q_1, caster.half_, shadow.sigma, radius);
     a = clamp((_e16 * shadow.density), 0.0, 1.0);
     if (cut_out) {
         float extent = min(caster.extent, min(caster.half_.x, caster.half_.y));
@@ -215,8 +216,8 @@ float drop_shadow(vec2 p_3, Caster caster, Shadow shadow, bool cut_out, float px
 
 float inner_shadow(vec2 p_4, Caster caster_1, Shadow shadow_1, float px_3) {
     float radius_1 = min(caster_1.radius, min(caster_1.half_.x, caster_1.half_.y));
-    vec2 q_1 = (p_4 - shadow_1.offset);
-    float _e15 = rounded_box_blur(q_1, caster_1.half_, shadow_1.sigma, radius_1);
+    vec2 q_2 = (p_4 - shadow_1.offset);
+    float _e15 = rounded_box_blur(q_2, caster_1.half_, shadow_1.sigma, radius_1);
     float _e17 = blur_mass(shadow_1.sigma);
     float blurred = (_e15 / _e17);
     float outside = max((1.0 - blurred), 0.0);
@@ -355,13 +356,31 @@ vec2 place(vec4 linear, vec2 moved, vec2 p_6) {
     return vec2((((linear.x * p_6.x) + (linear.z * p_6.y)) + moved.x), (((linear.y * p_6.x) + (linear.w * p_6.y)) + moved.y));
 }
 
-float outline_distance(vec2 p_7, vec2 half_4, float corner_2, float n_1, float grow) {
-    if ((corner_2 > 0.0)) {
-        float _e11 = rounded_distance(p_7, half_4, corner_2, ((n_1 > 0.0) ? n_1 : 2.0));
+float outline_distance(vec2 p_7, vec2 half_4, float corner_3, float n_1, float grow) {
+    if ((corner_3 > 0.0)) {
+        float _e11 = rounded_distance(p_7, half_4, corner_3, ((n_1 > 0.0) ? n_1 : 2.0));
         return (_e11 - grow);
     }
     float _e15 = rect_distance(p_7, (half_4 + vec2(grow)));
     return _e15;
+}
+
+float corner_of(vec4 corners, vec2 q, vec2 half_5) {
+    float e_1 = 0.0;
+    e_1 = corners.x;
+    if (((q.x >= 0.0) && (q.y < 0.0))) {
+        e_1 = corners.y;
+    } else {
+        if (((q.x >= 0.0) && (q.y >= 0.0))) {
+            e_1 = corners.z;
+        } else {
+            if (((q.x < 0.0) && (q.y >= 0.0))) {
+                e_1 = corners.w;
+            }
+        }
+    }
+    float _e29 = e_1;
+    return min(_e29, min(half_5.x, half_5.y));
 }
 
 uvec4 paint_bytes(vec2 p_9, vec2 frag_4) {

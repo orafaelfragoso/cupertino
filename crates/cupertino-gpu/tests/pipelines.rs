@@ -319,3 +319,54 @@ fn the_fill_program_draws_a_corner_of_the_exponent_its_block_carries_and_a_circu
             > 0.5
     );
 }
+
+#[test]
+fn the_fill_program_draws_each_corner_of_its_own_radius_when_the_block_carries_them() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let size = (48, 40);
+    let (centre, half) = ([24.0f32, 20.0], [19.0f32, 15.5]);
+    // top left, top right, bottom right (larger than the half size, held to it), bottom left square
+    let corners = [11.0f32, 4.0, 40.0, 0.0];
+    let mut block = FillBlock {
+        frame: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+        shape_linear: [1.0, 0.0, 0.0, 1.0],
+        shape_moved: [-centre[0], -centre[1], half[0], half[1]],
+        // the single radius the corners replace
+        shape: [6.0, 1.0, 0.0, 0.0],
+        color: [255.0; 4],
+        corners,
+        ..FillBlock::default()
+    };
+    block.clips.info = [0.0, 0.0, 3.4, 1.0];
+    let pixels = fill(
+        &device,
+        size,
+        &block,
+        [0.0, 0.0, size.0 as f32, size.1 as f32],
+    );
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let p = [x as f32 + 0.5 - centre[0], y as f32 + 0.5 - centre[1]];
+            let e = match (p[0] >= 0.0, p[1] >= 0.0) {
+                (false, false) => corners[0],
+                (true, false) => corners[1],
+                (true, true) => corners[2],
+                (false, true) => corners[3],
+            }
+            .min(half[0])
+            .min(half[1]);
+            let want = coverage(rounded_distance(p, half, e, 3.4), 1.0);
+            let got = f32::from(pixels[((y * size.0 + x) * 4 + 3) as usize]) / 255.0;
+            assert!(
+                (got - want).abs() <= 1.0 / 255.0 + 1e-4,
+                "pixel {x} {y}: drawn {got}, defined {want}"
+            );
+        }
+    }
+    // the square corner is covered to its tip, the round ones are not
+    let alpha = |x: u32, y: u32| pixels[((y * size.0 + x) * 4 + 3) as usize];
+    assert_eq!(alpha(5, 34), 255);
+    assert_eq!((alpha(5, 5), alpha(42, 34)), (0, 0));
+}

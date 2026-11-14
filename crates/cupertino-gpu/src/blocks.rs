@@ -19,7 +19,8 @@ pub struct ClipBlock {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClipsBlock {
-    /// Analytic clips, path clip mask used, and in [`FillBlock`] the corner exponent of its shape (0: circular).
+    /// Analytic clips, path clip mask used, and in [`FillBlock`] the corner exponent of its shape (0: circular) and
+    /// whether its corners each have their own radius ([`FillBlock::corners`]).
     pub info: [f32; 4],
     /// The path clip mask's window pixels (x0 y0 x1 y1).
     pub mask_rect: [f32; 4],
@@ -55,6 +56,8 @@ pub struct FillBlock {
     /// The stops' straight colours.
     pub colors: [[f32; 4]; 8],
     pub clips: ClipsBlock,
+    /// The shape's corner radii when the clips' `info[3]` is set: top left, top right, bottom right, bottom left.
+    pub corners: [f32; 4],
 }
 
 /// The block of [`crate::shaders::UI_TEXTURE`]: a colour glyph, a layer or an image, times the clips in force.
@@ -109,7 +112,7 @@ macro_rules! floats {
     };
 }
 
-floats!(FillBlock, 136);
+floats!(FillBlock, 140);
 floats!(TextureBlock, 96);
 
 impl FillBlock {
@@ -175,7 +178,8 @@ mod tests {
                 .sum()
         };
         let fill = members(&UI_FILL);
-        assert_eq!(fill.len(), 15, "{fill:?}");
+        assert_eq!(fill.len(), 16, "{fill:?}");
+        assert!(fill[15].contains("corners"), "{fill:?}");
         assert_eq!(count(&fill), FillBlock::FLOATS, "{fill:?}");
         assert!(fill[11].contains("clip_info"), "{fill:?}");
         assert_eq!(count(&fill[..11]), FillBlock::CLIPS);
@@ -196,7 +200,7 @@ mod tests {
         let f = b.floats();
         assert_eq!(&f[..4], &[1.0, 2.0, 3.0, 4.0]);
         assert_eq!(f[FillBlock::CLIPS + 2], 5.0);
-        assert_eq!(f[FillBlock::FLOATS - 3], 6.0);
+        assert_eq!(f[FillBlock::CLIPS + ClipsBlock::FLOATS - 3], 6.0);
         b.floats_mut()[12] = 7.0;
         assert_eq!(b.shape[0], 7.0);
         assert_eq!(b.bytes().len(), FillBlock::FLOATS * 4);

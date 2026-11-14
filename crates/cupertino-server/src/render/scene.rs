@@ -1395,14 +1395,14 @@ fn builtin_decorations(
         scale_x: plan.scale_x,
         scale_y: plan.scale_y,
     };
-    let picture = |buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    let picture = |buffer: &std::rc::Rc<super::chrome::ChromeImage>,
                    kind: SceneKind,
                    buffer_px: (i32, i32),
                    src: smithay::utils::Rectangle<f64, Logical>,
                    size: smithay::utils::Size<i32, Logical>,
                    at: Point<f64, Physical>| {
         Piece::Image(Box::new(Picture {
-            buffer: buffer.clone(),
+            buffer: super::compose::ImageBuffer::Chrome(buffer.clone()),
             kind,
             index: entry.id.0,
             role: ImageRole::Decoration,
@@ -1499,7 +1499,7 @@ fn revealed_titlebar(
         strip.y - p.rect.y,
     ));
     Some(Piece::Image(Box::new(Picture {
-        buffer: bufs.titlebar.clone(),
+        buffer: super::compose::ImageBuffer::Chrome(bufs.titlebar.clone()),
         kind: SceneKind::TitleBar,
         index: entry.id.0,
         role: ImageRole::Decoration,
@@ -2792,7 +2792,7 @@ fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
             stack.push(
                 SceneLayer::Cursor,
                 Piece::Image(Box::new(Picture {
-                    buffer: frame.buffer.clone(),
+                    buffer: frame.buffer.clone().into(),
                     kind: SceneKind::CursorImage,
                     index: 0,
                     role: ImageRole::Cursor,

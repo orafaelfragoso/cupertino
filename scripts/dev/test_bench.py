@@ -118,8 +118,8 @@ class ReadingTest(unittest.TestCase):
             "# renderer test\n# refresh_us 16666\n# start_monotonic_ns 1000000000\n"
             "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us app_lat_us "
             "allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads "
-            "hud_upload_bytes blur_passes blur_texels pointer_lat_us submit_us\n"
-            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000 3000 500\n"
+            "hud_upload_bytes blur_passes blur_texels pointer_lat_us submit_us deco_draws\n"
+            "10000000 300 1700 0 0 1 0 0 0 4000 - 0 4 1500 1 0 1 2048 0 0 4 6000 3000 500 2\n"
             "10016000 300 19000 0 0 0 1 0 1 - 9000 0 0 - 0 0 0 0 0 0 0 0 - 1700\n"
             "30000000 300 1000 0 0 0 0 0 0 - - 0 0 900 0 0 0 0 0 0 0 0 - 600\n")
         return path
@@ -134,6 +134,7 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual(c["missed"], 1)
         self.assertEqual(c["over_budget"], 1, "19.3 ms of work is over a 60 Hz refresh")
         self.assertEqual(c["decoration_rasters"], 1)
+        self.assertEqual(c["decoration_draws"], 2, "title bars drawn on the GPU")
         self.assertEqual(c["decoration_upload_kib"], 2.0)
         self.assertEqual(c["blur_passes_per_frame"], 2.0)
         self.assertEqual(c["blur_texels_per_frame"], 3000.0)

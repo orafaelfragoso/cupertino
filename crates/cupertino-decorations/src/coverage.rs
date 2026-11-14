@@ -66,8 +66,28 @@ impl Outline {
         rounded_distance(p, self.half, e, self.exponent)
     }
 
-    /// The pixels the outline can touch inside a pixmap of `w` x `h`.
-    fn span(&self, w: u32, h: u32) -> (u32, u32, u32, u32) {
+    /// Its centre, device pixels from the image's origin.
+    pub fn centre(&self) -> [f32; 2] {
+        self.centre
+    }
+
+    /// Half its width and height, in device pixels.
+    pub fn half(&self) -> [f32; 2] {
+        self.half
+    }
+
+    /// The corners' extents in device pixels: top left, top right, bottom right, bottom left.
+    pub fn extents(&self) -> [f32; 4] {
+        self.extents
+    }
+
+    /// The corners' exponent (2: circular).
+    pub fn exponent(&self) -> f32 {
+        self.exponent
+    }
+
+    /// The pixels the outline can touch inside a pixmap of `w` x `h`: x0, y0, x1, y1, the ends excluded.
+    pub fn span(&self, w: u32, h: u32) -> (u32, u32, u32, u32) {
         let lo = |c: f32, half: f32| (c - half - 1.0).floor().max(0.0) as u32;
         let hi = |c: f32, half: f32, n: u32| ((c + half + 1.0).ceil().max(0.0) as u32).min(n);
         (

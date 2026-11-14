@@ -6,7 +6,8 @@
 //! output owed it and how many refreshes passed meanwhile, and the input-to-present latency of the frame when it is the
 //! first shown after an input; then how many render targets the material and glass passes created and how many passes
 //! they ran; then the GPU time of the whole frame (by GPU timestamps, `-` where the device has none), the title bars and
-//! rims and the keyboard HUDs drawn on the CPU, their uploads and the bytes those sent, and the passes of backdrop blurs.
+//! rims and the keyboard HUDs drawn on the CPU, their uploads and the bytes those sent, and the passes of backdrop blurs;
+//! after the pointer latency and the submit time, the title bars and rims and the keyboard HUDs drawn on the GPU.
 //!
 //! An output owes a frame from the time it is due ([`crate::state::Cupertino::frame_deadline`]): a change is due at the
 //! next refresh, an animation frame at its grid point. A frame shown more than a refresh after it was owed missed the
@@ -141,6 +142,10 @@ pub struct DrawCounts {
     pub blur_passes: u64,
     /// Texels the blur passes wrote.
     pub blur_texels: u64,
+    /// Title bars and rims drawn on the GPU.
+    pub decoration_draws: u64,
+    /// Keyboard HUDs drawn on the GPU.
+    pub hud_draws: u64,
 }
 
 /// The running totals [`DrawCounts`] are taken from.
@@ -150,6 +155,8 @@ pub struct Totals {
     pub decoration_rasters: u64,
     pub hud_rasters: u64,
     pub uploads: crate::render::uploads::Uploads,
+    pub decoration_draws: u64,
+    pub hud_draws: u64,
 }
 
 impl Totals {
@@ -162,9 +169,11 @@ impl Totals {
                 .and_then(|r| r.material.as_ref())
                 .map(|m| m.borrow().stats)
                 .unwrap_or_default(),
-            decoration_rasters: state.decor.renders,
-            hud_rasters: state.overlays.images.rasters,
+            decoration_rasters: crate::render::chrome::counts().painted,
+            hud_rasters: crate::render::chrome::counts().hud_painted,
             uploads: crate::render::uploads::total(),
+            decoration_draws: crate::render::chrome::counts().drawn,
+            hud_draws: crate::render::chrome::counts().hud_drawn,
         }
     }
 
@@ -180,6 +189,8 @@ impl Totals {
             hud_upload_bytes: self.uploads.hud_bytes - before.uploads.hud_bytes,
             blur_passes: self.material.blur_passes - before.material.blur_passes,
             blur_texels: self.material.blur_texels - before.material.blur_texels,
+            decoration_draws: self.decoration_draws - before.decoration_draws,
+            hud_draws: self.hud_draws - before.hud_draws,
         }
     }
 }
@@ -191,7 +202,7 @@ impl FrameRecord {
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         let c = &self.counts;
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -216,6 +227,8 @@ impl FrameRecord {
             c.blur_texels,
             opt(self.pointer_latency),
             us(self.submit),
+            c.decoration_draws,
+            c.hud_draws,
         )
     }
 }
@@ -309,7 +322,7 @@ pub struct FrameStats {
 /// The first line of the file: the column names.
 pub const HEADER: &str = "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us \
 app_lat_us allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads hud_upload_bytes \
-blur_passes blur_texels pointer_lat_us submit_us";
+blur_passes blur_texels pointer_lat_us submit_us deco_draws hud_draws";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -600,7 +613,7 @@ mod tests {
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0 - 0"));
+        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0 - 0 0 0"));
     }
 
     #[test]
@@ -617,12 +630,15 @@ mod tests {
                 hud_upload_bytes: 6000,
                 blur_passes: 7,
                 blur_texels: 8000,
+                decoration_draws: 9,
+                hud_draws: 10,
             },
             submit: Duration::from_micros(900),
             ..Default::default()
         };
         assert!(
-            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000 - 900"),
+            r.line()
+                .ends_with(" 1500 1 2 3 4000 5 6000 7 8000 - 900 9 10"),
             "{}",
             r.line()
         );
@@ -647,6 +663,8 @@ mod tests {
         after.uploads.hud_bytes = 64;
         after.material.blur_passes = 26;
         after.material.blur_texels = 7500;
+        after.decoration_draws = 3;
+        after.hud_draws = 1;
         assert_eq!(
             after.since(&before),
             DrawCounts {
@@ -658,6 +676,8 @@ mod tests {
                 hud_upload_bytes: 64,
                 blur_passes: 6,
                 blur_texels: 2500,
+                decoration_draws: 3,
+                hud_draws: 1,
             }
         );
     }

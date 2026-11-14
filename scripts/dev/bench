@@ -512,6 +512,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
         "blurred_per_frame": per("blurred"), "reused_per_frame": per("reused"), "allocated_per_frame": per("allocated"),
         "blur_passes_per_frame": per("blur_passes"), "blur_texels_per_frame": per("blur_texels"),
         "decoration_rasters": sum(r.get("deco_rasters") or 0 for r in frames),
+        "decoration_draws": sum(r.get("deco_draws") or 0 for r in frames),
         "decoration_uploads": sum(r.get("deco_uploads") or 0 for r in frames),
         "decoration_upload_kib": sum(r.get("deco_upload_bytes") or 0 for r in frames) / 1024,
         "hud_rasters": sum(r.get("hud_rasters") or 0 for r in frames),
@@ -670,7 +671,7 @@ def check(name: str, r: dict) -> str | None:
             return "the drag drew few frames: it may not have held the title bar"
     if name == "resize" and r["compositor"]["frames"] < 30:
         return "the resize drew few frames: the press may have missed the corner"
-    if name == "hover" and not r["compositor"]["decoration_rasters"]:
+    if name == "hover" and not (r["compositor"]["decoration_rasters"] or r["compositor"].get("decoration_draws")):
         return "the hover drew no title bar: the pointer may have missed the window buttons"
     if name in ("files-scroll", "files-full-scroll") and r["clients"].get("cupertino-files", {}).get("frames", 0) < 30:
         return "Files drew few frames: the scroll may have missed its list"
@@ -728,7 +729,7 @@ def kilo(v):
 def table(summary: dict, renderer: str) -> str:
     lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
              f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'cpu99':>7} {'gpu99':>7} "
-             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7} "
+             f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u/g':>14} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7} "
              f"{'ptr95':>7}"]
     for key, s in summary.items():
         g = lambda k: s.get(f"compositor.{k}", {}).get("median")
@@ -740,7 +741,7 @@ def table(summary: dict, renderer: str) -> str:
             f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('submit_p99_ms'))} {fmt(g('gpu_p99_ms'))} "
             f"{fmt(g('cpu_ms_per_s'))} "
             f"{fmt(g('blur_passes_per_frame'))} {fmt(kilo(g('blur_texels_per_frame')), 8, 1)} "
-            f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
+            f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)}/{fmt(g('decoration_draws'), 4, 0)} "
             f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)} "
             f"{fmt(g('pointer_latency_p95_ms'))}")
     return "\n".join(lines)

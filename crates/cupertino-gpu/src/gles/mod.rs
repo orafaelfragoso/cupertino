@@ -89,6 +89,8 @@ pub struct Texture {
     image: Option<egl::EGLImage>,
     bo: Option<*mut c_void>,
     id: u64,
+    /// Its storage is the device's owner's ([`Device::wrap_texture`]): destroying it keeps the texture.
+    foreign: bool,
 }
 
 impl Texture {
@@ -613,6 +615,7 @@ impl Device {
                 image: None,
                 bo: None,
                 id: next_id(),
+                foreign: false,
             };
             if desc.usage.render_target {
                 match self.framebuffer_of(raw) {
@@ -625,6 +628,56 @@ impl Device {
             }
             Ok(texture)
         }
+    }
+
+    /// A render target over `name`, a 2D texture of `size` texels in 8-bit RGBA the device's owner made in the
+    /// context it lent: drawn into, sampled and read like the device's own textures (its filtering set to theirs,
+    /// one level, nearest). Destroying the result
+    /// ([`Device::destroy_texture`]) releases only the framebuffer the device made for it; the texture stays the
+    /// owner's. Only a borrowed device wraps.
+    ///
+    /// # Safety
+    ///
+    /// `name` is a texture of the current context with storage of `size` in a colour-renderable 8-bit RGBA format,
+    /// and it outlives the result.
+    pub unsafe fn wrap_texture(&self, name: u32, size: (u32, u32)) -> Result<Texture> {
+        self.ready()?;
+        if !self.is_borrowed() {
+            return Err(Error::Invalid(
+                "only a borrowed device wraps its owner's textures".into(),
+            ));
+        }
+        let raw = std::num::NonZeroU32::new(name)
+            .map(glow::NativeTexture)
+            .ok_or_else(|| Error::Invalid("texture name 0".into()))?;
+        let (w, h) = size;
+        if w == 0 || h == 0 {
+            return Err(Error::Invalid(format!("a texture of {w} x {h}")));
+        }
+        self.touch(Touched::FRAMEBUFFERS.with(Touched::TEXTURES));
+        // Safety: the caller's texture of the current context; it reads its one level, as the device's own do (its
+        // owner sets its own filtering when it samples it)
+        let framebuffer = unsafe {
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(raw));
+            self.texture_defaults();
+            self.framebuffer_of(raw)
+        }?;
+        Ok(Texture {
+            raw,
+            desc: TextureDesc {
+                size,
+                format: TextureFormat::Rgba8,
+                usage: TextureUsage {
+                    sampled: true,
+                    render_target: true,
+                },
+            },
+            framebuffer: Some(framebuffer),
+            image: None,
+            bo: None,
+            id: next_id(),
+            foreign: true,
+        })
     }
 
     /// Without a sampler bound, a texture reads its single level, nearest, clamped: complete without mipmaps.
@@ -797,7 +850,9 @@ impl Device {
             if let Some(fb) = texture.framebuffer {
                 self.gl.delete_framebuffer(fb);
             }
-            self.gl.delete_texture(texture.raw);
+            if !texture.foreign {
+                self.gl.delete_texture(texture.raw);
+            }
             if let Some(image) = texture.image {
                 self.ctx.destroy_image(image);
             }
@@ -936,6 +991,7 @@ impl Device {
                 image: Some(image),
                 bo,
                 id: next_id(),
+                foreign: false,
             };
             match self.framebuffer_of(raw) {
                 Ok(fb) => texture.framebuffer = Some(fb),

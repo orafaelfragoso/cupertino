@@ -50,6 +50,12 @@ pass!(
     "wallpaper"
 );
 
+pass!(
+    /// The chrome's draws, each laid over the image below it with the CPU painter's arithmetic ([`super::chrome`]).
+    CHROME,
+    "chrome"
+);
+
 /// Every rectangle pass, in the order of [`RectPass`].
 pub const ALL: [ShaderSource; 3] = [SHADOW, ROUNDED, WALLPAPER];
 
@@ -175,6 +181,8 @@ pub struct Passes {
     frame: RefCell<FrameEntry>,
     /// Times the context's state was read on entering the device (diagnostics and tests).
     state_reads: Cell<u64>,
+    /// What draws the chrome's lists, made when the first is drawn ([`super::chrome`]).
+    chrome: RefCell<Option<super::chrome::ChromePainter>>,
 }
 
 /// While it lives, the passes draw inside one frame of the renderer ([`Passes::frame`]).
@@ -289,6 +297,7 @@ impl Passes {
             failed: Cell::new(false),
             frame: RefCell::new(FrameEntry::Closed),
             state_reads: Cell::new(0),
+            chrome: RefCell::new(None),
         }))
     }
 
@@ -405,6 +414,34 @@ impl Passes {
         })
     }
 
+    /// Draw the chrome's `list` into the renderer's texture `name` (`size` texels, 8-bit RGBA), cleared first. The
+    /// renderer's context is current (inside its `with_context`), and no frame of it is being drawn.
+    pub fn draw_list(
+        &self,
+        name: u32,
+        size: (u32, u32),
+        list: &cupertino_decorations::DrawList,
+    ) -> cupertino_gpu::Result<()> {
+        if self.made.borrow().is_none() {
+            return Err(cupertino_gpu::Error::Invalid(
+                "the passes were released".into(),
+            ));
+        }
+        let device = &self.device;
+        let mut chrome = self.chrome.borrow_mut();
+        self.within(|| {
+            if chrome.is_none() {
+                *chrome = Some(super::chrome::ChromePainter::new(device)?);
+            }
+            let painter = chrome.as_mut().expect("made above");
+            // Safety: the renderer's texture of the current context, `size` texels of 8-bit RGBA, alive for the call.
+            let target = unsafe { device.wrap_texture(name, size) }?;
+            let drawn = painter.draw(device, &target, list);
+            device.destroy_texture(target);
+            drawn
+        })
+    }
+
     /// Release the device's objects (before the renderer is dropped); the passes draw nothing afterwards.
     pub fn destroy(&self, renderer: &mut GlesRenderer) {
         let Some(made) = self.made.borrow_mut().take() else {
@@ -420,6 +457,9 @@ impl Passes {
                 device.destroy_buffer(made.place);
                 if let Some((buffer, _)) = made.instances {
                     device.destroy_buffer(buffer);
+                }
+                if let Some(chrome) = self.chrome.borrow_mut().take() {
+                    chrome.destroy(device);
                 }
                 Ok(())
             })

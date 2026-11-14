@@ -85,6 +85,13 @@ impl Sampled
 {
 }
 
+impl Sampled
+    for smithay::backend::renderer::element::texture::TextureRenderElement<
+        smithay::backend::renderer::gles::GlesTexture,
+    >
+{
+}
+
 /// How many texels a pixel covers when `part` texels are drawn over `dst` pixels: the side of the square of equal area,
 /// so a turned buffer is covered as an upright one.
 pub fn texels_per_pixel(part: (f64, f64), dst: (f64, f64)) -> f64 {

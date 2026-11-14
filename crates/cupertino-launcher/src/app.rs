@@ -12,7 +12,7 @@ use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::Size;
-use cupertino_kit::platform::WindowSpec;
+use cupertino_kit::platform::{WindowSpec, WindowSystem as _};
 use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_launcher::browse::{App as BrowserApp, BrowseLayout};
 use cupertino_launcher::control::{self, Call};
@@ -1024,6 +1024,9 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;
     model.settled = cupertino_shell_client::test_clock::motion_settled();
+    // the compositor runs the panel's close when it shows a window's parts as layers of their own, with glass
+    let capabilities = system.capabilities();
+    model.compositor_layers = capabilities.surface_layers && capabilities.app_effects;
     let app = App { model, signals };
     let first = listen(&app.signals);
     cupertino_kit::app::run_on::<App>(system, (app, vec![first]))?;

@@ -155,6 +155,8 @@ pub(crate) struct NodeMaterial {
     pub(crate) radius: f64,
     /// The corners are half the node's shorter side, whatever its size ([`crate::GlassCorners::Capsule`]).
     pub(crate) capsule: bool,
+    /// A surface layer draws it ([`crate::PaintCx::layer_glass`]): the window shows no region for it.
+    pub(crate) in_layer: bool,
     pub(crate) alpha: f64,
     pub(crate) glass: Option<GlassRegion>,
 }
@@ -1091,10 +1093,11 @@ impl Painter {
             blank.push(painted.ops.is_empty() && painted.group.is_none());
             if let Some(material) = painted.material {
                 let shown = visible.translate(origin.x, origin.y);
-                if shown.width() > 0.0 && shown.height() > 0.0 {
-                    if material.glass.is_some() {
-                        glass_shown.push((shown, foreground.own));
-                    }
+                if shown.width() > 0.0 && shown.height() > 0.0 && material.glass.is_some() {
+                    glass_shown.push((shown, foreground.own));
+                }
+                // a surface layer's glass is drawn with the layer, not under the window
+                if shown.width() > 0.0 && shown.height() > 0.0 && !material.in_layer {
                     let radius = if material.capsule {
                         placement.rect.size.width.min(placement.rect.size.height) / 2.0
                     } else {

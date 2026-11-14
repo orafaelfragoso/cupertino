@@ -583,8 +583,8 @@ impl Motion {
         let anchor = shape.width.max(GROUP_WIDTH);
         shape.width = (shape.width + self.dip_at(now)).max(0.0);
         let header = self.header_at(now);
-        let spread = self.split.value(now);
-        let drawn = self.field.value(now);
+        let spread = shown(&self.split, now);
+        let drawn = shown(&self.field, now);
         let out = spread.abs() > 1e-3 || drawn.abs() > 1e-3;
         let count = if out && header == Header::Search {
             self.modes_laid
@@ -603,12 +603,12 @@ impl Motion {
             scale: if self.reduce {
                 1.0
             } else {
-                self.scale.value(now)
+                shown(&self.scale, now)
             },
             scale_y: if self.reduce || self.widen_only {
                 1.0
             } else {
-                self.scale.value(now)
+                shown(&self.scale, now)
             },
             content: self.content.value(now).clamp(0.0, 1.0),
             blur: self.blur.value(now).clamp(0.0, 1.0),
@@ -638,6 +638,25 @@ impl Motion {
     /// Whether the panel is fully gone at `now` (closed and its fade over).
     pub fn gone(&self, now: f64) -> bool {
         self.alpha.to == 0.0 && self.alpha.value(now) <= 0.0
+    }
+
+    /// How long the panel's fade out still runs at `now`, in seconds; 0 once it is gone or while it is not closing.
+    pub fn closing_left(&self, now: f64) -> f64 {
+        if self.alpha.to != 0.0 {
+            return 0.0;
+        }
+        (self.alpha.start + self.alpha.duration - now).max(0.0)
+    }
+}
+
+/// What `value` presents at `now`: its target once it no longer moves. A spring past its settling time is a hair off
+/// its target for ever; presenting that hair would leave the panel's place and the text in it a little off the
+/// device pixels they settle on.
+fn shown(value: &AnimatedValue<f64>, now: f64) -> f64 {
+    if value.is_animating(now) {
+        value.value(now)
+    } else {
+        value.target()
     }
 }
 
@@ -868,6 +887,21 @@ mod tests {
         m.show(OPEN, true, 0.0);
         let f = m.frame(0.0);
         assert_eq!((f.scale, f.scale_y), (ENTER_SCALE, ENTER_SCALE));
+    }
+
+    #[test]
+    fn once_its_springs_settle_the_panel_rests_exactly_at_its_place() {
+        let mut m = Motion::new(COMPACT);
+        m.show(COMPACT, false, 0.0);
+        m.set_modes(2, 0.0, 0.0);
+        let rest = (1..400)
+            .map(|i| f64::from(i) / 120.0)
+            .find(|&t| !m.animating(t))
+            .unwrap();
+        let f = m.frame(rest);
+        assert_eq!((f.scale, f.scale_y), (1.0, 1.0));
+        assert_eq!(f.modes.spread, 1.0);
+        assert_eq!(f.shape.width, crate::modes::field_width(2));
     }
 
     #[test]

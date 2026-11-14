@@ -182,7 +182,8 @@ impl<A: Application, W: WindowSystem> Timed for Runtime<A, W> {
             runtime = runtime.with_frame_timing(Box::new(move |t| {
                 use std::io::Write;
                 // one write per line: lines of other processes appending to the same file never land inside it
-                let line = format!("{}\n", frame_timing_json(t, pid, &program));
+                let renderer = cupertino_ui_wayland::renderer::active_name();
+                let line = format!("{}\n", frame_timing_json(t, pid, &program, renderer));
                 let _ = file.write_all(line.as_bytes());
             }));
         }
@@ -247,13 +248,19 @@ fn json_string(text: &str) -> String {
     out
 }
 
-/// One line of the frame timing report: the process, the turn's start on the monotonic clock and each phase, in
-/// nanoseconds, then the frames the turn presented.
-pub fn frame_timing_json(t: &cupertino_ui_core::FrameTiming, pid: u32, program: &str) -> String {
+/// One line of the frame timing report: the process, the renderer it drew the frame with (`cpu` or `gpu`), the turn's
+/// start on the monotonic clock and each phase, in nanoseconds, then the frames the turn presented.
+pub fn frame_timing_json(
+    t: &cupertino_ui_core::FrameTiming,
+    pid: u32,
+    program: &str,
+    renderer: &str,
+) -> String {
     let ns = |d: std::time::Duration| d.as_nanos();
     format!(
-        r#"{{"pid":{pid},"program":{},"start":{},"update":{},"view":{},"layout":{},"paint":{},"raster":{},"copy":{},"commit":{},"total":{},"frames":{}}}"#,
+        r#"{{"pid":{pid},"program":{},"renderer":{},"start":{},"update":{},"view":{},"layout":{},"paint":{},"raster":{},"copy":{},"commit":{},"total":{},"frames":{}}}"#,
         json_string(program),
+        json_string(renderer),
         t.start.0,
         ns(t.update),
         ns(t.view),
@@ -619,8 +626,8 @@ mod tests {
             frames: 2,
         };
         assert_eq!(
-            frame_timing_json(&t, 42, "cupertino-dock"),
-            r#"{"pid":42,"program":"cupertino-dock","start":1000,"update":1,"view":2,"layout":3,"paint":4,"raster":5,"copy":6,"commit":7,"total":30,"frames":2}"#
+            frame_timing_json(&t, 42, "cupertino-dock", "cpu"),
+            r#"{"pid":42,"program":"cupertino-dock","renderer":"cpu","start":1000,"update":1,"view":2,"layout":3,"paint":4,"raster":5,"copy":6,"commit":7,"total":30,"frames":2}"#
         );
     }
 
@@ -639,7 +646,7 @@ mod tests {
             frames: 1,
         };
         let name = "odd \"name\"\\\n\r\t\u{1}\u{1f}\u{7f} é";
-        let line = frame_timing_json(&t, 7, name);
+        let line = frame_timing_json(&t, 7, name, "gpu");
         assert!(
             !line.contains(['\n', '\r', '\t', '\u{1}', '\u{1f}', '\u{7f}']),
             "{line}"

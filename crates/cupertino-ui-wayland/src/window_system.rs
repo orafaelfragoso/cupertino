@@ -35,6 +35,7 @@ use cupertino_wayland_client::{
 use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
+use crate::gpu_path::{GpuPath, Presented};
 use crate::pixels::{convert_rects, rgba_to_argb8888};
 use crate::roles::{RoleEvent, SurfaceRoles};
 
@@ -51,6 +52,9 @@ enum Stall {
     Configure,
     Buffer,
 }
+
+/// How often a window waiting for a GPU buffer looks at its release points.
+const GPU_RELEASE_POLL: Duration = Duration::from_millis(2);
 
 /// The most drops kept while their data is read, as the transport keeps them.
 const MAX_LANDED: usize = 8;
@@ -323,6 +327,8 @@ pub struct WaylandWindowSystem {
     roles: Option<Box<dyn SurfaceRoles>>,
     /// Names the configures of surfaces with a role from [`SurfaceRoles`], which carry no serial of their own.
     role_configures: u32,
+    /// The process's renderer and, while it draws on the GPU, every surface's GPU buffers.
+    gpu: GpuPath,
 }
 
 /// Take the session's appearance or display options from `event` into `appearance`; false for any other event, and
@@ -418,6 +424,7 @@ impl WaylandWindowSystem {
             (effects, observer)
         });
         let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
+        let gpu = GpuPath::start(&mut conn);
         let mut system = WaylandWindowSystem {
             conn,
             copy_time: None,
@@ -445,6 +452,7 @@ impl WaylandWindowSystem {
             roles: None,
             role_configures: 0,
             menus: AppMenus::default(),
+            gpu,
         };
         // the compositor answers the observer at once: learn the session's appearance before the first window draws
         if system.effects.is_some() && system.conn.roundtrip().is_ok() {
@@ -464,6 +472,40 @@ impl WaylandWindowSystem {
             system.queued.push(PlatformEvent::SessionLock(false));
         }
         system
+    }
+
+    /// The process's GPU path: whether it draws on the GPU, and what each surface's GPU buffers did.
+    pub fn gpu(&self) -> &GpuPath {
+        &self.gpu
+    }
+
+    /// Wait up to `timeout` for the GPU device and programs made on the warm-up thread; whether the process draws on
+    /// the GPU now. The window system takes them by itself as they come (its next dispatch); this is for tests and
+    /// tools that need the switch at a known moment.
+    pub fn wait_for_gpu(&mut self, timeout: Duration) -> bool {
+        self.gpu.poll(&mut self.conn, Some(timeout));
+        let events = self.gpu.take_events();
+        self.renderer_changed(&events);
+        self.queued.extend(events);
+        self.gpu.on()
+    }
+
+    /// Test hook: the GPU device's next status check reads `loss` instead of the driver's own, as if it had been reset
+    /// or purged; the next frame finds it.
+    pub fn inject_gpu_loss(&self, loss: cupertino_gpu::Loss) {
+        self.gpu.inject_loss(loss);
+    }
+
+    /// After a change of renderer every window's next frame is whole.
+    fn renderer_changed(&mut self, events: &[PlatformEvent]) {
+        if events
+            .iter()
+            .any(|e| matches!(e, PlatformEvent::RendererChanged(_)))
+        {
+            for w in &mut self.windows {
+                w.shown = None;
+            }
+        }
     }
 
     /// Opens the windows `roles` gives a role, instead of as toplevels.
@@ -1070,6 +1112,13 @@ impl WaylandWindowSystem {
                                 ScrollBars::WhenScrolling
                             }));
                         }
+                        Some(AppEvent::BuffersLost) => {
+                            self.gpu.buffers_lost(&mut self.conn);
+                            for w in &mut self.windows {
+                                w.shown = None;
+                            }
+                            out.push(PlatformEvent::BuffersLost);
+                        }
                         Some(event) if apply_appearance(&mut self.appearance, event) => {
                             out.push(PlatformEvent::Appearance(self.appearance));
                         }
@@ -1355,6 +1404,19 @@ impl WindowSystem for WaylandWindowSystem {
         // the announcement goes before its surface
         if let Ok(w) = self.window_mut(window) {
             w.menus = None;
+        }
+        let mut gone_surfaces = vec![surface];
+        let mut parents = vec![window];
+        while let Some(child) = self
+            .windows
+            .iter()
+            .find(|w| w.parent.is_some_and(|p| parents.contains(&p)) && !parents.contains(&w.id))
+        {
+            parents.push(child.id);
+            gone_surfaces.push(child.surface);
+        }
+        for s in gone_surfaces {
+            self.gpu.forget(&mut self.conn, s);
         }
         // the transport destroys a window's popups with it
         let _ = self.conn.destroy(surface);
@@ -1664,16 +1726,32 @@ impl WindowSystem for WaylandWindowSystem {
                 .set_input_region(surface, region.as_deref())
                 .map_err(platform_error)?;
         }
-        let copy_time = self.copy_time.as_mut();
-        match copy_and_present(
-            &mut self.conn,
-            surface,
-            size,
-            frame,
-            &damage,
-            resized,
-            copy_time,
-        )? {
+        let copying = self.copy_time.is_some().then(Instant::now);
+        let on_gpu = self
+            .gpu
+            .present(&mut self.conn, surface, size, frame, &damage, resized)
+            .map_err(platform_error)?;
+        if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
+            *total += since.elapsed();
+        }
+        let shown = match on_gpu {
+            Presented::Gpu => Ok(()),
+            Presented::Busy => Err(Some(Stall::Buffer)),
+            Presented::Resized => Err(None),
+            Presented::Shm => {
+                let copy_time = self.copy_time.as_mut();
+                copy_and_present(
+                    &mut self.conn,
+                    surface,
+                    size,
+                    frame,
+                    &damage,
+                    resized,
+                    copy_time,
+                )?
+            }
+        };
+        match shown {
             Ok(()) => {
                 let feedback = self.conn.capabilities().contains(Capability::Presentation);
                 let w = self.window_mut(window)?;
@@ -1802,6 +1880,16 @@ impl WindowSystem for WaylandWindowSystem {
         }
         let ready = !self.queued.is_empty() || self.woken.load(Ordering::Acquire);
         events.append(&mut self.queued);
+        // a release point signals through an eventfd the connection does not poll: look again soon
+        let gpu_stalled = self
+            .windows
+            .iter()
+            .any(|w| w.stalled == Some(Stall::Buffer) && self.gpu.draws(w.surface));
+        let timeout = match (gpu_stalled, timeout) {
+            (true, Some(t)) => Some(t.min(GPU_RELEASE_POLL)),
+            (true, None) => Some(GPU_RELEASE_POLL),
+            (false, t) => t,
+        };
         let wire = self
             .conn
             .wait(if ready { Some(Duration::ZERO) } else { timeout })
@@ -1821,12 +1909,18 @@ impl WindowSystem for WaylandWindowSystem {
                 }));
             }
         }
+        self.gpu.poll(&mut self.conn, None);
+        let changes = self.gpu.take_events();
+        self.renderer_changed(&changes);
+        events.extend(changes);
         for i in 0..self.windows.len() {
             let w = &self.windows[i];
-            if w.stalled == Some(Stall::Buffer)
-                && matches!(self.conn.buffer_free(w.surface), Ok(true))
-                && self.resume(i)
-            {
+            let surface = w.surface;
+            let free = match self.gpu.buffer_free(&self.conn, surface) {
+                Some(free) => free,
+                None => matches!(self.conn.buffer_free(surface), Ok(true)),
+            };
+            if self.windows[i].stalled == Some(Stall::Buffer) && free && self.resume(i) {
                 events.push(PlatformEvent::Window {
                     window: self.windows[i].id,
                     event: WindowEvent::Frame(self.now()),

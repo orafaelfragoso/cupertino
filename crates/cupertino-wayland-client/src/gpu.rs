@@ -516,7 +516,9 @@ fn read_table(fd: OwnedFd, size: usize) -> Vec<(u32, u64)> {
     }) else {
         return Vec::new();
     };
-    map.chunks_exact(16)
+    map.as_chunks::<16>()
+        .0
+        .iter()
         .map(|e| {
             (
                 u32::from_ne_bytes(e[0..4].try_into().expect("4 bytes")),
@@ -568,8 +570,10 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, GpuQuiet> for State {
             Event::MainDevice { device } => fb.main_device = dev_of(&device),
             Event::TrancheFormats { indices } => fb.tranche.extend(
                 indices
-                    .chunks_exact(2)
-                    .map(|c| u16::from_ne_bytes([c[0], c[1]])),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_ne_bytes(*c)),
             ),
             Event::TrancheDone => {
                 let tranche = std::mem::take(&mut fb.tranche);

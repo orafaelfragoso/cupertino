@@ -2244,6 +2244,7 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-gpu",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",

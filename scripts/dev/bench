@@ -532,7 +532,9 @@ def clients(path: pathlib.Path, start_ns: int, span: tuple[float, float], refres
     for name, frames in sorted(by.items()):
         total = [f["total"] / 1e6 for f in frames]
         entry = {"frames": len(frames), "frame_p50_ms": pct(total, 50), "frame_p99_ms": pct(total, 99),
-                 "frame_max_ms": max(total), "slow_frames": sum(t > refresh_ms for t in total)}
+                 "frame_max_ms": max(total), "slow_frames": sum(t > refresh_ms for t in total),
+                 # the renderers the frames were drawn with, so a silent fallback shows in the numbers
+                 "renderers": sorted({f.get("renderer", "cpu") for f in frames})}
         for phase in PHASES:
             vals = [f[phase] / 1e6 for f in frames]
             entry[f"{phase}_p50_ms"] = pct(vals, 50)

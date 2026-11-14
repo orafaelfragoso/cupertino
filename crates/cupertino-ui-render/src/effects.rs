@@ -98,30 +98,26 @@ pub(crate) fn apply(layer: &mut Pixmap, effect: &Effect, scale: f64, origin: (i3
                 return;
             }
             let data = layer.data_mut();
-            let planes: Vec<Vec<f32>> = (0..4)
-                .map(|c| {
-                    let plane: Vec<f32> = data
-                        .iter()
-                        .skip(c)
-                        .step_by(4)
-                        .map(|&v| f32::from(v) / 255.0)
-                        .collect();
-                    blur_plane(&plane, w, h, sigma, (0.0, 0.0))
-                })
-                .collect();
-            for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let (x, y) = position(i, w, origin);
-                let alpha = dither::quantize(planes[3][i]);
-                for c in 0..3 {
-                    let v = planes[c][i];
-                    let stored = if dithered {
-                        dither::store(v, x, y)
-                    } else {
-                        dither::quantize(v)
-                    };
-                    px[c] = stored.min(alpha);
+            let unit = unit_levels();
+            let mut planes: [Vec<f32>; 4] = std::array::from_fn(|_| Vec::with_capacity(w * h));
+            for px in data.as_chunks::<4>().0 {
+                for (plane, &v) in planes.iter_mut().zip(px) {
+                    plane.push(unit[usize::from(v)]);
                 }
-                px[3] = alpha;
+            }
+            let planes = planes.map(|plane| blur_plane(plane, w, h, sigma, (0.0, 0.0)));
+            for (y, row) in data.as_chunks_mut::<4>().0.chunks_exact_mut(w).enumerate() {
+                let steps = dither_steps(origin, y, dithered);
+                let at = y * w;
+                for (x, px) in row.iter_mut().enumerate() {
+                    let i = at + x;
+                    let alpha = dither::quantize(planes[3][i]);
+                    let step = steps[x & 7];
+                    for c in 0..3 {
+                        px[c] = dither::quantize(planes[c][i] + step).min(alpha);
+                    }
+                    px[3] = alpha;
+                }
             }
         }
         // a shadow is one channel until it is tinted: its silhouette and blur hold coverage only
@@ -151,27 +147,37 @@ pub(crate) fn apply(layer: &mut Pixmap, effect: &Effect, scale: f64, origin: (i3
     }
 }
 
-/// The window pixel of the `i`th pixel of a layer `w` wide at `origin`, as the dither matrix counts it.
-fn position(i: usize, w: usize, origin: (i32, i32)) -> (u32, u32) {
-    let x = (i % w) as i64 + i64::from(origin.0);
-    let y = (i / w) as i64 + i64::from(origin.1);
-    (x.rem_euclid(1 << 30) as u32, y.rem_euclid(1 << 30) as u32)
+/// Each byte's value from 0 to 1.
+fn unit_levels() -> [f32; 256] {
+    std::array::from_fn(|v| v as f32 / 255.0)
+}
+
+/// What the dither adds before a store on row `y` of a layer whose top-left pixel is window pixel `origin`: the entry
+/// for the layer's column `x` is `[x & 7]`, the matrix's offset of that window pixel in steps of 1/255 (as
+/// [`dither::store`] adds it), or nothing when not `dithered`.
+fn dither_steps(origin: (i32, i32), y: usize, dithered: bool) -> [f32; 8] {
+    if !dithered {
+        return [0.0; 8];
+    }
+    let wy = (y as i64 + i64::from(origin.1)).rem_euclid(8) as u32;
+    std::array::from_fn(|j| {
+        let wx = (j as i64 + i64::from(origin.0)).rem_euclid(8) as u32;
+        dither::offset(wx, wy) / 255.0
+    })
 }
 
 /// Coverage (0 to 1) stored in bytes, dithered by position when `dithered`.
 fn store_coverage(plane: &[f32], w: usize, origin: (i32, i32), dithered: bool) -> Vec<u8> {
-    plane
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| {
-            if dithered {
-                let (x, y) = position(i, w, origin);
-                dither::store(v, x, y)
-            } else {
-                dither::quantize(v)
-            }
-        })
-        .collect()
+    let mut out = Vec::with_capacity(plane.len());
+    for (y, row) in plane.chunks_exact(w.max(1)).enumerate() {
+        let steps = dither_steps(origin, y, dithered);
+        out.extend(
+            row.iter()
+                .enumerate()
+                .map(|(x, &v)| dither::quantize(v + steps[x & 7])),
+        );
+    }
+    out
 }
 
 /// The shadow's coverage: the layer's alpha blurred by `sigma` pixels and moved by `offset` points, not rounded; for
@@ -185,17 +191,18 @@ fn shadow_coverage(
     scale: f64,
     inner: bool,
 ) -> Vec<f32> {
+    let unit = unit_levels();
     let alpha: Vec<f32> = data
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|p| f32::from(p[3]) / 255.0)
+        .map(|p| unit[usize::from(p[3])])
         .collect();
     let shift = (
         (offset.x * scale).clamp(-1e9, 1e9) as f32,
         (offset.y * scale).clamp(-1e9, 1e9) as f32,
     );
-    let mut out = blur_plane(&alpha, w, h, sigma, shift);
+    let mut out = blur_plane(alpha, w, h, sigma, shift);
     if inner {
         out.iter_mut().for_each(|v| *v = (1.0 - *v).clamp(0.0, 1.0));
     }
@@ -207,7 +214,7 @@ fn shadow_coverage(
 /// last level read back at every pixel of the plane moved by `shift` pixels, linearly between its texels. Levels are
 /// kept in `f32`.
 pub(crate) fn blur_plane(
-    plane: &[f32],
+    plane: Vec<f32>,
     w: usize,
     h: usize,
     sigma: f32,
@@ -217,6 +224,9 @@ pub(crate) fn blur_plane(
         return Vec::new();
     }
     let (level, lw, lh, k) = pyramid(plane, w, h, sigma);
+    if k == 0 && shift == (0.0, 0.0) {
+        return level;
+    }
     let factor = (1u64 << k) as f32;
     if k == 0 && shift.0.fract() == 0.0 && shift.1.fract() == 0.0 {
         // whole pixels: a move
@@ -236,32 +246,66 @@ pub(crate) fn blur_plane(
         }
         return out;
     }
-    let read = |x: i64, y: i64| {
-        if x < 0 || y < 0 || x >= lw as i64 || y >= lh as i64 {
-            0.0
-        } else {
-            level[y as usize * lw + x as usize]
+    // linear between the level's texels, across first: each column's two texels and their weights (a texel past the
+    // level's edge weighs nothing), then each row of the level read across once and kept while the rows below use it
+    let taps: Vec<(usize, f32, usize, f32)> = (0..w)
+        .map(|x| {
+            let u = (x as f32 + 0.5 - shift.0) / factor - 0.5;
+            let (x0, fx) = (u.floor(), u - u.floor());
+            let x0 = x0 as i64;
+            let tap = |x: i64, weight: f32| {
+                if x < 0 || x >= lw as i64 {
+                    (0, 0.0)
+                } else {
+                    (x as usize, weight)
+                }
+            };
+            let (a, wa) = tap(x0, 1.0 - fx);
+            let (b, wb) = tap(x0 + 1, fx);
+            (a, wa, b, wb)
+        })
+        .collect();
+    let across = |ly: i64, row: &mut Vec<f32>| {
+        row.clear();
+        if ly < 0 || ly >= lh as i64 {
+            row.resize(w, 0.0);
+            return;
         }
+        let src = &level[ly as usize * lw..(ly as usize + 1) * lw];
+        row.extend(taps.iter().map(|&(a, wa, b, wb)| src[a] * wa + src[b] * wb));
     };
+    let (mut upper, mut lower) = (Vec::with_capacity(w), Vec::with_capacity(w));
+    let mut held = None;
     let mut out = Vec::with_capacity(w * h);
     for y in 0..h {
         let v = (y as f32 + 0.5 - shift.1) / factor - 0.5;
         let (y0, fy) = (v.floor(), v - v.floor());
-        for x in 0..w {
-            let u = (x as f32 + 0.5 - shift.0) / factor - 0.5;
-            let (x0, fx) = (u.floor(), u - u.floor());
-            let (x0, y0) = (x0 as i64, y0 as i64);
-            let top = read(x0, y0) * (1.0 - fx) + read(x0 + 1, y0) * fx;
-            let bottom = read(x0, y0 + 1) * (1.0 - fx) + read(x0 + 1, y0 + 1) * fx;
-            out.push(top * (1.0 - fy) + bottom * fy);
+        let y0 = y0 as i64;
+        match held {
+            Some(r) if r == y0 => {}
+            Some(r) if r + 1 == y0 => {
+                std::mem::swap(&mut upper, &mut lower);
+                across(y0 + 1, &mut lower);
+            }
+            _ => {
+                across(y0, &mut upper);
+                across(y0 + 1, &mut lower);
+            }
         }
+        held = Some(y0);
+        out.extend(
+            upper
+                .iter()
+                .zip(&lower)
+                .map(|(&top, &bottom)| top * (1.0 - fy) + bottom * fy),
+        );
     }
     out
 }
 
 /// The plan's halvings and Gaussian of a plane: the last level, its size and the number of halvings.
 pub(crate) fn pyramid(
-    plane: &[f32],
+    plane: Vec<f32>,
     w: usize,
     h: usize,
     sigma: f32,
@@ -272,12 +316,12 @@ pub(crate) fn pyramid(
 
 /// [`pyramid`] by a given plan.
 pub(crate) fn pyramid_of(
-    plane: &[f32],
+    plane: Vec<f32>,
     w: usize,
     h: usize,
     plan: &cupertino_raster_math::blur::BlurPlan,
 ) -> (Vec<f32>, usize, usize, u32) {
-    let mut cur = plane.to_vec();
+    let mut cur = plane;
     let (mut cw, mut ch) = (w, h);
     for &(nw, nh) in &plan.levels {
         let (nw, nh) = (nw as usize, nh as usize);
@@ -439,7 +483,7 @@ mod tests {
         let channels: Vec<(Vec<f32>, usize)> = (0..4)
             .map(|c| {
                 let plane: Vec<f32> = pattern.pixels.iter().map(|p| p[c]).collect();
-                let (level, lw, _, _) = pyramid_of(&plane, 16, 16, &plan);
+                let (level, lw, _, _) = pyramid_of(plane, 16, 16, &plan);
                 (level, lw)
             })
             .collect();

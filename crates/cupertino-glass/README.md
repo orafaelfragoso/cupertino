@@ -7,12 +7,11 @@ filters and vibrant blending, driven by the recipes of `cupertino-theme`.
 
 | Item | Role |
 |---|---|
-| `MaterialRenderer` | library API on an external wgpu `Device`/`Queue`; `render` records into the caller's encoder from a `FrameDesc` and a list of `MaterialRegion`s |
+| `MaterialRenderer` | headless renderer on a `cupertino-gpu` `Device`; `render` draws a `FrameDesc` (source and target textures) and a list of `MaterialRegion`s with the same generated programs the compositor links; `destroy` releases its objects |
 | `glass-renderer` | headless binary (`--demo`, `--cpu-check`, `--bench N`) |
 | `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated); `apply_color_ops` runs a recipe's colour chain on one colour, which the server uses to measure the wallpaper as the menu bar's material shows it |
-| `shaders` | the generated programs (the backdrop passes: GLSL ES 3.00, SPIR-V, binding names and WGSL from one WGSL source each) |
-| `shaders/gles/` | GLSL ES 3.00 port of the material, vibrant and glass shaders, not yet generated |
-| `glass` | the glass background pass: `Container` (shapes joined by a smooth union whose blend width is the container's spacing, each with the recipe of its size from `cupertino-theme`), `Container::shade` (the CPU model of every stage, for tests), `GlassUniform` (the std140 block of `glass.wgsl` and `gles/glass.frag`) |
+| `shaders` | the generated programs (the backdrop passes, the material region, the glass composite and the vibrant glyphs: GLSL ES 3.00, SPIR-V, binding names and WGSL from one WGSL source each) |
+| `glass` | the glass background pass: `Container` (shapes joined by a smooth union whose blend width is the container's spacing, each with the recipe of its size from `cupertino-theme`), `Container::shade` (the CPU model of every stage, for tests), `GlassUniform` (the std140 block of `shaders/glass.wgsl`) |
 | `display_filter` | the display's colour filter, invert and contrast as a colour chain over a whole output (settings from `cupertino-defaults`) |
 
 ## Usage
@@ -21,21 +20,20 @@ filters and vibrant blending, driven by the recipes of `cupertino-theme`.
 use cupertino_glass::{FrameDesc, MaterialRegion, MaterialRenderer, TargetInit};
 use cupertino_geometry::CornerStyle;
 
-let mut renderer = MaterialRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+let mut renderer = MaterialRenderer::new(&device)?;
 let regions = [
     MaterialRegion::new([60.0, 80.0, 220.0, 420.0], &sidebar_recipe)
         .with_corner(12.0, CornerStyle::continuous()),
 ];
-let mut enc = device.create_command_encoder(&Default::default());
-let stats = renderer.render(&mut enc, &FrameDesc {
-    source: &scene_view, source_size: (w, h),
-    target: &target_view, target_size: (w, h),
+let stats = renderer.render(&device, &FrameDesc {
+    source: &scene, source_size: (w, h),
+    target: &target, target_size: (w, h),
     display_scale: 1.0,
     damage_generation: generation,   // bump when the source content changes
     tint_color: wallpaper_average,
     init: TargetInit::Keep,
-}, &regions);
-queue.submit([enc.finish()]);
+}, &regions)?;
+renderer.destroy(&device);
 ```
 
 ## How it works
@@ -50,8 +48,10 @@ queue.submit([enc.finish()]);
   `backdrop_misses` / `passes_encoded`). Entries unused for 120 frames are dropped, and `invalidate clears the cache.
 - The rounded mask is a signed distance field evaluated in the fragment shader, and anti-aliasing is a one-pixel linear
   ramp. The shader uses the closed-form first-order distance of `RoundedRect::sdf_approx`.
-- `render` never submits. `source` and `target` must be different textures in non-sRGB formats (values are blended
-  gamma-encoded).
+- `render` draws as it records (the device submits or reads back). `source` and `target` must be different textures in
+  non-sRGB formats (values are blended gamma-encoded); the target is a render target, the backdrop's levels are half
+  floats where the device renders to them. Every texture's first row is the top of the image, as everywhere on
+  `cupertino-gpu`.
 - `draw_vibrant` draws premultiplied template glyphs with the vibrant blend functions (lighten-sover over
   colour dodge;: darken-sover over colour burn, plus the reversed nesting). The
   effect constants `c0`/`c1` are unknown and default to the identity multiplier. `backdrop` must hold a copy of the target
@@ -65,7 +65,7 @@ source ─(2× box)→ capture @ backdrop scale ─(2× box pyramid while σ² >
 region quad ─ SDF mask ─ base = backdrop (or source) ─ fills with blend modes ─ alpha blend
 ```
 
-All stages are full-screen fragment passes (no compute), so each has a direct GLSL ES 3.00 counterpart. The tint layer colour (wallpaper average) is
+All stages are full-screen fragment passes (no compute), each a generated program. The tint layer colour (wallpaper average) is
 approximate and supplied by the caller.
 
 ### Display filters
@@ -85,8 +85,8 @@ table) with the design's `Normalize`. Channel gains, fade, post offsets and redu
 
 ### Glass
 
-`src/glass.rs` is the model of the glass background pass and `shaders/glass.wgsl` / `gles/glass.vert`, `gles/glass.frag`
-draw it, one draw per container over its sampled area (the shapes grown by the reach of the blur,
+`src/glass.rs` is the model of the glass background pass and `shaders/glass.wgsl` draws
+it, one draw per container over its sampled area (the shapes grown by the reach of the blur,
 `Container::sample_area`). The backdrop is read at the recipe's capture scale (half for most styles) into up to four blurred copies and a blur fill; the
 composite then, per pixel:
 
@@ -160,22 +160,19 @@ each including `shaders/include/pass.wgsl` (the `PassParams` block, the source t
 through a `// include pass.wgsl` line, with the shared module of `cupertino-gpu` ahead of it. `cargo run -p
 cupertino-gpu-shaders` generates `shaders/generated/`: GLSL ES 3.00 of each stage, SPIR-V, the GLSL names of the block
 and sampler by WGSL group and binding (`NAME.bindings`), and the assembled WGSL without the functions the program
-never calls (`NAME.wgsl`), which the wgpu renderer takes. The generated files are committed; that crate's test fails
-when they differ from a fresh generation. `shaders::DOWNSAMPLE`, `BLUR`, `COLOR` and `BLIT` hold them; the compositor
-links their GLSL and binds `PassParams` and the source by `Program::block` and `Program::sampler`. The blur dithers its
-result by pixel when `PassParams::flags[0]` is `PASS_DITHER` (set by the compositor for 8-bit levels).
+never calls (`NAME.wgsl`), for a backend that compiles WGSL itself. The generated files are committed; that crate's
+test fails when they differ from a fresh generation. `shaders::DOWNSAMPLE`, `BLUR`, `COLOR` and `BLIT` hold them; the
+compositor links their GLSL and binds `PassParams` and the source by `Program::block` and `Program::sampler`. The blur
+dithers its result by pixel when `PassParams::flags[0]` is `PASS_DITHER` (set by the compositor for 8-bit levels).
 
-### GLSL ES 3.00 port
-
-`shaders/gles/`: `material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`, `glass.vert`, `glass.frag`, the
-programs not yet generated from WGSL. Uniform blocks use std140 and are byte-identical to the Rust structs in
-`src/ops.rs`, so the same buffers work for both back ends. Material and vibrant quads are 4-vertex triangle strips
-(`gl_VertexID`). Samplers: `u_source`, `u_backdrop`, `u_glyphs`. When the source/backdrop textures were rendered by GL
-(row 0 at the bottom) set `Region.info.z = 1`.
-
-`tests/shaders.rs` validates the WGSL sources, the generated programs and the GLSL ports with `naga`. Its GLSL front
-end only accepts the Vulkan dialect, so the test first rewrites the ES sources (version line, `gl_VertexID`,
-location/binding qualifiers, texture/sampler split, `precision` statements).
+The region programs are generated the same way: `shaders/material.wgsl` (the rounded mask, the backdrop and the fill
+layers), `shaders/glass.wgsl` (the glass composite) and `shaders/vibrant.wgsl` (template glyphs over a copy of the
+target). Material and glass include `shaders/include/place.wgsl`, the placement block (`ops::Placement`): the quad drawn
+mapped through a projection from target pixels to clip space, and the dither flag, so the compositor draws one quad per
+damage rectangle through its frame projection and the headless renderer one padded quad per region through its own.
+The backdrop is sampled at the framebuffer-normalised coordinate mapped into the area it covers (`Region.info.zw`, its
+origin, and `Region.sizes.zw`, its size, in target pixels). Uniform blocks are std140 and byte-identical to the Rust
+structs, and `tests/shaders.rs` checks the members in the WGSL and in the GLSL generated from it.
 
 ## Tests
 
@@ -187,8 +184,8 @@ Tests cover recipe → ops encoding, blur plan, uniform layout, display filter m
 reference builders, the CPU chain of matrix, invert and contrast, GPU vs CPU PSNR ≥ 60 dB (multi-region frames at scale 1
 and 2), the CPU colour chain against the GPU colour pass within one level (both menu bar recipes, unblurred, on a grey
 ramp, a saturated hue ramp and the procedural wallpaper), the rounded mask against `cupertino-geometry` coverage, circle area, opacity, backdrop cache hit/miss accounting,
-vibrant blend GPU vs CPU, and WGSL and GLSL ES validation (`tests/shaders.rs`). GPU tests skip (pass) when no adapter is
-available.
+vibrant blend GPU vs CPU, and WGSL validation and block layouts (`tests/shaders.rs`). GPU tests skip (pass) when no device is available,
+and fail then with `CUPERTINO_GPU_REQUIRED=1`.
 
 ## Binary
 

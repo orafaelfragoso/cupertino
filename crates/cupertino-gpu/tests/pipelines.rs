@@ -146,3 +146,40 @@ fn a_premultiplied_colour_blends_over_and_the_scissor_clips() {
     device.destroy_pipeline(pipeline);
     device.destroy_texture(target);
 }
+
+#[test]
+fn a_straight_colour_blends_over_and_keeps_the_targets_alpha() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let target = common::target(&device, (4, 4), TextureFormat::Rgba8);
+    let (pipeline, layout) = common::pipeline(&device, &shaders::DITHER_FILL, Blend::StraightOver);
+    // white, opaque, over a half-transparent blue: the colour replaced, the alpha the target's
+    let fill = common::uniform(&device, &common::bytes(&[1.0, 0.0, 0.0, 0.0]), 16);
+    let group = device
+        .create_bind_group(
+            &layout,
+            &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: &fill,
+                    offset: 0,
+                    size: 16,
+                },
+            }],
+        )
+        .unwrap();
+    let mut pass = device
+        .begin_pass(&target, LoadOp::Clear([0.0, 0.0, 1.0, 0.5]))
+        .unwrap();
+    pass.set_pipeline(&pipeline);
+    pass.set_bind_group(0, &group).unwrap();
+    pass.draw(0..3, 1).unwrap();
+    pass.end();
+    let px = device.read_bytes(&target, Region::new(1, 1, 1, 1)).unwrap();
+    assert_eq!(px[..3], [255, 255, 255], "{px:?}");
+    assert!((i32::from(px[3]) - 128).abs() <= 1, "{px:?}");
+    device.destroy_buffer(fill);
+    device.destroy_pipeline(pipeline);
+    device.destroy_texture(target);
+}

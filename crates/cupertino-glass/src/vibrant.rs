@@ -37,14 +37,14 @@ impl VibrantStyle {
 /// One glyph run: a premultiplied template texture drawn into `rect` (target pixels, y down),
 /// sampling `uv = [u0, v0, u1, v1]` of the texture.
 pub struct VibrantDraw<'a> {
-    pub glyphs: &'a wgpu::TextureView,
+    pub glyphs: &'a cupertino_gpu::Texture,
     pub rect: [f32; 4],
     pub uv: [f32; 4],
     pub style: VibrantStyle,
 }
 
 impl<'a> VibrantDraw<'a> {
-    pub fn new(glyphs: &'a wgpu::TextureView, rect: [f32; 4], style: VibrantStyle) -> Self {
+    pub fn new(glyphs: &'a cupertino_gpu::Texture, rect: [f32; 4], style: VibrantStyle) -> Self {
         Self {
             glyphs,
             rect,

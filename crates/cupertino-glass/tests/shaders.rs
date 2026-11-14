@@ -23,11 +23,6 @@ fn wgsl_shaders_validate() {
     for program in cupertino_glass::shaders::ALL {
         validate_wgsl(program.source.name, program.wgsl, &["vs_main", "fs_main"]);
     }
-    validate_wgsl(
-        "material.wgsl",
-        cupertino_glass::renderer::MATERIAL_WGSL,
-        &["vs_region", "fs_material"],
-    );
 }
 
 /// Members of a uniform block in order, each with its number of vec4 slots.

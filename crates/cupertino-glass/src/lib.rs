@@ -1,6 +1,6 @@
 //! Material rendering for the Cupertino compositor.
 //!
-//! * [`renderer::MaterialRenderer`]: draws N material regions per frame on an external wgpu device,
+//! * [`renderer::MaterialRenderer`]: draws N material regions per frame on a `cupertino-gpu` device,
 //!   with a damage-generation keyed backdrop cache and an SDF rounded mask (circular or
 //!   continuous corners from `cupertino-geometry`).
 //! * [`vibrant`]: parameters for the vibrant blend functions used to draw template glyphs and text
@@ -10,7 +10,7 @@
 //! * [`display_filter`]: colour filters, invert and contrast of the whole display as a colour chain.
 //! * [`glass`]: the glass model (stages of the background pass, foreground matrix) and its uniform block; the glass
 //!   program follows it.
-//! * [`gpu`]: headless helpers (adapter, upload/read-back, procedural wallpaper, PSNR).
+//! * [`gpu`]: headless helpers (a device of its own, upload/read-back, procedural wallpaper, PSNR).
 //!
 //! * [`shaders`]: the generated programs (the backdrop passes, the material region, the glass composite and the
 //!   vibrant glyphs), each written once in WGSL; the compositor links their GLSL.

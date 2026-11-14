@@ -393,7 +393,7 @@ void main() {
     vec2 p_7 = (_e12.xy + (corner_2 * _e16.zw));
     float _e26 = _group_0_binding_0_vs.sizes.x;
     float _e36 = _group_0_binding_0_vs.sizes.y;
-    o.pos = vec4((((p_7.x / _e26) * 2.0) - 1.0), (1.0 - ((p_7.y / _e36) * 2.0)), 0.0, 1.0);
+    o.pos = vec4((((p_7.x / _e26) * 2.0) - 1.0), (((p_7.y / _e36) * 2.0) - 1.0), 0.0, 1.0);
     vec4 _e48 = _group_0_binding_0_vs.uv;
     vec4 _e52 = _group_0_binding_0_vs.uv;
     o.tex = mix(_e48.xy, _e52.zw, corner_2);

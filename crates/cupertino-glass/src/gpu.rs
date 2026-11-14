@@ -1,120 +1,57 @@
-//! Headless wgpu helpers for the binary, tests and benchmarks: adapter selection, texture upload
-//! and read-back, a procedural wallpaper.
+//! Headless helpers for the binary, tests and benchmarks: a `cupertino-gpu` device of its own, texture upload and
+//! read-back, a procedural wallpaper.
 
 use crate::renderer::{FrameDesc, MaterialRegion, MaterialRenderer, TargetInit};
-use wgpu::util::DeviceExt;
+use cupertino_gpu::{
+    Device, DeviceDesc, Platform, Region, Result, Texture, TextureDesc, TextureFormat, TextureUsage,
+};
 
 pub struct HeadlessGpu {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub device: Device,
     pub adapter_name: String,
 }
 
 impl HeadlessGpu {
-    /// `None` when no adapter or device is available.
+    /// A device on the surfaceless platform; `None` when there is none (no EGL or GLES 3.0).
     pub fn new() -> Option<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))?;
-        let adapter_name = adapter.get_info().name;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .ok()?;
+        let device = Device::new(&DeviceDesc {
+            platform: Platform::Surfaceless,
+        })
+        .ok()?;
+        let adapter_name = device.info().renderer.clone();
         Some(Self {
             device,
-            queue,
             adapter_name,
         })
     }
 
     /// Upload an RGBA8 image as a sampled, non-sRGB texture.
-    pub fn upload(&self, img: &image::RgbaImage) -> wgpu::Texture {
+    pub fn upload(&self, img: &image::RgbaImage) -> Result<Texture> {
         let (w, h) = img.dimensions();
-        self.device.create_texture_with_data(
-            &self.queue,
-            &wgpu::TextureDescriptor {
-                label: Some("image"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            img.as_raw(),
-        )
+        let texture = self.device.create_texture(&TextureDesc {
+            size: (w, h),
+            format: TextureFormat::Rgba8,
+            usage: TextureUsage::SAMPLED,
+        })?;
+        self.device
+            .write_texture(&texture, Region::new(0, 0, w, h), img.as_raw())?;
+        Ok(texture)
     }
 
     /// RGBA8 render target that can be sampled and read back.
-    pub fn target(&self, w: u32, h: u32) -> wgpu::Texture {
-        self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("target"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+    pub fn target(&self, w: u32, h: u32) -> Result<Texture> {
+        self.device.create_texture(&TextureDesc {
+            size: (w, h),
+            format: TextureFormat::Rgba8,
+            usage: TextureUsage::TARGET,
         })
     }
 
-    pub fn read(&self, tex: &wgpu::Texture) -> image::RgbaImage {
-        let (w, h) = (tex.width(), tex.height());
-        let row = (w * 4).div_ceil(256) * 256;
-        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: (row * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit([enc.finish()]);
-        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
-        let data = buf.slice(..).get_mapped_range();
-        let mut img = image::RgbaImage::new(w, h);
-        for y in 0..h {
-            let s = &data[(y * row) as usize..(y * row + w * 4) as usize];
-            img.as_mut()[(y * w * 4) as usize..((y + 1) * w * 4) as usize].copy_from_slice(s);
-        }
-        img
+    /// The pixels of a render target, first row first.
+    pub fn read(&self, tex: &Texture) -> Result<image::RgbaImage> {
+        let (w, h) = tex.size();
+        let bytes = self.device.read_bytes(tex, Region::new(0, 0, w, h))?;
+        Ok(image::RgbaImage::from_raw(w, h, bytes).expect("a whole image"))
     }
 
     /// One-shot helper: render `regions` over `wall` and read the result back.
@@ -124,23 +61,17 @@ impl HeadlessGpu {
         regions: &[MaterialRegion],
         display_scale: f32,
         tint: [f32; 3],
-    ) -> image::RgbaImage {
+    ) -> Result<image::RgbaImage> {
         let (w, h) = wall.dimensions();
-        let src = self.upload(wall);
-        let dst = self.target(w, h);
-        let mut r =
-            MaterialRenderer::new(&self.device, &self.queue, wgpu::TextureFormat::Rgba8Unorm);
-        let (sv, dv) = (
-            src.create_view(&Default::default()),
-            dst.create_view(&Default::default()),
-        );
-        let mut enc = self.device.create_command_encoder(&Default::default());
-        r.render(
-            &mut enc,
+        let src = self.upload(wall)?;
+        let dst = self.target(w, h)?;
+        let mut r = MaterialRenderer::new(&self.device)?;
+        let drawn = r.render(
+            &self.device,
             &FrameDesc {
-                source: &sv,
+                source: &src,
                 source_size: (w, h),
-                target: &dv,
+                target: &dst,
                 target_size: (w, h),
                 display_scale,
                 damage_generation: 1,
@@ -149,8 +80,11 @@ impl HeadlessGpu {
             },
             regions,
         );
-        self.queue.submit([enc.finish()]);
-        self.read(&dst)
+        let img = drawn.and_then(|_| self.read(&dst));
+        r.destroy(&self.device);
+        self.device.destroy_texture(src);
+        self.device.destroy_texture(dst);
+        img
     }
 }
 

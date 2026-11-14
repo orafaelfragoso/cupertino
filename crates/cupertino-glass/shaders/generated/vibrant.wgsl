@@ -101,7 +101,8 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
   let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
   let p = V.rect.xy + corner * V.rect.zw;
   var o: VsOut;
-  o.pos = vec4<f32>(p.x / V.sizes.x * 2.0 - 1.0, 1.0 - p.y / V.sizes.y * 2.0, 0.0, 1.0);
+  // the target's first row at clip y = -1
+  o.pos = vec4<f32>(p.x / V.sizes.x * 2.0 - 1.0, p.y / V.sizes.y * 2.0 - 1.0, 0.0, 1.0);
   o.tex = mix(V.uv.xy, V.uv.zw, corner);
   return o;
 }

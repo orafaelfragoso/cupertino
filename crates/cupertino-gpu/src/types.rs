@@ -280,6 +280,9 @@ pub enum Blend {
     Replace,
     /// Premultiplied source over: `src + dst · (1 − src.a)`.
     PremultipliedOver,
+    /// Straight-alpha source over the colour, the target's alpha kept: `src.rgb · src.a + dst.rgb · (1 − src.a)`,
+    /// `dst.a` (a material region drawn over an opaque frame).
+    StraightOver,
 }
 
 /// How vertices make primitives.

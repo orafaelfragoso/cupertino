@@ -84,8 +84,10 @@ Glass is drawn by the compositor for every class, so a CPU surface keeps the ful
 its first frame on the CPU while its context and programs are prepared on a worker thread, then switches and frees the
 CPU renderer's frame, layers and caches; a fallback rebuilds them. A hidden GPU process drops its pools and atlases and
 keeps its context, because tearing a context down returns almost no memory. The programs come from a per-user cache of
-saved binaries; the processes that start together make them in turn, so on a cold cache (a driver update, a shader
-change, a new user) only the first loads the driver's compiler, some 55 MiB it keeps until it exits, and the others
+saved binaries, which the compositor makes when the session starts (on a thread and a context of its own, off its
+frame path; `prepare_toolkit_programs` in `compositor.json` turns it off), so after a driver update, a shader change or
+for a new user no application process loads the driver's compiler, some 55 MiB it would keep until it exits. The
+processes that start together make what is missing in turn, so with that off only the first compiles and the others
 load what it saved. With the cache warm a GPU process adds 7–24 MiB of private memory to what it takes on the CPU.
 
 ### 4. Our own thin GPU layer, shaped for Vulkan
@@ -224,7 +226,9 @@ A process that may use the GPU draws its first frames on the CPU while a worker 
 programs, then switches (the runtime frees each window's CPU renderer and draws whole frames with a new one). Linked
 programs are saved per user in `$XDG_CACHE_HOME/cupertino/programs/<driver>/`, keyed by the driver's vendor, renderer
 and version strings, so the next start loads them instead of compiling; a binary the driver refuses is compiled
-again and replaced.
+again and replaced. The compositor makes the toolkit's programs (`cupertino_gpu::shaders::TOOLKIT`) there for the
+render node it offers as the session starts (`cupertino_gpu::program_cache::make_ahead`), taking the same turn the
+processes take, so an application process loads every program and compiles none.
 
 ### 9. Layers and animation in the compositor
 

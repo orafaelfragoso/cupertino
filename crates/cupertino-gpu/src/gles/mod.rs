@@ -1217,6 +1217,24 @@ impl Device {
         }
     }
 
+    /// Makes `shaders` into the program cache for a later device of the same driver, without keeping them: each is
+    /// loaded where a saved binary the driver takes is there, else compiled, linked and saved (a binary the driver
+    /// refuses is replaced), then deleted. Without a cache it does nothing. The counts are in
+    /// [`Device::program_cache_stats`].
+    pub fn prepare_programs(&self, shaders: &[ShaderSource]) -> Result<()> {
+        if self.program_cache.is_none() {
+            return Ok(());
+        }
+        self.ready()?;
+        self.touch(Touched::PROGRAM);
+        for shader in shaders {
+            let program = self.link(shader)?;
+            // Safety: a program of this device's current context, deleted once.
+            unsafe { self.gl.delete_program(program) };
+        }
+        Ok(())
+    }
+
     /// The linked program of `shader`: loaded from a saved binary where the cache has one the driver takes, else
     /// compiled and linked (and saved).
     fn link(&self, shader: &ShaderSource) -> Result<glow::Program> {

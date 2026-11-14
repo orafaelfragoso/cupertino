@@ -114,6 +114,30 @@ pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Option<Turn> {
     }
 }
 
+/// Makes `programs` into the cache under `base` for the driver of a device on `platform`, as a process that later makes
+/// them on that device does, so that process loads every one instead of compiling: a device of its own, the driver's
+/// directory's turn ([`take_turn`], waited on up to `patience`), each program loaded where a saved binary the driver
+/// takes is there, else compiled and saved (a refused binary is replaced). The directory and the file names are the
+/// ones that process looks up, keyed by the driver's strings and the programs' sources, so a binary of another
+/// driver is never loaded. The device is gone when it returns. It takes the compiles' time and the driver's compiler:
+/// run it on a thread of its own, off any frame path. `None` when the driver keeps no program binaries.
+pub fn make_ahead(
+    platform: crate::Platform,
+    base: &Path,
+    programs: &[crate::shaders::ShaderSource],
+    patience: std::time::Duration,
+) -> Result<Option<ProgramCacheStats>, crate::Error> {
+    let mut device = crate::Device::new(&crate::DeviceDesc { platform })?;
+    device.set_program_cache(Some(base));
+    let Some(dir) = device.program_cache_dir().map(Path::to_path_buf) else {
+        return Ok(None);
+    };
+    let turn = take_turn(&dir, patience);
+    device.prepare_programs(programs)?;
+    drop(turn);
+    Ok(Some(device.program_cache_stats()))
+}
+
 impl ProgramCache {
     pub(crate) fn new(base: &Path, driver: &str) -> ProgramCache {
         ProgramCache {

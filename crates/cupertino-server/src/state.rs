@@ -524,6 +524,12 @@ pub struct Cupertino {
     /// Whether a headless backend withholds `linux-drm-syncobj-v1` though its device could offer it (`--no-explicit-sync`),
     /// as a compositor without the protocol does. Read when the backend starts.
     pub withhold_explicit_sync: bool,
+    /// The cache the toolkit's GPU programs are made into when the backend starts ([`crate::toolkit_programs`]),
+    /// taken then; `None` makes none. The server's start sets it to the user's cache unless the configuration turns
+    /// it off; tests name a directory of their own.
+    pub program_cache_base: Option<std::path::PathBuf>,
+    /// The thread making them, until it is joined.
+    pub toolkit_programs: Option<std::thread::JoinHandle<crate::toolkit_programs::Made>>,
     /// Test hook: every dmabuf a client offers is refused, as a renderer that cannot import it would.
     pub refuse_dmabuf_imports: bool,
     /// The waits of the clients that have had a commit held back, until they disconnect ([`crate::acquire_waits::sweep`]).
@@ -907,6 +913,8 @@ impl Cupertino {
             dmabuf_global: None,
             syncobj_state: None,
             withhold_explicit_sync: false,
+            program_cache_base: None,
+            toolkit_programs: None,
             refuse_dmabuf_imports: false,
             acquire_registry: Vec::new(),
             popups: PopupManager::default(),

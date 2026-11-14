@@ -907,6 +907,10 @@ pub fn run(cli: Cli) -> Result<()> {
         &assets,
     )?;
     state.login_screen = login_screen;
+    // the login screen's processes draw on the CPU: only a user's session makes the toolkit's GPU programs ahead
+    if state.config.prepare_toolkit_programs && !login_screen {
+        state.program_cache_base = cupertino_gpu::program_cache::default_dir();
+    }
     let _runtime_file = announce_start(&cli, mode, &state)?;
     if let Some(f) = cli.time_scale.filter(|f| *f > 0.0) {
         state.time_scale = f;

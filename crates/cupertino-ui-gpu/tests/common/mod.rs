@@ -26,7 +26,7 @@ fn egl_required() -> bool {
     gpu_required() || std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1")
 }
 
-fn render_node() -> Option<PathBuf> {
+pub fn render_node() -> Option<PathBuf> {
     if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() {
         return None;
     }

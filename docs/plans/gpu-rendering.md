@@ -153,9 +153,11 @@ Gate:
 
 Gate:
 
-- [ ] Window drag over glass meets its budget with fewer texels written by blur passes per frame than the baseline;
-      the shimmer and banding checks pass. (Revised from "fewer blur passes": every frame of a drag uncovers
-      something, so every frame needs a blur; the work the blur does is what can fall. See Measurements, step 2.)
+- [ ] Window drag over glass meets its budgets (p99 CPU time to compose and submit a frame under 2 ms, p99 GPU time
+      under 4 ms) with fewer texels written by blur passes per frame than the baseline; the shimmer and banding
+      checks pass. (Revised from "fewer blur passes": every frame of a drag uncovers something, so every frame needs
+      a blur; the work the blur does is what can fall. The budget was then split into its CPU and GPU halves, each
+      measured on its own. See Measurements, step 2.)
 
 ## Step 3: vertical slice of the GPU path
 
@@ -551,7 +553,7 @@ layout about 3 ms each): above 4 ms, so step 4 gains the incremental view and la
 | Files live resize: client CPU excluding raster under 8 ms, GPU under 4 ms | p99 at 1.5: raster 8.6 ms, copy 6.5 ms, the other phases 2.3 ms together | confirmed: the copy is what the GPU path removes; the rest is a quarter of the budget |
 | Toolkit animation frame under 4 ms client CPU | Control Center 12.8 / 14.6 ms (raster 12.1 / 13.1); launcher p99 6.4 ms (raster 6.2) | confirmed: outside raster the phases' p99s add to 2.4 ms (Control Center) and 3.0 ms (launcher) at 1.5, most of it the copy the GPU path removes |
 | Client GPU time per frame under 4 ms | no client draws on the GPU yet; the compositor's whole output takes 0.7–6.8 ms of GPU at p99 | confirmed, checked from step 6 |
-| Compositor frame during a drag over glass: under 4 ms GPU, under 2 ms CPU | GPU p99 2.07 ms (1.5) / 1.43 ms (2); CPU p50 1.32 / 1.60 ms, p99 2.38 / 1.97 ms | confirmed: the CPU p99 at 1.5 is over, which step 2 fixes; the GPU room is for the compositor's own drawing that steps 8 and 9 move there |
+| Compositor frame during a drag over glass: under 4 ms GPU, under 2 ms CPU | GPU p99 2.07 ms (1.5) / 1.43 ms (2); CPU p50 1.32 / 1.60 ms, p99 2.38 / 1.97 ms | confirmed: the CPU p99 at 1.5 is over, which step 2 fixes; the GPU room is for the compositor's own drawing that steps 8 and 9 move there. Revised in step 2: the CPU half is the time to compose and submit, without the wait for the GPU, each half against its own budget (Measurements, step 2) |
 | First frame of a GPU process; switch within 150 ms on a warm cache | context 57 ms, first program 0.4 ms from the driver's cache | confirmed |
 | Added private memory per GPU process under 80 MiB | 68.8 MiB after a context and a compiled first program; 21 MiB with the driver's cache | confirmed |
 | GPU memory per GPU window | a process's first 3840 x 2160 target adds 63.5 MiB for 31.6 MiB of pixels and keeps it | revised: the driver reserves one more target's size with a process's first one; the 32 MiB of atlases and pools cannot hold that at 4K, so the budget names it |
@@ -961,7 +963,7 @@ capture is its own area at half scale, with the window's edge repeated past it. 
 the screen by a fraction of a texel and moves the repeated edge with it, so no texel of the last blur is one of the
 new blur, and there is nothing to keep. The same holds for the stationary dock while it resizes.
 
-Next steps, in order:
+Next steps, as proposed then:
 
 1. Capture a window's glass on a grid fixed to the output, with a margin as the materials have, and repeat the
    window's edge in the composite rather than in the capture. A dragged window's glass then keeps every texel away
@@ -970,6 +972,70 @@ Next steps, in order:
 2. Measure the work without waiting for the GPU: CPU time to submit, GPU time from timestamps, each against its own
    budget. The budget then holds unless the GPU itself is over.
 3. Bench on a quiet machine before ticking the gate.
+
+**Third round: the budget split, and why the grid capture waits.**
+
+The budget is split, as accepted by the lead. The frame line gains `submit_us`, the time from the start of the
+frame's drawing until its commands are issued, before the wait for the GPU; the bench reports the CPU's part of a
+frame as compose plus submit (`submit_p50_ms`, `submit_p99_ms`, table column `cpu99`) beside the GPU time from
+timestamps.
+
+- Old budget: "Compositor frame while a window is dragged over glass: under 4 ms GPU, under 2 ms CPU", checked as the
+  compositor's work p99 (compose and render, the render waiting for the GPU to finish) against 2 ms.
+- New budget: "p99 GPU time per frame (timestamps) under 4 ms; p99 CPU time to compose and submit a frame, not
+  counting the wait for the GPU, under 2 ms".
+- Reason: the work time holds the GPU's own time, so a shared or busy GPU put it over the CPU budget while the CPU did
+  no more work (the second round's 7.08 ms work p99 were 5.40 ms of GPU time). Each half is now measured against its
+  own budget, and the GPU half has the 4 ms it was given.
+
+Five runs on main as of `383368e8` with the split measured (4K, 1.5), on a quiet machine: load average 1.3 to 2.6,
+no compiler or test runner, no headless session but the bench's own. A second five runs after the change below,
+with other checkouts building and testing beside it (load average up to 9.2, up to 5 compilers, 2 test runners and
+one other headless session):
+
+| Drag over glass, 5 runs: median (spread) | Quiet | Parts in kept targets, busy machine |
+|---|---|---|
+| CPU time to compose and submit, p50 / p99 ms (budget 2) | 0.61 (0.19) / 2.34 (0.43) | 0.59 (0.41) / 2.35 (0.69) |
+| GPU time, p50 / p99 ms (budget 4) | 1.06 (0.00) / 2.20 (0.87) | 1.06 (0.01) / 2.11 (0.58) |
+| Work p99 ms (compose and render, with the wait) | 2.49 (0.25) | 2.42 (1.25) |
+| Targets created per frame | 0.49 | 0.04 |
+| Texels the blurs write per frame | 561 017 | 561 017 |
+| Blur passes per frame | 9.33 | 9.33 |
+| Missed refreshes | 0 | 0 |
+
+The GPU half holds with room. The CPU half is over at p99: 2.34 ms against 2 ms. The frames that pass 2 ms are
+those whose GPU time does as well, and their CPU time is the drawing (lowering the scene takes 0.1 ms of them), so a
+GL call during the drawing waits for the GPU. An earlier cause of the same frames is gone: a part of a backdrop made
+again had a pyramid of its own size, and the parts change size every frame, so each frame created and deleted
+textures (13 to 27 in the slowest frames, 1 to 3 ms of CPU time). The parts' levels are now made at the corner of
+targets whose sides are rounded up (to a multiple of 64 texels, or of a quarter of the power of two below), which
+later frames find again (`material::tests::the_parts_of_a_drag_are_made_in_targets_of_few_sizes_that_hold_them`; the
+drag still matches a whole blur within 1 of 255). Targets created per frame fall by 92 %; the CPU p99 does not move,
+so the wait for the GPU inside the drawing is what holds it over.
+
+The gate stays open. Next: find which call in the drawing waits for the GPU (timing the glass and material passes'
+GL calls on the CPU, as was done for the textures) and remove the wait, then bench again on a quiet machine.
+
+The grid capture for window glass (next step 1) is not built: it would change the glass edges and keep nothing in the
+drag it is for. A dragged window's glass reads the window under it, and the window's own surface is one of the
+elements below the glass. A moved element changes its whole place, where it was and where it is
+(`backdrop_change`), so every frame of the drag marks the whole area of each of the window's glass as changed, and a
+capture on a fixed grid would make all of its texels again, as today. It would keep texels only where the moved
+surface draws nothing, and the compositor does not know where that is: the sidebar window paints nothing under its
+sidebar, whose glass therefore shows the windows and the wallpaper behind it, but its buffer has an alpha channel and
+no region says so. (A window's shadow and outline have known holes only because the compositor draws them.)
+
+What would let the drag keep the glass's texels, for the lead to choose:
+
+1. The application says where it paints nothing: with its glass request, the rectangle under the glass its window
+   leaves empty. The compositor gives the window's surface that rectangle as a hole, as it does for shadows, so a move
+   changes only the ring the hole does not share; the grid capture with a margin then keeps everything inside it.
+   A wrong rectangle can only spoil the look of that application's own glass, which reads only its own window.
+2. The compositor finds the empty rectangle itself, from the alpha of a shared-memory buffer where a commit damaged
+   it. No change to the protocol; a scan of each damaged region on commit, and nothing for buffers on the GPU.
+
+Either is a change of its own, then the grid capture and its goldens. No golden changes in this round, so none is
+listed for re-recording and there is no before and after sheet.
 
 Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
 the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a

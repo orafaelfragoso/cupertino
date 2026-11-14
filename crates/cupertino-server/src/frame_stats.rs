@@ -94,7 +94,10 @@ pub struct FrameRecord {
     /// When it was shown, from the server's start.
     pub shown: Duration,
     pub compose: Duration,
+    /// From the start of the frame's drawing until the GPU finished it.
     pub render: Duration,
+    /// The CPU's part of `render`: until the frame's commands were issued, before waiting for the GPU.
+    pub submit: Duration,
     pub glass: GlassTime,
     /// Glass backdrops blurred again and reused.
     pub blurred: u64,
@@ -173,7 +176,7 @@ impl FrameRecord {
         let opt = |d: Option<Duration>| d.map_or_else(|| "-".into(), us);
         let c = &self.counts;
         format!(
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             us(self.shown),
             us(self.compose),
             us(self.render),
@@ -196,6 +199,7 @@ impl FrameRecord {
             c.hud_upload_bytes,
             c.blur_passes,
             c.blur_texels,
+            us(self.submit),
         )
     }
 }
@@ -289,7 +293,7 @@ pub struct FrameStats {
 /// The first line of the file: the column names.
 pub const HEADER: &str = "# shown_us compose_us render_us glass_us blur_us blurred reused late_us missed input_lat_us \
 app_lat_us allocated passes gpu_us deco_rasters hud_rasters deco_uploads deco_upload_bytes hud_uploads hud_upload_bytes \
-blur_passes blur_texels";
+blur_passes blur_texels submit_us";
 
 impl FrameStats {
     /// Write to `path`, naming the device that renders (`renderer`) on the first line; times count from `start`.
@@ -396,6 +400,7 @@ pub fn frame_rendered(
     idx: usize,
     compose: Duration,
     render: Duration,
+    submit: Duration,
     gpu: Option<Duration>,
 ) {
     let clock = state.frame_now();
@@ -417,6 +422,7 @@ pub fn frame_rendered(
         shown: now.saturating_duration_since(stats.start),
         compose,
         render,
+        submit,
         glass,
         blurred: counts.backdrop_misses - before.backdrop_misses,
         reused: counts.backdrop_hits - before.backdrop_hits,
@@ -552,11 +558,12 @@ mod tests {
             r.line().split(' ').count(),
             HEADER.trim_start_matches("# ").split(' ').count()
         );
-        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0"));
+        assert!(r.line().ends_with("3000 - 4 9 - 0 0 0 0 0 0 0 0 0"));
     }
 
     #[test]
-    fn a_line_ends_with_the_frames_gpu_time_and_its_cpu_drawing_uploads_and_blur_passes() {
+    fn a_line_ends_with_the_frames_gpu_time_its_cpu_drawing_uploads_and_blur_passes_and_its_submit_time(
+    ) {
         let r = FrameRecord {
             gpu: Some(Duration::from_micros(1500)),
             counts: DrawCounts {
@@ -569,10 +576,11 @@ mod tests {
                 blur_passes: 7,
                 blur_texels: 8000,
             },
+            submit: Duration::from_micros(900),
             ..Default::default()
         };
         assert!(
-            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000"),
+            r.line().ends_with(" 1500 1 2 3 4000 5 6000 7 8000 900"),
             "{}",
             r.line()
         );

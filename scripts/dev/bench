@@ -488,6 +488,8 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
     ints = [y - x for x, y in zip(shown, shown[1:])]
     work = [(r["compose_us"] + r["render_us"]) / 1e3 for r in frames]
     gpu = [r["gpu_us"] / 1e3 for r in frames if r.get("gpu_us") is not None]
+    # the CPU's part of the work: composing and issuing the frame, without waiting for the GPU
+    submit = [(r["compose_us"] + r["submit_us"]) / 1e3 for r in frames if r.get("submit_us") is not None]
     per = lambda key: sum(r.get(key) or 0 for r in frames) / n
     return {
         "frames": len(frames), "fps": len(frames) / max(1e-9, b - a),
@@ -496,6 +498,7 @@ def compositor(rows: list[dict], refresh_ms: float, span: tuple[float, float], c
         "work_p50_ms": pct(work, 50), "work_p99_ms": pct(work, 99), "work_max_ms": max(work, default=None),
         "over_budget": sum(x > refresh_ms for x in work),
         "gpu_p50_ms": pct(gpu, 50), "gpu_p99_ms": pct(gpu, 99),
+        "submit_p50_ms": pct(submit, 50), "submit_p99_ms": pct(submit, 99),
         "glass_p95_ms": pct([r["glass_us"] / 1e3 for r in frames], 95),
         "blurred_per_frame": per("blurred"), "reused_per_frame": per("reused"), "allocated_per_frame": per("allocated"),
         "blur_passes_per_frame": per("blur_passes"), "blur_texels_per_frame": per("blur_texels"),
@@ -714,7 +717,7 @@ def kilo(v):
 
 def table(summary: dict, renderer: str) -> str:
     lines = [f"rendered by {renderer}; medians over the runs (spread in the JSON)",
-             f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'gpu99':>7} "
+             f"{'scenario':26} {'frames':>6} {'int99':>7} {'missed':>6} {'work50':>7} {'work99':>7} {'cpu99':>7} {'gpu99':>7} "
              f"{'cpu/s':>7} {'blurP/f':>7} {'blurKt/f':>8} {'deco r/u':>9} {'hud r/u':>8} {'slow cl':>7} {'cl p99':>7}"]
     for key, s in summary.items():
         g = lambda k: s.get(f"compositor.{k}", {}).get("median")
@@ -723,7 +726,8 @@ def table(summary: dict, renderer: str) -> str:
                     default=None)
         lines.append(
             f"{key:26} {fmt(g('frames'), 6, 0)} {fmt(g('interval_p99_ms'))} {fmt(g('missed'), 6, 0)} "
-            f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('gpu_p99_ms'))} {fmt(g('cpu_ms_per_s'))} "
+            f"{fmt(g('work_p50_ms'))} {fmt(g('work_p99_ms'))} {fmt(g('submit_p99_ms'))} {fmt(g('gpu_p99_ms'))} "
+            f"{fmt(g('cpu_ms_per_s'))} "
             f"{fmt(g('blur_passes_per_frame'))} {fmt(kilo(g('blur_texels_per_frame')), 8, 1)} "
             f"{fmt(g('decoration_rasters'), 4, 0)}/{fmt(g('decoration_uploads'), 4, 0)} "
             f"{fmt(g('hud_rasters'), 3, 0)}/{fmt(g('hud_uploads'), 4, 0)} {fmt(slow, 7, 0)} {fmt(worst)}")

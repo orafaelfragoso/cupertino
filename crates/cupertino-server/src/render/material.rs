@@ -379,6 +379,16 @@ struct Reblur {
 /// The most parts a pyramid is made again in: each runs the capture and the pyramid's passes.
 const REBLUR_PARTS: usize = 8;
 
+/// The side of the target a part's level of `n` texels is made in: `n` rounded up to a multiple of 64, or of a quarter
+/// of the power of two below it when that is more. The parts of a drag change size every frame, and making a texture costs the
+/// CPU more than a frame's passes; in targets of few sizes each part finds one kept from the frames before.
+fn part_room(n: i32) -> i32 {
+    let n = n.max(1);
+    let below = 1i32 << (31 - n.leading_zeros());
+    let step = (below / 4).max(64);
+    (n + step - 1) / step * step
+}
+
 /// `parts` with those that overlap or lie close joined, while the joined rectangle holds little more than the two, and
 /// all of them joined in one when they stay many.
 fn merged(mut parts: Vec<Texels>) -> Vec<Texels> {
@@ -912,8 +922,23 @@ impl MaterialGl {
         dst: &Target,
         params: &PassParams,
     ) {
+        self.pass_into(gl, program, src_loc, src, dst, dst.size, params);
+    }
+
+    /// [`pass`](Self::pass) into the `size` texels at the origin of `dst`, which may be larger.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn pass_into(
+        &mut self,
+        gl: &ffi::Gles2,
+        program: GLuint,
+        src_loc: GLint,
+        src: GLuint,
+        dst: &Target,
+        size: (i32, i32),
+        params: &PassParams,
+    ) {
         gl.BindFramebuffer(ffi::FRAMEBUFFER, dst.fbo);
-        gl.Viewport(0, 0, dst.size.0, dst.size.1);
+        gl.Viewport(0, 0, size.0, size.1);
         gl.UseProgram(program);
         Self::upload_ubo(gl, self.ubo_pass, BIND_PASS, bytemuck::bytes_of(params));
         gl.ActiveTexture(ffi::TEXTURE0);
@@ -927,18 +952,20 @@ impl MaterialGl {
             .is_some_and(|p| program == p.downsample || program == p.blur)
         {
             self.stats.blur_passes += 1;
-            self.stats.blur_texels += (dst.size.0 as u64) * (dst.size.1 as u64);
+            self.stats.blur_texels += (size.0 as u64) * (size.1 as u64);
         }
     }
 
     /// The last level of the pyramid of the `crop` part of the bound framebuffer (`src_fbo`) for `p`'s recipe: the
     /// first level a linear blit (a 2x2 box average at half size), each next one a 2x2 box average of the one before.
+    /// For a `part` of a backdrop made again, the level lies at the origin of a target of [`part_room`] sides.
     unsafe fn pyramid(
         &mut self,
         gl: &ffi::Gles2,
         p: &DrawParams<'_>,
         src_fbo: GLuint,
         crop: Crop,
+        part: bool,
     ) -> Option<Target> {
         let (w, h) = p.output_px;
         let mut plan: BlurPlan = self.plan(p);
@@ -948,6 +975,14 @@ impl MaterialGl {
                 *level = ((crop.w >> (i + 1)) as u32, (crop.h >> (i + 1)) as u32);
             }
         }
+        // a part is made in the corner of a target of a rounded size, which the parts of later frames find again
+        let room = |size: (i32, i32)| {
+            if part {
+                (part_room(size.0), part_room(size.1))
+            } else {
+                size
+            }
+        };
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
         let first = plan
@@ -955,7 +990,8 @@ impl MaterialGl {
             .first()
             .map(|l| (l.0 as i32, l.1 as i32))
             .unwrap_or((crop.w, crop.h));
-        let mut cur = self.take_target(gl, first)?;
+        let mut cur = self.take_target(gl, room(first))?;
+        let mut cur_size = first;
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, cur.fbo);
         let filter = if plan.levels.is_empty() {
@@ -983,14 +1019,14 @@ impl MaterialGl {
         };
         for lvl in plan.levels.iter().skip(1) {
             let size = (lvl.0 as i32, lvl.1 as i32);
-            let next = self.take_target(gl, size)?;
+            let next = self.take_target(gl, room(size))?;
             let params = PassParams::new(
-                (cur.size.0 as u32, cur.size.1 as u32),
+                (cur_size.0 as u32, cur_size.1 as u32),
                 (size.0 as u32, size.1 as u32),
             );
-            self.pass(gl, ds, ds_loc, cur.tex, &next, &params);
+            self.pass_into(gl, ds, ds_loc, cur.tex, &next, size, &params);
             self.free.push(cur);
-            cur = next;
+            (cur, cur_size) = (next, size);
         }
         Some(cur)
     }
@@ -1063,7 +1099,7 @@ impl MaterialGl {
         src_fbo: GLuint,
         crop: Crop,
     ) -> Option<(Target, Option<Target>)> {
-        let pyramid = self.pyramid(gl, p, src_fbo, crop)?;
+        let pyramid = self.pyramid(gl, p, src_fbo, crop, false)?;
         if !self.filters(p) {
             return Some((pyramid, None));
         }
@@ -1194,7 +1230,7 @@ impl MaterialGl {
             pyramid
         };
         for &part in &plan.parts {
-            let Some(made) = self.pyramid(gl, p, src_fbo, part.crop(factor)) else {
+            let Some(made) = self.pyramid(gl, p, src_fbo, part.crop(factor), true) else {
                 self.free.push(pyramid);
                 return None;
             };
@@ -2065,6 +2101,23 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn the_parts_of_a_drag_are_made_in_targets_of_few_sizes_that_hold_them() {
+        assert_eq!(part_room(1), 64);
+        assert_eq!(part_room(64), 64);
+        assert_eq!(part_room(65), 128);
+        assert_eq!(part_room(1266), 1280);
+        assert_eq!(part_room(2049), 2560);
+        let mut sizes = std::collections::BTreeSet::new();
+        for n in 1..=2160 {
+            let room = part_room(n);
+            assert!(room >= n && room * 4 <= n * 5 + 256, "{n}: {room}");
+            sizes.insert(room);
+        }
+        // a strip of any width and height up to the output's: some 25 sides, not 2160
+        assert!(sizes.len() <= 25, "{}", sizes.len());
     }
 
     #[test]

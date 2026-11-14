@@ -453,7 +453,7 @@ fn compositor_edge(
         let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
         for c in &containers {
             let d = c.field(p).0;
-            let a = c.edge.color[3] * c.edge_share_at(d);
+            let a = c.edge_alpha_at(p);
             *px = (1.0 - (1.0 - px.0) * (1.0 - a), px.1.min(d));
         }
     }
@@ -629,9 +629,67 @@ fn shown_after(
 /// blurred by its deviation in device pixels, its origin on the window's device pixels, scaled about the device pixel
 /// nearest its bounds' centre, sampled between pixels, at its opacity, back to front.
 fn compose(size: (u32, u32), scale: f64, layers: &[ShownLayer]) -> Vec<u8> {
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    compose_over(size, scale, layers, vec![[0.0f32; 4]; w * h])
+}
+
+/// [`compose`] with the edge a compositor draws along the glass of `layers` (one glass group, the edge of its first
+/// layer `edge`) under them: each shape's outline cut by the others ([`cupertino_glass::glass::Container::edge_alpha_at`]
+/// on the shapes as shown, in device pixels), at the group's opacity, the most of its layers'.
+fn compose_with_edge(
+    size: (u32, u32),
+    scale: f64,
+    layers: &[ShownLayer],
+    edge: cupertino_kit::platform::LayerEdge,
+) -> Vec<u8> {
+    use cupertino_glass::glass::{Container, GlassEdge, GlassMode, GlassShape};
+    let s = scale as f32;
+    let glass: Vec<&ShownLayer> = layers
+        .iter()
+        .filter(|l| l.glass && l.opacity > 0.0 && l.bounds.width() > 0.0)
+        .collect();
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut base = vec![[0.0f32; 4]; w * h];
+    if !glass.is_empty() {
+        let shapes = glass
+            .iter()
+            .map(|l| {
+                let b = l.bounds;
+                GlassShape::new(
+                    [
+                        b.x() as f32 * s,
+                        b.y() as f32 * s,
+                        b.width() as f32 * s,
+                        b.height() as f32 * s,
+                    ],
+                    l.radius as f32 * s,
+                )
+            })
+            .collect();
+        let opacity = glass.iter().map(|l| l.opacity).fold(0.0, f64::max) as f32;
+        let c = Container::new(shapes, 0.0, GlassMode::default()).with_edge(GlassEdge {
+            width: edge.width as f32 * s,
+            color: edge.color,
+        });
+        for (i, px) in base.iter_mut().enumerate() {
+            let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
+            let a = c.edge_alpha_at(p) * opacity;
+            *px = [edge.color[0] * a, edge.color[1] * a, edge.color[2] * a, a];
+        }
+    }
+    compose_over(size, scale, layers, base)
+}
+
+/// [`compose`] over `base`, premultiplied pixels of the window's size.
+fn compose_over(
+    size: (u32, u32),
+    scale: f64,
+    layers: &[ShownLayer],
+    base: Vec<[f32; 4]>,
+) -> Vec<u8> {
     use cupertino_raster_math::blur::{plan_blur, Edge, Image, Precision};
     let (w, h) = (size.0 as usize, size.1 as usize);
-    let mut out = vec![[0.0f32; 4]; w * h];
+    let mut out = base;
     for layer in layers {
         let Some(frame) = &layer.frame else { continue };
         if layer.opacity <= 0.0 || frame.width == 0 {
@@ -1054,12 +1112,20 @@ fn open_moments(
         let rest = m.shown_layers();
         let changes = m.layer_requests();
         let (w, h, _) = m.window_pixels();
+        // the edge the compositor draws along the glass, where the panel hands it over
+        let edge = rest
+            .iter()
+            .find(|l| l.look.edge.width > 0.0)
+            .map(|l| l.look.edge);
         for &after in moments {
             let shown = shown_after(&rest, &changes, after);
             out.push(Moment {
                 after,
                 size: (w, h),
-                pixels: compose((w, h), scale, &shown),
+                pixels: match edge {
+                    Some(edge) => compose_with_edge((w, h), scale, &shown, edge),
+                    None => compose((w, h), scale, &shown),
+                },
                 glass: shown
                     .iter()
                     .filter(|l| l.glass)
@@ -1074,8 +1140,12 @@ fn open_moments(
     // at rest (the caret's blink draws later ones)
     let open = {
         let target = m.model().motion_target();
+        let header = m.model().presented().header;
         let mut motion = crate::motion::Motion::new(target);
-        motion.show_in(target, m.model().presented().header, 0.0);
+        motion.show_in(target, header, 0.0);
+        if header == crate::motion::Header::Search {
+            motion.set_modes(m.model().modes().len(), 0.0, 0.0);
+        }
         motion.moving_left(0.0)
     };
     let mut seen = 0;
@@ -1263,5 +1333,213 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 "{what}, dark {dark}: at the first frame {first}"
             );
         }
+    }
+}
+
+/// The search field opening from hidden hands its open to the compositor: the panel draws its layers once, at rest
+/// (the field's glass, its content and each mode button's glass and face), the field's glass carrying the edge the
+/// compositor draws along the glass group in place of the edge layer, and asks the compositor to move them from where
+/// the open starts, each value through the panel's own; then it draws no frame of its window or a layer, and asks for
+/// none, until the open is over, when the edge layer and the faces' edges draw the edge again.
+#[test]
+fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
+    use crate::view::layers::{glass_edge, OPEN_SAMPLES};
+    use crate::view::modes::{JOIN_CONTAINER, JOIN_SPACING};
+    use cupertino_kit::platform::LayerEdge;
+    let mut m = drawn(1.5, true, true);
+    send(Message::Toggle);
+    m.step(|_, _| {});
+    assert!(
+        m.model().field_open_handed(),
+        "the open is the compositor's"
+    );
+    for _ in 0..4 {
+        if m.presents().0 > 0 {
+            break;
+        }
+        m.step(|_, _| {});
+    }
+    let first = m.presents();
+    let shown = m.shown_layers();
+    let count = m.model().modes().len();
+    let mut want = vec![GLASS_LAYER, CONTENT_LAYER];
+    for i in 0..count {
+        want.extend([button_glass_layer(i), button_face_layer(i)]);
+    }
+    let keys: Vec<u64> = shown.iter().map(|l| l.key).collect();
+    assert_eq!(keys, want, "no edge layer");
+    let glass = shown.iter().find(|l| l.key == GLASS_LAYER).unwrap();
+    assert_eq!(
+        glass.look.edge,
+        glass_edge(true),
+        "the edge drawn along the glass"
+    );
+    for l in shown.iter().filter(|l| l.look.glass.is_some()) {
+        assert_eq!(
+            l.look.group,
+            (JOIN_CONTAINER, JOIN_SPACING),
+            "one glass group"
+        );
+    }
+    let open = m.layer_requests();
+    let of = |key: u64, p: LayerProperty| -> Vec<cupertino_kit::platform::LayerChange> {
+        open.iter()
+            .filter(|(k, _)| *k == key)
+            .flat_map(|(_, c)| c.iter().filter(|c| c.property == p).cloned())
+            .collect()
+    };
+    // the field's glass from 1.1 of the whole group's width to its own, through the panel's values
+    let width = of(GLASS_LAYER, LayerProperty::Width);
+    assert_eq!(width.len(), 1, "carried through samples");
+    let samples = width[0].samples.clone().unwrap();
+    assert_eq!(samples.len(), OPEN_SAMPLES);
+    let start = f64::from(samples[0]);
+    assert!((start - crate::motion::GROUP_WIDTH * crate::motion::ENTER_SCALE).abs() < 1e-3);
+    assert_eq!(width[0].to, glass.rect.width());
+    // its height never changes, so it is not sent
+    assert!(of(GLASS_LAYER, LayerProperty::Height).is_empty());
+    // a button buds out of the field's end, a bud at first
+    let side = of(button_glass_layer(0), LayerProperty::Width);
+    let side = side[0].samples.clone().unwrap();
+    assert!(
+        (f64::from(side[0]) - crate::modes::BUTTON_SIZE * crate::modes::BUD_START).abs() < 1e-3
+    );
+    assert_eq!(f64::from(*side.last().unwrap()), crate::modes::BUTTON_SIZE);
+    // its symbol fades in and sharpens after a delay
+    let blur = of(button_face_layer(0), LayerProperty::ContentBlur);
+    let blur = blur[0].samples.clone().unwrap();
+    assert_eq!((blur[0], *blur.last().unwrap()), (3.0, 0.0));
+    let fade = of(button_face_layer(0), LayerProperty::Opacity);
+    let fade = fade[0].samples.clone().unwrap();
+    assert_eq!((fade[0], *fade.last().unwrap()), (0.0, 1.0));
+    // the open's frames: none drawn, none asked for
+    for _ in 0..90 {
+        m.step(|_, _| {});
+        assert!(!m.model().animating(), "the open asks for no frame");
+    }
+    assert_eq!(m.presents(), first, "no frame of the window or its layers");
+    send(Message::OpenOver);
+    m.step(|_, _| {});
+    assert!(!m.model().open_handed(), "the open is over");
+    m.until_quiet(4, 200);
+    let rest = m.shown_layers();
+    assert!(
+        rest.iter().any(|l| l.key == EDGE_LAYER),
+        "the edge layer again"
+    );
+    let glass = rest.iter().find(|l| l.key == GLASS_LAYER).unwrap();
+    assert_eq!(glass.look.edge, LayerEdge::NONE);
+}
+
+/// Under Reduce Motion the search field's open is not handed over: the panel opens drawn in place.
+#[test]
+fn under_reduce_motion_the_search_field_s_open_is_the_panel_s_own() {
+    let mut m = drawn(1.5, true, true);
+    m.settle_on(Message::ReduceMotion(true));
+    send(Message::Toggle);
+    m.step(|_, _| {});
+    assert!(!m.model().open_handed());
+    assert!(m.layer_requests().is_empty());
+}
+
+/// The search field's open the compositor runs against the panel's own drawing of it at the same moments: at each
+/// frame the panel draws of its open from hidden (every other one and its last, at 1.5 in both appearances), the
+/// compositor's layers at that moment of the open, with the edge it draws along the glass group, against its pixels,
+/// and their glass against the glass it stands on (rect, corner and opacity), which it is at every moment. Run with
+/// `--no-capture` for the largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures
+/// ([`keep_moment`]).
+#[test]
+fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
+    for dark in [true, false] {
+        let own = open_moments(1.5, dark, false, || Message::Toggle, &[0.0; 80]);
+        assert!(own.len() >= 20, "the panel drew its open: {}", own.len());
+        let last = own.len() - 1;
+        let own: Vec<Moment> = own
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0 || *i == last)
+            .map(|(_, m)| m)
+            .collect();
+        let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
+        let handed = open_moments(1.5, dark, true, || Message::Toggle, &moments);
+        // the caret, which the field holds while the compositor runs the open and the panel's own drawing blinks
+        let field = handed.last().unwrap().glass[0].0;
+        let caret = Rect::new(
+            field.x() + crate::view::QUERY_INSET - 8.0,
+            field.y(),
+            16.0,
+            field.height(),
+        );
+        // where the shapes cross, a stroke round each cut by the others is drawn once by the compositor and by two
+        // antialiased strokes and clips by the panel: within an eighth of the line's opacity
+        let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
+        let bound = (line / 8.0).ceil() as u8;
+        let (mut worst, mut worst_caret) = (0, 0);
+        for (a, b) in own.iter().zip(&handed) {
+            assert_eq!(a.size, b.size);
+            let ms = a.after * 1000.0;
+            let width = a.size.0;
+            let (mut most, mut most_caret) = (0, 0);
+            for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
+                let d = p
+                    .iter()
+                    .zip(q)
+                    .map(|(u, v)| u.abs_diff(*v))
+                    .max()
+                    .unwrap_or(0);
+                let at = Point::new(
+                    (i as u32 % width) as f64 / 1.5,
+                    (i as u32 / width) as f64 / 1.5,
+                );
+                if caret.contains(at) {
+                    most_caret = most_caret.max(d);
+                } else {
+                    most = most.max(d);
+                }
+            }
+            worst = worst.max(most);
+            worst_caret = worst_caret.max(most_caret);
+            eprintln!(
+                "trace: field open, dark {dark}, {ms:.0} ms: largest difference {most}, {most_caret} at the caret"
+            );
+            keep_moment("open-field", dark, a, b);
+            assert!(
+                most <= bound,
+                "dark {dark}, {ms:.0} ms: {most} apart from the caret, over {bound}"
+            );
+            let shows = |g: &[(Rect, f64, f64)]| -> Vec<(Rect, f64, f64)> {
+                g.iter().filter(|g| g.2 > 0.0).copied().collect()
+            };
+            let (ga, gb) = (shows(&a.glass), shows(&b.glass));
+            assert_eq!(ga.len(), gb.len(), "{ms:.0} ms: {ga:?} {gb:?}");
+            for ((r0, q0, o0), (r1, q1, o1)) in ga.iter().zip(&gb) {
+                let off = (r0.x() - r1.x())
+                    .abs()
+                    .max((r0.y() - r1.y()).abs())
+                    .max((r0.width() - r1.width()).abs())
+                    .max((r0.height() - r1.height()).abs());
+                assert!(off < 0.05, "{ms:.0} ms: glass {r0:?} against {r1:?}");
+                assert!(
+                    (q0 - q1).abs() < 0.05 && (o0 - o1).abs() < 0.01,
+                    "{ms:.0} ms: {q0} {o0} / {q1} {o1}"
+                );
+            }
+        }
+        eprintln!(
+            "trace: field open, dark {dark}: {} of its {} frames, largest {worst} apart from the caret (bound \
+             {bound}), {worst_caret} at the caret",
+            own.len(),
+            last + 1
+        );
+        let (first, _) = compare(&own[0].pixels, &handed[0].pixels, own[0].size.0);
+        let (end, _) = compare(
+            &own.last().unwrap().pixels,
+            &handed.last().unwrap().pixels,
+            own[0].size.0,
+        );
+        assert!(
+            first <= 1 && end <= 1,
+            "dark {dark}: first {first}, last {end}"
+        );
     }
 }

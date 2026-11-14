@@ -14,6 +14,11 @@
 //! ([`LAYER_GRID`]), as the window's frame does, so its pixels are the ones the window would draw. The glass layers
 //! carry no pixels of their own: their glass is drawn by the compositor in their bounds, wherever those lie.
 //!
+//! While the compositor runs the search field's open with its mode buttons ([`field_open_changes`]) the shapes join and
+//! part every frame, which a fixed frame of an edge cannot follow: the field's glass layer then carries the edge in its
+//! look ([`glass_edge`]), which the compositor draws round each shape of the glass group cut by the others, as the panel
+//! cuts its own edges, and neither the edge layer nor the buttons' faces draw one.
+//!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
 //! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it and the content and
 //! the edge blur to the close's blur, everything fades out, and the mode buttons move out with the group.
@@ -34,6 +39,7 @@ use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Si
 use cupertino_kit::platform::{
     CubicBezier, GlassStyle, LayerChange, LayerCurve, LayerEdge, LayerProperty, SurfaceLayerLook,
 };
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// The keys of the panel's layers: the enclosure's glass, its edge and its content.
@@ -156,19 +162,30 @@ pub struct GlassLayer {
     pub rect: Rect,
     pub look: SurfaceLayerLook,
     pub key: u64,
+    /// Its glass carries the panel's edge in the appearance it is laid out in ([`glass_edge`]).
+    pub edge: bool,
 }
 
 impl<M: 'static> Widget<M> for GlassLayer {
-    type State = ();
+    /// Whether it is laid out in the dark appearance, for its edge.
+    type State = Cell<bool>;
 
     fn layout(&self) -> LayoutSpec {
-        placed(self.rect)
+        // measured, so it learns the appearance before its layer is marked
+        LayoutSpec {
+            width: SizeSpec::Fit,
+            height: SizeSpec::Fit,
+            position: self.rect.origin,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
     }
 
-    fn state(&self) {}
+    fn state(&self) -> Cell<bool> {
+        Cell::new(false)
+    }
 
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.rect != old.rect {
+    fn update(&self, old: &Self, _: &mut Cell<bool>) -> Change {
+        if self.rect != old.rect || self.edge != old.edge {
             Change::Layout
         } else if (self.look, self.key) != (old.look, old.key) {
             Change::Paint
@@ -177,33 +194,39 @@ impl<M: 'static> Widget<M> for GlassLayer {
         }
     }
 
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+    fn measure(&self, dark: &Cell<bool>, _: Constraints, cx: &mut MeasureCx<'_>) -> Measured {
+        dark.set(cx.env().theme.preferences.appearance.is_dark());
         leaf(self.rect)
     }
 
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+    fn event(&self, _: &mut Cell<bool>, _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
         Propagation::Continue
     }
 
-    fn hit(&self, _: &(), _: Point) -> bool {
+    fn hit(&self, _: &Cell<bool>, _: Point) -> bool {
         false
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    fn paint(&self, _: &Cell<bool>, _: &mut PaintCx<'_>) {}
 
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    fn semantics(&self, _: &Cell<bool>, _: &mut SemanticsCx<'_>) {}
 
-    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+    fn surface_layer(&self, dark: &Cell<bool>) -> Option<SurfaceLayerMark> {
+        let mut look = self.look;
+        if self.edge {
+            look.edge = glass_edge(dark.get());
+        }
         Some(SurfaceLayerMark {
             key: self.key,
-            look: self.look,
+            look,
         })
     }
 }
 
 /// A layer of a shape's thin dark edge (and a focus ring around it), at `rect` in its parent, the shape at `shape` in
 /// the same coordinates, its edge left out inside the `joined` shapes as the shape paints it in place; its children
-/// (a button's symbol) are placed in the same coordinates.
+/// (a button's symbol) are placed in the same coordinates. Without `edge` the compositor draws the edge along the
+/// glass and the layer draws none.
 pub struct EdgeLayer<M> {
     pub key: u64,
     pub rect: Rect,
@@ -211,6 +234,7 @@ pub struct EdgeLayer<M> {
     pub radius: f64,
     pub joined: Vec<(Rect, f64)>,
     pub focus: bool,
+    pub edge: bool,
     pub children: Vec<Element<M>>,
 }
 
@@ -230,8 +254,8 @@ impl<M: 'static> Widget<M> for EdgeLayer<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.rect != old.rect {
             Change::Layout
-        } else if (self.key, self.shape, self.radius, self.focus)
-            != (old.key, old.shape, old.radius, old.focus)
+        } else if (self.key, self.shape, self.radius, self.focus, self.edge)
+            != (old.key, old.shape, old.radius, old.focus, old.edge)
             || self.joined != old.joined
         {
             Change::Paint
@@ -258,7 +282,9 @@ impl<M: 'static> Widget<M> for EdgeLayer<M> {
         let shape = at(self.shape);
         let joined: Vec<(Rect, f64)> = self.joined.iter().map(|(r, q)| (at(*r), *q)).collect();
         let radius = self.radius.min(shape.height() / 2.0).max(0.0);
-        edge_outside(cx, shape, radius, edge_alpha(dark, true), &joined);
+        if self.edge {
+            edge_outside(cx, shape, radius, edge_alpha(dark, true), &joined);
+        }
         if self.focus {
             super::browse::focus_ring(cx, shape, radius);
         }
@@ -274,9 +300,11 @@ impl<M: 'static> Widget<M> for EdgeLayer<M> {
     }
 }
 
-/// A box at `rect` in its parent for a button's symbol, which centres itself in it.
+/// A box at `rect` in its parent for a button's symbol, which centres itself in it; on whole device pixels as one
+/// picture when `on_pixels`, as a layer the compositor moves is.
 pub struct SymbolBox<M> {
     pub rect: Rect,
+    pub on_pixels: bool,
     pub children: Vec<Element<M>>,
 }
 
@@ -294,7 +322,7 @@ impl<M: 'static> Widget<M> for SymbolBox<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.rect != old.rect {
+        if self.rect != old.rect || self.on_pixels != old.on_pixels {
             Change::Layout
         } else {
             Change::None
@@ -316,6 +344,10 @@ impl<M: 'static> Widget<M> for SymbolBox<M> {
     fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn on_pixels(&self, _: &()) -> bool {
+        self.on_pixels
+    }
 }
 
 fn placed(rect: Rect) -> LayoutSpec {
@@ -334,13 +366,14 @@ fn leaf(rect: Rect) -> Measured {
     }
 }
 
-/// The face of mode button `index` at `button` in the window: its edge, cut inside the `joined` shapes, its focus
-/// ring and `symbol`, in a layer of their own.
+/// The face of mode button `index` at `button` in the window: its edge, cut inside the `joined` shapes (none when
+/// the compositor draws it, without `edge`), its focus ring and `symbol`, in a layer of their own.
 pub fn button_face<M: From<Input> + Clone + 'static>(
     index: usize,
     button: Rect,
     joined: Vec<(Rect, f64)>,
     focus: bool,
+    edge: bool,
     symbol: Element<M>,
 ) -> Element<M> {
     let rect = face_layer_rect(button);
@@ -352,8 +385,37 @@ pub fn button_face<M: From<Input> + Clone + 'static>(
         radius: button.width() / 2.0,
         joined,
         focus,
+        edge,
         children: vec![Element::new(SymbolBox {
             rect: inner(button),
+            on_pixels: false,
+            children: vec![symbol],
+        })],
+    })
+}
+
+/// Where mode button `index`'s symbol lies while the buttons move, drawn in place: the face layer of the button at
+/// `rest` moved as its centre moves from there to `button`'s, so the symbol keeps its place in it as it does in the
+/// face layer the compositor moves; and the symbol's own box in that, the button at rest.
+pub fn moving_symbol(button: Rect, rest: Rect) -> (Rect, Rect) {
+    let face = face_layer_rect(rest);
+    let (dx, dy) = (
+        button.x() + button.width() / 2.0 - (rest.x() + rest.width() / 2.0),
+        button.y() + button.height() / 2.0 - (rest.y() + rest.height() / 2.0),
+    );
+    (face.translate(dx, dy), rest.translate(-face.x(), -face.y()))
+}
+
+/// A mode button's symbol drawn in place while the buttons move ([`moving_symbol`]): on whole device pixels as one
+/// picture, as its face layer is when the compositor moves it.
+pub fn symbol_in_place<M: 'static>(button: Rect, rest: Rect, symbol: Element<M>) -> Element<M> {
+    let (outer, inner) = moving_symbol(button, rest);
+    Element::new(SymbolBox {
+        rect: outer,
+        on_pixels: true,
+        children: vec![Element::new(SymbolBox {
+            rect: inner,
+            on_pixels: false,
             children: vec![symbol],
         })],
     })
@@ -512,6 +574,103 @@ pub fn open_changes(
         (EDGE_LAYER, edge),
         (CONTENT_LAYER, content),
     ]
+}
+
+/// The blur of a mode button's symbol `sharp` of the way to sharp, as the deviation of a Gaussian in points: half the
+/// blur's radius the symbol is drawn with in place ([`super::modes::glyph`]).
+pub fn glyph_deviation(sharp: f64) -> f64 {
+    (1.0 - sharp.clamp(0.0, 1.0)) * super::modes::GLYPH_BLUR / 2.0
+}
+
+/// Mode button `index` of `count` as `frame` presents it in a window `extent` large, laid out even at a moment the
+/// frame shows none yet (the open's first, before the buttons leave the field).
+pub fn button_at(extent: Size, frame: &Frame, count: usize, index: usize) -> Rect {
+    let mut f = *frame;
+    f.modes.count = count;
+    let enclosure = enclosure_rect(extent, &f);
+    mode_rects_of(extent, &f, count, &enclosure)[index]
+}
+
+/// The changes of the panel's layers for the search field's open from hidden the compositor runs: from `start`, the
+/// open's first moment, to `rest`, the panel at rest with its mode buttons beside the field that the layers are drawn
+/// at, in a window `extent` large. The field widens on the open's spring while its end draws back on a spring of its
+/// own, the buttons bud out of it on a third and their symbols sharpen after a delay: the field's glass is the
+/// product of two springs, a button's place the product of the open's scale and its place along the split, its size a
+/// clamped ramp of the split, so each value the layers show is carried through `motion`'s own values
+/// ([`open_values`]), left out where it never changes; everything fades in on the linear [`OPEN_FADE`]. The field's
+/// glass carries the edge ([`glass_edge`], set by the view while the open is the compositor's), so no frame of an edge
+/// is drawn; each button's face (its symbol alone) fades in and sharpens through its opacity and content blur.
+pub fn field_open_changes(
+    extent: Size,
+    first: &Frame,
+    rest: &Frame,
+    motion: &Motion,
+    start: f64,
+) -> Vec<(u64, Vec<LayerChange>)> {
+    let count = rest.modes.count;
+    let fade = Some(LayerCurve::Timed {
+        duration: OPEN_FADE,
+        bezier: CubicBezier::LINEAR,
+    });
+    let opacity = |out: &mut Vec<LayerChange>| {
+        out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
+        out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
+    };
+    let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
+        let (duration, values) = open_values(motion, start, value);
+        if values.iter().any(|v| *v != values[0]) {
+            out.push(LayerChange::through(property, duration, values));
+        }
+    };
+    let rect = |frame: &Frame| enclosure_rect(extent, frame);
+    let mut glass = Vec::new();
+    through(&mut glass, LayerProperty::X, &|f| rect(f).x());
+    through(&mut glass, LayerProperty::Y, &|f| rect(f).y());
+    through(&mut glass, LayerProperty::Width, &|f| rect(f).width());
+    through(&mut glass, LayerProperty::Height, &|f| rect(f).height());
+    through(&mut glass, LayerProperty::CornerRadius, &enclosure_radius);
+    opacity(&mut glass);
+    // the content keeps its size, centred across the enclosure and from its top edge
+    let mut content = Vec::new();
+    through(&mut content, LayerProperty::X, &|f| {
+        let r = rect(f);
+        r.x() + (r.width() - f.shape.width) / 2.0
+    });
+    through(&mut content, LayerProperty::Y, &|f| rect(f).y());
+    opacity(&mut content);
+    let mut out = vec![(GLASS_LAYER, glass), (CONTENT_LAYER, content)];
+    for index in 0..count {
+        let at = |f: &Frame| button_at(extent, f, count, index);
+        let mut button = Vec::new();
+        through(&mut button, LayerProperty::X, &|f| at(f).x());
+        through(&mut button, LayerProperty::Y, &|f| at(f).y());
+        through(&mut button, LayerProperty::Width, &|f| at(f).width());
+        through(&mut button, LayerProperty::Height, &|f| at(f).height());
+        through(&mut button, LayerProperty::CornerRadius, &|f| {
+            at(f).width() / 2.0
+        });
+        opacity(&mut button);
+        out.push((button_glass_layer(index), button));
+        // the face keeps its place about the button's centre, its symbol fading in and sharpening
+        let resting = at(rest);
+        let face = face_layer_rect(resting);
+        let centre = |r: Rect| Point::new(r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+        let mut symbol = Vec::new();
+        through(&mut symbol, LayerProperty::X, &|f| {
+            face.x() + centre(at(f)).x - centre(resting).x
+        });
+        through(&mut symbol, LayerProperty::Y, &|f| {
+            face.y() + centre(at(f)).y - centre(resting).y
+        });
+        through(&mut symbol, LayerProperty::Opacity, &|f| {
+            f.alpha * f.modes.sharp
+        });
+        through(&mut symbol, LayerProperty::ContentBlur, &|f| {
+            glyph_deviation(f.modes.sharp)
+        });
+        out.push((button_face_layer(index), symbol));
+    }
+    out
 }
 
 /// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight

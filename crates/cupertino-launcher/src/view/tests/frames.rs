@@ -248,7 +248,8 @@ impl Application for MeteredApp {
         let launcher = APPS.get().map_or_else(test_launcher, launcher_of);
         let mut model = Model::new(launcher, Box::new(MeteredHost));
         model.compositor_layers = LAYERS.get();
-        model.hand_scope_opens = LAYERS.get();
+        model.hand_opens = LAYERS.get();
+        model.hand_field_opens = LAYERS.get();
         (model, vec![listen()])
     }
 
@@ -631,6 +632,21 @@ impl Metered {
     fn settle_on(&mut self, message: Message) {
         send(message);
         self.step(|_, _| {});
+        self.until_quiet(4, 200);
+        self.finish_handed_open();
+    }
+
+    /// An open the compositor runs ends at the timer the test host never sets: past its end, the timer's message, and
+    /// the panel at rest.
+    fn finish_handed_open(&mut self) {
+        for _ in 0..400 {
+            if !self.model().open_handed() {
+                return;
+            }
+            self.step(|_, _| {});
+            send(Message::OpenOver);
+            self.step(|_, _| {});
+        }
         self.until_quiet(4, 200);
     }
 }

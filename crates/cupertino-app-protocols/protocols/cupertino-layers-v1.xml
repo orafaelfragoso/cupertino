@@ -364,10 +364,12 @@
         A line width logical points wide just outside the outline of the layer's glass, of the
         straight colour red, green, blue at alpha, drawn over what lies there and over the glass's
         own antialiased edge, as a stroke the client would draw around its shape. Its width stays
-        width points whatever the layer's scale, and in a glass group the line runs along the
-        outline of the group's joined shape as the scene shows it at each frame, so it is left out
-        where the shapes join and follows them as they move, scale and resize; the group takes the
-        edge of its first layer in drawing order. The line fades with the glass. 0, the initial
+        width points whatever the layer's scale, and in a glass group the line runs just outside
+        each shape's own outline as the scene shows it at each frame, left out inside the group's
+        other shapes, as a stroke around each shape cut by the others: where the shapes overlap only
+        the outline of the whole shows, where they only blend each keeps its own, and it follows them
+        as they move, scale and resize; the group takes the edge of its first layer in drawing
+        order. The line fades with the glass. 0, the initial
         width, draws none; a layer without glass draws no edge. Posts invalid_value for a width
         below 0 or above 4, or a channel outside 0 to 1.
       </description>

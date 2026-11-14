@@ -32,7 +32,7 @@ the capability a layer is `Unsupported`.
 With `Capabilities::surface_layers` a window may show marked parts of it in surfaces of their own that the compositor
 places and animates (`WindowSystem::present_surface_layers`): each `SurfaceLayer` has a key, its rect in the window,
 its look (`SurfaceLayerLook`: glass style, glass group and spacing, corner radius, masks to its shape, and a
-`LayerEdge`, a line the compositor draws along the outside of the glass's outline, or of the group's joined outline, at
+`LayerEdge`, a line the compositor draws along the outside of the glass's outline, in a group each shape's outline cut by the others, at
 a width in points that stays as the layer scales, where `Capabilities::surface_layer_edges` says it can) and its frame at
 its rect's size, or `None` when unchanged; the list is shown with the window's next `present`, back to front over its
 content, and a key left out goes. `WindowRequest::Layer { key, changes }` sets or animates a layer's properties

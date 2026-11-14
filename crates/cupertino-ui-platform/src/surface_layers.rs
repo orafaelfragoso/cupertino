@@ -99,8 +99,8 @@ pub struct SurfaceLayerLook {
     pub radius: f64,
     /// Cuts the frame to the layer's shape (its size and corner radius as shown).
     pub masks: bool,
-    /// The line the compositor draws along the outside of the layer's glass, or of its group's joined glass when the
-    /// layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
+    /// The line the compositor draws along the outside of the layer's glass, or of each shape of its group's glass cut
+    /// by the others when the layer is the group's first ([`LayerEdge`]); its default draws none. Only where the window system draws edges
     /// ([`Capabilities::surface_layer_edges`](crate::Capabilities::surface_layer_edges)).
     pub edge: LayerEdge,
 }

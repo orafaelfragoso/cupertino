@@ -723,7 +723,17 @@ fn a_focus_on_a_node_without_a_role_is_told_on_its_nearest_ancestor_in_the_tree(
             )
         })
         .collect();
-    let at = |focus| build(&tree, root, &geometry, focus, LayoutDirection::Ltr, 1.0, &[]);
+    let at = |focus| {
+        build(
+            &tree,
+            root,
+            &geometry,
+            focus,
+            LayoutDirection::Ltr,
+            1.0,
+            &[],
+        )
+    };
     let focused = |pass: &SemanticsPass| {
         let mut on: Vec<NodeId> = pass
             .nodes

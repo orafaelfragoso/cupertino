@@ -2,6 +2,7 @@
 //! titlebar and rim into premultiplied RGBA buffers.
 
 use crate::buttons::{draw_button, ButtonState};
+use crate::coverage::{self, Outline, Shade};
 use crate::edge::{edge, Edge, EdgeKind};
 use crate::hit::{double_click, hit_test, in_button_group, input_region, Hit};
 use crate::layout::{title_slot, FrameLayout};
@@ -10,13 +11,12 @@ use crate::metrics::{
 };
 use crate::palette::Palette;
 use crate::shadow::ShadowParams;
-use crate::shape::rounded_path;
 use crate::text::TextRenderer;
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_geometry::{CornerStyle, Point, Radii, Rect, Size};
 use cupertino_theme::window_shadow::ShadowOption;
 use cupertino_theme::{Appearance, Theme, Typography, WindowCornerSize};
-use tiny_skia::{FillRule, LineCap, Paint, Pixmap, Stroke, Transform};
+use tiny_skia::{Paint, Pixmap, Transform};
 
 #[derive(Clone, Debug)]
 pub struct DecorationConfig {
@@ -332,20 +332,13 @@ impl Decorations {
         let r = if flush { 0.0 } else { cfg.corner_radius() };
         let fill = cfg.palette.titlebar(cfg.style, state.active);
         let (pw, ph) = (w as f64 / scale, h as f64 / scale);
-        if let Some(path) = rounded_path(
+        let bar = Outline::rounded(
             Rect::new(0.0, 0.0, pw, ph),
             Radii::top(r),
             cfg.corner_style,
             scale,
-        ) {
-            pm.fill_path(
-                &path,
-                &paint(fill),
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
-        }
+        );
+        coverage::fill(&mut pm, &bar, &Shade::Solid(fill), None);
         if cfg.style == TitlebarStyle::Standard {
             let sep = (scale.round().max(1.0)) as f32;
             if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, h as f32 - sep, w as f32, sep) {
@@ -427,23 +420,13 @@ impl Decorations {
             return;
         };
         let (px, color) = inner.device(scale);
-        let width = f64::from(px);
-        let half = width / 2.0 / scale;
-        let rect = Rect::new(
-            half,
-            half,
-            size.width - 2.0 * half,
-            size.height - 2.0 * half,
+        let frame = Outline::rounded(
+            Rect::new(0.0, 0.0, size.width, size.height),
+            Radii::uniform(cfg.corner_radius()),
+            cfg.corner_style,
+            scale,
         );
-        let radius = (cfg.corner_radius() - half).max(0.0);
-        if let Some(path) = rounded_path(rect, Radii::uniform(radius), cfg.corner_style, scale) {
-            let stroke = Stroke {
-                width: width as f32,
-                line_cap: LineCap::Butt,
-                ..Stroke::default()
-            };
-            pm.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
-        }
+        coverage::fill(pm, &frame, &Shade::Solid(color), Some(px as f32));
     }
 
     /// The inner rim of the edge around the whole frame (premultiplied RGBA, transparent inside), whole device pixels

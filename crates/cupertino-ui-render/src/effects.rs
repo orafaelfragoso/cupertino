@@ -100,8 +100,12 @@ pub(crate) fn apply(layer: &mut Pixmap, effect: &Effect, scale: f64, origin: (i3
             let data = layer.data_mut();
             let planes: Vec<Vec<f32>> = (0..4)
                 .map(|c| {
-                    let plane: Vec<f32> =
-                        data.iter().skip(c).step_by(4).map(|&v| f32::from(v) / 255.0).collect();
+                    let plane: Vec<f32> = data
+                        .iter()
+                        .skip(c)
+                        .step_by(4)
+                        .map(|&v| f32::from(v) / 255.0)
+                        .collect();
                     blur_plane(&plane, w, h, sigma, (0.0, 0.0))
                 })
                 .collect();
@@ -126,7 +130,8 @@ pub(crate) fn apply(layer: &mut Pixmap, effect: &Effect, scale: f64, origin: (i3
             blur: b,
             color,
         } => {
-            let shadow = shadow_coverage(layer.data(), w, h, offset, sigma_px(b, scale), scale, false);
+            let shadow =
+                shadow_coverage(layer.data(), w, h, offset, sigma_px(b, scale), scale, false);
             let shadow = store_coverage(&shadow, w, origin, dithered);
             under(layer.data_mut(), &shadow, tint(color.premultiplied()));
         }
@@ -135,7 +140,8 @@ pub(crate) fn apply(layer: &mut Pixmap, effect: &Effect, scale: f64, origin: (i3
             blur: b,
             color,
         } => {
-            let shadow = shadow_coverage(layer.data(), w, h, offset, sigma_px(b, scale), scale, true);
+            let shadow =
+                shadow_coverage(layer.data(), w, h, offset, sigma_px(b, scale), scale, true);
             let mut shadow = store_coverage(&shadow, w, origin, dithered);
             for (s, c) in shadow.iter_mut().zip(layer.data().as_chunks::<4>().0) {
                 *s = div255(u32::from(*s) * u32::from(c[3])) as u8;
@@ -200,7 +206,13 @@ fn shadow_coverage(
 /// past its edges as transparent: the plan's 2x halvings, then its Gaussian across and down the last level, then the
 /// last level read back at every pixel of the plane moved by `shift` pixels, linearly between its texels. Levels are
 /// kept in `f32`.
-pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32, shift: (f32, f32)) -> Vec<f32> {
+pub(crate) fn blur_plane(
+    plane: &[f32],
+    w: usize,
+    h: usize,
+    sigma: f32,
+    shift: (f32, f32),
+) -> Vec<f32> {
     if w == 0 || h == 0 {
         return Vec::new();
     }
@@ -248,7 +260,12 @@ pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32, shift: (
 }
 
 /// The plan's halvings and Gaussian of a plane: the last level, its size and the number of halvings.
-pub(crate) fn pyramid(plane: &[f32], w: usize, h: usize, sigma: f32) -> (Vec<f32>, usize, usize, u32) {
+pub(crate) fn pyramid(
+    plane: &[f32],
+    w: usize,
+    h: usize,
+    sigma: f32,
+) -> (Vec<f32>, usize, usize, u32) {
     let plan = plan_blur(w as u32, h as u32, 1.0, sigma, 1.0);
     pyramid_of(plane, w, h, &plan)
 }
@@ -317,7 +334,10 @@ fn convolve_columns(src: &[f32], w: usize, h: usize, weights: &[f32]) -> Vec<f32
             *d = s * weights[0];
         }
         for (i, &wt) in weights.iter().enumerate().skip(1) {
-            for yy in [y.checked_sub(i), Some(y + i).filter(|&v| v < h)].into_iter().flatten() {
+            for yy in [y.checked_sub(i), Some(y + i).filter(|&v| v < h)]
+                .into_iter()
+                .flatten()
+            {
                 for (d, s) in dst.iter_mut().zip(&src[yy * w..(yy + 1) * w]) {
                     *d += s * wt;
                 }
@@ -432,7 +452,10 @@ mod tests {
             for (c, want) in [r, g, b, a].into_iter().enumerate() {
                 let (level, lw) = &channels[c];
                 let got = level[y as usize * lw + x as usize];
-                assert!((f64::from(got) - want).abs() < 2e-3, "{row:?}: channel {c} is {got}");
+                assert!(
+                    (f64::from(got) - want).abs() < 2e-3,
+                    "{row:?}: channel {c} is {got}"
+                );
             }
             checked += 1;
         }
@@ -444,15 +467,27 @@ mod tests {
     fn the_shadows_of_a_rounded_rectangle_match_the_shared_closed_form() {
         use cupertino_raster_math::shadow::{drop_shadow, inner_shadow, Caster, Shadow};
         let (w, h) = (240usize, 200usize);
-        let caster = Caster { half: [60.0, 40.0], radius: 10.0, extent: 10.0, exponent: 2.0 };
-        let shadow = Shadow { sigma: 6.0, offset: [3.0, 5.0], density: 1.0 };
+        let caster = Caster {
+            half: [60.0, 40.0],
+            radius: 10.0,
+            extent: 10.0,
+            exponent: 2.0,
+        };
+        let shadow = Shadow {
+            sigma: 6.0,
+            offset: [3.0, 5.0],
+            density: 1.0,
+        };
         let centre = [120.0f32, 100.0];
         let mut layer = Pixmap::new(w as u32, h as u32).unwrap();
         for y in 0..h {
             for x in 0..w {
                 let p = [x as f32 + 0.5 - centre[0], y as f32 + 0.5 - centre[1]];
-                let d = cupertino_raster_math::coverage::rounded_distance(p, caster.half, 10.0, 2.0);
-                let a = cupertino_raster_math::dither::quantize(cupertino_raster_math::coverage::coverage(d, 1.0));
+                let d =
+                    cupertino_raster_math::coverage::rounded_distance(p, caster.half, 10.0, 2.0);
+                let a = cupertino_raster_math::dither::quantize(
+                    cupertino_raster_math::coverage::coverage(d, 1.0),
+                );
                 layer.data_mut()[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[a; 4]);
             }
         }

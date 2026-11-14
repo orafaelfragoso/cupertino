@@ -1183,6 +1183,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-geometry",
  "cupertino-glyph",
+ "cupertino-raster-math",
  "cupertino-theme",
  "swash",
  "tempfile",

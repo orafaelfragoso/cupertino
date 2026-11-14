@@ -38,7 +38,11 @@ pub(crate) struct Outline {
 impl Outline {
     /// `shape` placed by `ts` (shape units to window pixels); `stroke` its width for a stroke. `None` for a path or a
     /// shape with no area.
-    pub(crate) fn new(shape: &Shape, ts: tiny_skia::Transform, stroke: Option<f64>) -> Option<Outline> {
+    pub(crate) fn new(
+        shape: &Shape,
+        ts: tiny_skia::Transform,
+        stroke: Option<f64>,
+    ) -> Option<Outline> {
         let (rect, radius) = match shape {
             Shape::Rect(r) => (r, 0.0),
             Shape::RoundedRect { rect, radius } => (rect, *radius),
@@ -114,7 +118,10 @@ impl Outline {
             Some(width) => {
                 let outer = self.distance(p, width / 2.0);
                 let inner = coverage(outer + width, self.px);
-                (to_byte(stroke_coverage(outer, width, self.px)), inner >= 1.0)
+                (
+                    to_byte(stroke_coverage(outer, width, self.px)),
+                    inner >= 1.0,
+                )
             }
         }
     }
@@ -133,7 +140,12 @@ impl Outline {
     /// coverage): one pixel at a time along the edges, and each run of pixels it covers fully at once; a stroke's
     /// hollow middle is passed over. A row meets a fill's fully covered part, and a stroke's hollow, in one run, both
     /// being convex: each row is read in from both ends until it reaches that part.
-    pub(crate) fn scan(&self, area: &Bounds, holes: &[Bounds], mut put: impl FnMut(i32, i32, i32, u8)) {
+    pub(crate) fn scan(
+        &self,
+        area: &Bounds,
+        holes: &[Bounds],
+        mut put: impl FnMut(i32, i32, i32, u8),
+    ) {
         let area = area.intersect(&self.bounds);
         if area.is_empty() {
             return;
@@ -202,7 +214,9 @@ impl Outline {
         let inside = all.intersect(&self.bounds);
         let mut cover = vec![0u8; (w * h) as usize];
         let at = |x: i32, y: i32| ((y - origin.1) * w + (x - origin.0)) as usize;
-        self.scan(&inside, &[], |y, x0, x1, c| cover[at(x0, y)..at(x1, y)].fill(c));
+        self.scan(&inside, &[], |y, x0, x1, c| {
+            cover[at(x0, y)..at(x1, y)].fill(c)
+        });
         for (m, c) in mask.data_mut().iter_mut().zip(&cover) {
             *m = match *c {
                 255 => *m,
@@ -217,7 +231,10 @@ impl Outline {
 pub(crate) enum Shade<'a> {
     Solid([u8; 4]),
     /// Premultiplied pixels (bytes in memory order) of the window rectangle `area`, row after row.
-    Pixels { data: &'a [u32], area: Bounds },
+    Pixels {
+        data: &'a [u32],
+        area: Bounds,
+    },
 }
 
 impl Shade<'_> {
@@ -292,7 +309,9 @@ impl Gradient {
             stops.push(stops[0]);
         }
         let stops = Stops::new(&stops).ok()?;
-        let (a, b, c, d, e, f) = (window.sx, window.ky, window.kx, window.sy, window.tx, window.ty);
+        let (a, b, c, d, e, f) = (
+            window.sx, window.ky, window.kx, window.sy, window.tx, window.ty,
+        );
         let det = a * d - b * c;
         if !(det.abs() > 1e-12 && det.is_finite()) {
             return None;
@@ -352,7 +371,10 @@ pub(crate) fn premultiplied(c: cupertino_theme::Color) -> Option<[u8; 4]> {
     if ![c.r, c.g, c.b, c.a].iter().all(|v| v.is_finite()) {
         return None;
     }
-    Some(c.premultiplied().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8))
+    Some(
+        c.premultiplied()
+            .map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
+    )
 }
 
 /// The premultiplied `color` laid over the pixel `below` at full coverage, as [`fill`] lays it.
@@ -550,7 +572,9 @@ mod tests {
                 .iter()
                 .map(|s| GradientStop {
                     offset: s.offset,
-                    color: cupertino_theme::Color::new(s.color[0], s.color[1], s.color[2], s.color[3]),
+                    color: cupertino_theme::Color::new(
+                        s.color[0], s.color[1], s.color[2], s.color[3],
+                    ),
                 })
                 .collect();
             // a linear gradient 1000 pixels long placed so that the centre of pixel 0 lies at the vector's `t`
@@ -581,12 +605,23 @@ mod tests {
             start: Point::new(0.0, 0.0),
             end: Point::new(64.0, 0.0),
             stops: vec![
-                GradientStop { offset: 0.0, color: grey(100.0 / 255.0) },
-                GradientStop { offset: 1.0, color: grey(101.0 / 255.0) },
+                GradientStop {
+                    offset: 0.0,
+                    color: grey(100.0 / 255.0),
+                },
+                GradientStop {
+                    offset: 1.0,
+                    color: grey(101.0 / 255.0),
+                },
             ],
         };
         let g = Gradient::new(&paint, tiny_skia::Transform::identity()).unwrap();
-        let area = Bounds { x0: 0, y0: 0, x1: 64, y1: 8 };
+        let area = Bounds {
+            x0: 0,
+            y0: 0,
+            x1: 64,
+            y1: 8,
+        };
         let plain = g.shade(&area, false);
         let dithered = g.shade(&area, true);
         let red = |v: &u32| v.to_le_bytes()[0];
@@ -608,7 +643,13 @@ mod tests {
         let many = Paint::Linear {
             start: Point::new(0.0, 0.0),
             end: Point::new(1.0, 0.0),
-            stops: vec![GradientStop { offset: 0.0, color: grey(0.0) }; 9],
+            stops: vec![
+                GradientStop {
+                    offset: 0.0,
+                    color: grey(0.0)
+                };
+                9
+            ],
         };
         assert!(Gradient::new(&many, tiny_skia::Transform::identity()).is_none());
     }

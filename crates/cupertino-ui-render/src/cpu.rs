@@ -3,7 +3,6 @@ use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
 use crate::raster;
-use cupertino_raster_math::dither;
 use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
@@ -12,6 +11,7 @@ use crate::{
     RenderError, RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
 };
 use cupertino_geometry::Rect;
+use cupertino_raster_math::dither;
 use cupertino_theme::Color;
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph};
 use std::collections::HashMap;

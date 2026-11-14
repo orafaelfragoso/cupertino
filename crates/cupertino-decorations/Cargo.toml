@@ -12,6 +12,7 @@ layer = "render"
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
 tiny-skia = "0.12"
 cupertino-glyph = { path = "../cupertino-glyph" }
 swash = "0.2.10"

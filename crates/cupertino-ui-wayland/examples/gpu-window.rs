@@ -4,7 +4,8 @@
 //!
 //! `gpu-window --report PATH [--frames N] [--size WxH] [--reset-every N] [--purge-every N] [--losses N] [--renderer]`
 //!
-//! - `--frames N`: frames to present in all (default 120).
+//! - `--frames N`: frames to present in all (default 120), not counting the shared-memory frames drawn while a device
+//!   warms up, so a slow warm-up still ends inside the run.
 //! - `--renderer`: once on the GPU, frames are drawn by the toolkit's GPU renderer on the presenter's device (the
 //!   window filled with the GPU colour, a mark of [`MARK_SIZE`] points at [`MARK_AT`] in the mark colour) and copied
 //!   from its texture into the buffers, nothing uploaded.
@@ -134,6 +135,9 @@ struct Seen {
     warm: Vec<String>,
     /// Frames the GPU renderer drew.
     drawn: u64,
+    /// Shared-memory frames drawn while a device warmed up: they do not count toward `--frames`, so a warm-up slowed
+    /// by a busy machine still ends inside the run.
+    while_warming: u64,
 }
 
 fn add(a: &mut SurfaceStats, b: SurfaceStats) {
@@ -168,7 +172,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let renderers = gpu.renderers();
     let mut drawing: Option<WindowRenderer<NoGlyphs>> = None;
     let mut drawn = 0u64;
-    while seen.gpu_frames + seen.shm_frames < args.frames {
+    while seen.gpu_frames + seen.shm_frames - seen.while_warming < args.frames {
         if started.elapsed() > LIMIT {
             return Err("the check ran out of time".into());
         }
@@ -297,6 +301,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                         seen.shm_with_syncobj += 1;
                     }
                     seen.shm_frames += 1;
+                    if gpu.warming() {
+                        seen.while_warming += 1;
+                    }
                     pending = true;
                     seen.first_frame.get_or_insert((started.elapsed(), "cpu"));
                     seen.sizes.insert(pixels);
@@ -404,6 +411,7 @@ fn report(args: &Args, conn: &Connection, gpu: &GpuPath, seen: &mut Seen) {
         ("frames", (seen.gpu_frames + seen.shm_frames).to_string()),
         ("gpu_frames", seen.gpu_frames.to_string()),
         ("shm_frames", seen.shm_frames.to_string()),
+        ("shm_frames_while_warming", seen.while_warming.to_string()),
         ("busy", seen.busy.to_string()),
         ("first_frame_ms", format!("{first_ms:.1}")),
         ("first_frame_renderer", first_renderer.to_string()),

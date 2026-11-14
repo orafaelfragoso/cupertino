@@ -490,7 +490,11 @@ fn the_presenter_keeps_its_fences_in_step_through_a_short_soak() {
     let home = s.home.path().to_path_buf();
     let (report, shown) = s.run(&home, &["--frames", "900"], |_, _| {});
     let gpu_frames = number(&report, "gpu_frames");
-    assert_eq!(number(&report, "frames"), 900);
+    // the frames drawn while the device warmed up come on top of the 900
+    assert_eq!(
+        number(&report, "frames") - number(&report, "shm_frames_while_warming"),
+        900
+    );
     assert!(gpu_frames >= 850, "{gpu_frames}");
     assert!(number(&report, "release_waits") + 2 >= gpu_frames);
     assert_eq!(report["allocations"], "2");

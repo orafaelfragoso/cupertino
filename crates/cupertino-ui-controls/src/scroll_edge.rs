@@ -24,8 +24,9 @@ pub const SOFT_EDGE_MAX: f64 = 0.96;
 pub const SOFT_EDGE_MIN: f64 = 0.72;
 /// How far down the band, as a share of its height, the veil keeps its full strength before it eases down.
 pub const SOFT_EDGE_HOLD: f64 = 0.0;
-/// Points at which the soft edge's gradient samples [`soft_edge_opacity`], from the band's top to its bottom.
-pub const SOFT_EDGE_STOPS: usize = 9;
+/// Points at which the soft edge's gradient samples [`soft_edge_opacity`], from the band's top to its bottom: the
+/// eight a gradient may have at most (a gradient with more draws nothing).
+pub const SOFT_EDGE_STOPS: usize = 8;
 /// The soft edge's hairline along the bottom of the band, in points.
 const HAIRLINE: f64 = 0.5;
 /// The hairline's strength: black over a light window, white over a dark one.

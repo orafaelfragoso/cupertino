@@ -66,6 +66,28 @@ class ScriptTest(unittest.TestCase):
         f = WINDOWS["files"]
         self.assertGreater(y, f["y"] + f["height"] - 30)
 
+    def test_the_full_screen_files_scenarios_measure_only_after_files_fills_the_output(self):
+        for name in ("files-full-repaint", "files-full-scroll"):
+            flags, (a, b) = bench.script(name, 60, WINDOWS, (1280, 800), 1.0, 15)
+            actions = [flags[i + 1].split(":") for i, f in enumerate(flags) if f == "--action"]
+            self.assertEqual(actions[0][1], "toggle-fullscreen", name)
+            self.assertLessEqual(float(actions[0][0]) + bench.FULL_SCREEN_SETTLE, a, name)
+            if name == "files-full-repaint":
+                self.assertEqual([what for _, what in actions[1:]], ["toggle-appearance"] * 3)
+                self.assertTrue(all(a <= float(t) <= b for t, _ in actions[1:]))
+            else:
+                points = {flags[i + 1].split(":")[1] for i, f in enumerate(flags) if f == "--scroll"}
+                self.assertEqual(points, {"768.0,400.0"}, "the middle of the list, which fills the output")
+
+    def test_a_full_screen_files_scenario_where_files_did_not_fill_the_output_is_flagged(self):
+        def run(width):
+            return {"windows": {"before": [], "after": [dict(WINDOWS["files"], width=width, height=800.0)]},
+                    "span_s": (9.0, 15.0), "output": [1280.0, 800.0], "compositor": {"frames": 200},
+                    "clients": {"cupertino-files": {"frames": 180}}}
+        self.assertIsNone(bench.check("files-full-scroll", run(1280.0)))
+        self.assertIsNotNone(bench.check("files-full-scroll", run(920.0)))
+        self.assertIsNotNone(bench.check("files-full-repaint", run(920.0)))
+
     def test_typing_in_the_launcher_types_each_letter_and_erases_it(self):
         flags, _ = bench.script("launcher-typing", 60, WINDOWS, (1280, 800), 1.0, 15)
         typed = [flags[i + 1].split(":", 1)[1] for i, f in enumerate(flags) if f == "--type"]

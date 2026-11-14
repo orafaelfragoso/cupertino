@@ -314,3 +314,36 @@ fn a_key_from_a_keyboard_waits_on_each_output_for_its_next_frame_in_the_drm_trac
         );
     }
 }
+
+/// Pointer motion is timed in the DRM trace on its own as well: the flip of the first frame queued after it reports
+/// `pointer-to-flip` beside `input-to-flip`.
+#[test]
+fn pointer_motion_is_reported_to_the_first_flip_after_it_in_the_drm_trace() {
+    use cupertino_server::drm_trace::{Branch, DrmTrace};
+    let mut d = Desktop::new(1.0);
+    let mut trace = DrmTrace::new();
+    trace.queued("DP-1");
+    d.state.drm_trace = Some(trace);
+    d.state.pointer_moved_to((40.0, 40.0).into(), 0, None);
+    let trace = d.state.drm_trace.as_mut().unwrap();
+    let frame = trace.queued("DP-1");
+    let lines = trace.flipped(
+        "DP-1",
+        Branch::FlipTimestamp,
+        0,
+        frame,
+        Instant::now() + Duration::from_millis(5),
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("input-to-flip output=DP-1")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("pointer-to-flip output=DP-1")),
+        "{lines:?}"
+    );
+}

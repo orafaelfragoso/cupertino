@@ -435,16 +435,9 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     }
     for (t, (x, y), dy) in cli.scrolls.iter().copied() {
         schedule(event_loop, t, move |state| {
-            use smithay::backend::input::{AxisRelativeDirection, AxisSource};
             state.pointer_moved_to((x, y).into(), 0, None);
-            state.pointer_axis(&crate::events::AxisInput {
-                device: String::new(),
-                source: AxisSource::Finger,
-                usec: Duration::from(state.clock.now()).as_micros() as u64,
-                amount: scripted_scroll(dy),
-                v120: [None, None],
-                relative_direction: [AxisRelativeDirection::Identical; 2],
-            });
+            let usec = Duration::from(state.clock.now()).as_micros() as u64;
+            state.pointer_axis(&scripted_scroll(dy, usec));
         })?;
     }
     for (t, name) in cli.unplugs.iter().cloned() {
@@ -489,10 +482,18 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     Ok(())
 }
 
-/// The axis amounts of a scripted two-finger scroll of `dy` points, horizontal then vertical: the horizontal axis
-/// carries nothing (a zero there would end the gesture on it at every step), and a `dy` of zero ends the scroll.
-fn scripted_scroll(dy: f64) -> [Option<f64>; 2] {
-    [None, Some(dy)]
+/// A scripted two-finger scroll of `dy` points at `usec`: the horizontal axis carries nothing (a zero there would end
+/// the gesture on it at every step), and a `dy` of zero ends the scroll.
+fn scripted_scroll(dy: f64, usec: u64) -> crate::events::AxisInput {
+    use smithay::backend::input::{AxisRelativeDirection, AxisSource};
+    crate::events::AxisInput {
+        device: String::new(),
+        source: AxisSource::Finger,
+        usec,
+        amount: [None, Some(dy)],
+        v120: [None, None],
+        relative_direction: [AxisRelativeDirection::Identical; 2],
+    }
 }
 
 /// The windows of `state`, back to front, one JSON object a line ([`window_line`]).
@@ -1202,8 +1203,22 @@ mod tests {
 
     #[test]
     fn a_scripted_scroll_moves_the_vertical_axis_alone_and_its_zero_ends_it() {
-        assert_eq!(scripted_scroll(20.0), [None, Some(20.0)]);
-        assert_eq!(scripted_scroll(0.0), [None, Some(0.0)]);
+        // the steps of a scroll stop neither axis, so the client sees one gesture, not one per step
+        for dy in [20.0, -3.5] {
+            let step = scripted_scroll(dy, 1_000);
+            assert_eq!(step.stopped_axes(), [false, false], "{dy}");
+            assert!(!step.ends_gesture(), "{dy}");
+        }
+        // the zero at the end stops the vertical axis alone and ends the gesture
+        let end = scripted_scroll(0.0, 2_000);
+        assert_eq!(end.stopped_axes(), [false, true]);
+        assert!(end.ends_gesture());
+        // a zero on the horizontal axis would have stopped it at every step
+        let both = crate::events::AxisInput {
+            amount: [Some(0.0), Some(20.0)],
+            ..scripted_scroll(20.0, 1_000)
+        };
+        assert_eq!(both.stopped_axes(), [true, false]);
     }
 
     #[test]

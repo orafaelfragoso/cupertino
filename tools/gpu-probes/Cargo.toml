@@ -6,7 +6,8 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "Measurements for the GPU rendering plan: context, program, render target and fence costs, and a deep-colour plane check. Never packaged."
 
-# Its own workspace: the desktop's workspace excludes it, so `scripts/dev/build`, the package and CI never build it.
+# Its own workspace: the desktop's workspace excludes it, so `scripts/dev/build` and the package never build it; CI runs
+# its tests alone (the gate job).
 [workspace]
 
 [dependencies]

@@ -247,6 +247,21 @@ pub struct AxisInput {
     pub relative_direction: [AxisRelativeDirection; 2],
 }
 
+impl AxisInput {
+    /// The axes this event stops, horizontal first: a finger scroll stops an axis with an amount of exactly zero.
+    pub fn stopped_axes(&self) -> [bool; 2] {
+        self.amount
+            .map(|a| self.source == AxisSource::Finger && a == Some(0.0))
+    }
+
+    /// Whether this event ends a touchpad gesture: a finger scroll where no axis moves and one is exactly zero.
+    pub fn ends_gesture(&self) -> bool {
+        self.source == AxisSource::Finger
+            && self.amount.contains(&Some(0.0))
+            && self.amount.iter().all(|a| a.is_none_or(|a| a == 0.0))
+    }
+}
+
 /// `wl_pointer.axis` carries a fixed-point value in 1/256 steps. A value is sent rounded to that step and what the
 /// rounding lost is added to the next value of the same axis, source and direction, so a run of small scrolls (a
 /// high-resolution wheel's fractions of a notch) adds up to the distance the device moved. A stop, another source or
@@ -1501,14 +1516,10 @@ impl Cupertino {
             }
         };
         let (h, v) = (amount(Axis::Horizontal), amount(Axis::Vertical));
-        // A touchpad gesture ends with a stop: no axis moves and one is exactly zero.
         let count = (input.source == AxisSource::Finger)
-            .then(|| {
-                let stop = input.amount.contains(&Some(0.0))
-                    && input.amount.iter().all(|a| a.is_none_or(|a| a == 0.0));
-                device.and_then(|d| d.scroll_count((h, v), stop, usec))
-            })
+            .then(|| device.and_then(|d| d.scroll_count((h, v), input.ends_gesture(), usec)))
             .flatten();
+        let stops = input.stopped_axes();
         let mut frame = AxisFrame::new((usec / 1000) as u32).source(input.source);
         let mut carries_axis = false;
         for (axis, value) in [(Axis::Horizontal, h), (Axis::Vertical, v)] {
@@ -1523,7 +1534,7 @@ impl Cupertino {
                     frame = frame.v120(axis, d as i32);
                 }
             }
-            if input.source == AxisSource::Finger && input.amount[i] == Some(0.0) {
+            if stops[i] {
                 carries_axis = true;
                 self.axis_carry.stop(i);
                 frame = frame.stop(axis);

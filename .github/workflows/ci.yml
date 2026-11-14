@@ -101,6 +101,8 @@ jobs:
           echo RUSTUP_TOOLCHAIN=1.99.1 >> "$GITHUB_ENV"
       # check-metadata and test_release read the dependency graph with cargo metadata --offline.
       - run: cargo fetch --locked
+      # the GPU probes are a workspace of their own, built nowhere else; the tests of their arithmetic need no GPU
+      - run: cargo test --locked --manifest-path tools/gpu-probes/Cargo.toml --target-dir target/gpu-probes
       # the SDK's verify tests compile a library with cc; without one they must fail here, not skip
       - run: python3 -I packaging/test_release.py
         env:

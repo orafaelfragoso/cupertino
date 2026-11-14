@@ -19,7 +19,7 @@ ordered-stream = "0.2"
 # second in every process with a bus connection; 1.6.2 ends it after half a second without work. A normal dependency
 # of the bus crate, so the exact version holds the shipped programs and the whole lockfile there;
 # `tests::the_blocking_pool_ends_its_threads_once_idle` checks it, and the gate fails on any other locked version.
-blocking = "=1.6.2"
+blocking = "=1.7.0"
 
 [dev-dependencies]
 async-io = "2"

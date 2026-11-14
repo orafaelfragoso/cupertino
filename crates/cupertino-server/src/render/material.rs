@@ -16,7 +16,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_glass::blur::{plan_blur, BlurPlan};
+use cupertino_raster_math::blur::{plan_blur, BlurPlan};
 use cupertino_glass::ops::{color_ops, fill_ops, Op, PassParams, RegionParams};
 use cupertino_theme::recipe::Recipe;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};

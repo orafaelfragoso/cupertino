@@ -1,0 +1,16 @@
+[package]
+name = "cupertino-raster-math"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "The one definition of the drawing maths every Cupertino renderer and shader implements: shape distance and coverage, the blur kernel and its pyramid, shadows, gradients and position-keyed dithering, with test vectors"
+autotests = false
+
+[package.metadata.cupertino]
+layer = "graphics"
+
+[dependencies]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

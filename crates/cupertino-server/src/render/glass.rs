@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_glass::blur::plan_blur;
+use cupertino_raster_math::blur::plan_blur;
 use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
 use cupertino_glass::ops::PassParams;
 use cupertino_theme::glass::{

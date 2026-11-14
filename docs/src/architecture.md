@@ -59,16 +59,17 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 | Layer | Crates | May depend on |
 |---|---|---|
 | `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-test-bus`, `cupertino-test-pam`, `cupertino-test-pam-shim`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `graphics` (the one definition of the drawing maths) | `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (pure logic, no I/O) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
 | `platform` (kernel interfaces, and the PipeWire boundary) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols`, `cupertino-semantics` | `foundation`, `protocol` |
 | `transport` | `cupertino-protocol-app`, `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `platform`, `protocol`, `transport` |
-| `render` | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `platform`, `render` |
-| `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-theme`, `cupertino-ui-wayland` | `foundation`, `protocol`, `transport`, `ui` |
-| `core` | `cupertino-server` | `foundation`, `models`, `platform`, `protocol`, `render` |
-| `shell` | `cupertino-control`, `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
+| `render` | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `platform`, `render` |
+| `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-theme`, `cupertino-ui-wayland` | `foundation`, `graphics`, `protocol`, `transport`, `ui` |
+| `core` | `cupertino-server` | `foundation`, `graphics`, `models`, `platform`, `protocol`, `render` |
+| `shell` | `cupertino-control`, `cupertino-controlcenter`, `cupertino-dock`, `cupertino-launcher`, `cupertino-login`, `cupertino-menubar`, `cupertino-notifications`, `cupertino-osd`, `cupertino-polkit-agent`, `cupertino-portal`, `cupertino-screenshot`, `cupertino-windowmanager` | `foundation`, `graphics`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` |
 | `services` | `cupertino-btd`, `cupertino-netd`, `cupertino-powerd`, `cupertino-sessiond` | `foundation`, `models`, `platform`, `protocol`, `services` |
-| `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `models`, `protocol`, `transport`, `ui` |
+| `apps` | `cupertino-files`, `cupertino-settings` | `foundation`, `graphics`, `models`, `protocol`, `transport`, `ui` |
 | `tools` | `cupertino-cli`, `cupertino-diagnostics`, `cupertino-layers`, `cupertino-testclient` | all but `core`, `shell`, `services`, `apps` |
 
 `shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.

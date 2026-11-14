@@ -6,7 +6,7 @@
 //! * [`vibrant`]: parameters for the vibrant blend functions used to draw template glyphs and text
 //!   on materials (`VibrantDraw`, `MaterialRenderer::draw_vibrant`).
 //! * [`cpu`]: CPU reference implementation of the same pipeline for validation.
-//! * [`blur`], [`ops`]: blur plan and the flat GPU encoding of recipes.
+//! * [`ops`]: the flat GPU encoding of recipes; the blur plan is `cupertino_raster_math::blur`.
 //! * [`display_filter`]: colour filters, invert and contrast of the whole display as a colour chain.
 //! * [`glass`]: the glass model (stages of the background pass, foreground matrix) and its uniform block; the WGSL
 //!   and GLSL ES shaders follow it.
@@ -15,7 +15,6 @@
 //! Recipes come from `cupertino-theme` (decoded layer archives). The GLSL ES 3.00 port of every
 //! shader lives in `shaders/gles/`; see the README.
 
-pub mod blur;
 pub mod cpu;
 pub mod display_filter;
 pub mod glass;

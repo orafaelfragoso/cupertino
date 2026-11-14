@@ -1342,6 +1342,7 @@ dependencies = [
  "bytemuck",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-raster-math",
  "cupertino-theme",
  "image",
  "naga",
@@ -1771,6 +1772,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-raster-math"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-render-api"
 version = "0.1.0"
 dependencies = [
@@ -1875,6 +1880,7 @@ dependencies = [
  "cupertino-overview",
  "cupertino-peer",
  "cupertino-protocols",
+ "cupertino-raster-math",
  "cupertino-render-api",
  "cupertino-scene",
  "cupertino-screencast",

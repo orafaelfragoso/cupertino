@@ -5,10 +5,10 @@
 //! resolution, quantifying the pyramid approximation error. `exact_mask = true` uses the design
 //! signed distance instead of the closed-form one the shaders implement.
 
-use crate::blur::{gaussian_weights, plan_blur};
 use crate::ops::{color_ops, fill_ops, Op};
 use crate::renderer::MaterialRegion;
 use cupertino_geometry::{rounded::coverage_from_distance, Point};
+use cupertino_raster_math::blur::{gaussian_weights, plan_blur};
 use std::collections::HashMap;
 
 /// Rounds to the nearest IEEE half-precision value (the GPU stores intermediates as rgba16float).

@@ -1,7 +1,7 @@
 //! Flat GPU representation of a recipe: colour filter operations, fill layers and the uniform
 //! blocks shared with the shaders (std140-compatible, 16-byte aligned members only).
 
-use crate::blur::MAX_BLUR_RADIUS;
+use cupertino_raster_math::blur::MAX_BLUR_RADIUS;
 use cupertino_theme::recipe::{curve_coeffs, ColorOp, Recipe};
 
 pub const MAX_OPS: usize = 8;

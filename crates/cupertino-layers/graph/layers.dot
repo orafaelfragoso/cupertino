@@ -35,6 +35,10 @@ digraph "layers" {
     "cupertino-typeahead";
     "xkbcommon";
   }
+  subgraph "cluster_graphics" {
+    label="graphics (1)";
+    "cupertino-raster-math";
+  }
   subgraph "cluster_models" {
     label="models (9)";
     "cupertino-control-model";
@@ -219,6 +223,7 @@ digraph "layers" {
   "cupertino-files" -> "cupertino-wayland-client";
   "cupertino-glass" -> "cupertino-defaults";
   "cupertino-glass" -> "cupertino-geometry";
+  "cupertino-glass" -> "cupertino-raster-math";
   "cupertino-glass" -> "cupertino-theme";
   "cupertino-icons" -> "cupertino-apps";
   "cupertino-icons" -> "cupertino-assets";
@@ -439,6 +444,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-peer";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-protocols" [label="dev"];
+  "cupertino-server" -> "cupertino-raster-math";
   "cupertino-server" -> "cupertino-render-api";
   "cupertino-server" -> "cupertino-scene";
   "cupertino-server" -> "cupertino-screencast" [label="dev"];

@@ -20,6 +20,7 @@ path = "src/bin/glass_renderer.rs"
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
 wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }

@@ -1423,11 +1423,11 @@ mod tests {
     }
 
     /// A row of a hard black-to-white edge (at texel 1001 of 2048) blurred with a Gaussian of `sigma` texels as the
-    /// GPU passes make it ([`crate::blur::plan_blur`]: 2× box halvings, then the separable weights on the last level,
+    /// GPU passes make it ([`cupertino_raster_math::blur::plan_blur`]: 2× box halvings, then the separable weights on the last level,
     /// reads clamped to the row), read back at every full-resolution texel with linear filtering.
     fn blurred_edge(sigma: f32) -> Vec<f32> {
         const N: usize = 2048;
-        let plan = crate::blur::plan_blur(N as u32, 64, 1.0, sigma, 1.0);
+        let plan = cupertino_raster_math::blur::plan_blur(N as u32, 64, 1.0, sigma, 1.0);
         let mut row: Vec<f32> = (0..N).map(|j| if j > 1000 { 1.0 } else { 0.0 }).collect();
         for _ in &plan.levels {
             row = row.chunks(2).map(|p| (p[0] + p[1]) * 0.5).collect();

@@ -13,10 +13,10 @@
 //! by a caller-provided *damage generation counter*: bump the counter whenever the source content
 //! (or the source texture object) changes; while it is unchanged the blur is not recomputed.
 
-use crate::blur::{plan_blur, BlurPlan};
 use crate::ops::{color_ops, fill_ops, Op, PassParams, RegionParams, VibrantUniform, MAX_FILLS};
 use crate::vibrant::VibrantDraw;
 use cupertino_geometry::{CornerStyle, Rect, RoundedRect};
+use cupertino_raster_math::blur::{plan_blur, BlurPlan};
 use cupertino_theme::recipe::Recipe;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;

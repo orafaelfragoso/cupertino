@@ -18,8 +18,14 @@ fn the_renderers_programs_made_ahead_are_all_loaded_and_none_compiled() {
     let base = std::env::temp_dir().join(format!("cupertino-ui-gpu-ahead-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let platform = common::render_node().map_or(Platform::Surfaceless, Platform::RenderNode);
-    let made = program_cache::make_ahead(platform, &base, shaders::TOOLKIT, Duration::ZERO)
-        .expect("the programs made ahead");
+    let made = program_cache::make_ahead(
+        platform,
+        &base,
+        shaders::TOOLKIT,
+        Duration::ZERO,
+        &Default::default(),
+    )
+    .expect("the programs made ahead");
     if made.is_none() {
         assert!(
             !common::gpu_required(),

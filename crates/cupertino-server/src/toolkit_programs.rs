@@ -10,6 +10,8 @@
 //! turns it off.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -21,9 +23,40 @@ const TURN_PATIENCE: Duration = Duration::from_secs(10);
 /// What the thread did: the cache's counts, `None` when the driver keeps no program binaries.
 pub type Made = Result<Option<ProgramCacheStats>, String>;
 
+/// The thread making the toolkit's programs. Dropping it stops the thread after the program it is making and joins
+/// it: the driver tears its state down as the process exits, so a thread still inside it then (a server that ends or
+/// panics while the programs are made) would crash the process.
+pub struct ToolkitPrograms {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<Made>>,
+}
+
+impl ToolkitPrograms {
+    /// Waits for the thread to make every program and returns what it did.
+    pub fn join(mut self) -> Option<Made> {
+        self.thread.take().and_then(|t| t.join().ok())
+    }
+
+    /// Whether the thread has ended.
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+impl Drop for ToolkitPrograms {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// Starts making the toolkit's programs for the device on `node` into the cache under `base`; the thread ends when
-/// they are made. `None` when the thread cannot start.
-pub fn start(node: PathBuf, base: PathBuf) -> Option<JoinHandle<Made>> {
+/// they are made, or after the program it is making once the handle is dropped. `None` when the thread cannot start.
+pub fn start(node: PathBuf, base: PathBuf) -> Option<ToolkitPrograms> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::clone(&stop);
     std::thread::Builder::new()
         .name("toolkit-programs".into())
         .spawn(move || {
@@ -33,6 +66,7 @@ pub fn start(node: PathBuf, base: PathBuf) -> Option<JoinHandle<Made>> {
                 &base,
                 shaders::TOOLKIT,
                 TURN_PATIENCE,
+                &stopped,
             )
             .map_err(|e| e.to_string());
             let ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -59,4 +93,8 @@ pub fn start(node: PathBuf, base: PathBuf) -> Option<JoinHandle<Made>> {
         })
         .map_err(|e| tracing::warn!(error = %e, "no thread for the toolkit's GPU programs"))
         .ok()
+        .map(|thread| ToolkitPrograms {
+            stop,
+            thread: Some(thread),
+        })
 }

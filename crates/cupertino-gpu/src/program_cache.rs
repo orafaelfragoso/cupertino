@@ -120,23 +120,47 @@ pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Option<Turn> {
 /// takes is there, else compiled and saved (a refused binary is replaced). The directory and the file names are the
 /// ones that process looks up, keyed by the driver's strings and the programs' sources, so a binary of another
 /// driver is never loaded. The device is gone when it returns. It takes the compiles' time and the driver's compiler:
-/// run it on a thread of its own, off any frame path. `None` when the driver keeps no program binaries.
+/// run it on a thread of its own, off any frame path. `None` when the driver keeps no program binaries. Once `stop` is
+/// set it makes no further program and returns: a process must not exit while a thread of it is inside the driver, so
+/// one that ends sets it and joins the thread, which then waits at most for the program being made.
 pub fn make_ahead(
     platform: crate::Platform,
     base: &Path,
     programs: &[crate::shaders::ShaderSource],
     patience: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
 ) -> Result<Option<ProgramCacheStats>, crate::Error> {
+    use std::sync::atomic::Ordering;
     let mut device = crate::Device::new(&crate::DeviceDesc { platform })?;
     device.set_program_cache(Some(base));
     let Some(dir) = device.program_cache_dir().map(Path::to_path_buf) else {
         return Ok(None);
     };
-    let turn = take_turn(&dir, patience);
-    device.prepare_programs(programs)?;
+    // the turn is waited on in short steps so a stop is seen while another process holds it
+    let deadline = std::time::Instant::now() + patience;
+    let turn = loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(Some(device.program_cache_stats()));
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match take_turn(&dir, left.min(STOP_POLL)) {
+            Some(turn) => break Some(turn),
+            None if left > STOP_POLL => continue,
+            None => break None,
+        }
+    };
+    for program in programs {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        device.prepare_programs(std::slice::from_ref(program))?;
+    }
     drop(turn);
     Ok(Some(device.program_cache_stats()))
 }
+
+/// How often [`make_ahead`] looks at its stop while it waits for the turn.
+const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl ProgramCache {
     pub(crate) fn new(base: &Path, driver: &str) -> ProgramCache {

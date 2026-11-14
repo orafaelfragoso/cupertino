@@ -528,8 +528,8 @@ pub struct Cupertino {
     /// taken then; `None` makes none. The server's start sets it to the user's cache unless the configuration turns
     /// it off; tests name a directory of their own.
     pub program_cache_base: Option<std::path::PathBuf>,
-    /// The thread making them, until it is joined.
-    pub toolkit_programs: Option<std::thread::JoinHandle<crate::toolkit_programs::Made>>,
+    /// The thread making them; dropped with the state, which stops and joins it before the process exits.
+    pub toolkit_programs: Option<crate::toolkit_programs::ToolkitPrograms>,
     /// Test hook: every dmabuf a client offers is refused, as a renderer that cannot import it would.
     pub refuse_dmabuf_imports: bool,
     /// The waits of the clients that have had a commit held back, until they disconnect ([`crate::acquire_waits::sweep`]).

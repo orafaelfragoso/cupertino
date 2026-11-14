@@ -111,7 +111,13 @@ fn programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled() {
         return;
     }
     let n = shaders::TOOLKIT.len() as u32;
-    let ahead = program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO);
+    let ahead = program_cache::make_ahead(
+        platform(),
+        &dir,
+        shaders::TOOLKIT,
+        Duration::ZERO,
+        &Default::default(),
+    );
     let Some(made) = ahead.unwrap() else {
         common::has(false, "program binary format");
         return;
@@ -122,9 +128,15 @@ fn programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled() {
         "{made:?}"
     );
     // made again (the next session's start): every one loaded and checked, none compiled
-    let again = program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO)
-        .unwrap()
-        .unwrap();
+    let again = program_cache::make_ahead(
+        platform(),
+        &dir,
+        shaders::TOOLKIT,
+        Duration::ZERO,
+        &Default::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         (again.loaded, again.compiled, again.refused),
         (n, 0, 0),
@@ -139,6 +151,60 @@ fn programs_made_ahead_are_loaded_by_a_later_device_and_none_is_compiled() {
     }
     let stats = device.program_cache_stats();
     assert_eq!((stats.loaded, stats.compiled), (n, 0), "{stats:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Programs made ahead with the stop set make none and end at once, and with the stop set while another process holds
+/// the driver's turn they end without waiting it out: a process that ends sets it and joins the thread, which must
+/// not still be inside the driver when the process exits.
+#[test]
+fn programs_made_ahead_stop_before_the_next_program_and_while_waiting_for_the_turn() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = scratch("stop");
+    let Some(mut device) = common::device() else {
+        return;
+    };
+    device.set_program_cache(Some(&dir));
+    let Some(ours) = device.program_cache_dir().map(Path::to_path_buf) else {
+        common::has(false, "program binary format");
+        return;
+    };
+    drop(device);
+    let stopped = AtomicBool::new(true);
+    let made = program_cache::make_ahead(
+        platform(),
+        &dir,
+        shaders::TOOLKIT,
+        Duration::from_secs(10),
+        &stopped,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!((made.compiled, made.loaded), (0, 0), "{made:?}");
+
+    let held = program_cache::take_turn(&ours, Duration::ZERO).expect("a free turn");
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let (thread_stop, thread_dir) = (std::sync::Arc::clone(&stop), dir.clone());
+    let started = std::time::Instant::now();
+    let thread = std::thread::spawn(move || {
+        program_cache::make_ahead(
+            platform(),
+            &thread_dir,
+            shaders::TOOLKIT,
+            Duration::from_secs(10),
+            &thread_stop,
+        )
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    stop.store(true, Ordering::Relaxed);
+    let made = thread.join().unwrap().unwrap().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert_eq!(made.compiled, 0, "{made:?}");
+    drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -159,9 +225,15 @@ fn making_programs_ahead_replaces_a_stale_binary_and_never_loads_another_drivers
     drop(device);
     let n = shaders::TOOLKIT.len() as u32;
     let made = |what| {
-        program_cache::make_ahead(platform(), &dir, shaders::TOOLKIT, Duration::ZERO)
-            .unwrap()
-            .unwrap_or_else(|| panic!("{what}: the driver keeps binaries"))
+        program_cache::make_ahead(
+            platform(),
+            &dir,
+            shaders::TOOLKIT,
+            Duration::ZERO,
+            &Default::default(),
+        )
+        .unwrap()
+        .unwrap_or_else(|| panic!("{what}: the driver keeps binaries"))
     };
     made("first");
     // another driver version's directory holds the same programs; ours is gone

@@ -1151,6 +1151,7 @@ impl MaterialGl {
             );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             self.stats.composites += 1;
+            self.stats.glass_composites += 1;
         }
         for unit in 2..textures.len() {
             gl.ActiveTexture(ffi::TEXTURE0 + unit as u32);

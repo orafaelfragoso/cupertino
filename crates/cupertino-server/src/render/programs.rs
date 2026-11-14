@@ -50,48 +50,62 @@ impl Programs {
     pub fn compile_with(renderer: &mut GlesRenderer, dither: bool) -> Result<Self, GlesError> {
         let f = |name: &'static str| UniformName::new(name, UniformType::_2f);
         let v4 = |name: &'static str| UniformName::new(name, UniformType::_4f);
+        // a refused program is logged once, by name: the passes' error carries the driver's log, the renderer logs its
+        // own log of a texture program just before
+        let named = |program: &'static str| {
+            move |e: GlesError| {
+                tracing::error!(program, error = %e, "a compositor program failed to compile or link");
+                e
+            }
+        };
         let passes = Passes::new(renderer, dither).map_err(|e| {
-            tracing::warn!(error = %e, "the rectangle passes are unavailable");
+            tracing::error!(program = "shadow, rrect, wallpaper", error = %e, "a compositor program failed to compile or link");
             GlesError::ProgramLinkError
         })?;
         let clip_src = format!("#version 100\n{}", CLIP.replace("//_SDF_", SDF));
-        let clip = renderer.compile_custom_texture_shader(
-            clip_src,
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-            ],
-        )?;
+        let clip = renderer
+            .compile_custom_texture_shader(
+                clip_src,
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                ],
+            )
+            .map_err(named("clip"))?;
         let minify_src = format!(
             "#version 100\n#define MINIFY\n{}",
             CLIP.replace("//_SDF_", SDF)
         );
-        let clip_minify = renderer.compile_custom_texture_shader(
-            minify_src,
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-                f("footprint"),
-                f("texels"),
-            ],
-        )?;
-        let vibrant = renderer.compile_custom_texture_shader(
-            format!(
-                "#version 100\n#define VIBRANT\n{}",
-                CLIP.replace("//_SDF_", SDF)
-            ),
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-                v4("vibrant"),
-            ],
-        )?;
+        let clip_minify = renderer
+            .compile_custom_texture_shader(
+                minify_src,
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                    f("footprint"),
+                    f("texels"),
+                ],
+            )
+            .map_err(named("clip, minifying"))?;
+        let vibrant = renderer
+            .compile_custom_texture_shader(
+                format!(
+                    "#version 100\n#define VIBRANT\n{}",
+                    CLIP.replace("//_SDF_", SDF)
+                ),
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                    v4("vibrant"),
+                ],
+            )
+            .map_err(named("clip, vibrant"))?;
         Ok(Self {
             passes,
             clip,

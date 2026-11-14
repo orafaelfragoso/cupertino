@@ -513,10 +513,11 @@ fn over_a_raised_layer_the_page_shows_under_the_row_through_a_soft_edge() {
         "thinner near the bottom: {low}, near {thinned}"
     );
     assert_eq!(level(&h, 300, 60), 0, "plain below the band");
+    // the gradient is dithered by position: a pixel may sit a step either side of its value
     let mut last = top;
     for y in 2..52 {
         let l = level(&h, 300, y);
-        assert!(l <= last.saturating_add(1), "at {y}: {l} after {last}");
+        assert!(l <= last.saturating_add(2), "at {y}: {l} after {last}");
         last = l.min(last);
     }
 

@@ -2352,6 +2352,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 &w.geometry,
                 w.focus.node(),
                 w.env.direction,
+                w.env.scale,
                 &w.obscuring,
             );
             w.focusable = semantics.focusable;
@@ -2390,6 +2391,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     &w.geometry,
                     w.focus.node(),
                     w.env.direction,
+                    w.env.scale,
                     &w.obscuring,
                 );
                 (pass.nodes, pass.focus)
@@ -2420,6 +2422,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 root,
                 &w.geometry,
                 w.env.direction,
+                w.env.scale,
                 &mut w.scroll_heard,
             );
             if let Some((target, part)) = w.reveal.take() {
@@ -2428,6 +2431,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     &w.geometry,
                     &w.obscuring,
                     w.env.direction,
+                    w.env.scale,
                     target,
                     part,
                 ));

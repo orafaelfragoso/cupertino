@@ -1183,6 +1183,7 @@ dependencies = [
  "cupertino-assets",
  "cupertino-geometry",
  "cupertino-glyph",
+ "cupertino-raster-math",
  "cupertino-theme",
  "swash",
  "tempfile",
@@ -2189,6 +2190,7 @@ name = "cupertino-ui-render"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-raster-math",
  "cupertino-theme",
  "cupertino-ui-text",
  "image",

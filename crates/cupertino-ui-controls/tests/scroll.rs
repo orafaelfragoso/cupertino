@@ -539,11 +539,9 @@ fn a_finger_pulling_past_the_start_stretches_the_content_and_the_stretch_returns
         0.0,
         "the offset stays at the edge"
     );
-    // eight pulls of 30 past a viewport of 100 show as 100 × (1 − 1 / (1 + 0.07 × 240 / 100)) ≈ 14.4
-    assert!(
-        (stretch - 14.4).abs() < 0.2,
-        "drawn {stretch} past the edge"
-    );
+    // eight pulls of 30 past a viewport of 100 show as 100 × (1 − 1 / (1 + 0.07 × 240 / 100)) ≈ 14.4, drawn in whole
+    // device pixels
+    assert!(stretch == 14.0, "drawn {stretch} past the edge");
     assert!(
         !h.snapshot().pending.animating,
         "a held stretch does not move on its own"
@@ -834,10 +832,11 @@ fn a_finger_on_an_inner_view_at_its_end_stretches_it_and_leaves_the_outer_view()
     }
     assert_eq!(h.model().outer.offset.y, 0.0, "the outer view stays");
     assert_eq!(h.model().inner.offset.y, 240.0 - 60.0);
-    // four pushes of 30 past a viewport of 60 show as 60 × (1 − 1 / (1 + 0.07 × 120 / 60)) ≈ 7.4
+    // four pushes of 30 past a viewport of 60 show as 60 × (1 − 1 / (1 + 0.07 × 120 / 60)) ≈ 7.4, drawn in whole
+    // device pixels
     let stretch = drawn(&h) - end;
     assert!(
-        (stretch - 7.4).abs() < 0.2,
+        stretch == 7.0,
         "the inner content is drawn {stretch} past its end"
     );
     finger(&mut h, inside, 450, 0.0, true);

@@ -9,13 +9,11 @@
 //! inactive window (a translucent grey disc without a ring, colour returns while the group is hovered), disabled (the
 //! same disc, no glyph).
 
+use crate::coverage::{self, Outline, Shade};
 use crate::metrics::{ButtonKind, DecorationMetrics};
 use crate::palette::{Palette, Rgba};
 use cupertino_geometry::Point;
-use tiny_skia::{
-    Color, FillRule, GradientStop, LineCap, LinearGradient, Paint, PathBuilder, Pixmap,
-    Point as SkPoint, SpreadMode, Stroke, Transform,
-};
+use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 /// What the pointer and the window do to the buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,21 +152,17 @@ pub fn draw_button(
     let v = state.visual();
     let (cx, cy) = ((center.x * scale) as f32, (center.y * scale) as f32);
     let r = (metrics.button_diameter * 0.5 * scale) as f32;
-    let mut pb = PathBuilder::new();
-    pb.push_circle(cx, cy, r);
-    let Some(disc) = pb.finish() else { return };
+    let disc = Outline::circle([cx, cy], r);
     let mut paint = Paint {
         anti_alias: true,
         ..Paint::default()
     };
     if !v.colored {
         // one translucent disc over what the window draws beneath: a ring under it would show through doubled
-        paint.set_color(color(button_fill(palette, kind, v)));
-        pm.fill_path(
+        coverage::fill(
+            pm,
             &disc,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
+            &Shade::Solid(button_fill(palette, kind, v)),
             None,
         );
         return;
@@ -176,33 +170,17 @@ pub fn draw_button(
     // the face, a little deeper at the top
     {
         let face = button_face(palette, kind, v);
-        match LinearGradient::new(
-            SkPoint::from_xy(cx, cy - r),
-            SkPoint::from_xy(cx, cy + r),
-            FACE_STOPS
-                .iter()
-                .zip(face)
-                .map(|(&at, c)| GradientStop::new(at, color(c)))
-                .collect(),
-            SpreadMode::Pad,
-            Transform::identity(),
-        ) {
-            Some(shader) => paint.shader = shader,
-            None => paint.set_color(color(face[1])),
-        }
-        pm.fill_path(
-            &disc,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+        let stops: Vec<(f32, [f32; 4])> = FACE_STOPS.iter().copied().zip(face).collect();
+        let shade =
+            Shade::linear([cx, cy - r], [cx, cy + r], &stops).unwrap_or(Shade::Solid(face[1]));
+        coverage::fill(pm, &disc, &shade, None);
     }
-    // two rings at the edge, strongest at the two sides (or at the top and the bottom) and gone half way round
+    // two rings just inside the edge, strongest at the two sides (or at the top and the bottom) and gone half way
+    // round
     let width = (EDGE_RING_WIDTH * scale).max(0.5) as f32;
     let rings = [
-        (r - width / 2.0, palette.edge_of(kind), 1.0),
-        (r - width * 1.5, palette.rim_of(kind), INNER_RING_SHARE),
+        (r, palette.edge_of(kind), 1.0),
+        (r - width, palette.rim_of(kind), INNER_RING_SHARE),
     ];
     for (radius, base, share) in rings {
         let mut stops = Vec::new();
@@ -212,46 +190,25 @@ pub fn draw_button(
         for &(at, opacity) in EDGE_FADE.iter().rev() {
             stops.push((0.5 + at / 2.0, opacity));
         }
-        let stops: Vec<GradientStop> = stops
+        let stops: Vec<(f32, [f32; 4])> = stops
             .into_iter()
             .map(|(position, opacity)| {
                 let mut c = base;
                 c[3] *= opacity * share;
-                GradientStop::new(position.clamp(0.0, 1.0), color(c))
+                (position.clamp(0.0, 1.0), c)
             })
             .collect();
-        let mut pb = PathBuilder::new();
-        pb.push_circle(cx, cy, radius.max(0.0));
-        let (Some(ring), Some(shader)) = (
-            pb.finish(),
-            LinearGradient::new(
-                if palette.edge_at_poles {
-                    SkPoint::from_xy(cx, cy - r)
-                } else {
-                    SkPoint::from_xy(cx - r, cy)
-                },
-                if palette.edge_at_poles {
-                    SkPoint::from_xy(cx, cy + r)
-                } else {
-                    SkPoint::from_xy(cx + r, cy)
-                },
-                stops,
-                SpreadMode::Pad,
-                Transform::identity(),
-            ),
-        ) else {
+        let (start, end) = if palette.edge_at_poles {
+            ([cx, cy - r], [cx, cy + r])
+        } else {
+            ([cx - r, cy], [cx + r, cy])
+        };
+        let Some(shade) = Shade::linear(start, end, &stops) else {
             continue;
         };
-        let ring_paint = Paint {
-            shader,
-            anti_alias: true,
-            ..Paint::default()
-        };
-        let stroke = Stroke {
-            width,
-            ..Stroke::default()
-        };
-        pm.stroke_path(&ring, &ring_paint, &stroke, Transform::identity(), None);
+        if radius > 0.0 {
+            coverage::fill(pm, &Outline::circle([cx, cy], radius), &shade, Some(width));
+        }
     }
     if v.glyph {
         paint.shader = tiny_skia::Shader::SolidColor(color(button_glyph(palette, kind, v)));

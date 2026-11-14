@@ -8,6 +8,7 @@ mod effects;
 mod geometry;
 mod glyph_cache;
 mod image_cache;
+mod raster;
 mod spans;
 mod stats;
 mod validate;
@@ -83,7 +84,8 @@ pub struct GradientStop {
     pub color: Color,
 }
 
-/// Source colour; gradients interpolate straight-alpha stops in encoded sRGB and premultiply the result.
+/// Source colour; gradients interpolate straight-alpha stops in encoded sRGB and premultiply the result, once per pixel
+/// at its centre. A gradient has at most eight stops: one with more is refused and draws nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Color),

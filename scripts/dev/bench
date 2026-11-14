@@ -537,6 +537,10 @@ def clients(path: pathlib.Path, start_ns: int, span: tuple[float, float], refres
             vals = [f[phase] / 1e6 for f in frames]
             entry[f"{phase}_p50_ms"] = pct(vals, 50)
             entry[f"{phase}_p99_ms"] = pct(vals, 99)
+        # what neither layers nor a GPU speed up: the frame's update, view and layout together
+        logic = [(f["update"] + f["view"] + f["layout"]) / 1e6 for f in frames]
+        entry["logic_p50_ms"] = pct(logic, 50)
+        entry["logic_p99_ms"] = pct(logic, 99)
         out[name] = entry
     return out
 

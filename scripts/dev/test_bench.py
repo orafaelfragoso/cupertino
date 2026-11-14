@@ -155,6 +155,19 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual(c["cupertino-dock"]["frame_max_ms"], 20.0)
         self.assertEqual(c["cupertino-dock"]["update_p50_ms"], 0.001)
 
+    def test_a_clients_update_view_and_layout_are_summed_per_frame(self):
+        path = pathlib.Path(tempfile.mkdtemp()) / "timing.jsonl"
+        start_ns = 1_000_000_000
+        # one frame heavy in view, the other in layout: the worst frame spends 5 ms, though the phases' p99s add to 8
+        frames = [(1_000_000, 4_000_000, 0), (1_000_000, 0, 3_000_000)]
+        path.write_text("".join(json.dumps(
+            {"pid": 1, "program": "cupertino-files", "start": start_ns + 10_000_000_000 + i, "update": u, "view": v,
+             "layout": l, "paint": 0, "raster": 0, "copy": 0, "commit": 0, "total": u + v + l, "frames": 1}) + "\n"
+            for i, (u, v, l) in enumerate(frames)))
+        c = bench.clients(path, start_ns, (9.0, 11.0), 16.666)["cupertino-files"]
+        self.assertEqual(c["logic_p50_ms"], 4.0)
+        self.assertEqual(c["logic_p99_ms"], 5.0)
+
     def test_a_sleeping_thread_shows_its_call_and_timeout(self):
         self.assertEqual(bench.sleep_of("232 0x5 0x7ffd 0x400 0xffffffffffffffff 0x0 0x0 0x7ffd 0x7f"),
                          "epoll_wait forever")

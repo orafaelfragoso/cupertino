@@ -125,7 +125,11 @@ unset PROMPT_COMMAND
 EOF
 touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/dev/null || true
 
-python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'
+# the server's settings sit in a folder of the session's own, as on a machine (/etc/cupertino), so the settings watch's
+# view of the folder above them is the session's scratch folder, not the busy /tmp
+SERVER_CONFIG=$SCRATCH/etc/server.json
+mkdir -p "$SCRATCH/etc"
+python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SERVER_CONFIG" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'
 import json, sys
 config = json.load(open(sys.argv[1]))
 config["shell"] = [dict(p, command=[c.removeprefix("/usr/bin/") if i == 0 else c for i, c in enumerate(p["command"])]) for p in config["shell"] if p["name"] != "login"]
@@ -147,7 +151,7 @@ env -i \
     XDG_CURRENT_DESKTOP=Cupertino \
     XDG_DATA_DIRS="$ROOT/crates/cupertino-files/data:$ROOT/crates/cupertino-settings/data:${SYSTEM_DATA_DIRS:-/usr/local/share:/usr/share}" \
     CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
-    CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
+    CUPERTINO_SERVER_CONFIG="$SERVER_CONFIG" \
     ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
     ${CUPERTINO_ACCESSIBILITY_CONF:+CUPERTINO_ACCESSIBILITY_CONF="$CUPERTINO_ACCESSIBILITY_CONF"} \
     ${CUPERTINO_FRAME_TIMING:+CUPERTINO_FRAME_TIMING="$CUPERTINO_FRAME_TIMING"} \

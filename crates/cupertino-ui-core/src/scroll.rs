@@ -35,6 +35,8 @@ struct Scroller {
     viewport: Rect,
     /// Zero along an axis the container does not scroll.
     offset: Point,
+    /// The offset the content is placed by: [`offset`](Self::offset) in whole device pixels.
+    drawn: Point,
     content: Size,
 }
 
@@ -91,6 +93,7 @@ fn scroller<M: 'static>(
         vertical,
         viewport,
         offset,
+        drawn,
         content,
     })
 }
@@ -169,9 +172,11 @@ pub(crate) fn reveal_events<M: 'static>(
         let mut next = s.offset;
         // how far the content moves on screen
         let mut moved = Point::new(0.0, 0.0);
+        // where the target lies by the offset itself: it is drawn by the offset in whole device pixels
+        let residual = Point::new(s.drawn.x - s.offset.x, s.drawn.y - s.offset.y);
         if s.vertical {
             let d = reveal_delta(
-                rect.origin.y,
+                rect.origin.y + residual.y,
                 rect.size.height,
                 s.viewport.origin.y,
                 s.viewport.size.height,
@@ -180,8 +185,12 @@ pub(crate) fn reveal_events<M: 'static>(
             moved.y = s.offset.y - next.y;
         }
         if s.horizontal {
+            let at = match direction {
+                LayoutDirection::Ltr => rect.origin.x + residual.x,
+                LayoutDirection::Rtl => rect.origin.x - residual.x,
+            };
             let d = reveal_delta(
-                rect.origin.x,
+                at,
                 rect.size.width,
                 s.viewport.origin.x,
                 s.viewport.size.width,

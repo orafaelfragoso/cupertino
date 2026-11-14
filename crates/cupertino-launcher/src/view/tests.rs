@@ -2707,7 +2707,7 @@ fn the_selected_result_over_the_glass_is_a_thin_fill_the_tint_shows_through() {
 fn the_panel_s_near_black_edge_is_drawn_over_glass_alone() {
     assert_eq!(edge_alpha(true, true), EDGE_ALPHA_DARK);
     assert_eq!(edge_alpha(true, false), EDGE_ALPHA_DARK_OPAQUE);
-    assert!(EDGE_ALPHA_DARK_OPAQUE < EDGE_ALPHA_DARK);
+    const { assert!(EDGE_ALPHA_DARK_OPAQUE < EDGE_ALPHA_DARK) };
     assert_eq!(edge_alpha(false, true), edge_alpha(false, false));
     for (appearance, glass, alpha) in [
         (Appearance::Dark, true, EDGE_ALPHA_DARK),

@@ -9,11 +9,16 @@
 //! layer, which the renderer lays over again and paints only where content comes into view, so a node that only moved
 //! with it damages nothing, nor does one of which only more or less shows (its box is cut by the layer's clip). What
 //! changed in a layer damages where it is in the window now, and where it was in the content now shows.
+//!
+//! A kept subtree the painter laid in unwalked ([`Painting::kept_runs`]) is kept as one run of the nodes it held:
+//! when the next frame lays it in again from the same root with the same nodes, they are compared in order with what
+//! the run holds, none looked up apart, and a run of which nothing changed damages nothing. Any other run gives its
+//! nodes back to be looked up one by one, so a frame damages what comparing every node apart damages.
 
 use crate::paint::Painting;
 use cupertino_geometry::Point;
 use cupertino_geometry::Rect;
-use cupertino_ui_layout::IdMap;
+use cupertino_ui_layout::{IdMap, IdSet};
 use cupertino_ui_render::{
     scroll_layers, DamageRegion, DisplayList, Layer, PaintNodeId, PaintRevision, Shape, Transform,
 };
@@ -32,9 +37,10 @@ struct Seen {
     spreads: bool,
     /// Under another parent the node is composited with other groups.
     parent: Option<PaintNodeId>,
-    /// The kept scroll layer the node lies in, and its box in the window.
+    /// The kept scroll layer the node lies in, and how far its offset moved the node into the layer's content: its
+    /// box in the window is `own` moved back by it.
     layer: Option<PaintNodeId>,
-    window: Rect,
+    shift: Point,
     /// A scroll layer's offset: it moving repaints no node's box.
     scroll: Option<Point>,
     /// The node or a node above it has a group, whose box reaches past what the node draws: in a layer, more or less
@@ -79,11 +85,17 @@ impl Seen {
 
 #[derive(Default)]
 pub(crate) struct DamageTracker {
+    /// The last frame's nodes, but for those of its kept subtrees.
     previous: IdMap<PaintNodeId, Seen>,
-    order: Vec<PaintNodeId>,
+    /// The last frame's kept subtrees, by root.
+    runs: IdMap<PaintNodeId, SeenRun>,
+    order: Vec<Unit>,
     full: bool,
     /// The last frame painted, moved or removed a node with a box, whether or not it changed a pixel.
     repainted: bool,
+    /// How many nodes the last frame compared one by one, looking each up; the rest it compared with their kept
+    /// subtree.
+    pub(crate) looked_up: usize,
 }
 
 impl DamageTracker {
@@ -100,17 +112,25 @@ impl DamageTracker {
     }
 
     pub(crate) fn damage(&mut self, painting: &Painting) -> DamageRegion {
-        self.damage_of(&painting.list, &painting.own, &painting.blank)
+        self.damage_of(
+            &painting.list,
+            &painting.own,
+            &painting.blank,
+            &painting.kept_runs,
+        )
     }
 
-    /// [`Self::damage`] of a list with its damage boxes and blank flags, as a window's raised layer has its own.
+    /// [`Self::damage`] of a list with its damage boxes and blank flags, as a window's raised layer has its own, and
+    /// the kept subtrees the painter laid in unwalked (`kept_runs`, by root: how many nodes from it on). A kept
+    /// subtree whose nodes are those the last frame saw from the same root is compared node for node in one pass,
+    /// without looking each up; what it damages is what comparing each node apart damages.
     pub(crate) fn damage_of(
         &mut self,
         list: &DisplayList,
         own: &[Rect],
         blank: &[bool],
+        kept_runs: &IdMap<PaintNodeId, usize>,
     ) -> DamageRegion {
-        let order: Vec<PaintNodeId> = list.nodes.iter().map(|n| n.id).collect();
         let ends = subtree_ends(list);
         let kept_in = scroll_layers(list);
         let offset_of = |l: usize| match list.nodes[l].layer {
@@ -123,28 +143,53 @@ impl DamageTracker {
             .flatten()
             .map(|&l| (list.nodes[l].id, offset_of(l)))
             .collect();
-        let index: IdMap<PaintNodeId, usize> =
-            order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
-        let mut grouped = vec![false; list.nodes.len()];
-        for (i, node) in list.nodes.iter().enumerate() {
-            let above = node
-                .parent
-                .and_then(|p| index.get(&p))
-                .is_some_and(|&p| p < i && grouped[p]);
-            grouped[i] = node.group.is_some() || above;
+        let grouped = grouped(list);
+        // a kept subtree of the last frame laid in again from the same root with the same nodes is compared in one go;
+        // every other one is looked at node by node, as the nodes it held are
+        let mut stored = std::mem::take(&mut self.runs);
+        let mut exploded: IdMap<PaintNodeId, Vec<PaintNodeId>> = IdMap::default();
+        let candidate_roots: IdSet<PaintNodeId> = list
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| kept_runs.get(&n.id).map(|&len| (n.id, i, len)))
+            .filter(|&(id, i, len)| {
+                stored.get(&id).is_some_and(|run| {
+                    list.nodes
+                        .get(i..i + len)
+                        .is_some_and(|nodes| nodes.iter().map(|n| n.id).eq(run.ids()))
+                })
+            })
+            .map(|(id, _, _)| id)
+            .collect();
+        let others: Vec<PaintNodeId> = stored
+            .keys()
+            .filter(|id| !candidate_roots.contains(id))
+            .copied()
+            .collect();
+        for root in others {
+            let run = stored.remove(&root).expect("listed above");
+            exploded.insert(root, self.explode(run));
         }
         // where a box seen in an earlier frame shows in this one
         let now = |seen: &Seen| match seen.layer.and_then(|l| offsets.get(&l)) {
             Some(o) => seen.own.translate(-o.x, -o.y),
-            None => seen.window,
+            None => seen.own.translate(-seen.shift.x, -seen.shift.y),
         };
-        let mut current = IdMap::with_capacity_and_hasher(order.len(), Default::default());
+        let mut current = IdMap::with_capacity_and_hasher(self.previous.len(), Default::default());
+        let mut runs: IdMap<PaintNodeId, SeenRun> = IdMap::default();
+        let mut reused: IdSet<PaintNodeId> = IdSet::default();
+        // the units of this frame's order for the comparison with the last one's, and the runs to keep for the next
+        let mut units: Vec<Unit> = Vec::with_capacity(list.nodes.len());
+        // the kept subtrees looked at node by node, by root: where they start and how many nodes they hold
+        let mut fresh_runs: IdMap<PaintNodeId, (usize, usize)> = IdMap::default();
         let mut rects = Vec::new();
         let mut repainted = false;
+        let mut looked_up = 0;
         let blank_at = |i: usize| blank.get(i).copied().unwrap_or(false);
         let boxes = own;
-        for (i, (node, &own)) in list.nodes.iter().zip(own).enumerate() {
-            let blank = blank_at(i);
+        let seen_at = |i: usize| -> Seen {
+            let node = &list.nodes[i];
             let shift = kept_in[i].map_or(Point::ZERO, offset_of);
             let mut transform = node.transform;
             transform.0[4] += shift.x;
@@ -153,19 +198,42 @@ impl DamageTracker {
                 (Some(Layer::Scroll { offset }), true) => Some(offset),
                 _ => None,
             };
-            let seen = Seen {
+            Seen {
                 revision: node.revision,
                 transform,
                 clip: node.clip.clone(),
-                own: own.translate(shift.x, shift.y),
-                blank,
+                own: own[i].translate(shift.x, shift.y),
+                blank: blank_at(i),
                 spreads: node.group.as_ref().is_some_and(|g| g.effects.is_empty()),
                 parent: node.parent,
                 layer: kept_in[i].map(|l| list.nodes[l].id),
-                window: own,
+                shift,
                 scroll,
                 grouped: grouped[i],
-            };
+            }
+        };
+        let mut i = 0;
+        while i < list.nodes.len().min(own.len()) {
+            let node = &list.nodes[i];
+            if let Some(len) = kept_runs.get(&node.id).copied() {
+                if candidate_roots.contains(&node.id) {
+                    let mut run = stored.remove(&node.id).expect("a candidate is stored");
+                    if run.matches(i, &seen_at) {
+                        // nothing in it changed: it damages nothing, and the frame need not commit for it
+                        reused.insert(node.id);
+                        units.push(Unit::Run(node.id));
+                        runs.insert(node.id, run);
+                        i += len;
+                        continue;
+                    }
+                    let ids = self.explode(std::mem::take(&mut run));
+                    exploded.insert(node.id, ids);
+                }
+                fresh_runs.insert(node.id, (i, len));
+            }
+            let seen = seen_at(i);
+            let own = own[i];
+            let blank = seen.blank;
             match self.previous.get(&node.id) {
                 Some(old) if old.same(&seen) => {
                     // a scroll layer that moved: the renderer lays it over again, and the frame commits
@@ -202,7 +270,10 @@ impl DamageTracker {
                     }
                 }
             }
+            units.push(Unit::Node(node.id));
             current.insert(node.id, seen);
+            i += 1;
+            looked_up += 1;
         }
         for (id, old) in &self.previous {
             if !current.contains_key(id) {
@@ -212,21 +283,141 @@ impl DamageTracker {
                 }
             }
         }
+        // the order of the nodes both frames hold, a kept subtree laid in again standing for its nodes in both
         let reordered = {
-            let kept_before = self.order.iter().filter(|id| current.contains_key(id));
-            let kept_now = order.iter().filter(|id| self.previous.contains_key(id));
-            !kept_before.eq(kept_now)
+            let mut kept_before = Vec::with_capacity(self.order.len());
+            for unit in &self.order {
+                match unit {
+                    Unit::Run(root) if reused.contains(root) => kept_before.push(*unit),
+                    Unit::Run(root) => kept_before.extend(
+                        exploded
+                            .get(root)
+                            .into_iter()
+                            .flatten()
+                            .filter(|id| current.contains_key(id))
+                            .map(|&id| Unit::Node(id)),
+                    ),
+                    Unit::Node(id) if current.contains_key(id) => kept_before.push(*unit),
+                    Unit::Node(_) => {}
+                }
+            }
+            let kept_now = units.iter().filter(|unit| match unit {
+                Unit::Run(_) => true,
+                Unit::Node(id) => self.previous.contains_key(id),
+            });
+            !kept_before.iter().eq(kept_now)
         };
+        // the kept subtrees looked at node by node this frame are compared in one go the next
+        let mut next_order = Vec::with_capacity(units.len());
+        let mut skip = 0;
+        for unit in units {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            match unit {
+                Unit::Node(root) if fresh_runs.contains_key(&root) => {
+                    let (start, len) = fresh_runs[&root];
+                    let mut run = SeenRun::default();
+                    for node in &list.nodes[start..start + len] {
+                        let seen = current.remove(&node.id).expect("looked at above");
+                        run.nodes.push((node.id, seen));
+                    }
+                    runs.insert(root, run);
+                    next_order.push(Unit::Run(root));
+                    skip = len - 1;
+                }
+                unit => next_order.push(unit),
+            }
+        }
         let full = std::mem::take(&mut self.full) || reordered;
         self.repainted = repainted || full;
+        self.looked_up = looked_up;
         self.previous = current;
-        self.order = order;
+        self.runs = runs;
+        self.order = next_order;
         if full {
             return DamageRegion::Full;
         }
         rects.retain(|r| !r.is_empty());
         DamageRegion::Rects(rects)
     }
+
+    /// Puts the nodes of a kept subtree of the last frame among the nodes looked up one by one, and gives their ids.
+    fn explode(&mut self, run: SeenRun) -> Vec<PaintNodeId> {
+        let mut ids = Vec::with_capacity(run.nodes.len());
+        for (id, seen) in run.nodes {
+            ids.push(id);
+            self.previous.insert(id, seen);
+        }
+        ids
+    }
+}
+
+/// One step of a frame's paint order: a node, or a kept subtree laid in again from its root.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    Node(PaintNodeId),
+    Run(PaintNodeId),
+}
+
+/// The nodes of a kept subtree as the last frame saw them, in the list's order from its root.
+#[derive(Default)]
+struct SeenRun {
+    nodes: Vec<(PaintNodeId, Seen)>,
+}
+
+impl SeenRun {
+    fn ids(&self) -> impl Iterator<Item = PaintNodeId> + '_ {
+        self.nodes.iter().map(|(id, _)| *id)
+    }
+
+    /// Whether every node of the run from list index `at` on is the same as the last frame saw it, so it damages
+    /// nothing and changes no commit; the positions are taken as they are now, as comparing each node apart would.
+    fn matches(&mut self, at: usize, seen_at: &impl Fn(usize) -> Seen) -> bool {
+        for (k, (_, old)) in self.nodes.iter_mut().enumerate() {
+            let seen = seen_at(at + k);
+            if !old.same(&seen) || old.scroll != seen.scroll {
+                return false;
+            }
+            *old = seen;
+        }
+        true
+    }
+}
+
+/// For each node of a list, whether it or a node above it has a group.
+fn grouped(list: &DisplayList) -> Vec<bool> {
+    let mut grouped = vec![false; list.nodes.len()];
+    // the path to the node before, by index; a node whose parent is not on it looks its parent up
+    let mut open: Vec<usize> = Vec::new();
+    let mut index: Option<IdMap<PaintNodeId, usize>> = None;
+    for (i, node) in list.nodes.iter().enumerate() {
+        while open
+            .last()
+            .is_some_and(|&top| Some(list.nodes[top].id) != node.parent)
+        {
+            open.pop();
+        }
+        let parent = match (open.last(), node.parent) {
+            (Some(&top), _) => Some(top),
+            (None, None) => None,
+            (None, Some(p)) => index
+                .get_or_insert_with(|| {
+                    list.nodes
+                        .iter()
+                        .enumerate()
+                        .map(|(j, n)| (n.id, j))
+                        .collect()
+                })
+                .get(&p)
+                .copied()
+                .filter(|&j| j < i),
+        };
+        grouped[i] = node.group.is_some() || parent.is_some_and(|p| grouped[p]);
+        open.push(i);
+    }
+    grouped
 }
 
 /// For each node of a list in preorder, the index past the last node of its subtree.
@@ -278,6 +469,7 @@ mod tests {
             materials: Vec::new(),
             layer: None,
             pins: false,
+            kept_runs: Default::default(),
         }
     }
 

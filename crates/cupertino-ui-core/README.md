@@ -105,7 +105,10 @@ all on one thread.
   the changed nodes that draw were and are, a clip cutting it one point past its edge, whose anti-aliased pixels
   the content behind still reaches; a node with a group damages its whole subtree, and any node under a group with
   effects that group's whole reach. A node that draws nothing, before and after (no operation and no group,
-  whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A frame that
+  whose opacity reaches its children), damages nothing, so a container's repaint costs no pixels. A scroll container
+  that clips marks its content as a scroll layer with its drawn offset, its scroll bars beside it; a node in a layer
+  the renderer keeps is compared in the layer's content, so a scroll damages nothing it only moved, and what changed
+  in it damages where it shows now. A window told it is suspended drops its renderers' kept layers. A frame that
   repainted nothing sends no buffer; one that repainted a node but no pixel commits with no damage, as an
   animation's next frame and the state an application sets on its surface outside the frame wait for a commit. The
   CPU renderer's partial redraw can sample an anti-aliased curved or fractional edge cut by a damaged rectangle's

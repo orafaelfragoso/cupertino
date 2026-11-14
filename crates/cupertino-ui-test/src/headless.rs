@@ -1480,4 +1480,60 @@ mod tests {
         assert!(system.wait_for_wake(Duration::from_secs(10)));
         thread.join().unwrap();
     }
+
+    #[test]
+    fn surface_layers_are_kept_as_presented_only_with_their_capability() {
+        use cupertino_ui_platform::{SurfaceLayer, SurfaceLayerLook};
+        fn layer(f: Option<&CpuFrame>) -> SurfaceLayer<'_> {
+            SurfaceLayer {
+                key: 7,
+                rect: cupertino_geometry::Rect::new(10.0, 20.0, 2.0, 0.5),
+                look: SurfaceLayerLook {
+                    radius: 4.0,
+                    masks: true,
+                    ..SurfaceLayerLook::default()
+                },
+                frame: f,
+            }
+        }
+        let drawn = frame(1);
+        let mut without = HeadlessWindowSystem::default();
+        let window = without.create_window(&spec()).unwrap();
+        assert_eq!(
+            without.present_surface_layers(window, &[layer(Some(&drawn))]),
+            Err(PlatformError::Unsupported)
+        );
+        assert_eq!(
+            without.present_surface_layers(window, &[]),
+            Ok(PresentOutcome::Presented),
+            "an empty list is all a window system without them takes"
+        );
+
+        let mut ws = HeadlessWindowSystem::new(Capabilities {
+            surface_layers: true,
+            ..Capabilities::default()
+        });
+        let window = ws.create_window(&spec()).unwrap();
+        ws.set_accepting_frames(false);
+        assert_eq!(
+            ws.present_surface_layers(window, &[layer(Some(&drawn))]),
+            Ok(PresentOutcome::NotReady)
+        );
+        ws.set_accepting_frames(true);
+        ws.present_surface_layers(window, &[layer(Some(&drawn))])
+            .unwrap();
+        ws.present_surface_layers(window, &[layer(None)]).unwrap();
+        let shown = ws.surface_layers(window).unwrap();
+        assert_eq!(shown.len(), 2, "the list not ready is not kept");
+        let first = &shown[0][0];
+        assert_eq!((first.key, first.look.radius), (7, 4.0));
+        let pixels = first.frame.as_ref().expect("its frame");
+        assert_eq!(
+            (pixels.width, pixels.pixel_height, pixels.height),
+            (2, 1, 1),
+            "its frame as drawn, its height in whole points"
+        );
+        assert_eq!(pixels.pixels, drawn.pixels);
+        assert_eq!(shown[1][0].frame, None, "unchanged");
+    }
 }

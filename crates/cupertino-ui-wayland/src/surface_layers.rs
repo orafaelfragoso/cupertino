@@ -268,3 +268,52 @@ fn send(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_for_a_layer_not_made_yet_wait_for_it_and_go_with_its_window() {
+        let mut layers = SurfaceLayers::default();
+        let (window, other) = (WindowId(1), WindowId(2));
+        let fade = LayerChange::new(LayerProperty::Opacity, 0.0, None);
+        let blur = LayerChange::through(LayerProperty::ContentBlur, 0.1, [0.0, 4.0].into());
+        assert_eq!(layers.change(window, 3, vec![fade.clone()]), Ok(false));
+        assert_eq!(layers.change(window, 3, vec![blur.clone()]), Ok(false));
+        assert_eq!(layers.change(other, 3, vec![fade.clone()]), Ok(false));
+        assert_eq!(
+            layers.pending.get(&(window, 3)),
+            Some(&vec![fade, blur]),
+            "in the order asked for"
+        );
+        assert!(
+            layers.settled(window),
+            "a window with no layers runs nothing"
+        );
+        assert!(layers.forget(window).is_empty());
+        assert!(!layers.pending.contains_key(&(window, 3)));
+        assert!(
+            layers.pending.contains_key(&(other, 3)),
+            "another window's stay"
+        );
+    }
+
+    #[test]
+    fn every_property_has_its_own_wire_property_and_content_blur_needs_version_4() {
+        let all = [
+            LayerProperty::X,
+            LayerProperty::Y,
+            LayerProperty::Width,
+            LayerProperty::Height,
+            LayerProperty::Opacity,
+            LayerProperty::Scale,
+            LayerProperty::CornerRadius,
+            LayerProperty::ContentBlur,
+        ];
+        let wired: HashSet<Wire> = all.into_iter().map(wire).collect();
+        assert_eq!(wired.len(), all.len());
+        assert_eq!(wire(LayerProperty::ContentBlur).since(), 4);
+        assert!(all[..7].iter().all(|&p| wire(p).since() < 4));
+    }
+}

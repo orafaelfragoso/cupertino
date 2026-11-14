@@ -97,6 +97,25 @@ pub struct SurfaceLayerLook {
     pub masks: bool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_change_through_samples_rests_at_its_last_over_a_timed_curve_of_its_duration() {
+        let change = LayerChange::through(LayerProperty::Scale, 0.25, [1.1, 0.98, 1.0].into());
+        assert_eq!(change.to, 1.0, "where it rests");
+        assert_eq!(change.velocity, 0.0);
+        assert!(matches!(
+            change.curve,
+            Some(cupertino_animation::LayerCurve::Timed { duration, .. }) if duration == 0.25
+        ));
+        assert_eq!(change.samples.as_deref(), Some(&[1.1_f32, 0.98, 1.0][..]));
+        let set = LayerChange::new(LayerProperty::Opacity, 0.5, None);
+        assert_eq!((set.to, set.curve, set.samples), (0.5, None, None));
+    }
+}
+
 /// A marked subtree's frame as the window system shows it ([`WindowSystem::present_surface_layers`]).
 ///
 /// [`WindowSystem::present_surface_layers`]: crate::WindowSystem::present_surface_layers

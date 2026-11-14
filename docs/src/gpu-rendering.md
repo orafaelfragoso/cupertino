@@ -119,7 +119,11 @@ A surface whose dmabuf import or allocation fails falls back to `wl_shm` for tha
 
 Our own programs are written once in WGSL. A build step (`cupertino-gpu-shaders`, a development binary) concatenates
 the shared module (the definitions of section 1, `crates/cupertino-gpu/shaders/shared.wgsl`) into each shader and
-`naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. The generated output is committed, so no
+`naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. It generates two sets: `cupertino-gpu`'s
+programs, and those of `cupertino-glass` that the compositor draws (`crates/cupertino-glass/shaders/`, where a line
+`// include NAME.wgsl` puts a file of `shaders/include/` in place, so the backdrop passes share their block and
+vertex stage); for the second set it also writes the assembled WGSL without the functions the program never reaches,
+for the glass crate's own headless renderer. The generated output is committed, so no
 product binary builds `naga`; a test regenerates it and fails on a difference. The generator runs with
 coordinate-space adjustment off, declares every block `std140` (GLSL ES 3.00 would leave the layout to the driver),
 writes the GLSL name of each block and sampler by WGSL group and binding beside the code, since GLSL ES 3.00 has no
@@ -127,8 +131,8 @@ binding qualifiers, and refuses a program with anything but uniform blocks and t
 block. Each backend has an orientation test.
 
 Texture programs compiled through Smithay's shader interface sample client buffers, including import-only ones through
-`samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, the reduced
-copy and the minification filter. Shadow, rounded-rectangle and wallpaper passes, which sample no client texture, move
+`samplerExternalOES`, and that interface takes GLSL ES 1.00 only. They stay hand-written: the clip program, its
+vibrant variant, the reduced copy and the minification filter. Shadow, rounded-rectangle and wallpaper passes, which sample no client texture, move
 to borrowed-context passes generated from WGSL. The CPU model in `cupertino-glass` stays as the model the glass
 shader is tested against.
 

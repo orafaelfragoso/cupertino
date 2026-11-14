@@ -1343,6 +1343,7 @@ dependencies = [
  "bytemuck",
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-gpu",
  "cupertino-raster-math",
  "cupertino-theme",
  "image",

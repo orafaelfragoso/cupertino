@@ -1,4 +1,5 @@
-//! Shader validation with naga: the WGSL sources, and the GLSL ES 3.00 ports.
+//! Shader validation with naga: the WGSL sources, the generated programs and the GLSL ES 3.00 ports not yet
+//! generated.
 //!
 //! naga's GLSL front end only accepts the Vulkan dialect (`#version 450`, explicit locations,
 //! bindings and separate texture/sampler objects), so the ES 3.00 sources are mechanically rewritten before parsing (`to_naga_dialect`).
@@ -25,17 +26,9 @@ fn validate_wgsl(name: &str, src: &str, entries: &[&str]) {
 
 #[test]
 fn wgsl_shaders_validate() {
-    validate_wgsl(
-        "passes.wgsl",
-        cupertino_glass::renderer::PASSES_WGSL,
-        &[
-            "vs_fullscreen",
-            "fs_downsample",
-            "fs_blur",
-            "fs_color",
-            "fs_blit",
-        ],
-    );
+    for program in cupertino_glass::shaders::ALL {
+        validate_wgsl(program.source.name, program.wgsl, &["vs_main", "fs_main"]);
+    }
     validate_wgsl(
         "material.wgsl",
         cupertino_glass::renderer::MATERIAL_WGSL,
@@ -279,4 +272,72 @@ fn glass_block_matches_the_rust_uniform_in_both_languages() {
         slots * 16,
         std::mem::size_of::<cupertino_glass::glass::GlassUniform>()
     );
+}
+
+#[test]
+fn the_generated_passes_bind_their_block_and_source_by_the_names_beside_them() {
+    use cupertino_glass::shaders::{ALL, PASS_BLOCK, PASS_SOURCE};
+    for program in ALL {
+        let name = program.source.name;
+        assert!(
+            program.source.vertex_glsl.starts_with("#version 300 es"),
+            "{name}"
+        );
+        assert!(
+            program.source.fragment_glsl.starts_with("#version 300 es"),
+            "{name}"
+        );
+        let block = program
+            .block(PASS_BLOCK.0, PASS_BLOCK.1)
+            .unwrap_or_else(|| panic!("{name}: no block"));
+        assert!(
+            program
+                .source
+                .fragment_glsl
+                .contains(&format!("layout(std140) uniform {block} {{ PassParams ")),
+            "{name}: {block}"
+        );
+        let sampler = program
+            .sampler(PASS_SOURCE.0, PASS_SOURCE.1)
+            .unwrap_or_else(|| panic!("{name}: no sampler"));
+        assert!(
+            program
+                .source
+                .fragment_glsl
+                .contains(&format!("sampler2D {sampler};")),
+            "{name}"
+        );
+        // the CPU writes the same bytes for every backend: the block's vec4 slots are the Rust struct's
+        let w = block_members(program.wgsl, "struct PassParams {", true);
+        let names: Vec<&str> = w.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            names,
+            ["sizes", "dir_radius", "weights", "ops", "flags"],
+            "{name}"
+        );
+        // each entry of ops is an Op of two vec4s
+        let slots: usize = w
+            .iter()
+            .map(|(m, n)| if m == "ops" { 2 * n } else { *n })
+            .sum();
+        assert_eq!(
+            slots * 16,
+            std::mem::size_of::<cupertino_glass::ops::PassParams>(),
+            "{name}"
+        );
+    }
+    // only the blur dithers, and only when its flag says so
+    let blur = cupertino_glass::shaders::BLUR.source.fragment_glsl;
+    assert!(blur.contains("dither_rgb("));
+    for other in [
+        cupertino_glass::shaders::DOWNSAMPLE,
+        cupertino_glass::shaders::COLOR,
+        cupertino_glass::shaders::BLIT,
+    ] {
+        assert!(
+            !other.source.fragment_glsl.contains("dither_rgb(_"),
+            "{}",
+            other.source.name
+        );
+    }
 }

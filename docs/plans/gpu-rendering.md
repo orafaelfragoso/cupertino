@@ -361,9 +361,25 @@ Gate:
 
 ## Step 10: retire the duplicates
 
-- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL.
+- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split:
+  - [ ] A borrowed device's pass can draw into the framebuffer its owner has bound, with its viewport and scissor
+        (the element's damage), under the state-restore contract; `cupertino-gpu` today draws only into its own
+        textures.
+  - [ ] The shadow pass, dithered as before.
+  - [ ] The rounded-rectangle pass.
+  - [ ] The wallpaper pass.
 - [ ] The hand-written GLSL ES 3.00 programs of the glass crate and the compositor replaced by generated ones; the
-      tests that pinned the copies pin the generated output.
+      tests that pinned the copies pin the generated output. Split:
+  - [x] The build step generates a second set, `cupertino-glass`'s programs (the shared module ahead of each, include
+        files, and the assembled WGSL for the wgpu renderer); the backdrop passes (downsample, blur, colour, blit) are
+        generated, the compositor and the wgpu renderer draw them, their hand-written copies in both crates are gone,
+        and the blur's dither for 8-bit levels is a flag of its block instead of a second program.
+  - [ ] The material region program (the glass crate's and the compositor's, which differ in how the region is placed
+        and sampled).
+  - [ ] The vibrant program.
+  - [ ] The glass program.
+  - [ ] The compositor's mesh program of the minimize and close effects (GLSL ES 1.00, compiled by the compositor
+        itself, not through Smithay's interface).
 - [ ] `wgpu` removed from `cupertino-glass`; the headless glass renderer and its tests run on `cupertino-gpu`.
 
 Gate:
@@ -1193,6 +1209,22 @@ window drawn below half its size. Nothing is re-recorded.
   (`scene_cost::a_steady_frame_copies_no_cursor_image`), an overlay's signature allocates nothing
   (`scene_cost::an_overlay_signature_allocates_nothing`) and a frame that changes nothing copies no wallpaper path
   (`wallpaper::tests::a_frame_that_changes_nothing_copies_no_wallpaper_path`).
+
+### Step 10: retire the duplicates
+
+**The backdrop passes generated.** Pixels, on the target machine's GPU: a headless shot of Settings alone and of Files
+alone, 1920 x 1200 at scale 1.5, dark and light, drawn by the compositor with the hand-written passes and with the
+generated ones (the same build otherwise): no pixel differs by more than 2 of 255 outside the menu bar's clock, whose
+minute changed between the shots. The server's material, glass, tone and dither tests and the glass crate's GPU
+tests (its colour pass within one level of the CPU chain, PSNR 60 dB and more) pass unchanged. The blur's 8-bit
+dither is now a flag of `PassParams` (`flags[0]`) set by the compositor when its levels have 8 bits, instead of a
+second program text; the levels have half floats on the target machine, so the flag is off there, as the dither
+was.
+
+The assembled WGSL leaves out every function its entry points do not reach: the Vulkan driver of the target machine
+crashed (a segmentation fault in its SPIR-V compiler, inside pipeline creation) on the backdrop passes with the whole
+shared module in them, and no longer does once the unused gradient function, which takes arrays by value, is left out.
+A Vulkan backend (step 12) compiling `cupertino-gpu`'s own SPIR-V, which keeps every function, will meet the same.
 
 ### Step 11: output timing and depth
 

@@ -16,7 +16,8 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_glass::ops::{color_ops, fill_ops, Op, PassParams, RegionParams};
+use cupertino_glass::ops::{color_ops, fill_ops, Op, PassParams, RegionParams, PASS_DITHER};
+use cupertino_glass::shaders::{Program, PASS_BLOCK, PASS_SOURCE};
 use cupertino_raster_math::blur::{plan_blur, BlurPlan};
 use cupertino_raster_math::dither::with_dither;
 use cupertino_theme::recipe::Recipe;
@@ -30,10 +31,6 @@ use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
 #[path = "glass.rs"]
 pub mod glass;
 
-const FULLSCREEN_VERT: &str = include_str!("../../shaders/fullscreen.vert");
-const DOWNSAMPLE_FRAG: &str = include_str!("../../shaders/downsample.frag");
-const BLUR_FRAG: &str = include_str!("../../shaders/blur.frag");
-const COLOR_FRAG: &str = include_str!("../../shaders/color.frag");
 const MATERIAL_VERT: &str = include_str!("../../shaders/material.vert");
 const MATERIAL_FRAG: &str = include_str!("../../shaders/material.frag");
 
@@ -114,6 +111,8 @@ struct Programs {
     material: GLuint,
     material_loc: MaterialLocs,
     src_loc: [GLint; 3],
+    /// The blur dithers its result by pixel: its levels are 8 bits a channel and dithering is on.
+    blur_dither: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -739,19 +738,28 @@ impl MaterialGl {
         }
         // levels kept in half floats hold the blur without banding: only 8-bit levels are dithered
         self.float_targets = self.probe_float_targets(gl);
-        let pass = |frag: &str| link(gl, FULLSCREEN_VERT, frag);
-        let downsample = pass(DOWNSAMPLE_FRAG).map_err(|e| format!("downsample: {e}"))?;
-        let blur = pass(&with_dither(BLUR_FRAG, dither && !self.float_targets))
-            .map_err(|e| format!("blur: {e}"))?;
-        let color = pass(COLOR_FRAG).map_err(|e| format!("color: {e}"))?;
+        // the backdrop passes are generated: their block and sampler are bound by the names beside them
+        let pass = |program: &Program| -> Result<(GLuint, GLint), String> {
+            let name = program.source.name;
+            let p = link(gl, program.source.vertex_glsl, program.source.fragment_glsl)
+                .map_err(|e| format!("{name}: {e}"))?;
+            let block = program
+                .block(PASS_BLOCK.0, PASS_BLOCK.1)
+                .ok_or_else(|| format!("{name}: no pass block"))?;
+            bind_block(gl, p, &block, BIND_PASS)?;
+            let sampler = program
+                .sampler(PASS_SOURCE.0, PASS_SOURCE.1)
+                .ok_or_else(|| format!("{name}: no source sampler"))?;
+            Ok((p, uniform_loc(gl, p, &sampler)))
+        };
+        let (downsample, downsample_src) = pass(&cupertino_glass::shaders::DOWNSAMPLE)?;
+        let (blur, blur_src) = pass(&cupertino_glass::shaders::BLUR)?;
+        let (color, color_src) = pass(&cupertino_glass::shaders::COLOR)?;
         let material = link(gl, MATERIAL_VERT, &with_dither(MATERIAL_FRAG, dither))
             .map_err(|e| format!("material: {e}"))?;
-        for p in [downsample, blur, color] {
-            bind_block(gl, p, "PassParams", BIND_PASS)?;
-        }
         bind_block(gl, material, "Region", BIND_REGION)?;
         self.glass = glass::GlassGl::init(gl, dither)?;
-        let src_loc = [downsample, blur, color].map(|p| uniform_loc(gl, p, "u_src"));
+        let src_loc = [downsample_src, blur_src, color_src];
         let material_loc = MaterialLocs {
             proj: uniform_loc(gl, material, "u_proj"),
             quad: uniform_loc(gl, material, "u_quad"),
@@ -764,6 +772,7 @@ impl MaterialGl {
             material,
             material_loc,
             src_loc,
+            blur_dither: dither && !self.float_targets,
         });
         let mut bufs = [0; 2];
         gl.GenBuffers(2, bufs.as_mut_ptr());
@@ -940,7 +949,15 @@ impl MaterialGl {
         gl.BindFramebuffer(ffi::FRAMEBUFFER, dst.fbo);
         gl.Viewport(0, 0, size.0, size.1);
         gl.UseProgram(program);
-        Self::upload_ubo(gl, self.ubo_pass, BIND_PASS, bytemuck::bytes_of(params));
+        let mut params = *params;
+        if self
+            .progs
+            .as_ref()
+            .is_some_and(|p| program == p.blur && p.blur_dither)
+        {
+            params.flags[0] = PASS_DITHER;
+        }
+        Self::upload_ubo(gl, self.ubo_pass, BIND_PASS, bytemuck::bytes_of(&params));
         gl.ActiveTexture(ffi::TEXTURE0);
         gl.BindTexture(ffi::TEXTURE_2D, src);
         gl.Uniform1i(src_loc, 0);
@@ -2238,10 +2255,6 @@ mod tests {
     fn the_shaders_shared_with_the_glass_crate_stay_its_copies() {
         // drawn by the server exactly as the glass crate draws them
         for (name, server) in [
-            ("fullscreen.vert", FULLSCREEN_VERT),
-            ("downsample.frag", DOWNSAMPLE_FRAG),
-            ("blur.frag", BLUR_FRAG),
-            ("color.frag", COLOR_FRAG),
             ("glass.vert", super::glass::GLASS_VERT),
             ("glass.frag", super::glass::GLASS_FRAG),
         ] {
@@ -2305,7 +2318,7 @@ mod tests {
 
     #[test]
     fn uniform_layouts_match_the_shader_blocks() {
-        assert_eq!(std::mem::size_of::<PassParams>(), 432);
+        assert_eq!(std::mem::size_of::<PassParams>(), 448);
         assert_eq!(std::mem::size_of::<RegionParams>(), 336);
     }
 
@@ -2316,8 +2329,21 @@ mod tests {
             MATERIAL_FRAG.contains("in vec2 v_uv")
                 && !MATERIAL_FRAG.contains("texelFetch(u_source")
         );
-        for s in [DOWNSAMPLE_FRAG, BLUR_FRAG, COLOR_FRAG] {
-            assert!(s.contains("PassParams") && s.contains("u_src"));
+        // the backdrop passes are the glass crate's generated programs, bound by the names generated beside them
+        for program in [
+            cupertino_glass::shaders::DOWNSAMPLE,
+            cupertino_glass::shaders::BLUR,
+            cupertino_glass::shaders::COLOR,
+        ] {
+            let block = program.block(PASS_BLOCK.0, PASS_BLOCK.1).unwrap();
+            let sampler = program.sampler(PASS_SOURCE.0, PASS_SOURCE.1).unwrap();
+            let frag = program.source.fragment_glsl;
+            let name = program.source.name;
+            assert!(
+                frag.contains(&format!("uniform {block} {{ PassParams ")),
+                "{name}"
+            );
+            assert!(frag.contains(&format!("sampler2D {sampler};")), "{name}");
         }
     }
 }

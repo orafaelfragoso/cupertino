@@ -5,6 +5,7 @@
 use cupertino_raster_math::dither;
 use cupertino_raster_math::shadow::{drop_shadow, Caster, Shadow};
 use cupertino_server::backend::headless;
+use cupertino_server::render::passes::RectPass;
 use cupertino_server::render::programs::{u4, Programs};
 use cupertino_server::render::screenshot::render_to_image;
 use cupertino_server::render::{MaterialGl, ShaderRect};
@@ -147,37 +148,32 @@ fn the_programs_that_dither_build_with_it_and_the_shadow_stays_within_half_a_ste
         density: 0.8,
     };
     let centre = [SIZE.0 as f32 * 0.5, SIZE.1 as f32 * 0.5];
-    let uniforms = || {
-        vec![
-            u4(
-                "caster",
-                [
-                    centre[0] - caster.half[0],
-                    centre[1] - caster.half[1],
-                    caster.half[0] * 2.0,
-                    caster.half[1] * 2.0,
-                ],
-            ),
-            u4(
-                "params",
-                [
-                    caster.radius,
-                    shadow.sigma,
-                    shadow.density,
-                    shadow.offset[1],
-                ],
-            ),
-            u4("flags", [0.0, caster.exponent, 1.0, caster.extent]),
-        ]
-    };
+    // the shadow pass's block: the caster, radius, sigma, density and offset, then no cut-out, the exponent, pixels
+    // per point and the extent
+    let params = [
+        [
+            centre[0] - caster.half[0],
+            centre[1] - caster.half[1],
+            caster.half[0] * 2.0,
+            caster.half[1] * 2.0,
+        ],
+        [
+            caster.radius,
+            shadow.sigma,
+            shadow.density,
+            shadow.offset[1],
+        ],
+        [0.0, caster.exponent, 1.0, caster.extent],
+    ];
     let element = |p: &Programs| {
-        ShaderRect::new(
-            p.shadow.clone(),
+        ShaderRect::pass(
+            &p.passes,
+            RectPass::Shadow,
             Id::new(),
             CommitCounter::default(),
             area(),
             1.0,
-            uniforms(),
+            &params,
             false,
         )
     };

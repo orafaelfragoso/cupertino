@@ -1878,6 +1878,7 @@ dependencies = [
  "cupertino-evdev",
  "cupertino-geometry",
  "cupertino-glass",
+ "cupertino-gpu",
  "cupertino-icons",
  "cupertino-input",
  "cupertino-keyboard",

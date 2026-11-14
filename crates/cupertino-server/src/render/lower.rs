@@ -21,7 +21,8 @@ use super::compose::{logical_rect, FrameResources, TreeSlice};
 use super::material::glass::GlassElement;
 use super::material::{MaterialElement, MaterialMask, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
-use super::programs::{corner_uniforms, u4, Programs};
+use super::passes::RectPass;
+use super::programs::{corner_uniforms, Programs};
 use super::reduce::{self, ReducedElement};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::snapshots::Snapshots;
@@ -291,26 +292,22 @@ pub fn shadow_rect(
         shadow.caster.0.height() as f32,
     ];
     let extent = shadow.radius * shadow.style.expansion();
-    let uniforms = vec![
-        u4("caster", caster),
-        u4(
-            "params",
-            [
-                shadow.radius as f32,
-                shadow.sigma as f32,
-                shadow.density as f32,
-                shadow.offset_y as f32,
-            ],
-        ),
-        u4(
-            "flags",
-            [
-                shadow.cutout as u8 as f32,
-                shadow.style.exponent() as f32,
-                scale as f32,
-                extent as f32,
-            ],
-        ),
+    // the block of the shadow pass: the caster, then radius, sigma, density and offset, then the cut-out, the
+    // corner exponent, pixels per point and the corner extent
+    let params = [
+        caster,
+        [
+            shadow.radius as f32,
+            shadow.sigma as f32,
+            shadow.density as f32,
+            shadow.offset_y as f32,
+        ],
+        [
+            shadow.cutout as u8 as f32,
+            shadow.style.exponent() as f32,
+            scale as f32,
+            extent as f32,
+        ],
     ];
     let sig = Sig::new()
         .rect(area)
@@ -323,13 +320,14 @@ pub fn shadow_rect(
         .u(shadow.cutout as u64)
         .finish();
     let (id, commit) = cache.slot(key, sig);
-    let rect = ShaderRect::new(
-        programs.shadow.clone(),
+    let rect = ShaderRect::pass(
+        &programs.passes,
+        RectPass::Shadow,
         id,
         commit,
         area,
         alpha as f32,
-        uniforms,
+        &params,
         false,
     );
     if !shadow.cutout {
@@ -360,18 +358,14 @@ fn wallpaper(
         sig = sig.f(f64::from(*v));
     }
     let (id, commit) = ctx.cache.slot(key, sig.finish());
-    ShaderRect::new(
-        ctx.programs.wallpaper.clone(),
+    ShaderRect::pass(
+        &ctx.programs.passes,
+        RectPass::Wallpaper,
         id,
         commit,
         area,
         opacity as f32,
-        vec![
-            u4("c0", colours[0]),
-            u4("c1", colours[1]),
-            u4("c2", colours[2]),
-            u4("c3", colours[3]),
-        ],
+        colours,
         opacity >= 1.0,
     )
 }

@@ -491,6 +491,7 @@ impl RenderResources {
         if let Some(m) = &self.mesh {
             m.borrow_mut().destroy(renderer);
         }
+        self.programs.passes.destroy(renderer);
     }
 }
 

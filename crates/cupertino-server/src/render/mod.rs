@@ -19,6 +19,7 @@ pub mod lower;
 pub mod material;
 pub mod mesh;
 pub mod motion;
+pub mod passes;
 pub mod programs;
 pub mod reduce;
 pub mod scene;

@@ -10,7 +10,8 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 |---|---|---|
 | Compositor (`cupertino-server`) | OpenGL ES 3 through Smithay's `GlesRenderer`, plus our own GL passes | scanout through `DrmCompositor` |
 | Glass and materials | the compositor on the GPU: backdrop captured at half scale, blur pyramid, every glass stage in one shader pass | n/a |
-| Window shadows, rounded clips, outlines, wallpaper | the compositor, GPU shaders compiled through Smithay's shader interface | n/a |
+| Window shadows, outlines, the shell's rounded rectangles, the procedural wallpaper | the compositor: passes generated from WGSL, drawn by a `cupertino-gpu` device borrowed from its context into the framebuffer it has bound | n/a |
+| Rounded clips of window content, reduced copies | the compositor, texture programs compiled through Smithay's shader interface | n/a |
 | Title bars, window buttons, keyboard HUDs, the procedural cursor | the compositor, rasterized on the CPU (tiny-skia, swash), cached, uploaded on change | memory buffers |
 | Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
@@ -76,7 +77,10 @@ is a translation, not a redesign. Backend one is OpenGL ES 3.0 over EGL (`glow` 
 takes the fallback instead of failing to start. A borrowed-context mode runs `cupertino-gpu` passes inside the
 compositor's GL context with a defined state-restore contract: between entering and leaving, the device saves and
 puts back every piece of state it may change (the list is in the crate's `gles::state`), and draws with a vertex
-array of its own.
+array of its own. A borrowed device draws either into textures of its own or, in a pass begun with
+`begin_owner_pass`, into the framebuffer its owner has bound, at the owner's viewport and in the owner's orientation:
+its programs place their vertices through the projection the owner hands them, and its scissor regions are the
+framebuffer's pixels as the owner counts them. That is how the compositor's own passes draw among Smithay's draws.
 
 Orientation is the same on every backend: a target's first row (the top of the image handed to the compositor) is at
 clip y = -1 and fragment row 0, texture coordinate v = 0 is a texture's first row, and pixels are written and read
@@ -119,11 +123,12 @@ A surface whose dmabuf import or allocation fails falls back to `wl_shm` for tha
 
 Our own programs are written once in WGSL. A build step (`cupertino-gpu-shaders`, a development binary) concatenates
 the shared module (the definitions of section 1, `crates/cupertino-gpu/shaders/shared.wgsl`) into each shader and
-`naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. It generates two sets: `cupertino-gpu`'s
-programs, and those of `cupertino-glass` that the compositor draws (`crates/cupertino-glass/shaders/`, where a line
+`naga` generates GLSL ES 3.00 for the GLES backend and SPIR-V for Vulkan. It generates three sets: `cupertino-gpu`'s
+programs, those of `cupertino-glass` that the compositor draws (`crates/cupertino-glass/shaders/`, where a line
 `// include NAME.wgsl` puts a file of `shaders/include/` in place, so the backdrop passes share their block and
 vertex stage); for the second set it also writes the assembled WGSL without the functions the program never reaches,
-for the glass crate's own headless renderer. The generated output is committed, so no
+for the glass crate's own headless renderer; and the compositor's rectangle passes
+(`crates/cupertino-server/shaders/passes/`, with an include directory of its own). The generated output is committed, so no
 product binary builds `naga`; a test regenerates it and fails on a difference. The generator runs with
 coordinate-space adjustment off, declares every block `std140` (GLSL ES 3.00 would leave the layout to the driver),
 writes the GLSL name of each block and sampler by WGSL group and binding beside the code, since GLSL ES 3.00 has no
@@ -135,8 +140,10 @@ Texture programs compiled through Smithay's shader interface sample client buffe
 vibrant variant, the reduced copy and the minification filter. Every other program of ours is generated: the
 backdrop passes (downsample, blur, colour, copy), the material region, the glass composite, the vibrant glyphs and
 the mesh of the window effects, which the compositor links itself and the headless glass renderer draws on
-`cupertino-gpu`. Shadow, rounded-rectangle and wallpaper passes, which sample no client texture, move to
-borrowed-context passes generated from WGSL. The CPU model in `cupertino-glass` stays as the model the glass
+`cupertino-gpu`, and the compositor's rectangle passes, which sample no client texture: the window shadow, the
+rounded rectangle and the procedural wallpaper (a third set, `crates/cupertino-server/shaders/passes/`, sharing one
+placement block and vertex stage), drawn by a device borrowed from the compositor's context into the framebuffer
+Smithay has bound, one quad per damage rectangle. The CPU model in `cupertino-glass` stays as the model the glass
 shader is tested against.
 
 ### 7. Same pixels on both paths

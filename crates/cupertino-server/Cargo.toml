@@ -47,6 +47,7 @@ cupertino-animation = { path = "../cupertino-animation" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-glass = { path = "../cupertino-glass" }
+cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-overview = { path = "../cupertino-overview" }
 cupertino-stage = { path = "../cupertino-stage" }

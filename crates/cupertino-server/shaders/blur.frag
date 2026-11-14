@@ -20,6 +20,8 @@ uniform sampler2D u_src;
 
 layout(location = 0) out vec4 frag_color;
 
+//_DITHER_
+
 vec4 ld(ivec2 p) {
     ivec2 q = clamp(p, ivec2(0), P.sizes.xy - ivec2(1));
     return texelFetch(u_src, q, 0);
@@ -39,4 +41,7 @@ void main() {
         acc += (ld(p + o) + ld(p - o)) * weight(i);
     }
     frag_color = vec4(acc.rgb, 1.0);
+#ifdef CUPERTINO_DITHER
+    frag_color.rgb = dither_rgb(frag_color.rgb, gl_FragCoord.xy);
+#endif
 }

@@ -45,6 +45,8 @@ layout(location = 0) out vec4 frag_color;
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float PI = 3.14159265;
 
+//_DITHER_
+
 // Distance to a rectangle whose corners reach e along each side with a superellipse of exponent n (2: a circle);
 // to first order in a corner of n over 2: the norm's excess over its slope.
 float rect_sdf(vec2 p, vec4 r, float e, float n) {
@@ -261,6 +263,9 @@ void main() {
         float a = o.a * G.info.w * kept;
         if (a <= 0.0) { discard; }
         frag_color = vec4(o.rgb, a);
+#ifdef CUPERTINO_DITHER
+        frag_color.rgb = dither_rgb(frag_color.rgb, gl_FragCoord.xy);
+#endif
         return;
     }
     vec2 g = vec2(field_d(p + vec2(0.5, 0.0)) - field_d(p - vec2(0.5, 0.0)),
@@ -338,4 +343,7 @@ void main() {
     float a = cov + under;
     c = a > 0.0 ? (clamp(c, vec3(0.0), vec3(1.0)) * cov + o.rgb * under) / a : c;
     frag_color = vec4(clamp(c, vec3(0.0), vec3(1.0)), a * G.info.w * kept);
+#ifdef CUPERTINO_DITHER
+    frag_color.rgb = dither_rgb(frag_color.rgb, gl_FragCoord.xy);
+#endif
 }

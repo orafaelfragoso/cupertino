@@ -38,6 +38,8 @@ mod diagnostic_events;
 mod diagnostic_isolation;
 #[path = "display_power.rs"]
 mod display_power;
+#[path = "dither.rs"]
+mod dither;
 #[path = "dock_v1.rs"]
 mod dock_v1;
 #[path = "drag-and-drop.rs"]

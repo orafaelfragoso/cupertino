@@ -108,6 +108,5 @@ mod tests {
         let on = with_dither(shader, true);
         assert!(on.contains("#define CUPERTINO_DITHER 1") && on.contains("float dither_offset"));
         assert!(!on.contains(MARKER));
-        assert!(!BY_DEFAULT, "dithering waits for the look freeze");
     }
 }

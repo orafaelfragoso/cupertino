@@ -16,8 +16,9 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_raster_math::blur::{plan_blur, BlurPlan};
 use cupertino_glass::ops::{color_ops, fill_ops, Op, PassParams, RegionParams};
+use cupertino_raster_math::blur::{plan_blur, BlurPlan};
+use cupertino_raster_math::dither::with_dither;
 use cupertino_theme::recipe::Recipe;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer};
@@ -487,6 +488,11 @@ impl MaterialGl {
     /// Compile the programs on `renderer`'s context. Fails (with a description) when the context
     /// does not provide GLES 3.0 features.
     pub fn new(renderer: &mut GlesRenderer) -> Result<SharedMaterial, String> {
+        Self::new_with(renderer, super::programs::dithering())
+    }
+
+    /// [`MaterialGl::new`] with the blur (into 8-bit levels), material and glass outputs dithered or not.
+    pub fn new_with(renderer: &mut GlesRenderer, dither: bool) -> Result<SharedMaterial, String> {
         let mut me = MaterialGl {
             progs: None,
             ubo_pass: 0,
@@ -504,13 +510,13 @@ impl MaterialGl {
             glass: glass::GlassGl::default(),
         };
         let res = renderer
-            .with_context(|gl| unsafe { me.init(gl) })
+            .with_context(|gl| unsafe { me.init(gl, dither) })
             .map_err(|e| format!("making the context current failed: {e}"))?;
         res?;
         Ok(Rc::new(RefCell::new(me)))
     }
 
-    unsafe fn init(&mut self, gl: &ffi::Gles2) -> Result<(), String> {
+    unsafe fn init(&mut self, gl: &ffi::Gles2, dither: bool) -> Result<(), String> {
         let version = {
             let p = gl.GetString(ffi::VERSION);
             if p.is_null() {
@@ -527,17 +533,20 @@ impl MaterialGl {
                 "material pass needs OpenGL ES 3.0, context reports {version:?}"
             ));
         }
+        // levels kept in half floats hold the blur without banding: only 8-bit levels are dithered
+        self.float_targets = self.probe_float_targets(gl);
         let pass = |frag: &str| link(gl, FULLSCREEN_VERT, frag);
         let downsample = pass(DOWNSAMPLE_FRAG).map_err(|e| format!("downsample: {e}"))?;
-        let blur = pass(BLUR_FRAG).map_err(|e| format!("blur: {e}"))?;
+        let blur = pass(&with_dither(BLUR_FRAG, dither && !self.float_targets))
+            .map_err(|e| format!("blur: {e}"))?;
         let color = pass(COLOR_FRAG).map_err(|e| format!("color: {e}"))?;
-        let material =
-            link(gl, MATERIAL_VERT, MATERIAL_FRAG).map_err(|e| format!("material: {e}"))?;
+        let material = link(gl, MATERIAL_VERT, &with_dither(MATERIAL_FRAG, dither))
+            .map_err(|e| format!("material: {e}"))?;
         for p in [downsample, blur, color] {
             bind_block(gl, p, "PassParams", BIND_PASS)?;
         }
         bind_block(gl, material, "Region", BIND_REGION)?;
-        self.glass = glass::GlassGl::init(gl)?;
+        self.glass = glass::GlassGl::init(gl, dither)?;
         let src_loc = [downsample, blur, color].map(|p| uniform_loc(gl, p, "u_src"));
         let material_loc = MaterialLocs {
             proj: uniform_loc(gl, material, "u_proj"),
@@ -556,7 +565,6 @@ impl MaterialGl {
         gl.GenBuffers(2, bufs.as_mut_ptr());
         self.ubo_pass = bufs[0];
         self.ubo_region = bufs[1];
-        self.float_targets = self.probe_float_targets(gl);
         tracing::info!(version = %version, float_targets = self.float_targets, "material pipeline initialised");
         Ok(())
     }

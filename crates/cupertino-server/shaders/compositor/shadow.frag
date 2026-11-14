@@ -44,6 +44,8 @@ float rounded_box_shadow(vec2 p, vec2 half_size, float sigma, float corner) {
 
 //_SDF_
 
+//_DITHER_
+
 void main() {
     vec2 pos = v_coords * area_pt;
     vec2 hs = caster.zw * 0.5;
@@ -56,4 +58,7 @@ void main() {
         a *= clamp(0.5 + d * flags.z, 0.0, 1.0);
     }
     gl_FragColor = vec4(0.0, 0.0, 0.0, a) * alpha;
+#ifdef CUPERTINO_DITHER
+    gl_FragColor.a = dither_alpha(gl_FragColor.a, gl_FragCoord.xy);
+#endif
 }

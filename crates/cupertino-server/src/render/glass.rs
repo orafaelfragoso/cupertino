@@ -19,9 +19,9 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
-use cupertino_raster_math::blur::plan_blur;
 use cupertino_glass::glass::{face_color, Container, Cut, GlassUniform};
 use cupertino_glass::ops::PassParams;
+use cupertino_raster_math::blur::plan_blur;
 use cupertino_theme::glass::{
     relative_luminance, GlassMode, GlassParams, BLUR_LEVELS, GLASS_BACKDROP_SCALE,
 };
@@ -655,8 +655,9 @@ impl<T> GlassCache<T> {
 }
 
 impl GlassGl {
-    pub(super) unsafe fn init(gl: &ffi::Gles2) -> Result<Self, String> {
-        let program = link(gl, GLASS_VERT, GLASS_FRAG).map_err(|e| format!("glass: {e}"))?;
+    pub(super) unsafe fn init(gl: &ffi::Gles2, dither: bool) -> Result<Self, String> {
+        let frag = cupertino_raster_math::dither::with_dither(GLASS_FRAG, dither);
+        let program = link(gl, GLASS_VERT, &frag).map_err(|e| format!("glass: {e}"))?;
         bind_block(gl, program, "Glass", BIND_GLASS)?;
         gl.UseProgram(program);
         for (unit, name) in ["u_level0", "u_level1", "u_level2", "u_level3", "u_fill"]

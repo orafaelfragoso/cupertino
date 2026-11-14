@@ -18,6 +18,14 @@ fn assemble(body: &str) -> String {
     format!("{HEADER}\n{}", body.replace("//_SDF_", SDF))
 }
 
+/// Whether the compositor dithers its blur, material, glass and shadow outputs by pixel position
+/// ([`cupertino_raster_math::dither`]). Off until the look freeze turns [`dither::BY_DEFAULT`](cupertino_raster_math::dither::BY_DEFAULT)
+/// on; `CUPERTINO_DITHER=1` turns it on before that, to look at it or test it.
+pub fn dithering() -> bool {
+    cupertino_raster_math::dither::BY_DEFAULT
+        || std::env::var_os("CUPERTINO_DITHER").is_some_and(|v| v == "1")
+}
+
 /// Compiled programs, shared by every output of one renderer.
 #[derive(Clone)]
 pub struct Programs {
@@ -29,10 +37,15 @@ pub struct Programs {
 
 impl Programs {
     pub fn compile(renderer: &mut GlesRenderer) -> Result<Self, GlesError> {
+        Self::compile_with(renderer, dithering())
+    }
+
+    /// [`Programs::compile`] with the shadow dithered or not.
+    pub fn compile_with(renderer: &mut GlesRenderer, dither: bool) -> Result<Self, GlesError> {
         let f = |name: &'static str| UniformName::new(name, UniformType::_2f);
         let v4 = |name: &'static str| UniformName::new(name, UniformType::_4f);
         let shadow = renderer.compile_custom_pixel_shader(
-            assemble(SHADOW),
+            cupertino_raster_math::dither::with_dither(&assemble(SHADOW), dither),
             &[f("area_pt"), v4("caster"), v4("params"), v4("flags")],
         )?;
         let rrect = renderer.compile_custom_pixel_shader(
@@ -163,6 +176,17 @@ mod tests {
         assert!((e2 / e1 - 2.0).abs() < 1e-5 && n1 == n2 && n1 > 2.0);
         let (e, n) = corner_uniforms(12.0, false, 1.0);
         assert_eq!((e, n), (12.0, 2.0));
+    }
+
+    #[test]
+    fn the_shadow_takes_the_dither_only_when_dithering() {
+        use cupertino_raster_math::dither::with_dither;
+        let plain = with_dither(&assemble(SHADOW), false);
+        assert_eq!(plain, assemble(SHADOW));
+        assert!(!plain.contains("#define CUPERTINO_DITHER"));
+        let on = with_dither(&assemble(SHADOW), true);
+        assert!(on.contains("#define CUPERTINO_DITHER 1") && on.contains("float dither_alpha("));
+        assert!(!cupertino_raster_math::dither::BY_DEFAULT || dithering());
     }
 
     #[test]

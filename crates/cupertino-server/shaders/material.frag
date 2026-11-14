@@ -31,6 +31,8 @@ in vec2 v_px;
 in vec2 v_uv;
 layout(location = 0) out vec4 frag_color;
 
+//_DITHER_
+
 // Same formula as cupertino_geometry::RoundedRect::sdf_approx.
 float region_sdf(vec2 p, vec2 hs, float e, float n) {
     vec2 q = abs(p) - (hs - vec2(e));
@@ -88,4 +90,7 @@ void main() {
         base = blend(int(a.x), s, b.w, base);
     }
     frag_color = vec4(clamp(base, vec3(0.0), vec3(1.0)), cov);
+#ifdef CUPERTINO_DITHER
+    frag_color.rgb = dither_rgb(frag_color.rgb, gl_FragCoord.xy);
+#endif
 }

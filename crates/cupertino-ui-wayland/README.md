@@ -107,8 +107,9 @@ compositor checks the device and makes every surface's next upload whole.
 viewport, in a modifier the compositor offers and the driver renders to. A frame the GPU renderer drew on the same
 device carries its texture (`CpuFrame::device`) and is copied from it into a free buffer texel for texel
 (`blit_texels`), nothing uploaded; a CPU frame has its damage uploaded into a staging texture and drawn into a free
-buffer. A surface that falls back to shared memory, the raised layer's subsurface and a drag image read a GPU frame
-back (`CpuFrame::in_memory`). With `linux-drm-syncobj-v1` the frame's native fence is the buffer's
+buffer. The raised layer's subsurface has buffers of its own and is presented as its window is. A surface that falls
+back to shared memory and a drag image read a GPU frame back (`CpuFrame::in_memory`). With
+`linux-drm-syncobj-v1` the frame's native fence is the buffer's
 acquire point and its release point is waited for through an eventfd (two buffers); without it the commit waits for
 the own fence and a buffer is reused one commit after its release (three buffers). A buffer that cannot be allocated
 or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj

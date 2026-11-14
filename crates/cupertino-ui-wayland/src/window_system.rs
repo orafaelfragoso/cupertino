@@ -1421,6 +1421,13 @@ impl WindowSystem for WaylandWindowSystem {
             parents.push(child.id);
             gone_surfaces.push(child.surface);
         }
+        // and the subsurfaces of their raised layers
+        gone_surfaces.extend(
+            self.windows
+                .iter()
+                .filter(|w| parents.contains(&w.id))
+                .filter_map(|w| w.layer.as_ref().map(|l| l.surface)),
+        );
         for s in gone_surfaces {
             self.gpu.forget(&mut self.conn, s);
         }
@@ -1810,16 +1817,33 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        let copy_time = self.copy_time.as_mut();
-        match copy_and_present(
-            &mut self.conn,
-            surface,
-            size,
-            frame,
-            &damage,
-            resized,
-            copy_time,
-        )? {
+        // on the GPU the layer's frame is drawn into the subsurface's own buffers from its texture, as a window's is
+        let copying = self.copy_time.is_some().then(Instant::now);
+        let on_gpu = self
+            .gpu
+            .present(&mut self.conn, surface, size, frame, &damage, resized)
+            .map_err(platform_error)?;
+        if let (Some(total), Some(since)) = (self.copy_time.as_mut(), copying) {
+            *total += since.elapsed();
+        }
+        let shown = match on_gpu {
+            Presented::Gpu => Ok(()),
+            Presented::Busy => Err(Some(Stall::Buffer)),
+            Presented::Resized => Err(None),
+            Presented::Shm => {
+                let copy_time = self.copy_time.as_mut();
+                copy_and_present(
+                    &mut self.conn,
+                    surface,
+                    size,
+                    frame,
+                    &damage,
+                    resized,
+                    copy_time,
+                )?
+            }
+        };
+        match shown {
             Ok(()) => {
                 let state = self.window_mut(window)?.layer.as_mut().expect("made above");
                 state.shown = Some((frame.width, frame.height));

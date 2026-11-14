@@ -23,7 +23,8 @@ transport's standard set and never reaches the private protocols (`cupertino-lay
 `draw` keeps the last frame's `Pixmap`. Without damage the pixmap is cleared and the frame is whole. With damage
 (rectangles in points) only those rectangles, rounded out to device pixels and cut to the buffer, are cleared for
 `paint`; only they and what the leased buffer missed of the frames shown since it last held one
-(`BufferLease::missed`) are converted into it, and only they are reported with `damage_buffer`. Rectangles that add up
+(`BufferLease::missed`) are converted into it, cut into rectangles that do not overlap so each pixel is converted
+once, and only they are reported with `damage_buffer`. Rectangles that add up
 to the buffer convert it once, whole. A frame at another size or scale is drawn whole, and so is the first one after
 `configured`: a configure can change what a frame shows (activation, maximized) without changing its size.
 

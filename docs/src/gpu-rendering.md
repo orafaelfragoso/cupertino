@@ -168,6 +168,17 @@ compositor tells every client its buffers were lost, so an idle client repaints 
 left behind. The renderer each process uses is logged once, reported by `cupertino-diagnose` and recorded in the frame
 statistics.
 
+Until step 7 the GPU path is built but off: one switch, `GPU_BY_DEFAULT` in `crates/cupertino-ui-wayland/src/renderer.rs`,
+is `false`, so every process draws on the CPU (reason "the GPU path is not turned on") and never binds the dmabuf
+protocol. `CUPERTINO_RENDERER=gpu` takes the GPU path regardless, which the tests and measurements use; `cpu` keeps a
+process on the CPU after the switch is turned on. Step 7 turns the switch on, per surface class.
+
+A process that may use the GPU draws its first frames on the CPU while a worker thread makes the device and links the
+programs, then switches (the runtime frees each window's CPU renderer and draws whole frames with a new one). Linked
+programs are saved per user in `$XDG_CACHE_HOME/cupertino/programs/<driver>/`, keyed by the driver's vendor, renderer
+and version strings, so the next start loads them instead of compiling; a binary the driver refuses is compiled
+again and replaced.
+
 ### 9. Layers and animation in the compositor
 
 After layers work inside the client, timed and spring transitions move to the compositor, so they run at the

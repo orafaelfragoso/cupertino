@@ -80,6 +80,7 @@ warn  portals.conf        no cupertino-portals.conf: xdg-desktop-portal picks th
 |---|---|
 | `gpu.driver` | The primary GPU's driver, and what it needs before a compositor takes the display. `fail` for a problem (for example `nvidia-drm` without `modeset=1`, or no GPU), `warn` for a warning (for example no NVIDIA GBM backend, or no driver bound). |
 | `gpu.renderer` | Whether the last session, or the one running, drew with a software renderer, from its line in `session.log`. `warn` when it did, `ok` otherwise, `skip` without a `session.log`. Facts: `time` and `gpu`. The fix says to install the GPU's Mesa driver or to give a virtual machine a GPU with 3D. |
+| `gpu.client_renderers` | Which renderer every running toolkit process draws with, from the record each writes to `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` (`program`, `renderer`, `reason`); records of processes that ended are left out. `warn` when a process draws on the CPU because the GPU failed it (no device, a software rasterizer, no dmabuf feedback or allocator, three context losses within a minute), `ok` otherwise, `skip` when no running process has drawn a window. Facts: one `process` per process, `<program> (<pid>): <renderer>, <reason>`. |
 | `session.logind` | logind's record of the session in `XDG_SESSION_ID`; `skip` when there is none. |
 | `session.desktop` | `XDG_CURRENT_DESKTOP` names Cupertino; `skip` otherwise. |
 | `session.wayland` | The compositor answers on `WAYLAND_DISPLAY`. `fail` when nothing answers or `XDG_RUNTIME_DIR` is not set. |

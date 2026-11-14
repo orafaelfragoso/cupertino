@@ -237,17 +237,20 @@ renderers:
 
 Presenter and process:
 
-- [ ] dmabuf presenter in `cupertino-ui-wayland` with the step 3 synchronisation, size-stepped allocation for live
+- [x] dmabuf presenter in `cupertino-ui-wayland` with the step 3 synchronisation, size-stepped allocation for live
       resize, two buffers with release points and three without.
-- [ ] Fallback rule in full: `CUPERTINO_RENDERER` (`gpu` overriding software and missing feedback), missing libraries,
+- [x] Fallback rule in full: `CUPERTINO_RENDERER` (`gpu` overriding software and missing feedback), missing libraries,
       three losses, purges not counted, per-surface fallback to shared memory on import or allocation failure.
-- [ ] "Buffers lost" after a reset or purge: protocol version bump, contract entry in
+- [x] "Buffers lost" after a reset or purge: protocol version bump, contract entry in
       `docs/architecture/contracts.yaml`, compositor event, client repaint, tests.
-- [ ] First frame on the CPU while the context and programs warm on a worker thread; after the switch the CPU
+- [x] First frame on the CPU while the context and programs warm on a worker thread; after the switch the CPU
       renderer's frame, layers and caches are freed.
-- [ ] `cupertino-diagnose` and the frame statistics report the renderer per process.
-- [ ] Local GPU tier: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import fallback, resize
-      storm, fence soak, goldens on the NVIDIA GPU.
+- [x] `cupertino-diagnose` and the frame statistics report the renderer per process.
+- [x] Local GPU tier, presenter: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import
+      fallback, resize storm, fence soak on the NVIDIA GPU.
+- [ ] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`).
+- [x] Renderer selection wired with every process on the CPU by default: the single switch `GPU_BY_DEFAULT`
+      (`crates/cupertino-ui-wayland/src/renderer.rs`), which step 7 turns on.
 - [ ] Parity at scales 1, 1.5 and 2 with odd sizes.
 
 Gate:
@@ -830,6 +833,63 @@ the blur's halving and Gaussian programs match the blur vectors at both edge rul
 driver's modifier, never linear on the NVIDIA GPU; fences and sync files signal; an injected reset of each kind and a
 purge are reported and the lost device refuses work; a borrowed device leaves its owner's state exactly as it found
 it; atlas eviction reuses a page's texture and the cap holds within a frame; a released pooled target comes back.
+
+### Step 6: the presenter and the process
+
+Taken on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08), headless sessions, scale 1.
+
+**Where it is.**
+
+- `cupertino-ui-wayland::renderer`: the fallback rule as functions of what the process found (`start`, `settle`,
+  `LossHistory`), the switch `GPU_BY_DEFAULT` (off), `CUPERTINO_RENDERER`, the process's current renderer and why
+  (`active`), logged as `renderer: <cpu|gpu> (<reason>)` on every change and recorded in
+  `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino-diagnose` (`gpu.client_renderers`). The frame
+  statistics carry `renderer` on every line and `scripts/dev/bench` lists each program's renderers.
+- `cupertino-ui-wayland::gpu_path`: the warm-up thread (device on the feedback's render node, saved programs, the blit
+  program; the context released and taken over by the main thread), the switch (`PlatformEvent::RendererChanged`,
+  on which the runtime drops each window's renderer and draws whole frames with a new one), losses (every surface's
+  buffers freed, a new warm-up, the CPU for good after three resets within a minute; purges never counted), the
+  per-surface fallback to shared memory and `buffers_lost`.
+- `cupertino-ui-wayland::gpu_present`: one surface's buffers. A frame's damage is uploaded into a staging texture and
+  drawn into a dmabuf allocated in 128-pixel steps (a buffer serves a frame that fits and is less than two steps
+  smaller; the viewport crops it), in a modifier both the compositor offers and the driver renders to. With
+  `linux-drm-syncobj-v1` the frame's native fence becomes the acquire point of a timeline per buffer and its release
+  point is waited for through an eventfd, two buffers; without, the commit waits for the own fence and a buffer is
+  reused one commit after its release, three buffers.
+- Transport (`cupertino-wayland-client`): dmabuf feedback (format table, main device, tranches), buffers the
+  compositor may refuse (`create`, not `create_immed`), syncobj timelines and points, frames cropped to their size; the
+  syncobj surface object is destroyed before any shared-memory or one-colour commit.
+- `cupertino-gpu`: syncobj timelines on the render node (`syncobj`), the saved program binaries (`program_cache`), and
+  a device made on one thread and used on another (`Device::detach`, `DetachedDevice::attach`).
+- `cupertino_app_effects_v1` version 21: `cupertino_appearance_v1.buffers_lost`, sent by the server after its own
+  reset or purge to every observer of version 21 or later. It goes on the appearance observer because every toolkit
+  process, third-party ones included, already holds that surface-less object for session-wide events that need a
+  repaint, so no new global is needed and `cupertino_shell_v1` (shell processes only) is not the place.
+
+**First frame and warm-up** (the check window, 320 x 240, three runs each; the first frame went out on the CPU every
+time):
+
+| Program cache | First frame (shared memory) | GPU ready after the start | Context | Programs |
+|---|---|---|---|---|
+| empty (compiled, then saved) | 29.7–30.2 ms | 99–103 ms | 62.9–66.5 ms | 35.9–36.7 ms |
+| filled by the run before (loaded) | 28.9–29.3 ms | 65–73 ms | 64.6–72.1 ms | 0.3 ms |
+
+**Tests.** The presenter's GPU tier is `cupertino-server`'s `gpu_presenter` (slow tier) with
+`cupertino-ui-wayland`'s `gpu-window` as its client; the rule, the size steps, the reuse, the records and the switch
+in the runtime are fast tests.
+
+| Test | What it shows on the NVIDIA GPU (`CUPERTINO_GPU_REQUIRED=1`) |
+|---|---|
+| warm-up and syncobj | first frames in shared memory, then 2 buffers in the driver's tiled modifier (`0x0300000000e08014`) imported as drawn, every buffer back through its release point, no CPU fence wait, one syncobj surface object, the record says `gpu` |
+| program cache | the second start loads the program the first compiled and compiles none |
+| without explicit sync | 3 buffers, one fence wait a frame, no syncobj object |
+| resets | a new device after each, the CPU for good after the third (reason "the context was lost 3 times within 60 s"), the syncobj object destroyed before every shared-memory frame |
+| purges | four purges, five devices, the process stays on the GPU and the later devices load the saved program |
+| refused import | the surface moves to shared memory with its syncobj object destroyed first; the process stays on the GPU |
+| resize storm | 183 sizes in 233 frames from 13 buffers |
+| short soak | 900 frames, 2 buffers, every release point signalled, no fence wait |
+
+8 of 8 passed; `gpu_slice` (6 of 6) and `gpu_reset` (3 of 3) still pass beside them.
 
 ## Decisions taken
 

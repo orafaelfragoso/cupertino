@@ -91,6 +91,8 @@ pub struct Texture {
     id: u64,
     /// Its storage is the device's owner's ([`Device::wrap_texture`]): destroying it keeps the texture.
     foreign: bool,
+    /// The bytes of storage the device gave it when it was made, in [`Device::live_textures`].
+    counted: u64,
 }
 
 impl Texture {
@@ -220,6 +222,28 @@ pub struct Device {
     program_cache: Option<ProgramCache>,
     /// The driver's vendor, renderer and version strings, which a saved binary is valid for.
     driver_key: String,
+    /// The textures made and not yet destroyed.
+    live: Cell<TextureTally>,
+}
+
+/// The textures a device made and has not destroyed, and the bytes of the storage it gave them: a texture's own
+/// storage, or the buffer object of a dmabuf it allocated; a dmabuf imported from elsewhere and an owner's texture
+/// wrapped are counted with no bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextureTally {
+    pub textures: u32,
+    pub bytes: u64,
+}
+
+impl Texture {
+    /// The bytes of storage the device gives it as it is made.
+    fn own_bytes(&self) -> u64 {
+        if self.foreign || (self.image.is_some() && self.bo.is_none()) {
+            return 0;
+        }
+        let (w, h) = self.desc.size;
+        u64::from(w) * u64::from(h) * u64::from(self.desc.format.bytes_per_pixel())
+    }
 }
 
 impl std::fmt::Debug for Device {
@@ -357,6 +381,7 @@ impl Device {
             owner_target: Cell::new((None, [0; 4])),
             program_cache: None,
             driver_key: driver,
+            live: Cell::new(TextureTally::default()),
         };
         if !borrowed {
             // Safety: our own context: its state is ours to set once.
@@ -390,6 +415,20 @@ impl Device {
     /// The directory programs are saved in, for this device's driver, while there is a cache.
     pub fn program_cache_dir(&self) -> Option<&std::path::Path> {
         self.program_cache.as_ref().map(ProgramCache::dir)
+    }
+
+    /// The textures made and not yet destroyed, and their storage's bytes.
+    pub fn live_textures(&self) -> TextureTally {
+        self.live.get()
+    }
+
+    fn count_made(&self, texture: &mut Texture) {
+        texture.counted = texture.own_bytes();
+        let t = self.live.get();
+        self.live.set(TextureTally {
+            textures: t.textures + 1,
+            bytes: t.bytes + texture.counted,
+        });
     }
 
     /// What the program cache did since it was set; all zero without one.
@@ -616,6 +655,7 @@ impl Device {
                 bo: None,
                 id: next_id(),
                 foreign: false,
+                counted: 0,
             };
             if desc.usage.render_target {
                 match self.framebuffer_of(raw) {
@@ -626,6 +666,7 @@ impl Device {
                     }
                 }
             }
+            self.count_made(&mut texture);
             Ok(texture)
         }
     }
@@ -662,7 +703,7 @@ impl Device {
             self.texture_defaults();
             self.framebuffer_of(raw)
         }?;
-        Ok(Texture {
+        let mut texture = Texture {
             raw,
             desc: TextureDesc {
                 size,
@@ -677,7 +718,10 @@ impl Device {
             bo: None,
             id: next_id(),
             foreign: true,
-        })
+            counted: 0,
+        };
+        self.count_made(&mut texture);
+        Ok(texture)
     }
 
     /// Without a sampler bound, a texture reads its single level, nearest, clamped: complete without mipmaps.
@@ -842,6 +886,11 @@ impl Device {
     }
 
     pub fn destroy_texture(&self, texture: Texture) {
+        let t = self.live.get();
+        self.live.set(TextureTally {
+            textures: t.textures.saturating_sub(1),
+            bytes: t.bytes.saturating_sub(texture.counted),
+        });
         if self.ready().is_err() {
             return;
         }
@@ -992,12 +1041,14 @@ impl Device {
                 bo,
                 id: next_id(),
                 foreign: false,
+                counted: 0,
             };
             match self.framebuffer_of(raw) {
                 Ok(fb) => texture.framebuffer = Some(fb),
                 // an import-only layout is still sampled
                 Err(_) => texture.desc.usage = TextureUsage::SAMPLED,
             }
+            self.count_made(&mut texture);
             Ok(texture)
         }
     }

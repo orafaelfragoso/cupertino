@@ -41,7 +41,7 @@ pub use blocks::{ClipBlock, ClipsBlock, FillBlock, TextureBlock};
 pub use gles::{
     wait_sync_file, BindGroup, BindGroupEntry, BindGroupLayout, BindingResource, BorrowedState,
     Buffer, DetachedDevice, Device, ExternalImage, Fence, Pass, Pipeline, PipelineDesc, Sampler,
-    Texture, MAX_BINDINGS, MAX_GROUPS,
+    Texture, TextureTally, MAX_BINDINGS, MAX_GROUPS,
 };
 pub use program_cache::ProgramCacheStats;
 pub use types::*;

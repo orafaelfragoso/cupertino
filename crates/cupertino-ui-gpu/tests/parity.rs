@@ -25,7 +25,7 @@ const STRAY_PIXELS: usize = 4;
 
 /// Glyphs drawn from their key: coverage boxes of a size that follows the text size, and glyph 7 in colour.
 #[derive(Clone, Copy)]
-struct Boxes;
+pub(crate) struct Boxes;
 
 impl GlyphRasterizer for Boxes {
     fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<RasterGlyph>, TextError> {
@@ -72,7 +72,7 @@ const PICTURE: ResourceId = ResourceId(1);
 const PREMULTIPLIED: ResourceId = ResourceId(2);
 const WIDE: ResourceId = ResourceId(3);
 
-fn resources() -> PaintResources {
+pub(crate) fn resources() -> PaintResources {
     let straight: Vec<u8> = (0..8 * 8 * 4).map(|i| (i * 29 % 256) as u8).collect();
     let premultiplied: Vec<u8> = (0..5 * 7)
         .flat_map(|i: u32| {
@@ -211,7 +211,7 @@ impl Draw {
 
 /// The primitive groups a scene may draw.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Shapes,
     Gradients,
     Glyphs,
@@ -223,7 +223,7 @@ enum Kind {
     All,
 }
 
-const SIZE: (f64, f64) = (67.0, 51.0);
+pub(crate) const SIZE: (f64, f64) = (67.0, 51.0);
 
 fn node(id: u64, parent: Option<u64>, transform: Transform, ops: Vec<PaintOp>) -> PaintNode {
     PaintNode {
@@ -453,7 +453,7 @@ fn effects(draw: &mut Draw) -> Vec<Effect> {
 }
 
 /// An opaque background and a tree of nodes drawing `kind`, some of them clipping, grouping or moved.
-fn scene(seed: u64, kind: Kind) -> DisplayList {
+pub(crate) fn scene(seed: u64, kind: Kind) -> DisplayList {
     let mut draw = Draw(seed);
     let (w, h) = SIZE;
     let mut nodes = vec![node(

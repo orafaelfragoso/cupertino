@@ -46,6 +46,11 @@ impl Presentations {
         }
     }
 
+    /// The global, for the windows' surface layers.
+    pub(crate) fn layers(&self) -> Option<&Layers> {
+        self.layers.as_ref()
+    }
+
     pub(crate) fn available(&self) -> bool {
         self.layers.is_some()
     }

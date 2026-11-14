@@ -242,6 +242,17 @@ impl Layer {
         }
     }
 
+    /// Draw `style` of glass below the layer's content, in its bounds, magnified by `lens` (1 for none); `None` draws
+    /// none.
+    pub fn set_glass(&self, style: Option<crate::GlassStyle>, lens: f64) -> Result<(), Error> {
+        if !(lens.is_finite() && lens >= 1.0) {
+            return Err(Error::InvalidGlass);
+        }
+        self.0
+            .set_glass(style.map_or(u32::MAX, crate::GlassStyle::wire), lens);
+        Ok(())
+    }
+
     /// Clip the content to the layer's rounded bounds.
     pub fn set_masks_to_bounds(&self, masks: bool) {
         self.0.set_masks_to_bounds(u32::from(masks));

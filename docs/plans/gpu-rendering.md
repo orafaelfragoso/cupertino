@@ -539,10 +539,18 @@ Gate:
           `a_repaint_elsewhere_leaves_the_layer_and_one_inside_it_draws_only_the_layer_s_damage`,
           `a_change_of_a_layer_s_properties_alone_draws_no_frame`,
           `without_surface_layers_the_marked_subtree_paints_in_place`.
-    - [ ] The shared-memory presenter: each layer a `wl_surface` made a `cupertino_layer_v1` of the window's surface,
-          its frame copied into buffers of its own as the raised layer's is, its changes sent as the layer's requests
-          before the window's commit (so they apply with it), its events (`finished`, `replaced`, `settled`) back to the
-          runtime as a presentation's are; a layer the server lacks the version for is painted in place.
+    - [x] The shared-memory presenter: each layer a `wl_surface` made a `cupertino_layer_v1` of the window's surface
+          (`cupertino-ui-wayland`'s `surface_layers.rs`), its frame copied into buffers of its own as the raised layer's
+          is, at the window's scale (an external role that names the surface it is drawn with,
+          `ExternalRole::drawn_with`, takes no configure and leases buffers at that surface's scale), its rect and look
+          sent as the layer's values and the application's changes as its requests, so they apply with the window's
+          next commit (a change alone commits the window without a buffer, as a presentation's does); its animations
+          followed through `finished`, `replaced` and `settled`, so `presentation_settled` waits for them. Needs the
+          global at version 4; below it the capability is off and marked subtrees paint in place. Checked against the
+          server with the toolkit's window system (`cupertino-ui-wayland`'s `surface-layers` example): the layer shows
+          at its rect from a 180 x 90 buffer at scale 1.5, and its fade runs on the server's clock with no new buffer of
+          the window
+          (`a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer`).
     - [ ] The GPU presenter: the layers' frames drawn from the GPU renderer's textures into dmabufs of their own, as
           the raised layer's subsurface is, and the GPU renderer's frame split by layer as the CPU renderer's is; the
           local GPU tier covers it.

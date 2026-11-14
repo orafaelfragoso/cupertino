@@ -232,6 +232,32 @@ impl Backdrop {
     }
 }
 
+impl GlassStyle {
+    /// The style's wire value at the protocol's current version, as other extensions of the same server name glass
+    /// styles by it.
+    pub(crate) fn wire(self) -> u32 {
+        let style = match self {
+            GlassStyle::Regular => WireStyle::Regular,
+            GlassStyle::Clear => WireStyle::Clear,
+            GlassStyle::LargePanel => WireStyle::LargePanel,
+            GlassStyle::Bar => WireStyle::Bar,
+            GlassStyle::Dense => WireStyle::Dense,
+            GlassStyle::Module => WireStyle::Module,
+            GlassStyle::Card => WireStyle::Card,
+            GlassStyle::Track => WireStyle::Track,
+            GlassStyle::Popover => WireStyle::Popover,
+            GlassStyle::Switcher => WireStyle::Switcher,
+            GlassStyle::Sidebar => WireStyle::Sidebar,
+            GlassStyle::SubduedModule => WireStyle::SubduedModule,
+            GlassStyle::Snippet => WireStyle::Snippet,
+            GlassStyle::Veiled => WireStyle::Veiled,
+            GlassStyle::Toolbar => WireStyle::Toolbar,
+            GlassStyle::Menu => WireStyle::Menu,
+        };
+        style as u32
+    }
+}
+
 /// The version of `cupertino_backdrop_v1` that has the `tone` event.
 const TONE_VERSION: u32 = 7;
 

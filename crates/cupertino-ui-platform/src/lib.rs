@@ -13,6 +13,7 @@ use std::time::Duration;
 pub use cupertino_modifiers::Mods;
 
 mod surface_layers;
+pub use cupertino_animation::{CubicBezier, LayerCurve};
 pub use surface_layers::{LayerChange, LayerProperty, SurfaceLayer, SurfaceLayerLook};
 pub use cupertino_ui_render::Color;
 

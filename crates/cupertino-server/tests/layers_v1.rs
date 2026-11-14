@@ -1475,3 +1475,93 @@ fn captures() {
         drop(client);
     }
 }
+
+/// The toolkit's window system against the server (`cupertino-ui-wayland`'s `surface-layers`), at scale 1.5: a window
+/// hands over a surface layer with its frame, which the server shows as a layer of the window's surface at the rect
+/// the window gave it, drawn from the layer's own buffer at the window's scale; the fade the window then asks for runs
+/// on the server's clock to its end while the window commits no new buffer.
+#[test]
+fn a_toolkit_window_s_surface_layer_shows_at_its_rect_and_fades_on_the_server_clock_without_a_window_buffer() {
+    use smithay::backend::renderer::utils::with_renderer_surface_state;
+    use std::process::Stdio;
+    let Some(mut h) = Harness::new(1.5, false) else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let runtime = home.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let report = home.path().join("report");
+    let binary = common::fixtures::artifact("cupertino-ui-wayland", "example", "surface-layers");
+    /// The window's process, ended with the test.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _window = Kill(
+        common::spawn::cleared(binary, home.path())
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("WAYLAND_DISPLAY", h.socket_path())
+            .arg("--report")
+            .arg(&report)
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("the window"),
+    );
+    let toplevel = |h: &Harness| {
+        h.state
+            .windows
+            .iter()
+            .find(|w| w.mapped)
+            .map(|w| w.toplevel.wl_surface().clone())
+    };
+    let drawn = |h: &Harness| {
+        toplevel(h).map_or_else(Vec::new, |s| {
+            present(&s, h.state.now(), h.state.display_options().reduce_motion)
+        })
+    };
+    h.wait_until("the window's layer and its frame", |h| {
+        drawn(h).first().is_some_and(|l| l.content != (0.0, 0.0))
+    });
+    let layer = drawn(&h)[0].clone();
+    assert_eq!(layer.content, (120.0, 60.0), "its frame, in points");
+    let pixels = with_renderer_surface_state(&layer.surface, |s| s.buffer_size())
+        .flatten()
+        .expect("the layer's buffer");
+    assert_eq!((pixels.w, pixels.h), (180, 90), "at the window's scale");
+    assert_eq!(
+        (layer.x, layer.y, layer.width, layer.height, layer.opacity),
+        (40.0, 30.0, 120.0, 60.0, 1.0),
+        "at the rect the window gave it"
+    );
+    let surface = toplevel(&h).unwrap();
+    let commit =
+        |s: &ServerSurface| with_renderer_surface_state(s, |state| state.current_commit());
+    h.wait_until("the fade asked for", |_| {
+        std::fs::read_to_string(&report).is_ok_and(|r| r.contains("faded 1"))
+    });
+    let r = std::fs::read_to_string(&report).unwrap();
+    assert!(r.contains("surface_layers 1"), "{r}");
+    assert!(r.contains("layer_frames 1"), "{r}");
+    let first = commit(&surface);
+    let (mut between, mut new_buffers, mut last) = (0, 0, first);
+    h.wait_until("the layer faded out", |h| {
+        let Some(shown) = drawn(h).first().map(|l| l.opacity) else {
+            return false;
+        };
+        if shown > 0.0 && shown < 1.0 {
+            between += 1;
+        }
+        let now = commit(&surface);
+        if now != last {
+            new_buffers += 1;
+            last = now;
+        }
+        shown == 0.0
+    });
+    eprintln!("trace: fade: {between} server steps part way, {new_buffers} new buffers of the window");
+    assert!(between > 0, "the fade ran on the server");
+    assert_eq!(new_buffers, 0, "the window drew no frame while its layer faded");
+}

@@ -39,7 +39,8 @@ checkout and was run on the commit this page was written against.
   ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
   A long list or grid keeps scrolling cheap by
   building only the rows near its viewport, each as `Element::kept(key, mark, build)`: a row whose mark is the same
-  as last time keeps its nodes and their layout and is not built again.
+  as last time keeps its nodes and their layout and is not built again, and while nothing in it changed its paint is
+  laid into the frame as it was, without walking its nodes.
 - A Rust toolchain. Nothing else is installed or enabled by these steps.
 
 ## Build and run the examples

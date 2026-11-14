@@ -1753,8 +1753,11 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         dst: &Rect,
         sampling: Sampling,
     ) -> Result<(), RenderError> {
-        let image = &self.resources.images[&id];
-        let whole = self.images.get(id, image, self.config.max_pixels)?;
+        let resources = self.resources;
+        let image = &resources.images[&id];
+        if u64::from(image.width) * u64::from(image.height) > self.config.max_pixels {
+            return Err(RenderError::ResourceLimit);
+        }
         if src.width() <= 0.0 || src.height() <= 0.0 || dst.width() <= 0.0 || dst.height() <= 0.0 {
             return Ok(());
         }
@@ -1768,9 +1771,6 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         else {
             return Ok(());
         };
-        let Some(part) = whole.clone_rect(crop) else {
-            return Ok(());
-        };
         let (sx, sy) = (dst.width() / src.width(), dst.height() / src.height());
         let place = tiny_skia::Transform::from_row(
             sx as f32,
@@ -1780,17 +1780,6 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             (dst.min_x() + (x0 - src.min_x()) * sx) as f32,
             (dst.min_y() + (y0 - src.min_y()) * sy) as f32,
         );
-        let quality = match sampling {
-            Sampling::Nearest => FilterQuality::Nearest,
-            Sampling::Linear => FilterQuality::Bilinear,
-        };
-        let paint = tiny_skia::Paint {
-            shader: Pattern::new(part.as_ref(), SpreadMode::Pad, quality, 1.0, place),
-            ..tiny_skia::Paint::default()
-        };
-        let Some(path) = geometry::path(&Shape::Rect(*dst)) else {
-            return Ok(());
-        };
         let mut ts = self.ts(t, node);
         // an image drawn one source pixel per device pixel lands on whole pixels, so it is copied, not resampled; the
         // pixel is chosen in window pixels, so every piece of the window it is drawn into puts it in the same place
@@ -1804,7 +1793,54 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             let x = whole_pixel(window.tx) - t.origin.0 as f32;
             let y = whole_pixel(window.ty) - t.origin.1 as f32;
             ts = ts.post_translate(x - device.tx, y - device.ty);
+            // whole source pixels filling a destination on whole pixels are laid over directly, with the same result
+            if x0 == src.min_x()
+                && y0 == src.min_y()
+                && x1 == src.max_x()
+                && y1 == src.max_y()
+                && on_pixels(&ts, dst, (x, y), crop)
+            {
+                let mask = t.clips.last().map(Mask::data);
+                let at = (x as i32, y as i32);
+                // premultiplied pixels are read where they are, with no copy kept
+                if image.format == PixelFormat::Rgba8Premultiplied {
+                    lay_over(
+                        t.pixmap,
+                        mask,
+                        &image.pixels,
+                        image.stride as usize,
+                        crop,
+                        at,
+                    );
+                } else {
+                    let whole = self.images.get(id, image, self.config.max_pixels)?;
+                    lay_over(
+                        t.pixmap,
+                        mask,
+                        whole.data(),
+                        whole.width() as usize * 4,
+                        crop,
+                        at,
+                    );
+                }
+                return Ok(());
+            }
         }
+        let whole = self.images.get(id, image, self.config.max_pixels)?;
+        let Some(part) = whole.clone_rect(crop) else {
+            return Ok(());
+        };
+        let quality = match sampling {
+            Sampling::Nearest => FilterQuality::Nearest,
+            Sampling::Linear => FilterQuality::Bilinear,
+        };
+        let paint = tiny_skia::Paint {
+            shader: Pattern::new(part.as_ref(), SpreadMode::Pad, quality, 1.0, place),
+            ..tiny_skia::Paint::default()
+        };
+        let Some(path) = geometry::path(&Shape::Rect(*dst)) else {
+            return Ok(());
+        };
         t.pixmap.fill_path(
             &path,
             &paint,
@@ -2235,6 +2271,84 @@ fn over_run(s: &[u8], d: &mut [u8], k: u32) {
 
 /// Source-over of a glyph image at (`x`, `y`) in the pixmap, through the clip mask and inside `limit` (pixmap
 /// pixels): a raster can reach past the box its node's extent allows.
+/// Whether `dst` under `ts` covers exactly the device pixels an image cut to `crop` covers at `at`.
+fn on_pixels(
+    ts: &tiny_skia::Transform,
+    dst: &Rect,
+    at: (f32, f32),
+    crop: tiny_skia::IntRect,
+) -> bool {
+    const SLACK: f32 = 1e-3;
+    if ts.kx != 0.0 || ts.ky != 0.0 {
+        return false;
+    }
+    let edge =
+        |v: f64, scale: f32, shift: f32, want: f32| (v as f32 * scale + shift - want).abs() < SLACK;
+    edge(dst.min_x(), ts.sx, ts.tx, at.0)
+        && edge(dst.max_x(), ts.sx, ts.tx, at.0 + crop.width() as f32)
+        && edge(dst.min_y(), ts.sy, ts.ty, at.1)
+        && edge(dst.max_y(), ts.sy, ts.ty, at.1 + crop.height() as f32)
+}
+
+/// `v` rounded to the nearest whole number, a half to the even one, for `v` in 0 to 2^22: adding 2^23 leaves no
+/// fraction bits, so the addition itself rounds. The same result as `f32::round_ties_even`, with no call to make.
+#[inline(always)]
+fn to_even(v: f32) -> f32 {
+    const SHIFT: f32 = 8_388_608.0;
+    (v + SHIFT) - SHIFT
+}
+
+/// Lays the `crop` of a premultiplied image, its rows `stride` bytes apart in `image`, over the pixmap with its top-left
+/// corner on pixel `at`, one source pixel per pixel, under the clip `mask`. The arithmetic is the one a pattern fill of the same image computes, in the same
+/// order and precision, so the pixels are the same; a direct loop skips the fill's per-pixel sampling.
+fn lay_over(
+    pm: &mut PixmapMut<'_>,
+    mask: Option<&[u8]>,
+    image: &[u8],
+    stride: usize,
+    crop: tiny_skia::IntRect,
+    at: (i32, i32),
+) {
+    const UNIT: f32 = 1.0 / 255.0;
+    let (w, h) = (pm.width() as i32, pm.height() as i32);
+    let (x0, x1) = (at.0.max(0), (at.0 + crop.width() as i32).min(w));
+    let (y0, y1) = (at.1.max(0), (at.1 + crop.height() as i32).min(h));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let (dw, n) = (w as usize, (x1 - x0) as usize);
+    let sx = (x0 - at.0 + crop.x()) as usize;
+    let (out, _) = pm.data_mut().as_chunks_mut::<4>();
+    for y in y0..y1 {
+        let sy = (y - at.1 + crop.y()) as usize;
+        let row = y as usize * dw + x0 as usize;
+        let from = image[sy * stride + sx * 4..][..n * 4].as_chunks::<4>().0;
+        let to = &mut out[row..][..n];
+        let covers = mask.map(|m| &m[row..][..n]);
+        for (i, (s, d)) in from.iter().zip(to.iter_mut()).enumerate() {
+            let cover = covers.map_or(255, |m| m[i]);
+            if cover == 0 || u32::from_ne_bytes(*s) == 0 {
+                continue;
+            }
+            // opaque, or over nothing: the sum is the source pixel itself
+            if cover == 255 && (s[3] == 255 || u32::from_ne_bytes(*d) == 0) {
+                *d = *s;
+                continue;
+            }
+            let mut v = s.map(|b| f32::from(b) * UNIT);
+            if cover != 255 {
+                let c = f32::from(cover) / 255.0;
+                v = v.map(|value| value * c);
+            }
+            let keep = 1.0 - v[3];
+            for (b, value) in d.iter_mut().zip(v) {
+                let o = f32::from(*b) * UNIT * keep + value;
+                *b = to_even(o.clamp(0.0, 1.0) * 255.0) as u8;
+            }
+        }
+    }
+}
+
 fn blend_glyph(
     pm: &mut PixmapMut<'_>,
     mask: Option<&[u8]>,
@@ -3310,6 +3424,89 @@ mod tests {
                     f.pixels == expected.pixels,
                     "scale {scale} frame {frame} ({damage:?}): the image is not on device pixel {landed:?}"
                 );
+            }
+        }
+    }
+
+    /// Lays `image`'s `crop` over `base` the way the pattern fill does, at `scale`: the destination rectangle in points
+    /// and the image placed one texel per device pixel at device pixel `at`.
+    fn pattern_fill(
+        base: &Pixmap,
+        mask: Option<&Mask>,
+        image: &Pixmap,
+        crop: tiny_skia::IntRect,
+        at: (i32, i32),
+        scale: f64,
+        quality: FilterQuality,
+    ) -> Pixmap {
+        let dst = Rect::new(
+            f64::from(at.0) / scale,
+            f64::from(at.1) / scale,
+            f64::from(crop.width()) / scale,
+            f64::from(crop.height()) / scale,
+        );
+        let place = tiny_skia::Transform::from_row(
+            (1.0 / scale) as f32,
+            0.0,
+            0.0,
+            (1.0 / scale) as f32,
+            dst.min_x() as f32,
+            dst.min_y() as f32,
+        );
+        let ts = tiny_skia::Transform::from_scale(scale as f32, scale as f32);
+        assert!(on_pixels(&ts, &dst, (at.0 as f32, at.1 as f32), crop));
+        let part = image.clone_rect(crop).unwrap();
+        let paint = tiny_skia::Paint {
+            shader: Pattern::new(part.as_ref(), SpreadMode::Pad, quality, 1.0, place),
+            ..tiny_skia::Paint::default()
+        };
+        let mut out = base.clone();
+        let path = geometry::path(&Shape::Rect(dst)).unwrap();
+        out.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, mask);
+        out
+    }
+
+    /// An image laid over directly has the bytes the pattern fill gives it: every alpha, under a clip and not, cut
+    /// from inside the image, partly off the pixmap on either side, at whole and fractional scales.
+    #[test]
+    fn an_image_laid_over_directly_has_the_bytes_of_its_pattern_fill() {
+        let crop = tiny_skia::IntRect::from_xywh(3, 2, 21, 13).unwrap();
+        for seed in 0..6 {
+            let image = noise(29, 17, seed);
+            let base = noise(48, 36, seed + 50);
+            let mut clip = Mask::new(48, 36).unwrap();
+            clip.data_mut()
+                .copy_from_slice(&noise(12, 36, seed + 90).data()[..48 * 36]);
+            for at in [(5, 7), (-4, -3), (40, 30), (0, 0), (27, 23)] {
+                for mask in [None, Some(&clip)] {
+                    let mut laid = base.clone();
+                    lay_over(
+                        &mut laid.as_mut(),
+                        mask.map(Mask::data),
+                        image.data(),
+                        image.width() as usize * 4,
+                        crop,
+                        at,
+                    );
+                    for scale in [1.0, 1.25, 1.5, 2.0] {
+                        for quality in [FilterQuality::Nearest, FilterQuality::Bilinear] {
+                            let filled =
+                                pattern_fill(&base, mask, &image, crop, at, scale, quality);
+                            let apart = laid
+                                .data()
+                                .iter()
+                                .zip(filled.data())
+                                .filter(|(a, b)| a != b)
+                                .count();
+                            assert_eq!(
+                                apart,
+                                0,
+                                "seed {seed} at {at:?} clipped {} scale {scale} {quality:?}",
+                                mask.is_some()
+                            );
+                        }
+                    }
+                }
             }
         }
     }

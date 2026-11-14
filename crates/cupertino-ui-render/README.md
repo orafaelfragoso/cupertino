@@ -20,11 +20,13 @@ Laying an image over another (`source_over_part`, a group's opacity, a clip mask
 pixels as words, two channels to a 16-bit lane (`effects::mul_px`, `effects::over_px`, the same bytes as the channel by
 channel arithmetic, which a test checks on every value and on random pixels), skips runs of 16 empty pixels (or of
 pixels a mask covers fully) read a word at a time, and has no branch per pixel, so it vectorizes: a mostly empty layer
-the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond. A group whose opacity
+the size of a 2x window, such as a panel's outline, is laid over in a fraction of a millisecond. A run of 16 opaque
+pixels laid over whole is copied. A group whose opacity
 rounds to nothing (a panel fading in from 0) changes no pixel, so nothing of its subtree is painted.
 
 A paint node marks where a renderer may keep a layer (`PaintNode::layer`): `Layer::Scroll` is a scroll container's
-content with its drawn offset, `Layer::Opacity` a translucent group that may change its opacity. `scroll_layers` says
+content with its drawn offset, `Layer::Opacity` a translucent group that may change its opacity, `Layer::Transform` a
+subtree whose transform animates (a popover growing out of its anchor) and whose group may change its opacity. `scroll_layers` says
 which scroll layers a renderer keeps (a clip, a translation alone, no group or kept layer above), and the damage
 tracker uses the same rule. The CPU renderer keeps each such layer as an image of its content in the content's own
 pixels, its rows a ring, so a vertical scroll moves no pixel and paints only the rows that come into view and what
@@ -36,9 +38,19 @@ painted whole: a test scrolls random scenes up, down, sideways and past the view
 nodes on the way, and checks every frame against one drawn whole. The layer is laid over the frame where every clip
 above it lets whole pixels through; at a fractional clip edge its content is painted in place, as without layers, so
 the only difference from no layer is the rounding of laying the content over at once, within the goldens' 2 of 255.
+Where the frame under the layer is still only to be set to one colour (the window's background, waiting as a span
+write), the layer is laid over that colour as it is written, in one pass: an empty run writes the colour, an opaque
+run is copied, and the background is not written first (`scroll_on_background` counts it; the bytes are those of the
+background written and the layer laid over it, which a test checks against the general path while scrolling).
 Kept layers hold at most the bytes of one frame and 8 MiB more (`LAYER_SLACK_BYTES`); a layer past that is not kept and
 is painted every frame, which a test checks with five window-sized layers. `UiRenderer::drop_layers` lets them all go
-and keeps the frame; the toolkit calls it when its window is suspended. Opacity layers are marked but not kept yet.
+and keeps the frame; the toolkit calls it when its window is suspended. A group marked `Layer::Opacity` or
+`Layer::Transform` that is painted into the frame is kept as the image of its subtree with its effects, before its
+opacity and the clips above it, within the same cap; while its subtree is the same (each node's revision, transform,
+clip, group and box) and it lies where it was painted, it is laid over from that image at its opacity and its subtree
+is not painted (`groups_kept`), with the bytes of a frame that paints it, at scales 1, 1.5 and 2. A group whose
+transform changed is painted again: laid over moved, even by whole device pixels, the image would not put its paths'
+edges and its dithering on the pixels painting them there does, and scaled it would be resampled.
 
 The frame's pixels are kept from one frame to the next; a frame drawn whole clears or paints over every one of them, so
 they are not cleared beforehand as well. Pixels of a new size (a window's first frame) are allocated zeroed, which the
@@ -70,8 +82,9 @@ the pixels costs a few milliseconds of memory traffic, so these paths matter mos
 `CpuRenderer::stats` counts what the last frame did (dirty pixels, nodes and groups painted, primitives, scratch and layer
 allocations, clip masks, and each copy site with its bytes: clear, node, group and layer composites, crops, mask
 application, cache fills, retained caches), the rectangles the span path wrote (`spans`) and the nodes skipped under an
-opaque fill (`hidden`), the pixels painted into kept layers (`layer_pixels`), their composite (`scroll_composite`)
-and the layers kept (`retained_layers`), so a timing run can tell a slower frame from a heavier one. The opt-in
+opaque fill (`hidden`), the pixels painted into kept layers (`layer_pixels`), their composite (`scroll_composite`, of
+it `scroll_on_background`), the groups laid over from their kept images (`groups_kept`) and the layers kept
+(`retained_layers`), so a timing run can tell a slower frame from a heavier one. The opt-in
 `tests/render_matrix.rs` prints cold, steady and full-repaint timings with those counters for 1, 10 and 100 rows at
 scale 1 and 2; run it with `--release --ignored --nocapture` in an exclusive slot.
 

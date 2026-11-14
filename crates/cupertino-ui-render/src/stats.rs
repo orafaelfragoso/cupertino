@@ -21,6 +21,9 @@ pub struct RenderStats {
     /// Nodes whose own operations were painted, and those painted as a group layer.
     pub nodes_painted: u32,
     pub groups_painted: u32,
+    /// Groups laid over from the image kept of them ([`crate::Layer::Opacity`], [`crate::Layer::Transform`]), their
+    /// subtrees not painted.
+    pub groups_kept: u32,
     /// Nodes not painted, or painted without their own operations, because an opaque fill after them covers the
     /// damaged rectangle.
     pub hidden: u32,

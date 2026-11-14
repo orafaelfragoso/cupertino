@@ -2,7 +2,7 @@ use crate::effects::{self, div255};
 use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
-use crate::layers::{self, Kept, ScrollImage};
+use crate::layers::{self, GroupImage, GroupNode, Kept, ScrollImage};
 use crate::raster;
 use crate::spans;
 use crate::stats::RenderStats;
@@ -181,6 +181,9 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
     ) -> Result<(), RenderError> {
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
+        // what the kept groups may hold more: the cap less the scroll layers and the groups kept already
+        let group_room = (self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES)
+            .saturating_sub(self.kept.bytes());
         let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
             .ok_or(RenderError::InvalidSize)?;
         let mut tree = Tree::new(&request.list.nodes, scale);
@@ -214,6 +217,8 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             fast: self.fast,
             pending: spans::Pending::over_zero(zeroed),
             views: &views,
+            groups: Some(&mut self.kept.groups),
+            group_room,
         };
         for d in dirty {
             let hidden = if self.fast {
@@ -371,6 +376,27 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         plans
     }
 
+    /// Lets go of the kept groups whose node is not a kept group of this frame, and of them all when, with the scroll
+    /// layers this frame keeps, they no longer fit in the cap.
+    fn keep_groups(&mut self, request: &RenderRequest<'_>) {
+        if self.kept.groups.is_empty() {
+            return;
+        }
+        let groups: HashSet<PaintNodeId> = request
+            .list
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.group.is_some() && matches!(n.layer, Some(Layer::Opacity | Layer::Transform))
+            })
+            .map(|n| n.id)
+            .collect();
+        self.kept.groups.retain(|id, _| groups.contains(id));
+        if self.kept.bytes() > self.frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES {
+            self.kept.groups.clear();
+        }
+    }
+
     /// Paints what each plan names into its layer's kept image, in content pixels: the layer's content that reaches
     /// those pixels, moved by the layer's offset, over transparent pixels.
     fn paint_scrolls(
@@ -407,6 +433,8 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 fast: self.fast,
                 pending: spans::Pending::over_zero(false),
                 views: &[],
+                groups: None,
+                group_room: 0,
             };
             let (width, height) = (image.pixels.width(), image.pixels.height());
             let stride = width as usize * 4;
@@ -448,6 +476,35 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         }
         Ok(())
     }
+}
+
+/// The subtree of node `i` as a kept group's image holds it, in the coordinates of the node moved from `at` to the
+/// origin: the node with its group's effects and not its opacity, then its descendants in paint order.
+fn group_content(tree: &Tree<'_>, i: usize, at: (f64, f64)) -> Vec<GroupNode> {
+    let mut out = Vec::new();
+    let mut stack = vec![i];
+    while let Some(j) = stack.pop() {
+        let node = &tree.nodes[j];
+        let [a, b, c, d, e, f] = node.transform.0;
+        out.push(GroupNode {
+            id: node.id,
+            revision: node.revision,
+            transform: [a, b, c, d, e - at.0, f - at.1],
+            clip: node.clip.clone(),
+            group: match (&node.group, j == i) {
+                (Some(g), true) => Some(crate::Group {
+                    opacity: 1.0,
+                    effects: g.effects.clone(),
+                }),
+                (g, _) => g.clone(),
+            },
+            bounds: node.bounds.translate(-at.0, -at.1),
+            // the group's own mark says how it may change, not what it shows
+            layer: if j == i { None } else { node.layer },
+        });
+        stack.extend(tree.children[j].iter().rev());
+    }
+    out
 }
 
 /// A scroll offset in points as the device pixels it moves the content by.
@@ -518,6 +575,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         };
         let kept_in = crate::scroll_layers(request.list);
         let plans = self.plan_scrolls(request, &kept_in, full, &damage);
+        self.keep_groups(request);
         let dirty = if full {
             vec![whole]
         } else {
@@ -722,6 +780,9 @@ struct Painter<'a, R> {
     pending: spans::Pending,
     /// The kept scroll layers the frame lays over, by node index (empty when there are none, and inside a layer).
     views: &'a [Option<View<'a>>],
+    /// The kept groups, by node, when the painter paints the frame; and the bytes more of them may hold.
+    groups: Option<&'a mut HashMap<PaintNodeId, GroupImage>>,
+    group_room: u64,
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
@@ -1039,6 +1100,25 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         {
             return Ok(());
         }
+        // a kept group laid over at its opacity where it is now: its subtree is not painted again
+        let at = (node.transform.0[4], node.transform.0[5]);
+        let content = (t.frame
+            && self.groups.is_some()
+            && matches!(node.layer, Some(Layer::Opacity | Layer::Transform)))
+        .then(|| group_content(tree, i, at));
+        if let Some(content) = &content {
+            if let Some(image) = self.groups.as_mut().and_then(|g| g.remove(&node.id)) {
+                if image.shows(self.scale, at, content, &area) {
+                    self.stats.groups_kept += 1;
+                    let laid = self.lay_group(t, &image.pixels, &area, group.opacity, chain);
+                    if let Some(groups) = self.groups.as_mut() {
+                        groups.insert(node.id, image);
+                    }
+                    return laid;
+                }
+                self.group_room += image.bytes();
+            }
+        }
         self.stats.groups_painted += 1;
         let mut layer = self.scratch(&area)?;
         {
@@ -1062,26 +1142,83 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         for effect in &group.effects {
             effects::apply(&mut layer, effect, self.scale, (area.x0, area.y0));
         }
-        if let Some(mask) = self.chain_mask(chain, &area, &[])? {
-            self.stats
-                .mask_apply
-                .add(u64::from(area.width()) * u64::from(area.height()) * 4);
-            // a pixel the clip covers fully keeps its value (div255(c · 255) is c), and runs of them are passed over
-            for (pixels, cover) in layer
-                .data_mut()
-                .chunks_mut(4 * 16)
-                .zip(mask.data().chunks(16))
-            {
-                if cover.iter().fold(255, |all, &m| all & m) == 255 {
-                    continue;
-                }
-                // scaling by 255 and by 0 is exact, so no pixel needs a branch of its own
-                for (px, &m) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(cover) {
-                    *px = effects::mul_px(u32::from_le_bytes(*px), u32::from(m)).to_le_bytes();
-                }
+        let bytes = u64::from(area.width()) * u64::from(area.height()) * 4;
+        if let Some(content) = content.filter(|_| bytes <= self.group_room) {
+            // kept for the frames to come, within the renderer's cap
+            self.group_room -= bytes;
+            let laid = self.lay_group(t, &layer, &area, group.opacity, chain);
+            let image = GroupImage {
+                pixels: layer,
+                scale: self.scale,
+                area,
+                at,
+                content,
+            };
+            if let Some(groups) = self.groups.as_mut() {
+                groups.insert(node.id, image);
             }
+            return laid;
+        }
+        if let Some(mask) = self.chain_mask(chain, &area, &[])? {
+            self.mask_layer(&mut layer, &mask, &area);
         }
         self.lay_over(t, layer, &area, group.opacity, Site::Group)
+    }
+
+    /// Multiplies a group's image covering `area` by the clips' `mask`.
+    fn mask_layer(&mut self, layer: &mut Pixmap, mask: &Mask, area: &Bounds) {
+        self.stats
+            .mask_apply
+            .add(u64::from(area.width()) * u64::from(area.height()) * 4);
+        // a pixel the clip covers fully keeps its value (div255(c · 255) is c), and runs of them are passed over
+        for (pixels, cover) in layer
+            .data_mut()
+            .chunks_mut(4 * 16)
+            .zip(mask.data().chunks(16))
+        {
+            if cover.iter().fold(255, |all, &m| all & m) == 255 {
+                continue;
+            }
+            // scaling by 255 and by 0 is exact, so no pixel needs a branch of its own
+            for (px, &m) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(cover) {
+                *px = effects::mul_px(u32::from_le_bytes(*px), u32::from(m)).to_le_bytes();
+            }
+        }
+    }
+
+    /// Lays a group's image covering `area` over the target at `opacity`, under the clips of `chain`, leaving the
+    /// image as it is.
+    fn lay_group(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        image: &Pixmap,
+        area: &Bounds,
+        opacity: f32,
+        chain: &[&PaintNode],
+    ) -> Result<(), RenderError> {
+        if let Some(mask) = self.chain_mask(chain, area, &[])? {
+            let mut masked = image.clone();
+            self.mask_layer(&mut masked, &mask, area);
+            return self.lay_over(t, masked, area, opacity, Site::Group);
+        }
+        let visible = area.intersect(&t.limit);
+        if visible.is_empty() {
+            return Ok(());
+        }
+        if t.frame {
+            self.pending.flush(t.pixmap, t.origin, &visible);
+        }
+        self.stats
+            .group_composite
+            .add(u64::from(visible.width()) * u64::from(visible.height()) * 4);
+        source_over_part(
+            t.pixmap,
+            (visible.x0 - t.origin.0, visible.y0 - t.origin.1),
+            image,
+            &visible.offset(-area.x0, -area.y0),
+            opacity,
+        );
+        Ok(())
     }
 
     /// Paints one node's own operations into a scratch image of just the pixels they can reach, under the
@@ -3238,6 +3375,143 @@ mod tests {
                 one_pass > 0,
                 "scale {scale}: no layer laid over its background in one pass"
             );
+        }
+    }
+
+    /// `list` inside a group marked `layer` at `opacity`, its node at `at` with its transform's linear part `linear`,
+    /// with a drop shadow when `shadow`, over an opaque backdrop and under a translucent bar.
+    fn grouped(
+        list: &DisplayList,
+        layer: Layer,
+        opacity: f32,
+        at: (f64, f64),
+        linear: f64,
+        shadow: bool,
+    ) -> DisplayList {
+        let backdrop = plain(
+            8000,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, SCENE.0, SCENE.1)),
+                paint: Paint::Solid(Color::new(0.3, 0.5, 0.7, 1.0)),
+            }],
+        );
+        let mut root = plain(7000, None, at, Vec::new());
+        root.transform.0[0] = linear;
+        root.transform.0[3] = linear;
+        root.layer = Some(layer);
+        root.group = Some(crate::Group {
+            opacity,
+            effects: shadow
+                .then_some(crate::Effect::DropShadow {
+                    offset: cupertino_geometry::Point::new(1.0, 2.0),
+                    blur: 3.0,
+                    color: Color::new(0.0, 0.0, 0.0, 0.4),
+                })
+                .into_iter()
+                .collect(),
+        });
+        // inside the frame, so that a move keeps all of it in view
+        root.bounds = Rect::new(at.0 + 10.0, at.1 + 20.0, 70.0 * linear, 50.0 * linear);
+        let mut nodes = vec![backdrop, root];
+        for node in &list.nodes {
+            let mut moved = node.clone();
+            let [a, b, c, d, e, f] = moved.transform.0;
+            moved.transform = Transform([
+                a * linear,
+                b * linear,
+                c * linear,
+                d * linear,
+                e * linear + at.0,
+                f * linear + at.1,
+            ]);
+            moved.bounds = Rect::new(
+                node.bounds.min_x() * linear + at.0,
+                node.bounds.min_y() * linear + at.1,
+                node.bounds.width() * linear,
+                node.bounds.height() * linear,
+            );
+            moved.parent = Some(node.parent.unwrap_or(PaintNodeId(7000)));
+            nodes.push(moved);
+        }
+        nodes.push(plain(
+            8001,
+            None,
+            (0.0, 0.0),
+            vec![PaintOp::Fill {
+                shape: Shape::Rect(Rect::new(0.0, 0.0, SCENE.0, 14.0)),
+                paint: Paint::Solid(Color::new(0.95, 0.9, 0.8, 0.6)),
+            }],
+        ));
+        DisplayList { nodes }
+    }
+
+    /// A fading group, marked as fading or as moving, is laid over from the image kept of it, with the bytes of
+    /// a frame that paints them whole; one whose transform changed, even by whole device pixels, is painted again.
+    #[test]
+    fn a_fading_group_is_laid_over_from_its_kept_image_and_a_moved_one_painted_again() {
+        let solid = DisplayList {
+            nodes: (0..6_u32)
+                .map(|i| {
+                    let x = f64::from(i) * 9.0;
+                    plain(
+                        100 + u64::from(i),
+                        None,
+                        (x, x / 2.0),
+                        vec![PaintOp::Fill {
+                            shape: Shape::RoundedRect {
+                                rect: Rect::new(12.3, 21.7, 17.5, 9.25),
+                                radius: 3.5,
+                            },
+                            paint: Paint::Solid(Color::new(0.9, 0.2 + 0.1 * i as f32, 0.1, 0.8)),
+                        }],
+                    )
+                })
+                .collect(),
+        };
+        for (content, shadow) in [(scene(4), true), (solid, false)] {
+            for scale in [1.0, 1.5, 2.0] {
+                let px = |n: f64| n / scale;
+                // (layer, opacity, place, linear part, kept)
+                let frames = [
+                    (Layer::Opacity, 1.0, (0.0, 0.0), 1.0, false),
+                    (Layer::Opacity, 0.7, (0.0, 0.0), 1.0, true),
+                    (Layer::Opacity, 0.25, (0.0, 0.0), 1.0, true),
+                    (Layer::Transform, 0.6, (0.0, 0.0), 1.0, true),
+                    (Layer::Transform, 0.6, (px(8.0), px(-8.0)), 1.0, false),
+                    (Layer::Transform, 0.3, (px(8.0), px(-8.0)), 1.0, true),
+                    (Layer::Transform, 0.3, (px(8.0), px(-8.0)), 0.8, false),
+                    (Layer::Transform, 0.9, (px(8.0), px(-8.0)), 0.8, true),
+                    (Layer::Transform, 0.9, (px(8.5), px(-8.0)), 0.8, false),
+                ];
+                let mut r = CpuRenderer::new(layer_config(), NoGlyphs);
+                for (n, (layer, opacity, at, linear, kept)) in frames.into_iter().enumerate() {
+                    let list = grouped(&content, layer, opacity, at, linear, shadow);
+                    let frame = draw_frame(&mut r, &list, &DamageRegion::Full, scale);
+                    let stats = *r.stats();
+                    let at = format!("shadow {shadow}, scale {scale}, frame {n}");
+                    assert_eq!(stats.groups_kept > 0, kept, "{at}");
+                    if kept {
+                        assert_eq!(stats.groups_painted, 0, "{at}: the subtree is not painted");
+                    }
+                    let whole = draw_frame(
+                        &mut CpuRenderer::new(layer_config(), NoGlyphs),
+                        &list,
+                        &DamageRegion::Full,
+                        scale,
+                    );
+                    assert!(frame.pixels == whole.pixels, "{at}");
+                    let (count, bytes) = r.kept_layers();
+                    let cap = frame.pixels.len() as u64 + layers::LAYER_SLACK_BYTES;
+                    assert!(count == 1 && bytes <= cap, "{at}");
+                }
+                // a group no longer marked lets its image go
+                let mut unmarked = grouped(&content, Layer::Opacity, 0.5, (0.0, 0.0), 1.0, shadow);
+                unmarked.nodes[1].layer = None;
+                draw_frame(&mut r, &unmarked, &DamageRegion::Full, scale);
+                assert_eq!(r.kept_layers(), (0, 0));
+            }
         }
     }
 

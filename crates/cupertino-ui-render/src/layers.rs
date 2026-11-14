@@ -12,7 +12,8 @@
 //! whole at any offset.
 
 use crate::geometry::Bounds;
-use crate::PaintNodeId;
+use crate::{Group, Layer, PaintNodeId, PaintRevision, Shape};
+use cupertino_geometry::Rect;
 use std::collections::{HashMap, HashSet};
 use tiny_skia::Pixmap;
 
@@ -67,10 +68,85 @@ pub(crate) fn ring_pieces(y0: i32, y1: i32, height: i32) -> Vec<(i32, i32, i32)>
     pieces
 }
 
+/// A kept group ([`crate::Layer::Opacity`], [`crate::Layer::Transform`]): the image of its subtree with its effects,
+/// before its opacity and the clips above it, and what the subtree was when it was painted.
+pub(crate) struct GroupImage {
+    pub(crate) pixels: Pixmap,
+    pub(crate) scale: f64,
+    /// The window pixels it covers.
+    pub(crate) area: Bounds,
+    /// Where the group's node was in the window, in points: its transform's translation.
+    pub(crate) at: (f64, f64),
+    pub(crate) content: Vec<GroupNode>,
+}
+
+impl GroupImage {
+    pub(crate) fn bytes(&self) -> u64 {
+        u64::from(self.pixels.width()) * u64::from(self.pixels.height()) * 4
+    }
+
+    /// Whether the image still shows the group: the same subtree at the same scale and in the same place, covering
+    /// the same pixels. Painted anywhere else, even whole device pixels away, its paths and dithering land on other
+    /// pixels than a move of the image would put them, so it is painted again.
+    pub(crate) fn shows(
+        &self,
+        scale: f64,
+        at: (f64, f64),
+        content: &[GroupNode],
+        area: &Bounds,
+    ) -> bool {
+        self.scale == scale
+            && self.at == at
+            && self.area == *area
+            && self.content.len() == content.len()
+            && self.content.iter().zip(content).all(|(a, b)| a.same(b))
+    }
+}
+
+/// How far two positions of one node relative to its group's node may differ and still be one.
+const SAME: f64 = 1e-6;
+
+/// One node of a kept group's subtree as it was painted, in the coordinates of the group's node moved to the origin.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GroupNode {
+    pub(crate) id: PaintNodeId,
+    pub(crate) revision: PaintRevision,
+    pub(crate) transform: [f64; 6],
+    pub(crate) clip: Option<Shape>,
+    /// The group's own node keeps its effects here, not its opacity, which the image is laid over at.
+    pub(crate) group: Option<Group>,
+    pub(crate) bounds: Rect,
+    pub(crate) layer: Option<Layer>,
+}
+
+impl GroupNode {
+    fn same(&self, other: &GroupNode) -> bool {
+        let near = |a: f64, b: f64| (a - b).abs() <= SAME;
+        let rect = |a: &Rect, b: &Rect| {
+            near(a.min_x(), b.min_x())
+                && near(a.min_y(), b.min_y())
+                && near(a.max_x(), b.max_x())
+                && near(a.max_y(), b.max_y())
+        };
+        self.id == other.id
+            && self.revision == other.revision
+            && self.clip == other.clip
+            && self.group == other.group
+            && self.layer == other.layer
+            && self
+                .transform
+                .iter()
+                .zip(&other.transform)
+                .all(|(a, b)| near(*a, *b))
+            && rect(&self.bounds, &other.bounds)
+    }
+}
+
 /// Everything a renderer keeps between frames, by node.
 #[derive(Default)]
 pub(crate) struct Kept {
     pub(crate) scrolls: HashMap<PaintNodeId, ScrollImage>,
+    pub(crate) groups: HashMap<PaintNodeId, GroupImage>,
     /// The scroll layers of the last frame drawn, kept or not. A layer new in a frame shows what its nodes, all new
     /// to it, damage; one the frame had before, with no image, shows what it did there only if laid over whole.
     pub(crate) seen: HashSet<PaintNodeId>,
@@ -78,16 +154,18 @@ pub(crate) struct Kept {
 
 impl Kept {
     pub(crate) fn bytes(&self) -> u64 {
-        self.scrolls.values().map(ScrollImage::bytes).sum()
+        self.scrolls.values().map(ScrollImage::bytes).sum::<u64>()
+            + self.groups.values().map(GroupImage::bytes).sum::<u64>()
     }
 
     /// Lets the images go; the layers stay seen, so the next frame lays them over whole.
     pub(crate) fn clear(&mut self) {
         self.scrolls.clear();
+        self.groups.clear();
     }
 
     pub(crate) fn count(&self) -> u64 {
-        self.scrolls.len() as u64
+        (self.scrolls.len() + self.groups.len()) as u64
     }
 }
 

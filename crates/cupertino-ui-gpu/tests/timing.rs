@@ -77,7 +77,9 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     let full = DamageRegion::Full;
     // a control's worth: a button-sized rectangle in the middle of the window
     let damaged = DamageRegion::Rects(vec![Rect::new(700.0, 480.0, 120.0, 28.0)]);
+    let made = Instant::now();
     let mut gpu = common::gpu(&device, GlyphRaster::new(system.clone()));
+    let made = made.elapsed();
     let mut cpu = common::cpu(GlyphRaster::new(system.clone()));
     let time = |damage: &DamageRegion, runs: usize, draw: &mut dyn FnMut(&Frame<'_>)| {
         let f = Frame {
@@ -125,7 +127,7 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     let whole_cpu = median(time(&full, 5, &mut on_cpu));
     let damaged_cpu = median(time(&damaged, 21, &mut on_cpu));
     eprintln!(
-        "{} nodes, {}x{} pixels: first frame gpu {first_gpu:?} cpu {first_cpu:?}; whole frame (median) gpu \
+        "renderer made in {made:?} (programs compiled); {} nodes, {}x{} pixels: first frame gpu {first_gpu:?} cpu {first_cpu:?}; whole frame (median) gpu \
          {whole_gpu:?} (returned after {whole_submitted:?}) cpu {whole_cpu:?}; damaged frame (median) gpu \
          {damaged_gpu:?} (returned after {damaged_submitted:?}) cpu {damaged_cpu:?}; {:?}",
         list.nodes.len(),

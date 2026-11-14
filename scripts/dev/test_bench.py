@@ -29,7 +29,7 @@ class ScriptTest(unittest.TestCase):
             flags, (a, b) = bench.script(name, 60, WINDOWS, (1280, 800), 1.0, 15)
             self.assertGreaterEqual(a, bench.SETTLE, name)
             self.assertGreater(b, a, name)
-            steps = [t for f in ("--pointer", "--press", "--release", "--click", "--action", "--key", "--type",
+            steps = [t for f in ("--pointer", "--pointer-on", "--press", "--release", "--click", "--action", "--key", "--type",
                                  "--scroll", "--right-click") for t in times(flags, f)]
             if name == "idle":
                 self.assertEqual(steps, [], "an idle desktop gets no input")
@@ -48,11 +48,15 @@ class ScriptTest(unittest.TestCase):
         s = WINDOWS["settings"]
         self.assertTrue(s["x"] < x < s["x"] + s["width"] and s["y"] < y < s["y"] + 28)
 
-    def test_the_hover_crosses_every_window_button_of_settings(self):
+    def test_the_hover_crosses_every_window_button_of_settings_wherever_settings_is(self):
         flags, _ = bench.script("hover", 60, WINDOWS, (1280, 800), 1.0, 15)
-        points = [tuple(float(v) for v in flags[i + 1].split(":")[1].split(","))
-                  for i, f in enumerate(flags) if f == "--pointer"][:-1]
-        (close_x, row), (zoom_x, _) = WINDOWS["settings"]["buttons"]
+        on = [flags[i + 1].split(":") for i, f in enumerate(flags) if f == "--pointer-on"]
+        self.assertTrue(on and all(window == "settings" for _, window, _ in on))
+        s = WINDOWS["settings"]
+        # points of Settings' frame, as the layout session placed it
+        points = [tuple(float(v) for v in p.split(",")) for _, _, p in on]
+        points = [(s["x"] + x, s["y"] + y) for x, y in points]
+        (close_x, row), (zoom_x, _) = s["buttons"]
         self.assertTrue(all(y == row for _, y in points))
         xs = [x for x, _ in points]
         self.assertLess(min(xs), close_x - 6)

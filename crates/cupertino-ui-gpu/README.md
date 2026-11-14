@@ -26,12 +26,22 @@ instances uploaded in one buffer each and the passes run (`exec`). Offscreen tar
 the frame has finished with (a layer laid over, a blur level read) gives its texture to the next target of its size
 and format, so a frame holds only the targets alive at once and a frame like the last makes none.
 
+A scroll layer (`Layer::Scroll`, kept as `cupertino_ui_render::scroll_layers` says) keeps its content between frames
+in a texture the size of its viewport, painted under none of its clips and dithered by its own pixel (the window
+pixel moved by the layer's offset). A frame that moves it by whole device pixels draws what stays in view into the
+layer's second texture, moved, and paints only the rows or columns that come into view and what the damage names; a
+move by a part of a pixel, a new viewport or a full frame paints it whole. The window lays the texture over where
+every clip around the layer lets pixels through whole and paints the content in place along a clip's partly covered
+edge, as the CPU renderer composites its kept images. The layers' textures stay within twice the window's bytes and
+16 MiB more; `trim` lets them go.
+
 A window draws with `WindowRenderer`, a `UiRenderer` whose frames are `CpuFrame`s with empty `pixels` and the
 `WindowTexture` in `device`: the window-sized texture, shared between the renderer and its frames, which the
 presenter on the same device copies into its buffers and anything else reads back (`CpuFrame::in_memory`). The
 programs (`GpuPrograms`) are made once per device and shared by every renderer on it (`GpuRenderer::with_programs`).
 
 The tests (`tests/`) draw the golden scenes against the CPU renderer's baselines, and generated scenes of each
-primitive group on both renderers at scales 1, 1.5 and 2 on odd sizes, whole and repainting damage. They need an EGL
+primitive group on both renderers at scales 1, 1.5 and 2 on odd sizes, whole and repainting damage, and scroll layers
+scrolled frame by frame against the same frames drawn whole. They need an EGL
 device: the first render node, or the surfaceless platform; `CUPERTINO_GPU_REQUIRED=1` makes a missing or software
 device a failure (the local GPU tier), `CUPERTINO_EGL_REQUIRED=1` a missing one (CI).

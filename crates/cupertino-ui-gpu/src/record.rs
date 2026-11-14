@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use cupertino_gpu::atlas::Atlas;
-use cupertino_gpu::{Error as GpuError, Region, TextureDesc, TextureFormat, TextureUsage};
+use cupertino_gpu::{Error as GpuError, Region, Texture, TextureDesc, TextureFormat, TextureUsage};
 use cupertino_raster_math::blur::{plan_blur, MAX_BLUR_RADIUS};
 use cupertino_raster_math::coverage::{coverage, rect_distance, rounded_distance};
 use cupertino_raster_math::dither;
@@ -36,6 +36,19 @@ pub(crate) const TEXTURE_FLOATS: usize = 96;
 pub(crate) const RESOLVE_FLOATS: usize = 16;
 pub(crate) const LEVEL_FLOATS: usize = 4;
 pub(crate) const KERNEL_FLOATS: usize = 40;
+
+/// The pixels a kept scroll layer's content may size its scratch images and layers against: all of them, so each
+/// follows its node's own extent and not the window's edges, wherever the layer has scrolled the node to.
+const EVERYWHERE: Bounds = Bounds {
+    x0: -(1 << 28),
+    y0: -(1 << 28),
+    x1: 1 << 28,
+    y1: 1 << 28,
+};
+
+/// The most pixels a scratch image or layer of a kept scroll layer's node covers before it is cut to what the
+/// pixels being painted need of it (with its effects' reach around them), as a frame cuts it.
+const SCRATCH_PIXELS: u64 = 1 << 22;
 
 /// Where a clip block starts in each program's uniforms.
 const FILL_CLIPS: usize = 76;
@@ -179,6 +192,23 @@ impl Recording {
         }
     }
 
+    /// A target drawn into a kept scroll layer's texture: its passes keep what the texture holds.
+    fn add_kept(&mut self, node: PaintNodeId, slot: usize, texture: Texture) -> TargetId {
+        let size = texture.size();
+        self.targets.push((
+            TargetMem::Kept {
+                node,
+                slot,
+                texture,
+            },
+            size,
+            TextureFormat::Rgba8,
+        ));
+        let t = self.add_target(self.targets.len() - 1, size);
+        self.started[t.0] = true;
+        t
+    }
+
     /// Gives every target and texture of the frame back.
     pub(crate) fn release<R>(self, r: &mut GpuRenderer<R>) {
         for (t, _, _) in self.targets {
@@ -186,6 +216,14 @@ impl Recording {
                 TargetMem::Window => {}
                 TargetMem::Pooled(p) => r.pool.release(p, r.frames),
                 TargetMem::Own(t) => r.device.destroy_texture(t),
+                TargetMem::Kept {
+                    node,
+                    slot,
+                    texture,
+                } => match r.kept.get_mut(&node) {
+                    Some(k) if k.textures[slot].is_none() => k.textures[slot] = Some(texture),
+                    _ => r.device.destroy_texture(texture),
+                },
             }
         }
         for t in self.own {
@@ -379,9 +417,17 @@ struct Ctx {
     origin: (i32, i32),
     rect: Bounds,
     limit: Bounds,
+    /// What the window pixel is moved by to key the dither: a kept scroll layer's content is dithered by its own
+    /// pixel (the window pixel plus the layer's offset), so it keeps its bytes as the layer moves.
+    dither: (i32, i32),
 }
 
 impl Ctx {
+    /// The dither's move as the programs take it: x + 8 y, each modulo the pattern's 8 pixels.
+    fn dither_shift(&self) -> f32 {
+        (self.dither.0.rem_euclid(8) + 8 * self.dither.1.rem_euclid(8)) as f32
+    }
+
     fn frame(&self, r: &Recording) -> [f32; 4] {
         let (w, h) = r.sizes[self.target.0];
         [
@@ -398,7 +444,13 @@ impl Ctx {
 
     fn scissor(&self, b: &Bounds) -> Region {
         let l = self.local(b);
-        Region::new(l.x0 as u32, l.y0 as u32, l.width(), l.height())
+        let (x0, y0) = (l.x0.max(0), l.y0.max(0));
+        Region::new(
+            x0 as u32,
+            y0 as u32,
+            (l.x1 - x0).max(0) as u32,
+            (l.y1 - y0).max(0) as u32,
+        )
     }
 }
 
@@ -407,6 +459,7 @@ struct Tree<'n> {
     nodes: &'n [PaintNode],
     extents: Vec<Bounds>,
     children: Vec<Vec<usize>>,
+    parents: Vec<Option<usize>>,
     roots: Vec<usize>,
 }
 
@@ -415,10 +468,14 @@ impl<'n> Tree<'n> {
         let index: HashMap<PaintNodeId, usize> =
             nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         let mut children = vec![Vec::new(); nodes.len()];
+        let mut parents = vec![None; nodes.len()];
         let mut roots = Vec::new();
         for (i, node) in nodes.iter().enumerate() {
             match node.parent.and_then(|p| index.get(&p)) {
-                Some(&p) => children[p].push(i),
+                Some(&p) => {
+                    children[p].push(i);
+                    parents[i] = Some(p);
+                }
                 None => roots.push(i),
             }
         }
@@ -429,59 +486,62 @@ impl<'n> Tree<'n> {
                 .map(|n| geometry::own_extent(n, scale))
                 .collect(),
             children,
+            parents,
             roots,
         }
     }
 }
 
-/// Records the frame's damaged rectangle `dirty` (window pixels) of `request`.
+/// What a frame does to a kept scroll layer's texture before the window is painted: the layer's node (by index),
+/// where its clip shows it (window pixels, the texture's size), how far its content moved since the texture was
+/// painted (its pixels laid into the other texture moved back by as much), and the window pixels of the layer to
+/// paint into it again.
+pub(crate) struct ScrollPlan {
+    pub index: usize,
+    pub id: PaintNodeId,
+    pub viewport: Bounds,
+    pub moved: Option<(i32, i32)>,
+    pub paint: Vec<Bounds>,
+    /// The layer's offset in device pixels: its content is dithered by the window pixel moved by as much.
+    pub shift: (i32, i32),
+}
+
+/// Records the frame's damaged rectangles `dirty` (window pixels) of `request`, after bringing the kept scroll layers
+/// of `plans` up to date.
 pub(crate) fn paint<R: GlyphRasterizer>(
     r: &mut GpuRenderer<R>,
     rec: &mut Recording,
     request: &RenderRequest<'_>,
     dirty: &[Bounds],
+    plans: &[ScrollPlan],
 ) -> Result<(), RenderError> {
     rec.sizes[0] = (request.width, request.height);
     let whole = Bounds::of_size(request.width, request.height);
     let tree = Tree::new(&request.list.nodes, request.scale);
+    let mut p = Painter {
+        r,
+        rec,
+        tree: &tree,
+        scale: request.scale,
+        request,
+        whole,
+        views: HashMap::new(),
+    };
+    for plan in plans {
+        p.keep(plan)?;
+    }
     for &dirty in dirty {
         let ctx = Ctx {
             target: WINDOW,
             origin: (0, 0),
             rect: whole,
             limit: dirty,
+            dither: (0, 0),
         };
-        if !rec.full {
+        if !p.rec.full {
             // the repainted rectangle starts transparent
-            let mut u = [0.0f32; FILL_FLOATS];
-            u[..4].copy_from_slice(&ctx.frame(rec));
-            u[4] = 1.0;
-            u[7] = 1.0;
-            u[8] = -(dirty.x0 as f32 + dirty.x1 as f32) / 2.0;
-            u[9] = -(dirty.y0 as f32 + dirty.y1 as f32) / 2.0;
-            u[10] = dirty.width() as f32 / 2.0 + 1.0;
-            u[11] = dirty.height() as f32 / 2.0 + 1.0;
-            u[13] = 1.0;
-            let uniform = rec.uniform(&u);
-            let first = rec.instance_count();
-            rec.quad(dirty, (0.0, 0.0));
-            rec.cmds.push(Cmd::Quads {
-                program: Program::Clear,
-                target: WINDOW,
-                scissor: ctx.scissor(&dirty),
-                uniform,
-                textures: [Tex::Empty; 3],
-                instances: (first, 1),
-            });
+            p.clear(&ctx, dirty);
         }
-        let mut p = Painter {
-            r,
-            rec,
-            tree: &tree,
-            scale: request.scale,
-            request,
-            whole,
-        };
         for &root in &tree.roots {
             p.subtree(&ctx, root, &mut Vec::new())?;
         }
@@ -505,6 +565,9 @@ struct Painter<'a, 'n, R> {
     scale: f64,
     request: &'a RenderRequest<'a>,
     whole: Bounds,
+    /// The kept scroll layers laid over the window this frame, by their node's index: the target holding the
+    /// layer's content as the frame shows it, and where its clip shows it.
+    views: HashMap<usize, (TargetId, Bounds)>,
 }
 
 /// What a layer laid over at `opacity` is multiplied by, from 0 (it changes nothing) to 255.
@@ -648,7 +711,162 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             return self.group(ctx, i, group, chain);
         }
         self.own(ctx, i, chain)?;
+        if ctx.target == WINDOW {
+            if let Some(&(kept, viewport)) = self.views.get(&i) {
+                return self.composite(ctx, i, chain, kept, viewport);
+            }
+        }
         self.children(ctx, i, chain)
+    }
+
+    /// The pixels `rect` of `ctx`'s target made transparent.
+    fn clear(&mut self, ctx: &Ctx, rect: Bounds) {
+        let mut u = [0.0f32; FILL_FLOATS];
+        u[..4].copy_from_slice(&ctx.frame(self.rec));
+        u[4] = 1.0;
+        u[7] = 1.0;
+        u[8] = -(rect.x0 as f32 + rect.x1 as f32) / 2.0;
+        u[9] = -(rect.y0 as f32 + rect.y1 as f32) / 2.0;
+        u[10] = rect.width() as f32 / 2.0 + 1.0;
+        u[11] = rect.height() as f32 / 2.0 + 1.0;
+        u[13] = 1.0;
+        let uniform = self.rec.uniform(&u);
+        let first = self.rec.instance_count();
+        self.rec.quad(ctx.local(&rect), (0.0, 0.0));
+        self.rec.cmds.push(Cmd::Quads {
+            program: Program::Clear,
+            target: ctx.target,
+            scissor: ctx.scissor(&rect),
+            uniform,
+            textures: [Tex::Empty; 3],
+            instances: (first, 1),
+        });
+    }
+
+    /// Brings a kept scroll layer's texture up to date as `plan` says: the pixels that stay in view moved into the
+    /// other texture, then the pixels to paint again cleared and painted, the layer's content in place in the window's
+    /// pixels and under none of its clips (those cut it as it is laid over).
+    fn keep(&mut self, plan: &ScrollPlan) -> Result<(), RenderError> {
+        let v = plan.viewport;
+        let size = (v.width(), v.height());
+        let Some(kept) = self.r.kept.get_mut(&plan.id) else {
+            return Ok(());
+        };
+        let held = kept.current;
+        let Some(texture) = kept.textures[held].take() else {
+            return Ok(());
+        };
+        let from = self.rec.add_kept(plan.id, held, texture);
+        let at = (v.x0, v.y0);
+        let target = match plan.moved {
+            None => from,
+            Some((dx, dy)) => {
+                let other = 1 - held;
+                let texture = match self
+                    .r
+                    .kept
+                    .get_mut(&plan.id)
+                    .and_then(|k| k.textures[other].take())
+                {
+                    Some(t) => t,
+                    None => {
+                        self.r.stats.targets_made += 1;
+                        self.r
+                            .device
+                            .create_texture(&TextureDesc {
+                                size,
+                                format: TextureFormat::Rgba8,
+                                usage: TextureUsage::TARGET,
+                            })
+                            .map_err(gpu)?
+                    }
+                };
+                let to = self.rec.add_kept(plan.id, other, texture);
+                if let Some(k) = self.r.kept.get_mut(&plan.id) {
+                    k.current = other;
+                }
+                self.rec.cmds.push(Cmd::Begin { target: to });
+                let ctx = Ctx {
+                    target: to,
+                    origin: at,
+                    rect: v,
+                    limit: v,
+                    dither: (0, 0),
+                };
+                let was = v.offset(-dx, -dy);
+                self.lay_layer(&ctx, from, was, was.intersect(&v), 255, &[])?;
+                to
+            }
+        };
+        for &rect in &plan.paint {
+            let rect = rect.intersect(&v);
+            if rect.is_empty() {
+                continue;
+            }
+            self.r.stats.scroll_pixels += u64::from(rect.width()) * u64::from(rect.height());
+            let ctx = Ctx {
+                target,
+                origin: at,
+                rect: EVERYWHERE,
+                limit: rect,
+                dither: plan.shift,
+            };
+            self.clear(&ctx, rect);
+            for &child in &self.tree.children[plan.index] {
+                self.subtree(&ctx, child, &mut Vec::new())?;
+            }
+        }
+        self.views.insert(plan.index, (target, v));
+        Ok(())
+    }
+
+    /// Lays a kept scroll layer over the window where its node's clip shows it. The pixels every clip above it and
+    /// its own let through whole come straight from its texture; at a clip's edge, where it covers part of a pixel,
+    /// the content is painted in place, so the edge is cut draw by draw as a frame without the layer cuts it.
+    fn composite(
+        &mut self,
+        ctx: &Ctx,
+        i: usize,
+        chain: &mut Vec<ClipItem>,
+        kept: TargetId,
+        viewport: Bounds,
+    ) -> Result<(), RenderError> {
+        let mut area = viewport.intersect(&ctx.limit);
+        let mut whole = vec![area];
+        let mut owner = Some(i);
+        while let Some(n) = owner {
+            let node = &self.tree.nodes[n];
+            if let Some(clip) = &node.clip {
+                match geometry::clip_cover(clip, &node.transform, self.scale) {
+                    Some((reach, inside)) => {
+                        area = area.intersect(&reach);
+                        whole = whole
+                            .iter()
+                            .flat_map(|w| inside.iter().map(move |p| w.intersect(p)))
+                            .filter(|w| !w.is_empty())
+                            .collect();
+                    }
+                    None => whole.clear(),
+                }
+            }
+            owner = self.tree.parents[n];
+        }
+        if area.is_empty() {
+            return Ok(());
+        }
+        let whole: Vec<Bounds> = whole
+            .iter()
+            .map(|w| w.intersect(&area))
+            .filter(|w| !w.is_empty())
+            .collect();
+        for piece in &whole {
+            self.lay_layer(ctx, kept, viewport, *piece, 255, &[])?;
+        }
+        for rim in geometry::subtract(area, &whole) {
+            let edge = Ctx { limit: rim, ..*ctx };
+            self.children(&edge, i, chain)?;
+        }
+        Ok(())
     }
 
     fn children(
@@ -702,7 +920,11 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         chain: &[ClipItem],
     ) -> Result<(), RenderError> {
         let node = &self.tree.nodes[i];
-        let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&ctx.rect);
+        let area = bounded(
+            Bounds::of_rect(&node.bounds, self.scale).intersect(&ctx.rect),
+            ctx,
+            geometry::node_support(node, self.scale),
+        );
         let k = opacity_factor(group.opacity);
         if area.is_empty() || area.intersect(&ctx.limit).is_empty() || k == 0 {
             return Ok(());
@@ -713,12 +935,13 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             origin: (area.x0, area.y0),
             rect: area,
             limit: area,
+            dither: ctx.dither,
         };
         self.own(&inner, i, &[])?;
         self.children(&inner, i, &mut Vec::new())?;
         let mut layer = layer;
         for effect in &group.effects {
-            layer = self.effect(layer, area, effect)?;
+            layer = self.effect(layer, area, effect, ctx.dither_shift())?;
         }
         let visible = area.intersect(&ctx.limit);
         let laid = self.lay_layer(ctx, layer, area, visible, k, chain);
@@ -733,6 +956,11 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         let Some(area) = self.own_area(i, chain, &ctx.rect, &ctx.rect) else {
             return Ok(());
         };
+        let area = bounded(
+            area,
+            ctx,
+            geometry::node_support(&self.tree.nodes[i], self.scale),
+        );
         let mut clips = chain.to_vec();
         let mut pos = 0;
         self.run(
@@ -822,11 +1050,12 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             origin: (area.x0, area.y0),
             rect: area,
             limit: area,
+            dither: ctx.dither,
         };
         self.run(&inner, i, area, area, &mut Vec::new(), pos)?;
         let mut layer = layer;
         for effect in effects {
-            layer = self.effect(layer, area, effect)?;
+            layer = self.effect(layer, area, effect, ctx.dither_shift())?;
         }
         let k = opacity_factor(opacity);
         let laid = if k == 0 {
@@ -900,6 +1129,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         layer: TargetId,
         area: Bounds,
         effect: &Effect,
+        dither: f32,
     ) -> Result<TargetId, RenderError> {
         let (mode, sigma, shift, color) = match *effect {
             Effect::Blur { radius } => (
@@ -973,6 +1203,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         u[2] = shift.0;
         u[3] = shift.1;
         u[4] = if dither::BY_DEFAULT { 1.0 } else { 0.0 };
+        u[5] = dither;
         u[8] = area.x0 as f32;
         u[9] = area.y0 as f32;
         if let Some(c) = color {
@@ -1323,6 +1554,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             }
         };
         data.write(&mut u);
+        u[23] = ctx.dither_shift();
         c.write(&mut u, FILL_CLIPS);
         let uniform = self.rec.uniform(&u);
         let first = self.rec.instance_count();
@@ -1792,6 +2024,17 @@ fn insert(
 }
 
 /// Moves `pos` past the `PopLayer` that closes the layer just opened.
+/// A scratch image's or layer's `area`: painting a kept scroll layer, where it follows its node's own extent, no
+/// larger than [`SCRATCH_PIXELS`], else cut to what `ctx` needs of it with `halo` around, as in the window.
+fn bounded(area: Bounds, ctx: &Ctx, halo: i32) -> Bounds {
+    if ctx.rect == EVERYWHERE && u64::from(area.width()) * u64::from(area.height()) > SCRATCH_PIXELS
+    {
+        area.intersect(&ctx.limit.outset(halo))
+    } else {
+        area
+    }
+}
+
 fn skip_layer(node: &PaintNode, pos: &mut usize) {
     let mut depth = 1;
     while let Some(op) = node.ops.get(*pos) {

@@ -9,7 +9,7 @@ use cupertino_theme::Color;
 use cupertino_ui_render::{
     DamageRegion, DisplayList, Effect, FillRule, GradientStop, Group, ImageResource, Paint,
     PaintNode, PaintNodeId, PaintOp, PaintResources, PaintRevision, PathVerb, PixelFormat,
-    ResourceId, ResourceRef, Sampling, Shape, Transform,
+    ResourceId, ResourceRef, Sampling, Shape, Transform, UiRenderer,
 };
 use cupertino_ui_text::{
     FontId, GlyphFormat, GlyphId, GlyphKey, GlyphRasterizer, GlyphRun, PositionedGlyph,
@@ -711,13 +711,11 @@ fn scrolled(list: &DisplayList, offset: Point, clip: Shape) -> DisplayList {
 }
 
 /// A scroll layer scrolled frame by frame by whole device pixels (down, up, sideways, past its whole viewport, not at
-/// all), its frames' damage leaving out what only moved with it as a frame's damage does, now and then a node of it
-/// changed with the layer's view damaged: every frame of the GPU renderer, which paints a layer's content in place,
-/// is the CPU renderer's picture of the same list drawn whole without the layer. (The CPU renderer's kept image of a
-/// layer is the content painted in its own coordinates, so a blur or shadow of content past the window's edge reaches
-/// into it, which a picture drawn in place cuts off; the two part there.)
+/// all) and by a part of one, its frames' damage leaving out what only moved with it as a frame's damage does, now
+/// and then a node of it changed with the layer's view damaged: every frame of the GPU renderer, which keeps the
+/// layer's content and paints only what comes into view, is the same list drawn whole by a renderer of its own.
 #[test]
-fn scroll_layers_repaint_what_moved_as_the_content_drawn_in_place() {
+fn scroll_layers_scrolled_frame_by_frame_are_the_frames_drawn_whole() {
     let Some(device) = common::device() else {
         return;
     };
@@ -738,18 +736,21 @@ fn scroll_layers_repaint_what_moved_as_the_content_drawn_in_place() {
                     ((SIZE.1 * scale).ceil() as u32) | 1,
                 );
                 let mut gpu = common::gpu(&device, Boxes);
+                // a renderer of its own drawing every frame whole
+                let mut drawn_whole = common::gpu(&device, Boxes);
                 let mut draw = Draw(seed ^ 0x5c40);
                 let mut offset = Point::new(0.0, 0.0);
-                for frame in 0..10 {
+                for frame in 0..12 {
                     let damage = if frame == 0 {
                         DamageRegion::Full
                     } else {
-                        let px = |n: i32| f64::from(n) / scale;
-                        let (dx, dy) = match draw.pick(6) {
-                            0 => (0, 120),
-                            1 => (3 + draw.pick(5) as i32, 0),
-                            2 => (0, 0),
-                            _ => (0, draw.pick(41) as i32 - 20),
+                        let px = |n: f64| n / scale;
+                        let (dx, dy) = match draw.pick(7) {
+                            0 => (0.0, 120.0),
+                            1 => (f64::from(3 + draw.pick(5)), 0.0),
+                            2 => (0.0, 0.0),
+                            3 => (0.0, 0.5),
+                            _ => (0.0, f64::from(draw.pick(41)) - 20.0),
                         };
                         offset = Point::new(offset.x + px(dx), offset.y + px(dy));
                         let mut rects = Vec::new();
@@ -774,21 +775,17 @@ fn scroll_layers_repaint_what_moved_as_the_content_drawn_in_place() {
                         damage: &damage,
                     };
                     let b = common::draw_gpu(&mut gpu, &f);
-                    // the same list without the layer, drawn whole
-                    let mut plain = list.clone();
-                    plain.nodes[1].layer = None;
                     let whole = Frame {
-                        list: &plain,
                         damage: &DamageRegion::Full,
                         ..f
                     };
-                    let a = common::draw_cpu(&mut common::cpu(Boxes), &whole);
+                    let a = common::draw_gpu(&mut drawn_whole, &whole);
                     let (beyond, most, first) = common::difference(&a, &b, size.0);
                     if beyond > STRAY_PIXELS || most > TOLERANCE + 1 {
                         let (x, y, p, q) = first.unwrap();
                         failures.push(format!(
                             "seed {seed} scale {scale} {clip:?} frame {frame} offset {offset:?}: {beyond} pixels \
-                             beyond, largest {most}; first at ({x}, {y}): cpu {p:?} gpu {q:?}"
+                             beyond, largest {most}; first at ({x}, {y}): whole {p:?} scrolled {q:?}"
                         ));
                         break;
                     }
@@ -797,4 +794,125 @@ fn scroll_layers_repaint_what_moved_as_the_content_drawn_in_place() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A frame of a scroll layer drawn whole is the CPU renderer's: both keep the layer's content under none of its
+/// clips and lay it over through them, painting in place only where a clip covers part of a pixel.
+#[test]
+fn scroll_layers_drawn_whole_match_the_cpu() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let resources = resources();
+    let mut failures = Vec::new();
+    for seed in 900..910 {
+        for scale in SCALES {
+            for clip in [
+                Shape::Rect(VIEW),
+                Shape::RoundedRect {
+                    rect: VIEW,
+                    radius: 6.0,
+                },
+            ] {
+                let size = (
+                    ((SIZE.0 * scale).ceil() as u32) | 1,
+                    ((SIZE.1 * scale).ceil() as u32) | 1,
+                );
+                let list = scrolled(&scene(seed, Kind::All), Point::new(0.0, 0.0), clip.clone());
+                let f = Frame {
+                    list: &list,
+                    resources: &resources,
+                    scale,
+                    size,
+                    damage: &DamageRegion::Full,
+                };
+                let a = common::draw_cpu(&mut common::cpu(Boxes), &f);
+                let b = common::draw_gpu(&mut common::gpu(&device, Boxes), &f);
+                let (beyond, most, first) = common::difference(&a, &b, size.0);
+                if beyond > STRAY_PIXELS || most > TOLERANCE + 1 {
+                    let (x, y, p, q) = first.unwrap();
+                    failures.push(format!(
+                        "seed {seed} scale {scale} {clip:?}: {beyond} pixels beyond, largest {most}; first at \
+                         ({x}, {y}): cpu {p:?} gpu {q:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A kept scroll layer scrolled by whole device pixels paints only the rows that come into view (and what the
+/// damage names) into its texture, and the frame lays the layer's viewport over; a frame that does not move it and
+/// damages nothing paints nothing.
+#[test]
+fn a_kept_scroll_layer_paints_only_the_rows_that_come_into_view() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let resources = resources();
+    let scale = 1.5;
+    let size = (
+        (SIZE.0 * scale).ceil() as u32,
+        (SIZE.1 * scale).ceil() as u32,
+    );
+    let content = scene(903, Kind::All);
+    let mut gpu = common::gpu(&device, Boxes);
+    // the viewport: the clip's pixels, as a clip's bounds count them, one pixel out
+    let reach = |lo: f64, hi: f64| ((hi * scale).ceil() - (lo * scale).floor()) as u64 + 2;
+    let view = (
+        reach(VIEW.min_x(), VIEW.max_x()),
+        reach(VIEW.min_y(), VIEW.max_y()),
+    );
+    let mut offset = 0.0;
+    for (frame, (rows, damage)) in [
+        (0i32, None),
+        (14, Some(VIEW)),
+        (14, None),
+        (0, None),
+        (-9, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        offset += f64::from(rows) / scale;
+        let list = scrolled(&content, Point::new(0.0, offset), Shape::Rect(VIEW));
+        let rects = DamageRegion::Rects(damage.into_iter().collect());
+        let f = Frame {
+            list: &list,
+            resources: &resources,
+            scale,
+            size,
+            damage: if frame == 0 {
+                &DamageRegion::Full
+            } else {
+                &rects
+            },
+        };
+        let id = gpu.render(&f.request()).expect("the GPU frame");
+        let stats = *gpu.stats();
+        let laid: u64 = gpu
+            .frame(id)
+            .unwrap()
+            .damage
+            .iter()
+            .map(|d| u64::from(d.width) * u64::from(d.height))
+            .sum();
+        assert_eq!(stats.kept_layers, 1, "frame {frame}");
+        // the rows that came into view, and the damage over the whole viewport
+        let painted = match (frame, damage) {
+            (0, _) => view.0 * view.1,
+            (_, Some(_)) => view.0 * view.1 + view.0 * u64::from(rows.unsigned_abs()),
+            _ => view.0 * u64::from(rows.unsigned_abs()),
+        };
+        assert_eq!(stats.scroll_pixels, painted, "frame {frame}");
+        let shown = if rows == 0 && damage.is_none() {
+            0
+        } else {
+            view.0 * view.1
+        };
+        if frame > 0 {
+            assert_eq!(laid, shown, "frame {frame}");
+        }
+    }
 }

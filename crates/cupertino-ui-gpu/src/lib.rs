@@ -20,7 +20,8 @@
 //! random scenes at scales 1, 1.5 and 2.
 //!
 //! A frame repaints the rectangle around the request's damage (or everything), so pixels outside it keep the last
-//! frame's. The frame itself stays on the GPU: [`GpuRenderer::texture`] is what a presenter draws from, and
+//! frame's. A scroll layer keeps its content in a texture between frames: a scroll moves what stays in view and paints
+//! only what comes into view (`record::ScrollPlan`). The frame itself stays on the GPU: [`GpuRenderer::texture`] is what a presenter draws from, and
 //! [`GpuRenderer::read_pixels`] reads it back for tests and for a surface that falls back to shared memory.
 
 mod exec;
@@ -91,6 +92,9 @@ pub struct GpuStats {
     /// Bytes of uniforms and instances written.
     pub uniform_bytes: u64,
     pub instance_bytes: u64,
+    /// Scroll layers whose content is kept, and the pixels of them painted again this frame.
+    pub kept_layers: u32,
+    pub scroll_pixels: u64,
 }
 
 /// Bytes every uniform block starts at a multiple of: the largest offset alignment drivers ask for.
@@ -229,6 +233,38 @@ pub(crate) enum TargetMem {
     Pooled(Pooled<Texture>),
     /// Larger than the pool holds: made for the frame and destroyed after it.
     Own(Texture),
+    /// A kept scroll layer's texture, taken for the frame from the layer's `slot` and given back after it.
+    Kept {
+        node: PaintNodeId,
+        slot: usize,
+        texture: Texture,
+    },
+}
+
+/// The extra bytes the kept scroll layers of one renderer hold at most beyond two textures the size of its window
+/// (each layer keeps two, the content moved from one into the other as it scrolls): a window keeps one large layer
+/// and a few small ones. A layer past the cap is not kept: what it shows is painted in place every frame it moves.
+const SCROLL_SLACK_BYTES: u64 = 16 << 20;
+
+/// A kept scroll layer: its content as the window last showed it, under none of its clips, in one of two textures
+/// the size of its viewport (the other takes it moved as the layer scrolls).
+pub(crate) struct KeptScroll {
+    pub textures: [Option<Texture>; 2],
+    /// The texture holding the content.
+    pub current: usize,
+    pub scale: f64,
+    /// Where its node's clip showed it, in window pixels.
+    pub viewport: Bounds,
+    /// The offset it was drawn at, in device pixels.
+    pub shift: (f64, f64),
+}
+
+impl KeptScroll {
+    fn destroy(self, device: &Device) {
+        for t in self.textures.into_iter().flatten() {
+            device.destroy_texture(t);
+        }
+    }
 }
 
 /// Paints display lists into a window-sized texture on the GPU, repainting the damage.
@@ -258,6 +294,8 @@ pub struct GpuRenderer<R> {
     /// Each scroll layer of the last frame ([`cupertino_ui_render::scroll_layers`]): the window pixels its clip
     /// showed and its drawn offset in device pixels.
     scrolls: HashMap<PaintNodeId, (Bounds, (i32, i32))>,
+    /// The scroll layers whose content is kept.
+    kept: HashMap<PaintNodeId, KeptScroll>,
 }
 
 /// A GPU failure as a render error: the frame is not drawn and the next one is drawn whole. A lost device is also
@@ -380,6 +418,7 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
             },
             stats: GpuStats::default(),
             scrolls: HashMap::new(),
+            kept: HashMap::new(),
         }
     }
 
@@ -417,8 +456,10 @@ impl<R: GlyphRasterizer> GpuRenderer<R> {
             .map_err(gpu)
     }
 
-    /// Frees the atlases, pooled targets and image textures (a hidden window drops them), keeping the frame.
+    /// Frees the atlases, pooled targets, image textures and kept scroll layers (a hidden window drops them),
+    /// keeping the frame.
     pub fn trim(&mut self) {
+        self.drop_kept();
         let device = Rc::clone(&self.device);
         self.coverage.clear(&device);
         self.color.clear(&device);
@@ -495,6 +536,7 @@ impl<R> Drop for GpuRenderer<R> {
             p.destroy(&device);
         }
         self.window = None;
+        self.drop_kept();
         self.coverage.clear(&device);
         self.color.clear(&device);
         self.masks.clear(&device);
@@ -523,32 +565,50 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
             width: request.width,
             height: request.height,
         };
-        let moved = self.moved_layers(request);
-        let dirty = match (full, request.damage) {
+        let bounds = |d: &PixelRect| Bounds {
+            x0: d.x as i32,
+            y0: d.y as i32,
+            x1: (d.x + d.width) as i32,
+            y1: (d.y + d.height) as i32,
+        };
+        let damage: Vec<PixelRect> = match (full, request.damage) {
             (false, DamageRegion::Rects(rects)) => {
-                let mut dirty = damage_rects(rects, request.scale, request.width, request.height);
-                dirty.extend(moved);
-                dirty
+                damage_rects(rects, request.scale, request.width, request.height)
             }
             _ => vec![whole],
         };
+        let damaged: Vec<Bounds> = damage.iter().map(bounds).collect();
+        let (plans, moved) = self.plan_scrolls(request, full, &damaged);
+        let mut dirty = damage;
+        if !full {
+            // what the damage already repaints is not repainted twice
+            let held = |b: &Bounds| damaged.iter().any(|d| d.intersect(b) == *b);
+            dirty.extend(
+                moved
+                    .iter()
+                    .filter(|b| !b.is_empty() && !held(b))
+                    .map(|b| PixelRect {
+                        x: b.x0 as u32,
+                        y: b.y0 as u32,
+                        width: b.width(),
+                        height: b.height(),
+                    }),
+            );
+        }
         self.frames += 1;
-        if !dirty.is_empty() {
-            let bounds: Vec<Bounds> = dirty
-                .iter()
-                .map(|d| Bounds {
-                    x0: d.x as i32,
-                    y0: d.y as i32,
-                    x1: (d.x + d.width) as i32,
-                    y1: (d.y + d.height) as i32,
-                })
-                .collect();
+        if !dirty.is_empty() || plans.iter().any(|p| !p.paint.is_empty()) {
+            let rects: Vec<Bounds> = dirty.iter().map(bounds).collect();
             let mut rec = record::Recording::new(full);
-            let painted = record::paint(self, &mut rec, request, &bounds)
+            let painted = record::paint(self, &mut rec, request, &rects, &plans)
                 .and_then(|()| self.execute(&mut rec).map_err(gpu));
             rec.release(self);
+            if painted.is_err() {
+                // a kept layer may be half painted: the next frame paints each one whole
+                self.drop_kept();
+            }
             painted?;
         }
+        self.stats.kept_layers = self.kept.len() as u32;
         self.trim_images();
         self.frame = GpuFrame {
             id: RenderFrameId(self.next_id),
@@ -571,11 +631,27 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
 }
 
 impl<R> GpuRenderer<R> {
-    /// The window pixels this frame repaints for its scroll layers besides the damage. A frame's damage leaves out
-    /// what only moved with a scroll layer's offset, as the renderers keep a layer's content between frames; this one
-    /// paints that content in place, so a layer of the last frame that moved or changed its viewport repaints all it
-    /// showed and shows. A layer new to the frame has only nodes new to it, which the damage covers.
-    fn moved_layers(&mut self, request: &RenderRequest<'_>) -> Vec<PixelRect> {
+    /// Lets every kept scroll layer go; the layers stay seen, so the next frame lays each one over whole.
+    fn drop_kept(&mut self) {
+        for (_, k) in self.kept.drain() {
+            k.destroy(&self.device);
+        }
+    }
+
+    /// What this frame does to its scroll layers ([`cupertino_ui_render::scroll_layers`]), and the window pixels it
+    /// paints again for them besides the damage `damage`. A frame's damage leaves out what only moved with a scroll
+    /// layer's offset: a kept layer's texture takes what stays in view moved by as many device pixels, and what comes
+    /// into view and what the damage names is painted into it, so only those pixels of the content are painted again
+    /// and the viewport is laid over. A layer moved by a part of a pixel, or past what its texture holds, is painted
+    /// whole; one not kept paints what it showed and shows in place. A layer new to the frame has only nodes new to
+    /// it, which the damage covers.
+    fn plan_scrolls(
+        &mut self,
+        request: &RenderRequest<'_>,
+        full: bool,
+        damage: &[Bounds],
+    ) -> (Vec<record::ScrollPlan>, Vec<Bounds>) {
+        let scale = request.scale;
         let whole = Bounds::of_size(request.width, request.height);
         let mut layers: Vec<usize> = cupertino_ui_render::scroll_layers(request.list)
             .into_iter()
@@ -584,37 +660,121 @@ impl<R> GpuRenderer<R> {
         layers.sort_unstable();
         layers.dedup();
         let before = std::mem::take(&mut self.scrolls);
+        let mut old = std::mem::take(&mut self.kept);
+        let mut budget =
+            u64::from(request.width) * u64::from(request.height) * 8 + SCROLL_SLACK_BYTES;
+        let mut plans = Vec::new();
         let mut repaint = Vec::new();
+        let far = f64::from(1 << 28);
         for index in layers {
             let node = &request.list.nodes[index];
             let (Some(Layer::Scroll { offset }), Some(clip)) = (node.layer, &node.clip) else {
                 continue;
             };
-            let viewport =
-                geometry::clip_bounds(clip, &node.transform, request.scale).intersect(&whole);
-            let px = |v: f64| {
-                (v * request.scale)
-                    .round()
-                    .clamp(-f64::from(1 << 28), f64::from(1 << 28)) as i32
-            };
-            let shift = (px(offset.x), px(offset.y));
-            match before.get(&node.id) {
-                Some(&(was, _)) if was != viewport => repaint.extend([was, viewport]),
-                Some(&(_, was)) if was != shift => repaint.push(viewport),
-                _ => {}
-            }
+            let viewport = geometry::clip_bounds(clip, &node.transform, scale).intersect(&whole);
+            let exact = (
+                (offset.x * scale).clamp(-far, far),
+                (offset.y * scale).clamp(-far, far),
+            );
+            let shift = (exact.0.round() as i32, exact.1.round() as i32);
+            let previous = before.get(&node.id).copied();
             self.scrolls.insert(node.id, (viewport, shift));
+            if let Some((was, _)) = previous.filter(|(was, _)| *was != viewport) {
+                repaint.push(was);
+            }
+            let moved = previous.is_some_and(|(was, s)| was != viewport || s != shift);
+            let bytes = u64::from(viewport.width()) * u64::from(viewport.height()) * 8;
+            if viewport.is_empty() || bytes > budget {
+                if moved {
+                    repaint.push(viewport);
+                }
+                continue;
+            }
+            let in_view = damage
+                .iter()
+                .map(|d| d.intersect(&viewport))
+                .filter(|d| !d.is_empty());
+            // a texture of the viewport's size serves again, with its content when nothing else changed
+            let size = (viewport.width(), viewport.height());
+            let reused = old.remove(&node.id).and_then(|k| {
+                let fits = k.textures[k.current]
+                    .as_ref()
+                    .is_some_and(|t| t.size() == size);
+                if fits {
+                    Some(k)
+                } else {
+                    k.destroy(&self.device);
+                    None
+                }
+            });
+            let mut plan = record::ScrollPlan {
+                index,
+                id: node.id,
+                viewport,
+                moved: None,
+                paint: Vec::new(),
+                shift,
+            };
+            let kept = match reused {
+                Some(mut k) => {
+                    let same = !full && k.scale == scale && k.viewport == viewport;
+                    let d = (exact.0 - k.shift.0, exact.1 - k.shift.1);
+                    let whole_px = |v: f64| (v - v.round()).abs() < 1e-6;
+                    let step = (d.0.round() as i64, d.1.round() as i64);
+                    let within = step.0.unsigned_abs() < u64::from(viewport.width())
+                        && step.1.unsigned_abs() < u64::from(viewport.height());
+                    if !(same && whole_px(d.0) && whole_px(d.1) && within) {
+                        plan.paint.push(viewport);
+                        repaint.push(viewport);
+                    } else if step != (0, 0) {
+                        let step = (step.0 as i32, step.1 as i32);
+                        let stays = viewport.intersect(&viewport.offset(-step.0, -step.1));
+                        plan.moved = Some(step);
+                        plan.paint = geometry::subtract(viewport, &[stays]);
+                        plan.paint.extend(in_view);
+                        repaint.push(viewport);
+                    } else {
+                        // it stays where it was: only the damage is painted again and laid over
+                        plan.paint.extend(in_view);
+                    }
+                    k.shift = exact;
+                    k.scale = scale;
+                    k.viewport = viewport;
+                    k
+                }
+                None => {
+                    let Ok(texture) = self.device.create_texture(&TextureDesc {
+                        size,
+                        format: TextureFormat::Rgba8,
+                        usage: TextureUsage::TARGET,
+                    }) else {
+                        if moved {
+                            repaint.push(viewport);
+                        }
+                        continue;
+                    };
+                    self.stats.targets_made += 1;
+                    plan.paint.push(viewport);
+                    if previous.is_some() {
+                        repaint.push(viewport);
+                    }
+                    KeptScroll {
+                        textures: [Some(texture), None],
+                        current: 0,
+                        scale,
+                        viewport,
+                        shift: exact,
+                    }
+                }
+            };
+            budget -= bytes;
+            self.kept.insert(node.id, kept);
+            plans.push(plan);
         }
-        repaint
-            .into_iter()
-            .filter(|b| !b.is_empty())
-            .map(|b| PixelRect {
-                x: b.x0 as u32,
-                y: b.y0 as u32,
-                width: b.width(),
-                height: b.height(),
-            })
-            .collect()
+        for (_, k) in old.drain() {
+            k.destroy(&self.device);
+        }
+        (plans, repaint)
     }
 
     /// Drops image textures past the budget, those used least recently first, never one of this frame.

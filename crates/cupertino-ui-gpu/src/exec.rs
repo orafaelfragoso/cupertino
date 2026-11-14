@@ -205,5 +205,6 @@ fn target_texture<'a>(window: Option<&'a Texture>, rec: &'a Recording, t: Target
         TargetMem::Window => window.expect("the window texture is made before drawing"),
         TargetMem::Pooled(p) => &p.target,
         TargetMem::Own(t) => t,
+        TargetMem::Kept { texture, .. } => texture,
     }
 }

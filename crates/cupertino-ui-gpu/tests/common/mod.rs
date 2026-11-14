@@ -124,7 +124,7 @@ pub struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    fn request(&self) -> RenderRequest<'_> {
+    pub fn request(&self) -> RenderRequest<'_> {
         RenderRequest {
             list: self.list,
             resources: self.resources,

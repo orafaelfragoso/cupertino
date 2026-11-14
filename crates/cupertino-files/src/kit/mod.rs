@@ -364,6 +364,9 @@ struct Session {
     tag_colors: tag_editor::TagColors,
     /// The fixed-pitch family the previews set text files in.
     text_family: Option<String>,
+    /// Counts the messages that may change what the windows show, any but a window's scroll: views made at the same
+    /// revision may keep what they built ([`cupertino_kit::core::Element::kept`]).
+    view_revision: u64,
 }
 
 /// One browser window.
@@ -729,6 +732,7 @@ impl Application for Files {
                 known_tags: RefCell::new(BTreeSet::new()),
                 tag_colors: tag_editor::tag_colors(),
                 text_family: cupertino_kit::app::mono_family(),
+                view_revision: 0,
             },
         };
         let first = model.next_window;
@@ -753,6 +757,9 @@ impl Application for Files {
     }
 
     fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        if !matches!(message, Message::Window(_, Event::Scroll(_))) {
+            model.session.view_revision += 1;
+        }
         let mut commands = model.handle(message);
         commands.extend(model.exit_when_done());
         commands

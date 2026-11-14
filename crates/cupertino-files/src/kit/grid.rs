@@ -115,6 +115,26 @@ pub(super) fn cell_key(id: u64, index: usize) -> Key {
     Key::from(format!("icon/{id}/{index}"))
 }
 
+/// What item `index`'s cell is built from beyond its item: the grid's revision, whether it is selected, ringed and the
+/// keyboard's stop, its cell, icon and name frames and the icon's side. A cell of the same mark is not built again.
+fn cell_mark(revision: u64, index: usize, state: [bool; 3], frames: [Rect; 3], side: f64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    (revision, index, state).hash(&mut hasher);
+    for frame in frames {
+        [
+            frame.min_x(),
+            frame.min_y(),
+            frame.size.width,
+            frame.size.height,
+        ]
+        .map(f64::to_bits)
+        .hash(&mut hasher);
+    }
+    side.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The index of the item whose cell [`cell_key`] keyed `key`.
 pub(super) fn cell_index(key: &Key) -> Option<u64> {
     let Key::Str(key) = key else {
@@ -149,7 +169,10 @@ pub(super) struct IconGrid {
     /// which the grid scrolls under.
     pub lead: f64,
     /// What sits under item `index`'s icon, given as `(index, selected)`: its [`name`], or the field it is renamed in.
-    pub name: Box<dyn Fn(usize, bool) -> Element<Message>>,
+    pub name: Rc<dyn Fn(usize, bool) -> Element<Message>>,
+    /// Changes whenever what the cells are made from may have changed, other than where the grid is scrolled to: a
+    /// cell built at the same revision, place and state is kept as it was rather than built and compared again.
+    pub revision: u64,
     /// One row scrolled sideways ([`crate::layout::icon::strip`]), as wide as its cells and as tall as the view: a page
     /// is the pictures in view, and a press between them draws no band.
     pub strip: bool,
@@ -528,48 +551,66 @@ impl Widget<Message> for IconGrid {
         let at = self.at();
         let pick = self.pick();
         let side = self.params.icon_box().w;
+        let icon_size = self.params.icon_size;
         let band = self.band.map(band::view);
         self.built()
             .into_iter()
             .map(|index| {
                 let cell = &self.layout.cells[index];
                 let selected = self.selection.contains(index);
+                let ringed = self.ringed.contains(index);
+                let stop = at == Some(index);
                 let frame = rect(cell.frame);
                 let icon = rect(cell.icon_frame);
                 let label = rect(cell.label_frame);
-                let (x, y) = (icon.min_x() - frame.min_x(), icon.min_y() - frame.min_y());
-                let children = vec![
-                    Element::new(Image {
-                        sources: (self.icon)(&self.items[index]),
-                        size: Size::new(self.params.icon_size, self.params.icon_size),
-                        fit: ImageFit::Contain,
-                        radius: 0.0,
-                        label: None,
-                    }),
-                    Element::new(NameBox {
-                        size: label.size,
-                        children: vec![(self.name)(index, selected)],
-                    }),
-                ];
-                Element::new(Cell {
+                let mark = cell_mark(
+                    self.revision,
                     index,
-                    frame,
-                    icon: Rect::new(
-                        x + (icon.size.width - side) / 2.0,
-                        y + (icon.size.height - side) / 2.0,
-                        side,
-                        side,
-                    ),
-                    icon_top: y,
-                    gap: label.min_y() - icon.max_y(),
-                    selected,
-                    ringed: self.ringed.contains(index),
-                    stop: at == Some(index),
-                    name: self.items[index].name.clone(),
-                    pick: Rc::clone(&pick),
-                    children,
+                    [selected, ringed, stop],
+                    [frame, icon, label],
+                    side,
+                );
+                let (items, make_icon, name, pick) = (
+                    Rc::clone(&self.items),
+                    Rc::clone(&self.icon),
+                    Rc::clone(&self.name),
+                    Rc::clone(&pick),
+                );
+                // a cell built at the same revision, place and state is kept as it is, unbuilt
+                Element::kept(cell_key(self.window, index), mark, move || {
+                    let (x, y) = (icon.min_x() - frame.min_x(), icon.min_y() - frame.min_y());
+                    let children = vec![
+                        Element::new(Image {
+                            sources: make_icon(&items[index]),
+                            size: Size::new(icon_size, icon_size),
+                            fit: ImageFit::Contain,
+                            radius: 0.0,
+                            label: None,
+                        }),
+                        Element::new(NameBox {
+                            size: label.size,
+                            children: vec![name(index, selected)],
+                        }),
+                    ];
+                    Element::new(Cell {
+                        index,
+                        frame,
+                        icon: Rect::new(
+                            x + (icon.size.width - side) / 2.0,
+                            y + (icon.size.height - side) / 2.0,
+                            side,
+                            side,
+                        ),
+                        icon_top: y,
+                        gap: label.min_y() - icon.max_y(),
+                        selected,
+                        ringed,
+                        stop,
+                        name: items[index].name.clone(),
+                        pick,
+                        children,
+                    })
                 })
-                .key(cell_key(self.window, index))
             })
             .chain(band)
             .collect()
@@ -1377,14 +1418,93 @@ mod tests {
             ringed: Selection::new([], None, None),
             band: None,
             lead: 0.0,
-            name: Box::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            name: Rc::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            revision: 0,
             strip: false,
         };
         let built = grid.built().len();
-        let cells = grid.take_children().len();
-        assert_eq!(cells, built);
+        let cells = grid.take_children();
+        assert_eq!(cells.len(), built);
+        assert_eq!(made.get(), 0, "a cell makes its icon only when it is built");
+        for cell in cells {
+            cell.built();
+        }
         assert_eq!(made.get(), built, "one icon a cell built");
         assert!(built < count / 10, "{built} cells built of {count}");
+    }
+
+    #[test]
+    fn a_cell_is_kept_while_the_grid_only_scrolls_and_built_again_when_its_state_or_the_revision_changes(
+    ) {
+        let params = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
+        let width = 8.0 * 112.0 + 2.0 * icon::MARGIN;
+        let count = 400;
+        let layout = icon::layout(
+            &params,
+            width,
+            &[SectionSpec { title: None, count }],
+            Flow::Leading,
+        );
+        let viewport = Size::new(width, 600.0);
+        let mut grid = IconGrid {
+            window: 1,
+            label: "Items".into(),
+            params,
+            items: (0..count)
+                .map(|i| crate::Entry::synthetic(&format!("item {i}.txt"), false, 1))
+                .collect(),
+            icon: Rc::new(|_| Vec::new()),
+            scroll: ScrollState {
+                offset: Point::new(0.0, 1000.0),
+                content: Size::new(layout.content.w, layout.content.h),
+                viewport,
+            },
+            layout: Rc::new(layout),
+            // the cursor is on an item far out of view, so the keyboard's stop does not follow the scroll
+            selection: Selection::new([], Some(count - 1), None),
+            ringed: Selection::new([], None, None),
+            band: None,
+            lead: 0.0,
+            name: Rc::new(|_, _| Element::new(cupertino_kit::controls::Spacer { min: 0.0 })),
+            revision: 7,
+            strip: false,
+        };
+        // each built cell's mark, by item
+        let marks = |grid: &mut IconGrid| -> std::collections::BTreeMap<usize, u64> {
+            let built = grid.built();
+            built
+                .into_iter()
+                .zip(grid.take_children())
+                .map(|(index, cell)| (index, cell.kept_mark().unwrap()))
+                .collect()
+        };
+        let before = marks(&mut grid);
+        grid.scroll.offset.y += 300.0;
+        let scrolled = marks(&mut grid);
+        let both: Vec<usize> = before
+            .keys()
+            .copied()
+            .filter(|k| scrolled.contains_key(k))
+            .collect();
+        assert!(
+            !both.is_empty() && both.len() < before.len(),
+            "the scroll shows new cells and keeps others"
+        );
+        assert!(
+            both.iter().all(|k| before[k] == scrolled[k]),
+            "a cell that stays in view keeps its mark"
+        );
+
+        let picked = both[0];
+        grid.selection = Selection::new(std::iter::once(picked..picked + 1), Some(count - 1), None);
+        let selected = marks(&mut grid);
+        for (key, mark) in &selected {
+            assert_eq!(*mark == scrolled[key], *key != picked, "item {key}");
+        }
+
+        grid.revision += 1;
+        let revised = marks(&mut grid);
+        assert!(revised.iter().all(|(key, mark)| selected[key] != *mark));
     }
 
     #[test]

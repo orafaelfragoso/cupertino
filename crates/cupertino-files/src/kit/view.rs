@@ -1216,7 +1216,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         ringed: ringed_items(win),
         band: win.band,
         lead: under_row(win),
-        name: Box::new(
+        name: Rc::new(
             move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
                 Some((_, value, revision, selection)) => {
                     name_field(id, value.clone(), *revision, selection.clone())
@@ -1224,6 +1224,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
+        revision: session.view_revision,
         strip: false,
     });
     // the grid starts below the toolbar row, and scrolls under it

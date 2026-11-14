@@ -203,7 +203,8 @@ fn strip(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         band: None,
         lead: 0.0,
         // the strip names no picture: the name is under the large one
-        name: Box::new(|_, _| Element::new(Spacer { min: 0.0 })),
+        name: Rc::new(|_, _| Element::new(Spacer { min: 0.0 })),
+        revision: session.view_revision,
         strip: true,
     });
     let scroll = Element::from(ScrollView {

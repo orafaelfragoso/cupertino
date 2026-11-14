@@ -672,10 +672,13 @@ fn reblurs(h: &Harness) -> u64 {
 
 #[test]
 fn a_sidebar_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole() {
-    // the sidebar alone, and beside the content's window background
-    for split in [None, Some(200)] {
-        dragged_backdrops_match_whole_ones(split);
-    }
+    dragged_backdrops_match_whole_ones(None);
+}
+
+#[test]
+fn a_sidebar_beside_a_window_background_dragged_over_a_window_is_blurred_again_in_part_and_looks_as_if_blurred_whole(
+) {
+    dragged_backdrops_match_whole_ones(Some(200));
 }
 
 fn dragged_backdrops_match_whole_ones(split: Option<i32>) {

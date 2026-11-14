@@ -389,6 +389,8 @@ pub fn render(state: &mut Cupertino) {
                         Err(e) => tracing::warn!(error = %e, "headless render failed"),
                     }
                 }
+                // the commands are issued: what follows waits for the GPU
+                let submit = rendering.elapsed();
                 if timing {
                     // the GPU's work belongs to the frame's time: wait for it
                     let st = &*state;
@@ -410,6 +412,7 @@ pub fn render(state: &mut Cupertino) {
                         idx,
                         compose,
                         rendering.elapsed(),
+                        submit,
                         gpu,
                     );
                 }

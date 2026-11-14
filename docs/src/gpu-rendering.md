@@ -242,7 +242,7 @@ reviewed change that records the reason.
 | Files live resize | client CPU excluding raster under 8 ms; client GPU under 4 ms | 7 |
 | Toolkit animation frame (Control Center opening, launcher typing), client CPU | under 4 ms | 7 |
 | Client GPU time per frame (timer queries) | under 4 ms | 6 |
-| Compositor frame while a window is dragged over glass | under 4 ms GPU, under 2 ms CPU | 2 |
+| Compositor frame while a window is dragged over glass | p99 GPU time per frame (timestamps) under 4 ms; p99 CPU time to compose and submit a frame, not counting the wait for the GPU, under 2 ms | 2 |
 | First frame of a GPU process | no later than the CPU path; the switch to the GPU within 150 ms with a warm program cache | 6 |
 | Added private memory per GPU process | under 80 MiB; CPU-class processes unchanged | 7 |
 | GPU memory per GPU window | at most two buffers and one window-sized layer (width x height x 4 bytes each) plus 32 MiB of atlases and pools, measured as the change in total GPU memory with the window open and closed; a process's first render target adds the one more target's size the driver reserves with it | 7 |

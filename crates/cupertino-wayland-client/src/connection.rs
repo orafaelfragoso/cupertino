@@ -3301,6 +3301,25 @@ mod tests {
         waker.wake();
     }
 
+    /// An opaque region is sent as the whole points inside each rectangle, so it never claims a point it only part
+    /// covers.
+    #[test]
+    fn an_opaque_rectangle_is_sent_as_the_whole_points_inside_it() {
+        assert_eq!(round_in(&Rect::new(1.0, 2.0, 30.0, 40.0)), (1, 2, 30, 40));
+        assert_eq!(
+            round_in(&Rect::new(0.5, 1.25, 10.0, 10.5)),
+            (1, 2, 9, 9),
+            "fractional edges round inwards"
+        );
+        assert_eq!(
+            round_in(&Rect::new(-3.5, -0.5, 4.0, 2.0)),
+            (-3, 0, 3, 1),
+            "inwards on either side of zero"
+        );
+        let (.., width, height) = round_in(&Rect::new(4.2, 4.2, 0.6, 20.0));
+        assert_eq!((width, height), (0, 19), "narrower than a point: empty");
+    }
+
     #[test]
     fn a_solid_colour_is_sent_premultiplied_over_the_whole_u32_range() {
         assert_eq!(single_pixel([0.0; 4]), [0; 4], "transparent");

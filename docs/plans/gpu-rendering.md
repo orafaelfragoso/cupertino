@@ -328,9 +328,10 @@ Works with the CPU renderer; no GPU needed.
         (the names of the cells past the band, in the direction of the scroll), shaped into the text system's cache
         (two generations of 512 paragraphs) so the frame that builds them finds them there. Test: a scroll whose
         frames build new rows shapes no paragraph inside a frame once the idle work ran.
-  - None was taken up in the rounds that made paint and damage incremental, the shared-memory copy cheaper and the
-    opaque region declared; their time went to those. The layout p99 at the fifth round is in "Measurements",
-    "Step 4", "Fifth round".
+  - Kept semantics and names shaped between frames were not taken up in the rounds that made paint and damage
+    incremental, the shared-memory copy cheaper and the opaque region declared; their time went to those. At the
+    fifth round the layout p99 is 3.2–3.9 ms on the GPU path at both scales and 1.6–13.8 on the CPU path at loads of
+    7 to 11, so not under 4 ms in every run ("Measurements", "Step 4", "Fifth round").
 - [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
       ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
       without walking its subtree, and the list is the one a full walk paints
@@ -411,7 +412,12 @@ Gate:
       scale 1 (load 7.9 to 4.6) and 8.5 at 1.5 (load 4.6 to 5.3), frame p50 3.2 and 2.6 ("Measurements", "Step 4",
       "Fourth round"). So the GPU path meets the budget at scale 1 in two runs of three (5.6, 5.9; the third 11.7) and
       at 1.5 in one of three (7.2; 8.5, 10.0), at these loads only; the CPU path misses it at both, its copy's p99
-      alone over the budget. The unticked items above are what remains of it.
+      alone over the budget. After the fifth round (`1f7756f80`), at loads of 4.7 to 11.3: GPU p99 12.3 ms at scale 1
+      (11.5–18.8) and 12.3 at 1.5 (10.4–14.9), frame p50 5.0 and 2.8, no run under 8 ms; CPU p99 41.2 at scale 1 and
+      36.7 at 1.5, copy p99 21.3 and 22.4. The merge the round started from, measured again on the GPU at scale 1,
+      gives 10.8 (9.9–11.5) with the same phases, so the round moved none of them and the fourth round's 5.9 is not
+      met at today's loads ("Measurements", "Step 4", "Fifth round"). The unticked items above are what remains of
+      it.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1868,6 +1874,49 @@ bring its second under 19 ms at that load. The frame p99s follow the load more t
 No pixel changed: the byte copy writes the bytes the conversion wrote in the compositor's other order
 (`every_buffer_shown_holds_the_whole_frame_in_either_byte_order`), the damage runs damage and commit what comparing every
 node apart does, and the scene 910 change makes the kept image the picture painted in place. No golden is re-recorded.
+
+#### Fifth round: the opaque region and kept placements
+
+The same scenario and machine, release builds, three runs per configuration, other agents building and testing beside
+it; the load average is recorded before and after each configuration's runs. Before is the merge the round started
+from (`bdbc354b7`, measured again on the GPU path at scale 1 only, after the round's runs); after is `1f7756f80`. The
+round's commits are `dfd7cffbc` (transform animations closed as moot), `b5962a7a4` and `904037c85` (the opaque region,
+and its pass looking only at large nodes and fills) and `1f7756f80` (kept placements). Medians of the three runs, the
+frame p99's range across them in brackets.
+
+| Files two-finger scroll, client frame ms | Before | After |
+|---|---|---|
+| CPU, scale 1: load | – | 7.0 to 9.1 |
+| CPU, scale 1: frames, frame p50, p99 | – | 86, 16.1, 41.2 (41.1–51.4) |
+| CPU, scale 1: layout, paint, raster, copy p50 | – | 1.2, 2.6, 7.4, 4.8 |
+| CPU, scale 1: raster, copy p99 | – | 16.6, 21.3 |
+| CPU, scale 1.5: load | – | 9.1 to 11.3 |
+| CPU, scale 1.5: frames, frame p50, p99 | – | 92, 13.5, 36.7 (33.8–78.0) |
+| CPU, scale 1.5: layout, paint, raster, copy p50 | – | 0.5, 1.1, 7.7, 3.9 |
+| CPU, scale 1.5: raster, copy p99 | – | 13.2, 22.4 |
+| GPU, scale 1: load | 10.7 to 7.6 | 4.7 to 5.5 |
+| GPU, scale 1: frames, frame p50, p99 | 183, 4.7, 10.8 (9.9–11.5) | 181, 5.0, 12.3 (11.5–18.8) |
+| GPU, scale 1: layout, paint, raster, copy p50 | 1.1, 2.3, 1.1, 0.2 | 1.1, 2.4, 1.1, 0.2 |
+| GPU, scale 1.5: load | – | 5.5 to 7.0 |
+| GPU, scale 1.5: frames, frame p50, p99 | – | 181, 2.8, 12.3 (10.4–14.9) |
+| GPU, scale 1.5: layout, paint, raster, copy p50 | – | 0.4, 1.1, 0.9, 0.2 |
+
+The after runs' phase p99s: CPU at scale 1 update 1.1, view 4.6, layout 13.8, paint 7.8; at 1.5 0.3, 1.8, 1.6, 1.8;
+GPU at scale 1 view 2.9, layout 3.9, paint 3.8, raster 3.2, copy 0.7; at 1.5 3.2, 3.2, 3.5, 3.1, 0.8. Before, GPU at
+scale 1: view 2.2, layout 3.3, paint 3.1, raster 2.3, copy 0.6.
+
+The budget is not met on either path at these loads: the GPU path's frame p99 is 10.4–18.8 ms at both scales, no run
+under 8 ms, so the three more runs at a load under 4 were not taken; the CPU path's copy p99 alone is over it. At the
+same scale and renderer the round's commits leave every phase where the merge it started from has it: the opaque
+region's pass takes about 16 microseconds of the paint phase on Files' list of about 3700 nodes (265 before it looked
+only at nodes and fills of 128 points a side or more), and kept placements spare the walk of a cell's descendants,
+a part of the layout phase too small to show in its p50 beside the solve and the semantics. Both renderers' p50s at
+scale 1 are above the fourth round's (frame 4.7–5.0 against 3.2 ms on the GPU, paint 2.3–2.4 against 1.5) before the
+round's commits as after them.
+
+No pixel changed: the opaque region is a request beside the frame, kept placements are those of placing every node
+(`a_kept_subtree_that_did_not_change_is_placed_from_its_run_as_placing_every_node_places_it`), and the compositor's
+culling leaves drawn what a backdrop reads. No golden is re-recorded.
 
 ## Decisions taken
 

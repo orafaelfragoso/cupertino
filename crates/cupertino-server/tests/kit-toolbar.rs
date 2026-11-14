@@ -57,9 +57,10 @@ struct Harness {
     clock: InputClock,
 }
 
-/// The milliseconds an input event is stamped with. They keep pace with real time, as a compositor's do: a client lays
-/// them on its own clock and takes a stamp that falls far behind it for one of another clock, laid afresh at the moment
-/// it is read, so a clock that ran slower would lose the spacing of a double click whose presses straddle that moment.
+/// The milliseconds an input event is stamped with. Between gestures they keep pace with real time, as a compositor's
+/// do, so two double clicks seconds apart are not one run of clicks; within a gesture its events follow one another
+/// [`InputClock::GESTURE_STEP`] apart however long the test takes to send them, so a slow step does not split a double
+/// click. A client lays each stamp that interval after the one before, and never later than when it reads it.
 struct InputClock {
     start: Instant,
     last: u32,
@@ -68,6 +69,9 @@ struct InputClock {
 impl InputClock {
     /// The first stamp: a second, so no event is at zero.
     const START: u32 = 1_000;
+    /// The time between the events of one gesture, in milliseconds: a double click's two presses are three apart,
+    /// well within the client's double click interval.
+    const GESTURE_STEP: u32 = 10;
 
     fn new() -> Self {
         Self {
@@ -86,6 +90,17 @@ impl InputClock {
         let elapsed = u32::try_from(at.duration_since(self.start).as_millis()).unwrap();
         self.last = (Self::START + elapsed).max(self.last + 1);
         self.last
+    }
+
+    /// The stamps of the `events` events of one gesture that starts at `at`: the first keeps pace with real time, and
+    /// each after it is [`Self::GESTURE_STEP`] later.
+    fn gesture(&mut self, at: Instant, events: u32) -> Vec<u32> {
+        let first = self.stamp(at);
+        let stamps: Vec<u32> = (0..events)
+            .map(|i| first + i * Self::GESTURE_STEP)
+            .collect();
+        self.last = *stamps.last().unwrap_or(&first);
+        stamps
     }
 }
 
@@ -202,12 +217,17 @@ impl Harness {
     }
 
     fn button(&mut self, pressed: bool) {
+        let time = self.clock.next();
+        self.button_at(pressed, time);
+    }
+
+    /// The button pressed or released with the stamp `time`.
+    fn button_at(&mut self, pressed: bool, time: u32) {
         let state = if pressed {
             ButtonState::Pressed
         } else {
             ButtonState::Released
         };
-        let time = self.clock.next();
         self.state.pointer_button(BTN_LEFT, state, time);
         self.step();
     }
@@ -235,13 +255,13 @@ impl Harness {
         self.button(false);
     }
 
-    /// Two presses at `content` well within a double click.
+    /// Two presses at `content` well within a double click, however long the steps between them take.
     fn double_click(&mut self, content: (f64, f64)) {
         let point = self.screen(content);
         self.move_to(point);
-        for _ in 0..2 {
-            self.button(true);
-            self.button(false);
+        let stamps = self.clock.gesture(Instant::now(), 4);
+        for (i, time) in stamps.into_iter().enumerate() {
+            self.button_at(i % 2 == 0, time);
         }
     }
 
@@ -355,4 +375,23 @@ fn the_input_clock_keeps_pace_with_real_time() {
     // two events sent within the same millisecond still come in order
     let next = clock.stamp(clock.start + Duration::from_millis(1_500));
     assert_eq!(next, later + 1);
+}
+
+/// A double click's presses are a fixed few milliseconds apart however long the steps that send them take, stamps
+/// stay in order around the gesture, and the next gesture keeps pace with real time again.
+#[test]
+fn a_gestures_events_are_a_fixed_step_apart_and_the_next_keeps_pace_with_real_time() {
+    let mut clock = InputClock::new();
+    let first = clock.gesture(clock.start + Duration::from_millis(200), 4);
+    let step = InputClock::GESTURE_STEP;
+    let at = InputClock::START + 200;
+    assert_eq!(first, [at, at + step, at + 2 * step, at + 3 * step]);
+    // an event sent at once after it still comes after its last
+    assert_eq!(
+        clock.stamp(clock.start + Duration::from_millis(200)),
+        at + 3 * step + 1
+    );
+    // a gesture a second and a half later is that far on
+    let second = clock.gesture(clock.start + Duration::from_millis(1_700), 4);
+    assert_eq!(second[0], InputClock::START + 1_700);
 }

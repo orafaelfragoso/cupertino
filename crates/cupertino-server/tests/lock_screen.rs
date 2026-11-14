@@ -217,6 +217,10 @@ impl Fixture {
     fn login_process(&self, bus: &str, system: &str, pam: &Pam) -> ShellProcess {
         let mut login = common::shell::process("cupertino-login", bus, &[]);
         let program = login.command.pop().unwrap();
+        // the lock screen's own class picks its renderer here, not the shared CPU override
+        login
+            .command
+            .retain(|word| !word.starts_with("CUPERTINO_RENDERER="));
         login.command.extend(pam.env_words());
         login.command.extend([
             format!("DBUS_SYSTEM_BUS_ADDRESS={system}"),
@@ -532,6 +536,19 @@ fn the_right_password_unlocks_the_session_and_the_application_gets_its_input_bac
     assert!(
         after.0 > before.0 && after.1 > before.1 && after.2 > before.2,
         "the application got no input after the unlock: {before:?} then {after:?}"
+    );
+    // the lock screen must always draw: it draws on the CPU, whatever becomes of the GPU
+    let records =
+        std::path::Path::new(&session.fixture.path("runtime")).join("cupertino/renderers");
+    let record = std::fs::read_dir(&records)
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .find(|r| r.starts_with("program=cupertino-login\n"))
+        .expect("the login process records its renderer");
+    assert_eq!(
+        record,
+        "program=cupertino-login\nrenderer=cpu\nreason=its class draws on the CPU\n"
     );
 }
 

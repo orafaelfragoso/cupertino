@@ -184,6 +184,8 @@ fn more_info(token: &str) -> Result<Command<Message>> {
 impl Application for AboutApp {
     type Model = AboutWindow;
     type Message = Message;
+    /// A small window drawn once: a GPU context would only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     fn init() -> (AboutWindow, Vec<Command<Message>>) {
         let Start {
@@ -485,4 +487,18 @@ impl Widget<Message> for Mark {
     }
 
     fn semantics(&self, _: &Drawn, _: &mut SemanticsCx<'_>) {}
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The about window is small and still.
+    #[test]
+    fn the_about_window_draws_on_the_cpu() {
+        assert_eq!(
+            <AboutApp as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
+    }
 }

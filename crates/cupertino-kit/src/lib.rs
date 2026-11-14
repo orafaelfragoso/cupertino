@@ -20,7 +20,8 @@ pub mod prelude {
         TextChange, TextEditor, TextField, Toggle,
     };
     pub use cupertino_ui_core::{
-        Application, Command, Element, Glass, GlassStyle, Key, Window, WindowBackground, WindowKey,
+        Application, Command, Element, Glass, GlassStyle, Key, RendererClass, Window,
+        WindowBackground, WindowKey,
     };
     pub use cupertino_ui_layout::{Align, Axis};
     pub use cupertino_ui_platform::WindowSpec;

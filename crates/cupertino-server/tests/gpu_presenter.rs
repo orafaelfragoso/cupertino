@@ -51,6 +51,8 @@ struct Session {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     home: tempfile::TempDir,
+    /// The window runs in a sandbox that hides `/dev/dri` (a user and mount namespace of its own).
+    sandboxed: bool,
 }
 
 impl Session {
@@ -76,6 +78,7 @@ impl Session {
             state,
             event_loop,
             home: tempfile::tempdir().unwrap(),
+            sandboxed: false,
         };
         let renderer = s.state.backend.as_mut().unwrap().renderer();
         if cupertino_server::backend::render_node(renderer).is_none() {
@@ -107,7 +110,16 @@ impl Session {
         std::fs::create_dir_all(&runtime).unwrap();
         let socket = Path::new(&std::env::var_os("XDG_RUNTIME_DIR").unwrap())
             .join(self.state.socket_name.as_ref().unwrap());
-        let mut command = common::spawn::cleared(binary, home);
+        let mut command = if self.sandboxed {
+            let mut command = common::spawn::cleared("unshare", home);
+            command
+                .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
+                .arg(r#"mount -t tmpfs none /dev/dri && exec "$0" "$@""#)
+                .arg(binary);
+            command
+        } else {
+            common::spawn::cleared(binary, home)
+        };
         command
             .env("XDG_RUNTIME_DIR", &runtime)
             .env("WAYLAND_DISPLAY", socket)
@@ -392,6 +404,19 @@ fn the_presenter_makes_a_new_device_after_a_reset_and_stays_on_the_cpu_after_the
         record.contains("renderer=cpu\nreason=the context was lost"),
         "{record}"
     );
+    let events = recorded_events(&home);
+    let fallbacks = |scope: &str| {
+        events
+            .lines()
+            .filter(|l| l.contains("\"toolkit.renderer.fallback\"") && l.contains(scope))
+            .count()
+    };
+    assert_eq!(fallbacks("\"scope\":\"loss\""), 3, "each reset is recorded");
+    assert_eq!(
+        fallbacks("\"scope\":\"process\""),
+        1,
+        "and the CPU for good"
+    );
 }
 
 /// A purge is not the work's fault: the process makes a new device every time and stays on the GPU.
@@ -412,6 +437,10 @@ fn the_presenter_never_counts_a_purge_toward_the_cpu() {
         ("5", "4")
     );
     assert_eq!(report["renderer"], "gpu");
+    assert!(
+        !recorded_events(&home).contains("toolkit.renderer.fallback"),
+        "a purge is no fallback"
+    );
     let ups = warm_ups(&report);
     assert_eq!(ups.len(), 5);
     assert!(
@@ -440,6 +469,13 @@ fn the_presenter_falls_back_to_shared_memory_for_a_surface_whose_buffer_is_refus
     });
     assert_eq!(report["fell_back"], "1");
     assert_eq!(report["renderer"], "gpu", "the process stays on the GPU");
+    assert!(
+        recorded_events(&home)
+            .lines()
+            .any(|l| l.contains("\"toolkit.renderer.fallback\"")
+                && l.contains("\"scope\":\"surface\"")),
+        "the surface's fallback is recorded"
+    );
     assert!(number(&report, "gpu_frames") >= 1);
     assert!(number(&report, "shm_frames") > 0);
     assert_eq!(report["syncobj_surfaces_created"], "1");
@@ -606,5 +642,155 @@ fn the_presenter_shows_what_the_gpu_renderer_drew_from_its_texture_in_dmabufs() 
     assert!(
         at.0 >= i64::from(MARK_AT.0) - 1 && at.1 >= i64::from(MARK_AT.1) - 1,
         "the mark at {at:?} of the window's frame"
+    );
+}
+
+/// The diagnostic events the window recorded in its store (`XDG_STATE_HOME` under `home`), every line of every segment.
+fn recorded_events(home: &Path) -> String {
+    let mut text = String::new();
+    let mut dirs = vec![home.join(".local/state/cupertino/events")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                text += &std::fs::read_to_string(&path).unwrap_or_default();
+            }
+        }
+    }
+    text
+}
+
+/// The renderer record the window left in its runtime directory under `home`.
+fn renderer_record(home: &Path) -> String {
+    std::fs::read_to_string(
+        home.join("runtime/cupertino/renderers")
+            .read_dir()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path(),
+    )
+    .unwrap()
+}
+
+/// A process of the CPU's class draws every frame into shared memory and makes no device, however large its window.
+#[test]
+fn a_cpu_class_draws_on_the_cpu_however_large_its_window() {
+    let Some(mut s) = Session::start(true) else {
+        return;
+    };
+    let home = s.home.path().to_path_buf();
+    let (report, shown) = s.run(
+        &home,
+        &["--class", "cpu", "--size", "1300x900", "--frames", "150"],
+        |_, _| {},
+    );
+    assert_eq!(report["class"], "cpu");
+    assert_eq!(report["renderer"], "cpu");
+    assert_eq!(report["reason"], "its class draws on the CPU");
+    assert_eq!(
+        (report["to_gpu"].as_str(), report["gpu_frames"].as_str()),
+        ("0", "0")
+    );
+    assert_eq!(report["warm_ups"], "");
+    assert_eq!(shown.dmabuf, 0);
+    assert!(!recorded_events(&home).contains("toolkit.renderer.fallback"));
+}
+
+/// A process of the size and repaint rule's class starts on the CPU; a window over a quarter of its output moves it to
+/// the GPU with its first frame, whose successors are drawn on the CPU only while the device warms up.
+#[test]
+fn the_rule_moves_a_process_to_the_gpu_once_its_window_covers_more_than_a_quarter_of_its_output() {
+    let Some(mut s) = Session::start(true) else {
+        return;
+    };
+    let home = s.home.path().to_path_buf();
+    // 1000 x 800 of the 1400 x 1000 output
+    let (report, shown) = s.run(
+        &home,
+        &["--class", "by-use", "--size", "1000x800", "--frames", "120"],
+        |_, _| {},
+    );
+    assert_eq!(report["class"], "by use");
+    assert_eq!(
+        report["shm_frames_before_switch"], "1",
+        "the first frame was large"
+    );
+    assert_eq!(report["still_waiting"], "0");
+    assert_eq!(report["renderer"], "gpu");
+    assert_eq!(report["reason"], "the GPU");
+    assert_eq!(report["to_gpu"], "1");
+    assert!(number(&report, "gpu_frames") > 60);
+    assert!(shown.dmabuf > 0);
+}
+
+/// A small window of the rule's class stays on the CPU while it presents at most 30 frames a second; one that presents
+/// faster for two whole seconds moves its process to the GPU.
+#[test]
+fn the_rule_moves_a_process_to_the_gpu_once_a_small_window_presented_fast_for_two_seconds() {
+    let Some(mut s) = Session::start(true) else {
+        return;
+    };
+    let home = s.home.path().to_path_buf();
+    let started = Instant::now();
+    let (report, _) = s.run(
+        &home,
+        &["--class", "by-use", "--size", "320x240", "--frames", "600"],
+        |_, _| {},
+    );
+    let before = number(&report, "shm_frames_before_switch");
+    assert!(
+        before > 2 * 30,
+        "{before} frames on the CPU before the switch, two seconds of more than 30"
+    );
+    assert!(started.elapsed() >= Duration::from_secs(2));
+    assert_eq!(report["still_waiting"], "0");
+    assert_eq!(report["renderer"], "gpu");
+    assert_eq!(report["to_gpu"], "1");
+}
+
+/// A process of the GPU's class in a sandbox that hides `/dev/dri` cannot reach the device the compositor names: it
+/// draws on the CPU from its first frame to its last, says why in its record, and records the fallback as a
+/// diagnostic event.
+#[test]
+fn a_sandboxed_process_without_the_render_node_draws_on_the_cpu_and_records_the_fallback() {
+    let Some(mut s) = Session::start(true) else {
+        return;
+    };
+    let probe = std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
+        .arg("mount -t tmpfs none /dev/dri && test -z \"$(ls /dev/dri)\"")
+        .status();
+    if !probe.is_ok_and(|s| s.success()) {
+        unavailable("no user and mount namespaces to hide /dev/dri in");
+        return;
+    }
+    s.sandboxed = true;
+    let home = s.home.path().to_path_buf();
+    let (report, shown) = s.run(&home, &["--class", "gpu", "--frames", "60"], |_, _| {});
+    assert_eq!(report["renderer"], "cpu");
+    assert_eq!(report["reason"], "no render node for the dmabuf device");
+    assert_eq!(
+        (report["to_gpu"].as_str(), report["gpu_frames"].as_str()),
+        ("0", "0")
+    );
+    assert_eq!(report["first_frame_renderer"], "cpu");
+    assert!(shown.shm > 0 && shown.dmabuf == 0);
+    assert_eq!(
+        renderer_record(&home),
+        "program=gpu-window\nrenderer=cpu\nreason=no render node for the dmabuf device\n"
+    );
+    let events = recorded_events(&home);
+    let fallback = events
+        .lines()
+        .find(|l| l.contains("\"toolkit.renderer.fallback\""))
+        .unwrap_or_else(|| panic!("no fallback event in {events}"));
+    assert!(
+        fallback.contains("\"scope\":\"process\"")
+            && fallback.contains("no render node for the dmabuf device"),
+        "{fallback}"
     );
 }

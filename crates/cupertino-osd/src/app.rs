@@ -228,6 +228,8 @@ impl Application for Osd {
     type Model = Osd;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// A small overlay shown now and then: a GPU context would only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     /// An overlay on the machine's backends that no bus feeds; [`run`] starts the process's one.
     fn init() -> (Osd, Vec<Command<Message>>) {
@@ -274,7 +276,7 @@ fn first_output(conn: &Connection) -> Result<OutputId> {
 
 /// Connect, claim the bus name and serve until the connection, the bus or the overlay's surface goes.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Osd::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -295,4 +297,18 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     });
     cupertino_kit::app::run_on::<Osd>(system, start(controller(options), commands))?;
     Err("the overlay's surface was closed".into())
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// An overlay is small and its fades are the compositor's.
+    #[test]
+    fn the_overlays_draw_on_the_cpu() {
+        assert_eq!(
+            <Osd as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
+    }
 }

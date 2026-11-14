@@ -1,5 +1,6 @@
 //! Running an application on the session's Wayland display: the installed theme, the asset packs' fonts and the
-//! built-in Inter, the CPU renderer and the monotonic clock.
+//! built-in Inter, the renderer of the application's class (the GPU renderer once the process draws there) and the
+//! monotonic clock.
 
 use cupertino_assets::{Assets, FontRole, FontSource, BUILTIN_FONT};
 use cupertino_defaults::appearance::{AppearanceSettings, Highlight};
@@ -54,9 +55,11 @@ impl std::error::Error for AppError {}
 
 /// Opens `A`'s windows on the session's Wayland display, publishes them to assistive technology over AT-SPI, follows
 /// the session's appearance and display options, and runs until the application exits, its last window without a
-/// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window.
+/// close handler is closed, or a non-[resident](Application::RESIDENT) application closes its last window. Its
+/// windows draw with the renderer of its class ([`Application::RENDERER`]).
 pub fn run<A: Application>() -> Result<(), AppError> {
-    let system = WaylandWindowSystem::connect(Profile::cupertino()).map_err(AppError::Connect)?;
+    let system = WaylandWindowSystem::connect_as(Profile::cupertino(), A::RENDERER)
+        .map_err(AppError::Connect)?;
     run_on::<A>(system, A::init())
 }
 
@@ -628,6 +631,28 @@ mod tests {
             changed: Arc::new(AtomicBool::new(false)),
         });
         Box::new(move |appearance| inner.make(appearance))
+    }
+
+    /// An application run by [`run`] names its class through the prelude.
+    #[test]
+    fn an_application_names_its_renderer_class_through_the_prelude() {
+        use crate::prelude::RendererClass;
+        struct Large;
+        impl Application for Large {
+            type Model = ();
+            type Message = ();
+            const RENDERER: RendererClass = RendererClass::Gpu;
+            fn init() -> ((), Vec<cupertino_ui_core::Command<()>>) {
+                ((), Vec::new())
+            }
+            fn update(_: &mut (), _: ()) -> Vec<cupertino_ui_core::Command<()>> {
+                Vec::new()
+            }
+            fn view(_: &()) -> Vec<cupertino_ui_core::Window<()>> {
+                Vec::new()
+            }
+        }
+        assert_eq!(<Large as Application>::RENDERER, RendererClass::Gpu);
     }
 
     #[test]

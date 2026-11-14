@@ -110,6 +110,8 @@ impl Harness {
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
                 .env("DBUS_SESSION_BUS_ADDRESS", &address)
                 .env("DBUS_SYSTEM_BUS_ADDRESS", &address)
+                // the test reads the window's and the menu's shm buffers: Settings would otherwise move to the GPU
+                .env("CUPERTINO_RENDERER", "cpu")
                 .spawn()
                 .unwrap(),
         );

@@ -187,6 +187,7 @@ Every id a test can drive, where it comes from, and how. `tests/registry.rs` che
 | `server.lock.fallback_shown` | warn | `cupertino-server` | the server covered the locked session itself (`reason`, `outputs`) | `cupertino-server/tests/lock_screen.rs`, `session_lock.rs` |
 | `power.suspend.failed` | error | `cupertino-server`, `cupertino-sessiond` | a sleep did not happen: the idle policy's (`reason`), or the login screen's that logind failed | `cupertino-server/src/power.rs`, `cupertino-sessiond/src/manager.rs` |
 | `power.inhibit.failed` | warn | `cupertino-server` | logind gave no sleep delay inhibitor | `cupertino-server/src/power.rs` |
+| `toolkit.renderer.fallback` | warn | any toolkit process | a process or surface that wanted the GPU draws on the CPU (`program`, `scope`: `process`, `surface` or `loss`, `reason`); a purge is not one | `cupertino-server/tests/gpu_presenter.rs` |
 | `login.power.failed` | error | `cupertino-sessiond` | logind failed to restart or shut down (`action`) | `cupertino-sessiond/src/manager.rs` |
 | `login.auth.failed` | warn | `cupertino-sessiond` | PAM refused an authentication (`service`, `stage`, `error`, `outcome`, `failures`); never the account | `cupertino-sessiond/tests/diag_events.rs` |
 | `login.session.start_failed` | error | `cupertino-sessiond` | a session could not be started at `stage` | `cupertino-sessiond/tests/diag_events.rs` |

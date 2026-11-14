@@ -13,7 +13,8 @@ a rule changes this file first, in its own reviewed change.
    material limit.
 2. *(from step 7)* A client draws its own content with the toolkit renderer of its surface class: CPU for small,
    rarely shown, must-draw and static surfaces (the lock screen and login always), GPU for large or continuously
-   repainted windows. The class of every shell process and of third-party applications is listed in the design.
+   repainted windows. The class of every shell process and of third-party applications is listed in the design; each
+   process declares its own (`RendererClass`) and no switch turns the GPU on for every process.
 3. *(in force)* The CPU renderer is the standard the GPU renderer is tested against, and the fallback. It is never
    removed and never allowed to fall behind the GPU renderer in what it can draw.
 
@@ -59,9 +60,10 @@ a rule changes this file first, in its own reviewed change.
 
 16. *(from step 6)* EGL, GBM and Vulkan are loaded at run time; their absence selects the CPU renderer, never a failed
     start.
-17. *(from step 6)* A process falls back to the CPU on `CUPERTINO_RENDERER=cpu`, missing dmabuf feedback, an unusable
-    or software device, or three context losses within a minute. Video-memory purges are never counted as losses.
-    `CUPERTINO_RENDERER=gpu` forces the GPU path for tests.
+17. *(from step 6)* A process falls back to the CPU on `CUPERTINO_RENDERER=cpu`, missing dmabuf feedback, a render node
+    it cannot see, an unusable or software device, or three context losses within a minute. Video-memory purges are
+    never counted as losses. `CUPERTINO_RENDERER=gpu` forces the GPU path for tests. *(from step 7)* A fallback of a
+    process or surface that wanted the GPU is logged and recorded as a diagnostic event.
 18. *(from step 6)* Every client context is created with robustness and purge notification. After a reset or purge
     the compositor tells clients their buffers were lost, and clients repaint.
 19. *(from step 6)* The renderer each process uses is logged, reported by `cupertino-diagnose` and recorded in the

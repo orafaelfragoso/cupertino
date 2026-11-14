@@ -541,6 +541,9 @@ impl Application for Dialogs {
     type Model = Model;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The file chooser and the portal's dialogs are shown now and then, mostly at rest: a resident GPU context would
+    /// only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     fn init() -> (Model, Vec<Command<Message>>) {
         let home = home();
@@ -1715,6 +1718,15 @@ mod tests {
 
     use super::*;
     use crate::file_chooser::{Ask, Event};
+
+    /// The chooser and the overlays are small and must draw whatever becomes of the GPU.
+    #[test]
+    fn the_chooser_and_the_overlays_draw_on_the_cpu() {
+        assert_eq!(
+            <Dialogs as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
+    }
 
     fn ask(kind: Kind, folder: &std::path::Path) -> Ask {
         Ask {

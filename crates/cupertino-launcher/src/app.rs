@@ -919,6 +919,8 @@ impl Application for App {
     type Model = App;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// A frame for every letter typed: on the CPU its raster passes the animation budget, on the GPU it is within it.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Gpu;
 
     /// Not used: the model needs the host and the bus [`run`] sets up, and starts through `run_on`.
     fn init() -> (App, Vec<Command<Message>>) {
@@ -949,7 +951,7 @@ impl Application for App {
 
 /// Connect, claim the bus name and serve until the connection or the bus fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), App::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let shell =
         LayerShell::bind(system.connection()).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -1033,6 +1035,15 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A typed letter redraws the results whole: the launcher draws on the GPU.
+    #[test]
+    fn the_launcher_draws_on_the_gpu() {
+        assert_eq!(
+            <App as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Gpu
+        );
+    }
 
     #[test]
     fn the_preview_reads_only_the_start_of_regular_files_and_never_waits() {

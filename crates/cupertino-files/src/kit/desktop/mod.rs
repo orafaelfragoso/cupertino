@@ -950,6 +950,8 @@ impl Application for Desktop {
     type Model = Model;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// Full screen but static: it repaints when its icons change, so a GPU context would only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     /// A desktop that lists nothing and no output feeds; [`run`] starts the process's one.
     fn init() -> (Model, Vec<Command<Message>>) {
@@ -1145,7 +1147,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default();
     let file_icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
 
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Desktop::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let shell = DesktopShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -1254,5 +1256,19 @@ mod drop_tests {
         );
         assert_eq!(dropped_sources(b"", desk), None);
         assert_eq!(dropped_sources(b"https://example.org/x\r\n", desk), None);
+    }
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The desktop redraws only when its icons change.
+    #[test]
+    fn the_desktop_draws_on_the_cpu() {
+        assert_eq!(
+            <Desktop as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
     }
 }

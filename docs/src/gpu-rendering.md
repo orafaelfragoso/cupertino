@@ -14,13 +14,14 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Rounded clips of window content, reduced copies | the compositor, texture programs compiled through Smithay's shader interface | n/a |
 | Title bars, window buttons, rims, keyboard HUDs | the compositor: each recorded as a list of draws, drawn by the borrowed device with the toolkit's coverage program into a texture of the renderer when its state changes (glyphs and button glyph paths kept in an atlas); painted on the CPU from the same list where the device cannot draw it | n/a |
 | The procedural cursor | the compositor, rasterized on the CPU (tiny-skia), cached, uploaded on change: the cursor plane's buffer is filled on the CPU | memory buffers |
-| Toolkit windows (shell processes, Files, Settings) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; with `CUPERTINO_RENDERER=gpu`, the GPU renderer (`cupertino-ui-gpu`) after the first frames, its scroll layers kept as textures | `wl_shm`, three slots, damage rectangles, copied byte for byte as `abgr8888` where the compositor lists it, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
+| Toolkit windows of the GPU class (Files windows, Settings, the dock and overview, the launcher) and third-party windows once large or busy | the GPU renderer (`cupertino-ui-gpu`) after the first frames, which the CPU draws while the device warms up, its scroll layers kept as textures; the CPU renderer on a fallback | dmabufs copied from the renderer's texture; shared memory on a fallback |
+| Toolkit windows of the CPU class (menu bar, OSD, banners, Control Center, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, copied byte for byte as `abgr8888` where the compositor lists it, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
 The material system is already a GPU system: a window asks the compositor for glass by shape and style, and the
-compositor shades it against whatever is behind it. What is still on the CPU is the content of every window, the
-compositor's own title bars and HUDs, and the material effects that need a window's own pixels (vibrant text and
-symbols, lifted control thumbs, displacement).
+compositor shades it against whatever is behind it. What is still on the CPU is the content of the windows of the
+CPU class (small, rarely repainted, or ones that must always draw) and the material effects that need a window's own
+pixels (vibrant text and symbols, lifted control thumbs, displacement).
 
 Three facts decide most of the plan:
 
@@ -60,12 +61,19 @@ the rows that changed.
 
 | Class | Examples | Renderer |
 |---|---|---|
-| Small or rarely shown | OSD, banners, menu bar, polkit and keyring prompts, portal overlays and file chooser, screenshot toolbar and selection overlay | CPU, with layers |
+| Small or rarely shown | OSD, banners, menu bar, Control Center, the About window, polkit and keyring prompts, portal overlays and file chooser, screenshot toolbar and selection overlay | CPU, with layers |
 | Must always draw | lock screen, login | CPU |
 | Static and full-screen | the Files desktop instance | CPU |
-| Large or continuously repainted | Files windows, Settings | GPU |
+| Large or continuously repainted | Files windows, Settings, the dock (and its overview), the launcher | GPU |
 | Third-party toolkit applications | anything built on the toolkit or its C ABI | GPU once a window is larger than a quarter of its output or presents more than 30 frames a second for two seconds; CPU otherwise |
-| Decided by measurement after layers | dock (and its overview), launcher, Control Center | whichever meets the budgets |
+
+Each process declares its class (`RendererClass`: `Cpu`, `Gpu`, or `ByUse` for the rule of the third-party row, which
+an application that declares nothing takes); `CUPERTINO_RENDERER=cpu|gpu` overrides it. The dock, the launcher and
+Control Center were measured on both renderers with their layers (the plan's step 7 measurements): the overview's
+frames miss a refresh on the CPU and a typed letter's frame passes the animation budget there, both within it on the
+GPU; Control Center draws one frame as it opens and one as it closes, its motion the compositor's, and the GPU draws
+it little faster for the 70 MiB a context costs. The polkit agent, the keyring prompter and the portal's pick overlay
+draw with tiny-skia directly and never make a GPU device.
 
 Glass is drawn by the compositor for every class, so a CPU surface keeps the full material look. A GPU process paints
 its first frame on the CPU while its context and programs are prepared on a worker thread, then switches and frees the
@@ -179,23 +187,30 @@ client CPU p99 is more than 10% above its baseline.
 
 A process draws on the CPU when:
 
-- `CUPERTINO_RENDERER=cpu` is set, or its surface class is a CPU class;
-- the compositor offers no dmabuf feedback, or EGL, GBM or Vulkan cannot be loaded or initialised on the advertised
-  device;
+- `CUPERTINO_RENDERER=cpu` is set, or its surface class is a CPU class, or it takes the size and repaint rule and
+  no window of it has been large or busy yet;
+- the compositor offers no dmabuf feedback, the process cannot see the render node of the device it names (a sandbox
+  without `/dev/dri`), or EGL, GBM or Vulkan cannot be loaded or initialised on the advertised device;
 - the device is a software rasterizer;
 - its context was lost three times within a minute.
 
-`CUPERTINO_RENDERER=gpu` overrides the software and missing-feedback conditions (it takes the device from EGL), which
-tests use. Contexts are created with the same robustness and purge-notification attributes as the compositor's.
-Video-memory purges (suspend, VT switch, mode set) are never counted as losses. After a reset or a purge the
+`CUPERTINO_RENDERER=gpu` overrides the class and the software and missing-feedback conditions (it takes the device
+from EGL), which tests use. Contexts are created with the same robustness and purge-notification attributes as the
+compositor's. Video-memory purges (suspend, VT switch, mode set) are never counted as losses. After a reset or a purge the
 compositor tells every client its buffers were lost, so an idle client repaints instead of showing what the driver
 left behind. The renderer each process uses is logged once, reported by `cupertino-diagnose` and recorded in the frame
-statistics.
+statistics. A process or surface that wanted the GPU and draws on the CPU instead (the process at its start, one
+surface whose buffer was refused, a reset of its context; a purge is none) logs
+`renderer: fell back to the CPU (<scope>): <why>` and records the diagnostic event `toolkit.renderer.fallback`, which
+outlasts the session in the user's event store (a fortnight), so `cupertino diagnose events --since 7d` shows whether a
+week went by without one.
 
-Until step 7 the GPU path is built but off: one switch, `GPU_BY_DEFAULT` in `crates/cupertino-ui-wayland/src/renderer.rs`,
-is `false`, so every process draws on the CPU (reason "the GPU path is not turned on") and never binds the dmabuf
-protocol. `CUPERTINO_RENDERER=gpu` takes the GPU path regardless, which the tests and measurements use; `cpu` keeps a
-process on the CPU after the switch is turned on. Step 7 turns the switch on, per surface class.
+Each process declares its class when it connects (`RendererClass`, `Application::RENDERER` for an application run by
+`cupertino_kit::app::run`); there is no switch for every process. A process of the CPU's class never makes a device and
+never binds the dmabuf protocol (reason "its class draws on the CPU"); one of the GPU's class warms up from its start;
+one that declares nothing (third-party applications) starts on the CPU and moves to the GPU for the rest of its life
+once a window covers more than a quarter of the largest output it is on or presents more than 30 frames a second in
+each of two whole seconds. A process does not move back: tearing a context down returns almost no memory.
 
 A process that may use the GPU draws its first frames on the CPU while a worker thread makes the device and links the
 programs, then switches (the runtime frees each window's CPU renderer and draws whole frames with a new one). Linked

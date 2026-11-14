@@ -10,6 +10,7 @@ autotests = false
 layer = "ui"
 
 [dependencies]
+cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }

@@ -493,6 +493,8 @@ impl Application for Notifications {
     type Model = Notifications;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// Banners are small and shown now and then: a GPU context would only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     /// The process's daemon on the session bus; [`run`] starts it with the command line's options.
     fn init() -> (Notifications, Vec<Command<Message>>) {
@@ -579,7 +581,7 @@ fn metrics(options: &RuntimeOptions) -> CardMetrics {
 /// Connect, claim the bus names and serve until the connection or the bus fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let start = start(options)?;
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Notifications::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -608,6 +610,15 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Banners are small and draw a frame now and then.
+    #[test]
+    fn banners_and_the_list_draw_on_the_cpu() {
+        assert_eq!(
+            <Notifications as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
+    }
 
     /// The bus says the list is open exactly while its surface exists, with its output's name once known.
     #[test]

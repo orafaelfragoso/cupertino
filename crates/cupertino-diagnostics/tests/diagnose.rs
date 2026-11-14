@@ -614,7 +614,7 @@ fn every_running_process_reports_its_renderer_and_one_that_fell_back_from_the_gp
         )
         .unwrap();
     };
-    record(41, "cupertino-dock", "cpu", "the GPU path is not turned on");
+    record(41, "cupertino-dock", "cpu", "its class draws on the CPU");
     record(42, "cupertino-files", "gpu", "the GPU");
     record(43, "gone", "cpu", "no GPU device: no libEGL");
     fixture.file("/proc/41/stat", "");
@@ -631,7 +631,7 @@ fn every_running_process_reports_its_renderer_and_one_that_fell_back_from_the_gp
     assert_eq!(
         facts,
         [
-            "cupertino-dock (41): cpu, the GPU path is not turned on",
+            "cupertino-dock (41): cpu, its class draws on the CPU",
             "cupertino-files (42): gpu, the GPU"
         ]
     );
@@ -642,5 +642,21 @@ fn every_running_process_reports_its_renderer_and_one_that_fell_back_from_the_gp
     assert_eq!(
         seen.summary,
         "1 of 3 processes draw on the CPU after the GPU failed; gone (43): no GPU device: no libEGL"
+    );
+
+    // a sandboxed process that could not reach the device's render node fell back too
+    record(
+        44,
+        "sandboxed",
+        "cpu",
+        "no render node for the dmabuf device",
+    );
+    fixture.file("/proc/44/stat", "");
+    let seen = check(&fixture);
+    assert!(
+        seen.summary
+            .starts_with("2 of 4 processes draw on the CPU after the GPU failed"),
+        "{}",
+        seen.summary
     );
 }

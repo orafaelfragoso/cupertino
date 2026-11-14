@@ -217,7 +217,7 @@ pub fn listen<T: Send + 'static, M: Send + 'static>(
 /// Connect, serve the control interface and run until a connection or thread fails.
 pub fn run(options: &SessionOptions) -> Result<Ended> {
     let user = User::current()?;
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), SessionApp::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -596,6 +596,8 @@ impl Application for SessionApp {
     type Model = SessionApp;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The lock screen must always draw, whatever becomes of the GPU, and it is mostly at rest.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     fn init() -> (SessionApp, Vec<Command<Message>>) {
         unreachable!(
@@ -1407,5 +1409,19 @@ fn requesting_app(app: cupertino_shell_client::ConsentApp) -> RequestingApp {
         services: app.services,
         remembered: app.remembered,
         icon,
+    }
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The lock screen must draw whatever becomes of the GPU.
+    #[test]
+    fn the_lock_screen_draws_on_the_cpu() {
+        assert_eq!(
+            <SessionApp as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
     }
 }

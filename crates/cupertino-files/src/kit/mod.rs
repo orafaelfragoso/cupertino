@@ -680,6 +680,8 @@ impl Application for Files {
     type Message = Message;
     /// Files exits itself ([`Model::exit_when_done`]): a file operation outlives the windows.
     const RESIDENT: bool = true;
+    /// Large windows, scrolled and resized: their repaints are the GPU's.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Gpu;
 
     fn init() -> (Model, Vec<Command<Message>>) {
         let start = START
@@ -3046,4 +3048,18 @@ fn has_tag(entry: &crate::Entry, color: TagColor) -> bool {
 pub fn run(start: Start) -> Result<(), cupertino_kit::app::AppError> {
     prepare(start);
     cupertino_kit::app::run::<Files>()
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// Its windows are large and redraw whole on every step of a live resize.
+    #[test]
+    fn the_file_manager_window_draws_on_the_gpu() {
+        assert_eq!(
+            <Files as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Gpu
+        );
+    }
 }

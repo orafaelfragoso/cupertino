@@ -32,6 +32,9 @@ content, and a key left out goes. `WindowRequest::Layer { key, changes }` sets o
 duration) on the compositor's clock without a frame. Without the capability an empty list is all a window system
 takes.
 
+`RendererClass` is the renderer a process's windows belong on by what they draw (`Cpu`, `Gpu`, or `ByUse`: the CPU until a
+window is large or busy); `PlatformEvent::RendererChanged(RendererKind)` says the process now draws with the other one.
+
 `PlatformEvent::ScrollBars` tells how the session wants scroll views to show their bars: `ScrollBars::WhenScrolling`
 (thin bars over the content while it scrolls) or `ScrollBars::Always` (tracks beside it that stay shown). A system
 that cannot tell never sends it, and each view keeps its own style.

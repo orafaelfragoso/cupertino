@@ -1,6 +1,6 @@
 # What runs on CupertinoKit
 
-CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says what each of them draws with it and what is still open. Assessed on 2026-11-07 at the end of the Phase 4 work. A program counts as migrated only when its normal entry point draws through Kit. A dependency or a parallel implementation alone does not complete migration. Kit rasterizes every window on the CPU and hands it to the compositor in shared memory; rendering on the GPU is planned ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)): a process started with `CUPERTINO_RENDERER=gpu` already draws its windows with the GPU renderer and hands them over as dmabufs, but no app does so by default yet.
+CupertinoKit is the toolkit that Cupertino's own apps draw with. This page says what each of them draws with it and what is still open. Assessed on 2026-11-07 at the end of the Phase 4 work. A program counts as migrated only when its normal entry point draws through Kit. A dependency or a parallel implementation alone does not complete migration. Kit draws a window with the renderer of its application's class ([#155](https://github.com/orafaelfragoso/cupertino/issues/155)): Files windows, Settings, the dock and the launcher draw on the GPU and hand their windows over as dmabufs; the other shell processes draw on the CPU into shared memory; an application that declares no class moves to the GPU once a window is large or busy.
 
 | Program | On Kit today | Still open |
 |---|---|---|
@@ -71,8 +71,8 @@ the rows that come into view; the icon grid builds only the cells near its viewp
 only scrolls (`Element::kept`) and makes an item's icon only for a cell it builds, and the paint of a kept cell that
 did not change is laid into the frame as it was, without walking it. A full-screen scroll still takes over 8 ms in
 its worst frames: the toolkit still lays out, places and compares its whole tree each frame, and on the CPU path copies
-the moved viewport into the shared-memory buffer, which the GPU rendering planned for toolkit applications removes
-([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
+the moved viewport into the shared-memory buffer, which the GPU renderer Files windows draw with removes
+([Roadmap](roadmap.md#gpu-rendering-in-applications)).
 
 When the Settings pages became grouped forms on their own background, switching panes went from 10.2 / 7.1 / 4.9 ms
 to 39.4 / 29.1 / 20.3 ms and typing a search from 15.7 / 11.9 / 7.7 to 60.6 / 46.1 / 30.5 ms: the CPU renderer

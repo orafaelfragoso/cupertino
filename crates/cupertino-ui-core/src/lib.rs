@@ -36,7 +36,7 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
-pub use cupertino_ui_platform::GlassStyle;
+pub use cupertino_ui_platform::{GlassStyle, RendererClass};
 pub use cx::{
     EventCx, FocusTarget, Glass, GlassCorners, MeasureCx, OverlayCx, PaintCx, SemanticsCx,
 };
@@ -79,6 +79,9 @@ pub trait Application: 'static {
     type Message: Clone + Send + 'static;
     /// Keeps running with no window open, until [`Command::Exit`].
     const RESIDENT: bool = false;
+    /// The renderer the application's windows belong on, by what they draw. One that declares none takes the size and
+    /// repaint rule ([`RendererClass::ByUse`]).
+    const RENDERER: RendererClass = RendererClass::ByUse;
 
     fn init() -> (Self::Model, Vec<Command<Self::Message>>);
     fn update(model: &mut Self::Model, message: Self::Message) -> Vec<Command<Self::Message>>;
@@ -501,5 +504,25 @@ mod tests {
         let one = NonZeroU32::new(1).unwrap();
         let two = NonZeroU32::new(2).unwrap();
         assert_ne!(NodeId::new(5, one), NodeId::new(5, two));
+    }
+
+    /// An application that declares no class takes the size and repaint rule.
+    #[test]
+    fn an_application_that_declares_no_class_takes_the_size_and_repaint_rule() {
+        struct Plain;
+        impl Application for Plain {
+            type Model = ();
+            type Message = ();
+            fn init() -> ((), Vec<Command<()>>) {
+                ((), Vec::new())
+            }
+            fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+                Vec::new()
+            }
+            fn view(_: &()) -> Vec<Window<()>> {
+                Vec::new()
+            }
+        }
+        assert_eq!(<Plain as Application>::RENDERER, RendererClass::ByUse);
     }
 }

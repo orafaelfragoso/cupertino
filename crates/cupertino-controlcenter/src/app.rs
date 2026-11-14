@@ -726,6 +726,9 @@ impl Application for Panel {
     type Model = Panel;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The panel draws a frame as it opens and as it closes, its motion is the compositor's: the GPU draws that frame
+    /// little faster than the CPU and would keep a context for it.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     /// A panel on the machine's backends that no bus feeds; [`run`] starts the process's one.
     fn init() -> (Panel, Vec<Command<Message>>) {
@@ -813,7 +816,7 @@ fn output_gone<O: PartialEq>(output: Option<O>, outputs: &[(O, bool)]) -> bool {
 /// it is toggled, so the process also starts and keeps running while the server has no output.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let menu_bar = Theme::load()?.shapes.menu_bar_height.ceil() as i32;
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Panel::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let appearance = system.appearance().unwrap_or_default();
     let conn = system.connection();
@@ -856,6 +859,15 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 mod tests {
     use super::*;
     use cupertino_controlcenter::model::{Detail, Module};
+
+    /// The panel draws two frames an opening and none while it fades: the GPU would cost its memory for nothing.
+    #[test]
+    fn the_panel_draws_on_the_cpu() {
+        assert_eq!(
+            <Panel as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
+    }
 
     /// The bus says the panel is shown exactly while its catcher is open, with its output's name once known; a
     /// fading or hidden panel is not shown and names no output.

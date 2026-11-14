@@ -11,6 +11,8 @@
 //!   from its texture into the buffers, nothing uploaded.
 //! - `--reset-every N` / `--purge-every N`: after N frames on a device, its next status check reads a reset (or a
 //!   purge), `--losses` times in all (default 1).
+//! - `--class cpu|gpu|by-use`: the process is of this renderer class and asks for nothing (`CUPERTINO_RENDERER` may
+//!   still), instead of asking for the GPU; with `by-use` its presents go through the size and repaint rule.
 //!
 //! The window follows the compositor's configures, so the session drives resizes.
 //!
@@ -24,7 +26,7 @@ use std::time::{Duration, Instant};
 use cupertino_geometry::Rect;
 use cupertino_gpu::Loss;
 use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
-use cupertino_ui_platform::{PlatformEvent, RendererKind};
+use cupertino_ui_platform::{PlatformEvent, RendererClass, RendererKind};
 use cupertino_ui_render::{
     Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PixelFormat, RenderFrameId, RenderRequest, Shape, Transform,
@@ -57,6 +59,7 @@ struct Args {
     purge_every: Option<u64>,
     losses: u64,
     renderer: bool,
+    class: Option<RendererClass>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -68,6 +71,7 @@ fn parse() -> Result<Args, String> {
         purge_every: None,
         losses: 1,
         renderer: false,
+        class: None,
     };
     let mut it = std::env::args().skip(1);
     let number = |v: Option<String>| -> Result<u64, String> {
@@ -90,6 +94,14 @@ fn parse() -> Result<Args, String> {
             "--purge-every" => args.purge_every = Some(number(it.next())?),
             "--losses" => args.losses = number(it.next())?,
             "--renderer" => args.renderer = true,
+            "--class" => {
+                args.class = Some(match it.next().as_deref() {
+                    Some("cpu") => RendererClass::Cpu,
+                    Some("gpu") => RendererClass::Gpu,
+                    Some("by-use") => RendererClass::ByUse,
+                    _ => return Err("--class cpu|gpu|by-use".into()),
+                })
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -100,6 +112,12 @@ fn parse() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    // a fallback is recorded as a diagnostic event, in the store of the session's `XDG_STATE_HOME`
+    cupertino_diagnostic_events::init(
+        cupertino_diagnostic_events::component!(),
+        "gpu_window",
+        cupertino_diagnostic_events::Sink::UserStore,
+    );
     let args = match parse() {
         Ok(a) => a,
         Err(e) => {
@@ -138,6 +156,8 @@ struct Seen {
     /// Shared-memory frames drawn while a device warmed up: they do not count toward `--frames`, so a warm-up slowed
     /// by a busy machine still ends inside the run.
     while_warming: u64,
+    /// Shared-memory frames presented while the process waited for the size and repaint rule.
+    before_switch: u64,
 }
 
 fn add(a: &mut SurfaceStats, b: SurfaceStats) {
@@ -154,7 +174,11 @@ fn add(a: &mut SurfaceStats, b: SurfaceStats) {
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let mut conn = Connection::connect()?;
-    let mut gpu = GpuPath::start_with(&mut conn, Requested::Gpu, false);
+    let (requested, class) = match args.class {
+        Some(class) => (Requested::from_env(), class),
+        None => (Requested::Gpu, RendererClass::Gpu),
+    };
+    let mut gpu = GpuPath::start_with(&mut conn, requested, class);
     let toplevel = conn.toplevel(&ToplevelConfig {
         app_id: "gpu-window".into(),
         title: "GPU window".into(),
@@ -304,6 +328,12 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                     if gpu.warming() {
                         seen.while_warming += 1;
                     }
+                    if gpu.waiting() {
+                        seen.before_switch += 1;
+                    }
+                    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+                    let now = (now.tv_sec as u64) * 1_000_000_000 + now.tv_nsec as u64;
+                    gpu.presented(&mut conn, surface, pixels, now);
                     pending = true;
                     seen.first_frame.get_or_insert((started.elapsed(), "cpu"));
                     seen.sizes.insert(pixels);
@@ -412,6 +442,9 @@ fn report(args: &Args, conn: &Connection, gpu: &GpuPath, seen: &mut Seen) {
         ("gpu_frames", seen.gpu_frames.to_string()),
         ("shm_frames", seen.shm_frames.to_string()),
         ("shm_frames_while_warming", seen.while_warming.to_string()),
+        ("class", gpu.class().name().to_string()),
+        ("shm_frames_before_switch", seen.before_switch.to_string()),
+        ("still_waiting", u8::from(gpu.waiting()).to_string()),
         ("busy", seen.busy.to_string()),
         ("first_frame_ms", format!("{first_ms:.1}")),
         ("first_frame_renderer", first_renderer.to_string()),

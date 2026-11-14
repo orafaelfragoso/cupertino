@@ -924,6 +924,9 @@ impl Application for App {
     type Model = App;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The overview's frames cover the whole output and miss a refresh on the CPU; the GPU draws them and the dock's
+    /// magnification within the animation budget.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Gpu;
 
     /// Not used: the model needs the host and the connection [`run`] sets up, and starts through `run_on`.
     fn init() -> (App, Vec<Command<Message>>) {
@@ -1061,7 +1064,7 @@ fn listen_badges(messages: async_channel::Sender<Message>) {
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), App::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -1174,4 +1177,18 @@ fn fixture_unresponsive() -> std::collections::HashSet<String> {
 #[cfg(not(cupertino_capture_fixtures))]
 fn fixture_unresponsive() -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The overview redraws the whole output on every frame of its animation.
+    #[test]
+    fn the_dock_and_its_overview_draw_on_the_gpu() {
+        assert_eq!(
+            <App as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Gpu
+        );
+    }
 }

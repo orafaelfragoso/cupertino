@@ -268,7 +268,7 @@ fn refusal_text(outcome: Outcome, pam_notice: Option<&str>) -> String {
 pub fn run() -> Result<std::convert::Infallible> {
     let socket = std::env::var(SOCKET_VARIABLE).map_err(|e| format!("{SOCKET_VARIABLE}: {e}"))?;
     let stream = connect(&socket)?;
-    let mut system = WaylandWindowSystem::connect(Profile::cupertino())
+    let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), GreeterApp::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -358,6 +358,8 @@ impl Application for GreeterApp {
     type Model = GreeterApp;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The login screen must always draw, whatever becomes of the GPU, and it is mostly at rest.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     fn init() -> (GreeterApp, Vec<Command<Message>>) {
         unreachable!("the greeter starts only through `run`, which hands the model to the runtime")
@@ -790,5 +792,19 @@ impl GreeterApp {
             | ManagerEvent::PowerRefused { .. } => unreachable!("handled above"),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The login screen must draw whatever becomes of the GPU.
+    #[test]
+    fn the_login_screen_draws_on_the_cpu() {
+        assert_eq!(
+            <GreeterApp as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
     }
 }

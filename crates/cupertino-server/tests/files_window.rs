@@ -149,6 +149,8 @@ fn files_process(home: &Path, data_dirs: &Path, bus: &PrivateBus) -> ShellProces
         env("XDG_DATA_HOME", &home.join(".local/share")),
         env("XDG_STATE_HOME", &home.join(".local/state")),
         env("XDG_DATA_DIRS", data_dirs),
+        // the test reads the window's shm buffers: Files would otherwise move to the GPU once it is ready
+        "CUPERTINO_RENDERER=cpu".into(),
         files_binary().display().to_string(),
     ];
     ShellProcess {

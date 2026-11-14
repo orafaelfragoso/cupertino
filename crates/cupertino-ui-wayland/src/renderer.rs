@@ -1,24 +1,22 @@
-//! Which renderer a process draws with, and why: the fallback rule as a model without a display, and the record of the
-//! choice each process leaves for `cupertino-diagnose` and the frame statistics.
+//! Which renderer a process draws with, and why: the fallback rule as a model without a display, the size and repaint
+//! rule of a process that declares no class, and the record of the choice each process leaves for `cupertino-diagnose`
+//! and the frame statistics.
 //!
-//! A process draws on the CPU when `CUPERTINO_RENDERER=cpu` is set, when the GPU path is not turned on for it
-//! ([`GPU_BY_DEFAULT`]), when the compositor offers no dmabuf feedback, when EGL or GBM cannot be loaded or started on
-//! the device the feedback names, when that device is a software rasterizer, or after its context was lost three
-//! times within a minute. Video-memory purges are never counted. `CUPERTINO_RENDERER=gpu` overrides the software and
-//! missing-feedback conditions (it takes the driver's default device then), which tests use; nothing overrides missing
-//! libraries or the losses.
+//! A process draws on the CPU when `CUPERTINO_RENDERER=cpu` is set, when its class is the CPU's
+//! ([`RendererClass::Cpu`]) or the size and repaint rule has not yet asked for the GPU ([`RendererClass::ByUse`],
+//! [`large`], [`Busy`]), when the compositor offers no dmabuf feedback or its device has no render node the process
+//! can open, when EGL or GBM cannot be loaded or started on that device, when the device is a software rasterizer, or
+//! after its context was lost three times within a minute. Video-memory purges are never counted.
+//! `CUPERTINO_RENDERER=gpu` overrides the class, the software and missing-feedback conditions (it takes the driver's
+//! default device then), which tests use; nothing overrides missing libraries or the losses. A process that wanted the
+//! GPU and draws on the CPU instead says so on standard error and in a diagnostic event ([`fallback`]).
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub use cupertino_ui_platform::RendererKind;
-
-/// Whether a process whose surfaces are of a GPU class draws on the GPU without being asked to: the one switch that
-/// turns the GPU path on for every process. Off until the GPU renderer meets its budgets; `CUPERTINO_RENDERER=gpu`
-/// turns it on for one process meanwhile.
-pub const GPU_BY_DEFAULT: bool = false;
+pub use cupertino_ui_platform::{RendererClass, RendererKind};
 
 /// The variable that asks for a renderer: `cpu` or `gpu`.
 pub const RENDERER_ENV: &str = "CUPERTINO_RENDERER";
@@ -27,6 +25,58 @@ pub const RENDERER_ENV: &str = "CUPERTINO_RENDERER";
 pub const LOSS_LIMIT: usize = 3;
 /// The time [`LOSS_LIMIT`] losses are counted over.
 pub const LOSS_WINDOW: Duration = Duration::from_secs(60);
+
+/// A window covering more than one part in this many of its output's pixels is large: the size rule's quarter.
+pub const LARGE_WINDOW_PARTS: u64 = 4;
+/// Frames a second a window must present more than to be busy.
+pub const BUSY_FRAMES_PER_SECOND: u32 = 30;
+/// Whole seconds in a row a window must be busy before its process moves to the GPU.
+pub const BUSY_SECONDS: u32 = 2;
+
+/// Whether the class puts the process on the GPU from its start (the rule's class waits for a large or busy window).
+pub fn on_at_start(class: RendererClass) -> bool {
+    class == RendererClass::Gpu
+}
+
+/// Whether a window of `window` pixels is large on an output of `output` pixels: more than a quarter of it.
+pub fn large(window: (u32, u32), output: (u32, u32)) -> bool {
+    let area = |(w, h): (u32, u32)| u64::from(w) * u64::from(h);
+    let output = area(output);
+    output > 0 && area(window) * LARGE_WINDOW_PARTS > output
+}
+
+/// The repaint half of the rule for one window: its presents counted by whole seconds of the clock, from its first.
+#[derive(Clone, Debug, Default)]
+pub struct Busy {
+    /// When the second being counted began, in nanoseconds of the clock.
+    second: Option<u64>,
+    /// Frames presented in it.
+    frames: u32,
+    /// Busy seconds in a row before it.
+    seconds: u32,
+}
+
+impl Busy {
+    /// Count a frame presented at `at_ns` (monotonic nanoseconds); whether the window has now presented more than
+    /// [`BUSY_FRAMES_PER_SECOND`] in each of [`BUSY_SECONDS`] whole seconds in a row.
+    pub fn presented(&mut self, at_ns: u64) -> bool {
+        const SECOND: u64 = 1_000_000_000;
+        let start = *self.second.get_or_insert(at_ns);
+        if at_ns >= start.saturating_add(SECOND) {
+            let passed = (at_ns - start) / SECOND;
+            let busy = self.frames > BUSY_FRAMES_PER_SECOND;
+            // a second with no frame at all between ends the run
+            self.seconds = match (busy, passed) {
+                (true, 1) => self.seconds + 1,
+                _ => 0,
+            };
+            self.second = Some(start + passed * SECOND);
+            self.frames = 0;
+        }
+        self.frames += 1;
+        self.seconds >= BUSY_SECONDS
+    }
+}
 
 /// What the environment asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,10 +108,14 @@ impl Requested {
 pub enum Reason {
     /// `CUPERTINO_RENDERER=cpu`.
     AskedForCpu,
-    /// The GPU path is not turned on for the process ([`GPU_BY_DEFAULT`]).
-    NotTurnedOn,
+    /// The process's class draws on the CPU ([`RendererClass::Cpu`]).
+    CpuClass,
+    /// The process takes the size and repaint rule and no window of it has been large or busy yet.
+    NotYetLargeOrBusy,
     /// The compositor offers no dmabuf feedback.
     NoFeedback,
+    /// The feedback names a device whose render node the process cannot find (a sandbox without `/dev/dri`).
+    NoRenderNode,
     /// EGL or GBM is missing or cannot start on the device.
     Unavailable(String),
     /// The device is a software rasterizer.
@@ -83,8 +137,10 @@ impl Reason {
     pub fn label(&self) -> String {
         match self {
             Reason::AskedForCpu => "asked for the CPU".into(),
-            Reason::NotTurnedOn => "the GPU path is not turned on".into(),
+            Reason::CpuClass => "its class draws on the CPU".into(),
+            Reason::NotYetLargeOrBusy => "no window large or busy enough yet".into(),
             Reason::NoFeedback => "no dmabuf feedback".into(),
+            Reason::NoRenderNode => "no render node for the dmabuf device".into(),
             Reason::Unavailable(why) => format!("no GPU device: {why}"),
             Reason::Software => "a software rasterizer".into(),
             Reason::NoAllocator => "no dmabuf allocator".into(),
@@ -97,6 +153,20 @@ impl Reason {
             Reason::Forced => "asked for the GPU".into(),
         }
     }
+
+    /// Whether a process with this reason wanted the GPU and could not have it: a fallback, logged and recorded as a
+    /// diagnostic event ([`fallback`]).
+    pub fn is_fallback(&self) -> bool {
+        matches!(
+            self,
+            Reason::NoFeedback
+                | Reason::NoRenderNode
+                | Reason::Unavailable(_)
+                | Reason::Software
+                | Reason::NoAllocator
+                | Reason::Losses
+        )
+    }
 }
 
 /// What the rule says before a device exists: draw on the CPU for `reason`, or make a device (on `device`, a render
@@ -107,17 +177,46 @@ pub enum Start {
     Device { node: Option<PathBuf> },
 }
 
-/// The first half of the rule: the request, whether the GPU path is on, and the feedback's device (`Some(None)`: the
-/// compositor offers dmabufs but names no device; `None`: no dmabuf protocol).
-pub fn start(requested: Requested, turned_on: bool, feedback: Option<Option<PathBuf>>) -> Start {
+/// What the compositor's dmabuf feedback said about the device to draw on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Feedback {
+    /// No dmabuf protocol, or it was not asked (a process on the CPU never binds it).
+    None,
+    /// The compositor offers dmabufs and names no device.
+    NoDevice,
+    /// It names a device whose render node the process cannot find.
+    NoNode,
+    /// The render node of the device it names.
+    Node(PathBuf),
+}
+
+/// Why a process in the rule's class still waits: `CpuClass` for the CPU's class, `NotYetLargeOrBusy` for the rule's.
+fn waiting(class: RendererClass) -> Reason {
+    match class {
+        RendererClass::ByUse => Reason::NotYetLargeOrBusy,
+        _ => Reason::CpuClass,
+    }
+}
+
+/// The first half of the rule: the request, the process's class, whether the class wants the GPU now (always for
+/// the GPU's class, once a window was large or busy for the rule's), and the feedback's device.
+pub fn start(
+    requested: Requested,
+    class: RendererClass,
+    wanted: bool,
+    feedback: Feedback,
+) -> Start {
     match requested {
         Requested::Cpu => return Start::Cpu(Reason::AskedForCpu),
-        Requested::Default if !turned_on => return Start::Cpu(Reason::NotTurnedOn),
+        Requested::Default if class == RendererClass::Cpu || !wanted => {
+            return Start::Cpu(waiting(class))
+        }
         _ => {}
     }
     match (feedback, requested) {
-        (Some(Some(node)), _) => Start::Device { node: Some(node) },
+        (Feedback::Node(node), _) => Start::Device { node: Some(node) },
         (_, Requested::Gpu) => Start::Device { node: None },
+        (Feedback::NoNode, _) => Start::Cpu(Reason::NoRenderNode),
         _ => Start::Cpu(Reason::NoFeedback),
     }
 }
@@ -191,7 +290,7 @@ pub fn active() -> Choice {
         .and_then(|c| c.clone())
         .unwrap_or(Choice {
             kind: RendererKind::Cpu,
-            reason: Reason::NotTurnedOn,
+            reason: Reason::CpuClass,
         })
 }
 
@@ -215,9 +314,57 @@ pub fn set_active(choice: Choice) {
         choice.kind.name(),
         choice.reason.label()
     );
+    if choice.reason.is_fallback() {
+        fallback(FallbackScope::Process, &choice.reason.label());
+    }
     if let Some(dir) = record_dir() {
         let _ = write_record(&dir, std::process::id(), &program(), &choice);
     }
+}
+
+/// What a fallback from the GPU took to the CPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackScope {
+    /// The whole process draws on the CPU.
+    Process,
+    /// One surface presents from shared memory; the process stays on the GPU.
+    Surface,
+    /// The context was lost: the process draws on the CPU until a new device is made, or for good after the third
+    /// reset within a minute.
+    Loss,
+}
+
+impl FallbackScope {
+    pub fn name(self) -> &'static str {
+        match self {
+            FallbackScope::Process => "process",
+            FallbackScope::Surface => "surface",
+            FallbackScope::Loss => "loss",
+        }
+    }
+}
+
+/// The line a fallback logs on standard error.
+pub fn fallback_line(scope: FallbackScope, why: &str) -> String {
+    format!("renderer: fell back to the CPU ({}): {why}", scope.name())
+}
+
+/// A process that wanted the GPU draws on the CPU instead, or one of its surfaces presents from shared memory: logged
+/// on standard error and recorded as the diagnostic event `toolkit.renderer.fallback` (the program, the scope and
+/// why), which lasts past the session in the user's event store, so days of use can be checked for any.
+pub fn fallback(scope: FallbackScope, why: &str) {
+    use cupertino_diagnostic_events::{self as diag, Severity, Value};
+    eprintln!("{}", fallback_line(scope, why));
+    let program = program();
+    diag::event(
+        Severity::Warn,
+        "toolkit.renderer.fallback",
+        "a process or surface that wanted the GPU draws on the CPU",
+    )
+    .field("program", Value::Public(&program))
+    .field("scope", Value::Public(scope.name()))
+    .field("reason", Value::Public(why))
+    .emit();
 }
 
 /// `$XDG_RUNTIME_DIR/cupertino/renderers`: one file per process, named by its id.
@@ -271,9 +418,13 @@ pub fn write_record(
 mod tests {
     use super::*;
 
-    fn node() -> Option<Option<PathBuf>> {
-        Some(Some(PathBuf::from("/dev/dri/renderD128")))
+    fn node() -> Feedback {
+        Feedback::Node(PathBuf::from("/dev/dri/renderD128"))
     }
+
+    const CPU: RendererClass = RendererClass::Cpu;
+    const GPU: RendererClass = RendererClass::Gpu;
+    const BY_USE: RendererClass = RendererClass::ByUse;
 
     #[test]
     fn the_environment_asks_for_cpu_or_gpu_and_anything_else_is_the_default() {
@@ -284,42 +435,104 @@ mod tests {
     }
 
     #[test]
-    fn every_process_draws_on_the_cpu_until_the_switch_is_turned_on() {
-        const { assert!(!GPU_BY_DEFAULT) };
+    fn each_class_decides_its_process_s_renderer_and_the_rule_s_waits_for_a_large_or_busy_window() {
+        let device = Start::Device {
+            node: Some(PathBuf::from("/dev/dri/renderD128")),
+        };
+        assert!(on_at_start(GPU) && !on_at_start(CPU) && !on_at_start(BY_USE));
         assert_eq!(
-            start(Requested::Default, GPU_BY_DEFAULT, node()),
-            Start::Cpu(Reason::NotTurnedOn)
+            start(Requested::Default, CPU, on_at_start(CPU), node()),
+            Start::Cpu(Reason::CpuClass)
         );
         assert_eq!(
-            start(Requested::Default, true, node()),
-            Start::Device {
-                node: Some(PathBuf::from("/dev/dri/renderD128"))
+            start(Requested::Default, CPU, true, node()),
+            Start::Cpu(Reason::CpuClass),
+            "nothing but the variable takes a CPU class to the GPU"
+        );
+        assert_eq!(
+            start(Requested::Default, GPU, on_at_start(GPU), node()),
+            device
+        );
+        assert_eq!(
+            start(Requested::Default, BY_USE, on_at_start(BY_USE), node()),
+            Start::Cpu(Reason::NotYetLargeOrBusy)
+        );
+        assert_eq!(start(Requested::Default, BY_USE, true, node()), device);
+        assert_eq!(RendererClass::default(), BY_USE);
+        assert!(!Reason::CpuClass.is_fallback() && !Reason::NotYetLargeOrBusy.is_fallback());
+    }
+
+    #[test]
+    fn cpu_wins_over_everything_and_gpu_overrides_the_class_and_missing_feedback_only() {
+        for class in [CPU, GPU, BY_USE] {
+            assert_eq!(
+                start(Requested::Cpu, class, true, node()),
+                Start::Cpu(Reason::AskedForCpu)
+            );
+            for feedback in [Feedback::None, Feedback::NoDevice, Feedback::NoNode] {
+                assert_eq!(
+                    start(Requested::Gpu, class, false, feedback),
+                    Start::Device { node: None }
+                );
             }
+        }
+        assert_eq!(
+            start(Requested::Default, GPU, true, Feedback::None),
+            Start::Cpu(Reason::NoFeedback)
+        );
+        assert_eq!(
+            start(Requested::Default, GPU, true, Feedback::NoDevice),
+            Start::Cpu(Reason::NoFeedback)
+        );
+        assert_eq!(
+            start(Requested::Default, BY_USE, true, Feedback::NoNode),
+            Start::Cpu(Reason::NoRenderNode),
+            "a sandbox without the render node draws on the CPU"
+        );
+        for reason in [Reason::NoFeedback, Reason::NoRenderNode, Reason::Software] {
+            assert!(reason.is_fallback(), "{reason:?}");
+        }
+        assert_eq!(
+            fallback_line(FallbackScope::Surface, "the import was refused"),
+            "renderer: fell back to the CPU (surface): the import was refused"
         );
     }
 
     #[test]
-    fn cpu_wins_over_everything_and_gpu_overrides_missing_feedback_only() {
-        assert_eq!(
-            start(Requested::Cpu, true, node()),
-            Start::Cpu(Reason::AskedForCpu)
+    fn a_window_over_a_quarter_of_its_output_is_large() {
+        let output = (3840, 2160);
+        assert!(!large((1920, 1080), output), "exactly a quarter");
+        assert!(large((1921, 1080), output));
+        assert!(large((3840, 2160), output));
+        assert!(!large((900, 600), output), "a dialog");
+        assert!(!large((3840, 2160), (0, 0)), "an output without a mode");
+    }
+
+    #[test]
+    fn a_window_is_busy_after_two_whole_seconds_of_more_than_thirty_frames_each() {
+        const MS: u64 = 1_000_000;
+        let mut at_60 = Busy::default();
+        let busy: Vec<bool> = (0..200).map(|i| at_60.presented(i * 16_667_000)).collect();
+        // two seconds of 60 frames close at the first frame of the third
+        assert_eq!(busy.iter().position(|&b| b), Some(120));
+        assert!(busy[120..].iter().all(|&b| b));
+
+        let mut at_30 = Busy::default();
+        assert!(
+            (0..300).all(|i| !at_30.presented(i * 1000 * MS / 30)),
+            "thirty frames a second are not more than thirty"
         );
-        assert_eq!(
-            start(Requested::Default, true, None),
-            Start::Cpu(Reason::NoFeedback)
-        );
-        assert_eq!(
-            start(Requested::Default, true, Some(None)),
-            Start::Cpu(Reason::NoFeedback)
-        );
-        assert_eq!(
-            start(Requested::Gpu, false, None),
-            Start::Device { node: None }
-        );
-        assert_eq!(
-            start(Requested::Gpu, false, Some(None)),
-            Start::Device { node: None }
-        );
+
+        // a busy second, a second with no frame, another busy second: no two in a row
+        let mut paused = Busy::default();
+        for i in 0..63 {
+            assert!(!paused.presented(i * 16 * MS));
+        }
+        let mut t = 2100 * MS;
+        while t < 3500 * MS {
+            assert!(!paused.presented(t), "at {} ms", t / MS);
+            t += 16 * MS;
+        }
     }
 
     #[test]

@@ -40,8 +40,9 @@ pub fn gpu(sources: &Sources) -> Vec<Check> {
 
 /// The reasons a process gives for drawing on the CPU when it was meant to draw on the GPU
 /// (`cupertino_ui_wayland::renderer::Reason`).
-const GPU_FAILURES: [&str; 5] = [
+const GPU_FAILURES: [&str; 6] = [
     "no GPU device",
+    "no render node",
     "the context was lost",
     "a software rasterizer",
     "no dmabuf feedback",

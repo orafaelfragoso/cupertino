@@ -696,6 +696,8 @@ impl Shell {
 impl Application for SettingsApp {
     type Model = Shell;
     type Message = Message;
+    /// A large window whose panes scroll and change whole: its repaints are the GPU's.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Gpu;
 
     fn init() -> (Shell, Vec<Command<Message>>) {
         let Start {
@@ -849,6 +851,15 @@ mod tests {
     use crate::settings::Settings;
     use crate::sheet::Sheet;
     use crate::watch::{Changed, Which};
+
+    /// The window is large and its panes redraw whole when they change.
+    #[test]
+    fn the_settings_window_draws_on_the_gpu() {
+        assert_eq!(
+            <SettingsApp as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Gpu
+        );
+    }
 
     const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
     const RETURN: u32 = 0xff0d;

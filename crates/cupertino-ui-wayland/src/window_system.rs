@@ -22,8 +22,8 @@ use cupertino_ui_platform::{
     ConfigureId, CursorShape, DragImage, DragProgress, DragRequest, DragToken, DropAction,
     DropAnswer, DropEvent, DropToken, GlassRegion, GlassStyle, GlassTone, KeyEvent, Keysym,
     MaterialRegion, MenuDescription, PlatformError, PlatformEvent, PopupSpec, PresentOutcome,
-    RaisedLayer, ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId, WindowRequest,
-    WindowSpec, WindowSystem,
+    RaisedLayer, RendererClass, ScrollBars, SystemAppearance, Timestamp, WindowEvent, WindowId,
+    WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::TextInputState;
@@ -418,21 +418,42 @@ fn platform_error(e: Error) -> PlatformError {
 }
 
 impl WaylandWindowSystem {
-    /// Connect to the compositor named by the environment.
+    /// Connect to the compositor named by the environment, for a process that draws on the CPU
+    /// ([`RendererClass::Cpu`]).
     pub fn connect(profile: Profile) -> Result<WaylandWindowSystem, PlatformError> {
+        WaylandWindowSystem::connect_as(profile, RendererClass::Cpu)
+    }
+
+    /// Connect to the compositor named by the environment, for a process of `class`: the class decides whether its
+    /// windows draw on the CPU or the GPU, or the size and repaint rule does, and `CUPERTINO_RENDERER=cpu|gpu`
+    /// overrides it.
+    pub fn connect_as(
+        profile: Profile,
+        class: RendererClass,
+    ) -> Result<WaylandWindowSystem, PlatformError> {
         Connection::connect()
-            .map(|conn| WaylandWindowSystem::new(conn, profile))
+            .map(|conn| WaylandWindowSystem::new_as(conn, profile, class))
             .map_err(platform_error)
     }
 
-    pub fn new(mut conn: Connection, profile: Profile) -> WaylandWindowSystem {
+    /// The window system on `conn`, for a process that draws on the CPU ([`RendererClass::Cpu`]).
+    pub fn new(conn: Connection, profile: Profile) -> WaylandWindowSystem {
+        WaylandWindowSystem::new_as(conn, profile, RendererClass::Cpu)
+    }
+
+    /// The window system on `conn`, for a process of `class` ([`WaylandWindowSystem::connect_as`]).
+    pub fn new_as(
+        mut conn: Connection,
+        profile: Profile,
+        class: RendererClass,
+    ) -> WaylandWindowSystem {
         let effects = AppEffects::bind(&mut conn).map(|effects| {
             let observer = effects.appearance(&conn);
             (effects, observer)
         });
         let semantics = cupertino_protocol_app::Semantics::bind(&mut conn);
         let presentations = Presentations::bind(&mut conn);
-        let gpu = GpuPath::start(&mut conn);
+        let gpu = GpuPath::start(&mut conn, class);
         let mut system = WaylandWindowSystem {
             conn,
             copy_time: None,
@@ -1868,6 +1889,10 @@ impl WindowSystem for WaylandWindowSystem {
                 }
                 w.frame_pending = true;
                 w.shown = Some((frame.width, frame.height));
+                // a process of the size and repaint rule's class counts what its windows present
+                let now = self.now().0;
+                self.gpu
+                    .presented(&mut self.conn, surface, (frame.width, frame.height), now);
                 Ok(PresentOutcome::Presented)
             }
             Err(stall) => {

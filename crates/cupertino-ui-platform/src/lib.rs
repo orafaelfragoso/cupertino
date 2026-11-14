@@ -755,6 +755,32 @@ impl RendererKind {
     }
 }
 
+/// Which renderer a process's windows belong on, by what they draw: the class an application declares for its
+/// surfaces. `CUPERTINO_RENDERER=cpu|gpu` overrides it, and the fallback rule may still keep a GPU class on the CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RendererClass {
+    /// Small or rarely repainted surfaces, ones that must always draw, and static full-screen ones: the CPU, which
+    /// costs the process no GPU context.
+    Cpu,
+    /// Large or continuously repainted windows: the GPU, its first frames on the CPU while the device warms up.
+    Gpu,
+    /// The CPU until a window grows larger than a quarter of its output or presents more than 30 frames a second for
+    /// two seconds, then the GPU for the rest of the process: an application that declares no class.
+    #[default]
+    ByUse,
+}
+
+impl RendererClass {
+    /// `cpu`, `gpu` or `by use`, as logs and reports name it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RendererClass::Cpu => "cpu",
+            RendererClass::Gpu => "gpu",
+            RendererClass::ByUse => "by use",
+        }
+    }
+}
+
 /// How the session wants scroll views to show their bars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollBars {
@@ -1010,6 +1036,21 @@ mod glass_style_tests {
         assert_eq!(
             GlassStyle::of_material("SwitcherGlass"),
             Some(GlassStyle::Switcher)
+        );
+    }
+}
+
+#[cfg(test)]
+mod renderer_class_tests {
+    use super::RendererClass;
+
+    /// A process that declares nothing takes the size and repaint rule; each class has the name its logs give.
+    #[test]
+    fn a_process_that_declares_nothing_takes_the_rule() {
+        assert_eq!(RendererClass::default(), RendererClass::ByUse);
+        assert_eq!(
+            [RendererClass::Cpu, RendererClass::Gpu, RendererClass::ByUse].map(RendererClass::name),
+            ["cpu", "gpu", "by use"]
         );
     }
 }

@@ -238,7 +238,8 @@ fn every_id_is_dotted_lower_case_and_starts_with_its_area() {
     let known: BTreeSet<&str> = areas
         .iter()
         .map(String::as_str)
-        .chain(["diag", "session"])
+        // `diag` and `toolkit` are recorded by the libraries every process links, not by one process
+        .chain(["diag", "session", "toolkit"])
         .collect();
     for id in code.keys() {
         let parts: Vec<&str> = id.split('.').collect();

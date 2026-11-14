@@ -70,6 +70,9 @@ pub fn process(binary: &str, bus_address: &str, args: &[&str]) -> ShellProcess {
     command.extend([
         format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
         format!("CUPERTINO_TEST_CLOCK={TEST_CLOCK}"),
+        // the tests read the processes' shm buffers and compare CPU frames, whatever renderer a process's class
+        // picks; the GPU path's own tests ask for the GPU
+        "CUPERTINO_RENDERER=cpu".to_string(),
     ]);
     command.extend(cupertino_test_pam::shared().env_words());
     command.push(bin_dir().join(binary).display().to_string());

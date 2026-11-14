@@ -24,7 +24,8 @@ use cupertino_wayland_client::{Connection, PixelRect, SurfaceId};
 
 use crate::gpu_present::{GpuDevice, GpuSurface, PresentError, Programs, SurfaceStats};
 use crate::renderer::{
-    self, Choice, LossHistory, Reason, RendererKind, Requested, Start, GPU_BY_DEFAULT,
+    self, Busy, Choice, FallbackScope, Feedback, LossHistory, Reason, RendererClass, RendererKind,
+    Requested, Start,
 };
 
 /// What the warm-up thread made, and how long it took.
@@ -74,7 +75,7 @@ pub fn warm(node: Option<&Path>, cache: Option<&Path>) -> Result<Warm, String> {
 }
 
 /// The render node of the device `dev` names (a `dev_t` from dmabuf feedback): the node itself when it is one, else
-/// the render node of the same device.
+/// the render node of the same device; `None` when the process cannot see one (a sandbox without `/dev/dri`).
 pub fn render_node_of(dev: u64) -> Option<PathBuf> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let nodes = std::fs::read_dir("/dev/dri").ok()?;
@@ -100,6 +101,8 @@ pub fn render_node_of(dev: u64) -> Option<PathBuf> {
         .filter_map(|e| e.file_name().into_string().ok())
         .find(|n| n.starts_with("renderD"))
         .map(|n| PathBuf::from("/dev/dri").join(n))
+        // a sandbox may hide the node the kernel has
+        .filter(|node| node.exists())
 }
 
 /// The major number of a Linux `dev_t`.
@@ -180,6 +183,10 @@ pub enum Presented {
 pub struct GpuPath {
     state: State,
     requested: Requested,
+    class: RendererClass,
+    /// The rule's class before any window was large or busy: each window's presents counted, no device made and the
+    /// dmabuf protocol not bound.
+    waiting: Option<HashMap<SurfaceId, Busy>>,
     node: Option<PathBuf>,
     offered: Vec<u64>,
     explicit_offered: bool,
@@ -194,15 +201,22 @@ pub struct GpuPath {
 }
 
 impl GpuPath {
-    /// Decide by the rule (asked through `CUPERTINO_RENDERER`) and start the warm-up when the GPU may be used.
-    pub fn start(conn: &mut Connection) -> GpuPath {
-        Self::start_with(conn, Requested::from_env(), GPU_BY_DEFAULT)
+    /// Decide by the process's class and the rule (`CUPERTINO_RENDERER` overriding the class) and start the warm-up
+    /// when the GPU may be used.
+    pub fn start(conn: &mut Connection, class: RendererClass) -> GpuPath {
+        Self::start_with(conn, Requested::from_env(), class)
     }
 
-    pub fn start_with(conn: &mut Connection, requested: Requested, turned_on: bool) -> GpuPath {
+    pub fn start_with(
+        conn: &mut Connection,
+        requested: Requested,
+        class: RendererClass,
+    ) -> GpuPath {
         let mut path = GpuPath {
             state: State::Cpu,
             requested,
+            class,
+            waiting: None,
             node: None,
             offered: Vec::new(),
             explicit_offered: false,
@@ -213,34 +227,97 @@ impl GpuPath {
             events: Vec::new(),
             renderers: GpuRenderers::default(),
         };
-        let wants_device = match requested {
+        let wanted = renderer::on_at_start(class);
+        if requested == Requested::Default && class == RendererClass::ByUse {
+            path.waiting = Some(HashMap::new());
+        }
+        path.decide(conn, wanted);
+        path
+    }
+
+    /// Run the rule's first half with `wanted` (whether the class wants the GPU now) and make the device if it says
+    /// so. A process that draws on the CPU never binds the dmabuf protocol.
+    fn decide(&mut self, conn: &mut Connection, wanted: bool) {
+        let wants_device = match self.requested {
             Requested::Cpu => false,
-            Requested::Default => turned_on,
+            Requested::Default => wanted && self.class != RendererClass::Cpu,
             Requested::Gpu => true,
         };
-        // a process that draws on the CPU never binds the dmabuf protocol
         let feedback = if wants_device {
             conn.dmabuf_feedback().ok().flatten()
         } else {
             None
         };
-        path.offered = feedback
+        self.offered = feedback
             .as_ref()
             .map(|f| f.modifiers(FOURCC_ARGB8888))
             .unwrap_or_default();
-        path.explicit_offered = wants_device && conn.has_explicit_sync().unwrap_or(false);
-        let node = feedback.map(|f| f.main_device.and_then(render_node_of));
-        match renderer::start(requested, turned_on, node) {
+        self.explicit_offered = wants_device && conn.has_explicit_sync().unwrap_or(false);
+        let feedback = match feedback {
+            None => Feedback::None,
+            Some(f) => match f.main_device {
+                None => Feedback::NoDevice,
+                Some(dev) => render_node_of(dev).map_or(Feedback::NoNode, Feedback::Node),
+            },
+        };
+        match renderer::start(self.requested, self.class, wanted, feedback) {
             Start::Cpu(reason) => renderer::set_active(Choice {
                 kind: RendererKind::Cpu,
                 reason,
             }),
             Start::Device { node } => {
-                path.node = node;
-                path.begin_warm(conn);
+                self.node = node;
+                self.begin_warm(conn);
             }
         }
-        path
+    }
+
+    /// The process's class.
+    pub fn class(&self) -> RendererClass {
+        self.class
+    }
+
+    /// Whether the process takes the size and repaint rule and no window of it was large or busy yet.
+    pub fn waiting(&self) -> bool {
+        self.waiting.is_some()
+    }
+
+    /// `surface` presented a frame of `size` pixels at `at_ns` (monotonic nanoseconds): while the process waits for
+    /// the rule, a window larger than a quarter of the largest output it is on (any output before it entered one) or
+    /// busy for two seconds moves the process to the GPU, its first frames there still the CPU's while it warms up.
+    pub fn presented(
+        &mut self,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        size: (u32, u32),
+        at_ns: u64,
+    ) {
+        let Some(waiting) = self.waiting.as_mut() else {
+            return;
+        };
+        let busy = waiting.entry(surface).or_default().presented(at_ns);
+        let entered = conn.surface_outputs(surface).unwrap_or_default();
+        let output = conn
+            .outputs()
+            .into_iter()
+            .filter(|o| entered.is_empty() || entered.contains(&o.id))
+            .filter_map(|o| o.mode)
+            .max_by_key(|&(w, h)| u64::from(w) * u64::from(h));
+        let large = output.is_some_and(|output| renderer::large(size, output));
+        if large || busy {
+            self.waiting = None;
+            let why = if large {
+                "covers more than a quarter of its output".to_string()
+            } else {
+                format!(
+                    "presented more than {} frames a second for {} s",
+                    renderer::BUSY_FRAMES_PER_SECOND,
+                    renderer::BUSY_SECONDS
+                )
+            };
+            eprintln!("renderer: a window {why}: the process moves to the GPU");
+            self.decide(conn, true);
+        }
     }
 
     fn begin_warm(&mut self, conn: &Connection) {
@@ -390,7 +467,10 @@ impl GpuPath {
             Err(PresentError::Busy) => Ok(Presented::Busy),
             Err(PresentError::Resized) => Ok(Presented::Resized),
             Err(PresentError::Fallback(why)) => {
-                eprintln!("renderer: surface draws into shared memory: {why}");
+                renderer::fallback(
+                    FallbackScope::Surface,
+                    &format!("the surface draws into shared memory: {why}"),
+                );
                 s.free(Some(gpu), conn);
                 self.surfaces.insert(surface, SurfaceKind::Fallback);
                 Ok(Presented::Shm)
@@ -418,7 +498,13 @@ impl GpuPath {
             }
         }
         drop(gpu);
-        eprintln!("renderer: the GPU context was lost ({loss:?})");
+        let lost = format!("the GPU context was lost ({loss:?})");
+        if loss.counts_as_failure() {
+            renderer::fallback(FallbackScope::Loss, &lost);
+        } else {
+            // a purge (suspend, a VT switch, a mode set) is no fault: the next device takes over
+            eprintln!("renderer: {lost}");
+        }
         let exceeded = self.losses.record(loss.counts_as_failure(), Instant::now());
         self.events
             .push(PlatformEvent::RendererChanged(RendererKind::Cpu));
@@ -481,6 +567,9 @@ impl GpuPath {
 
     /// The surface is gone: free its buffers.
     pub fn forget(&mut self, conn: &mut Connection, surface: SurfaceId) {
+        if let Some(waiting) = self.waiting.as_mut() {
+            waiting.remove(&surface);
+        }
         if let Some(SurfaceKind::Gpu(mut s)) = self.surfaces.remove(&surface) {
             let gpu = match &self.state {
                 State::On(gpu) => Some(gpu.as_ref()),

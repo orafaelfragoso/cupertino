@@ -420,6 +420,9 @@ impl Application for App {
     type Model = App;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// The toolbar is small and the selection overlay is shown for a moment, mostly at rest: a GPU context would only
+    /// cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     /// [`run`] starts the process from its connection; there is no run without one.
     fn init() -> (App, Vec<Command<Message>>) {
@@ -506,15 +509,16 @@ pub fn run(options: &Options) -> Result<()> {
     let (request_to, requests) = async_channel::unbounded();
     // the roles go with the window system; a channel closed then would wake a loop that is gone
     let keep_open = request_to.clone();
-    let system = WaylandWindowSystem::new(conn, Profile::cupertino()).with_roles(Roles {
-        shell,
-        outputs: screens.iter().map(|s| s.id).collect(),
-        screens: screens.clone(),
-        style,
-        layers: Vec::new(),
-        gate: Arc::clone(&gate),
-        requests: request_to,
-    });
+    let system =
+        WaylandWindowSystem::new_as(conn, Profile::cupertino(), App::RENDERER).with_roles(Roles {
+            shell,
+            outputs: screens.iter().map(|s| s.id).collect(),
+            screens: screens.clone(),
+            style,
+            layers: Vec::new(),
+            gate: Arc::clone(&gate),
+            requests: request_to,
+        });
     let (controller, effects) = Controller::new(
         style,
         settings,
@@ -547,5 +551,19 @@ pub fn run(options: &Options) -> Result<()> {
         Some(Ok(())) => Ok(()),
         Some(Err(problem)) => Err(problem.into()),
         None => Err("the screenshot's windows went away".into()),
+    }
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The toolbar is small and the overlay redraws only its selection.
+    #[test]
+    fn the_toolbar_and_the_overlay_draw_on_the_cpu() {
+        assert_eq!(
+            <App as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
     }
 }

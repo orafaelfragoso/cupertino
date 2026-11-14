@@ -581,3 +581,14 @@ fn panics_unwind_in_every_profile() {
         }
     }
 }
+
+/// A C application declares no renderer class of its own: once its windows reach a display, it takes the size and
+/// repaint rule, as a third-party toolkit application does.
+#[test]
+fn a_c_application_takes_the_size_and_repaint_rule() {
+    use cupertino_kit::core::{Application, RendererClass};
+    assert_eq!(
+        <registry::CApp as Application>::RENDERER,
+        RendererClass::ByUse
+    );
+}

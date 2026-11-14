@@ -101,6 +101,8 @@ ABI 1.
 
 ## Known limitations
 
-- Only the headless backend exists. `CK_BACKEND_WAYLAND` returns `CK_ERROR_UNSUPPORTED`.
+- Only the headless backend exists. `CK_BACKEND_WAYLAND` returns `CK_ERROR_UNSUPPORTED`. A C application declares no
+  renderer class, so once its windows reach a display it takes the size and repaint rule of third-party toolkit
+  applications (`RendererClass::ByUse`: the CPU until a window is large or busy, then the GPU).
 - There are no windows, views or UI events yet. `ck_poll_events` returns only posted messages, and nothing waits on the
   wake fd until `ck_runtime_dispatch` exists; the samples poll in steps instead.

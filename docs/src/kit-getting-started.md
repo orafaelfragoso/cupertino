@@ -31,12 +31,14 @@ checkout and was run on the commit this page was written against.
 - Fonts and icons come from an asset pack when one is installed (`CUPERTINO_ASSET_DIR`, else the user or system
   pack). The kit falls back to its built-in Inter font. Headless captures of the controls sheet need a pack
   (`ci/capture.sh` says so in its header).
-- No GPU. The kit rasterizes each window on the CPU (`cupertino-ui-render`), repainting only what changed and keeping
-  scrolled content as an image it moves, and hands it to the compositor in shared memory (`wl_shm`). Started with
-  `CUPERTINO_RENDERER=gpu`, a process draws its first frames that way while its device warms up, then draws every
-  window with the GPU renderer (`cupertino-ui-gpu`) on the device the compositor names and hands it over as a dmabuf;
-  that is off by default until the GPU path is turned on, with the CPU kept as the fallback
-  ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
+- The renderer follows the application's class, `Application::RENDERER`. An application that declares none
+  (`RendererClass::ByUse`) starts on the CPU: the kit rasterizes each window there (`cupertino-ui-render`), repainting
+  only what changed and keeping scrolled content as an image it moves, and hands it to the compositor in shared memory
+  (`wl_shm`). Once one of its windows covers more than a quarter of its output, or presents more than 30 frames a
+  second for two seconds, the process moves to the GPU renderer (`cupertino-ui-gpu`) on the device the compositor
+  names and hands its windows over as dmabufs, drawing on the CPU while the device warms up. `RendererClass::Gpu`
+  starts there (a large or busy window), `RendererClass::Cpu` never goes (a small window drawn now and then);
+  `CUPERTINO_RENDERER=cpu|gpu` overrides the class, and the CPU stays the fallback.
   A long list or grid keeps scrolling cheap by
   building only the rows near its viewport, each as `Element::kept(key, mark, build)`: a row whose mark is the same
   as last time keeps its nodes and their layout and is not built again, and while nothing in it changed its paint is

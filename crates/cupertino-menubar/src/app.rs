@@ -547,7 +547,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         cupertino_keyboard::binding::load_default().0,
     );
 
-    let mut system = WaylandWindowSystem::connect(keymap.profile().clone())
+    let mut system = WaylandWindowSystem::connect_as(keymap.profile().clone(), App::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
@@ -1622,6 +1622,9 @@ impl Application for App {
     type Model = App;
     type Message = Message;
     const RESIDENT: bool = true;
+    /// A thin bar repainted when its menus or status items change and once a minute for the clock: a GPU context would
+    /// only cost memory.
+    const RENDERER: cupertino_kit::core::RendererClass = cupertino_kit::core::RendererClass::Cpu;
 
     fn init() -> (App, Vec<Command<Message>>) {
         unreachable!(
@@ -1746,5 +1749,19 @@ fn client_session_action(action: SessionAction) -> cupertino_shell_client::Sessi
         SessionAction::RefreshCapabilities => {
             cupertino_shell_client::SessionAction::RefreshCapabilities
         }
+    }
+}
+
+#[cfg(test)]
+mod renderer_class {
+    use super::*;
+
+    /// The menu bar is a thin strip that redraws a frame now and then.
+    #[test]
+    fn the_menu_bar_draws_on_the_cpu() {
+        assert_eq!(
+            <App as Application>::RENDERER,
+            cupertino_kit::core::RendererClass::Cpu
+        );
     }
 }

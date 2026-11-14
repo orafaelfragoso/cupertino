@@ -107,11 +107,21 @@ its anchor rectangle; `reactive` is not sent.
 
 ## The GPU path
 
-`renderer` holds the fallback rule and the switch: `GPU_BY_DEFAULT` is `false`, so every process draws on the CPU
-unless `CUPERTINO_RENDERER=gpu` asks for the GPU (it overrides a software device and missing dmabuf feedback);
-`CUPERTINO_RENDERER=cpu` keeps a process on the CPU. Missing libraries or devices (`Unavailable`) select the CPU, and
-so do three resets within a minute; purges never count. The current renderer and why (`active`) is logged as
-`renderer: <cpu|gpu> (<reason>)` on each change and recorded in `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`.
+`renderer` holds the fallback rule and the rule of each class. A process is of a renderer class
+(`cupertino_ui_platform::RendererClass`), which it declares when it connects (`WaylandWindowSystem::connect_as`;
+`connect` is the CPU's class, and `cupertino_kit::app::run` takes the application's `Application::RENDERER`):
+`Cpu` never makes a device and never binds the dmabuf protocol, `Gpu` warms up from the start, and `ByUse` (an
+application that declares none) starts on the CPU and moves to the GPU for good once a window covers more than a
+quarter of the largest output it is on (`large`) or presents more than 30 frames a second in each of two whole
+seconds (`Busy`), counted by `GpuPath::presented` with every window's present. `CUPERTINO_RENDERER=gpu` asks for the
+GPU whatever the class (it overrides a software device and missing dmabuf feedback); `CUPERTINO_RENDERER=cpu` keeps a
+process on the CPU. Missing libraries or devices (`Unavailable`), a device whose render node the process cannot see
+(`NoRenderNode`, a sandbox without `/dev/dri`) and three resets within a minute select the CPU; purges never count.
+The current renderer and why (`active`) is logged as `renderer: <cpu|gpu> (<reason>)` on each change and recorded in
+`$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`. A process or surface that wanted the GPU and draws on the CPU
+(`renderer::fallback`: the process, one surface, or a reset of its context) logs
+`renderer: fell back to the CPU (<scope>): <why>` and records the diagnostic event `toolkit.renderer.fallback`,
+which `cupertino diagnose events` lists for the last fortnight.
 
 `gpu_path::GpuPath`, owned by the window system, makes the device on the feedback's render node and links the
 presenter's and the GPU renderer's programs on a worker thread (saved per driver in

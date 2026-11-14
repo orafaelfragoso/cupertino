@@ -6,12 +6,13 @@
 //! values between two steps are spread over the neighbouring pixels. The same pixel always gets the same offset:
 //! nothing is random, damage repaints match and goldens are stable.
 //!
-//! Which channels: the colour of a straight-alpha output, the alpha of a one-colour coverage output (a shadow). The
-//! position is the framebuffer pixel, as `gl_FragCoord` counts it. [`GLSL`] is the shader implementation, tested
-//! against [`offset`].
+//! Which channels: the colour of a straight-alpha output (blur, material, glass), the alpha of a one-colour coverage
+//! output (a shadow), and the colour of a gradient (its premultiplied channels, held at its alpha; the alpha is
+//! rounded). The position is the framebuffer pixel, as `gl_FragCoord` counts it, or the pixel of the window or buffer
+//! a renderer draws into. [`GLSL`] is the shader implementation, tested against [`offset`].
 
-/// Whether renderers dither by default. Off until the look freeze, which turns it on and re-records the goldens.
-pub const BY_DEFAULT: bool = false;
+/// Whether renderers dither by default: on since the look freeze, which re-recorded the goldens with it.
+pub const BY_DEFAULT: bool = true;
 
 /// The shader implementation: `dither_offset`, `dither_rgb` and `dither_alpha` over `gl_FragCoord.xy`.
 pub const GLSL: &str = include_str!("dither.glsl");

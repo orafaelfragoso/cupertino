@@ -19,11 +19,14 @@ fn assemble(body: &str) -> String {
 }
 
 /// Whether the compositor dithers its blur, material, glass and shadow outputs by pixel position
-/// ([`cupertino_raster_math::dither`]). Off until the look freeze turns [`dither::BY_DEFAULT`](cupertino_raster_math::dither::BY_DEFAULT)
-/// on; `CUPERTINO_DITHER=1` turns it on before that, to look at it or test it.
+/// ([`cupertino_raster_math::dither`]): [`dither::BY_DEFAULT`](cupertino_raster_math::dither::BY_DEFAULT), on;
+/// `CUPERTINO_DITHER=0` turns it off and `CUPERTINO_DITHER=1` on, to compare the two.
 pub fn dithering() -> bool {
-    cupertino_raster_math::dither::BY_DEFAULT
-        || std::env::var_os("CUPERTINO_DITHER").is_some_and(|v| v == "1")
+    match std::env::var_os("CUPERTINO_DITHER") {
+        Some(v) if v == "0" => false,
+        Some(v) if v == "1" => true,
+        _ => cupertino_raster_math::dither::BY_DEFAULT,
+    }
 }
 
 /// Compiled programs, shared by every output of one renderer.

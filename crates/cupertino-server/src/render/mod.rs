@@ -14,6 +14,7 @@ pub mod clip;
 pub mod compose;
 pub mod gles;
 pub mod image;
+pub mod layers;
 pub mod lower;
 pub mod material;
 pub mod mesh;

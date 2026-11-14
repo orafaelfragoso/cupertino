@@ -448,9 +448,39 @@ Gate:
 
 ## Step 8: the compositor's own drawing on the GPU pipelines
 
+The way in is step 10's: a device borrowed from the compositor's context draws into the framebuffer Smithay has bound
+(`Device::begin_owner_pass`, `render::passes`). Two facts shape the split. The layer rules let the compositor (core)
+depend on the graphics layer but not on the toolkit, so it reaches the toolkit renderer's pipelines where they live,
+in `cupertino-gpu` (the `ui_fill` and `ui_texture` programs, the coverage and path mask atlases), not through
+`cupertino-ui-gpu`, which records paint trees. And `ui_fill` draws circular corners only, while title bars and
+buttons have continuous corners, per-corner radii (the bar's top corners alone), linear gradients (button faces and
+rings) and strokes (the rim, the rings). Split (open at the end of step 10's third session):
+
 - [ ] Title bars and window buttons through the renderer's rectangle and glyph pipelines in borrowed-context mode.
-- [ ] Keyboard HUDs the same way.
-- [ ] The procedural cursor last, kept a cursor-plane element.
+      Split:
+  - [ ] `cupertino-decorations` records a title bar, its buttons and the rim as a list of draws (an outline with
+        per-corner extents and an exponent, a solid or linear shade, a stroke width; a coverage image of a glyph run
+        or a button glyph) and its CPU path paints that list, the same pixels as today (its tests and the server
+        goldens unchanged).
+  - [ ] The `ui_fill` block carries the corner exponent in a lane unused today (zero, circular, for every draw the
+        toolkit records), so a continuous corner is the shared distance on both renderers; per-corner extents by a
+        shape taller than the strip, held to it by the scissor.
+  - [ ] The block layout of `ui_fill` and `ui_texture` as one Rust type in `cupertino-gpu`, which
+        `cupertino-ui-gpu` and the compositor both fill, so neither keeps a copy.
+  - [ ] The compositor draws a title bar's list into a texture of its own through those pipelines on the borrowed
+        device (title glyphs and button glyphs rasterized once into the coverage and path mask atlases, kept across
+        frames), when its state changes, and lays the texture over the window as the uploaded buffer was; the frame
+        statistics count GPU draws apart from CPU rasters.
+- [ ] Keyboard HUDs the same way (the input-source HUD, the accent popup, the shortcut notice: rounded fills and
+      centred text).
+- [ ] The procedural cursor last, kept a cursor-plane element: on the GPU into the plane's buffer where the plane
+      takes a GPU buffer, else the CPU image kept for the plane, the choice recorded here.
+- [ ] The rectangle passes of a frame (shadows, outlines, rounded rectangles, title bars) drawn inside one enter and
+      leave of the borrowed device instead of one each, so the state is read and put back once a frame
+      ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today).
+- [ ] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
+      it reports that the hover drew no title bar (the window's place differs between runs), so its median counts
+      none. The baseline from the run that hit them, before step 8: 36 decoration rasters and 36 uploads, 12 MiB.
 
 Gate:
 
@@ -517,14 +547,18 @@ Gate:
 
 ## Step 10: retire the duplicates
 
-- [ ] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split (open
-      at the end of the step's second session; the next session takes them in this order):
-  - [ ] A borrowed device's pass can draw into the framebuffer its owner has bound, with its viewport and scissor
-        (the element's damage), under the state-restore contract; `cupertino-gpu` today draws only into its own
-        textures.
-  - [ ] The shadow pass, dithered as before.
-  - [ ] The rounded-rectangle pass.
-  - [ ] The wallpaper pass.
+- [x] Shadow, rounded-rectangle and wallpaper passes move to borrowed-context passes generated from WGSL. Split:
+  - [x] A borrowed device's pass can draw into the framebuffer its owner has bound, with its viewport and scissor
+        (the element's damage), under the state-restore contract: `Device::begin_owner_pass` keeps the owner's
+        framebuffer and viewport, sets a pass's fixed state, and `leave` puts everything back
+        (`gles::tests::a_borrowed_device_s_pass_draws_into_the_framebuffer_its_owner_bound_at_the_owner_s_viewport`).
+  - [x] The shadow pass, dithered as before: a flag of its placement block instead of a second program text.
+  - [x] The rounded-rectangle pass.
+  - [x] The wallpaper pass. The three are a third source set (`crates/cupertino-server/shaders/passes/`, one
+        placement block and vertex stage included by each, one quad per damage rectangle through the frame's
+        projection), drawn by `render::passes::Passes` on a device borrowed from the renderer's context; the
+        hand-written GLSL ES 1.00 copies are gone, and the tests that held them to the shared definitions
+        (`dither::`, `coverage_gl::`) hold the generated passes now.
 - [x] The hand-written GLSL ES 3.00 programs of the glass crate and the compositor replaced by generated ones; the
       tests that pinned the copies pin the generated output. Split:
   - [x] The build step generates a second set, `cupertino-glass`'s programs (the shared module ahead of each, include
@@ -542,8 +576,10 @@ Gate:
 
 Gate:
 
-- [ ] One WGSL source for every program of ours; the texture programs compiled through Smithay's shader interface
-      (clip, reduced copy, minification) stay GLSL ES 1.00 and are listed by name in the design.
+- [x] One WGSL source for every program of ours; the texture programs compiled through Smithay's shader interface
+      (clip, its vibrant variant, reduced copy, minification) stay GLSL ES 1.00 and are listed by name in the design.
+      The one hand-written program text left is `crates/cupertino-server/shaders/compositor/clip.frag` with its
+      distance (`sdf.glsl`), compiled as those four (`render::programs::tests`).
 
 ## Step 11: output timing and depth on the target display
 
@@ -1497,6 +1533,29 @@ machine's GPU with a build of the commit before the step and with this one (118 
 dark), is unchanged except where two runs of the same build differ too: which of two windows started together holds
 the focus in the overview scenarios (the set of changed shots moves between runs), and the caret's blink in the
 launcher.
+
+**The rectangle passes generated.** The shadow, outline, rounded rectangle and wallpaper are drawn by three generated
+passes on a device borrowed from the compositor's context (`render/passes.rs`), into the framebuffer the frame has
+bound (`Device::begin_owner_pass`), one instance per damage rectangle. Pixels: the server's headless goldens pass
+unchanged in the pinned image (4 of 4); the preview scenarios, shot headless on the target machine's GPU with a
+release build of `main` before the change and with this one (118 shots), are unchanged except the overview scenarios
+(the focus, as above), the dead-key caret at 1.5 and 2 times (18 to 105 pixels; unchanged, 6 of 6, when shot again)
+and the menu bar's clock in one launcher shot. The dither and coverage tests hold the generated shadow and rounded
+rectangle with their old bounds.
+
+A program the driver refuses is now an error in the log, once, with the program's name and the driver's message, and
+a GPU-tier test (`window_popup_backdrop::every_compositor_program_links_on_the_driver_and_the_glass_and_material_passes_draw`)
+links every compositor program, generated and hand-written, dithered and not, on the machine's driver, and checks
+that a window's sidebar glass and content material were drawn by their passes (`MaterialStats::glass_composites`
+and `composites`), not by the fallback fill.
+
+Cost (`scripts/dev/bench`, 3840 x 2160 at 1.5, 3 runs, the same machine, `main` before the change against this one):
+compose work p50 1.12 to 1.38 ms and p99 1.98 to 2.24 ms in the hover scenario, p50 1.45 to 1.57 ms and p99 2.48 to
+3.38 ms in the drag, compose CPU p99 2.40 to 2.97 ms in the drag (over its 2 ms budget before the change too). Each
+pass draw enters and leaves the borrowed device, which reads and puts back the context's state (about 80 queries) for
+every shadow, outline and rounded rectangle element; the per-run p50 is 0.2 to 0.3 ms higher in every run. Drawing
+all of a frame's rectangle passes inside one enter and leave needs the frame's elements drawn by the device, not one
+by one by the renderer: that is step 8's title bar work, which moves the same elements, and is measured again there.
 
 ### Step 11: output timing and depth
 

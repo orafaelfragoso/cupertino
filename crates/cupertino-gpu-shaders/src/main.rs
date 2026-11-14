@@ -1,5 +1,6 @@
 //! `cupertino-gpu-shaders [--check]`: generate the GLSL ES 3.00, SPIR-V and binding names of every program of every
-//! set ([`cupertino_gpu_shaders::sets`]: `crates/cupertino-gpu/shaders/` and `crates/cupertino-glass/shaders/`) and
+//! set ([`cupertino_gpu_shaders::sets`]: `crates/cupertino-gpu/shaders/`, `crates/cupertino-glass/shaders/` and
+//! `crates/cupertino-server/shaders/passes/`) and
 //! write them into the set's `generated/` directory, or, with `--check`, report the files that differ from a fresh
 //! generation and fail. Development only; never packaged.
 

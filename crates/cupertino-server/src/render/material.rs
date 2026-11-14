@@ -458,7 +458,10 @@ pub struct MaterialStats {
     pub backdrop_hits: u64,
     pub backdrop_misses: u64,
     pub passes: u64,
+    /// Quads the material and glass composites drew.
     pub composites: u64,
+    /// Of those, the glass composite's.
+    pub glass_composites: u64,
     /// Render targets (texture and framebuffer) created: a pass that keeps reusing its targets creates none.
     pub allocations: u64,
     /// Passes of a backdrop blur: the pyramid's downsamples and the Gaussian's two directions.

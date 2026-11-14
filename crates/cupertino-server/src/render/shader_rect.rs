@@ -4,6 +4,7 @@
 
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{
@@ -11,6 +12,8 @@ use smithay::backend::renderer::gles::{
 };
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size};
+
+use super::passes::{Passes, RectPass, PARAMS};
 
 /// Identity of a cached element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -147,23 +150,40 @@ pub fn to_physical_rect(r: Rectangle<f64, Logical>, scale: Scale<f64>) -> Rectan
     )
 }
 
-/// A rectangle drawn by a pixel shader. The shader sees `v_coords` in `[0, 1]` across the
-/// element and the uniform `area_pt` (element size in points); the remaining uniforms are
-/// supplied by the caller in points relative to the element origin.
+/// What draws a [`ShaderRect`].
+#[derive(Debug, Clone)]
+enum RectProgram {
+    /// A pixel program of the renderer's own shader interface and its uniforms (a test's probe).
+    Pixel {
+        program: GlesPixelProgram,
+        uniforms: Vec<Uniform<'static>>,
+    },
+    /// One of the compositor's rectangle passes and its block.
+    Pass {
+        passes: Rc<Passes>,
+        pass: RectPass,
+        params: [[f32; 4]; PARAMS],
+    },
+}
+
+/// A rectangle drawn by a program that sees its point across the element: a rectangle pass ([`ShaderRect::pass`]),
+/// whose block is in points relative to the element origin, or a pixel program of the renderer's interface
+/// ([`ShaderRect::new`]), which sees `v_coords` in `[0, 1]` across the element and the uniform `area_pt` (the
+/// element's size in points).
 #[derive(Debug, Clone)]
 pub struct ShaderRect {
-    program: GlesPixelProgram,
+    program: RectProgram,
     id: Id,
     commit: CommitCounter,
     area: Rectangle<f64, Logical>,
     alpha: f32,
-    uniforms: Vec<Uniform<'static>>,
     opaque: bool,
     /// A rectangle inside the area where the program draws nothing.
     hole: Option<Rectangle<f64, Logical>>,
 }
 
 impl ShaderRect {
+    /// A rectangle drawn by a pixel program of the renderer's own shader interface.
     pub fn new(
         program: GlesPixelProgram,
         id: Id,
@@ -177,13 +197,58 @@ impl ShaderRect {
             "area_pt",
             (area.size.w as f32, area.size.h as f32),
         ));
+        Self::with_program(
+            RectProgram::Pixel { program, uniforms },
+            id,
+            commit,
+            area,
+            alpha,
+            opaque,
+        )
+    }
+
+    /// A rectangle drawn by the rectangle pass `pass` of `passes` with its block `params` (unused `vec4`s zero).
+    #[allow(clippy::too_many_arguments)]
+    pub fn pass(
+        passes: &Rc<Passes>,
+        pass: RectPass,
+        id: Id,
+        commit: CommitCounter,
+        area: Rectangle<f64, Logical>,
+        alpha: f32,
+        params: &[[f32; 4]],
+        opaque: bool,
+    ) -> Self {
+        let mut block = [[0.0; 4]; PARAMS];
+        block[..params.len()].copy_from_slice(params);
+        Self::with_program(
+            RectProgram::Pass {
+                passes: passes.clone(),
+                pass,
+                params: block,
+            },
+            id,
+            commit,
+            area,
+            alpha,
+            opaque,
+        )
+    }
+
+    fn with_program(
+        program: RectProgram,
+        id: Id,
+        commit: CommitCounter,
+        area: Rectangle<f64, Logical>,
+        alpha: f32,
+        opaque: bool,
+    ) -> Self {
         Self {
             program,
             id,
             commit,
             area,
             alpha,
-            uniforms,
             opaque,
             hole: None,
         }
@@ -253,15 +318,30 @@ impl RenderElement<GlesRenderer> for ShaderRect {
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        frame.render_pixel_shader_to(
-            &self.program,
-            src,
-            dst,
-            Size::from((1, 1)),
-            Some(damage),
-            self.alpha,
-            &self.uniforms,
-        )
+        match &self.program {
+            RectProgram::Pixel { program, uniforms } => frame.render_pixel_shader_to(
+                program,
+                src,
+                dst,
+                Size::from((1, 1)),
+                Some(damage),
+                self.alpha,
+                uniforms,
+            ),
+            RectProgram::Pass {
+                passes,
+                pass,
+                params,
+            } => passes.draw(
+                frame,
+                *pass,
+                dst,
+                damage,
+                (self.area.size.w as f32, self.area.size.h as f32),
+                self.alpha,
+                params,
+            ),
+        }
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {

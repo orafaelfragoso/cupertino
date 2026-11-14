@@ -1173,6 +1173,47 @@ impl Device {
             pipeline: None,
             attributes: Vec::new(),
             index: false,
+            owners: false,
+        })
+    }
+
+    /// Start a render pass into the framebuffer the owner of a borrowed device has bound, at the viewport the owner
+    /// set, keeping what the framebuffer holds: how a borrowed device draws among its owner's own draws.
+    ///
+    /// The pass sets the fixed state of every pass (no scissor, depth, stencil, culling or blending, every channel
+    /// written) and leaves the framebuffer and the viewport as the owner has them. The framebuffer's orientation is
+    /// the owner's: a pipeline places its vertices through the projection the owner gives it, and
+    /// [`Pass::set_scissor`] regions and fragment positions are the framebuffer's pixels as the owner's context
+    /// counts them. [`Pass::size`] is the viewport's size. [`Device::leave`] puts back all the state the pass
+    /// changed, the owner's framebuffer and viewport among it.
+    pub fn begin_owner_pass(&self) -> Result<Pass<'_>> {
+        if !self.borrowed {
+            return Err(Error::Invalid(
+                "only a borrowed device draws into its owner's framebuffer".into(),
+            ));
+        }
+        self.ready()?;
+        let gl = &self.gl;
+        // Safety: the owner's context is current and entered; its framebuffer stays bound, the pass's fixed state is
+        // set before any draw and restored on leave.
+        let viewport = unsafe {
+            let mut v = [0; 4];
+            gl.get_parameter_i32_slice(glow::VIEWPORT, &mut v);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.disable(glow::DEPTH_TEST);
+            gl.disable(glow::STENCIL_TEST);
+            gl.disable(glow::CULL_FACE);
+            gl.disable(glow::BLEND);
+            gl.color_mask(true, true, true, true);
+            v
+        };
+        Ok(Pass {
+            device: self,
+            size: (viewport[2].max(0) as u32, viewport[3].max(0) as u32),
+            pipeline: None,
+            attributes: Vec::new(),
+            index: false,
+            owners: true,
         })
     }
 
@@ -1347,6 +1388,8 @@ pub struct Pass<'a> {
     pipeline: Option<&'a Pipeline>,
     attributes: Vec<u32>,
     index: bool,
+    /// The target is the framebuffer the owner bound ([`Device::begin_owner_pass`]), which stays bound.
+    owners: bool,
 }
 
 impl<'a> Pass<'a> {
@@ -1493,7 +1536,8 @@ impl<'a> Pass<'a> {
         Ok(())
     }
 
-    /// Draw only inside `region` (pixels from the first row), or everywhere.
+    /// Draw only inside `region` (pixels from the first row; in a pass into the owner's framebuffer, its pixels as
+    /// the owner's context counts them), or everywhere.
     pub fn set_scissor(&mut self, region: Option<Region>) {
         let gl = &self.device.gl;
         // Safety: plain state of the pass; fragment row 0 is the target's first row, so no flip.
@@ -1576,7 +1620,9 @@ impl Drop for Pass<'_> {
             if self.index {
                 gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
             }
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            if !self.owners {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            }
         }
     }
 }

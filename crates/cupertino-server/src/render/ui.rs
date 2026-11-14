@@ -1,11 +1,12 @@
 //! Public element constructors for shell and decoration components: rounded rectangles drawn by
-//! the compositor's shader, with stable ids so damage tracking stays minimal.
+//! the compositor's rounded-rectangle pass, with stable ids so damage tracking stays minimal.
 
 use smithay::utils::{Logical, Rectangle};
 
 use cupertino_scene::BorderFalloff;
 
-use super::programs::{corner_uniforms, u4, Programs};
+use super::passes::RectPass;
+use super::programs::{corner_uniforms, Programs};
 use super::shader_rect::{ElementCache, ElementKey, ShaderRect, Sig};
 
 /// Description of a rounded rectangle in output-local logical points.
@@ -65,28 +66,23 @@ pub fn rounded_rect(
     let area = padded_area(r, scale);
     let (extent, exponent) = corner_uniforms(spec.radius, spec.continuous, 1.0);
     let (bw, bc) = spec.border.unwrap_or((0.0, [0.0; 4]));
-    let uniforms = vec![
-        u4(
-            "rect",
-            [
-                (r.loc.x - area.loc.x) as f32,
-                (r.loc.y - area.loc.y) as f32,
-                r.size.w as f32,
-                r.size.h as f32,
-            ],
-        ),
-        u4("shape", [extent, bw as f32, exponent, scale as f32]),
-        u4("fill", spec.fill),
-        u4("border", bc),
-        u4(
-            "edge",
-            [
-                spec.border_falloff.sides,
-                spec.border_falloff.ends,
-                spec.border_falloff.floor,
-                0.0,
-            ],
-        ),
+    // the block of the rounded-rectangle pass: the rectangle, the shape, the fill, the border and its falloff
+    let params = [
+        [
+            (r.loc.x - area.loc.x) as f32,
+            (r.loc.y - area.loc.y) as f32,
+            r.size.w as f32,
+            r.size.h as f32,
+        ],
+        [extent, bw as f32, exponent, scale as f32],
+        spec.fill,
+        bc,
+        [
+            spec.border_falloff.sides,
+            spec.border_falloff.ends,
+            spec.border_falloff.floor,
+            0.0,
+        ],
     ];
     let mut s = Sig::new()
         .rect(area)
@@ -102,13 +98,14 @@ pub fn rounded_rect(
         s = s.f(*v as f64);
     }
     let (id, commit) = cache.slot(key, s.finish());
-    ShaderRect::new(
-        programs.rrect.clone(),
+    ShaderRect::pass(
+        &programs.passes,
+        RectPass::Rounded,
         id,
         commit,
         area,
         spec.alpha,
-        uniforms,
+        &params,
         false,
     )
 }

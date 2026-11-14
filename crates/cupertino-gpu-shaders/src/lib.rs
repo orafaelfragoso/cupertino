@@ -1,7 +1,7 @@
-//! The build step of Cupertino's own shader programs. Each program of a set ([`sets`]: `crates/cupertino-gpu/shaders/`
-//! and `crates/cupertino-glass/shaders/`) is one WGSL file with a `vs_main` and an `fs_main` entry point, whose
-//! `// include NAME.wgsl` lines put the set's include files in their place; the shared module (`shared.wgsl` of
-//! `cupertino-gpu`, the drawing maths) is concatenated ahead of it, and `naga` generates, into the set's `generated/`:
+//! The build step of Cupertino's own shader programs. Each program of a set ([`sets`]: `crates/cupertino-gpu/shaders/`,
+//! `crates/cupertino-glass/shaders/` and `crates/cupertino-server/shaders/passes/`) is one WGSL file with a `vs_main`
+//! and an `fs_main` entry point, whose `// include NAME.wgsl` lines put the set's include files in their place; the
+//! shared module (`shared.wgsl` of `cupertino-gpu`, the drawing maths) is concatenated ahead of it, and `naga` generates, into the set's `generated/`:
 //!
 //! * `NAME.vert.glsl` and `NAME.frag.glsl`: GLSL ES 3.00, coordinate-space adjustment off (clip y = -1 is a target's
 //!   first row on every backend);
@@ -293,10 +293,12 @@ pub struct SourceSet {
     pub wgsl: bool,
 }
 
-/// Every set of programs the build step generates: `cupertino-gpu`'s, and the backdrop and material programs of
-/// `cupertino-glass`, which the compositor draws too, with the same shared module ahead of each.
+/// Every set of programs the build step generates: `cupertino-gpu`'s, the backdrop and material programs of
+/// `cupertino-glass`, which the compositor draws too, and the compositor's own rectangle passes (shadow, rounded
+/// rectangle, wallpaper, in `crates/cupertino-server/shaders/passes/`), with the same shared module ahead of each.
 pub fn sets() -> Vec<SourceSet> {
     let glass = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupertino-glass/shaders");
+    let passes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupertino-server/shaders/passes");
     vec![
         SourceSet {
             dir: source_dir(),
@@ -311,6 +313,13 @@ pub fn sets() -> Vec<SourceSet> {
             include: Some(glass.join("include")),
             wgsl: true,
             dir: glass,
+        },
+        SourceSet {
+            generated: passes.join("generated"),
+            shared: source_dir().join(SHARED),
+            include: Some(passes.join("include")),
+            wgsl: false,
+            dir: passes,
         },
     ]
 }

@@ -373,14 +373,15 @@ impl RenderResources {
         let (material, material_error) = match super::MaterialGl::new(renderer) {
             Ok(m) => (Some(m), None),
             Err(e) => {
-                tracing::warn!(error = %e, "material pass unavailable, using translucent fallbacks");
+                // a program the driver refused names itself and carries the driver's log in `e`
+                tracing::error!(error = %e, "a material or glass program failed: the material pass is off, translucent fills stand in");
                 (None, Some(e))
             }
         };
         let mesh = match MeshGl::new(renderer) {
             Ok(m) => Some(m),
             Err(e) => {
-                tracing::warn!(error = %e, "mesh pass unavailable, minimize falls back to a plain rescale");
+                tracing::error!(error = %e, "the mesh program failed: minimize falls back to a plain rescale");
                 None
             }
         };
@@ -491,6 +492,7 @@ impl RenderResources {
         if let Some(m) = &self.mesh {
             m.borrow_mut().destroy(renderer);
         }
+        self.programs.passes.destroy(renderer);
     }
 }
 

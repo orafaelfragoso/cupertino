@@ -1,22 +1,19 @@
-//! Custom GLES shader programs of the compositor (GLSL ES 1.00, compiled through the renderer's
-//! pixel / texture shader interface) and the helpers that translate geometry into their uniforms.
+//! The compositor's own programs of one renderer: the rectangle passes generated from WGSL and drawn by a borrowed
+//! device ([`super::passes`]), and the texture programs compiled through the renderer's texture shader interface
+//! (GLSL ES 1.00, which that interface takes, with the external-sampler variant it makes), with the helpers that
+//! translate geometry into their uniforms.
+
+use std::rc::Rc;
 
 use cupertino_geometry::CornerStyle;
 use smithay::backend::renderer::gles::{
-    GlesError, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
-    UniformValue,
+    GlesError, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
 };
 
-const HEADER: &str = include_str!("../../shaders/compositor/header.glsl");
-const SDF: &str = include_str!("../../shaders/compositor/sdf.glsl");
-const SHADOW: &str = include_str!("../../shaders/compositor/shadow.frag");
-const RRECT: &str = include_str!("../../shaders/compositor/rrect.frag");
-const WALLPAPER: &str = include_str!("../../shaders/compositor/wallpaper.frag");
-const CLIP: &str = include_str!("../../shaders/compositor/clip.frag");
+use super::passes::Passes;
 
-fn assemble(body: &str) -> String {
-    format!("{HEADER}\n{}", body.replace("//_SDF_", SDF))
-}
+const SDF: &str = include_str!("../../shaders/compositor/sdf.glsl");
+const CLIP: &str = include_str!("../../shaders/compositor/clip.frag");
 
 /// Whether the compositor dithers its blur, material, glass and shadow outputs by pixel position
 /// ([`cupertino_raster_math::dither`]): [`dither::BY_DEFAULT`](cupertino_raster_math::dither::BY_DEFAULT), on;
@@ -32,9 +29,8 @@ pub fn dithering() -> bool {
 /// Compiled programs, shared by every output of one renderer.
 #[derive(Clone)]
 pub struct Programs {
-    pub shadow: GlesPixelProgram,
-    pub rrect: GlesPixelProgram,
-    pub wallpaper: GlesPixelProgram,
+    /// The shadow, rounded-rectangle and wallpaper passes.
+    pub passes: Rc<Passes>,
     pub clip: GlesTexProgram,
     /// The clip program for a texture drawn smaller than its texels, each pixel the average of those it covers
     /// ([`super::clip::minify_uniforms`]).
@@ -54,67 +50,64 @@ impl Programs {
     pub fn compile_with(renderer: &mut GlesRenderer, dither: bool) -> Result<Self, GlesError> {
         let f = |name: &'static str| UniformName::new(name, UniformType::_2f);
         let v4 = |name: &'static str| UniformName::new(name, UniformType::_4f);
-        let shadow = renderer.compile_custom_pixel_shader(
-            cupertino_raster_math::dither::with_dither(&assemble(SHADOW), dither),
-            &[f("area_pt"), v4("caster"), v4("params"), v4("flags")],
-        )?;
-        let rrect = renderer.compile_custom_pixel_shader(
-            assemble(RRECT),
-            &[
-                f("area_pt"),
-                v4("rect"),
-                v4("shape"),
-                v4("fill"),
-                v4("border"),
-                v4("edge"),
-            ],
-        )?;
-        let wallpaper = renderer.compile_custom_pixel_shader(
-            assemble(WALLPAPER),
-            &[f("area_pt"), v4("c0"), v4("c1"), v4("c2"), v4("c3")],
-        )?;
+        // a refused program is logged once, by name: the passes' error carries the driver's log, the renderer logs its
+        // own log of a texture program just before
+        let named = |program: &'static str| {
+            move |e: GlesError| {
+                tracing::error!(program, error = %e, "a compositor program failed to compile or link");
+                e
+            }
+        };
+        let passes = Passes::new(renderer, dither).map_err(|e| {
+            tracing::error!(program = "shadow, rrect, wallpaper", error = %e, "a compositor program failed to compile or link");
+            GlesError::ProgramLinkError
+        })?;
         let clip_src = format!("#version 100\n{}", CLIP.replace("//_SDF_", SDF));
-        let clip = renderer.compile_custom_texture_shader(
-            clip_src,
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-            ],
-        )?;
+        let clip = renderer
+            .compile_custom_texture_shader(
+                clip_src,
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                ],
+            )
+            .map_err(named("clip"))?;
         let minify_src = format!(
             "#version 100\n#define MINIFY\n{}",
             CLIP.replace("//_SDF_", SDF)
         );
-        let clip_minify = renderer.compile_custom_texture_shader(
-            minify_src,
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-                f("footprint"),
-                f("texels"),
-            ],
-        )?;
-        let vibrant = renderer.compile_custom_texture_shader(
-            format!(
-                "#version 100\n#define VIBRANT\n{}",
-                CLIP.replace("//_SDF_", SDF)
-            ),
-            &[
-                UniformName::new("inv_proj", UniformType::Matrix3x3),
-                f("viewport"),
-                v4("clip_rect"),
-                v4("clip_shape"),
-                v4("vibrant"),
-            ],
-        )?;
+        let clip_minify = renderer
+            .compile_custom_texture_shader(
+                minify_src,
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                    f("footprint"),
+                    f("texels"),
+                ],
+            )
+            .map_err(named("clip, minifying"))?;
+        let vibrant = renderer
+            .compile_custom_texture_shader(
+                format!(
+                    "#version 100\n#define VIBRANT\n{}",
+                    CLIP.replace("//_SDF_", SDF)
+                ),
+                &[
+                    UniformName::new("inv_proj", UniformType::Matrix3x3),
+                    f("viewport"),
+                    v4("clip_rect"),
+                    v4("clip_shape"),
+                    v4("vibrant"),
+                ],
+            )
+            .map_err(named("clip, vibrant"))?;
         Ok(Self {
-            shadow,
-            rrect,
-            wallpaper,
+            passes,
             clip,
             clip_minify,
             reduced: super::reduce::Reductions::default(),
@@ -220,20 +213,23 @@ mod tests {
     }
 
     #[test]
-    fn the_shadow_takes_the_dither_only_when_dithering() {
-        use cupertino_raster_math::dither::with_dither;
-        let plain = with_dither(&assemble(SHADOW), false);
-        assert_eq!(plain, assemble(SHADOW));
-        assert!(!plain.contains("#define CUPERTINO_DITHER"));
-        let on = with_dither(&assemble(SHADOW), true);
-        assert!(on.contains("#define CUPERTINO_DITHER 1") && on.contains("float dither_alpha("));
+    fn dithering_is_on_by_default() {
         assert!(!cupertino_raster_math::dither::BY_DEFAULT || dithering());
     }
 
     #[test]
-    fn shader_sources_are_assembled() {
-        let s = assemble(SHADOW);
-        assert!(s.contains("rounded_sdf") && !s.contains("//_SDF_"));
-        assert!(assemble(RRECT).starts_with("#ifdef"));
+    fn the_hand_written_programs_left_are_the_texture_programs_of_the_renderer_s_interface() {
+        // the clip program and its variants, GLSL ES 1.00 with the distance put in place; the rectangle passes are
+        // generated ([`super::super::passes`])
+        let clip = CLIP.replace("//_SDF_", SDF);
+        assert!(clip.contains("float rounded_sdf(") && !clip.contains("//_SDF_"));
+        assert!(clip.contains("uniform sampler2D tex;") && clip.contains("samplerExternalOES"));
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/compositor");
+        let mut files: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["clip.frag", "sdf.glsl"]);
     }
 }

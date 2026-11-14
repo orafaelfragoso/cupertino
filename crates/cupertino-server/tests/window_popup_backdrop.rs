@@ -733,3 +733,81 @@ fn dragged_backdrops_match_whole_ones(split: Option<i32>) {
         "the dragged sidebar ({split:?}) differs from one blurred whole by {worst}"
     );
 }
+
+/// Every program of the compositor compiles and links on this machine's driver (the generated passes, dithered and
+/// not, the mesh, and the texture programs of the renderer's shader interface), and a window's sidebar glass and its
+/// content's material backdrop are drawn by the glass and material passes, not by the fill that stands in for them
+/// when a program is refused. In the local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) the renderer is the hardware's.
+#[test]
+fn every_compositor_program_links_on_the_driver_and_the_glass_and_material_passes_draw() {
+    use cupertino_server::render::{MaterialGl, MeshGl, Programs};
+    use smithay::backend::renderer::gles::ffi;
+    let required = std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() == Ok("1");
+    let mut renderer = match headless::create_renderer() {
+        Ok(r) => r,
+        Err(e) => {
+            assert!(!required, "CUPERTINO_GPU_REQUIRED=1: {e:#}");
+            common::egl_unavailable(format!("{e:#}"));
+            return;
+        }
+    };
+    // Safety: the renderer's context is current inside `with_context`; RENDERER is a constant string of it.
+    let name = renderer
+        .with_context(|gl| unsafe {
+            std::ffi::CStr::from_ptr(gl.GetString(ffi::RENDERER) as *const _)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap();
+    let software = ["llvmpipe", "softpipe", "swrast"]
+        .iter()
+        .any(|s| name.to_ascii_lowercase().contains(s));
+    assert!(
+        !(required && software),
+        "CUPERTINO_GPU_REQUIRED=1, but the renderer is {name}"
+    );
+    for dither in [false, true] {
+        if let Err(e) = Programs::compile_with(&mut renderer, dither) {
+            panic!("{name}: the rectangle passes and texture programs (dither {dither}): {e}");
+        }
+        if let Err(e) = MaterialGl::new_with(&mut renderer, dither) {
+            panic!("{name}: the backdrop, material and glass programs (dither {dither}): {e}");
+        }
+    }
+    if let Err(e) = MeshGl::new(&mut renderer) {
+        panic!("{name}: the mesh program: {e}");
+    }
+    drop(renderer);
+    let Some(mut h) = Harness::new() else {
+        assert!(
+            !required,
+            "CUPERTINO_GPU_REQUIRED=1: no headless compositor"
+        );
+        return;
+    };
+    h.state.cursor_status = CursorImageStatus::Hidden;
+    let _app = App::spawn_with(h.socket_path(), Some(0.0), true, Some(161));
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    let t = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, t);
+    h.state.tick();
+    h.step(20);
+    let _ = h.screenshot();
+    let render = h.state.render.as_ref().expect("a renderer");
+    assert_eq!(render.material_error, None, "{name}");
+    let material = render
+        .material
+        .as_ref()
+        .expect("the material pass")
+        .borrow();
+    assert_eq!(material.failure(), None, "{name}");
+    let stats = material.stats;
+    assert!(
+        stats.glass_composites > 0,
+        "{name}: the sidebar glass was not composited: {stats:?}"
+    );
+    assert!(
+        stats.composites > stats.glass_composites,
+        "{name}: the content's material was not composited: {stats:?}"
+    );
+}

@@ -298,6 +298,163 @@ fn a_borrowed_device_draws_between_enter_and_leave_and_leaves_the_owner_s_state_
 }
 
 #[test]
+fn a_borrowed_device_s_pass_draws_into_the_framebuffer_its_owner_bound_at_the_owner_s_viewport() {
+    let Some(owner) = owner() else { return };
+    let size = 16u32;
+    let target = owner
+        .create_texture(&TextureDesc {
+            size: (size, size),
+            format: TextureFormat::Rgba8,
+            usage: TextureUsage::TARGET,
+        })
+        .unwrap();
+    owner
+        .write_texture(
+            &target,
+            Region::new(0, 0, size, size),
+            &[0, 0, 255, 255].repeat((size * size) as usize),
+        )
+        .unwrap();
+    let (texture, buffer, program, fb) = unusual_state(&owner.gl);
+    // the owner's own framebuffer and viewport, with the scissor test on and blending as it likes it
+    // Safety: the owner's context is current; its own framebuffer.
+    unsafe {
+        owner
+            .gl
+            .bind_framebuffer(glow::FRAMEBUFFER, target.framebuffer);
+        owner.gl.viewport(4, 2, 8, 10);
+    }
+    let before = owner.capture_state();
+    // Safety: the owner's context is current and outlives the borrowed device.
+    let device =
+        unsafe { Device::borrow(owner.info.robustness, owner.info.purge_notification) }.unwrap();
+    assert!(matches!(owner.begin_owner_pass(), Err(Error::Invalid(_))));
+    let saved = device.enter().unwrap();
+    let layout = device
+        .create_bind_group_layout(&[BindingLayout {
+            binding: 0,
+            kind: BindingKind::UniformBuffer,
+        }])
+        .unwrap();
+    let floats = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+    let viewport = device
+        .create_buffer(&BufferDesc {
+            size: 16,
+            usage: BufferUsage::Uniform,
+        })
+        .unwrap();
+    device
+        .write_buffer(&viewport, 0, &floats(&[8.0, 10.0, 0.0, 0.0]))
+        .unwrap();
+    // a red square over the viewport's first four columns and rows, and a green one over all of it
+    let instances = device
+        .create_buffer(&BufferDesc {
+            size: 80,
+            usage: BufferUsage::Vertex,
+        })
+        .unwrap();
+    device
+        .write_buffer(
+            &instances,
+            0,
+            &floats(&[
+                0.0, 0.0, 4.0, 4.0, 1.0, 0.0, 0.0, 1.0, 0.0, 2.0, //
+                0.0, 0.0, 8.0, 10.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0,
+            ]),
+        )
+        .unwrap();
+    let shape = device
+        .create_pipeline(&PipelineDesc {
+            shader: &crate::shaders::SHAPE,
+            layouts: &[&layout],
+            vertex_buffers: &[VertexLayout {
+                stride: 40,
+                step: StepMode::Instance,
+                attributes: vec![
+                    VertexAttribute {
+                        location: 0,
+                        format: VertexFormat::Float32x4,
+                        offset: 0,
+                    },
+                    VertexAttribute {
+                        location: 1,
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                    },
+                    VertexAttribute {
+                        location: 2,
+                        format: VertexFormat::Float32x2,
+                        offset: 32,
+                    },
+                ],
+            }],
+            blend: Blend::Replace,
+            topology: Topology::TriangleStrip,
+        })
+        .unwrap();
+    let group = device
+        .create_bind_group(
+            &layout,
+            &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: &viewport,
+                    offset: 0,
+                    size: 16,
+                },
+            }],
+        )
+        .unwrap();
+    {
+        let mut pass = device.begin_owner_pass().unwrap();
+        assert_eq!(pass.size(), (8, 10), "the owner's viewport");
+        pass.set_pipeline(&shape);
+        pass.set_bind_group(0, &group).unwrap();
+        pass.set_vertex_buffer(0, &instances, 0).unwrap();
+        pass.draw(0..4, 1).unwrap();
+        // the second square only inside a scissor of the framebuffer's pixels: its rows 9 to 11
+        pass.set_vertex_buffer(0, &instances, 40).unwrap();
+        pass.set_scissor(Some(Region::new(0, 9, size, 3)));
+        pass.draw(0..4, 1).unwrap();
+        pass.end();
+    }
+    device.leave(saved);
+    assert_eq!(owner.capture_state(), before, "the owner's state is back");
+    let saved = device.enter().unwrap();
+    device.destroy_pipeline(shape);
+    device.destroy_buffer(viewport);
+    device.destroy_buffer(instances);
+    device.leave(saved);
+    drop(device);
+    assert_eq!(owner.capture_state(), before);
+    // Safety: the owner's context; its objects, gone before the target is read.
+    unsafe {
+        owner.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        owner.gl.disable(glow::SCISSOR_TEST);
+        owner.gl.delete_framebuffer(fb);
+        owner.gl.delete_program(program);
+        owner.gl.delete_buffer(buffer);
+        owner.gl.delete_texture(texture);
+    }
+    let pixels = owner
+        .read_bytes(&target, Region::new(0, 0, size, size))
+        .unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * size + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    let (red, green, blue) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+    // the viewport starts at the framebuffer's pixel (4, 2)
+    assert_eq!(at(5, 3), red, "the first square, at the viewport's origin");
+    assert_eq!(at(9, 4), blue, "the framebuffer kept beside it");
+    assert_eq!(at(3, 3), blue, "nothing left of the viewport");
+    assert_eq!(at(6, 10), green, "the second square inside the scissor");
+    assert_eq!(at(6, 8), blue, "and nothing of it outside");
+    assert_eq!(at(6, 12), blue, "nothing below the viewport");
+    owner.destroy_texture(target);
+}
+
+#[test]
 fn driver_reset_statuses_are_read_as_their_losses() {
     for loss in [
         Loss::Reset { guilty: Some(true) },

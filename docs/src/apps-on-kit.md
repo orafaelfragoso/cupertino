@@ -68,9 +68,10 @@ took 57–96 ms. Now a node that draws nothing (a stack, a scroll view's content
 nothing, a node that draws damages its box, and a change that moves nothing keeps the layout. A folder opened and the
 search results still repaint everything the listing shows. A scroll moves the listing's kept image and paints only
 the rows that come into view; the icon grid builds only the cells near its viewport, keeps each one while the window
-only scrolls (`Element::kept`) and makes an item's icon only for a cell it builds. A full-screen scroll still takes
-over 8 ms a frame: the toolkit still lays out and paints its whole tree each frame and copies the moved viewport into
-the shared-memory buffer, which the GPU rendering planned for toolkit applications removes
+only scrolls (`Element::kept`) and makes an item's icon only for a cell it builds, and the paint of a kept cell that
+did not change is laid into the frame as it was, without walking it. A full-screen scroll still takes over 8 ms in
+its worst frames: the toolkit still lays out, places and compares its whole tree each frame, and on the CPU path copies
+the moved viewport into the shared-memory buffer, which the GPU rendering planned for toolkit applications removes
 ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
 
 When the Settings pages became grouped forms on their own background, switching panes went from 10.2 / 7.1 / 4.9 ms

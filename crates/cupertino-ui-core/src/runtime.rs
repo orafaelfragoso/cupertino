@@ -1023,7 +1023,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             paint_animate: BTreeSet::new(),
             wakes: BTreeMap::new(),
             text_input: None,
-            geometry: Geometry::new(),
+            geometry: Geometry::default(),
             accessibility: BTreeMap::new(),
             accessibility_focus: None,
             semantic_revision: 0,

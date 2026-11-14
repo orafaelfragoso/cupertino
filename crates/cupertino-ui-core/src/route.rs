@@ -6,7 +6,7 @@ use crate::cx::{Effects, EventCx, Status};
 use crate::tree::Tree;
 use crate::{Environment, Event, NodeId, Phase, Propagation, WindowKey};
 use cupertino_geometry::{Point, Rect};
-use std::collections::HashMap;
+use cupertino_ui_layout::IdMap;
 
 /// Where a node sits in its window, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,7 +41,7 @@ impl Placement {
     }
 }
 
-pub(crate) type Geometry = HashMap<NodeId, Placement>;
+pub(crate) type Geometry = IdMap<NodeId, Placement>;
 
 pub(crate) struct Route<'a, M> {
     pub(crate) tree: &'a mut Tree<M>,

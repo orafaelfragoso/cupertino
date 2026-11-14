@@ -12,10 +12,61 @@ mod virtual_list;
 mod wrap;
 
 use cupertino_geometry::{Insets, Point, Rect, Size};
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 pub use engine::{layout, layout_cached, LayoutCache};
+
+/// A hasher for ids a program hands out itself (node ids, paint node ids): a rotate, an exclusive or and a multiply per
+/// word. The standard maps' keyed hash guards against keys chosen to collide, which such ids never are, and costs more
+/// than the rest of a lookup; a frame looks up every node of a window several times.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IdHasher(u64);
+
+/// The odd constant [`IdHasher`] multiplies by: its bits spread each word over the whole hash.
+const ID_SPREAD: u64 = 0x517c_c1b7_2722_0a95;
+
+impl IdHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(ID_SPREAD);
+    }
+}
+
+impl Hasher for IdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u8(&mut self, v: u8) {
+        self.add(u64::from(v));
+    }
+
+    fn write_u32(&mut self, v: u32) {
+        self.add(u64::from(v));
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.add(v);
+    }
+
+    fn write_usize(&mut self, v: usize) {
+        self.add(v as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A map keyed by ids, hashed by [`IdHasher`].
+pub type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
+
+/// A set of ids, hashed by [`IdHasher`].
+pub type IdSet<K> = HashSet<K, BuildHasherDefault<IdHasher>>;
 pub use virtual_list::VirtualList;
 
 /// The range one axis may take: `0 <= min <= ideal <= max`, where only `max` may be infinite.
@@ -340,7 +391,7 @@ pub struct NodeLayout {
 
 #[derive(Clone, Debug)]
 pub struct LayoutResult<Id> {
-    pub nodes: HashMap<Id, NodeLayout>,
+    pub nodes: IdMap<Id, NodeLayout>,
     pub stats: LayoutStats,
 }
 
@@ -384,6 +435,25 @@ pub struct VirtualWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_handed_out_in_order_hash_apart_and_an_id_map_finds_each() {
+        let hash = |v: u64| {
+            let mut h = IdHasher::default();
+            h.write_u64(v);
+            h.finish()
+        };
+        // ids made of a slot index and a generation, as node ids are: neither the bucket bits nor the top bits that a
+        // map's probe compares collide among a few thousand of them
+        let ids: Vec<u64> = (0..4096u64).map(|i| 1 << 32 | i).collect();
+        let low: HashSet<u64> = ids.iter().map(|&v| hash(v) & 0xfff).collect();
+        let top: HashSet<u64> = ids.iter().map(|&v| hash(v) >> 57).collect();
+        assert!(low.len() > 2400, "{} of 4096 low parts", low.len());
+        assert_eq!(top.len(), 128, "every top part");
+        let map: IdMap<u64, u64> = ids.iter().map(|&v| (v, v * 3)).collect();
+        assert!(ids.iter().all(|v| map.get(v) == Some(&(v * 3))));
+        assert_eq!(map.len(), ids.len());
+    }
 
     #[test]
     fn an_axis_constraint_is_ordered_and_finite_except_its_max() {

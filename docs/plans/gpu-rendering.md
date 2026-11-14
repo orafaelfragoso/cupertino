@@ -280,16 +280,28 @@ Works with the CPU renderer; no GPU needed.
       2.9–4.5 (`a_kept_element_of_the_same_mark_keeps_its_node_unbuilt_and_a_new_mark_builds_it_again`,
       `a_cell_is_kept_while_the_grid_only_scrolls_and_built_again_when_its_state_or_the_revision_changes`,
       `a_grid_of_thousands_of_items_makes_icons_only_for_the_cells_it_builds`).
-- [ ] Files layout under 4 ms in the worst frame of a full-screen scroll: p99 5.7–6.2 ms at scale 1 (1.6–2.8 at 1.5).
-      The layout pass walks the whole tree every frame however little changed: the cached solve and the placement of
-      every node (2.1 ms p50, 5.7 p99 at scale 1, the worst frames those that lay out a new row's names), the window's
-      placements (0.5 ms p50) and its semantics (0.6 ms p50). It needs a layout that keeps the placements of a subtree
-      that did not change, and the names of a row measured before it comes into view.
-- [ ] The toolkit's paint phase made incremental: a scroll frame of Files at scale 1 walks every node of the window
-      (2.0 ms p50, 5.2 p99, of it 0.3 ms copying kept operations) and builds and compares the whole paint tree (paint
-      p50 4.4–4.7 ms, p99 6.7–12.0). It needs the paint tree of a subtree that did not change kept as it was.
-- [ ] The toolkit's damage phase made incremental: comparing the paint tree with the last frame's is 1.0 ms p50 and
-      3.1 p99 at scale 1. It goes with the paint tree kept by subtree, compared only where it changed.
+- [x] Maps keyed by node and paint node ids hash an id with a rotate and one multiply, not the keyed hash of the
+      standard maps: the layout cache and result, the window's placements, the painter's and the damage tracker's
+      maps (`ids_handed_out_in_order_hash_apart_and_an_id_map_finds_each`). Every phase that looks nodes up gets
+      cheaper with it ("Measurements", "Step 4", "Third round").
+- [ ] Files layout under 4 ms in the worst frame of a full-screen scroll. The layout pass walks the whole tree every
+      frame however little changed; timed inside the client at scale 1 (about 3700 nodes, load about 4), the cached
+      solve and the placement of every node take 0.8 ms p50, the window's placements 0.5 and its semantics 0.6, the
+      worst frames those that lay out a new row's names. Split in two:
+  - [ ] Placements and semantics kept for a subtree that did not change: a kept node of the same subtree revision
+        moves its subtree's placements by its own offset and keeps its semantics nodes, as paint does.
+  - [ ] The names of a row measured before it comes into view, so the frame that brings a row in does not shape its
+        text.
+- [x] The toolkit's paint phase made incremental: a kept node whose subtree did not change (its subtree revision, the
+      ground it is painted on and its nodes in paint order are the same) has its paint nodes laid in as they were,
+      without walking its subtree, and the list is the one a full walk paints
+      (`a_kept_subtree_that_did_not_change_is_laid_in_as_it_was_unwalked_and_the_list_is_the_one_painted_whole`:
+      scrolls at whole and fractional offsets walk 2 of 42 nodes, a changed row walks its own, an inactive window all;
+      list, own pixels and blank equal a new painter's). A Files scroll frame at scale 1 walks about 60 of 3700 nodes;
+      the walk is 0.95 ms p50 from 1.20 at load about 4 ("Measurements", "Step 4", "Third round").
+- [ ] The toolkit's damage phase made incremental: comparing the paint tree with the last frame's is 0.7 ms p50 at
+      scale 1 (load about 4). It needs the comparison skipped for a kept run laid in unchanged, whose nodes moved only
+      by the scroll's offset inside a layer.
 - [x] A kept opaque scroll layer laid over by copy rather than by blending, with the background behind it baked in: the
       layer is laid over the background colour pending under it in one pass, its empty runs writing the colour and
       its opaque runs copied (`a_layer_laid_over_its_background_in_one_pass_has_the_bytes_of_the_background_written_and_laid_over`,
@@ -312,15 +324,21 @@ Works with the CPU renderer; no GPU needed.
       0, scene 910 of `cupertino-ui-gpu`'s `parity::scroll_layers_drawn_whole_match_the_cpu` parts from the same list
       drawn without the layer by up to 6/255 on up to 30 pixels at the viewport's first column and rows, where the GPU
       renderer's kept texture and both renderers' pictures in place agree within 1/255. That test runs scenes 900 to
-      909 until this is found.
+      909 until this is found. Narrowed: the scene's parting comes from two blur groups, one inside the other (radii
+      5.1 and 5.6), over a gradient fill that lies just outside the viewport's start edge (window x 0.1 to 3.1, the
+      viewport starting at 4). Moving the fill inside the viewport or dropping either group removes it; one blur
+      group alone across the edge does not part. Still to find: how the CPU layer's image bounds the inner group's
+      blur source where it crosses the layer's edge, against the outer group's.
 
 Gate:
 
 - [ ] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
-      cover only the exposed strip. Not met: client frame p99 36.7–38.0 ms at scale 1 and 36.9–37.2 ms at 1.5 against
-      8 ms (it was 79.3 and 126.4 ms at step 0, 41.2 and 42.8 before this round); painting covers the exposed strip,
-      compositing and copying the whole viewport ("Measurements", "Step 4"). The unticked items above are what remains
-      of it; the copy's p99 alone is over the budget.
+      cover only the exposed strip. Not met on either path. CPU: client frame p99 34.9–37.5 ms at scale 1 and
+      36.6–41.0 ms at 1.5 before the third round, 39.3–67.5 and 41.3–64.8 after it under a heavier load, against 8 ms
+      (79.3 and 126.4 ms at step 0); painting covers the exposed strip, compositing and copying the whole viewport. GPU
+      (`CUPERTINO_RENDERER=gpu`): p99 8.4–10.6 ms at scale 1 and 21.6–35.3 at 1.5 before, 11.4–17.8 and 10.8–14.8 after,
+      with frame p50 4.0–4.1 ms at 1.5 from 6.6 ("Measurements", "Step 4", "Third round"). The unticked items above are
+      what remains of it; on the CPU path the copy's p99 alone is over the budget.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1607,6 +1625,44 @@ with temporary timers (not committed):
 No pixel changed: the composite in one pass has the bytes of the background written and the layer laid over it, the
 copy converts the same pixels, a kept group is laid over only where it was painted and at the same subtree, and a cell
 kept unbuilt is the node a build would have left unchanged. No golden is re-recorded.
+
+#### Third round: kept paint and node maps
+
+The same scenario and machine, release builds, three runs per configuration, other agents building and testing beside
+it; the load average is recorded before and after each configuration's runs. Before is `d6fd6eaa0`; after is
+`0059ca5ec`, measured twice. The round's commits are `706cfb6d5` (maps keyed by node id hash it with a rotate and one
+multiply) and `0059ca5ec` (a kept subtree that did not change is laid into the paint unwalked). Medians of the three
+runs, the frame p99's range across them in brackets; the two after values are the two measurements.
+
+| Files two-finger scroll, client frame ms | Before | After |
+|---|---|---|
+| CPU, scale 1: load | 11.5 to 9.9 | 1.5 to 13.0; 8.0 to 8.7 |
+| CPU, scale 1: frames, frame p50, p99 | 116, 19.6, 36.4 (34.9–37.5) | 102, 22.4, 45.9 (39.3–67.5); 84, 17.7, 62.6 (49.9–66.4) |
+| CPU, scale 1: layout, paint p50 | 3.2, 4.4 | 2.7, 3.1; 1.5, 3.2 |
+| CPU, scale 1: raster, copy p99 | 8.8, 21.0 | 17.8, 21.3; 17.4, 26.4 |
+| GPU, scale 1: load | 9.9 to 4.0 | 13.0 to 17.5; 8.7 to 8.1 |
+| GPU, scale 1: frames, frame p50, p99 | 183, 5.3, 9.4 (8.4–10.6) | 165, 5.6, 23.7 (21.4–57.6); 172, 6.1, 13.4 (11.4–17.8) |
+| GPU, scale 1: layout, paint p50 | 1.0, 3.3 | 1.3, 2.9; 1.4, 3.1 |
+| CPU, scale 1.5: load | 4.0 to 4.5 | 17.5 to 13.8; 8.1 to 6.9 |
+| CPU, scale 1.5: frames, frame p50, p99 | 90, 15.7, 40.3 (36.6–41.0) | 90, 17.8, 44.9 (41.3–63.4); 107, 18.7, 46.5 (42.6–64.8) |
+| CPU, scale 1.5: layout, paint p50 | 0.8, 1.9 | 1.2, 1.2; 1.2, 1.3 |
+| CPU, scale 1.5: raster, copy p99 | 12.7, 22.3 | 14.3, 23.4; 19.8, 24.8 |
+| GPU, scale 1.5: load | 4.5 to 11.0 | 13.8 to 11.3; 6.9 to 7.3 |
+| GPU, scale 1.5: frames, frame p50, p99 | 155, 6.6, 23.0 (21.6–35.3) | 176, 4.0, 16.9 (14.4–19.4); 182, 4.1, 11.2 (10.8–14.8) |
+| GPU, scale 1.5: layout, paint p50 | 1.2, 3.0 | 0.6, 1.2; 0.6, 1.1 |
+
+Paint p50 falls on both paths at both scales (by a third at scale 1 on the CPU, by more than half at 1.5); the p99s
+follow the load, which was heavier for the after runs, and the CPU path's raster and copy p99, which this round did
+not touch, rise with it. Timed inside the client at scale 1 on a build with temporary timers (not committed), headless
+Files in its icon view over 3000 items, 20-point steps of a two-finger scroll, on the thread's CPU clock at a load of
+about 4: the cached solve 0.8 ms p50, the window's placements 0.5, its semantics 0.6, the paint walk 0.95 (1.20 with
+the kept runs turned off) and the comparison with the last frame's paint tree 0.7. A frame walks about 60 of the 3700
+nodes and lays the rest in as kept runs. At a load of about 30, before the id hash, the same frames took 2.9 ms to
+solve, 1.8 to place, 1.5 for semantics and 2.0 to compare, and the walk 3.6 ms without kept runs and 1.8 with them.
+
+No pixel changed: a kept run is laid in only where the subtree, its ground and its order in the paint are those it was
+painted with, and each node of it is built by the same function a walk uses; the test compares the list, the own
+pixels and the blank region with a new painter's after every scroll. No golden is re-recorded.
 
 ## Decisions taken
 

@@ -76,7 +76,7 @@ pub(crate) fn placements<M: 'static>(
     env: &Environment,
     cut: &[(NodeId, Rect)],
 ) -> Geometry {
-    let mut geometry = Geometry::with_capacity(layout.nodes.len());
+    let mut geometry = Geometry::with_capacity_and_hasher(layout.nodes.len(), Default::default());
     let mut stack = vec![(root, Point::new(0.0, 0.0), None::<Rect>, false)];
     while let Some((id, parent_origin, clip, raised)) = stack.pop() {
         let Some(node) = layout.nodes.get(&id) else {
@@ -222,7 +222,8 @@ mod tests {
                 ),
                 (content, at(0.0, -30.0, 100.0, 300.0, None)),
             ]
-            .into(),
+            .into_iter()
+            .collect(),
             stats: LayoutStats::default(),
         };
 
@@ -269,7 +270,8 @@ mod tests {
                 (first, at(first_x, 10.0, None)),
                 (last, at(last_x, 10.0, None)),
             ]
-            .into(),
+            .into_iter()
+            .collect(),
             stats: LayoutStats::default(),
         };
         let geometry = placements(

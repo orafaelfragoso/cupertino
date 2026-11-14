@@ -35,6 +35,11 @@ all on one thread.
   layout reused); otherwise `build` makes the element, which updates or replaces the node as any other. The mark stands for
   everything `build` reads. A long list or grid builds only the rows near its viewport this way and keeps each one
   while it only scrolls.
+- **Kept paint.** The painter keeps the paint nodes of each kept node's subtree with the subtree's revision (which
+  changes when it or any descendant is marked or built again) and the ground it was painted on (what lies under it,
+  its layer, the window's state). A kept node whose subtree revision and ground are the same next frame has its paint
+  nodes laid in as they were, each placed where layout puts it, without walking its subtree; anything else is painted
+  as usual. The list is the one a full walk paints.
 - **Events.** An event goes down the target's path (capture), reaches the target and goes back up (bubble); a handler
   can stop it. Hit-testing takes the topmost node and respects every clip. Hover enter and leave reach each node the
   pointer crosses. A raised node (`Widget::raised`, a toolbar row over a page that scrolls under it) takes a point

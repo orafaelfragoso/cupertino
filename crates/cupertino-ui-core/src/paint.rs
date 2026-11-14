@@ -4,11 +4,12 @@
 //! node repaints only when it changed or its size did, and keeps its paint revision otherwise.
 
 use crate::cx::{OverlayCx, PaintCx};
-use crate::route::Geometry;
+use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_layout::{ContainerKind, LayoutDirection};
+use cupertino_ui_layout::{IdMap, IdSet};
 use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Layer, Paint, PaintNode, PaintNodeId, PaintOp,
@@ -16,7 +17,6 @@ use cupertino_ui_render::{
 };
 use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 use cupertino_ui_theme::{FaceTone, ThemeTokens};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 struct Painted {
@@ -311,7 +311,7 @@ fn shape_bounds(shape: &Shape) -> Option<Rect> {
 /// One window's paint, kept between frames.
 #[derive(Default)]
 pub(crate) struct Painter {
-    nodes: HashMap<NodeId, Painted>,
+    nodes: IdMap<NodeId, Painted>,
     revision: u64,
     /// The environment the kept paint was made in; any other repaints every node.
     painted_in: Option<Environment>,
@@ -326,12 +326,61 @@ pub(crate) struct Painter {
     pin_envs: Option<[Environment; 3]>,
     /// What each node's overlay drew last, and the revision it drew with, while the node asks for one: a caret that
     /// shows again where it showed before is the same paint.
-    overlays: HashMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
+    overlays: IdMap<NodeId, (Vec<PaintOp>, PaintRevision)>,
     overlay_revision: u64,
     /// The scroll views that told they are scrolled, by node ([`PaintCx::set_page_scrolled`]).
-    scrolled_pages: HashMap<NodeId, bool>,
+    scrolled_pages: IdMap<NodeId, bool>,
     /// The raised nodes that told they show a band, by node ([`PaintCx::set_band_shown`]).
-    bands: HashMap<NodeId, bool>,
+    bands: IdMap<NodeId, bool>,
+    /// The kept subtrees ([`Element::kept`](crate::Element::kept)) of the last list, by their root, which the next
+    /// paint lays in as they were while nothing in them or under them changed.
+    segments: IdMap<NodeId, Segment>,
+    /// What the last paint did, node by node.
+    pub(crate) stats: PaintStats,
+}
+
+/// How many nodes a paint went through one by one, and how many it laid in with their kept subtree, unwalked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaintStats {
+    pub(crate) walked: usize,
+    pub(crate) kept: usize,
+}
+
+/// What the root of a kept subtree lay on, and the frame's flags every node's paint depends on: a subtree painted on
+/// the same ground is painted as it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Ground {
+    under: Under,
+    inherited: Option<GlassTone>,
+    pinned: Option<bool>,
+    on_material: bool,
+    backdrop: bool,
+    window_active: bool,
+    focus_visible: bool,
+    layer: bool,
+    materials: bool,
+}
+
+/// A kept subtree's nodes as the last list laid them, in paint order from its root: none raised, focused or with an
+/// overlay, a material, a pinned appearance, a scroll layer or a window mark, so what they draw follows from their
+/// own paint, their placement and their root's ground alone.
+struct Segment {
+    /// The root's subtree revision when it was laid.
+    revision: u64,
+    ground: Ground,
+    nodes: Vec<NodeId>,
+}
+
+/// A kept subtree being laid by the walk, until a node outside it comes.
+struct Recording {
+    root: NodeId,
+    ground: Ground,
+    revision: u64,
+    nodes: Vec<NodeId>,
+    /// The path from the root down to the last node laid, which the next node of the subtree is a child of.
+    open: Vec<NodeId>,
+    /// Every node so far can be laid again as it is.
+    keeps: bool,
 }
 
 /// The paint node of `node`'s overlay ([`Widget::overlay`](crate::Widget::overlay)): it comes after the node's
@@ -423,7 +472,7 @@ pub(crate) fn unobscured(rect: Rect, raised: &[(NodeId, Rect)]) -> Rect {
 fn paint_order<M: 'static>(
     tree: &Tree<M>,
     root: NodeId,
-    raised: &HashSet<NodeId>,
+    raised: &IdSet<NodeId>,
     layer: bool,
 ) -> Vec<NodeId> {
     let all = tree.preorder(root);
@@ -431,7 +480,7 @@ fn paint_order<M: 'static>(
         return all;
     }
     // where each lifted node goes: over the rest (`false`) or over every other raised node (`true`)
-    let mut lifted: HashMap<NodeId, bool> = HashMap::new();
+    let mut lifted: IdMap<NodeId, bool> = IdMap::default();
     let (mut rest, mut over, mut floating) =
         (Vec::with_capacity(all.len()), Vec::new(), Vec::new());
     for id in all {
@@ -555,6 +604,7 @@ impl Painter {
     /// Drops every node's kept paint, so the next paint draws each node again.
     pub(crate) fn forget_nodes(&mut self) {
         self.nodes.clear();
+        self.segments.clear();
     }
 
     pub(crate) fn paint<M: 'static>(
@@ -581,6 +631,7 @@ impl Painter {
                 .is_some_and(|env| same_environment(env, input.env))
         {
             self.nodes.clear();
+            self.segments.clear();
             self.painted_in = Some(input.env.clone());
             self.pinned_in = input.pinned.clone();
             self.glass_envs = None;
@@ -612,13 +663,13 @@ impl Painter {
             })
             .clone();
         // the appearance each node pinned its subtree to, as its children inherit it
-        let mut pinned_below: HashMap<NodeId, Option<bool>> = HashMap::new();
+        let mut pinned_below: IdMap<NodeId, Option<bool>> = IdMap::default();
         let mut pins = false;
         // What each node lies on, as its children inherit it: the window's material when it is glass and shown, below
         // a node that shows a material that node's region. A node with nothing under it from its ancestors lies on
         // the glass painted before it that holds it whole: a panel's content is often drawn beside the node of its
         // glass, after it.
-        let mut on_glass: HashMap<NodeId, Under> = HashMap::new();
+        let mut on_glass: IdMap<NodeId, Under> = IdMap::default();
         let mut glass_shown: Vec<(Rect, GlassTone)> = Vec::new();
         let window_glass = match input.background {
             WindowBackground::Surface { surface, .. } if input.backdrop => input
@@ -636,7 +687,7 @@ impl Painter {
         let mut mark_readers: Vec<NodeId> = Vec::new();
         let mut band_readers: Vec<(NodeId, bool)> = Vec::new();
         let mut resources = PaintResources::default();
-        let mut seen = HashSet::with_capacity(self.nodes.len());
+        let mut seen = IdSet::with_capacity_and_hasher(self.nodes.len(), Default::default());
         let mut clips = Vec::new();
         let mut materials = Vec::new();
         let mut blank = Vec::new();
@@ -661,20 +712,49 @@ impl Painter {
                 layered.push(done.layered);
             }
         };
-        let raised_ids: HashSet<NodeId> = input.raised.iter().map(|(id, _)| *id).collect();
+        let raised_ids: IdSet<NodeId> = input.raised.iter().map(|(id, _)| *id).collect();
         // whether each node draws in the raised layer, as its children inherit it
-        let mut in_layer: HashMap<NodeId, bool> = HashMap::new();
-        let mut overlaid = HashSet::new();
+        let mut in_layer: IdMap<NodeId, bool> = IdMap::default();
+        let mut overlaid = IdSet::default();
         // whether each node's children lie on a material, from the window's background down
-        let mut material_below: HashMap<NodeId, bool> = HashMap::new();
+        let mut material_below: IdMap<NodeId, bool> = IdMap::default();
         let window_material = matches!(
             input.background,
             WindowBackground::Surface { surface, .. } if crate::cx::translucent(surface)
         );
-        for id in paint_order(tree, root, &raised_ids, input.layer) {
+        let order = paint_order(tree, root, &raised_ids, input.layer);
+        // the focused node and its ancestors: a kept subtree that holds the focus paints it, so it is walked
+        let focus_path: IdSet<NodeId> = input
+            .focus
+            .filter(|&f| tree.contains(f))
+            .map(|f| tree.path(f))
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let mut segments: IdMap<NodeId, Segment> =
+            IdMap::with_capacity_and_hasher(self.segments.len(), Default::default());
+        let mut recording: Option<Recording> = None;
+        let mut stats = PaintStats::default();
+        let mut at = 0;
+        while at < order.len() {
+            let id = order[at];
+            at += 1;
             let (Some(node), Some(placement)) = (tree.get(id), geometry.get(&id)) else {
                 continue;
             };
+            // a node outside the kept subtree being laid ends it
+            let ended = recording.as_mut().is_some_and(|rec| {
+                while rec.open.last().is_some_and(|&top| Some(top) != node.parent) {
+                    rec.open.pop();
+                }
+                rec.open.is_empty()
+            });
+            if ended {
+                let rec = recording.take().expect("checked above");
+                if rec.keeps {
+                    segments.insert(rec.root, rec.segment());
+                }
+            }
             flush(
                 &mut pending,
                 Some(id),
@@ -751,6 +831,88 @@ impl Painter {
                     Some(parent) => material_below.get(&parent).copied().unwrap_or(false),
                     None => window_material,
                 };
+            let ground = Ground {
+                under,
+                inherited,
+                pinned,
+                on_material,
+                backdrop: input.backdrop,
+                window_active: input.window_active,
+                focus_visible: input.focus_visible,
+                layer: input.layer,
+                materials: input.materials,
+            };
+            // a kept subtree that changed in nothing and lies on the same ground is laid in as it was, unwalked
+            let candidate =
+                node.kept.is_some() && id != root && !raised && !focus_path.contains(&id);
+            if let Some(segment) = candidate
+                .then(|| self.segments.remove(&id))
+                .flatten()
+                .filter(|s| {
+                    s.revision == node.subtree_revision
+                        && s.ground == ground
+                        && order.get(at - 1..at - 1 + s.nodes.len()) == Some(&s.nodes[..])
+                })
+            {
+                let lengths = (list.nodes.len(), clips.len(), blank.len(), layered.len());
+                let mut laid = true;
+                let mut reach: Option<Rect> = None;
+                for &d in &segment.nodes {
+                    let (Some(n), Some(p), Some(painted)) =
+                        (tree.get(d), geometry.get(&d), self.nodes.get(&d))
+                    else {
+                        laid = false;
+                        break;
+                    };
+                    // what a node's paint read of its place must be as it was
+                    if painted.size != p.rect.size
+                        || painted.visible.is_some_and(|v| v != shown_part(p, window))
+                        || painted
+                            .obscured
+                            .is_some_and(|o| o != obscured_insets(p.rect, input.obscuring))
+                    {
+                        laid = false;
+                        break;
+                    }
+                    reach = Some(reach.map_or(p.rect, |r| r.union(&p.rect)));
+                    add_images(&mut resources, painted);
+                    blank.push(painted.ops.is_empty() && painted.group.is_none());
+                    list.nodes.push(paint_node(
+                        d,
+                        n.parent,
+                        p,
+                        painted,
+                        group_layer(painted),
+                        input.env.scale,
+                    ));
+                    clips.push(p.clip);
+                    layered.push(false);
+                    seen.insert(d);
+                }
+                // on the window, each node of it looked for glass painted before it that holds it, and found none
+                if laid && under == Under::Window {
+                    laid = reach.is_none_or(|reach| {
+                        !glass_shown
+                            .iter()
+                            .any(|(glass, _)| glass.outset(1.0).intersects(&reach))
+                    });
+                }
+                if laid {
+                    stats.kept += segment.nodes.len();
+                    at += segment.nodes.len() - 1;
+                    if let Some(rec) = &mut recording {
+                        rec.nodes.extend(&segment.nodes);
+                        rec.open.push(id);
+                    }
+                    segments.insert(id, segment);
+                    continue;
+                }
+                list.nodes.truncate(lengths.0);
+                clips.truncate(lengths.1);
+                blank.truncate(lengths.2);
+                layered.truncate(lengths.3);
+            }
+            stats.walked += 1;
             let fresh = self.nodes.get(&id).is_some_and(|p| {
                 p.source == source
                     && p.background == background
@@ -943,16 +1105,7 @@ impl Painter {
                     });
                 }
             }
-            for (image, pixels) in &painted.images {
-                let kept = resources
-                    .images
-                    .entry(*image)
-                    .or_insert_with(|| pixels.clone());
-                debug_assert!(
-                    kept.revision == pixels.revision && Arc::ptr_eq(&kept.pixels, &pixels.pixels),
-                    "resource {image:?} names two images; new pixels take a new id"
-                );
-            }
+            add_images(&mut resources, painted);
             // a scroll container that clips keeps its content as a layer the renderer moves by the drawn offset
             let layer = match node.spec.kind {
                 ContainerKind::Scroll {
@@ -973,31 +1126,42 @@ impl Painter {
                         offset: Point::new(x, y),
                     })
                 }
-                _ => painted
-                    .group
-                    .as_ref()
-                    .filter(|g| g.effects.is_empty() && g.opacity < 1.0)
-                    .map(|_| Layer::Opacity),
+                _ => group_layer(painted),
             };
-            list.nodes.push(PaintNode {
+            if recording.is_none() && candidate {
+                recording = Some(Recording {
+                    root: id,
+                    ground,
+                    revision: node.subtree_revision,
+                    nodes: Vec::new(),
+                    open: Vec::new(),
+                    keeps: true,
+                });
+            }
+            if let Some(rec) = &mut recording {
+                rec.nodes.push(id);
+                rec.open.push(id);
+                rec.keeps &= !raised
+                    && !focused
+                    && !painted.overlay
+                    && painted.material.is_none()
+                    && painted.materials.is_none()
+                    && painted.pins.is_none()
+                    && painted.marks.is_none()
+                    && !matches!(layer, Some(Layer::Scroll { .. }))
+                    && !self.scrolled_pages.contains_key(&id)
+                    && !self.bands.contains_key(&id)
+                    && !(under == Under::Window && inherited.is_some())
+                    && animating.last() != Some(&id);
+            }
+            list.nodes.push(paint_node(
+                id,
+                node.parent,
+                placement,
+                painted,
                 layer,
-                id: id.into(),
-                parent: node.parent.map(PaintNodeId::from),
-                revision: painted.revision,
-                transform: Transform([1.0, 0.0, 0.0, 1.0, origin.x, origin.y]),
-                clip: placement
-                    .own_clip
-                    .map(|c| Shape::Rect(c.translate(-origin.x, -origin.y))),
-                bounds: bounds(placement.rect, painted.extent, placement.clip),
-                hit: placement
-                    .clip
-                    .map_or(Some(placement.target), |c| {
-                        c.intersection(&placement.target)
-                    })
-                    .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
-                group: painted.group.clone(),
-                ops: on_pixels(&painted.ops, &painted.pixels, origin, input.env.scale),
-            });
+                input.env.scale,
+            ));
             clips.push(placement.clip);
             layered.push(raised);
             seen.insert(id);
@@ -1068,6 +1232,11 @@ impl Painter {
             &mut blank,
             &mut layered,
         );
+        if let Some(rec) = recording.take().filter(|rec| rec.keeps) {
+            segments.insert(rec.root, rec.segment());
+        }
+        self.segments = segments;
+        self.stats = stats;
         self.nodes.retain(|id, _| seen.contains(id));
         self.scrolled_pages.retain(|id, _| seen.contains(id));
         self.bands.retain(|id, _| seen.contains(id));
@@ -1113,7 +1282,7 @@ impl Painter {
             // the raised subtrees move to a list of their own; a subtree's root keeps the clip of its ancestors
             let mut main = (DisplayList::default(), Vec::new(), Vec::new());
             let mut raised = (DisplayList::default(), Vec::new(), Vec::new());
-            let ids: HashSet<PaintNodeId> = list
+            let ids: IdSet<PaintNodeId> = list
                 .nodes
                 .iter()
                 .zip(&layered)
@@ -1181,6 +1350,82 @@ impl Painter {
     }
 }
 
+impl Recording {
+    fn segment(self) -> Segment {
+        Segment {
+            revision: self.revision,
+            ground: self.ground,
+            nodes: self.nodes,
+        }
+    }
+}
+
+/// What of a node at `placement` shows, in its own coordinates: its rect cut by its ancestors' clip and the window.
+fn shown_part(placement: &Placement, window: Option<Rect>) -> Rect {
+    let origin = placement.rect.origin;
+    [placement.clip, window]
+        .into_iter()
+        .flatten()
+        .try_fold(placement.rect, |shown, clip| shown.intersection(&clip))
+        .map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |shown| {
+            shown.translate(-origin.x, -origin.y)
+        })
+}
+
+/// The images a node's paint draws, added to the list's resources.
+fn add_images(resources: &mut PaintResources, painted: &Painted) {
+    for (image, pixels) in &painted.images {
+        let kept = resources
+            .images
+            .entry(*image)
+            .or_insert_with(|| pixels.clone());
+        debug_assert!(
+            kept.revision == pixels.revision && Arc::ptr_eq(&kept.pixels, &pixels.pixels),
+            "resource {image:?} names two images; new pixels take a new id"
+        );
+    }
+}
+
+/// The layer a node's group makes: a group of opacity alone below full is kept as an image of its subtree.
+fn group_layer(painted: &Painted) -> Option<Layer> {
+    painted
+        .group
+        .as_ref()
+        .filter(|g| g.effects.is_empty() && g.opacity < 1.0)
+        .map(|_| Layer::Opacity)
+}
+
+/// The list's node of `id` (whose parent is `parent`) at `placement` with what it painted.
+fn paint_node(
+    id: NodeId,
+    parent: Option<NodeId>,
+    placement: &Placement,
+    painted: &Painted,
+    layer: Option<Layer>,
+    scale: f64,
+) -> PaintNode {
+    let origin = placement.rect.origin;
+    PaintNode {
+        layer,
+        id: id.into(),
+        parent: parent.map(PaintNodeId::from),
+        revision: painted.revision,
+        transform: Transform([1.0, 0.0, 0.0, 1.0, origin.x, origin.y]),
+        clip: placement
+            .own_clip
+            .map(|c| Shape::Rect(c.translate(-origin.x, -origin.y))),
+        bounds: bounds(placement.rect, painted.extent, placement.clip),
+        hit: placement
+            .clip
+            .map_or(Some(placement.target), |c| {
+                c.intersection(&placement.target)
+            })
+            .unwrap_or(Rect::new(origin.x, origin.y, 0.0, 0.0)),
+        group: painted.group.clone(),
+        ops: on_pixels(&painted.ops, &painted.pixels, origin, scale),
+    }
+}
+
 /// The list's boxes made whole: each node's bounds widened by its children and its group's effects, and what each
 /// node damages when it changes. `clips` are the clips of each node's ancestors, in the list's order.
 fn finish(
@@ -1190,7 +1435,7 @@ fn finish(
 ) -> (DisplayList, Vec<Rect>, Vec<bool>) {
     let mut own: Vec<Rect> = list.nodes.iter().map(|n| n.bounds).collect();
     // Children come after their parent, so walking backwards widens each parent by its finished children.
-    let index: HashMap<PaintNodeId, usize> = list
+    let index: IdMap<PaintNodeId, usize> = list
         .nodes
         .iter()
         .enumerate()

@@ -22,6 +22,9 @@ pub(crate) struct Node<M> {
     pub(crate) generation: Generation,
     /// Changes when this node's paint does.
     pub(crate) paint_revision: u64,
+    /// Changes when this node's paint or layout, or what it holds, changes, or any descendant's does: a subtree of the
+    /// same revision paints, measures and places as it did.
+    pub(crate) subtree_revision: u64,
     /// The mark of the [`Element::kept`] that made the node, which an element of the same mark keeps as it is.
     pub(crate) kept: Option<u64>,
 }
@@ -150,6 +153,7 @@ impl<M: 'static> Tree<M> {
             widget: element.widget,
             generation: Generation(revision),
             paint_revision: revision,
+            subtree_revision: revision,
             kept,
         });
         let id = match self.free.pop() {
@@ -273,14 +277,16 @@ impl<M: 'static> Tree<M> {
         self.paint_dirty.insert(id);
         let node = self.node_mut(id);
         node.paint_revision = revision;
-        if change == Change::Layout {
-            self.layout_dirty = true;
-            let mut next = Some(id);
-            while let Some(id) = next {
-                let node = self.node_mut(id);
+        let layout = change == Change::Layout;
+        self.layout_dirty |= layout;
+        let mut next = Some(id);
+        while let Some(id) = next {
+            let node = self.node_mut(id);
+            if layout {
                 node.generation = Generation(revision);
-                next = node.parent;
             }
+            node.subtree_revision = revision;
+            next = node.parent;
         }
     }
 
@@ -293,6 +299,7 @@ impl<M: 'static> Tree<M> {
         while let Some(id) = next {
             let node = self.node_mut(id);
             node.generation = Generation(revision);
+            node.subtree_revision = revision;
             next = node.parent;
         }
     }

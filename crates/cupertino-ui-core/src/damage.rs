@@ -13,10 +13,10 @@
 use crate::paint::Painting;
 use cupertino_geometry::Point;
 use cupertino_geometry::Rect;
+use cupertino_ui_layout::IdMap;
 use cupertino_ui_render::{
     scroll_layers, DamageRegion, DisplayList, Layer, PaintNodeId, PaintRevision, Shape, Transform,
 };
-use std::collections::HashMap;
 
 #[derive(Clone, PartialEq)]
 struct Seen {
@@ -79,7 +79,7 @@ impl Seen {
 
 #[derive(Default)]
 pub(crate) struct DamageTracker {
-    previous: HashMap<PaintNodeId, Seen>,
+    previous: IdMap<PaintNodeId, Seen>,
     order: Vec<PaintNodeId>,
     full: bool,
     /// The last frame painted, moved or removed a node with a box, whether or not it changed a pixel.
@@ -118,12 +118,12 @@ impl DamageTracker {
             _ => Point::ZERO,
         };
         // where each kept layer's content is now, by node
-        let offsets: HashMap<PaintNodeId, Point> = kept_in
+        let offsets: IdMap<PaintNodeId, Point> = kept_in
             .iter()
             .flatten()
             .map(|&l| (list.nodes[l].id, offset_of(l)))
             .collect();
-        let index: HashMap<PaintNodeId, usize> =
+        let index: IdMap<PaintNodeId, usize> =
             order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
         let mut grouped = vec![false; list.nodes.len()];
         for (i, node) in list.nodes.iter().enumerate() {
@@ -138,7 +138,7 @@ impl DamageTracker {
             Some(o) => seen.own.translate(-o.x, -o.y),
             None => seen.window,
         };
-        let mut current = HashMap::with_capacity(order.len());
+        let mut current = IdMap::with_capacity_and_hasher(order.len(), Default::default());
         let mut rects = Vec::new();
         let mut repainted = false;
         let blank_at = |i: usize| blank.get(i).copied().unwrap_or(false);

@@ -38,7 +38,7 @@ fn route(tree: &mut Tree<M>, path: &[NodeId]) -> (Propagation, Vec<String>) {
     let mut effects = Effects::default();
     let result = Route {
         tree,
-        geometry: &Geometry::new(),
+        geometry: &Geometry::default(),
         env: &env,
         status: status(),
         popups: &[],
@@ -115,7 +115,7 @@ fn the_later_sibling_is_on_top_and_a_clip_hides_what_it_cuts_off() {
     };
     let b = tree.get(clipper).unwrap().children[0];
     let clip = Rect::new(0.0, 0.0, 40.0, 40.0);
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
     place(&mut geometry, a, Rect::new(0.0, 0.0, 60.0, 60.0), None);
     place(&mut geometry, clipper, clip, Some(clip));
@@ -145,7 +145,7 @@ fn a_press_beside_a_control_reaches_the_nearest_target_and_the_topmost_on_a_tie(
     let [a, b] = tree.get(root).unwrap().children[..] else {
         unreachable!()
     };
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
     for (id, x) in [(a, 10.0), (b, 40.0)] {
         let rect = Rect::new(x, 10.0, 20.0, 20.0);
@@ -184,7 +184,7 @@ fn a_rect_that_holds_the_point_beats_a_target_that_reaches_it() {
     let [under, over] = tree.get(root).unwrap().children[..] else {
         unreachable!()
     };
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
     place(&mut geometry, under, Rect::new(0.0, 0.0, 30.0, 30.0), None);
     let rect = Rect::new(32.0, 0.0, 20.0, 20.0);
@@ -358,7 +358,7 @@ fn a_raised_node_takes_a_point_over_the_siblings_after_it() {
         unreachable!()
     };
     let header = tree.get(holder).unwrap().children[0];
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     place(&mut geometry, root, Rect::new(0.0, 0.0, 100.0, 100.0), None);
     place(
         &mut geometry,

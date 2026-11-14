@@ -92,7 +92,7 @@ impl Fixture {
     }
 
     fn painting(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> Painting {
-        let geometry = Geometry::from([(
+        let geometry = Geometry::from_iter([(
             self.root,
             Placement {
                 rect,
@@ -190,7 +190,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
         .unwrap();
     let child = tree.get(root).unwrap().children[0];
     let viewport = Rect::new(10.0, 10.0, 50.0, 50.0);
-    let geometry = Geometry::from([
+    let geometry = Geometry::from_iter([
         (
             root,
             Placement {
@@ -355,7 +355,7 @@ fn a_group_reaches_the_renderer_and_its_effects_widen_the_subtree_bounds() {
     let mut tree = Tree::<M>::new(2);
     let root = tree.reconcile(None, Element::new(Shadowed)).unwrap();
     let rect = Rect::new(10.0, 10.0, 20.0, 20.0);
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect,
@@ -461,7 +461,7 @@ fn an_image_a_node_draws_travels_with_the_list_and_stays_when_the_node_is_reused
             }),
         )
         .unwrap();
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: Rect::new(4.0, 4.0, 16.0, 16.0),
@@ -567,7 +567,7 @@ fn a_node_s_material_is_cut_to_what_shows_and_capped_per_window_and_a_refused_on
         .unwrap();
     let ids = tree.get(root).unwrap().children.clone();
     let viewport = Rect::new(0.0, 0.0, 100.0, 1000.0);
-    let mut geometry = Geometry::from([(
+    let mut geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: viewport,
@@ -739,7 +739,7 @@ fn glass_nodes_join_their_container_with_round_ends() {
         .unwrap();
     let ids = tree.get(root).unwrap().children.clone();
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let mut geometry = Geometry::from([(
+    let mut geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: window,
@@ -956,7 +956,7 @@ fn text_on_glass_takes_the_matrix_of_its_face_and_text_beside_it_keeps_the_theme
     };
     let inner = |id: NodeId| tree.get(id).unwrap().children[0];
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (id, rect) in [
         (root, window),
         (panel, Rect::new(10.0, 20.0, 100.0, 36.0)),
@@ -1075,7 +1075,7 @@ fn text_drawn_after_a_glass_node_and_inside_it_lies_on_that_glass() {
     let [glass, over, straddling, past] = tree.get(root).unwrap().children.clone()[..] else {
         unreachable!()
     };
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (id, rect) in [
         (root, Rect::new(0.0, 0.0, 400.0, 200.0)),
         (glass, Rect::new(20.0, 20.0, 240.0, 120.0)),
@@ -1167,7 +1167,7 @@ fn text_on_a_window_of_glass_takes_the_windows_tone() {
     let mut tree = Tree::<M>::new(4);
     let root = tree.reconcile(None, Element::new(TextSwatch)).unwrap();
     let window = Rect::new(0.0, 0.0, 300.0, 100.0);
-    let geometry = Geometry::from([(
+    let geometry = Geometry::from_iter([(
         root,
         Placement {
             rect: window,
@@ -1326,7 +1326,7 @@ fn probed(beneath: Beneath, background: WindowBackground, shown: bool) -> bool {
         .unwrap();
     let probe = tree.get(root).unwrap().children[0];
     let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
-    let geometry = Geometry::from([root, probe].map(|id| {
+    let geometry = Geometry::from_iter([root, probe].map(|id| {
         (
             id,
             Placement {
@@ -1464,7 +1464,7 @@ fn what_a_node_puts_on_device_pixels_lands_on_them_wherever_a_frame_draws_it() {
         Point::new(3.7, 0.9),
     ] {
         let rect = Rect::new(origin.x, origin.y, 40.0, 20.0);
-        let geometry = Geometry::from([(
+        let geometry = Geometry::from_iter([(
             root,
             Placement {
                 rect,
@@ -1668,7 +1668,7 @@ impl Overlaid {
             own_clip,
             raised: Default::default(),
         };
-        let geometry = Geometry::from([
+        let geometry = Geometry::from_iter([
             (self.root, placed(viewport, None, Some(viewport))),
             (self.field, placed(field, Some(viewport), None)),
             (self.inner, placed(field, Some(viewport), None)),
@@ -1884,7 +1884,7 @@ fn a_subtree_pinned_to_an_appearance_paints_in_its_theme_and_the_rest_keeps_the_
         unreachable!()
     };
     let light_label = tree.get(light_panel).unwrap().children[0];
-    let mut geometry = Geometry::new();
+    let mut geometry = Geometry::default();
     for (i, id) in [root, panel, label, light_panel, light_label, beside]
         .into_iter()
         .enumerate()
@@ -2015,4 +2015,317 @@ fn the_sidebar_subdued_module_snippet_and_veiled_glass_are_regular_glass_of_thei
             (regular.alpha, regular.container, regular.spacing)
         );
     }
+}
+
+/// A bar of a fixed size that fills itself in `tone` and counts its paints.
+struct Bar {
+    tone: f32,
+    paints: Rc<Cell<u32>>,
+}
+
+const BAR: Size = Size {
+    width: 80.0,
+    height: 10.0,
+};
+
+impl Widget<M> for Bar {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: cupertino_ui_layout::SizeSpec::Fixed(BAR.width),
+            height: cupertino_ui_layout::SizeSpec::Fixed(BAR.height),
+            ..spec(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if old.tone == self.tone {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: BAR,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        self.paints.set(self.paints.get() + 1);
+        cx.push(PaintOp::Fill {
+            shape: Shape::RoundedRect {
+                rect: Rect::from_origin_size(Point::new(0.0, 0.0), cx.size()),
+                radius: 3.0,
+            },
+            paint: Paint::Solid(Color::new(self.tone, 0.2, 0.4, 1.0)),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Its children one under the other, at their sizes.
+struct Pile(Vec<Element<M>>);
+
+impl Widget<M> for Pile {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Stack {
+            axis: cupertino_ui_layout::Axis::Vertical,
+            spacing: 2.0,
+            align: cupertino_ui_layout::Align::Start,
+            justify: cupertino_ui_layout::Justify::Start,
+        })
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.0)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// Its content scrolled up by `offset`, inside its fixed viewport.
+struct View {
+    content: Vec<Element<M>>,
+    offset: f64,
+}
+
+impl Widget<M> for View {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: cupertino_ui_layout::SizeSpec::Fixed(100.0),
+            height: cupertino_ui_layout::SizeSpec::Fixed(50.0),
+            ..spec(ContainerKind::Scroll {
+                horizontal: false,
+                vertical: true,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.content)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if old.offset == self.offset {
+            Change::None
+        } else {
+            Change::Paint
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::from_origin_size(Point::new(0.0, 0.0), cx.size())),
+            paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, 1.0)),
+        });
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn scroll_offset(&self, _: &()) -> Point {
+        Point::new(0.0, self.offset)
+    }
+}
+
+/// Twenty kept rows of a bar each in a view scrolled by `offset`; row `i` is made by `Element::kept` with the mark and
+/// the tone `tones[i]`.
+fn kept_rows(paints: &Rc<Cell<u32>>, tones: &[f32], offset: f64) -> Element<M> {
+    let rows = tones
+        .iter()
+        .enumerate()
+        .map(|(i, &tone)| {
+            let paints = Rc::clone(paints);
+            Element::kept(i as u64, u64::from(tone.to_bits()), move || {
+                Element::new(crate::test_support::group(vec![Element::new(Bar {
+                    tone,
+                    paints,
+                })]))
+            })
+        })
+        .collect();
+    Element::new(View {
+        content: vec![Element::new(Pile(rows))],
+        offset,
+    })
+}
+
+/// The tree laid out in a 100 x 50 window and painted by `painter` with the window `active` or not.
+fn paint_laid_out(
+    painter: &mut Painter,
+    tree: &Tree<M>,
+    root: NodeId,
+    env: &Environment,
+    active: bool,
+) -> Painting {
+    let result = cupertino_ui_layout::layout(
+        &crate::layout_view::TreeView { tree, env },
+        root,
+        Constraints::tight(Size::new(100.0, 50.0)).unwrap(),
+        &cupertino_ui_layout::LayoutOptions {
+            direction: env.direction,
+            node_limit: 1000,
+        },
+    )
+    .unwrap();
+    let geometry = crate::layout_view::placements(tree, root, &result, env, &[]);
+    painter.paint(
+        tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env,
+            focus: None,
+            focus_visible: false,
+            window_active: active,
+            background: WindowBackground::Theme,
+            backdrop: false,
+            materials: false,
+            now: Timestamp(0),
+            raised: &[],
+            obscuring: &[],
+            layer: false,
+            pinned: &[None, None],
+        },
+    )
+}
+
+/// The list with every revision taken out, which two painters count apart.
+fn unrevised(list: &DisplayList) -> Vec<PaintNode> {
+    list.nodes
+        .iter()
+        .map(|n| PaintNode {
+            revision: PaintRevision(0),
+            ..n.clone()
+        })
+        .collect()
+}
+
+#[test]
+fn a_kept_subtree_that_did_not_change_is_laid_in_as_it_was_unwalked_and_the_list_is_the_one_painted_whole(
+) {
+    let paints = Rc::default();
+    let env = env();
+    let mut tones = [0.5_f32; 20];
+    let mut tree = Tree::<M>::new(100);
+    let root = tree
+        .reconcile(None, kept_rows(&paints, &tones, 0.0))
+        .unwrap();
+    let mut painter = Painter::default();
+    let first = paint_laid_out(&mut painter, &tree, root, &env, true);
+    // the view, its pile and twenty rows of two nodes each
+    let nodes = 2 + 20 * 2;
+    assert_eq!(
+        painter.stats,
+        PaintStats {
+            walked: nodes,
+            kept: 0
+        }
+    );
+    assert_eq!(paints.get(), 20);
+    let revisions = |list: &DisplayList| -> Vec<PaintRevision> {
+        list.nodes.iter().map(|n| n.revision).collect()
+    };
+
+    // scrolled by whole points and by part of one, rows across the viewport's edges among them: the rows are laid in
+    // with their revisions, nothing of them is painted or walked, and the list is the list a new painter makes
+    for offset in [7.0, 13.5, 40.0] {
+        tree.reconcile(Some(root), kept_rows(&paints, &tones, offset))
+            .unwrap();
+        let before = paints.get();
+        let painting = paint_laid_out(&mut painter, &tree, root, &env, true);
+        assert_eq!(
+            painter.stats,
+            PaintStats {
+                walked: 2,
+                kept: nodes - 2
+            },
+            "at {offset}"
+        );
+        assert_eq!(paints.get(), before, "no row painted at {offset}");
+        assert_eq!(revisions(&painting.list)[2..], revisions(&first.list)[2..]);
+        let whole = paint_laid_out(&mut Painter::default(), &tree, root, &env, true);
+        assert_eq!(
+            unrevised(&painting.list),
+            unrevised(&whole.list),
+            "at {offset}"
+        );
+        assert_eq!(painting.own, whole.own);
+        assert_eq!(painting.blank, whole.blank);
+    }
+
+    // a row made anew is walked and painted, the others are laid in
+    tones[3] = 0.25;
+    tree.reconcile(Some(root), kept_rows(&paints, &tones, 40.0))
+        .unwrap();
+    let before = paints.get();
+    let painting = paint_laid_out(&mut painter, &tree, root, &env, true);
+    assert_eq!(
+        painter.stats,
+        PaintStats {
+            walked: 4,
+            kept: nodes - 4
+        }
+    );
+    assert_eq!(paints.get(), before + 1, "the new row alone painted");
+    let whole = paint_laid_out(&mut Painter::default(), &tree, root, &env, true);
+    assert_eq!(unrevised(&painting.list), unrevised(&whole.list));
+
+    // a change every node paints with walks every node
+    let before = paints.get();
+    paint_laid_out(&mut painter, &tree, root, &env, false);
+    assert_eq!(
+        painter.stats,
+        PaintStats {
+            walked: nodes,
+            kept: 0
+        }
+    );
+    assert_eq!(paints.get(), before + 20);
 }

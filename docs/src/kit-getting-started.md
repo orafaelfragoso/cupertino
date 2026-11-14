@@ -39,7 +39,8 @@ checkout and was run on the commit this page was written against.
   ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
   A long list or grid keeps scrolling cheap by
   building only the rows near its viewport, each as `Element::kept(key, mark, build)`: a row whose mark is the same
-  as last time keeps its nodes and their layout and is not built again.
+  as last time keeps its nodes and their layout and is not built again, and while nothing in it changed its paint is
+  laid into the frame as it was, without walking its nodes.
 - No Cupertino compositor for transitions. A window with a shell role may hand its open and close to the compositor
   (`Command::Window(key, WindowRequest::Present(changes))`, when `Capabilities::present_animation` says it can), which
   then fades, moves or scales all the window draws on its clock without the application drawing a frame; the request

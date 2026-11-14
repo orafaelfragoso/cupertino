@@ -484,6 +484,53 @@ mod tests {
 
     use super::*;
 
+    /// The threads of this process the bus connections' pool for blocking calls runs.
+    fn pool_threads() -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(|t| std::fs::read_to_string(t.ok()?.path().join("comm")).ok())
+            .filter(|name| name.starts_with("blocking-"))
+            .count()
+    }
+
+    /// Set in the copy of the test program that runs the pool test alone.
+    const POOL_ALONE: &str = "CUPERTINO_POOL_TEST_ALONE";
+
+    /// A bus connection runs its connect and its socket's shutdown on a pool of threads. Once a call ends, the pool's
+    /// thread ends too: a thread kept idle would wake twice a second in every process with a bus connection, on a
+    /// desktop where nothing happens. The pool is one per process, so the test runs again in a process of its own,
+    /// where every pool thread is one its call made, whatever else the test program runs beside it.
+    #[test]
+    fn the_blocking_pool_ends_its_threads_once_idle() {
+        if std::env::var_os(POOL_ALONE).is_none() {
+            let name = concat!(module_path!(), "::the_blocking_pool_ends_its_threads_once_idle");
+            let name = name.split_once("::").map_or(name, |(_, path)| path);
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--test-threads=1", "--nocapture"])
+                .env(POOL_ALONE, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        assert_eq!(pool_threads(), 0, "no pool thread before the call");
+        async_io::block_on(blocking::unblock(|| ()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pool_threads() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} pool threads are still waiting for work",
+                pool_threads()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     fn own_pidfd() -> OwnedFd {
         // Safety: pidfd_open returns a new descriptor for our own pid, which nothing else owns.
         unsafe {

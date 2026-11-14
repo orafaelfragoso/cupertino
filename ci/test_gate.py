@@ -219,5 +219,35 @@ class ProtocolXmlTest(unittest.TestCase):
         self.assertEqual(self.problems(files), [])
 
 
+class LockfileTest(unittest.TestCase):
+    def problems(self, lock: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Cargo.lock").write_text(lock)
+            return gate.lockfile_problems(root.resolve())
+
+    def entry(self, name: str, version: str) -> str:
+        return f'[[package]]\nname = "{name}"\nversion = "{version}"\nsource = "registry"\n\n'
+
+    def test_the_pinned_version_passes(self):
+        self.assertEqual(self.problems(self.entry("blocking", "1.6.2") + self.entry("other", "1.7.0")), [])
+
+    def test_another_version_of_a_pinned_crate_fails(self):
+        problems = self.problems(self.entry("other", "1.6.2") + self.entry("blocking", "1.7.0"))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("blocking 1.7.0", problems[0])
+        self.assertTrue(problems[0].startswith("Cargo.lock:8:"), problems[0])
+
+    def test_a_second_copy_beside_the_pinned_one_fails(self):
+        self.assertEqual(len(self.problems(self.entry("blocking", "1.6.2") + self.entry("blocking", "1.7.1"))), 1)
+
+    def test_the_checkout_lockfile_passes(self):
+        self.assertEqual(gate.lockfile_problems(Path(__file__).resolve().parent.parent), [])
+
+    def test_a_tree_without_a_lockfile_has_no_lockfile_problems(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(gate.lockfile_problems(Path(tmp).resolve()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

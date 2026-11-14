@@ -1645,7 +1645,9 @@ dependencies = [
 name = "cupertino-peer"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "async-lock",
+ "blocking",
  "cupertino-test-bus",
  "libc",
  "ordered-stream",
@@ -1850,7 +1852,6 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-io",
- "blocking",
  "bytemuck",
  "clap",
  "cupertino-animation",

@@ -330,6 +330,32 @@ def contracts_problems(root: Path) -> list[str]:
     return [f"contracts: {line}" for line in lines]
 
 
+# Crates whose lockfile version is held exactly: name, the one version allowed, and why.
+PINNED_LOCK_VERSIONS = {
+    # 1.7.0 keeps an idle pool thread for good, waking it twice a second in every process with a bus connection.
+    "blocking": "1.6.2",
+}
+
+
+def lockfile_problems(root: Path) -> list[str]:
+    """`Cargo.lock` entries of a pinned crate at any version other than the pinned one."""
+    lock = root / "Cargo.lock"
+    if not lock.is_file():
+        return []
+    problems: list[str] = []
+    name = None
+    for number, line in enumerate(lock.read_text(encoding="utf-8").splitlines(), 1):
+        if line == "[[package]]":
+            name = None
+        elif line.startswith("name = "):
+            name = line.removeprefix("name = ").strip('"')
+        elif line.startswith("version = ") and name in PINNED_LOCK_VERSIONS:
+            version = line.removeprefix("version = ").strip('"')
+            if version != PINNED_LOCK_VERSIONS[name]:
+                problems.append(f"Cargo.lock:{number}: {name} {version} is locked; only {PINNED_LOCK_VERSIONS[name]} is allowed")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -339,6 +365,7 @@ def main() -> int:
         parser.error("root must be a directory")
     hits, problems = gate(root)
     problems += protocol_xml_problems(root)
+    problems += lockfile_problems(root)
     problems += metadata_problems(root)
     problems += contracts_problems(root)
     for problem in problems:

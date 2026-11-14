@@ -576,7 +576,8 @@ Removed:
 
 - The pool thread that bus connections run their blocking calls on stayed for good after its first call and woke twice
   a second, in every process with a bus connection: its 1.7.0 release never ends an idle thread. Held at 1.6.2, which
-  ends it after half a second without work (`dbus::tests::the_blocking_pool_ends_its_threads_once_idle`).
+  ends it after half a second without work, by a normal dependency of `cupertino-peer`
+  (`tests::the_blocking_pool_ends_its_threads_once_idle` there; the gate fails on any other locked version).
 - Hung-application pings: the server pinged every client with a mapped window once a second, and each woke to answer.
   Pings now go out only after input since the last one (the first input after a rest pings at once), so a desktop
   nobody touches pings no one (`hung::tests`, `hung_apps::a_desktop_nobody_uses_pings_no_one_and_the_first_input_pings_at_once`).

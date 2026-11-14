@@ -15,7 +15,13 @@ rustix = { version = "1", features = ["event", "process"] }
 tracing = "0.1"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 ordered-stream = "0.2"
+# The pool the bus connections run their blocking calls on. 1.7.0 keeps an idle thread for good, waking it twice a
+# second in every process with a bus connection; 1.6.2 ends it after half a second without work. A normal dependency
+# of the bus crate, so the exact version holds the shipped programs and the whole lockfile there;
+# `tests::the_blocking_pool_ends_its_threads_once_idle` checks it, and the gate fails on any other locked version.
+blocking = "=1.6.2"
 
 [dev-dependencies]
+async-io = "2"
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"

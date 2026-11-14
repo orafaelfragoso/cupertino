@@ -11,6 +11,7 @@ layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }

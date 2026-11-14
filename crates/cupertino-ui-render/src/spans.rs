@@ -6,10 +6,10 @@
 //! through the scratch image, with those pixels cut out of the fills so the rasterizer skips them. Both give the
 //! same bytes.
 
-use crate::cpu::skia_paint;
 use crate::geometry::{self, Bounds};
+use crate::raster;
 use crate::{Paint, PaintNode, PaintOp, Shape};
-use tiny_skia::{Mask, Pixmap, PixmapMut, Point};
+use tiny_skia::{PixmapMut, Point};
 
 /// The farthest edge, in target pixels, the span path trusts its arithmetic for; a node reaching past it keeps its
 /// scratch image.
@@ -49,19 +49,8 @@ pub(crate) fn solid(
     if !axis_aligned(&ts) {
         return None;
     }
-    let masked = chain.iter().any(|owner| owner.clip.is_some());
-    let mut pixel = Pixmap::new(1, 1)?;
-    let mask = if masked {
-        let mut m = Mask::new(1, 1)?;
-        m.data_mut().fill(255);
-        Some(m)
-    } else {
-        None
-    };
-    // a fill of the whole pixel, painted as the scratch image paints its fully covered pixels
-    let cover = geometry::path(&Shape::Rect(cupertino_geometry::Rect::new(
-        -1.0, -1.0, 3.0, 3.0,
-    )))?;
+    // the scratch image's pixel where the fills cover it fully, laid as the fills lay it
+    let mut pixel = [0u8; 4];
     let [a, b, c, d, _, _] = node.transform.0;
     let stretch = a.abs().max(b.abs()).max(c.abs()).max(d.abs());
     let mut core = vec![*area];
@@ -73,9 +62,12 @@ pub(crate) fn solid(
         let outer = match op {
             PaintOp::Fill {
                 shape: shape @ (Shape::Rect(r) | Shape::RoundedRect { rect: r, .. }),
-                paint: paint @ Paint::Solid(_),
+                paint: Paint::Solid(color),
             } => {
-                let (Some(_), Some(paint)) = (geometry::path(shape), skia_paint(paint)) else {
+                let (Some(_), Some(color)) = (
+                    raster::Outline::new(shape, ts, None),
+                    raster::premultiplied(*color),
+                ) else {
                     // draws nothing
                     continue;
                 };
@@ -95,13 +87,7 @@ pub(crate) fn solid(
                 if clipped == 0 && pixels(&within) >= pixels(&beside) {
                     core = within;
                     covering[i] = true;
-                    pixel.fill_path(
-                        &cover,
-                        &paint,
-                        tiny_skia::FillRule::Winding,
-                        tiny_skia::Transform::identity(),
-                        mask.as_ref(),
-                    );
+                    pixel = raster::laid(color, pixel);
                 } else {
                     core = beside;
                 }
@@ -149,11 +135,10 @@ pub(crate) fn solid(
     if core.is_empty() || !covering.contains(&true) {
         return None;
     }
-    let px = pixel.data();
     Some(Solid {
         core,
         reach: reach?.intersect(area),
-        color: [px[0], px[1], px[2], px[3]],
+        color: pixel,
         covering,
         glyphs: glyphs.to_vec(),
     })
@@ -536,6 +521,7 @@ fn subtract_each(rects: &[Bounds], cut: &Bounds) -> Vec<Bounds> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiny_skia::Pixmap;
 
     fn b(x0: i32, y0: i32, x1: i32, y1: i32) -> Bounds {
         Bounds { x0, y0, x1, y1 }

@@ -8,6 +8,7 @@ mod effects;
 mod geometry;
 mod glyph_cache;
 mod image_cache;
+mod raster;
 mod spans;
 mod stats;
 mod validate;

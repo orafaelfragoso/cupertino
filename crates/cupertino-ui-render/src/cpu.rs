@@ -2,6 +2,7 @@ use crate::effects::{self, div255};
 use crate::geometry::{self, Bounds};
 use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
+use crate::raster;
 use crate::spans;
 use crate::stats::RenderStats;
 use crate::validate;
@@ -802,23 +803,26 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let mut mask: Option<Mask> = None;
         for owner in chain {
             let Some(clip) = &owner.clip else { continue };
-            let ts = geometry::to_target(&owner.transform, self.scale, (area.x0, area.y0));
-            let (path, ts) = holed(geometry::path(clip), ts, holes, (area.x0, area.y0));
-            let rule = geometry::fill_rule(clip);
-            match (mask.as_mut(), path) {
-                (None, path) => {
+            let m = match mask {
+                Some(ref mut m) => m,
+                None => {
                     self.stats
                         .masks
                         .add(u64::from(area.width()) * u64::from(area.height()));
-                    let mut m =
-                        Mask::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
-                    if let Some(path) = path {
-                        m.fill_path(&path, rule, true, ts);
-                    }
-                    mask = Some(m);
+                    mask.insert(full_mask(area.width(), area.height())?)
                 }
-                (Some(m), Some(path)) => m.intersect_path(&path, rule, true, ts),
-                (Some(m), None) => m.clear(),
+            };
+            if let Shape::Path { .. } = clip {
+                // the rasterizer skips the holes, whose pixels are not used
+                let ts = geometry::to_target(&owner.transform, self.scale, (area.x0, area.y0));
+                let (path, ts) = holed(geometry::path(clip), ts, holes, (area.x0, area.y0));
+                match path {
+                    Some(path) => m.intersect_path(&path, geometry::fill_rule(clip), true, ts),
+                    None => m.clear(),
+                }
+            } else {
+                let window = geometry::to_target(&owner.transform, self.scale, (0, 0));
+                clip_by(m, clip, window, (area.x0, area.y0));
             }
         }
         Ok(mask)
@@ -923,6 +927,11 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         geometry::to_target(&node.transform, self.scale, t.origin)
     }
 
+    /// Node coordinates to window pixels.
+    fn window_ts(&self, node: &PaintNode) -> tiny_skia::Transform {
+        geometry::to_target(&node.transform, self.scale, (0, 0))
+    }
+
     fn push_clip(
         &mut self,
         t: &mut Target<'_, '_>,
@@ -935,12 +944,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             Some(m) => m.clone(),
             None => full_mask(w, h)?,
         };
-        match geometry::path(shape) {
-            Some(path) => {
-                mask.intersect_path(&path, geometry::fill_rule(shape), true, self.ts(t, node))
-            }
-            None => mask.clear(),
-        }
+        let window = geometry::to_target(&node.transform, self.scale, (0, 0));
+        clip_by(&mut mask, shape, window, t.origin);
         t.clips.push(mask);
         Ok(())
     }
@@ -954,8 +959,14 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         paint: &Paint,
         holed: bool,
     ) {
-        let holes: &[Bounds] = if holed { &t.holes } else { &[] };
-        let (path, ts) = self::holed(geometry::path(shape), self.ts(t, node), holes, t.origin);
+        let holes: Vec<Bounds> = if holed { t.holes.clone() } else { Vec::new() };
+        if !matches!(shape, Shape::Path { .. }) {
+            if let Some(outline) = raster::Outline::new(shape, self.window_ts(node), None) {
+                self.lay(t, node, &outline, paint, &holes);
+            }
+            return;
+        }
+        let (path, ts) = self::holed(geometry::path(shape), self.ts(t, node), &holes, t.origin);
         let (Some(path), Some(paint)) = (path, skia_paint(paint)) else {
             return;
         };
@@ -976,6 +987,12 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         width: f64,
         paint: &Paint,
     ) {
+        if !matches!(shape, Shape::Path { .. }) {
+            if let Some(outline) = raster::Outline::new(shape, self.window_ts(node), Some(width)) {
+                self.lay(t, node, &outline, paint, &[]);
+            }
+            return;
+        }
         let (Some(path), Some(paint)) = (geometry::path(shape), skia_paint(paint)) else {
             return;
         };
@@ -986,6 +1003,38 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         let ts = self.ts(t, node);
         t.pixmap
             .stroke_path(&path, &paint, &stroke, ts, t.clips.last());
+    }
+
+    /// Lays `paint` through the coverage of `outline` over the target, where its result is needed.
+    fn lay(
+        &self,
+        t: &mut Target<'_, '_>,
+        node: &PaintNode,
+        outline: &raster::Outline,
+        paint: &Paint,
+        holes: &[Bounds],
+    ) {
+        let area = t.limit.intersect(&t.rect).intersect(&outline.bounds);
+        if area.is_empty() {
+            return;
+        }
+        let mask = t.clips.last();
+        match paint {
+            Paint::Solid(c) => {
+                let Some(color) = raster::premultiplied(*c) else {
+                    return;
+                };
+                let shade = raster::Shade::Solid(color);
+                raster::fill(t.pixmap, t.origin, &area, outline, &shade, mask, holes);
+            }
+            _ => {
+                let Some(data) = shade_pixels(paint, &self.window_ts(node), &area) else {
+                    return;
+                };
+                let shade = raster::Shade::Pixels { data: &data, area };
+                raster::fill(t.pixmap, t.origin, &area, outline, &shade, mask, holes);
+            }
+        }
     }
 
     fn image(
@@ -1226,6 +1275,47 @@ fn skip_layer(node: &PaintNode, pos: &mut usize) {
             _ => {}
         }
     }
+}
+
+/// Multiplies `mask`, whose top-left pixel is window pixel `origin`, by the coverage of the clip `shape` placed by
+/// `window` (node coordinates to window pixels).
+fn clip_by(mask: &mut Mask, shape: &Shape, window: tiny_skia::Transform, origin: (i32, i32)) {
+    if let Shape::Path { .. } = shape {
+        let ts = window.post_translate(-origin.0 as f32, -origin.1 as f32);
+        match geometry::path(shape) {
+            Some(path) => mask.intersect_path(&path, geometry::fill_rule(shape), true, ts),
+            None => mask.clear(),
+        }
+        return;
+    }
+    match raster::Outline::new(shape, window, None) {
+        Some(outline) => outline.clip(mask, origin),
+        None => mask.clear(),
+    }
+}
+
+/// The premultiplied colour of the gradient `paint` (placed by `window`, node coordinates to window pixels) at every
+/// pixel of `area` (window pixels), row after row.
+fn shade_pixels(paint: &Paint, window: &tiny_skia::Transform, area: &Bounds) -> Option<Vec<u32>> {
+    let mut paint = skia_paint(paint)?;
+    let mut pixmap = Pixmap::new(area.width(), area.height())?;
+    let ts = window.post_translate(-area.x0 as f32, -area.y0 as f32);
+    paint.shader.transform(ts);
+    pixmap.fill_rect(
+        tiny_skia::Rect::from_xywh(0.0, 0.0, area.width() as f32, area.height() as f32)?,
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some(
+        pixmap
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u32::from_le_bytes(*p))
+            .collect(),
+    )
 }
 
 fn full_mask(w: u32, h: u32) -> Result<Mask, RenderError> {

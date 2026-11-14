@@ -116,6 +116,10 @@ pub struct Cli {
     /// positive down); repeatable. A distance of 0 ends the gesture.
     #[arg(long = "scroll", value_name = "SECONDS:X,Y:DY", value_parser = parse_timed_scroll)]
     pub scrolls: Vec<(f64, (f64, f64), f64)>,
+    /// Headless: withhold explicit sync (`linux-drm-syncobj-v1`), offered otherwise when the device has a render node,
+    /// as a compositor without the protocol does.
+    #[arg(long = "no-explicit-sync", requires = "headless")]
+    pub no_explicit_sync: bool,
     /// Headless: the refresh rate of the display, in Hz (default 60).
     #[arg(long, value_name = "HZ", requires = "headless")]
     pub refresh: Option<f64>,
@@ -953,6 +957,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 Some(_) => cli.scale,
                 None => Some(cli.scale.unwrap_or(1.0)),
             };
+            state.withhold_explicit_sync = cli.no_explicit_sync;
             crate::backend::headless::init_displays(&mut state, &[], scale)?;
             let refresh_mhz = cli
                 .refresh

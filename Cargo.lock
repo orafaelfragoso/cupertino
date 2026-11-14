@@ -1358,6 +1358,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-gpu-slice"
+version = "0.1.0"
+dependencies = [
+ "drm",
+ "libc",
+ "libloading",
+ "wayland-client",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "cupertino-icons"
 version = "0.1.0"
 dependencies = [

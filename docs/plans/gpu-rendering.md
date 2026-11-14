@@ -160,24 +160,27 @@ Gate:
 
 The risk is the handoff, so it is proven first with the smallest renderer possible.
 
-- [ ] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
-- [ ] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
+- [x] The headless backend offers `linux-drm-syncobj-v1` when its device has a render node, with a flag to withhold it.
+- [x] A test client renders solid rectangles with GLES into GBM buffer objects on the feedback device, with the
       offered modifiers, never adding linear on a hardware driver.
-- [ ] It attaches them through `zwp_linux_dmabuf_v1` v4.
-- [ ] Acquire through native fence → syncobj timeline point; release waited through a syncobj eventfd.
-- [ ] The syncobj surface object is destroyed before a shared-memory attach and re-created on return to dmabuf.
-- [ ] Without the protocol: wait for the own fence before commit; reuse after release plus one frame.
-- [ ] The client counts missed refreshes from presentation-feedback sequence gaps.
-- [ ] Overdraw test: many layers of drawing ending in one flat colour; every capture must be uniform.
-- [ ] The compositor imports the client's buffers with the driver's default modifier (recorded).
-- [ ] Probe: the slice on llvmpipe in the goldens image, allocating by texture export; result recorded.
-- [ ] Runs in a headless session and in the live session on the target machine.
+- [x] It attaches them through `zwp_linux_dmabuf_v1` v4.
+- [x] Acquire through native fence → syncobj timeline point; release waited through a syncobj eventfd.
+- [x] The syncobj surface object is destroyed before a shared-memory attach and re-created on return to dmabuf.
+- [x] Without the protocol: wait for the own fence before commit; reuse after release plus one frame.
+- [x] The client counts missed refreshes from presentation-feedback sequence gaps.
+- [x] Overdraw test: many layers of drawing ending in one flat colour; every capture must be uniform.
+- [x] The compositor imports the client's buffers with the driver's default modifier (recorded).
+- [x] Probe: the slice on llvmpipe in the goldens image, allocating by texture export; result recorded.
+- [ ] Runs in a headless session and in the live session on the target machine. Headless: done
+      (`crates/cupertino-server/tests/gpu_slice.rs`). Live: BLOCKED (owner action), one command ("Measurements",
+      "Step 3").
 
 Gate:
 
 - [ ] One hour in the live session on the target machine beside a `wl_shm` control client of the same size: no more
-      missed refreshes than the control, and every overdraw capture uniform.
-- [ ] The slice's offscreen loop of 10 million frames meets the fence budget.
+      missed refreshes than the control, and every overdraw capture uniform. BLOCKED (owner action): the command is
+      under "Measurements", "Step 3".
+- [x] The slice's offscreen loop of 10 million frames meets the fence budget.
 
 ## Step 4: retained layers in the toolkit
 
@@ -684,6 +687,79 @@ stay armed without firing in a minute (one in the server, one in the menu bar): 
 headless sessions keep the server's settings in a folder of their own, as a machine does (`/etc/cupertino`): beside
 `/tmp` every file another process made there woke the settings watch.
 
+### Step 3: the vertical slice
+
+Taken at `7f54f6b8` on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.08), headless.
+
+**Where it is.** `cupertino-gpu-slice` (`crates/cupertino-gpu-slice`, a development binary, never packaged): a window
+drawing solid rectangles with GLES (scissored clears) into dmabufs. It reads the compositor's default dmabuf feedback,
+opens the main device's render node, makes a GLES 3 context on its GBM device (or, without one, on the surfaceless
+platform with texture export), and allocates ARGB8888 buffers with the modifiers both the feedback offers and the
+driver renders to (`model::usable_modifiers`: linear only when both list it). With `linux-drm-syncobj-v1` it keeps two
+buffers, each with a timeline: the frame's native fence is imported into a binary syncobj and transferred to the
+acquire point, the release point is waited for through an eventfd in its poll loop. Without the protocol it keeps
+three, waits for its own fence before each commit (on a driver without native fences, for the GPU on the CPU), and
+reuses a buffer only after its release and one further commit. `--shm-every K` draws every K-th frame from shared
+memory, destroying the syncobj surface object first and making it again on the next dmabuf frame. Presentation
+feedback counts missed refreshes from sequence gaps (or from the times over the refresh period when the compositor
+does not number its refreshes); the headless backend now numbers them (refreshes since its clock started). Every
+frame lays 24 overlapping rectangles in colours never shown at rest, then one flat colour over the window.
+
+The headless session offers explicit sync when its device has a render node and the kernel waits on timeline points
+through an eventfd; `--no-explicit-sync` withholds it.
+
+**Headless session tests** (`gpu_slice::`, the slow tier but the first two; on the NVIDIA GPU with
+`CUPERTINO_GPU_REQUIRED=1`, which turns every skip into a failure):
+
+| Test | What it shows |
+|---|---|
+| `a_headless_session_offers_explicit_sync_with_a_render_node_and_withholds_it_when_told` | offered with the render node, withheld with the flag |
+| `a_headless_presentation_numbers_its_refresh` | the sequence a headless presentation carries |
+| `the_slice_attaches_dmabufs_with_acquire_and_release_points_in_the_driver_s_layout` | 180 dmabuf frames, two buffers, no CPU wait, every buffer but the last two back through its release point; the compositor's buffer has the client's modifier, `0x0300000000e08014` (the driver's default) on the NVIDIA GPU, never linear |
+| `the_slice_destroys_its_syncobj_surface_before_a_shared_memory_frame_and_makes_it_again_after` | 6 shared-memory frames in 60, the object destroyed 6 times and made 6 times; the session never shows a shared-memory buffer on a surface that has the object |
+| `the_slice_without_explicit_sync_waits_for_its_own_fence_and_keeps_three_buffers` | 180 commits, 180 fence waits, three buffers, captures uniform |
+| `the_slice_counts_no_missed_refresh_when_the_session_keeps_up_and_every_overdraw_capture_is_flat` | 8 captures of the window, each one flat colour; missed refreshes counted |
+
+Missed refreshes headless: none in 59 frames when nothing holds the loop up; the captures (each a whole-output render
+and a PNG written by the session) hold it for a few refreshes each (15 in 107 frames with 8 captures).
+
+**The driver's default modifier.** The compositor imports the slice's buffers in `0x0300000000e08014`, the layout the
+driver picks among those both sides list (linear is import-only on this driver, so never offered to the allocator).
+
+**The fence budget** (`cupertino-gpu-slice --offscreen 10000000`, two GBM buffers, one full-buffer draw a frame,
+resident memory sampled 200 times and fitted after the first tenth):
+
+| Per frame | Resident growth | Run time |
+|---|---|---|
+| the window's fence path: native fence, import into a syncobj, transfer to a timeline point, eventfd wait | 15.95 bytes | 443 s |
+| no fence (`glFinish`) | 15.99 bytes | 262 s |
+
+The fence path adds nothing (-0.04 bytes a frame; the budget is under 1). Both grow about 16 bytes a frame, as the
+step 0 probe found for drawing without presenting.
+
+**llvmpipe and texture export.** On the host's llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`, the Mesa EGL vendor forced, the
+headless server on the surfaceless platform): the compositor offers dmabuf version 3 without feedback, with linear
+and the implicit layout; the slice allocates by texture export (linear), and 120 of 120 frames were dmabufs the
+compositor imported, each waited for by its fence. In the goldens image (`cupertino-goldens:7153b7a8…`, no device
+passed in): llvmpipe has neither native fences nor texture export, so the slice falls back to shared memory for its
+surface (120 shared-memory frames). With `/dev/udmabuf` passed into the same image (`docker run --device
+/dev/udmabuf`), texture export works: 120 of 120 dmabuf frames, linear, imported. So the dmabuf presenter can run
+in CI on llvmpipe only where the runner gives the container `/dev/udmabuf`.
+
+**The live session and the one-hour gate.** BLOCKED (owner action): it needs the desktop session. From a terminal in
+the session, in the checkout:
+
+```sh
+cargo build --release -p cupertino-gpu-slice
+target/release/cupertino-gpu-slice --minutes 60 --control-shm --size 1280x800 --report ~/gpu-slice-hour.txt
+```
+
+Two windows open side by side (place them so neither covers the other): the slice and a shared-memory control
+window of the same size, drawing a frame every refresh for an hour. At the end both reports are printed (the control's
+lines start `control_`) with `comparison gpu_missed=N control_missed=M pass|fail`; pass is the gate's first half.
+For the second, take a few screenshots of the slice window while it runs: inside its rounded corners each must be one
+flat colour (blue or orange). The report also names the modifier and whether explicit sync was used.
+
 ## Decisions taken
 
 - Shared maths and one look freeze come first; goldens are not re-recorded per step afterwards.
@@ -705,4 +781,5 @@ headless sessions keep the server's settings in a folder of their own, as a mach
   plane takes 10-bit formats; the look needs the owner's run of `tools/gpu-probes/depth.sh` ("Measurements").
 - Are the driver's flip timestamps real? (step 0) The trace that answers it is in place; it needs the owner's
   traced session ("Measurements").
-- Does the dmabuf slice run on llvmpipe inside the goldens container? (step 3)
+- Does the dmabuf slice run on llvmpipe inside the goldens container? (step 3) Answered: only with `/dev/udmabuf`
+  passed in; without it llvmpipe has no texture export and the slice falls back to shared memory ("Measurements").

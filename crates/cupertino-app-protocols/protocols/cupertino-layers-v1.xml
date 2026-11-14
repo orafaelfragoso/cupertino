@@ -25,7 +25,7 @@
 
     <enum name="error">
       <entry name="invalid_surface" value="0" summary="a surface belongs to another client or is gone"/>
-      <entry name="role" value="1" summary="the surface already has a role, is the parent, or is a layer the parent lies in"/>
+      <entry name="role" value="1" summary="the surface already has a role or is the parent, or the parent is a layer"/>
       <entry name="too_many_layers" value="2" summary="the parent or the client holds as many layers as the server allows"/>
     </enum>
 
@@ -42,15 +42,16 @@
         initial state: at the parent's origin, its bounds the size of its content, opacity 1,
         scale 1, no corner radius, no glass, the normal blend role and the flat elevation.
         Layers of a parent are drawn in creation order, later ones above, and raised layers above
-        all flat ones. The parent is a window's or a layer shell surface's main surface; layers of
-        a layer are drawn as the parent's own (they are placed from the parent's origin).
+        all flat ones. The parent is a window's or a layer shell surface's main surface, and is not
+        a layer itself. A surface that is a layer of the parent may become one again after its
+        layer object was destroyed.
 
         The layer's content is the surface's own buffer and applies on the surface's own commit,
         never waiting for the parent: see the late-content rule of cupertino_layer_v1. Its
         geometry and look apply with the parent's commit.
 
         Posts invalid_surface when either surface belongs to another client, role when the surface
-        already has a role or is the parent, and too_many_layers when the parent already holds 64
+        already has a role or is the parent or the parent is a layer, and too_many_layers when the parent already holds 64
         layers or the client 256 (layers that are not destroyed count).
       </description>
       <arg name="id" type="new_id" interface="cupertino_layer_v1"/>
@@ -124,7 +125,7 @@
 
     <enum name="elevation">
       <entry name="flat" value="0" summary="in the parent's plane"/>
-      <entry name="raised" value="1" summary="lifted above every flat layer of the parent, with a soft shadow below it; its glass reads the flat layers and the parent beneath it, so a lifted thumb or a lens shows what it lies over"/>
+      <entry name="raised" value="1" summary="lifted above every flat layer of the parent, its glass casting a soft shadow; its glass reads the flat layers and the parent beneath it, so a lifted thumb or a lens shows what it lies over"/>
     </enum>
 
     <enum name="highlight">

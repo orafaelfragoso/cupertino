@@ -47,10 +47,19 @@ pub struct Planes {
 }
 
 /// The trace of one server run.
+///
+/// Each output reports its own input-to-flip latency: an input is waiting on every output until a frame of that output
+/// is queued, which takes it; the first flip of that output that shows that frame or a later one reports it. A frame
+/// whose flip never comes (refused, dropped with its CRTC's state, or parked behind a failed one) leaves its input to the
+/// next flip of the output that does.
 #[derive(Debug, Default)]
 pub struct DrmTrace {
-    /// The earliest input no queued frame has carried yet.
-    input: Option<Instant>,
+    /// By output name, the earliest input no queued frame of the output has taken yet.
+    waiting: Vec<(String, Option<Instant>)>,
+    /// The inputs queued frames took, by output and the frame's [`DrmTrace::queued`] number, not reported yet.
+    in_flight: Vec<(String, u64, Instant)>,
+    /// The number of the last frame queued.
+    frames: u64,
     /// The last branch and planes logged, by output name, so only changes are logged.
     branches: Vec<(String, Branch)>,
     planes: Vec<(String, Planes)>,
@@ -63,14 +72,51 @@ impl DrmTrace {
         DrmTrace::default()
     }
 
-    /// An input arrived at `at`.
+    /// An input arrived at `at`: it waits on every output for the output's next frame.
     pub fn input(&mut self, at: Instant) {
-        self.input.get_or_insert(at);
+        for (_, waiting) in &mut self.waiting {
+            waiting.get_or_insert(at);
+        }
     }
 
-    /// A frame is being queued: it carries the earliest input not shown yet, if any.
-    pub fn queued(&mut self) -> Option<Instant> {
-        self.input.take()
+    /// The earliest input waiting on `output`'s next frame.
+    pub fn waiting(&self, output: &str) -> Option<Instant> {
+        self.waiting
+            .iter()
+            .find(|(name, _)| name == output)
+            .and_then(|(_, at)| *at)
+    }
+
+    /// A frame of `output` is being queued: it takes the input waiting on the output, if any. Its number, for
+    /// [`DrmTrace::flipped`].
+    pub fn queued(&mut self, output: &str) -> u64 {
+        self.frames += 1;
+        let taken = match self.waiting.iter_mut().find(|(name, _)| name == output) {
+            Some((_, waiting)) => waiting.take(),
+            None => {
+                // an output starts waiting for inputs at its first frame
+                self.waiting.push((output.to_owned(), None));
+                None
+            }
+        };
+        if let Some(at) = taken {
+            self.in_flight.push((output.to_owned(), self.frames, at));
+        }
+        self.frames
+    }
+
+    /// The earliest input a flip of `output` showing the frame numbered `frame` shows first: the input of that frame or
+    /// of any earlier frame of the output whose flip never came.
+    fn shown_input(&mut self, output: &str, frame: u64) -> Option<Instant> {
+        let mut earliest: Option<Instant> = None;
+        self.in_flight.retain(|(name, number, at)| {
+            let shown = name == output && *number <= frame;
+            if shown {
+                earliest = Some(earliest.map_or(*at, |e| e.min(*at)));
+            }
+            !shown
+        });
+        earliest
     }
 
     /// The planes of a frame of `output`: the line to log when they differ from the last frame's.
@@ -83,17 +129,18 @@ impl DrmTrace {
         })
     }
 
-    /// A flip of `output` was shown, its time from `branch`, `late_periods` refreshes after it was due; it carried the
-    /// input of `input`, shown at `flip` (on the same clock). The lines to log: the branch when it changed, a missed
-    /// flip, the input-to-flip latency.
+    /// A flip of `output` showing the frame numbered `frame` (from [`DrmTrace::queued`]) was shown at `flip`, its time
+    /// from `branch`, `late_periods` refreshes after it was due. The lines to log: the branch when it changed, a missed
+    /// flip, the latency from the earliest input it is the first to show.
     pub fn flipped(
         &mut self,
         output: &str,
         branch: Branch,
         late_periods: u32,
-        input: Option<Instant>,
+        frame: u64,
         flip: Instant,
     ) -> Vec<String> {
+        let input = self.shown_input(output, frame);
         self.flips += 1;
         let mut lines = Vec::new();
         if changed(&mut self.branches, output, branch) {
@@ -166,16 +213,16 @@ mod tests {
     fn the_branch_and_planes_are_logged_when_they_change_per_output() {
         let mut t = DrmTrace::new();
         let now = Instant::now();
-        let first = t.flipped("DP-1", Branch::FlipTimestamp, 0, None, now);
+        let first = t.flipped("DP-1", Branch::FlipTimestamp, 0, 0, now);
         assert_eq!(
             first,
             ["presentation-time output=DP-1 branch=flip-timestamp"]
         );
         assert!(t
-            .flipped("DP-1", Branch::FlipTimestamp, 0, None, now)
+            .flipped("DP-1", Branch::FlipTimestamp, 0, 0, now)
             .is_empty());
-        assert_eq!(t.flipped("DP-2", Branch::OwnClock, 0, None, now).len(), 1);
-        assert_eq!(t.flipped("DP-1", Branch::OwnClock, 0, None, now).len(), 1);
+        assert_eq!(t.flipped("DP-2", Branch::OwnClock, 0, 0, now).len(), 1);
+        assert_eq!(t.flipped("DP-1", Branch::OwnClock, 0, 0, now).len(), 1);
         let planes = Planes {
             cursor_plane: true,
             ..Planes::default()
@@ -188,32 +235,80 @@ mod tests {
         assert!(t.planes("DP-1", Planes::default()).is_some());
     }
 
+    fn us(n: u64) -> Duration {
+        Duration::from_micros(n)
+    }
+
     #[test]
     fn an_input_ends_at_the_flip_of_the_first_frame_queued_after_it_and_late_flips_count_as_missed()
     {
         let mut t = DrmTrace::new();
         let t0 = Instant::now();
-        assert_eq!(t.queued(), None);
+        t.queued("DP-1");
+        let before = t.flipped("DP-1", Branch::FlipTimestamp, 0, 1, t0);
+        assert_eq!(before.len(), 1, "the branch only: no input yet");
         t.input(t0);
-        t.input(t0 + Duration::from_millis(3));
-        let carried = t.queued();
-        assert_eq!(carried, Some(t0), "the earliest input");
-        assert_eq!(t.queued(), None, "a later frame carries none");
-        let lines = t.flipped(
-            "DP-1",
-            Branch::FlipTimestamp,
-            2,
-            carried,
-            t0 + Duration::from_micros(21_500),
-        );
+        t.input(t0 + us(3_000));
+        assert_eq!(t.waiting("DP-1"), Some(t0), "the earliest input");
+        let frame = t.queued("DP-1");
+        assert_eq!(t.waiting("DP-1"), None, "the frame took it");
+        let later = t.queued("DP-1");
+        let lines = t.flipped("DP-1", Branch::FlipTimestamp, 2, frame, t0 + us(21_500));
         assert_eq!(
-            lines[1..],
+            lines,
             [
-                "missed output=DP-1 late_periods=2 flips=1 missed_total=2".to_owned(),
+                "missed output=DP-1 late_periods=2 flips=2 missed_total=2".to_owned(),
                 "input-to-flip output=DP-1 latency_us=21500".to_owned()
             ]
         );
-        assert_eq!((t.flips, t.missed), (1, 2));
+        assert!(
+            t.flipped("DP-1", Branch::FlipTimestamp, 0, later, t0 + us(30_000))
+                .is_empty(),
+            "a later frame carries none"
+        );
+        assert_eq!((t.flips, t.missed), (3, 2));
+    }
+
+    #[test]
+    fn each_output_reports_the_input_at_its_own_first_flip_after_it() {
+        let mut t = DrmTrace::new();
+        let t0 = Instant::now();
+        for output in ["DP-1", "DP-2"] {
+            let frame = t.queued(output);
+            t.flipped(output, Branch::FlipTimestamp, 0, frame, t0);
+        }
+        t.input(t0);
+        // the first output queues first; the second, where the input shows, queues later and still reports it
+        let first = t.queued("DP-1");
+        let second = t.queued("DP-2");
+        assert_eq!(
+            t.flipped("DP-1", Branch::FlipTimestamp, 0, first, t0 + us(8_000)),
+            ["input-to-flip output=DP-1 latency_us=8000"]
+        );
+        assert_eq!(
+            t.flipped("DP-2", Branch::FlipTimestamp, 0, second, t0 + us(12_000)),
+            ["input-to-flip output=DP-2 latency_us=12000"]
+        );
+    }
+
+    #[test]
+    fn an_input_carried_by_a_dropped_flip_is_reported_at_the_next_flip_of_its_output() {
+        let mut t = DrmTrace::new();
+        let t0 = Instant::now();
+        let shown_before = t.queued("DP-1");
+        t.input(t0);
+        // this frame's flip never comes
+        let _dropped = t.queued("DP-1");
+        // a flip of a frame queued before the input does not show it
+        assert!(t
+            .flipped("DP-1", Branch::OwnClock, 0, shown_before, t0 + us(1_000))
+            .iter()
+            .all(|line| !line.starts_with("input-to-flip")));
+        let next = t.queued("DP-1");
+        assert_eq!(
+            t.flipped("DP-1", Branch::OwnClock, 0, next, t0 + us(40_000)),
+            ["input-to-flip output=DP-1 latency_us=40000"]
+        );
     }
 
     #[test]

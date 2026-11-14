@@ -476,6 +476,7 @@ impl Cupertino {
 
     /// A key event from an input device: the start of the filter chain.
     pub fn key_from_device(&mut self, code: Keycode, state: KeyState, time: u32) {
+        crate::frame_stats::note_input(self);
         if self.key_filters.unfiltered.contains(&evdev(code)) {
             if state == KeyState::Released {
                 self.key_filters.unfiltered.remove(&evdev(code));

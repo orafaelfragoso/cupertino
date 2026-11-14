@@ -83,8 +83,8 @@ pub struct Frame {
     /// The client buffers it was drawn from. Dropping the last handle of one signals its explicit-sync release point,
     /// which must wait until the GPU finished reading it: once the flip is done, the frame drawn from it is finished.
     _buffers: Vec<Buffer>,
-    /// The earliest input this frame is the first to show, when the DRM trace is on.
-    input: Option<std::time::Instant>,
+    /// Its number in the DRM trace, when the trace is on ([`crate::drm_trace::DrmTrace::queued`]).
+    trace: Option<u64>,
 }
 
 struct Surface {
@@ -1398,12 +1398,20 @@ fn render_surface(
     if drawn.rendered {
         let feedback = state.collect_feedback(idx);
         let id = state.outputs[idx].scheduler.next_presentation();
-        let input = state.drm_trace.as_mut().and_then(|t| t.queued());
+        let name = state
+            .drm_trace
+            .is_some()
+            .then(|| state.outputs[idx].output.name());
+        let trace = state
+            .drm_trace
+            .as_mut()
+            .zip(name)
+            .map(|(t, name)| t.queued(&name));
         let frame = Frame {
             id,
             feedback,
             _buffers: drawn.buffers,
-            input,
+            trace,
         };
         match surface.drm_output.queue_frame(frame) {
             Ok(()) => {
@@ -1650,9 +1658,9 @@ fn frame_finish(
         } else {
             crate::drm_trace::Branch::OwnClock
         };
-        let input = shown.as_ref().and_then(|f| f.input);
+        let frame = shown.as_ref().and_then(|f| f.trace).unwrap_or(0);
         let name = state.outputs[idx].output.name();
-        for line in trace.flipped(&name, branch, presented.late_periods, input, flip) {
+        for line in trace.flipped(&name, branch, presented.late_periods, frame, flip) {
             crate::drm_trace::log(&line);
         }
     }

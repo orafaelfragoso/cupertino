@@ -289,3 +289,28 @@ fn an_animation_follows_the_clock_not_the_frames_of_heads_at_120_and_60_hz() {
         drawn(&fast, 0, 1)
     );
 }
+
+/// The DRM trace times an input to the flip that first shows it, a key as well as the pointer: a key from a keyboard
+/// waits on each output for its next frame, and is not there for an output until it reached the server.
+#[test]
+fn a_key_from_a_keyboard_waits_on_each_output_for_its_next_frame_in_the_drm_trace() {
+    use smithay::backend::input::KeyState;
+    use smithay::input::keyboard::Keycode;
+    let mut d = Desktop::new(1.0);
+    let mut trace = cupertino_server::drm_trace::DrmTrace::new();
+    for output in ["DP-1", "DP-2"] {
+        trace.queued(output);
+    }
+    d.state.drm_trace = Some(trace);
+    let before = Instant::now();
+    // the A key, as the input device sends it
+    d.state
+        .key_from_device(Keycode::new(30 + 8), KeyState::Pressed, 0);
+    let trace = d.state.drm_trace.as_ref().unwrap();
+    for output in ["DP-1", "DP-2"] {
+        assert!(
+            trace.waiting(output).is_some_and(|at| at >= before),
+            "{output}"
+        );
+    }
+}

@@ -322,7 +322,8 @@ desktop session running beside the runs.
 - `CUPERTINO_DRM_TRACE=1` on the session server logs, under the `cupertino_server::drm_trace` target: the
   presentation-time branch when it changes (`flip timestamp` or `own clock`), every missed flip with how many refresh
   periods late, the plane assignment when it changes (direct scanout, cursor plane, overlays) and the input-to-flip
-  latency. Without the variable nothing is kept.
+  latency of each output (keys and pointer alike, an input whose flip was dropped reported at the output's next flip).
+  Without the variable nothing is kept.
 - `scripts/dev/measure` reports private dirty memory beside Pss and Rss.
 - The probes live in `tools/gpu-probes`, a crate with a workspace of its own: never built by the workspace, never in
   the packages. Build: `cargo build --release --offline --manifest-path tools/gpu-probes/Cargo.toml --target-dir

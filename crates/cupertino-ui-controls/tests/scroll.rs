@@ -541,10 +541,7 @@ fn a_finger_pulling_past_the_start_stretches_the_content_and_the_stretch_returns
     );
     // eight pulls of 30 past a viewport of 100 show as 100 × (1 − 1 / (1 + 0.07 × 240 / 100)) ≈ 14.4, drawn in whole
     // device pixels
-    assert!(
-        stretch == 14.0,
-        "drawn {stretch} past the edge"
-    );
+    assert!(stretch == 14.0, "drawn {stretch} past the edge");
     assert!(
         !h.snapshot().pending.animating,
         "a held stretch does not move on its own"

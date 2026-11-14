@@ -920,15 +920,41 @@ Gate:
               of the content's layer, and the content's body fades on its own curve while the query row does not, so
               the row and the body are layers of their own; the shape changes both ways with its corner held to half
               its height, which a fixed frame of the edge cannot follow: it needs the edge drawn by the compositor.
+              Split, in order:
+          - [ ] The query row and the body as layers of their own in place of the one content layer, at rest the
+                panel's pixels within 1 of 255 (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`
+                over the browser, the files scope and the field).
+          - [ ] The glass's place, size and corner through samples of the panel's own values on the shape spring
+                (`layers::open_values` over the fold's motion, the corner the panel's, held to half the height), the
+                body's opacity through samples of its own curve, the row's frame drawn again once at the header's
+                switch (one buffer of the row's layer, the only one the fold makes).
+          - [ ] The edge. OWNER DECISION (above): through the fold the outline goes from a scope's continuous corners
+                to the field's capsule, which only the compositor's edge can follow, and at a scope's corners it parts
+                from the panel's circular-arc edge by up to the line's opacity. Until the owner chooses, the fold and
+                unfold stay the panel's own drawing, as they are now; once a scope's edge follows its glass, the
+                compositor's edge (`layers::glass_edge`, within 4 of 255 of the panel's along the field and every
+                straight side) carries it, and the scope's edge layer goes.
+          - [ ] Their same-moment test, as the open's (`open_moments` over `Escape` from a scope and the scope's
+                shortcut from the field), and the real process's count against the server, as
+                `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` (one
+                buffer of the row's layer allowed, at the switch).
       - [ ] The search field's open with its mode buttons: the field's layer and each button's on sampled curves of
             the products above, in one glass group with the field, each button's symbol sharpening as its layer's
-            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Split: the glass
-            and the symbols can be carried now; the dark edge cannot. Through the bud the field's edge is left out
-            inside each button and each button's inside the field and its neighbours (`edge_cuts`), so the outline
-            changes shape every frame, and a button's ring grows from 0.4 of its size with a stroke that keeps its
-            width; a layer is cut only to its own shape (`masks`). It needs the compositor to draw the edge of a
-            glass group (the outline of the group's shapes, with the edge's width and opacity in the layers' look),
-            a change of the protocol and of the compositor's glass, before this item can be exact.
+            content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Through the bud
+            the field's edge is left out inside each button and each button's inside the field and its neighbours
+            (`edge_cuts`), so the outline changes shape every frame, and a button's ring grows from 0.4 of its size
+            with a stroke that keeps its width; a layer is cut only to its own shape (`masks`). The compositor now
+            draws a glass group's edge along its joined outline at the output's scale (version 5, above), within 4 of
+            255 of the panel's along the field and its buttons at rest, which is what this needed. Split, in order:
+          - [ ] The field's glass and each button's glass and face through samples of the panel's own values
+                (`layers::open_values` over `modes::button_rect`, `bud_size`, the field's width and corner, the
+                products of the split spring and the open spring), in one glass group with the field, its edge the
+                compositor's (`layers::glass_edge` in the looks) in place of the edge layer and `edge_cuts`.
+          - [ ] Each button's symbol: its face's content blur through samples from its starting blur to 0 on
+                `GLYPH_SHARPEN` after `GLYPH_DELAY`.
+          - [ ] The same-moment test over `Toggle` from hidden, as the open's (`open_moments`), the edge compared
+                along the joined outline as the scopes' is, and the real process's count against the server, as the
+                scope's open (`ToggleLauncher`).
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over

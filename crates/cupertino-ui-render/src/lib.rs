@@ -181,6 +181,13 @@ pub enum Layer {
     /// does not depend on the opacity, so a renderer that keeps the group's image lays it over at each opacity without
     /// painting the subtree again.
     Opacity,
+    /// The node's transform animates, and with it its subtree's (a popover growing out of its anchor), and so may its
+    /// group's opacity: what the subtree paints in its own coordinates does not change with either, so a renderer that
+    /// keeps the group's image may lay it over where the transform puts it and at the group's opacity. The CPU renderer
+    /// lays a kept image over only where it was painted, at another opacity: a moved image does not land its paths and
+    /// dithering on the pixels painting them there would, so at any change of the transform it paints the subtree
+    /// again.
+    Transform,
 }
 
 /// The scroll layer each node of `list` is kept in, by index into the list, as every renderer keeps them: a node marked

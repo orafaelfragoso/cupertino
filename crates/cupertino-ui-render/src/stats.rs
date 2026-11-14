@@ -21,6 +21,9 @@ pub struct RenderStats {
     /// Nodes whose own operations were painted, and those painted as a group layer.
     pub nodes_painted: u32,
     pub groups_painted: u32,
+    /// Groups laid over from the image kept of them ([`crate::Layer::Opacity`], [`crate::Layer::Transform`]), their
+    /// subtrees not painted.
+    pub groups_kept: u32,
     /// Nodes not painted, or painted without their own operations, because an opaque fill after them covers the
     /// damaged rectangle.
     pub hidden: u32,
@@ -48,6 +51,9 @@ pub struct RenderStats {
     pub layer_pixels: u64,
     /// Kept scroll layers laid over the frame.
     pub scroll_composite: Tally,
+    /// Of those, the parts laid over the colour the frame was to be set to there (its background) in one pass, that
+    /// colour not written first.
+    pub scroll_on_background: Tally,
     /// Retained across frames, after this one.
     pub retained_glyphs: Tally,
     pub retained_images: Tally,

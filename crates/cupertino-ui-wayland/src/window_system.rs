@@ -36,7 +36,7 @@ use rustix::time::ClockId;
 
 use crate::convert::{self, InputTimeline};
 use crate::gpu_path::{GpuPath, Presented};
-use crate::pixels::{convert_rects, rgba_to_argb8888};
+use crate::pixels::{convert_rects, disjoint, rgba_to_argb8888};
 use crate::roles::{RoleEvent, SurfaceRoles};
 
 enum Kind {
@@ -2001,7 +2001,7 @@ fn copy_and_present(
     let changed = inside(&mut damage.iter());
     let copy = lease
         .missed()
-        .map(|missed| inside(&mut changed.iter().chain(missed)));
+        .map(|missed| disjoint(&inside(&mut changed.iter().chain(missed))));
     let whole = [PixelRect {
         x: 0,
         y: 0,

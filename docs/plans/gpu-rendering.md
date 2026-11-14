@@ -244,40 +244,75 @@ Works with the CPU renderer; no GPU needed.
 
 - [x] The paint tree marks layer boundaries: scroll content (`Layer::Scroll` with its drawn offset, the scroll bars
       beside it) and opacity groups (`Layer::Opacity`, fades included).
-- [ ] The paint tree marks animated subtrees: a node whose transform animates.
+- [x] The paint tree marks animated subtrees: a node whose transform animates (`Layer::Transform`, a popover's roots
+      while it grows out of its anchor or shrinks into it;
+      `a_growing_popover_marks_its_roots_as_layers_whose_transform_animates`).
 - [x] The CPU renderer keeps scroll layers as images between frames and composites them, within one frame's bytes and
       8 MiB more (`kept_layers_stay_within_their_cap_and_can_be_dropped`).
 - [x] Scrolling moves a layer and paints only the exposed strip
       (`a_scroll_paints_only_the_rows_that_come_into_view`).
-- [ ] Opacity and transform animations change layer properties, not pixels: a kept group image laid over at each
-      opacity and transform, within the same cap.
+- [x] Opacity animations change layer properties, not pixels: a group marked as fading or moving is kept as the image
+      of its subtree within the same cap and laid over from it at each opacity while its subtree is the same and lies
+      where it was painted (`a_fading_group_is_laid_over_from_its_kept_image_and_a_moved_one_painted_again`).
+- [ ] Transform animations change layer properties, not pixels. On the CPU path a kept image laid at another place or
+      scale does not have the bytes of its subtree painted there (dithering follows the pixel, paths are rasterized at
+      their place), so a group whose transform changed is painted again and the pixels stay those of painting in
+      place. Laying the kept image over at its transform goes with the GPU renderer's layers (step 6); on the CPU it
+      needs the owner to accept a moving popover's pixels differing from painting in place.
 - [x] A window told it is suspended drops its renderers' layers and keeps its frame
       (`a_window_told_it_is_suspended_lets_its_layers_go`).
-- [ ] The server tells minimized and fully covered windows they are suspended (`xdg_toplevel` state `suspended`), so
-      they drop their layers.
+- [x] The server tells minimized and fully covered windows they are suspended (`xdg_toplevel` state `suspended`), so
+      they drop their layers: minimized, of a hidden application or of a workspace not shown, or every point of it
+      under the opaque region of windows at rest above it, corners cut; the state goes as soon as it shows again
+      (`a_minimized_window_is_told_it_is_suspended_and_no_longer_once_restored`,
+      `a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again`,
+      `a_window_under_covers_that_leave_no_point_of_it_does_not_show`, `a_rounded_window_covers_all_but_its_corners`).
+- [ ] Kit windows declare their opaque region (the window less its material and glass regions and its corners), so a
+      Kit window covering another suspends it: today only clients that declare one cover.
 - [x] Test: a scissored repaint equals a full repaint, with effects crossing the damage edge, at scales 1, 1.5 and 2
       (`a_frame_drawn_over_the_last_has_the_bytes_of_one_drawn_whole` at 1, 1.25, 1.5 and 2, and, through kept
       layers, `a_scrolled_layer_has_the_bytes_of_one_drawn_whole_at_its_offset` at 1, 1.5 and 2).
 - [x] Incremental layout for the Files listing: the icon layout is kept between views while the width and the number
       of items stay, and the grid takes it without comparing its cells.
-- [ ] Files view and layout under 4 ms in the worst frame of a full-screen scroll: step 0 found 5.5–6.1 ms at
-      scales 1 and 1.5; after the step view p99 is 5.9–6.3 ms and layout p99 6.0–6.5 ms at scale 1 (4.8–5.3 and
-      1.6–3.1 ms at 1.5), with the view made again for every frame that shows other rows.
-- [ ] The toolkit's paint and damage phase made incremental: a scroll frame of Files at scale 1 builds and compares
-      its whole paint tree (4.2–4.4 ms p50, 6.4–6.5 ms p99).
-- [ ] A kept opaque scroll layer laid over by copy rather than by blending, or with the background behind it baked in:
-      a scroll frame lays the whole viewport over (raster p50 7.2–10.2 ms, of it the composite of about 33 MB at
-      scale 1).
-- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy of a scroll frame,
-      whose damage is the whole moved viewport, is 8.7–10.3 ms p50 and 20–26 ms p99 (rendered straight into the
-      buffer, or the GPU path of step 6).
+- [x] Files view under 4 ms in the worst frame of a full-screen scroll: rows are made only as they come into view and
+      the rest kept (`Element::kept`; the grid's cells keep their nodes while the window only scrolls, and an item's
+      icon is made only for a cell that is built). View p99 2.4–2.8 ms at scale 1 and 2.3–2.5 ms at 1.5, from 6.3 and
+      2.9–4.5 (`a_kept_element_of_the_same_mark_keeps_its_node_unbuilt_and_a_new_mark_builds_it_again`,
+      `a_cell_is_kept_while_the_grid_only_scrolls_and_built_again_when_its_state_or_the_revision_changes`,
+      `a_grid_of_thousands_of_items_makes_icons_only_for_the_cells_it_builds`).
+- [ ] Files layout under 4 ms in the worst frame of a full-screen scroll: p99 5.7–6.2 ms at scale 1 (1.6–2.8 at 1.5).
+      The layout pass walks the whole tree every frame however little changed: the cached solve and the placement of
+      every node (2.1 ms p50, 5.7 p99 at scale 1, the worst frames those that lay out a new row's names), the window's
+      placements (0.5 ms p50) and its semantics (0.6 ms p50). It needs a layout that keeps the placements of a subtree
+      that did not change, and the names of a row measured before it comes into view.
+- [ ] The toolkit's paint phase made incremental: a scroll frame of Files at scale 1 walks every node of the window
+      (2.0 ms p50, 5.2 p99, of it 0.3 ms copying kept operations) and builds and compares the whole paint tree (paint
+      p50 4.4–4.7 ms, p99 6.7–12.0). It needs the paint tree of a subtree that did not change kept as it was.
+- [ ] The toolkit's damage phase made incremental: comparing the paint tree with the last frame's is 1.0 ms p50 and
+      3.1 p99 at scale 1. It goes with the paint tree kept by subtree, compared only where it changed.
+- [x] A kept opaque scroll layer laid over by copy rather than by blending, with the background behind it baked in: the
+      layer is laid over the background colour pending under it in one pass, its empty runs writing the colour and
+      its opaque runs copied (`a_layer_laid_over_its_background_in_one_pass_has_the_bytes_of_the_background_written_and_laid_over`,
+      `a_layer_scrolled_over_its_background_has_the_bytes_of_the_general_path`). Raster p50 5.9–7.2 ms at scale 1, from
+      7.5.
+- [x] The copy into the shared-memory buffer converts each pixel once: a frame's damage and what the buffer missed are
+      cut into rectangles that do not overlap, where a scroll converted the moved viewport once for each
+      (`overlapping_rectangles_become_ones_that_hold_each_pixel_of_their_union_once`). Copy p50 3.2–4.6 ms at scale 1,
+      from 8.9.
+- [ ] The frame reaches the compositor without the copy into the shared-memory buffer: the copy's p99 stays at
+      20.3–20.6 ms, the frames that convert a whole buffer (a buffer new to the window, or one whose pixels are
+      unknown). Rendering straight into the buffer needs the buffer in the renderer's byte order (`abgr8888`, which
+      the window system offers when the compositor's renderer takes it; the toolkit asks for `argb8888` and swaps the
+      channels as it copies), the renderer drawing into a buffer it borrows rather than its own pixmap, and what the
+      buffer missed repainted by its age, not copied from the last frame; or the GPU path of step 6.
 
 Gate:
 
 - [ ] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
-      cover only the exposed strip. Not met: client frame p99 41.2 ms at scale 1 and 44.1 ms at 1.5 against 8 ms (it
-      was 79.3 and 126.4 ms); painting covers the exposed strip, compositing the whole viewport ("Measurements",
-      "Step 4"). The four unticked items above are what remains of it.
+      cover only the exposed strip. Not met: client frame p99 36.7–38.0 ms at scale 1 and 36.9–37.2 ms at 1.5 against
+      8 ms (it was 79.3 and 126.4 ms at step 0, 41.2 and 42.8 before this round); painting covers the exposed strip,
+      compositing and copying the whole viewport ("Measurements", "Step 4"). The unticked items above are what remains
+      of it; the copy's p99 alone is over the budget.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1394,6 +1429,45 @@ rounded clips, effects and a translucent bar over the layer's edge). Pixels at f
 place through the frame, as without layers. Inside, the composite rounds once where painting in place rounds node by
 node, within the goldens' 2 of 255 (`a_kept_layer_draws_the_picture_of_its_content_drawn_in_place`). No golden is
 re-recorded.
+
+#### Second round: copy, composite, kept groups and rows
+
+The same scenario and machine, release builds, other agents building and benchmarking beside it; the load average is
+recorded at the start and end of each scale's three runs. Before is `b4774447b` (load 6.1 then 2.9 and 2.5); after is
+`d0016e41c`, measured twice (loads 6.2 to 4.9, then 7.3 to 3.6). The round's commits are `ea4669d77` (the copy
+converts each pixel once), `8ac300a25` (the scroll layer laid over its background in one pass, opaque runs copied),
+`0db51815d` (the server suspends windows nobody sees), `e06873ab9` (icons made only for built cells), `21f6b794a`
+(`Layer::Transform`), `a0605b3e3` (kept group images), `764d806f4` (`Element::kept`) and `d0016e41c` (the grid keeps
+its cells). Medians of the three runs; the two after columns are the two measurements.
+
+| Files two-finger scroll, client frame ms | Scale 1 before | Scale 1 after | Scale 1.5 before | Scale 1.5 after |
+|---|---|---|---|---|
+| Frames drawn in the scroll | 92 | 88 / 117 | 89 | 93 / 96 |
+| Frame p50 / p99 | 30.1 / 41.2 | 19.0 / 38.0, 19.5 / 36.7 | 18.5 / 42.8 | 13.9 / 36.9, 13.1 / 37.2 |
+| View p50 / p99 | 3.7 / 6.3 | 1.4 / 2.8, 1.4 / 2.4 | 0.0 / 4.5 | 0.0 / 2.5, 0.0 / 2.3 |
+| Layout p50 / p99 | 3.3 / 5.9 | 3.1 / 5.7, 3.1 / 6.2 | 0.6 / 2.0 | 0.7 / 2.8, 0.6 / 1.6 |
+| Paint p50 / p99 | 4.3 / 6.2 | 4.7 / 12.0, 4.4 / 6.7 | 1.8 / 2.9 | 1.8 / 2.7, 1.7 / 2.7 |
+| Raster p50 / p99 | 7.5 / 10.3 | 7.2 / 10.6, 5.9 / 10.0 | 9.1 / 16.6 | 7.5 / 11.2, 7.1 / 11.6 |
+| Copy p50 / p99 | 8.9 / 20.2 | 4.6 / 20.6, 3.2 / 20.3 | 7.1 / 21.0 | 3.9 / 20.9, 3.5 / 20.4 |
+
+The spread between runs is wide under this load (frames drawn 88 against 117, the paint p99 12.0 against 6.7); the
+view, raster and copy p50 fall in both. What a scroll frame costs now, at scale 1, timed inside the client on a build
+with temporary timers (not committed):
+
+- The copy: p50 is down to the moved viewport converted once. Its p99, about 20 ms, is the frames that convert a
+  whole buffer: a buffer new to the window or one whose pixels are unknown. It alone is over the budget.
+- View: the application's view 1.6 ms p50 and the reconcile 2.5 ms p50 (7.4 p99) before the kept cells; after them
+  the whole view is 1.4 ms p50.
+- Layout: the cached solve and the placement of every node 2.1 ms p50 (5.7 p99), the window's placements 0.5 and its
+  semantics 0.6.
+- Paint: the walk over every node 2.0 ms p50 (5.2 p99) and the comparison with the last frame's paint tree 1.0 ms
+  (3.1 p99).
+- Raster: the layer laid over the viewport and the subtrees around it painted again where the scroll damaged them
+  (1.4 ms p50, 7.7 p99).
+
+No pixel changed: the composite in one pass has the bytes of the background written and the layer laid over it, the
+copy converts the same pixels, a kept group is laid over only where it was painted and at the same subtree, and a cell
+kept unbuilt is the node a build would have left unchanged. No golden is re-recorded.
 
 ## Decisions taken
 

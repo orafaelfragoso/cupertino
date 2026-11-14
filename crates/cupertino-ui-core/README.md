@@ -30,6 +30,11 @@ all on one thread.
 - **Reconciliation.** A child keeps its node when its key matches, or, without keys, its position among the unkeyed
   siblings, and its widget type is the same; anything else unmounts with its subtree. Node ids carry their slot's
   generation, and a slot whose generation would wrap is retired. More nodes than the ceiling is `UiError::NodeLimit`.
+  `Element::kept(key, mark, build)` is an element made only when its place needs it: when the node at its key was
+  made by `kept` with the same mark, it and its subtree stay as they are (not built, compared or marked, their
+  layout reused); otherwise `build` makes the element, which updates or replaces the node as any other. The mark stands for
+  everything `build` reads. A long list or grid builds only the rows near its viewport this way and keeps each one
+  while it only scrolls.
 - **Events.** An event goes down the target's path (capture), reaches the target and goes back up (bubble); a handler
   can stop it. Hit-testing takes the topmost node and respects every clip. Hover enter and leave reach each node the
   pointer crosses. A raised node (`Widget::raised`, a toolbar row over a page that scrolls under it) takes a point

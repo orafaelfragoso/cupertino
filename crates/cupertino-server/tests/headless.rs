@@ -26,7 +26,7 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::decoration::zv1::client::{
@@ -140,6 +140,8 @@ struct Status {
     configured: bool,
     closed: bool,
     committed: bool,
+    /// Whether each configure of the toplevel had the `suspended` state, in order.
+    suspended: Vec<bool>,
 }
 
 struct ClientState {
@@ -267,7 +269,8 @@ ignore_events!(
     wl_shm::WlShm,
     wl_shm_pool::WlShmPool,
     wl_buffer::WlBuffer,
-    wl_surface::WlSurface
+    wl_surface::WlSurface,
+    wl_region::WlRegion
 );
 
 ignore_events!(
@@ -352,8 +355,20 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     ) {
         match event {
             xdg_toplevel::Event::Close => state.status.lock().unwrap().closed = true,
-            xdg_toplevel::Event::Configure { width, height, .. } if width > 0 && height > 0 => {
-                state.configured_size = Some((width, height));
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
+                let suspended = states
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|c| u32::from_ne_bytes(*c) == xdg_toplevel::State::Suspended as u32);
+                state.status.lock().unwrap().suspended.push(suspended);
+                if width > 0 && height > 0 {
+                    state.configured_size = Some((width, height));
+                }
             }
             _ => {}
         }
@@ -378,6 +393,9 @@ struct Options {
     stripes: bool,
     /// Draw at this buffer scale (`wl_surface.set_buffer_scale`; 0 is 1).
     buffer_scale: i32,
+    /// Say the whole surface is opaque at any size (`wl_surface.set_opaque_region`) and bind `xdg_wm_base` at version
+    /// 6, so the toplevel hears the `suspended` state.
+    opaque: bool,
 }
 
 struct TestClient {
@@ -435,8 +453,16 @@ impl TestClient {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
-            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let newest = if options.opaque { 6 } else { 5 };
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=newest, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
+            if options.opaque {
+                let region = compositor.create_region(&qh, ());
+                // past any size the window takes: the compositor cuts it to the surface
+                region.add(0, 0, 1 << 15, 1 << 15);
+                surface.set_opaque_region(Some(&region));
+                region.destroy();
+            }
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg.get_toplevel(&qh, ());
             toplevel.set_app_id(app_id.to_string());
@@ -512,6 +538,17 @@ impl TestClient {
 
     fn closed(&self) -> bool {
         self.status.lock().unwrap().closed
+    }
+
+    /// Whether the toplevel's last configure had the `suspended` state.
+    fn suspended(&self) -> bool {
+        self.status
+            .lock()
+            .unwrap()
+            .suspended
+            .last()
+            .copied()
+            .unwrap_or(false)
     }
 }
 
@@ -2622,4 +2659,124 @@ fn an_untitled_window_has_the_inside_band_only() {
         h.move_to(frame.right() + dx, mid);
         assert_eq!(h.state.decor.cursor, expected, "right edge {dx:+}");
     }
+}
+
+/// A client that says its whole surface is opaque and hears the `suspended` state.
+fn opaque_client(h: &Harness, app_id: &'static str, size: (i32, i32)) -> TestClient {
+    TestClient::spawn_with(
+        h.socket_path(),
+        app_id,
+        size,
+        [40, 120, 200, 255],
+        Options {
+            opaque: true,
+            sizing: Sizing::Follow,
+            ..Options::default()
+        },
+    )
+}
+
+#[test]
+fn a_minimized_window_is_told_it_is_suspended_and_no_longer_once_restored() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = opaque_client(&h, "org.example.suspend-min", (300, 200));
+    let (id, _) = h.mapped_window(1);
+    h.sync(&client);
+    assert!(!client.suspended(), "a window on screen is not suspended");
+    h.state.command(Command::Minimize {
+        window: id,
+        target: Some(DOCK_SLOT),
+    });
+    let t = h.state.now();
+    common::set_time(&mut h.state, &mut h.event_loop, t + 3.0);
+    h.state.tick();
+    assert!(h.state.wm.window(id).unwrap().state().is_minimized());
+    assert!(h.state.window_suspended(id));
+    h.sync(&client);
+    assert!(client.suspended(), "the client heard it is suspended");
+    h.state.command(Command::Restore { window: id });
+    h.state.tick();
+    assert!(
+        !h.state.window_suspended(id),
+        "restoring shows the window again from its first frame"
+    );
+    h.sync(&client);
+    assert!(!client.suspended(), "the client heard it shows again");
+    drop(client);
+}
+
+#[test]
+fn windows_that_open_partly_in_view_are_never_told_they_are_suspended() {
+    let Some(mut h) = Harness::new() else { return };
+    let first = opaque_client(&h, "org.example.suspend-map-a", (200, 150));
+    h.mapped_window(1);
+    let second = opaque_client(&h, "org.example.suspend-map-b", (300, 200));
+    h.mapped_window(2);
+    let t = h.state.now();
+    common::set_time(&mut h.state, &mut h.event_loop, t + 3.0);
+    h.state.tick();
+    h.sync(&first);
+    h.sync(&second);
+    for (client, name) in [(&first, "first"), (&second, "second")] {
+        let heard = client.status.lock().unwrap().suspended.clone();
+        assert!(
+            !heard.iter().any(|&s| s),
+            "the {name} window was told it is suspended while it opened: {heard:?}"
+        );
+    }
+    drop((first, second));
+}
+
+#[test]
+fn a_window_covered_by_an_opaque_one_is_suspended_until_it_shows_again() {
+    let Some(mut h) = Harness::new() else { return };
+    let under = opaque_client(&h, "org.example.suspend-under", (200, 150));
+    let (below, frame) = h.mapped_window(1);
+    let over = opaque_client(&h, "org.example.suspend-over", (120, 80));
+    h.mapped_window(2);
+    let above = h
+        .state
+        .wm
+        .windows()
+        .map(|w| w.id)
+        .find(|id| *id != below)
+        .expect("the second window");
+    h.state.command(Command::FocusWindow { window: above });
+    h.state.tick();
+    h.sync(&under);
+    assert!(
+        !under.suspended(),
+        "a window partly in view is not suspended"
+    );
+    // the window above fills the output's usable area and holds the one below inside its rounded corners
+    h.state.command(Command::ToggleZoom { window: above });
+    let t = h.state.now();
+    common::set_time(&mut h.state, &mut h.event_loop, t + 3.0);
+    h.state.tick();
+    let zoomed = h.state.wm.window(above).unwrap().geometry();
+    let radius = h.state.config.window.corner_radius;
+    assert!(
+        frame.x >= zoomed.x + radius
+            && frame.y >= zoomed.y + radius
+            && frame.right() <= zoomed.right() - radius
+            && frame.bottom() <= zoomed.bottom() - radius,
+        "the window below {frame:?} lies inside the zoomed one {zoomed:?}"
+    );
+    h.wait_until("the window below to be suspended", |s| {
+        s.window_suspended(below)
+    });
+    assert!(!h.state.window_suspended(above));
+    h.sync(&under);
+    assert!(
+        under.suspended(),
+        "the covered client heard it is suspended"
+    );
+    // brought to the front, it shows again
+    h.state.command(Command::FocusWindow { window: below });
+    h.state.tick();
+    assert!(!h.state.window_suspended(below));
+    h.sync(&under);
+    assert!(!under.suspended(), "the client heard it shows again");
+    drop(over);
+    drop(under);
 }

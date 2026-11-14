@@ -29,7 +29,7 @@ use super::columns;
 use super::context::Secondary;
 use super::drops;
 use super::gallery;
-use super::grid::{self, IconGrid, Item};
+use super::grid::{self, IconGrid};
 use super::jobs::Job;
 use super::list::{self, Gestures, RowCell};
 use super::progress::{self, ShowsProgress};
@@ -1191,14 +1191,10 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
     let text_size = params.text_size;
     // the whole lines the layout gives a name; a name past them ends in an ellipsis
     let lines = icon::max_title_lines(&params).floor().max(1.0) as u32;
-    let entries = browser.entries();
-    let items: Rc<[Item]> = entries
-        .iter()
-        .map(|e| Item {
-            name: e.name.clone(),
-            icon: session.icons.icon(e, params.icon_size),
-        })
-        .collect();
+    let items: Rc<[crate::Entry]> = browser.entries().into();
+    let item_icons = Rc::clone(&session.icons);
+    let side = params.icon_size;
+    let icon: grid::ItemIcon = Rc::new(move |e| item_icons.icon(e, side));
     let rename = win.rename.as_ref().map(|r| {
         (
             r.edit.index(),
@@ -1214,12 +1210,13 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         layout,
         params,
         items,
+        icon,
         scroll: win.scroll,
         selection: shown_selection(win),
         ringed: ringed_items(win),
         band: win.band,
         lead: under_row(win),
-        name: Box::new(
+        name: Rc::new(
             move |index, selected| match rename.as_ref().filter(|r| r.0 == index) {
                 Some((_, value, revision, selection)) => {
                     name_field(id, value.clone(), *revision, selection.clone())
@@ -1227,6 +1224,7 @@ fn icons(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
                 None => grid::name(names[index].name.clone(), text_size, selected, Some(lines)),
             },
         ),
+        revision: session.view_revision,
         strip: false,
     });
     // the grid starts below the toolbar row, and scrolls under it

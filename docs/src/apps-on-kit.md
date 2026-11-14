@@ -65,9 +65,13 @@ other builds running on the machine, Files with a folder of 1500 files (p99 at s
 
 Before the first damage work every frame of Files but the caret's and a hover's repainted 85–95 % of the window and
 took 57–96 ms. Now a node that draws nothing (a stack, a scroll view's content, the listing's gesture layer) damages
-nothing, a node that draws damages its box, and a change that moves nothing keeps the layout. A scroll, a folder
-opened and the search results still repaint everything the listing shows; meeting 8 ms there needs the renderer to
-move the pixels it has, or the GPU rendering planned for toolkit applications ([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
+nothing, a node that draws damages its box, and a change that moves nothing keeps the layout. A folder opened and the
+search results still repaint everything the listing shows. A scroll moves the listing's kept image and paints only
+the rows that come into view; the icon grid builds only the cells near its viewport, keeps each one while the window
+only scrolls (`Element::kept`) and makes an item's icon only for a cell it builds. A full-screen scroll still takes
+over 8 ms a frame: the toolkit still lays out and paints its whole tree each frame and copies the moved viewport into
+the shared-memory buffer, which the GPU rendering planned for toolkit applications removes
+([Roadmap](roadmap.md#planned-gpu-rendering-in-applications)).
 
 When the Settings pages became grouped forms on their own background, switching panes went from 10.2 / 7.1 / 4.9 ms
 to 39.4 / 29.1 / 20.3 ms and typing a search from 15.7 / 11.9 / 7.7 to 60.6 / 46.1 / 30.5 ms: the CPU renderer

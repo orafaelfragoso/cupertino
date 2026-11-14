@@ -9,6 +9,9 @@
 #[cfg(target_arch = "x86_64")]
 #[path = "goldens/baselines.rs"]
 mod baselines;
+#[cfg(target_arch = "x86_64")]
+#[path = "goldens/scenes.rs"]
+mod scenes;
 
 #[cfg(not(target_arch = "x86_64"))]
 #[test]

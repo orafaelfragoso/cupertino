@@ -272,6 +272,7 @@ impl Renderer for Gles {
                 let mut framebuffer = renderer
                     .bind(texture)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
+                let _frame = resources.programs.passes.frame();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &elements, clear)
                     .map(|r| GlesCompletion::Drawn {
@@ -290,6 +291,7 @@ impl Renderer for Gles {
                 let mut framebuffer = renderer
                     .bind(dmabuf)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
+                let _frame = resources.programs.passes.frame();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &elements, clear)
                     .map(|r| GlesCompletion::Offscreen {
@@ -309,6 +311,7 @@ impl Renderer for Gles {
                     .bind()
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let elements = Gles::lower(renderer, scene, resources)?;
+                let _frame = resources.programs.passes.frame();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &elements, clear)
                     .map(|r| GlesCompletion::Drawn {
@@ -323,6 +326,8 @@ impl Renderer for Gles {
                 clear,
             } => {
                 let elements = Gles::lower(renderer, scene, resources)?;
+                // the primary plane's one frame (the cursor plane is drawn on the CPU)
+                let _frame = resources.programs.passes.frame();
                 output
                     .render_frame(
                         renderer,

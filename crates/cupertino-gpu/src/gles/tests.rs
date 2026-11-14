@@ -455,6 +455,199 @@ fn a_borrowed_device_s_pass_draws_into_the_framebuffer_its_owner_bound_at_the_ow
 }
 
 #[test]
+fn a_borrowed_device_paused_puts_back_only_what_it_changed_and_resumes_on_what_entering_read() {
+    let Some(owner) = owner() else { return };
+    let size = 16u32;
+    let target = owner
+        .create_texture(&TextureDesc {
+            size: (size, size),
+            format: TextureFormat::Rgba8,
+            usage: TextureUsage::TARGET,
+        })
+        .unwrap();
+    owner
+        .write_texture(
+            &target,
+            Region::new(0, 0, size, size),
+            &[0, 0, 255, 255].repeat((size * size) as usize),
+        )
+        .unwrap();
+    let (texture, buffer, program, fb) = unusual_state(&owner.gl);
+    // Safety: the owner's context is current; its own framebuffer.
+    unsafe {
+        owner
+            .gl
+            .bind_framebuffer(glow::FRAMEBUFFER, target.framebuffer);
+        owner.gl.viewport(4, 2, 8, 10);
+    }
+    let before = owner.capture_state();
+    // Safety: the owner's context is current and outlives the borrowed device.
+    let device =
+        unsafe { Device::borrow(owner.info.robustness, owner.info.purge_notification) }.unwrap();
+    // only a borrowed device resumes, and only when it is not entered
+    assert!(matches!(owner.resume(&before), Err(Error::Invalid(_))));
+    let saved = device.enter().unwrap();
+    assert!(matches!(device.resume(&saved), Err(Error::Invalid(_))));
+    let layout = device
+        .create_bind_group_layout(&[BindingLayout {
+            binding: 0,
+            kind: BindingKind::UniformBuffer,
+        }])
+        .unwrap();
+    let floats = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+    let viewport = device
+        .create_buffer(&BufferDesc {
+            size: 16,
+            usage: BufferUsage::Uniform,
+        })
+        .unwrap();
+    device
+        .write_buffer(&viewport, 0, &floats(&[8.0, 10.0, 0.0, 0.0]))
+        .unwrap();
+    // a red square over the viewport's first four columns and rows, and a green one over its next four columns
+    let instances = device
+        .create_buffer(&BufferDesc {
+            size: 80,
+            usage: BufferUsage::Vertex,
+        })
+        .unwrap();
+    device
+        .write_buffer(
+            &instances,
+            0,
+            &floats(&[
+                0.0, 0.0, 4.0, 4.0, 1.0, 0.0, 0.0, 1.0, 0.0, 2.0, //
+                4.0, 0.0, 4.0, 4.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0,
+            ]),
+        )
+        .unwrap();
+    let own = device
+        .create_texture(&TextureDesc {
+            size: (4, 4),
+            format: TextureFormat::Rgba8,
+            usage: TextureUsage::TARGET,
+        })
+        .unwrap();
+    let shape = device
+        .create_pipeline(&PipelineDesc {
+            shader: &crate::shaders::SHAPE,
+            layouts: &[&layout],
+            vertex_buffers: &[VertexLayout {
+                stride: 40,
+                step: StepMode::Instance,
+                attributes: vec![
+                    VertexAttribute {
+                        location: 0,
+                        format: VertexFormat::Float32x4,
+                        offset: 0,
+                    },
+                    VertexAttribute {
+                        location: 1,
+                        format: VertexFormat::Float32x4,
+                        offset: 16,
+                    },
+                    VertexAttribute {
+                        location: 2,
+                        format: VertexFormat::Float32x2,
+                        offset: 32,
+                    },
+                ],
+            }],
+            blend: Blend::Replace,
+            topology: Topology::TriangleStrip,
+        })
+        .unwrap();
+    let group = device
+        .create_bind_group(
+            &layout,
+            &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: &viewport,
+                    offset: 0,
+                    size: 16,
+                },
+            }],
+        )
+        .unwrap();
+    device.pause(&saved);
+    assert_eq!(
+        owner.capture_state(),
+        before,
+        "a pause puts back what was changed"
+    );
+    // between the device's draws the owner draws too: it binds a program of its own, as it does before each of its
+    // draws, and changes the unpack alignment, which an owner pass does not touch
+    // Safety: the owner's context is current; plain state.
+    unsafe {
+        owner.gl.use_program(None);
+        owner.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+    }
+    for square in 0..2u64 {
+        device.resume(&saved).unwrap();
+        if square == 1 {
+            // a pass into a texture of the device's own first: the owner pass after it is still the owner's
+            let pass = device.begin_pass(&own, LoadOp::Clear([0.0; 4])).unwrap();
+            pass.end();
+        }
+        {
+            let mut pass = device.begin_owner_pass().unwrap();
+            assert_eq!(
+                pass.size(),
+                (8, 10),
+                "the owner's viewport, as entering read it"
+            );
+            pass.set_pipeline(&shape);
+            pass.set_bind_group(0, &group).unwrap();
+            pass.set_vertex_buffer(0, &instances, square * 40).unwrap();
+            pass.draw(0..4, 1).unwrap();
+            pass.end();
+        }
+        device.pause(&saved);
+    }
+    // the program the passes changed is back as entering read it; the alignment the owner set since is its own
+    // Safety: plain queries and state of the owner's current context.
+    unsafe {
+        assert_eq!(owner.gl.get_parameter_i32(glow::UNPACK_ALIGNMENT), 4);
+        owner.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 2);
+    }
+    assert_eq!(owner.capture_state(), before);
+    let saved = device.enter().unwrap();
+    device.destroy_pipeline(shape);
+    device.destroy_buffer(viewport);
+    device.destroy_buffer(instances);
+    device.destroy_texture(own);
+    device.leave(saved);
+    drop(device);
+    assert_eq!(owner.capture_state(), before);
+    // Safety: the owner's context; its objects, gone before the target is read.
+    unsafe {
+        owner.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        owner.gl.disable(glow::SCISSOR_TEST);
+        owner.gl.delete_framebuffer(fb);
+        owner.gl.delete_program(program);
+        owner.gl.delete_buffer(buffer);
+        owner.gl.delete_texture(texture);
+    }
+    let pixels = owner
+        .read_bytes(&target, Region::new(0, 0, size, size))
+        .unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * size + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    let (red, green, blue) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+    assert_eq!(at(5, 3), red, "the first draw, at the viewport's origin");
+    assert_eq!(
+        at(9, 3),
+        green,
+        "the second, after a pass of the device's own, beside it"
+    );
+    assert_eq!(at(5, 7), blue, "nothing below the squares");
+    owner.destroy_texture(target);
+}
+
+#[test]
 fn driver_reset_statuses_are_read_as_their_losses() {
     for loss in [
         Loss::Reset { guilty: Some(true) },

@@ -3,15 +3,20 @@
 //! `cupertino-gpu` device borrowed from the renderer's context draws it into the framebuffer the renderer has bound
 //! for the frame, one quad per damage rectangle of the element, under the borrowed device's state-restore contract,
 //! so the renderer's own drawing around it sees its state as it left it.
+//!
+//! Inside a frame the renderer draws ([`Passes::frame`]) the context's state is read once, at the frame's first
+//! pass; each pass after it resumes the device with what that read and pauses it again, which puts back only what the
+//! pass changed. The renderer keeps to the device's side of that: its framebuffer, viewport, scissor and blending
+//! stay as it set them when the frame began, and it sets its program, textures and buffers before each of its draws.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use cupertino_gpu::shaders::ShaderSource;
 use cupertino_gpu::{
-    BindGroup, BindGroupEntry, BindingKind, BindingLayout, BindingResource, Blend, Buffer,
-    BufferDesc, BufferUsage, Device, Pipeline, PipelineDesc, StepMode, Topology, VertexAttribute,
-    VertexFormat, VertexLayout,
+    BindGroup, BindGroupEntry, BindingKind, BindingLayout, BindingResource, Blend, BorrowedState,
+    Buffer, BufferDesc, BufferUsage, Device, Pipeline, PipelineDesc, StepMode, Topology,
+    VertexAttribute, VertexFormat, VertexLayout,
 };
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
 use smithay::utils::{Physical, Rectangle};
@@ -148,6 +153,16 @@ struct Made {
     instances: Option<(Buffer, u64)>,
 }
 
+/// Whether a frame is being drawn, and the context's state its first pass read.
+#[derive(Default)]
+enum FrameEntry {
+    /// No frame: each draw reads the state and puts it back.
+    #[default]
+    Closed,
+    /// Inside [`Passes::frame`]: what the frame's first pass read, once it has.
+    Open(Option<BorrowedState>),
+}
+
 /// The device borrowed from one renderer's context, with the three pipelines and their buffers.
 pub struct Passes {
     device: Device,
@@ -157,6 +172,18 @@ pub struct Passes {
     dither: bool,
     /// A draw failed once already (logged once, not again every frame).
     failed: Cell<bool>,
+    frame: RefCell<FrameEntry>,
+    /// Times the context's state was read on entering the device (diagnostics and tests).
+    state_reads: Cell<u64>,
+}
+
+/// While it lives, the passes draw inside one frame of the renderer ([`Passes::frame`]).
+pub struct FrameScope<'a>(&'a Passes);
+
+impl Drop for FrameScope<'_> {
+    fn drop(&mut self) {
+        *self.0.frame.borrow_mut() = FrameEntry::Closed;
+    }
 }
 
 impl std::fmt::Debug for Passes {
@@ -260,7 +287,49 @@ impl Passes {
             made: RefCell::new(Some(made)),
             dither,
             failed: Cell::new(false),
+            frame: RefCell::new(FrameEntry::Closed),
+            state_reads: Cell::new(0),
         }))
+    }
+
+    /// The passes drawn until the scope is dropped belong to one frame of the renderer: one framebuffer bound for
+    /// all of them, with the viewport, scissor and blending the renderer set when it began the frame. The first
+    /// reads the context's state; the others only put back what they changed.
+    pub fn frame(&self) -> FrameScope<'_> {
+        *self.frame.borrow_mut() = FrameEntry::Open(None);
+        FrameScope(self)
+    }
+
+    /// How many times entering the device read the context's state.
+    pub fn state_reads(&self) -> u64 {
+        self.state_reads.get()
+    }
+
+    /// `f` between entering and leaving the device: inside a frame, the state its first pass read resumed and
+    /// paused again; outside one, read and put back.
+    fn within<T>(&self, f: impl FnOnce() -> cupertino_gpu::Result<T>) -> cupertino_gpu::Result<T> {
+        let device = &self.device;
+        let mut frame = self.frame.borrow_mut();
+        match &mut *frame {
+            FrameEntry::Open(Some(saved)) => {
+                device.resume(saved)?;
+                let result = f();
+                device.pause(saved);
+                result
+            }
+            FrameEntry::Open(slot @ None) => {
+                self.state_reads.set(self.state_reads.get() + 1);
+                let saved = device.enter()?;
+                let result = f();
+                device.pause(&saved);
+                *slot = Some(saved);
+                result
+            }
+            FrameEntry::Closed => {
+                self.state_reads.set(self.state_reads.get() + 1);
+                entered(device, f)
+            }
+        }
     }
 
     /// Whether `pass` dithers its result by its pixel.
@@ -308,7 +377,7 @@ impl Passes {
         let Some(made) = made.as_mut() else {
             return Ok(());
         };
-        entered(device, || {
+        self.within(|| {
             device.write_buffer(&made.place, 0, bytemuck::bytes_of(place))?;
             device.write_buffer(&made.params, 0, bytemuck::cast_slice(params))?;
             let need = rects.len() as u64;

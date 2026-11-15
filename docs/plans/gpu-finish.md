@@ -310,6 +310,10 @@ The boxes here are ticked together with their items in the GPU plan.
   - Added private memory per GPU process (GPU against the CPU figures of step 7): dock 93.2 MiB (+39.7), launcher
     53.6 (+37.7), Files 67.4 (+38.0), Settings 68.0 (+23.6). Under 80 MiB: held.
   - Idle: no GPU process woke; the menu bar drew one frame.
-  - Launcher: typing frame p50 0.47 ms, but the search field's open has an update phase of 9 to 59 ms and the
-    launcher's first GPU frames raster 33 ms and copy 14 to 42 ms; being traced.
+  - Launcher: typing's update 13 to 65 ms became 0.15 ms (result icons decoded off the main loop), the open's
+    update 5.2 ms became 0.6 ms, and the first open's first frame 34.6 ms became 8 to 21 ms (each program drawn once
+    in the warm-up); the rest of a first frame is the wait for the server's answer to buffer creation.
+  - Measure later: against the stored baseline, Files' private memory is up about 20 MiB, Settings' and the
+    server's 10 to 15 MiB, and the copy p99 of some GPU clients 1 to 2 ms (one run against three); not yet
+    attributed.
 - [ ] Packages built, and the owner's before and after sheet for the fold and unfold.

@@ -2369,8 +2369,8 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
     const ESCAPE: u32 = 1 + 8;
     // the search field's window, with the room for its shadow
     const SEARCH: i32 = 640 + 120;
-    // the field's glass, its edge, its content and the mode button's glass and face
-    const LAYERS: usize = 5;
+    // the field's glass, its edge, its query row and body and the mode button's glass and face
+    const LAYERS: usize = 6;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -2458,17 +2458,17 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
 }
 
 /// The launcher's application browser opens from hidden on the compositor's clock: its window draws one frame, with
-/// its layers (the glass, the content and the edge) at rest, and while the compositor scales and fades them in from
-/// where the open starts neither the window nor any of its layers commits a buffer. The browser opens once first and
-/// closes, as a resident launcher's has by the time it is asked again, so the renderer has warmed up (its first frames
-/// are the CPU's, then the GPU draws them again). Run with `--no-capture` for the counts.
+/// its layers (the glass, the query row, the body and the edge) at rest, and while the compositor scales and fades
+/// them in from where the open starts neither the window nor any of its layers commits a buffer. The browser opens
+/// once first and closes, as a resident launcher's has by the time it is asked again, so the renderer has warmed up
+/// (its first frames are the CPU's, then the GPU draws them again). Run with `--no-capture` for the counts.
 #[test]
 fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::present;
     // the browser's window, with the room for its shadow
     const BROWSER: i32 = 844 + 120;
-    // the browser's glass, its content and its edge
-    const LAYERS: usize = 3;
+    // the browser's glass, its query row, its body and its edge
+    const LAYERS: usize = 4;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;

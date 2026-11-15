@@ -6,7 +6,8 @@
 //! * the enclosure's glass, a layer with the glass in its look and nothing of its own ([`GLASS_LAYER`]);
 //! * the thin dark edge just outside the enclosure, in a layer around it whose centre is the point the enclosure grows
 //!   about, so the layer's scale grows the edge with the glass ([`EDGE_LAYER`]);
-//! * the content, unscaled ([`CONTENT_LAYER`]);
+//! * the content, unscaled, in two layers: the query row ([`ROW_LAYER`]) and the body below it ([`BODY_LAYER`]),
+//!   which a fold fades on its own curve while the row does not, both from the content's top ([`ContentPart`]);
 //! * each mode button's glass, in the field's glass group, and its face (its edge, focus ring and symbol) in a layer
 //!   around it ([`button_glass_layer`], [`button_face_layer`]).
 //!
@@ -42,10 +43,11 @@ use cupertino_kit::platform::{
 use std::cell::Cell;
 use std::sync::Arc;
 
-/// The keys of the panel's layers: the enclosure's glass, its edge and its content.
+/// The keys of the panel's layers: the enclosure's glass, its edge, and its content's query row and body.
 pub const GLASS_LAYER: u64 = 1;
 pub const EDGE_LAYER: u64 = 2;
-pub const CONTENT_LAYER: u64 = 3;
+pub const ROW_LAYER: u64 = 3;
+pub const BODY_LAYER: u64 = 4;
 
 /// The key of the layer of mode button `index`'s glass.
 pub fn button_glass_layer(index: usize) -> u64 {
@@ -350,6 +352,84 @@ impl<M: 'static> Widget<M> for SymbolBox<M> {
     }
 }
 
+/// A part of the panel's content, `size` large at the content's top left, its children one above the other from `top`
+/// down, across its width; a compositor layer of its own (`key`) when `layer`. The body's part starts at the content's
+/// top as the row's does, with room for the row above its children, so both lie on the device pixels the content
+/// lies on.
+pub struct ContentPart<M> {
+    pub key: u64,
+    pub layer: bool,
+    pub size: Size,
+    pub top: f64,
+    pub children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for ContentPart<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.size.width.max(0.0)),
+            height: SizeSpec::Fixed(self.size.height.max(0.0)),
+            insets: cupertino_kit::geometry::Insets {
+                top: self.top,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            },
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: cupertino_kit::layout::Axis::Vertical,
+                spacing: 0.0,
+                align: cupertino_kit::layout::Align::Stretch,
+                justify: cupertino_kit::layout::Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (self.size, self.top) != (old.size, old.top) {
+            Change::Layout
+        } else if (self.key, self.layer) != (old.key, old.layer) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    /// The body's part lies over the row's: a point reaches what each holds, never the part itself.
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        self.layer.then_some(SurfaceLayerMark {
+            key: self.key,
+            look: SurfaceLayerLook::default(),
+        })
+    }
+}
+
 fn placed(rect: Rect) -> LayoutSpec {
     LayoutSpec {
         width: SizeSpec::Fixed(rect.width().max(0.0)),
@@ -484,7 +564,8 @@ pub fn close_changes(
     if a.y != b.y {
         content.push(go(LayerProperty::Y, b.y));
     }
-    out.push((CONTENT_LAYER, content));
+    out.push((ROW_LAYER, content.clone()));
+    out.push((BODY_LAYER, content));
     let (here, there) = (
         mode_rects_of(extent, from, modes, &rest),
         mode_rects_of(extent, to, modes, &end),
@@ -572,7 +653,8 @@ pub fn open_changes(
     vec![
         (GLASS_LAYER, glass),
         (EDGE_LAYER, edge),
-        (CONTENT_LAYER, content),
+        (ROW_LAYER, content.clone()),
+        (BODY_LAYER, content),
     ]
 }
 
@@ -638,7 +720,11 @@ pub fn field_open_changes(
     });
     through(&mut content, LayerProperty::Y, &|f| rect(f).y());
     opacity(&mut content);
-    let mut out = vec![(GLASS_LAYER, glass), (CONTENT_LAYER, content)];
+    let mut out = vec![
+        (GLASS_LAYER, glass),
+        (ROW_LAYER, content.clone()),
+        (BODY_LAYER, content),
+    ];
     for index in 0..count {
         let at = |f: &Frame| button_at(extent, f, count, index);
         let mut button = Vec::new();
@@ -770,10 +856,10 @@ mod tests {
         assert_eq!(of(GLASS_LAYER, LayerProperty::Opacity), Some(0.0));
         // the search field widens and never grows taller; its content stays where it is
         assert_eq!(of(GLASS_LAYER, LayerProperty::Height), Some(57.0));
-        assert_eq!(of(CONTENT_LAYER, LayerProperty::X), None);
-        assert_eq!(of(CONTENT_LAYER, LayerProperty::Y), None);
+        assert_eq!(of(ROW_LAYER, LayerProperty::X), None);
+        assert_eq!(of(ROW_LAYER, LayerProperty::Y), None);
         assert_eq!(
-            of(CONTENT_LAYER, LayerProperty::ContentBlur),
+            of(ROW_LAYER, LayerProperty::ContentBlur),
             Some(CLOSE_DEVIATION)
         );
         assert_eq!(of(EDGE_LAYER, LayerProperty::Scale), Some(to.scale));

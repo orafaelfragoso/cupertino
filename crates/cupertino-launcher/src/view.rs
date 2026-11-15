@@ -973,12 +973,13 @@ where
         leading: icon_inset,
         spacing: QUERY_INSET - icon_inset - icon_size,
         alpha: if split { frame.alpha } else { 1.0 },
+        layer: view.layered.then_some(layers::ROW_LAYER),
         children: row,
     })
     .key("query-row");
-    let mut children = vec![query_row];
+    let mut body = Vec::new();
     if let Some(browser) = showing_browser {
-        children.push(
+        body.push(
             browse::body(
                 browser,
                 view.app_icons,
@@ -990,7 +991,7 @@ where
             .key("browser"),
         );
     } else if let Some(scope) = showing_scope {
-        children.push(
+        body.push(
             scope::body(
                 scope,
                 view.file_images,
@@ -1001,20 +1002,32 @@ where
             .key("scope"),
         );
     } else {
-        children.extend(search_body(view));
+        body.extend(search_body(view));
     }
     // while the panel scales in or out its content keeps its size, cut off by the glass, and moves on whole device
-    // pixels, as one picture, as the content's layer does when the compositor runs the open
+    // pixels, as one picture, as the content's layers do when the compositor runs the open
     let scaled = frame.scale != 1.0 || frame.scale_y != 1.0;
+    let size = Size::new(frame.shape.width, frame.shape.height);
+    // the query row and the body are layers of their own, both from the content's top, on the device pixels it lies
+    // on; the body's children start below the row
+    let parts = vec![
+        query_row,
+        Element::new(layers::ContentPart {
+            key: layers::BODY_LAYER,
+            layer: view.layered,
+            size,
+            top: COLLAPSED_HEIGHT,
+            children: body,
+        })
+        .key("body-part"),
+    ];
     let inner = Element::new(PanelRoot {
         keys: view.keys,
-        alpha: frame.alpha,
-        size: Size::new(frame.shape.width, frame.shape.height),
+        size,
         offset: (rect.width() - frame.shape.width) / 2.0,
-        layer: view.layered,
         handed: view.handed,
         scaled,
-        children,
+        children: parts,
     });
     let mut children = vec![inner.key("content")];
     if view.layered {
@@ -1573,12 +1586,9 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
 /// reports when its window loses the keyboard.
 struct PanelRoot<M> {
     keys: KeyMode,
-    alpha: f64,
     size: Size,
     /// Where it lies in the enclosure: centred across it.
     offset: f64,
-    /// It is the content's own compositor layer ([`layers::CONTENT_LAYER`]).
-    layer: bool,
     /// The compositor runs the close ([`PanelView::handed`]): a key, its release included, reaches nothing inside, as
     /// a field would restart its caret's blink and draw again.
     handed: bool,
@@ -1595,7 +1605,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
             width: SizeSpec::Fixed(self.size.width.max(0.0)),
             height: SizeSpec::Fixed(self.size.height.max(0.0)),
             position: Point::new(self.offset, 0.0),
-            ..column(Insets::default())
+            ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
 
@@ -1605,11 +1615,10 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn state(&self) {}
 
+    /// It draws nothing: which keys it takes changes no pixel.
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.size, self.offset, self.scaled) != (old.size, old.offset, old.scaled) {
             Change::Layout
-        } else if (self.alpha, self.keys, self.layer) != (old.alpha, old.keys, old.layer) {
-            Change::Paint
         } else {
             Change::None
         }
@@ -1663,13 +1672,6 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     /// while its shapes and images fall between them.
     fn on_pixels(&self, _: &()) -> bool {
         self.scaled
-    }
-
-    fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
-        self.layer.then_some(cupertino_kit::core::SurfaceLayerMark {
-            key: layers::CONTENT_LAYER,
-            look: cupertino_kit::platform::SurfaceLayerLook::default(),
-        })
     }
 }
 
@@ -1975,6 +1977,8 @@ struct Bar<M> {
     spacing: f64,
     /// The opacity it is drawn at, as one layer when under 1.
     alpha: f64,
+    /// The compositor layer of its own it draws into, while the panel is drawn as layers ([`layers::ROW_LAYER`]).
+    layer: Option<u64>,
     children: Vec<Element<M>>,
 }
 
@@ -2009,7 +2013,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.height, self.leading, self.spacing) != (old.height, old.leading, old.spacing) {
             Change::Layout
-        } else if self.alpha != old.alpha {
+        } else if (self.alpha, self.layer) != (old.alpha, old.layer) {
             Change::Paint
         } else {
             Change::None
@@ -2031,6 +2035,13 @@ impl<M: 'static> Widget<M> for Bar<M> {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
+        self.layer.map(|key| cupertino_kit::core::SurfaceLayerMark {
+            key,
+            look: cupertino_kit::platform::SurfaceLayerLook::default(),
+        })
+    }
 }
 
 /// The results: a list of every result, of which the shown ones are children of their sections.

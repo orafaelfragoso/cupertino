@@ -4,7 +4,7 @@
 use super::*;
 use crate::motion::CLOSE_DURATION;
 use crate::view::layers::{
-    button_face_layer, button_glass_layer, CONTENT_LAYER, EDGE_LAYER, GLASS_LAYER,
+    button_face_layer, button_glass_layer, BODY_LAYER, EDGE_LAYER, GLASS_LAYER, ROW_LAYER,
 };
 use cupertino_kit::platform::{LayerProperty, SurfaceLayerLook};
 use cupertino_ui_test::PresentedSurfaceLayer;
@@ -219,10 +219,27 @@ fn walk(scale: f64, dark: bool, layers: bool) -> Vec<Rest> {
     m.until_quiet(4, 200);
     assert_eq!(m.model().nav.view, View::Browse);
     out.push(take(&mut m, "the browser"));
+    to_files(&mut m);
+    out.push(take(&mut m, "the files scope"));
     out
 }
 
-/// The panel at rest in each view, drawn in place and drawn as layers: the layers laid over the window's frame are
+/// From the browser at rest, the files scope at rest: the browser folds and closes, the files scope opens and a letter
+/// is typed, which shows the caret afresh whether or not the compositor ran the open.
+fn to_files(m: &mut Metered) {
+    for _ in 0..2 {
+        m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+        m.until_quiet(4, 200);
+    }
+    send(Message::CloseOver);
+    m.settle_on(Message::Files);
+    assert_eq!(m.model().nav.view, View::Files);
+    m.step(|s, w| key(s, w, 'x' as u32, Some('x'), Mods::NONE));
+    m.until_quiet(4, 200);
+}
+
+/// The panel at rest in each view (the search field, its results, the browser and the files scope), drawn in place and
+/// drawn as layers, its query row and its body each a layer of its own: the layers laid over the window's frame are
 /// the window's frame drawn in place, pixel for pixel, at whole and fractional scales and in both appearances; and
 /// the glass the layers carry is the glass the panel stands on in place, the window standing on none of its own.
 #[test]
@@ -235,7 +252,9 @@ fn a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place() {
                 let what = a.what;
                 assert!(a.keys.is_empty(), "{what}: drawn in place");
                 assert!(
-                    b.keys.contains(&GLASS_LAYER) && b.keys.contains(&CONTENT_LAYER),
+                    b.keys.contains(&GLASS_LAYER)
+                        && b.keys.contains(&ROW_LAYER)
+                        && b.keys.contains(&BODY_LAYER),
                     "{what} at {scale}x: {:?}",
                     b.keys
                 );
@@ -271,13 +290,23 @@ fn a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place() {
                 layered[0].keys,
                 vec![
                     GLASS_LAYER,
-                    CONTENT_LAYER,
+                    ROW_LAYER,
+                    BODY_LAYER,
                     EDGE_LAYER,
                     button_glass_layer(0),
                     button_face_layer(0)
                 ],
-                "the field's glass, content and edge, then the button's glass and face"
+                "the field's glass, query row, body and edge, then the button's glass and face"
             );
+            // the browser and the files scope: the glass, the query row, the body and the edge
+            for rest in &layered[2..] {
+                assert_eq!(
+                    rest.keys,
+                    vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER, EDGE_LAYER],
+                    "{}",
+                    rest.what
+                );
+            }
         }
     }
 }
@@ -304,7 +333,8 @@ fn a_resting_panel_closes_on_the_compositor_s_clock_without_a_frame() {
         vec![
             GLASS_LAYER,
             EDGE_LAYER,
-            CONTENT_LAYER,
+            ROW_LAYER,
+            BODY_LAYER,
             button_glass_layer(0),
             button_face_layer(0)
         ]
@@ -404,6 +434,8 @@ fn resting_layers(
     m.step(|s, w| key(s, w, '1' as u32, Some('1'), Mods::PRIMARY));
     m.until_quiet(4, 200);
     out.push(take(&mut m, "the browser"));
+    to_files(&mut m);
+    out.push(take(&mut m, "the files scope"));
     out
 }
 
@@ -996,7 +1028,11 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
         assert!(m.model().open_handed(), "{what}: still the compositor's");
         let first = m.presents();
         let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
-        assert_eq!(keys, vec![GLASS_LAYER, CONTENT_LAYER, EDGE_LAYER], "{what}");
+        assert_eq!(
+            keys,
+            vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER, EDGE_LAYER],
+            "{what}"
+        );
         let open = m.layer_requests()[asked..].to_vec();
         let of = |key: u64, p: LayerProperty| -> Vec<cupertino_kit::platform::LayerChange> {
             open.iter()
@@ -1015,7 +1051,7 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
         assert!((start - glass.width() * crate::motion::ENTER_SCALE).abs() < 1e-3);
         assert_eq!(width[0].to, glass.width());
         // the content's place springs, the compositor putting it on whole device pixels as the panel does
-        let y = of(CONTENT_LAYER, LayerProperty::Y);
+        let y = of(ROW_LAYER, LayerProperty::Y);
         assert_eq!(
             y.len(),
             2,
@@ -1026,7 +1062,7 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
             Some(cupertino_kit::platform::LayerCurve::Spring { response, damping })
                 if response == crate::motion::OPEN_RESPONSE && damping == crate::motion::OPEN_DAMPING
         ));
-        for key in [GLASS_LAYER, EDGE_LAYER, CONTENT_LAYER] {
+        for key in [GLASS_LAYER, EDGE_LAYER, ROW_LAYER, BODY_LAYER] {
             let fade = of(key, LayerProperty::Opacity);
             assert_eq!(
                 (fade[0].to, fade[1].to),
@@ -1414,7 +1450,7 @@ fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame(
     let first = m.presents();
     let shown = m.shown_layers();
     let count = m.model().modes().len();
-    let mut want = vec![GLASS_LAYER, CONTENT_LAYER];
+    let mut want = vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER];
     for i in 0..count {
         want.extend([button_glass_layer(i), button_face_layer(i)]);
     }

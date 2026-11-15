@@ -903,7 +903,8 @@ Gate:
               faded in on the linear 0.1 s (`layers::open_changes`, `Model::hand_scope_opens`). The edge stays the
               edge layer, scaled, not the compositor's: a scope's corners are continuous, and the compositor's edge
               would follow them where the panel strokes circular arcs (above), so the scaled layer is the nearer of
-              the two (its stroke a tenth wider at the first frame). Done: the panel draws its layers once, at rest,
+              the two (its stroke a tenth wider at the first frame); since the panel's edge follows the glass, the
+              edge is the compositor's along the glass and the edge layer is gone (below). Done: the panel draws its layers once, at rest,
               in the open's first frame (1 window frame and 3 layer frames), then no frame of its window or a layer
               and asks for none until the open is over, the browser's scroll indicator kept meanwhile
               (`a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame`, the browser and the files
@@ -955,7 +956,8 @@ Gate:
                 within 0 of 255, along the outline 178 and 52 of 255 (dark, light) while the corners are a scope's and
                 within 1 from 300 ms, at the field's capsule
                 (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). Behind
-                `Model::hand_folds`, off in the process until the edge follows the glass (below).
+                `Model::hand_folds`, off in the process until the edge followed the glass (below), on since: along
+                the outline then within 2 of 255 in the dark and 1 in the light.
           - [ ] The unfold: the scope's body drawn into the body's layer at its first frame and masked to the glass as
                 it grows, and the mode buttons' layers carried through their merge; not done.
           - [ ] The edge follows the glass (decided by the owner: the edge follows the glass's continuous outline).
@@ -975,9 +977,16 @@ Gate:
                   (`parity::superellipses_match_the_cpu`). No golden changed: the launcher's goldens draw without
                   glass, where the edge keeps the opaque fill's circular corners, and the server's launcher golden is
                   the search field, whose capsule is stroked as before.
-            - [ ] The scopes' rest, open and close on the compositor's edge (`layers::glass_edge`, then within 4 of
-                  255 of the panel's along every side and corner), the scope's edge layer gone.
-            - [ ] The fold and unfold carry it, from here on in order with the items above and below.
+            - [x] The scopes' rest, open and close on the compositor's edge (`layers::glass_edge`, then within 4 of
+                  255 of the panel's along every side and corner), the scope's edge layer gone
+                  (`layers::compositor_edge`; the search field keeps its edge layer). At rest within 1 of 255 along
+                  every side and corner at 1, 1.5 and 2 in both appearances; the open from hidden at the same moments
+                  within 1 along the edge (it was up to 90 with the scaled edge layer); against the server the
+                  browser's open 0 buffers over 113 steps part way with 3 layers. The scope's close draws the
+                  compositor's edge unblurred where the panel's own close blurs it; it has no same-moment test.
+            - [ ] The fold and unfold carry it, from here on in order with the items above and below. The fold does
+                  (`Model::hand_folds` on in the process; at the same moments along the outline 2 of 255 in the dark
+                  and 1 in the light, where it was 178 and 52); the unfold waits on its own item above.
           - [ ] Their same-moment test, as the open's (`open_moments` over `Escape` from a scope and the scope's
                 shortcut from the field), and the real process's count against the server, as
                 `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` (one

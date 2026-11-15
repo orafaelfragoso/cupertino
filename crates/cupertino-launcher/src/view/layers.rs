@@ -4,8 +4,9 @@
 //! parts draw into layers of their own ([`PanelView::layered`]) with the same pixels as when they paint in place:
 //!
 //! * the enclosure's glass, a layer with the glass in its look and nothing of its own ([`GLASS_LAYER`]);
-//! * the thin dark edge just outside the enclosure, in a layer around it whose centre is the point the enclosure grows
-//!   about, so the layer's scale grows the edge with the glass ([`EDGE_LAYER`]);
+//! * the search field's thin dark edge just outside the enclosure, in a layer around it whose centre is the point the
+//!   enclosure grows about, so the layer's scale grows the edge with the glass ([`EDGE_LAYER`]); a scope's edge is the
+//!   compositor's, along its glass ([`compositor_edge`]);
 //! * the content, unscaled, in two layers: the query row ([`ROW_LAYER`]) and the body below it ([`BODY_LAYER`]),
 //!   which a fold fades on its own curve while the row does not, both from the content's top ([`ContentPart`]);
 //! * each mode button's glass, in the field's glass group, and its face (its edge, focus ring and symbol) in a layer
@@ -22,10 +23,13 @@
 //!
 //! While the compositor runs a scope's fold into the search field ([`fold_changes`]) the shape changes from a scope's
 //! to the field's capsule, which a fixed frame of an edge cannot follow either: the glass carries the edge then too.
+//! A scope's glass carries it at rest, through its open from hidden and through its close as well: the panel strokes
+//! its own edge along the glass's continuous outline, as the compositor draws it ([`super::edge_outside`]).
 //!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
-//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it and the content and
-//! the edge blur to the close's blur, everything fades out, and the mode buttons move out with the group.
+//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it (the edge layer's)
+//! or follows it (the compositor's), the content and the edge layer blur to the close's blur, everything fades out,
+//! and the mode buttons move out with the group.
 
 use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
@@ -160,6 +164,14 @@ pub fn glass_edge(dark: bool) -> LayerEdge {
         width: EDGE_WIDTH,
         color: [0.0, 0.0, 0.0, edge_alpha(dark, true)],
     }
+}
+
+/// Whether the compositor draws the edge of the panel `frame` presents along its glass, in place of the edge layer, at
+/// rest, through the open from hidden and through the close: a scope's, one shape without mode buttons, whose edge the
+/// panel strokes along the glass's continuous outline as the compositor does. The search field's edge stays a layer of
+/// its own there, scaled and blurred with the enclosure as the field closes.
+pub fn compositor_edge(frame: &Frame) -> bool {
+    frame.header.is_scope() && frame.modes.count == 0
 }
 
 /// A layer that carries only the glass of its look: it draws nothing, the compositor draws the glass in its bounds.
@@ -524,19 +536,19 @@ pub fn close_changes(
     let go = |property, value: f64| LayerChange::new(property, value, curve);
     let fade = || go(LayerProperty::Opacity, 0.0);
     let (rest, end) = (enclosure_rect(extent, from), enclosure_rect(extent, to));
-    let mut out = vec![
-        (
-            GLASS_LAYER,
-            vec![
-                go(LayerProperty::X, end.x()),
-                go(LayerProperty::Y, end.y()),
-                go(LayerProperty::Width, end.width()),
-                go(LayerProperty::Height, end.height()),
-                go(LayerProperty::CornerRadius, enclosure_radius(to)),
-                fade(),
-            ],
-        ),
-        (
+    let mut out = vec![(
+        GLASS_LAYER,
+        vec![
+            go(LayerProperty::X, end.x()),
+            go(LayerProperty::Y, end.y()),
+            go(LayerProperty::Width, end.width()),
+            go(LayerProperty::Height, end.height()),
+            go(LayerProperty::CornerRadius, enclosure_radius(to)),
+            fade(),
+        ],
+    )];
+    if !compositor_edge(from) {
+        out.push((
             EDGE_LAYER,
             vec![
                 go(LayerProperty::Scale, to.scale.max(to.scale_y)),
@@ -547,8 +559,8 @@ pub fn close_changes(
                 ),
                 fade(),
             ],
-        ),
-    ];
+        ));
+    }
     // the content keeps its size, centred across the enclosure and from its top edge
     let content_at = |frame: &Frame, rect: Rect| {
         Point::new(
@@ -598,10 +610,11 @@ pub fn close_changes(
 /// panel with no mode buttons (a scope). The open only scales the enclosure about its centre (on the open's spring)
 /// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale. The
 /// content's place, which keeps its size, springs from where the first frame has it on the same spring, as the
-/// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner and the edge's
-/// scale about the enclosure's middle are carried through `motion`'s own values ([`open_values`]): a spring of the
-/// compositor comes to rest within a thousandth of its unit of its target, which for a scale is a third of a device
-/// pixel at the panel's sides, and the panel's own spring comes to rest at its own time.
+/// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner, and the edge
+/// layer's scale about the enclosure's middle where the edge is not the compositor's ([`compositor_edge`]), are
+/// carried through `motion`'s own values ([`open_values`]): a spring of the compositor comes to rest within a
+/// thousandth of its unit of its target, which for a scale is a third of a device pixel at the panel's sides, and the
+/// panel's own spring comes to rest at its own time. A scope's edge is the compositor's, along the glass.
 pub fn open_changes(
     extent: Size,
     first: &Frame,
@@ -641,8 +654,6 @@ pub fn open_changes(
         through(LayerProperty::CornerRadius, &enclosure_radius),
     ];
     opacity(&mut glass);
-    let mut edge = vec![through(LayerProperty::Scale, &|f| f.scale.max(f.scale_y))];
-    opacity(&mut edge);
     // the content keeps its size, centred across the enclosure and from its top edge
     let content_at = |frame: &Frame| {
         let r = rect(frame);
@@ -653,12 +664,14 @@ pub fn open_changes(
     from_to(&mut content, LayerProperty::X, p.x, q.x, spring);
     from_to(&mut content, LayerProperty::Y, p.y, q.y, spring);
     opacity(&mut content);
-    vec![
-        (GLASS_LAYER, glass),
-        (EDGE_LAYER, edge),
-        (ROW_LAYER, content.clone()),
-        (BODY_LAYER, content),
-    ]
+    let mut out = vec![(GLASS_LAYER, glass)];
+    if !compositor_edge(rest) {
+        let mut edge = vec![through(LayerProperty::Scale, &|f| f.scale.max(f.scale_y))];
+        opacity(&mut edge);
+        out.push((EDGE_LAYER, edge));
+    }
+    out.extend([(ROW_LAYER, content.clone()), (BODY_LAYER, content)]);
+    out
 }
 
 /// The blur of a mode button's symbol `sharp` of the way to sharp, as the deviation of a Gaussian in points: half the

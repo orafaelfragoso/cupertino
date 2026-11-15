@@ -594,7 +594,8 @@ pub struct PanelView<'a> {
     /// query row's layer again.
     pub opening: bool,
     /// The compositor draws the panel's edge along its glass ([`layers::glass_edge`]): while it runs the search field's
-    /// open, the shapes joining and parting every frame, or a fold, the shape changing; no layer draws an edge then.
+    /// open, the shapes joining and parting every frame, or a fold, the shape changing, and for a scope at rest, in its
+    /// open and in its close ([`layers::compositor_edge`]); no layer draws an edge then.
     pub group_edge: bool,
     /// The panel's own motion runs and it draws it itself: its content lies on whole device pixels as one picture, as
     /// the compositor puts the content's layers when it runs a motion.

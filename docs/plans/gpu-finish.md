@@ -105,8 +105,11 @@ The boxes here are ticked together with their items in the GPU plan.
       layer still animates, in the way the scope's open test counts its own.
 - [x] `cupertino-ui-gpu`'s `a_large_windows_damaged_frame_stays_within_the_gpu_budget` times the GPU's own work (a
       timer query), not wall-clock time with other GPU users in it. The damaged frame takes about 0.05 ms on the GPU
-      here. The test's other check, a whole frame recorded and issued within 4 ms (now of the thread's CPU time), still
-      fails: 5.7 to 6.3 ms of CPU time in the dev build, against 2.5 ms when the budget was set; open.
+      here. The test's other check, a whole frame recorded and issued within 4 ms of the thread's CPU time, holds an
+      optimized build (2.4 to 2.6 ms of CPU time, at the commit that set the budget and now); the unoptimized build the
+      test scripts run takes 5.6 to 6.2 ms at both, so it was never a slowdown, and that build is held to 10 ms instead,
+      the optimized budget scaled by its measured cost. The damaged frame's figures do not depend on the build (0.05 ms
+      on the GPU in both; without timer queries 0.18 ms of CPU time optimized and 0.5 ms not, well within 4 ms).
 
 ## Wave 3: the launcher's fold and unfold (`cupertino-launcher`, after 1c)
 

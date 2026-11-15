@@ -5,7 +5,7 @@
 //! stretches the time to the finish. On the local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) a damaged frame's time on the
 //! GPU must stay within the client's GPU budget per frame (without timer queries, the CPU time of its recording and
 //! issuing instead, and the GPU's half is skipped with a message), and a whole frame's recording and issuing of its
-//! draws within its CPU budget.
+//! draws within its CPU budget, which an unoptimized build holds to a larger budget of its own.
 
 use std::time::{Duration, Instant};
 
@@ -23,8 +23,23 @@ const SCALE: f64 = 1.5;
 /// The most a frame repainting a control's worth of damage may take on the GPU.
 const DAMAGED_BUDGET: Duration = Duration::from_millis(4);
 
-/// The most the recording and issuing of a whole frame's draws may take of the thread's CPU time, request to return.
+/// The most the recording and issuing of a whole frame's draws may take of the thread's CPU time, request to return,
+/// in an optimized build.
 const WHOLE_RECORDING_BUDGET: Duration = Duration::from_millis(4);
+
+/// The same budget for an unoptimized build (debug assertions on, as the test scripts build): the optimized budget
+/// scaled by the measured cost of an unoptimized build, whose whole frame takes about two and a half times the CPU
+/// time of an optimized one (about 6 ms against 2.4 ms here).
+const WHOLE_RECORDING_BUDGET_UNOPTIMIZED: Duration = Duration::from_millis(10);
+
+/// The build's profile, for the failure message, and its budget for a whole frame's recording and issuing.
+fn whole_recording_budget() -> (&'static str, Duration) {
+    if cfg!(debug_assertions) {
+        ("an unoptimized build", WHOLE_RECORDING_BUDGET_UNOPTIMIZED)
+    } else {
+        ("an optimized build", WHOLE_RECORDING_BUDGET)
+    }
+}
 
 /// The window tiled with the golden scenes, each moved to its place.
 fn window(system: &TextSystem) -> DisplayList {
@@ -210,9 +225,11 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
                 );
             }
         }
+        let (profile, budget) = whole_recording_budget();
         assert!(
-            whole_submitted_cpu < WHOLE_RECORDING_BUDGET,
-            "a whole frame's draws took {whole_submitted_cpu:?} of the thread's CPU time to record and issue"
+            whole_submitted_cpu < budget,
+            "a whole frame's draws took {whole_submitted_cpu:?} of the thread's CPU time to record and issue, over \
+             the budget of {budget:?} for {profile}"
         );
     }
 }

@@ -15,6 +15,7 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-profile = { path = "../cupertino-profile" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-menus = { path = "../cupertino-ui-menus" }
@@ -24,6 +25,7 @@ cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 rustix = { version = "1", features = ["time"] }
 tiny-skia = "0.12"
+tracing = "0.1"
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]

@@ -447,6 +447,8 @@ impl WaylandWindowSystem {
         profile: Profile,
         class: RendererClass,
     ) -> Result<WaylandWindowSystem, PlatformError> {
+        // the frame timeline `CUPERTINO_PROFILE` asks for, from the process's first frame
+        cupertino_profile::init();
         Connection::connect()
             .map(|conn| WaylandWindowSystem::new_as(conn, profile, class))
             .map_err(platform_error)
@@ -1998,7 +2000,10 @@ impl WindowSystem for WaylandWindowSystem {
         let resized = w.shown != Some(size);
         let carried = std::mem::take(&mut w.carried);
         let inside = |r: &PixelRect| clip(*r, size.0, size.1);
-        let leased = match self.conn.lease(surface, logical, BufferFormat::Abgr8888) {
+        let leasing = tracing::trace_span!("wl.lease").entered();
+        let leased = self.conn.lease(surface, logical, BufferFormat::Abgr8888);
+        drop(leasing);
+        let leased = match leased {
             Ok(mut lease) => {
                 let layout = lease.layout();
                 if (layout.width(), layout.height()) != size
@@ -2028,8 +2033,10 @@ impl WindowSystem for WaylandWindowSystem {
                                 .chain(drawn.iter().map(wire_rect))
                                 .filter_map(|r| inside(&r))
                                 .collect();
-                            lease
-                                .present_damage((!resized).then_some(&changed[..]))
+                            tracing::trace_span!("wl.commit")
+                                .in_scope(|| {
+                                    lease.present_damage((!resized).then_some(&changed[..]))
+                                })
                                 .map_err(platform_error)?;
                             Ok(id)
                         }
@@ -2420,7 +2427,8 @@ fn copy_and_present(
     } else {
         BufferFormat::Argb8888
     };
-    let mut lease = match conn.lease(surface, size, format) {
+    let leased = tracing::trace_span!("wl.lease").in_scope(|| conn.lease(surface, size, format));
+    let mut lease = match leased {
         Ok(lease) => lease,
         Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),
         Err(Error::NotConfigured) => return Ok(Err(Some(Stall::Configure))),
@@ -2451,18 +2459,21 @@ fn copy_and_present(
     } else {
         convert_rects
     };
-    into(
-        &frame.pixels,
-        frame.stride as usize,
-        lease.pixels_mut(),
-        layout.stride(),
-        copy.as_deref().unwrap_or(&whole),
-    );
+    let rects = copy.as_deref().unwrap_or(&whole);
+    tracing::trace_span!("wl.copy", from = "memory", rects = rects.len()).in_scope(|| {
+        into(
+            &frame.pixels,
+            frame.stride as usize,
+            lease.pixels_mut(),
+            layout.stride(),
+            rects,
+        )
+    });
     if let (Some(total), Some(since)) = (copy_time, copying) {
         *total += since.elapsed();
     }
-    lease
-        .present_damage((!resized).then_some(&changed[..]))
+    tracing::trace_span!("wl.commit")
+        .in_scope(|| lease.present_damage((!resized).then_some(&changed[..])))
         .map_err(platform_error)?;
     Ok(Ok(()))
 }

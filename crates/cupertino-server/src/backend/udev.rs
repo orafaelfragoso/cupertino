@@ -1439,6 +1439,7 @@ fn render_surface(
     // and the vblank it is drawn for is the first after this moment
     let started = Instant::now();
     let started_at = Duration::from(state.clock.now());
+    let _frame = tracing::trace_span!("server.output_frame", output = idx).entered();
     let target = {
         let refresh = state.refresh_of(idx);
         let now = state.frame_now();
@@ -1449,6 +1450,13 @@ fn render_surface(
             .get(&node)
             .and_then(|c| c.surfaces.get(&crtc))
             .is_some_and(|s| !s.latch.delay(s.refresh).is_zero());
+    // the wait from the vblank to this start, on the timeline beside the frames
+    if held && state.fixed_time.is_none() {
+        if let Some(vblank) = state.outputs[idx].scheduler.last_vblank() {
+            let nanos = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+            cupertino_profile::interval("server.latch_wait", nanos(vblank), nanos(started_at));
+        }
+    }
     // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let drawn = if node == u.render_node {
         draw_direct(state, u, node, crtc, idx)?
@@ -1480,7 +1488,9 @@ fn render_surface(
             _buffers: drawn.buffers,
             trace,
         };
-        match surface.drm_output.queue_frame(frame) {
+        let queued = tracing::trace_span!("server.submit")
+            .in_scope(|| surface.drm_output.queue_frame(frame));
+        match queued {
             Ok(()) => {
                 surface.pending = true;
                 surface.in_flight = Some(InFlight {

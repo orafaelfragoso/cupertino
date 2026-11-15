@@ -15,6 +15,7 @@ cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+tracing = "0.1"
 
 [dev-dependencies]
 gungraun = "=0.20.0"

@@ -684,6 +684,41 @@ benches cover comes with its benchmark; a new hot function gets one in its crate
 | `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
 | `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |
 
+### Frame timelines
+
+`CUPERTINO_PROFILE` records where each frame's time goes, as spans on a timeline, in every process started with it.
+A slow frame then shows which part of it grew, without adding timing prints. The spans:
+
+- the toolkit's run loop: each turn (`ui.turn`); its update (`ui.update`: the wake-ups and fades, each platform event
+  by its kind, the tasks run, each message by its type); `ui.view`; and per window (`ui.window`) its layout, paint,
+  raster per layer (`content`, `raised`, the surface layers) and present; accessibility and semantics; each idle slice;
+- the GPU renderer: `gpu.render` per layer with its prepare, plan, record, submit and image uploads, and the programs
+  made; the CPU renderer: `cpu.raster` per layer with its plan, scroll layers and paint;
+- the Wayland presenter: lease (with allocations), copy, commit, submit and the fence wait or finish, and the GPU
+  warm-up's device, program turn and programs, on the warm-up thread's track;
+- the compositor: each output's frame (`server.output_frame`), its scene, its render (lower, supersample, draw) with the
+  glass, material, blur, content blur, surface and shrink passes inside, the flip submitted, the GPU wait of a timed
+  headless frame, and on the text console the late start after a vblank (`server.latch_wait`) on a track of its own.
+
+| Value | What is recorded |
+|---|---|
+| `chrome:DIR/` | each process's spans in `DIR/<program>-<pid>.json` (Trace Event format), which [Perfetto](https://ui.perfetto.dev) opens; the files' times are the monotonic clock's, so their events concatenated into one array open as one timeline with a track per process |
+| `chrome:FILE` | one process's spans in `FILE` |
+| `tracy` | the spans streamed to the Tracy profiler, in a build with its client (`crates/cupertino-profile/README.md`) |
+
+```sh
+CUPERTINO_PROFILE=chrome:/tmp/trace/ scripts/dev/shot /tmp/files.png --spawn cupertino-files
+CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- --spawn cupertino-files
+```
+
+The headless session (`session.sh`, which `scripts/dev/shot` and `scripts/dev/bench` start) passes the variable through,
+and the server passes it to every process it starts. A file is written as the process runs, at most 100 ms behind, and
+closed when the process exits; a process killed first (the shell processes when the server ends) leaves it without the
+closing `]`, which Perfetto reads. Unset, no layer is installed and a span costs its callsite's check that nothing
+listens, about a nanosecond: `scripts/test -p cupertino-ui-core -- --no-capture -E 'test(/frame_spans/)'` prints a
+frame's spans and their cost, recorded and not. The frame timing file (`CUPERTINO_FRAME_TIMING`, the phases
+`scripts/dev/bench` reads) is apart and unchanged.
+
 ## Soak
 
 `ci/soak.py` runs the daily-driver workload for hours and samples the server's RSS and open file descriptors every minute: Chrome and an Electron window each play a looping video while the page scrolls itself (from the page's script, not from input events), foot prints a listing five times a second, Files shows the home folder, and `glxgears` draws through `xwayland-satellite`. A `cupertino-testclient --intervals` window draws on every frame callback and logs the time between its presented frames; each sample carries that minute's median and 99th percentile, and the result reports how both changed after the warm-up (reported, not judged). It needs `google-chrome-stable`, `electron43`, `foot`, `glxgears`, `xwayland-satellite` and `ffmpeg` (it encodes the test video). `cupertino-files` and `cupertino-testclient` are taken from `BIN_DIR` (default `target/release`), else from `PATH`; `--headless` also runs the server from there.

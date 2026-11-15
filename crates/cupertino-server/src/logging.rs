@@ -83,6 +83,7 @@ pub fn init(file: Option<File>) {
                         .with_writer(io::stderr)
                         .with_filter(LevelFilter::WARN),
                 )
+                .with(cupertino_profile::layer())
                 .init();
         }
         None => tracing_subscriber::registry()
@@ -91,6 +92,7 @@ pub fn init(file: Option<File>) {
                     .with_writer(io::stderr)
                     .with_filter(filter()),
             )
+            .with(cupertino_profile::layer())
             .init(),
     }
     let previous = std::panic::take_hook();

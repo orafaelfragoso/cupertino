@@ -1262,6 +1262,9 @@ desktop session running beside the runs.
 - `CUPERTINO_FRAME_TIMING=PATH`: every toolkit process appends one JSON line a presented frame with its phases
   (update, view, layout, paint, raster, copy, commit, total). Without the variable no clock is read
   (`runtime::tests::a_presented_frame_is_timed_phase_by_phase_and_nothing_is_timed_without_a_sink`).
+- `CUPERTINO_PROFILE=chrome:DIR/` (or `tracy`): every process, the server's too, records the spans of its frames as a
+  timeline, one Trace Event file per process for Perfetto (`docs/src/building.md`, *Frame timelines*). Without the
+  variable no layer is installed (`runtime::tests::the_frame_spans_cost_nothing_measurable_with_no_timeline_recorded`).
 - The frame statistics (`--frame-stats`, headless) end with the GPU time of the frame (timer queries), title bar and
   HUD rasters and uploads with their bytes, and blur passes; a `# start_monotonic_ns` line lines other processes'
   times up with them.

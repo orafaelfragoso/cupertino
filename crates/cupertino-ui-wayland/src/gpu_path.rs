@@ -95,12 +95,14 @@ pub fn warm(
     cache: Option<&Path>,
     signals: &WarmSignals,
 ) -> Result<Warm, String> {
+    let _warm = tracing::trace_span!("wl.gpu_warm").entered();
     let started = Instant::now();
     let platform = match node {
         Some(node) => Platform::RenderNode(node.to_path_buf()),
         None => Platform::Surfaceless,
     };
-    let made = Device::new(&DeviceDesc { platform });
+    let made =
+        tracing::trace_span!("wl.gpu_device").in_scope(|| Device::new(&DeviceDesc { platform }));
     signals.note_device_made();
     let mut device = made.map_err(|e| e.to_string())?;
     let context = started.elapsed();
@@ -111,13 +113,17 @@ pub fn warm(
     let compiling = Instant::now();
     // the processes of a session starting together make their programs in turn, so on a cold cache only the first
     // loads the driver's compiler; a turn that cannot be held is not waited for, and a stop ends the wait
-    let turn = device
-        .program_cache_dir()
-        .and_then(|dir| program_cache::wait_turn(dir, PROGRAM_TURN_PATIENCE, &signals.stop));
+    let turn = tracing::trace_span!("wl.gpu_program_turn").in_scope(|| {
+        device
+            .program_cache_dir()
+            .and_then(|dir| program_cache::wait_turn(dir, PROGRAM_TURN_PATIENCE, &signals.stop))
+    });
     if signals.stopped() {
         return Err(STOPPED.into());
     }
-    let programs = Programs::new(&device).map_err(|e| e.to_string())?;
+    let programs = tracing::trace_span!("wl.gpu_programs")
+        .in_scope(|| Programs::new(&device))
+        .map_err(|e| e.to_string())?;
     drop(turn);
     let timing = WarmTiming {
         context,

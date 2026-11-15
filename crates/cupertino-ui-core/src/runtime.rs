@@ -643,34 +643,51 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     fn turn(&mut self) -> Result<(), UiError> {
+        let _turn = tracing::trace_span!("ui.turn").entered();
         let began = self
             .frame_timing
             .as_mut()
             .map(|t| t.begin(self.options.clock.now()));
-        self.wake_due();
-        self.advance_fades();
-        self.advance_grows();
+        let updating = tracing::trace_span!("ui.update").entered();
+        tracing::trace_span!("ui.wakes").in_scope(|| {
+            self.wake_due();
+            self.advance_fades();
+            self.advance_grows();
+        });
         for event in std::mem::take(&mut self.events) {
+            let _event = tracing::trace_span!(
+                "ui.event",
+                label = tracing::field::display(EventName(&event))
+            )
+            .entered();
             self.platform_event(event)?;
         }
         self.assistive_actions();
         self.semantic_actions();
-        self.messages.extend(self.executor.run_ready());
+        let ready = tracing::trace_span!("ui.tasks").in_scope(|| self.executor.run_ready());
+        self.messages.extend(ready);
         while let Some(message) = self.messages.pop_front() {
+            let _message = tracing::trace_span!(
+                "ui.message",
+                label = std::any::type_name::<A::Message>(),
+                variant = tracing::field::debug(std::mem::discriminant(&message))
+            )
+            .entered();
             for command in A::update(&mut self.model, message) {
                 self.command(command);
             }
             self.view_dirty = true;
         }
         self.finish_drops();
+        drop(updating);
         lap(&mut self.frame_timing, Phase::Update, began);
         if self.view_dirty && !self.exit {
             self.view_dirty = false;
             let viewing = mark(&self.frame_timing);
-            self.view()?;
+            tracing::trace_span!("ui.view").in_scope(|| self.view())?;
             lap(&mut self.frame_timing, Phase::View, viewing);
         }
-        let framed = self.frame();
+        let framed = tracing::trace_span!("ui.frame").in_scope(|| self.frame());
         if let Some(t) = &mut self.frame_timing {
             t.end();
         }
@@ -2247,8 +2264,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.view_dirty = true;
             }
         }
-        self.sync_accessibility();
-        self.sync_semantics();
+        tracing::trace_span!("ui.accessibility").in_scope(|| self.sync_accessibility());
+        tracing::trace_span!("ui.semantics").in_scope(|| self.sync_semantics());
         self.send_presented();
         Ok(())
     }
@@ -2329,10 +2346,13 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !w.dirty {
             return Ok(());
         }
+        let _window =
+            tracing::trace_span!("ui.window", window = tracing::field::debug(w.id)).entered();
         let mut focus_effects = Effects::default();
         let mut hold = false;
         let laid_out = !w.prepared;
         let laying_out = mark(&self.frame_timing);
+        let layout_span = tracing::trace_span!("ui.layout", whole = !w.prepared).entered();
         if !w.prepared {
             let result = match w.laid_out.take() {
                 Some(result) => result,
@@ -2508,6 +2528,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             hold = !scroll_effects.messages.is_empty() && w.held_paints < HELD_PAINTS;
             focus_effects.absorb(scroll_effects);
         }
+        drop(layout_span);
         lap(&mut self.frame_timing, Phase::Layout, laying_out);
         self.apply(i, focus_effects);
         // what lies under a drag that stood still may have moved
@@ -2552,7 +2573,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             w.surface_layers.hide(&mut self.system, w.id)?;
             let committing = mark(&self.frame_timing);
-            let solid = self.system.present_solid(w.id, color, w.ack);
+            let solid = tracing::trace_span!("ui.present", solid = true)
+                .in_scope(|| self.system.present_solid(w.id, color, w.ack));
             lap(&mut self.frame_timing, Phase::Commit, committing);
             match solid {
                 Ok(PresentOutcome::Presented) => {
@@ -2640,6 +2662,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             painting
         };
         let painting_since = mark(&self.frame_timing);
+        let paint_span = tracing::trace_span!("ui.paint").entered();
         let mut painting = paint(w, &self.tree, &self.pinned);
         w.painted_active = Some(w.active || w.keyboard_in_popup);
         if painting.pins && !self.pins_seen {
@@ -2714,6 +2737,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.opaque = opaque;
             }
         }
+        drop(paint_span);
         lap(&mut self.frame_timing, Phase::Paint, painting_since);
         // a frame that repainted nothing sends nothing, unless a configure waits for its acknowledgement or a frame
         // the window system was not ready for waits to be shown; one that repainted no pixel commits with no damage
@@ -2732,6 +2756,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         // the surface layers first: they show with the content's commit
         if surface.changed {
             let rastering = mark(&self.frame_timing);
+            let _surface_layers = tracing::trace_span!("ui.surface_layers").entered();
             let shown = w.surface_layers.present(
                 surface,
                 &mut self.system,
@@ -2755,6 +2780,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 (Some(layer), Some(height), Some(damage)) => {
                     w.layer.list = layer.list;
                     let rastering = mark(&self.frame_timing);
+                    let raster_span = tracing::trace_span!("ui.raster", layer = "raised").entered();
                     let renderer = w
                         .layer
                         .renderer
@@ -2770,11 +2796,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                         })
                         .map_err(UiError::Render)?;
                     let frame = renderer.frame(id).map_err(UiError::Render)?;
+                    drop(raster_span);
                     lap(&mut self.frame_timing, Phase::Raster, rastering);
                     let committing = mark(&self.frame_timing);
-                    let shown = self
-                        .system
-                        .present_layer(w.id, Some(RaisedLayer { frame, height }))
+                    let shown = tracing::trace_span!("ui.present", layer = "raised")
+                        .in_scope(|| {
+                            self.system
+                                .present_layer(w.id, Some(RaisedLayer { frame, height }))
+                        })
                         .map_err(UiError::Platform)?;
                     handed_over(&mut self.frame_timing, &mut self.system, committing);
                     shown
@@ -2819,10 +2848,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             };
             let (renderer, timing) = (&mut w.renderer, &mut self.frame_timing);
             let (mut failed, mut drawn, mut committing) = (None, None, None);
+            let _present = tracing::trace_span!("ui.present", lent = true).entered();
             let outcome = self
                 .system
                 .present_into(w.id, (width, height), w.ack, &changes, &mut |target| {
-                    let into = renderer.render_into(&request, target);
+                    let into = tracing::trace_span!("ui.raster", layer = "content")
+                        .in_scope(|| renderer.render_into(&request, target));
                     lap(timing, Phase::Raster, rastering);
                     committing = mark(timing);
                     match into {
@@ -2854,13 +2885,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let (outcome, id) = match lent {
             Some(lent) => lent,
             None => {
+                let raster_span = tracing::trace_span!("ui.raster", layer = "content").entered();
                 let id = w.renderer.render(&request).map_err(UiError::Render)?;
                 let frame = w.renderer.frame(id).map_err(UiError::Render)?;
+                drop(raster_span);
                 lap(&mut self.frame_timing, Phase::Raster, rastering);
                 let committing = mark(&self.frame_timing);
-                let outcome = self
-                    .system
-                    .present(w.id, frame, w.ack)
+                let outcome = tracing::trace_span!("ui.present")
+                    .in_scope(|| self.system.present(w.id, frame, w.ack))
                     .map_err(UiError::Platform)?;
                 handed_over(&mut self.frame_timing, &mut self.system, committing);
                 (outcome, Some(id))
@@ -3422,6 +3454,38 @@ fn sync_menus<M>(system: &mut impl WindowSystem, w: &mut WindowState<M>, menus: 
     if wanted != w.menus {
         let _ = system.request(w.id, WindowRequest::Menus(wanted.clone()));
         w.menus = wanted;
+    }
+}
+
+/// The kind of a platform event as its span's label (a window's event by the window event's kind): the variant its
+/// `Debug` output begins with. Formatted only when a timeline records the span, and only that far.
+struct EventName<'a>(&'a PlatformEvent);
+
+impl std::fmt::Display for EventName<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+        /// Keeps what comes before the first `(`, `{` or space, and stops the formatting there.
+        struct Name(String);
+        impl std::fmt::Write for Name {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                match s.find(['(', '{', ' ']) {
+                    Some(end) => {
+                        self.0.push_str(&s[..end]);
+                        Err(std::fmt::Error)
+                    }
+                    None => {
+                        self.0.push_str(s);
+                        Ok(())
+                    }
+                }
+            }
+        }
+        let mut name = Name(String::new());
+        let _ = match self.0 {
+            PlatformEvent::Window { event, .. } => write!(name, "{event:?}"),
+            event => write!(name, "{event:?}"),
+        };
+        f.write_str(&name.0)
     }
 }
 

@@ -445,6 +445,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             if rects.is_empty() {
                 continue;
             }
+            let _layer = tracing::trace_span!("cpu.scroll_layer", rects = rects.len()).entered();
             let content = in_content(request.list, kept_in, plan, scale, &rects);
             let tree = Tree::new(&content, scale);
             let mut painter = Painter {
@@ -597,6 +598,13 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
     type Frame = CpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        let _raster = tracing::trace_span!(
+            "cpu.raster",
+            width = request.width,
+            height = request.height,
+            nodes = request.list.nodes.len()
+        )
+        .entered();
         self.stats = RenderStats::default();
         let (full, zeroed) = self.prepare(request, true)?;
         let mut pixels = std::mem::take(&mut self.frame.pixels);
@@ -631,6 +639,14 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         request: &RenderRequest<'_>,
         target: MemoryTarget<'_>,
     ) -> Result<(RenderFrameId, Vec<PixelRect>), RenderError> {
+        let _raster = tracing::trace_span!(
+            "cpu.raster",
+            width = request.width,
+            height = request.height,
+            nodes = request.list.nodes.len(),
+            lent = true
+        )
+        .entered();
         self.stats = RenderStats::default();
         let (full, _) = self.prepare(request, false)?;
         let row = request.width as usize * 4;
@@ -676,9 +692,11 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
                 .collect(),
             _ => vec![whole],
         };
+        let planning = tracing::trace_span!("cpu.plan").entered();
         let kept_in = crate::scroll_layers(request.list);
         let plans = self.plan_scrolls(request, &kept_in, full, &damage);
         self.keep_groups(request);
+        drop(planning);
         let dirty = if full {
             vec![whole]
         } else {
@@ -717,9 +735,12 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
             frame_bytes: self.frame_bytes(),
             ..RenderStats::default()
         };
-        let painted = self
-            .paint_scrolls(request, &kept_in, &plans)
-            .and_then(|()| self.paint(request, pixels, painting, zeroed, &kept_in, &plans));
+        let painted = tracing::trace_span!("cpu.scroll_layers")
+            .in_scope(|| self.paint_scrolls(request, &kept_in, &plans))
+            .and_then(|()| {
+                tracing::trace_span!("cpu.paint", rects = painting.len())
+                    .in_scope(|| self.paint(request, pixels, painting, zeroed, &kept_in, &plans))
+            });
         self.stats.glyph_rasterize = self.glyphs.take_filled();
         self.stats.image_decode = self.images.take_filled();
         if painted.is_err() {

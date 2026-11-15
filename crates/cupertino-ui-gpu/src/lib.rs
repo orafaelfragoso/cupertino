@@ -316,6 +316,7 @@ pub struct GpuPrograms {
 impl GpuPrograms {
     /// The programs on `device`, compiled or loaded from its saved programs.
     pub fn new(device: &Device) -> Result<GpuPrograms, GpuError> {
+        let _programs = tracing::trace_span!("gpu.programs").entered();
         Programs::new(device).map(|inner| GpuPrograms { inner })
     }
 
@@ -557,8 +558,15 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
     type Frame = GpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        let _render = tracing::trace_span!(
+            "gpu.render",
+            width = request.width,
+            height = request.height,
+            nodes = request.list.nodes.len()
+        )
+        .entered();
         self.stats = GpuStats::default();
-        let full = self.prepare(request)?;
+        let full = tracing::trace_span!("gpu.prepare").in_scope(|| self.prepare(request))?;
         let whole = PixelRect {
             x: 0,
             y: 0,
@@ -578,7 +586,8 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
             _ => vec![whole],
         };
         let damaged: Vec<Bounds> = damage.iter().map(bounds).collect();
-        let (plans, moved) = self.plan_scrolls(request, full, &damaged);
+        let (plans, moved) = tracing::trace_span!("gpu.plan")
+            .in_scope(|| self.plan_scrolls(request, full, &damaged));
         let mut dirty = damage;
         if !full {
             // what the damage already repaints is not repainted twice
@@ -599,7 +608,8 @@ impl<R: GlyphRasterizer> UiRenderer for GpuRenderer<R> {
         if !dirty.is_empty() || plans.iter().any(|p| !p.paint.is_empty()) {
             let rects: Vec<Bounds> = dirty.iter().map(bounds).collect();
             let mut rec = record::Recording::new(full);
-            let painted = record::paint(self, &mut rec, request, &rects, &plans)
+            let painted = tracing::trace_span!("gpu.record", rects = rects.len())
+                .in_scope(|| record::paint(self, &mut rec, request, &rects, &plans))
                 .and_then(|()| self.execute(&mut rec).map_err(gpu));
             rec.release(self);
             if painted.is_err() {

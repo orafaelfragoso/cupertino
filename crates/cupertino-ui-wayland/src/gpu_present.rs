@@ -526,17 +526,21 @@ impl GpuSurface {
         }
         let allocated = self.allocated.expect("set above");
         self.stats.allocated = allocated;
+        let leasing = tracing::trace_span!("wl.lease", gpu = true).entered();
         self.refresh(gpu, conn);
         let index = match self.next(gpu) {
             Next::Buffer(i) => i,
             Next::Allocate => {
+                let _allocate = tracing::trace_span!("wl.allocate").entered();
                 self.allocate(gpu, conn, allocated)?;
                 self.slots.len() - 1
             }
             Next::Busy => return Err(PresentError::Busy),
         };
+        drop(leasing);
         if let Some(source) = source {
-            self.draw_from(gpu, index, source.texture())?;
+            tracing::trace_span!("wl.copy", from = "texture")
+                .in_scope(|| self.draw_from(gpu, index, source.texture()))?;
             self.stats.from_texture += 1;
             // the staging texture missed this frame
             self.stale = true;
@@ -570,6 +574,8 @@ impl GpuSurface {
             height: frame.height,
         }];
         let uploads: &[PixelRect] = if whole { &full } else { damage };
+        let copying =
+            tracing::trace_span!("wl.copy", from = "memory", rects = uploads.len()).entered();
         let mut packed = Vec::new();
         for r in uploads {
             let Some(r) = clip(*r, frame.width, frame.height) else {
@@ -607,6 +613,7 @@ impl GpuSurface {
             pass.draw(0..3, 1).map_err(gpu_error)?;
             pass.end();
         }
+        drop(copying);
         self.commit(
             gpu,
             conn,
@@ -661,10 +668,13 @@ impl GpuSurface {
         damage: &[PixelRect],
         whole: bool,
     ) -> Result<(), PresentError> {
+        let _commit = tracing::trace_span!("wl.commit", gpu = true).entered();
         let slot = &mut self.slots[index];
         let sync = match (&gpu.sync, &slot.timeline) {
             (Some(sync), Some((timeline, id))) => {
-                let (fence, file) = gpu.device.submit_exported().map_err(gpu_error)?;
+                let (fence, file) = tracing::trace_span!("wl.submit")
+                    .in_scope(|| gpu.device.submit_exported())
+                    .map_err(gpu_error)?;
                 gpu.device.destroy_fence(fence);
                 slot.uses += 1;
                 let (acquire, release) = (2 * slot.uses - 1, 2 * slot.uses);
@@ -680,11 +690,16 @@ impl GpuSurface {
             _ => {
                 // without explicit sync the compositor must not read a buffer still being drawn
                 if gpu.device.info().native_fences {
-                    let (fence, file) = gpu.device.submit_exported().map_err(gpu_error)?;
+                    let (fence, file) = tracing::trace_span!("wl.submit")
+                        .in_scope(|| gpu.device.submit_exported())
+                        .map_err(gpu_error)?;
                     gpu.device.destroy_fence(fence);
-                    cupertino_gpu::wait_sync_file(&file, FENCE_WAIT);
+                    tracing::trace_span!("wl.fence_wait")
+                        .in_scope(|| cupertino_gpu::wait_sync_file(&file, FENCE_WAIT));
                 } else {
-                    gpu.device.finish().map_err(gpu_error)?;
+                    tracing::trace_span!("wl.finish")
+                        .in_scope(|| gpu.device.finish())
+                        .map_err(gpu_error)?;
                 }
                 self.stats.fence_waits += 1;
                 slot.reuse = Reuse::Release;

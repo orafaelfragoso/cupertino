@@ -356,6 +356,7 @@ pub fn render(state: &mut Cupertino) {
             if !state.displays.powered(target.output) || !state.frame_due(idx, state.frame_now()) {
                 continue;
             }
+            let _frame = tracing::trace_span!("server.output_frame", output = idx).entered();
             // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
             let composing = Instant::now();
             let timing = state.frame_stats.is_some();
@@ -395,6 +396,7 @@ pub fn render(state: &mut Cupertino) {
                     // the GPU's work belongs to the frame's time: wait for it
                     let st = &*state;
                     let timer = st.frame_stats.as_ref().and_then(|s| s.timer.as_ref());
+                    let _wait = tracing::trace_span!("server.gpu_wait").entered();
                     let gpu = h
                         .renderer
                         .with_context(|gl| unsafe {

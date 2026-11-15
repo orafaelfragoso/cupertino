@@ -24,4 +24,6 @@ rustix = { version = "1", features = ["time"] }
 tracing = "0.1"
 
 [dev-dependencies]
+cupertino-profile = { path = "../cupertino-profile" }
 proptest = "1.12"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }

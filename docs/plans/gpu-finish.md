@@ -151,7 +151,10 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3c. The fold and unfold on the compositor's clock
 
-- [ ] The fold and unfold carry the row, the body, the glass and the edge.
+- [ ] The unfold (the scope's shortcut from the field) handed over as the fold is: the scope's body drawn into the
+      body layer at the first frame, that layer masked to the glass as it grows, the mode buttons' layers carried
+      through their merge, and masks in the same-moment test's composition.
+- [ ] The fold and unfold carry the row, the body, the glass and the edge; `Model::hand_folds` on in the process.
 - [ ] The same-moment test, as the open's (`open_moments` over `Escape` from a scope, and the scope's shortcut from
       the field).
 - [ ] The real process against the server: one buffer of the row's layer at the switch, and none other.

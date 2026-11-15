@@ -232,7 +232,8 @@ all on one thread.
   the outer layer, and a subtree's root leaves its ancestors' clips and groups to the layer's shape and properties),
   keeps a damage tracker and a renderer per layer, draws a layer only where it changed, at its layout size, and hands
   the frames to the window system with the window's (`present_surface_layers`). The application moves, fades, scales
-  and blurs a layer with `WindowRequest::Layer`, which draws no frame. Layout, input and semantics keep the layout.
+  and blurs a layer with `WindowRequest::Layer`, which draws no frame; once the window's layers' last running
+  animation ends, the window's root hears `Event::LayersSettled`. Layout, input and semantics keep the layout.
   Without the capability the subtree paints in place.
 - **Menus.** A toplevel's `menus` go to the window system as `WindowRequest::Menus` when its bar or its disabled
   items change, and `None` withdraws them; an item chosen in the desktop's menu bar (`WindowEvent::MenuActivated`)
@@ -260,5 +261,4 @@ all on one thread.
 
 ## Not yet
 
-An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop. Scrolling repaints everything the scroll view shows: the CPU renderer draws it again rather than moving
-the pixels it has.
+An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop.

@@ -2876,7 +2876,7 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// A light-appearance panel of regular glass (Control Center's modules and menus) keeps body text, black at 85 %,
+    /// A light-appearance panel of regular glass (the control panel's modules and menus) keeps body text, black at 85 %,
     /// at 4.5:1 or more over the darkest backdrops, at every panel size and with each accessibility recipe.
     #[test]
     fn light_glass_keeps_body_text_readable_over_a_dark_backdrop() {

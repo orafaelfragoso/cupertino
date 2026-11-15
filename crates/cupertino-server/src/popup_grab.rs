@@ -118,7 +118,7 @@ impl Cupertino {
 
     /// The keyboard is about to go to `surface` ([`Cupertino::set_keyboard_focus`], the one path every move of the
     /// keyboard takes): when that is outside the chain of the popup grab (another window, a layer surface such as the
-    /// launcher, Control Center or the authentication prompt, a lock surface, or none), the grab ends first and its
+    /// launcher, the control panel or the authentication prompt, a lock surface, or none), the grab ends first and its
     /// popups are dismissed, as a press elsewhere would end it, so a menu never stays open without its keys. The
     /// keyboard goes straight to `surface`, never back to the grab's toplevel first. The toplevel itself and the popups
     /// of its chain keep the grab.

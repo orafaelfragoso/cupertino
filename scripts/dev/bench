@@ -17,7 +17,7 @@ session that finds where the two windows are at this size and scale. The scenari
   drag            Settings dragged by its title bar over Files' sidebar, under the menu bar and back
   hover           the pointer sweeps along Settings' title bar, over its window buttons and its title, and back
   resize          Files raised, its lower right corner dragged out and back in
-  control-center  Control Center opened and closed, three times
+  control-panel   the control panel opened and closed, three times
   launcher-typing the launcher opened, a word typed a letter at a time and erased, Escape; twice
   files-scroll    Files raised and its list scrolled with two fingers, down and up
 and, with --scenario all or by name: dock-sweep (magnification), overview, launcher (open and close), context-menu
@@ -57,7 +57,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 TICK = os.sysconf("SC_CLK_TCK")
 SETTLE = 9.0
-BASELINE = ["idle", "drag", "hover", "resize", "control-center", "launcher-typing", "files-scroll"]
+BASELINE = ["idle", "drag", "hover", "resize", "control-panel", "launcher-typing", "files-scroll"]
 EXTRA = ["dock-sweep", "overview", "launcher", "context-menu", "files-full-repaint", "files-full-scroll"]
 # the files in Files' folder, and in the full screen scenarios', whose window shows 400 whole at 3840 x 2160 and scale 1
 ITEMS = 400
@@ -227,7 +227,7 @@ def script(name: str, hz: float, win: dict, size: tuple[int, int], scale: float,
         s.t += 0.1
         s.path([(cx, cy), (cx + grow, cy + grow * 0.6), (cx - 200, cy - 120), (cx, cy)], 3.0)
         s.at("--release", f"{cx:.1f},{cy:.1f}", s.dt)
-    elif name == "control-center":
+    elif name == "control-panel":
         for _ in range(3):
             s.at("--action", "control-panel")
             s.at("--action", "control-panel", 1.2)

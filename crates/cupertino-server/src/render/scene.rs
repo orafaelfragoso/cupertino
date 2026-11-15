@@ -1898,7 +1898,7 @@ pub fn raised_popups_window(wm: &Wm, output: OutputId) -> Option<WindowId> {
 }
 
 /// Whether the `top` surface gives way to a full-screen window: all but a menu bar and a surface over the whole output,
-/// such as the outside-click catcher of the launcher or Control Center, which must still take the click that closes them.
+/// such as the outside-click catcher of the launcher or the control panel, which must still take the click that closes them.
 pub fn gives_way(surface: &LayerSurface, menu_bars: &crate::menu_bar::MenuBars) -> bool {
     !menu_bars.has_surface(surface.wl_surface()) && surface.cached_state().anchor != Anchor::all()
 }

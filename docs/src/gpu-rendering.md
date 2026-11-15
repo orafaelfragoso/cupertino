@@ -15,7 +15,7 @@ step-by-step plan and its checklist are in `docs/plans/gpu-rendering.md`, and th
 | Title bars, window buttons, rims, keyboard HUDs | the compositor: each recorded as a list of draws, drawn by the borrowed device with the toolkit's coverage program into a texture of the renderer when its state changes (glyphs and button glyph paths kept in an atlas); painted on the CPU from the same list where the device cannot draw it | n/a |
 | The procedural cursor | the compositor, rasterized on the CPU (tiny-skia), cached, uploaded on change: the cursor plane's buffer is filled on the CPU | memory buffers |
 | Toolkit windows of the GPU class (Files windows, Settings, the dock and overview, the launcher) and third-party windows once large or busy | the GPU renderer (`cupertino-ui-gpu`) after the first frames, which the CPU draws while the device warms up, its scroll layers kept as textures; the CPU renderer on a fallback | dmabufs copied from the renderer's texture; shared memory on a fallback |
-| Toolkit windows of the CPU class (menu bar, OSD, banners, Control Center, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, drawn straight into the leased slot as `abgr8888` where the compositor lists it (what the slot missed repainted, nothing copied), converted into `argb8888` elsewhere, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
+| Toolkit windows of the CPU class (menu bar, OSD, banners, the control panel, screenshot, portal dialogs, lock screen, login, the Files desktop) | the CPU: tiny-skia, our own glyph rasterizer, resvg icons, box blur for layer effects; `CUPERTINO_RENDERER=gpu` takes them to the GPU renderer | `wl_shm`, three slots, damage rectangles, drawn straight into the leased slot as `abgr8888` where the compositor lists it (what the slot missed repainted, nothing copied), converted into `argb8888` elsewhere, the next slot's pages made off the frame while a window draws frame after frame; on the GPU, dmabufs copied from the renderer's texture |
 | The polkit agent, keyring prompter and portal pick overlay | the CPU, drawing with tiny-skia directly rather than through the toolkit renderer | `wl_shm` |
 
 The material system is already a GPU system: a window asks the compositor for glass by shape and style, and the
@@ -64,7 +64,7 @@ about to build, so the frame that builds them shapes none.
 
 | Class | Examples | Renderer |
 |---|---|---|
-| Small or rarely shown | OSD, banners, menu bar, Control Center, the About window, polkit and keyring prompts, portal overlays and file chooser, screenshot toolbar and selection overlay | CPU, with layers |
+| Small or rarely shown | OSD, banners, menu bar, the control panel, the About window, polkit and keyring prompts, portal overlays and file chooser, screenshot toolbar and selection overlay | CPU, with layers |
 | Must always draw | lock screen, login | CPU |
 | Static and full-screen | the Files desktop instance | CPU |
 | Large or continuously repainted | Files windows, Settings, the dock (and its overview), the launcher | GPU |
@@ -72,9 +72,9 @@ about to build, so the frame that builds them shapes none.
 
 Each process declares its class (`RendererClass`: `Cpu`, `Gpu`, or `ByUse` for the rule of the third-party row, which
 an application that declares nothing takes); `CUPERTINO_RENDERER=cpu|gpu` overrides it. The dock, the launcher and
-Control Center were measured on both renderers with their layers (the plan's step 7 measurements): the overview's
+the control panel were measured on both renderers with their layers (the plan's step 7 measurements): the overview's
 frames miss a refresh on the CPU and a typed letter's frame passes the animation budget there, both within it on the
-GPU; Control Center draws one frame as it opens and one as it closes, its motion the compositor's, and the GPU draws
+GPU; the control panel draws one frame as it opens and one as it closes, its motion the compositor's, and the GPU draws
 it little faster for the 70 MiB a context costs. On the CPU the shadow's bands, most of a frame's raster, are drawn
 once into a picture the process keeps and laid over one texel per pixel, so a whole opening frame at 1.5 takes about
 3 ms on the new renderer each opening makes. The polkit agent, the keyring prompter and the portal's pick overlay
@@ -94,9 +94,9 @@ load what it saved. With the cache warm a GPU process adds 7–24 MiB of private
 
 A new crate, `cupertino-gpu`, exposes what a 2D renderer needs: devices, buffers, textures with external memory,
 immutable pipelines, explicit render passes, bind groups and fences. Its shape follows Vulkan so the second backend
-is a translation, not a redesign. Backend one is OpenGL ES 3.0 over EGL (`glow` for GL, EGL and GBM through
-`libloading`); backend two is Vulkan (`ash`). EGL, GBM and Vulkan are loaded at run time, so a machine without them
-takes the fallback instead of failing to start. A borrowed-context mode runs `cupertino-gpu` passes inside the
+is a translation, not a redesign. The one backend is OpenGL ES 3.0 over EGL (`glow` for GL, EGL and GBM through
+`libloading`); a second, Vulkan (`ash`), is not built yet. EGL and GBM are loaded at run time, so a machine without
+them takes the fallback instead of failing to start. A borrowed-context mode runs `cupertino-gpu` passes inside the
 compositor's GL context with a defined state-restore contract: between entering and leaving, the device saves and
 puts back every piece of state it may change (the list is in the crate's `gles::state`), and draws with a vertex
 array of its own. A borrowed device draws either into textures of its own or, in a pass begun with
@@ -125,7 +125,8 @@ than `wgpu`'s overhead; the decision is reviewed before the Vulkan backend is bu
 The toolkit speaks Wayland in Rust and never hands EGL or Vulkan a `wl_display`. It allocates its own buffers on the
 device the compositor names in dmabuf feedback, renders into them and attaches them through `zwp_linux_dmabuf_v1`
 version 4. Two allocators exist: GBM buffer objects on a hardware device, and dmabuf export of a texture
-(`EGL_MESA_image_dma_buf_export`) where there is no GBM, as with a software rasterizer. A buffer uses only a modifier
+(`EGL_MESA_image_dma_buf_export`) where there is no GBM, as with a software rasterizer. A device that has neither
+allocates no dmabufs, and its process draws on the CPU into shared memory (section 8). A buffer uses only a modifier
 the feedback offers and its own driver can render to; linear is never added on a hardware driver. During a live
 resize buffers are allocated in size steps and cropped with the viewport. A window keeps two buffers when release
 points are available, three otherwise.
@@ -202,12 +203,14 @@ A process draws on the CPU when:
 - `CUPERTINO_RENDERER=cpu` is set, or its surface class is a CPU class, or it takes the size and repaint rule and
   no window of it has been large or busy yet;
 - the compositor offers no dmabuf feedback, the process cannot see the render node of the device it names (a sandbox
-  without `/dev/dri`), or EGL, GBM or Vulkan cannot be loaded or initialised on the advertised device;
+  without `/dev/dri`), or EGL or GBM cannot be loaded or initialised on the advertised device;
+- the device has no dmabuf allocator: neither GBM nor texture export;
 - the device is a software rasterizer;
 - its context was lost three times within a minute.
 
 `CUPERTINO_RENDERER=gpu` overrides the class and the software and missing-feedback conditions (it takes the device
-from EGL), which tests use. Contexts are created with the same robustness and purge-notification attributes as the
+from EGL), which tests use; a device that cannot be made, one with no allocator, and the context losses still send
+the process to the CPU. Contexts are created with the same robustness and purge-notification attributes as the
 compositor's. Video-memory purges (suspend, VT switch, mode set) are never counted as losses. After a reset or a purge the
 compositor tells every client its buffers were lost, so an idle client repaints instead of showing what the driver
 left behind. The renderer each process uses is logged once, reported by `cupertino-diagnose` and recorded in the frame
@@ -254,7 +257,10 @@ integer positions cannot land on device pixels at fractional scales. The protoco
 - retargeting from the presented value and velocity, with `finished` and `replaced (value, velocity)` events;
 - input: animated layers take no input, and the client hit-tests against target values;
 - semantics: accessible bounds are target values, with a settled signal for desktop control;
-- clipping to the window, and per-client limits;
+- clipping to the window (every layer and its glass cut to the window's outline, and a layer that masks to its
+  bounds to those bounds within it), and limits: 512 animations a client has running or waiting, queued ones among them, at most 16
+  layers of a parent in one glass group (a 17th is the `group_full` error), and every value shown held in a range far
+  past any output, so no request takes the scene past what it can draw;
 - a presentation of a whole surface (a panel, a popup), so a panel's fade or a popover's growth out of its anchor runs
   on the compositor's clock with no layer of the toolkit's;
 - a rule for content that arrives late while scrolling.
@@ -286,7 +292,10 @@ spring does not come to rest apart from the panel's), the content's place on the
 in, with no frame of the application's. While the panel scales in or out its content keeps its size, cut off by the
 glass (`Overflow::Crop`), and lies on whole device pixels as one picture (`Widget::on_pixels`), as the compositor
 moves the content's layer, so part way the two are the same pixels within 1 of 255; only the edge, the resting
-stroke scaled, differs from the stroke the panel draws at each scale, along the outline.
+stroke scaled, differs from the stroke the panel draws at each scale, along the outline. The search field's open with
+its mode buttons is handed over too (`layers::field_open_changes`). A handed open ends when the window system tells
+the panel its layers came to rest (`WindowEvent::LayersSettled`, once, when their last running animation ends), not
+on the panel's own clock, with a timer a second past the open's end in case no word comes.
 
 ### 10. The compositor
 
@@ -338,7 +347,7 @@ reviewed change that records the reason.
 | Any frame, compositor or client | inside one refresh (16.7 ms at 60 Hz); no missed refreshes in the bench scenarios, and no client frame longer than a refresh | every step: no scenario worse than its baseline beyond the recorded run-to-run noise (step 1: within its 10% budget); absolute from the step that owns the scenario (scroll 4, drag 2, resize and animation 7) |
 | Files wheel scroll with the window filling the output, p99 client frame CPU | under 8 ms at scale 1 and 1.5; paint and raster cover only the exposed strip | 4 |
 | Files live resize | client CPU excluding raster under 8 ms; client GPU under 4 ms | 7 |
-| Toolkit animation frame (Control Center opening, launcher typing), client CPU | under 4 ms | 7 |
+| Toolkit animation frame (the control panel opening, launcher typing), client CPU | under 4 ms | 7 |
 | Client GPU time per frame (timer queries) | under 4 ms | 6 |
 | Compositor frame while a window is dragged over glass | p99 GPU time per frame (timestamps) under 4 ms; p99 CPU time to compose and submit a frame, not counting the wait for the GPU, under 2 ms | 2 |
 | First frame of a GPU process | no later than the CPU path; the switch to the GPU within 150 ms with a warm program cache | 6 |
@@ -351,9 +360,12 @@ reviewed change that records the reason.
 
 ## Testing
 
-- Every renderer golden runs through both renderers. CI runs the GPU renderer on Mesa llvmpipe with
-  `CUPERTINO_RENDERER=gpu`; if the step 3 probe succeeds, the dmabuf presenter runs there too, allocating by texture
-  export.
+- Every golden scene of the toolkit's renderer runs through both renderers: `cupertino-ui-gpu`'s tests draw the CPU
+  renderer's scenes on the GPU against the same baselines. CI runs them, and `cupertino-gpu`'s, on Mesa's software
+  rasteriser (llvmpipe) through EGL's surfaceless platform, with `CUPERTINO_EGL_REQUIRED=1` making a missing device a
+  failure. The compositor's goldens run on the software rasteriser too, in the pinned image of `ci/goldens/Dockerfile`
+  (`ci/goldens.sh`). CI sets no `CUPERTINO_RENDERER`, and its runners have no render node, so the presenter's
+  end-to-end tests skip there and the session tests' toolkit windows draw on the CPU.
 - What CI cannot exercise (GBM, hardware modifiers, syncobj with the DRM backend, the NVIDIA driver) runs in a local
   tier before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a missing GPU a failure
   (`scripts/test --slow` and `scripts/done` set it when the machine's render node opens, and say so): dmabuf

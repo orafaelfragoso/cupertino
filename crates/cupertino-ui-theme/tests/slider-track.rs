@@ -107,7 +107,7 @@ fn a_slider_track_stands_three_to_one_against_the_window() {
     }
 }
 
-/// A panel's level slider, as in Control Center, sits in a module: the group fill over the panel, whose opaque colour
+/// A panel's level slider, as in the control panel, sits in a module: the group fill over the panel, whose opaque colour
 /// is the window background (the material it asks for blurs what is behind it instead).
 #[test]
 fn a_panel_slider_track_stands_three_to_one_against_its_module() {

@@ -58,7 +58,8 @@ is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn fro
 scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
 layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
 without a buffer when the window shows a frame, or with the layer's first values); their animations count for
-`presentation_settled`; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
+`presentation_settled`, and a window whose layers' last running animation ends hears `WindowEvent::LayersSettled` once,
+in the read that saw it end; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
 with one layer that fades on the compositor's clock while its content blur goes up and back down through samples, or
 with `--renderer` is drawn by the GPU renderer; the server's tests run it.
 Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
@@ -118,9 +119,11 @@ its anchor rectangle; `reactive` is not sent.
 application that declares none) starts on the CPU and moves to the GPU for good once a window covers more than a
 quarter of the largest output it is on (`large`) or presents more than 30 frames a second in each of two whole
 seconds (`Busy`), counted by `GpuPath::presented` with every window's present. `CUPERTINO_RENDERER=gpu` asks for the
-GPU whatever the class (it overrides a software device and missing dmabuf feedback); `CUPERTINO_RENDERER=cpu` keeps a
-process on the CPU. Missing libraries or devices (`Unavailable`), a device whose render node the process cannot see
-(`NoRenderNode`, a sandbox without `/dev/dri`) and three resets within a minute select the CPU; purges never count.
+GPU whatever the class (it overrides a software device and missing dmabuf feedback, but not a device with no dmabuf
+allocator); `CUPERTINO_RENDERER=cpu` keeps a process on the CPU. Missing libraries or devices (`Unavailable`), a
+device whose render node the process cannot see (`NoRenderNode`, a sandbox without `/dev/dri`), a device that can
+allocate no dmabufs, by GBM or by texture export (`NoAllocator`), and three resets within a minute select the CPU;
+purges never count.
 The current renderer and why (`active`) is logged as `renderer: <cpu|gpu> (<reason>)` on each change and recorded in
 `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>`. A process or surface that wanted the GPU and draws on the CPU
 (`renderer::fallback`: the process, one surface, or a reset of its context) logs
@@ -134,7 +137,10 @@ reports `PlatformEvent::RendererChanged`: the runtime drops every window's rende
 and caches go with it) and draws whole frames with a new one. The new ones come from `GpuRenderers`
 (`WaylandWindowSystem::gpu_renderers`), which the kit's renderer factory holds: while the process is on the GPU it
 makes a `cupertino_ui_gpu::WindowRenderer` on the presenter's device (shared through an `Rc`) with the programs made
-in the warm-up, and the CPU renderer otherwise. On a loss it frees every surface's buffers, reports the
+in the warm-up, and the CPU renderer otherwise. Dropping the path stops the warm-up thread after the step it is in and
+joins it (one still inside `Device::new` is waited for 5 s at exit and then left); a thread inside `Device::new` for
+10 s (`DEVICE_HANG`) is given up as a fallback, the run loop waking at that deadline to notice. On a loss it frees
+every surface's buffers (the lost device's images and buffer objects with them), reports the
 change back to the CPU and warms up again (or stays on the CPU after the third reset). `buffers_lost` from the
 compositor checks the device and makes every surface's next upload whole.
 

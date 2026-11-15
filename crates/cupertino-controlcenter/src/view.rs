@@ -52,7 +52,7 @@ pub const PANEL_KEY: &str = "panel";
 /// The `app_id` of the catcher's window.
 pub const CATCHER_APP_ID: &str = "cupertino-controlcenter.catcher";
 /// What assistive technology calls the panel.
-pub const TITLE: &str = "Control Center";
+pub const TITLE: &str = "Control Panel";
 
 const ESCAPE: Keysym = Keysym(0xff1b);
 const SPACE: Keysym = Keysym(0x20);

@@ -46,4 +46,5 @@ The tests (`tests/`) draw the golden scenes against the CPU renderer's baselines
 primitive group on both renderers at scales 1, 1.5 and 2 on odd sizes, whole and repainting damage, and scroll layers
 scrolled frame by frame against the same frames drawn whole. They need an EGL
 device: the first render node, or the surfaceless platform; `CUPERTINO_GPU_REQUIRED=1` makes a missing or software
-device a failure (the local GPU tier), `CUPERTINO_EGL_REQUIRED=1` a missing one (CI).
+device a failure (the local GPU tier: `scripts/test --slow` and `scripts/done` set it when the machine's render node
+opens), `CUPERTINO_EGL_REQUIRED=1` a missing one (CI, which runs them on Mesa's software rasteriser).

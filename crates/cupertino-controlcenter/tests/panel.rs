@@ -225,7 +225,7 @@ impl Run {
     /// Runs until every window rests, then checks that a screen reader could read every window open.
     fn settle(&mut self) {
         self.settle_frames();
-        self.driver.assert_accessible("Control Center");
+        self.driver.assert_accessible("Control Panel");
     }
 
     fn settle_frames(&mut self) {

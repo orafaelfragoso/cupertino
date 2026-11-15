@@ -127,6 +127,9 @@ struct Window {
     /// A toplevel's application id; empty for a popup.
     app_id: String,
     configured: bool,
+    /// The compositor leaves the window's size to it (no configure yet, or the last one carried no size): `size` follows
+    /// what the runtime asks ([`WindowRequest::SetSize`]).
+    free_size: bool,
     menus: Option<ShownMenus>,
     /// An input region to send with the next present; `Some(None)` gives the whole surface back.
     input_region: Option<Option<Vec<Rect>>>,
@@ -670,6 +673,7 @@ impl WaylandWindowSystem {
             materials: Vec::new(),
             app_id: String::new(),
             configured: false,
+            free_size: true,
             menus: None,
             input_region: None,
             opaque_region: None,
@@ -1027,6 +1031,21 @@ impl WaylandWindowSystem {
         Ok((surface, size))
     }
 
+    /// `window` committed a frame with a frame callback: its next frame waits for that callback. A frame queued as due
+    /// at once before the commit (one the window asked for while handling the callback that let it draw) is folded
+    /// into it, so the window draws once for each frame the compositor shows, not twice.
+    fn await_frame_callback(&mut self, window: WindowId) -> Result<(), PlatformError> {
+        let before = self.queued.len();
+        self.queued.retain(|event| {
+            !matches!(event, PlatformEvent::Window { window: w, event: WindowEvent::Frame(_) } if *w == window)
+        });
+        let folded = self.queued.len() < before;
+        let w = self.window_mut(window)?;
+        w.frame_pending = true;
+        w.frame_wanted |= folded;
+        Ok(())
+    }
+
     /// `window` presented frame `id` of `size` pixels: its feedback awaited, its next frame paced, and the size and
     /// repaint rule told.
     fn presented_frame(
@@ -1036,11 +1055,11 @@ impl WaylandWindowSystem {
         size: (u32, u32),
     ) -> Result<(), PlatformError> {
         let feedback = self.conn.capabilities().contains(Capability::Presentation);
+        self.await_frame_callback(window)?;
         let w = self.window_mut(window)?;
         if feedback {
             w.in_flight.push_back(id);
         }
-        w.frame_pending = true;
         w.shown = Some(size);
         if let Some(layer) = w.layer.as_mut() {
             layer.waiting = false;
@@ -1126,6 +1145,7 @@ impl WaylandWindowSystem {
                 if let Some(size) = configure.size {
                     self.windows[i].size = size;
                 }
+                self.windows[i].free_size = configure.size.is_none();
                 if !std::mem::replace(&mut self.windows[i].configured, true) {
                     let _ = self.publish_menus(self.windows[i].id);
                 }
@@ -1681,6 +1701,13 @@ impl WindowSystem for WaylandWindowSystem {
             WindowRequest::SetMaxSize(size) => {
                 self.window_mut(window)?.max_size = size;
                 self.send_size_limits(window)?
+            }
+            WindowRequest::SetSize(size) => {
+                let w = self.window_mut(window)?;
+                if w.free_size {
+                    w.size = convert::whole(size);
+                }
+                return Ok(());
             }
             WindowRequest::Move => {
                 let t = self.toplevel(window)?;
@@ -2275,8 +2302,8 @@ impl WindowSystem for WaylandWindowSystem {
         }
         match self.conn.present_solid(surface, size, color.to_array()) {
             Ok(()) => {
+                self.await_frame_callback(window)?;
                 let w = self.window_mut(window)?;
-                w.frame_pending = true;
                 w.shown = None;
                 w.carried.clear();
                 Ok(PresentOutcome::Presented)

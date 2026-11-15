@@ -72,7 +72,9 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   query field holds its caret (`BareField::hold_caret`), so neither a key nor the caret's blink draws the content
   again. At each frame the panel draws of its own close, the compositor's layers at the same moment, from the curves it
   sent, are its pixels (`view::tests::frames::layers`, which writes the pairs out with `CUPERTINO_LAUNCHER_MOMENTS`
-  set to a directory). While the panel moves, under Reduce Motion and
+  set to a directory; with `CUPERTINO_LAUNCHER_QUICK=1` the same-moment tests check only their key moments, the first,
+  the last, the header's switch, where a bound changes and where the figures come nearest their bounds, for a quick
+  look while working on them, and without it every moment, as the gate runs them). While the panel moves, under Reduce Motion and
   without the capability it draws its own close. The compositor can also draw the edge along the glass itself
   (`view::layers::glass_edge` in a glass layer's look, `SurfaceLayerLook::edge`), the panel's own edge along capsules and
   straight sides; a scope's open from hidden can be handed over (`view::layers::open_changes`, the layers drawn once at

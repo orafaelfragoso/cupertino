@@ -93,6 +93,8 @@ jobs:
       - run: python3 -I ci/test_replace.py
       - run: python3 -I ci/test_soak.py
       - run: python3 -I scripts/dev/test_bench.py
+      - run: python3 -I scripts/dev/test_profile.py
+      - run: python3 -I scripts/dev/test_perf_gate.py
       - run: python3 -I scripts/dev/test_drm_trace_summary.py
       - run: python3 -I ci/test_arch_ci.py
       - run: python3 -I ci/test_render_node.py

@@ -640,10 +640,73 @@ for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one withou
 | `scripts/dev/warm-target` | In a fresh git worktree, a copy-on-write clone of the main checkout's `target/debug` (btrfs, XFS), so the worktree's first build reuses every dependency already compiled; the worktree's own crates still rebuild once. |
 | `scripts/dev/shot OUT.png [server flags]` | One headless screenshot of the whole desktop with the current checkout, built first. `SIZE` (default `1512x982`), `SCALE` (default 2), `APPEARANCE` (`dark` or `light`), `AFTER` (seconds before the shot, default 5) and `WALLPAPER` change it. |
 | `scripts/preview` | Shoots every scenario in `scenarios/*.toml` headless with this checkout and with the installed release (or the programs in `PREVIEW_BEFORE=DIR`), at scales 1, 1.5 and 2 in light and dark, and shows them side by side with the changed pixels in `target/preview/index.html`. `--changed` takes only the scenarios of the programs changed since `origin/main`, `--no-before` skips the comparison, and `--live` runs the checkout's desktop in a window of the current session. |
-| `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. |
+| `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. `--profile[=perf\|samply\|heaptrack]` also runs every process of each session under the profiler, with the profiling build, and `--compare BASE.json` compares the run with a stored one and exits 1 on a regression ([Profiling and performance](#profiling-and-performance)). |
+| `scripts/dev/profile` | A program (`-- PROGRAM [ARGS]`) or the bench's sessions of some scenarios (`--scenario NAME[,NAME]`) under `perf` (the default), `samply` or `heaptrack`, with the profiling build: the tool's file and a plain-text summary per process ([Profiling and performance](#profiling-and-performance)). |
+| `scripts/dev/perf-gate [BASE]` | The scenarios the crates changed since `BASE` can affect, once each at 3840 × 2160 and scale 1.5, compared with this machine's stored baseline; on a regression the regressed scenario is profiled and the top functions of the regressed program are printed. `--update-baseline` records the baseline (three runs of every mapped scenario). |
 | `scripts/dev/measure` | Memory (PSS, RSS and private dirty) and CPU of every desktop process in a headless session at rest, while used and at rest after use, the median of `RUNS` sessions (default 3). `--out F.json` writes the figures and `--compare A.json B.json` shows the change process by process; `NO_BUILD=1` or `MEASURE_BIN=DIR` measures other programs. |
 | `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
 | `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |
+
+## Profiling and performance
+
+Before adding timing code to find out where time goes, profile: one command runs the programs under a profiler and
+writes a summary to read straight away.
+
+| Question | Tool | Command |
+|---|---|---|
+| Which functions take the CPU time of a scenario, per process | perf | `scripts/dev/profile --scenario launcher` |
+| The same, to browse as a call tree, flame graph or timeline | samply | `scripts/dev/profile --scenario launcher --tool samply`, then `samply load FILE` |
+| What allocates, how often, and what the heap holds at its peak | heaptrack | `scripts/dev/profile --scenario files-scroll --tool heaptrack` |
+| Where one program, outside a session, spends its time | any | `scripts/dev/profile -- cupertino-gpu-shaders --check` |
+| Whether a change made a scenario slower | the bench | `scripts/dev/perf-gate`, or `scripts/dev/bench --compare BASE.json` |
+| How fast a scenario is, every figure | the bench | `scripts/dev/bench --scenario launcher --out F.json` |
+
+`scripts/dev/profile` builds the profiling build first: the `profiling` Cargo profile (the release build with full
+debug info and no stripping), with `RUSTFLAGS="-C force-frame-pointers=yes"`, into `target/profiling-fp/profiling`, a
+target folder of its own so the release build's cache is untouched. `NO_BUILD=1` takes it as it is. `--scenario`
+accepts the bench's scenarios and `--size WxH --scale S`; it runs `scripts/dev/bench --profile=TOOL`, so the bench's
+figures come out too. `--out DIR` sets where the files go (default `target/profile/TIME`, a folder per scenario and run
+inside it). At the end it prints each process's summary and `summary.txt`, which holds all of them, the busiest
+process first; `index.json` lists every file for scripts.
+
+perf samples user space only (`kernel.perf_event_paranoid` 2 allows no more) at 1999 samples per second of CPU time,
+with frame-pointer call chains. The session's server runs under it and every process the server starts is followed, so
+one file, `cupertino-server.PID.perf.data`, holds the whole session; `perf report -i FILE --pid PID` shows one process.
+samply cannot record at `perf_event_paranoid` 2, so `--tool samply` records with perf too and converts the file to
+`*.samply.json.gz`. heaptrack follows no child process, so under it every program of the session runs on its own, a
+`PROGRAM.PID.heaptrack.zst` each (`heaptrack_gui FILE`, `heaptrack_print FILE`). A profiler must start the program:
+attaching to a running process is not allowed here (`kernel.yama.ptrace_scope` 1).
+
+How to read a CPU summary (`PROGRAM.PID.summary.txt`):
+
+- The heading gives the process's samples and, at the sampling rate, about how much CPU time they are.
+- Threads: each thread's share of the process's samples, so a render or warm-up thread shows apart from the main loop.
+- Self time: the functions the samples were in, in percent of the process's samples; a hot loop shows here. A library
+  without symbols (the GPU driver) is one summed row, `(code without symbols)`.
+- Inclusive time: a function and everything it calls; the phase that is slow shows here (a toolkit's update or
+  raster, the compositor's render). A call chain stops at a library built without frame pointers, so a caller's share
+  is a lower bound.
+
+How to read a heap summary: the peak heap and peak RSS (RSS includes the tool's own memory), then the allocation sites
+by number of calls (temporary allocations in a hot path show here) and by bytes held at the heap's peak (what fills
+memory). A site is the innermost frame outside the allocator and the standard containers, with the two frames above it.
+
+`scripts/dev/bench --compare BASE.json` runs the stored run's size, scale, rates and scenarios (unless given) and
+compares, scenario by scenario, the compositor's work, CPU and GPU p99 and its missed refreshes, each program's frame
+p99, each phase's p99, its slow frames and its private memory, and each program's wakeups a minute at idle. A figure
+regresses when it is worse than the stored median by more than 25%, by more than three times the stored spread
+(max − min over the stored runs), and by more than a floor: 0.5 ms for a time, one frame for a count, 1 MiB, one wakeup
+a minute. It prints the regressions and improvements and exits 1 on a regression.
+
+`scripts/dev/perf-gate` is the check to run after a performance-sensitive change or a merge. It takes the files changed
+in `BASE..HEAD` (default: the last commit that passed it, kept in `target/bench/baseline/last-pass`, else
+`origin/main`), the crates they are in and every crate that depends on them, and the scenarios those programs can
+affect (its `SCENARIOS` table: the server and the glass every scenario, Files its scroll and resize, the launcher its
+open and typing, and so on; tests, scripts, CI and documentation none). It runs them once at 3840 × 2160, scale 1.5,
+and compares them with `target/bench/baseline/HOSTNAME-3840x2160-1.5.json`. On a regression it profiles each regressed
+scenario under perf and prints the top functions by self and inclusive time of each regressed program, so the failure
+says where the time went. `scripts/dev/perf-gate --update-baseline` records the baseline: three runs of every scenario
+in the table. Record it again after a change that is meant to move the figures, and after a driver or kernel update.
 
 ## Soak
 

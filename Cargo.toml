@@ -11,6 +11,15 @@ license = "GPL-3.0-or-later"
 [profile.release]
 debug = "line-tables-only"
 
+# The release build with full debug info and every symbol kept, for profilers: `scripts/dev/profile` builds it. Frame
+# pointers cannot be set per profile on stable Cargo, so the script adds `RUSTFLAGS="-C force-frame-pointers=yes"` and
+# builds into a target folder of its own (target/profiling-fp): a different RUSTFLAGS in target/ would rebuild the
+# release build from scratch on its next run.
+[profile.profiling]
+inherits = "release"
+debug = "full"
+strip = "none"
+
 # Dev builds optimise the crates where CPU drawing spends its time: the rasteriser, the font, SVG and PNG crates, and
 # cupertino-ui-render's own shadow and blur loops. Unoptimised, a 2x frame or capture is several times slower; why each
 # is listed is in CONTRIBUTING.md. Debug assertions and overflow checks stay as the dev profile sets them.

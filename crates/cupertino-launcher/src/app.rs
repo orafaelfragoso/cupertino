@@ -366,10 +366,6 @@ fn image(width: u32, height: u32, pixels: &[u8]) -> ImageSource {
 struct AppHost {
     surfaces: Rc<RefCell<Surfaces>>,
     start: Instant,
-    /// Applications' own icons (`Icon=`).
-    themes: ThemeIcons,
-    /// The generic application, folder and document icons.
-    system: SystemIcons,
     /// File icons by type, and the type database, for the preview; made at the first preview of a file.
     files: Option<FileIcons>,
     /// Reads what the preview shows of a file, the newest asked for only; started at the first preview of a file.
@@ -381,8 +377,9 @@ struct AppHost {
     /// Loads and decodes the files scope's thumbnails in the order asked, on a thread of its own; started at the
     /// first one asked. The model keeps at most `kit::MAX_FILE_THUMB_LOADS` waiting.
     thumb_loads: Option<std::sync::mpsc::Sender<ThumbLoad>>,
-    /// Loads and decodes the browser's application icons in the order asked, on a thread of its own; started at the
-    /// first icon asked. The model keeps at most `kit::MAX_APP_ICON_LOADS` waiting.
+    /// Loads and decodes the results', the preview's and the browser's icons in the order asked, on a thread of its
+    /// own; started at the first icon asked. The model keeps at most `kit::MAX_APP_ICON_LOADS` of the browser's
+    /// waiting.
     icon_loads: Option<std::sync::mpsc::Sender<IconLoad>>,
     /// The asset packs, for the icon thread's own lookup.
     assets: Assets,
@@ -424,37 +421,76 @@ fn file_thumbnail(thumbnailer: &Thumbnailer, path: &Path) -> Vec<ImageSource> {
     vec![image(pixels.width, pixels.height, &pixels.rgba)]
 }
 
-/// An application icon the icon thread is asked for (the entry's `Icon`), and where its renditions go.
+/// An icon the icon thread is asked for, and where its renditions go.
 struct IconLoad {
-    icon: Option<String>,
+    icon: IconWanted,
     reply: async_channel::Sender<Vec<ImageSource>>,
 }
 
-/// The renditions of the browser's icon `name` at its sizes, from the icon theme, or the generic application's.
-fn browser_icon(
-    themes: &mut ThemeIcons,
-    system: &mut SystemIcons,
-    name: Option<&str>,
-) -> Vec<ImageSource> {
-    let own: Vec<ImageSource> = name
-        .map(|name| {
-            BROWSE_ICON_PX
-                .iter()
-                .filter_map(|&px| themes.load(name, px))
-                .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
-                .collect()
-        })
-        .unwrap_or_default();
-    if !own.is_empty() {
-        return own;
-    }
-    BROWSE_ICON_PX
+/// Which icon the icon thread loads, and at which sizes.
+enum IconWanted {
+    /// A browser's application's (the entry's `Icon`) at the browser's sizes, the generic application's without one.
+    Browser(Option<String>),
+    /// A result's at the list's sizes: an application's own (its `Icon`), else its kind's.
+    Result(ItemKind, Option<String>),
+    /// An application's own (its `Icon`) at the preview's sizes; none when the icon theme has none.
+    Preview(String),
+}
+
+/// The renditions of the icon theme's icon `name` at `sizes` device pixels, none when the theme has none.
+fn theme_icon(themes: &mut ThemeIcons, name: &str, sizes: &[u32]) -> Vec<ImageSource> {
+    sizes
+        .iter()
+        .filter_map(|&px| themes.load(name, px))
+        .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
+        .collect()
+}
+
+/// The renditions of the system's icon `name` at `sizes` device pixels.
+fn system_icon(system: &mut SystemIcons, name: &str, sizes: &[u32]) -> Vec<ImageSource> {
+    sizes
         .iter()
         .map(|&px| {
-            let pixmap = system.raster(GENERIC_APPLICATION_ICON, px);
+            let pixmap = system.raster(name, px);
             image(pixmap.width(), pixmap.height(), pixmap.data())
         })
         .collect()
+}
+
+/// The renditions of the icon `wanted`, as the icon thread loads them.
+fn load_icon(
+    themes: &mut ThemeIcons,
+    system: &mut SystemIcons,
+    wanted: &IconWanted,
+) -> Vec<ImageSource> {
+    let (name, sizes, fallback): (Option<&str>, &[u32], Option<&str>) = match wanted {
+        IconWanted::Browser(name) => (
+            name.as_deref(),
+            &BROWSE_ICON_PX,
+            Some(GENERIC_APPLICATION_ICON),
+        ),
+        IconWanted::Result(kind, name) => {
+            let (own, fallback) = match kind {
+                ItemKind::Application | ItemKind::ApplicationAction => {
+                    (name.as_deref(), GENERIC_APPLICATION_ICON)
+                }
+                ItemKind::Folder => (None, FOLDER_ICON),
+                ItemKind::File => (None, DOCUMENT_ICON),
+                ItemKind::WebSearch | ItemKind::Calculator | ItemKind::Conversion => {
+                    return Vec::new()
+                }
+            };
+            (own, &ICON_PX, Some(fallback))
+        }
+        IconWanted::Preview(name) => (Some(name.as_str()), &PREVIEW_ICON_PX, None),
+    };
+    let own = name
+        .map(|name| theme_icon(themes, name, sizes))
+        .unwrap_or_default();
+    match fallback {
+        Some(fallback) if own.is_empty() => system_icon(system, fallback, sizes),
+        _ => own,
+    }
 }
 
 /// A file the preview reader is asked about, and where its answer goes.
@@ -586,6 +622,44 @@ fn read_preview(path: &Path, mime: &str, is_dir: bool, icon: Vec<ImageSource>) -
     }
 }
 
+impl AppHost {
+    /// Ask the icon thread for `wanted`, starting the thread at the first icon asked: the receiver gets its
+    /// renditions, or closes without the thread.
+    fn load_icon(&mut self, wanted: IconWanted) -> async_channel::Receiver<Vec<ImageSource>> {
+        if self.icon_loads.is_none() {
+            let assets = self.assets.clone();
+            let (jobs, queue) = std::sync::mpsc::channel::<IconLoad>();
+            let started = std::thread::Builder::new()
+                .name("launcher-icons".to_owned())
+                .spawn(move || {
+                    // the thread's own lookup and rasters: nothing it reads or decodes is shared with the loop
+                    let mut themes = ThemeIcons::new(&assets);
+                    let mut system = SystemIcons::required(
+                        &assets,
+                        &[GENERIC_APPLICATION_ICON, FOLDER_ICON, DOCUMENT_ICON],
+                        &[SEARCH_SYMBOL],
+                    );
+                    for job in queue {
+                        let images = load_icon(&mut themes, &mut system, &job.icon);
+                        let _ = job.reply.send_blocking(images);
+                    }
+                });
+            match started {
+                Ok(_) => self.icon_loads = Some(jobs),
+                Err(e) => eprintln!("cupertino-launcher: no icon thread: {e}"),
+            }
+        }
+        let (reply, loaded) = async_channel::bounded(1);
+        if let Some(loads) = &self.icon_loads {
+            let _ = loads.send(IconLoad {
+                icon: wanted,
+                reply,
+            });
+        }
+        loaded
+    }
+}
+
 impl Host for AppHost {
     fn run(&mut self, spec: CommandSpec, token: Option<String>) {
         let spec = match token {
@@ -623,66 +697,45 @@ impl Host for AppHost {
         }
     }
 
-    fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource> {
-        let system = match item.kind {
-            ItemKind::Application | ItemKind::ApplicationAction => {
-                if let Some(name) = item.icon.as_deref() {
-                    let own: Vec<ImageSource> = ICON_PX
-                        .iter()
-                        .filter_map(|&px| self.themes.load(name, px))
-                        .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
-                        .collect();
-                    if !own.is_empty() {
-                        return own;
-                    }
-                }
-                GENERIC_APPLICATION_ICON
-            }
-            ItemKind::Folder => FOLDER_ICON,
-            ItemKind::File => DOCUMENT_ICON,
-            ItemKind::WebSearch | ItemKind::Calculator | ItemKind::Conversion => return Vec::new(),
-        };
-        ICON_PX
-            .iter()
-            .map(|&px| {
-                let pixmap = self.system.raster(system, px);
-                image(pixmap.width(), pixmap.height(), pixmap.data())
-            })
-            .collect()
+    fn icon(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
+        if matches!(
+            item.kind,
+            ItemKind::WebSearch | ItemKind::Calculator | ItemKind::Conversion
+        ) {
+            return Vec::new();
+        }
+        let id = item.id.clone();
+        let loaded = self.load_icon(IconWanted::Result(item.kind, item.icon.clone()));
+        // without the thread, or once it is gone, the row shows its kind's symbol
+        vec![Command::Perform(Box::pin(async move {
+            Message::ResultIcon(id, loaded.recv().await.unwrap_or_default())
+        }))]
     }
 
     fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
         let id = item.id.clone();
-        let ready = |id: String, preview: Preview| -> Vec<Command<Message>> {
-            vec![Command::Perform(Box::pin(async move {
-                Message::Previewed(id, Arc::new(preview))
-            }))]
-        };
         match (&item.kind, &item.action) {
             (ItemKind::Application | ItemKind::ApplicationAction, _) => {
-                let icon: Vec<ImageSource> = item
-                    .icon
-                    .as_deref()
-                    .map(|name| {
-                        PREVIEW_ICON_PX
-                            .iter()
-                            .filter_map(|&px| self.themes.load(name, px))
-                            .map(|pixmap| image(pixmap.width(), pixmap.height(), pixmap.data()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if icon.is_empty() {
+                let Some(name) = item.icon.clone() else {
                     return Vec::new();
-                }
-                ready(
-                    id,
-                    Preview {
-                        body: PreviewBody::Icon,
-                        icon,
-                        kind: String::new(),
-                        details: Vec::new(),
-                    },
-                )
+                };
+                // loaded on the icon thread; without an icon of its own the preview shows only the result
+                let loaded = self.load_icon(IconWanted::Preview(name));
+                vec![Command::Perform(Box::pin(async move {
+                    let icon = loaded.recv().await.unwrap_or_default();
+                    if icon.is_empty() {
+                        return Message::NoPreview(id);
+                    }
+                    Message::Previewed(
+                        id,
+                        Arc::new(Preview {
+                            body: PreviewBody::Icon,
+                            icon,
+                            kind: String::new(),
+                            details: Vec::new(),
+                        }),
+                    )
+                }))]
             }
             (ItemKind::File | ItemKind::Folder, Action::OpenPath(path)) => {
                 let path = path.clone();
@@ -729,33 +782,8 @@ impl Host for AppHost {
     }
 
     fn app_icon(&mut self, app: &BrowserApp) -> Vec<Command<Message>> {
-        if self.icon_loads.is_none() {
-            let assets = self.assets.clone();
-            let (jobs, queue) = std::sync::mpsc::channel::<IconLoad>();
-            let started = std::thread::Builder::new()
-                .name("launcher-icons".to_owned())
-                .spawn(move || {
-                    // the thread's own lookup and rasters: nothing it reads or decodes is shared with the loop
-                    let mut themes = ThemeIcons::new(&assets);
-                    let mut system = SystemIcons::new(&assets);
-                    for job in queue {
-                        let images = browser_icon(&mut themes, &mut system, job.icon.as_deref());
-                        let _ = job.reply.send_blocking(images);
-                    }
-                });
-            match started {
-                Ok(_) => self.icon_loads = Some(jobs),
-                Err(e) => eprintln!("cupertino-launcher: no icon thread: {e}"),
-            }
-        }
         let id = app.id.clone();
-        let (reply, loaded) = async_channel::bounded(1);
-        if let Some(loads) = &self.icon_loads {
-            let _ = loads.send(IconLoad {
-                icon: app.icon.clone(),
-                reply,
-            });
-        }
+        let loaded = self.load_icon(IconWanted::Browser(app.icon.clone()));
         // without the thread, or once it is gone, the browser draws a placeholder
         vec![Command::Perform(Box::pin(async move {
             Message::AppIcon(id, loaded.recv().await.unwrap_or_default())
@@ -1017,12 +1045,6 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let host = AppHost {
         surfaces,
         start: Instant::now(),
-        themes: ThemeIcons::new(&assets),
-        system: SystemIcons::required(
-            &assets,
-            &[GENERIC_APPLICATION_ICON, FOLDER_ICON, DOCUMENT_ICON],
-            &[SEARCH_SYMBOL],
-        ),
         files: None,
         previews: None,
         searches: None,

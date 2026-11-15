@@ -122,8 +122,10 @@ pub trait Host {
     fn index(&mut self, config: FileSearchConfig) -> Vec<Command<Message>>;
     /// The panel's window is now `size` points large.
     fn resize(&mut self, size: Size);
-    /// The renditions of `item`'s icon, one per output scale it is loaded at; none to show its kind's symbol.
-    fn icon(&mut self, item: &ResultItem) -> Vec<ImageSource>;
+    /// Load and decode the renditions of `item`'s icon off the loop, one per output scale it is loaded at; the
+    /// commands deliver them as [`Message::ResultIcon`] with its id. None to show its kind's symbol; the row is blank
+    /// while they load.
+    fn icon(&mut self, item: &ResultItem) -> Vec<Command<Message>>;
     /// Load and decode the renditions of an application's icon at the browser's sizes off the loop; the commands
     /// deliver them as [`Message::AppIcon`] with its desktop ID, none to draw a placeholder. The default delivers none
     /// at once.
@@ -134,7 +136,8 @@ pub trait Host {
         }))]
     }
     /// Find out what the preview shows of `item`, the selected result, off the loop; the commands deliver it as
-    /// [`Message::Previewed`]. None when the preview shows only the result itself.
+    /// [`Message::Previewed`], or [`Message::NoPreview`] once it turns out to show only the result itself. None when
+    /// it is known at once to show only the result.
     fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>>;
     /// Run a file search; the commands deliver its [`Update`] as [`Message::Provided`]. The default runs it at once.
     fn search(&mut self, request: SearchRequest) -> Vec<Command<Message>> {
@@ -226,6 +229,10 @@ pub enum Message {
     Remap,
     /// What the preview shows of the result with this id.
     Previewed(String, Arc<Preview>),
+    /// The preview of the result with this id shows only the result itself.
+    NoPreview(String),
+    /// The renditions of the icon of the result with this id arrived ([`Host::icon`]).
+    ResultIcon(String, Vec<ImageSource>),
     /// The preview of the result with this id is overdue.
     PreviewOverdue(String),
     /// A slow provider answered.
@@ -1297,9 +1304,11 @@ impl Model {
                     continue;
                 };
                 if !self.icons.contains_key(&item.id) {
-                    let sources = self.host.icon(item);
-                    if !sources.is_empty() {
-                        self.icons.insert(item.id.clone(), sources);
+                    let loads = self.host.icon(item);
+                    if !loads.is_empty() {
+                        // blank until its renditions arrive, rather than its kind's symbol for a moment first
+                        self.icons.insert(item.id.clone(), Vec::new());
+                        commands.extend(loads);
                     }
                 }
             }
@@ -2306,10 +2315,23 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
+        Message::NoPreview(id) => {
+            if model.preview == PreviewState::Waiting(id) {
+                model.preview = PreviewState::None;
+            }
+            Vec::new()
+        }
         Message::PreviewOverdue(id) => {
-            let answered = matches!(model.preview, PreviewState::Ready(_));
-            if model.previewed.as_deref() == Some(id.as_str()) && !answered {
+            // still waiting: an answer, or word that there is none to show, ends the wait
+            if model.preview == PreviewState::Waiting(id) {
                 model.preview = PreviewState::Unavailable;
+            }
+            Vec::new()
+        }
+        Message::ResultIcon(id, sources) => {
+            // still shown blank (the icons are not cleared since)
+            if let Some(icon) = model.icons.get_mut(&id).filter(|icon| icon.is_empty()) {
+                *icon = sources;
             }
             Vec::new()
         }

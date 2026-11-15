@@ -124,7 +124,7 @@ impl Host for TestHost {
         EXTENT.set(Some(size));
     }
 
-    fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
+    fn icon(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
         Vec::new()
     }
 
@@ -2480,7 +2480,7 @@ impl Host for MovingHost {
     fn resize(&mut self, size: Size) {
         self.1.set(size);
     }
-    fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
+    fn icon(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
         Vec::new()
     }
     fn preview(&mut self, _: &ResultItem) -> Vec<Command<Message>> {

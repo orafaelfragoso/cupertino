@@ -195,7 +195,7 @@ impl Host for MeteredHost {
     fn resize(&mut self, size: Size) {
         EXTENT.set(Some(size));
     }
-    fn icon(&mut self, _: &ResultItem) -> Vec<ImageSource> {
+    fn icon(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
         Vec::new()
     }
     fn preview(&mut self, _: &ResultItem) -> Vec<Command<Message>> {

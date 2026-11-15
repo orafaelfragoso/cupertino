@@ -31,9 +31,9 @@ use cupertino_kit::controls::{
     TextField, TextRole,
 };
 use cupertino_kit::core::{
-    AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
-    Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget, Window,
-    WindowBackground, WindowKey,
+    glass_outline, AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event,
+    EventCx, Glass, Key, Live, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
+    Window, WindowBackground, WindowKey,
 };
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
@@ -803,13 +803,16 @@ pub(crate) fn mode_rects_of(
 
 /// The thin dark edge just outside the rounded `rect`, black at `alpha`, left out inside each of the `joined` shapes
 /// (other shapes of the same joined glass, in the same coordinates) that come within the glass's join spacing: where
-/// the shapes join into one, only the outline of the whole shows, not each part's.
+/// the shapes join into one, only the outline of the whole shows, not each part's. On `glass` it runs along the
+/// glass's own continuous outline ([`glass_outline`]), where the compositor draws a glass's edge; around the opaque
+/// fill drawn without glass, along that fill's circular corners.
 pub(crate) fn edge_outside(
     cx: &mut PaintCx<'_>,
     rect: Rect,
     radius: f64,
     alpha: f32,
     joined: &[(Rect, f64)],
+    glass: bool,
 ) {
     let near = edge_cuts(rect, joined);
     let room = rect.outset(EDGE_WIDTH + 1.0);
@@ -824,11 +827,16 @@ pub(crate) fn edge_outside(
             fill_rule: FillRule::EvenOdd,
         }));
     }
-    cx.push(PaintOp::Stroke {
-        shape: Shape::RoundedRect {
+    let shape = if glass {
+        glass_outline(rect, radius, EDGE_WIDTH / 2.0)
+    } else {
+        Shape::RoundedRect {
             rect: rect.outset(EDGE_WIDTH / 2.0),
             radius: radius + EDGE_WIDTH / 2.0,
-        },
+        }
+    };
+    cx.push(PaintOp::Stroke {
+        shape,
         width: EDGE_WIDTH,
         paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, alpha)),
     });
@@ -1581,7 +1589,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
             .iter()
             .map(|(r, radius)| (r.translate(-self.rect.x(), -self.rect.y()), *radius))
             .collect();
-        edge_outside(cx, rect, radius, edge * own, &joined);
+        edge_outside(cx, rect, radius, edge * own, &joined, glass);
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}

@@ -218,6 +218,8 @@ pub(crate) enum Kind {
     Images,
     Paths,
     Clips,
+    /// Superellipses filled, stroked and as clips, among rectangles and rounded rectangles.
+    Superellipses,
     Layers,
     Effects,
     All,
@@ -267,6 +269,15 @@ fn path(draw: &mut Draw, rect: Rect) -> Shape {
 }
 
 fn shape(draw: &mut Draw, kind: Kind, rect: Rect, g: u32) -> Shape {
+    if matches!(kind, Kind::Superellipses) && draw.pick(3) != 0 {
+        // continuous corners and quarter circles, their outline moved in or out
+        return Shape::Superellipse {
+            rect,
+            extent: draw.value(0.0, 20.0, g),
+            exponent: [2.0, 2.6, 3.33, 5.0][draw.pick(4) as usize],
+            outset: [0.0, 0.25, -0.5, 1.5][draw.pick(4) as usize],
+        };
+    }
     let paths = matches!(kind, Kind::Paths | Kind::All);
     match draw.pick(if paths { 4 } else { 3 }) {
         0 => Shape::Rect(rect),
@@ -311,7 +322,7 @@ fn op(draw: &mut Draw, kind: Kind, g: u32) -> Vec<PaintOp> {
     let rect = draw.rect(w / 2.0, h / 2.0, g);
     let glyphs = matches!(kind, Kind::Glyphs | Kind::All) && draw.pick(3) == 0;
     let images = matches!(kind, Kind::Images | Kind::All) && draw.pick(3) == 0;
-    let clips = matches!(kind, Kind::Clips | Kind::All) && draw.pick(4) == 0;
+    let clips = matches!(kind, Kind::Clips | Kind::Superellipses | Kind::All) && draw.pick(4) == 0;
     let layers = matches!(kind, Kind::Layers | Kind::Effects | Kind::All) && draw.pick(6) == 0;
     if glyphs {
         return vec![PaintOp::Glyphs {
@@ -476,7 +487,7 @@ pub(crate) fn scene(seed: u64, kind: Kind) -> DisplayList {
             .collect();
         let parent = parents[draw.pick(parents.len() as u32) as usize];
         let mut n = node(id, Some(parent), transform, ops);
-        if matches!(kind, Kind::Clips | Kind::All) && draw.pick(4) == 0 {
+        if matches!(kind, Kind::Clips | Kind::Superellipses | Kind::All) && draw.pick(4) == 0 {
             let r = draw.rect(w, h, g);
             n.clip = Some(shape(&mut draw, kind, r, g));
         }
@@ -614,6 +625,11 @@ fn culprit(
 #[test]
 fn rectangles_and_rounded_rectangles_match_the_cpu() {
     compare(Kind::Shapes, 0..8);
+}
+
+#[test]
+fn superellipses_match_the_cpu() {
+    compare(Kind::Superellipses, 1000..1012);
 }
 
 #[test]

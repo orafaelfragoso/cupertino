@@ -36,6 +36,7 @@ struct Draw {
     vec4 mask_at;
     Clip clips[4];
     vec4 corners;
+    vec4 outline;
 };
 struct Instance {
     vec4 rect;
@@ -395,8 +396,8 @@ uint clip_coverage(vec2 p_8, ivec2 wp) {
     bool loop_init_3 = true;
     while(true) {
         if (!loop_init_3) {
-            int _e44 = i_3;
-            i_3 = (_e44 + 1);
+            int _e46 = i_3;
+            i_3 = (_e46 + 1);
         }
         loop_init_3 = false;
         int _e11 = i_3;
@@ -412,38 +413,38 @@ uint clip_coverage(vec2 p_8, ivec2 wp) {
             int _e18 = i_3;
             Clip clip = _group_0_binding_0_fs.clips[_e18];
             vec2 _e24 = place(clip.linear, clip.moved.xy, p_8);
-            float _e31 = outline_distance(_e24, clip.moved.zw, clip.corner.x, 0.0, 0.0);
-            float _e34 = coverage(_e31, clip.corner.y);
-            uint _e35 = coverage_byte(_e34);
-            if ((_e35 == 0u)) {
+            float _e33 = outline_distance(_e24, clip.moved.zw, clip.corner.x, clip.corner.z, clip.corner.w);
+            float _e36 = coverage(_e33, clip.corner.y);
+            uint _e37 = coverage_byte(_e36);
+            if ((_e37 == 0u)) {
                 m = 0u;
             } else {
-                if ((_e35 != 255u)) {
-                    uint _e41 = m;
-                    uint _e43 = div255_((_e41 * _e35));
-                    m = _e43;
+                if ((_e37 != 255u)) {
+                    uint _e43 = m;
+                    uint _e45 = div255_((_e43 * _e37));
+                    m = _e45;
                 }
             }
         }
     }
-    float _e50 = _group_0_binding_0_fs.clip_info.y;
-    if ((_e50 > 0.5)) {
-        vec4 _e55 = _group_0_binding_0_fs.mask_rect;
-        ivec4 r = ivec4(_e55);
+    float _e52 = _group_0_binding_0_fs.clip_info.y;
+    if ((_e52 > 0.5)) {
+        vec4 _e57 = _group_0_binding_0_fs.mask_rect;
+        ivec4 r = ivec4(_e57);
         if (((((wp.x >= r.x) && (wp.y >= r.y)) && (wp.x < r.z)) && (wp.y < r.w))) {
-            vec4 _e76 = _group_0_binding_0_fs.mask_at;
-            ivec2 t_3 = ((ivec2(_e76.xy) + wp) - r.xy);
-            vec4 _e84 = texelFetch(_group_0_binding_2_fs, t_3, 0);
-            uint _e86 = byte_of(_e84.x);
-            c_1 = _e86;
+            vec4 _e78 = _group_0_binding_0_fs.mask_at;
+            ivec2 t_3 = ((ivec2(_e78.xy) + wp) - r.xy);
+            vec4 _e86 = texelFetch(_group_0_binding_2_fs, t_3, 0);
+            uint _e88 = byte_of(_e86.x);
+            c_1 = _e88;
         }
-        uint _e87 = m;
-        uint _e88 = c_1;
-        uint _e90 = div255_((_e87 * _e88));
-        m = _e90;
+        uint _e89 = m;
+        uint _e90 = c_1;
+        uint _e92 = div255_((_e89 * _e90));
+        m = _e92;
     }
-    uint _e91 = m;
-    return _e91;
+    uint _e93 = m;
+    return _e93;
 }
 
 uvec4 paint_bytes(vec2 p_9, vec2 frag_4) {
@@ -529,44 +530,45 @@ void main() {
             float _e67 = corner_of(_e66, _e40, half_6);
             corner = _e67;
         }
+        float grow_1 = _group_0_binding_0_fs.outline.x;
         if ((width_1 > 0.0)) {
-            float _e70 = corner;
-            float _e73 = outline_distance(_e40, half_6, _e70, n_2, (width_1 * 0.5));
-            float _e77 = _group_0_binding_0_fs.shape.y;
-            float _e78 = stroke_coverage(_e73, width_1, _e77);
-            uint _e79 = coverage_byte(_e78);
-            k = _e79;
+            float _e74 = corner;
+            float _e78 = outline_distance(_e40, half_6, _e74, n_2, ((width_1 * 0.5) + grow_1));
+            float _e82 = _group_0_binding_0_fs.shape.y;
+            float _e83 = stroke_coverage(_e78, width_1, _e82);
+            uint _e84 = coverage_byte(_e83);
+            k = _e84;
         } else {
-            float _e80 = corner;
-            float _e82 = outline_distance(_e40, half_6, _e80, n_2, 0.0);
-            float _e86 = _group_0_binding_0_fs.shape.y;
-            float _e87 = coverage(_e82, _e86);
-            uint _e88 = coverage_byte(_e87);
-            k = _e88;
+            float _e85 = corner;
+            float _e86 = outline_distance(_e40, half_6, _e85, n_2, grow_1);
+            float _e90 = _group_0_binding_0_fs.shape.y;
+            float _e91 = coverage(_e86, _e90);
+            uint _e92 = coverage_byte(_e91);
+            k = _e92;
         }
     }
-    float _e92 = _group_0_binding_0_fs.clip_info.x;
-    float _e98 = _group_0_binding_0_fs.clip_info.y;
-    if (((_e92 > 0.5) || (_e98 > 0.5))) {
-        uint _e102 = clip_coverage(p_11, wp_1);
-        uint _e103 = k;
-        uint _e105 = div255_((_e102 * _e103));
-        k = _e105;
+    float _e96 = _group_0_binding_0_fs.clip_info.x;
+    float _e102 = _group_0_binding_0_fs.clip_info.y;
+    if (((_e96 > 0.5) || (_e102 > 0.5))) {
+        uint _e106 = clip_coverage(p_11, wp_1);
+        uint _e107 = k;
+        uint _e109 = div255_((_e106 * _e107));
+        k = _e109;
     }
-    uint _e106 = k;
-    if ((_e106 == 0u)) {
+    uint _e110 = k;
+    if ((_e110 == 0u)) {
         discard;
     }
-    uvec4 _e112 = paint_bytes(p_11, (window + vec2(0.5)));
-    uint _e114 = k;
-    uint _e116 = div255_((_e112.x * _e114));
+    uvec4 _e116 = paint_bytes(p_11, (window + vec2(0.5)));
     uint _e118 = k;
-    uint _e120 = div255_((_e112.y * _e118));
+    uint _e120 = div255_((_e116.x * _e118));
     uint _e122 = k;
-    uint _e124 = div255_((_e112.z * _e122));
+    uint _e124 = div255_((_e116.y * _e122));
     uint _e126 = k;
-    uint _e128 = div255_((_e112.w * _e126));
-    uvec4 out_1 = uvec4(_e116, _e120, _e124, _e128);
+    uint _e128 = div255_((_e116.z * _e126));
+    uint _e130 = k;
+    uint _e132 = div255_((_e116.w * _e130));
+    uvec4 out_1 = uvec4(_e120, _e124, _e128, _e132);
     _fs2p_location0 = (vec4(out_1) / vec4(255.0));
     return;
 }

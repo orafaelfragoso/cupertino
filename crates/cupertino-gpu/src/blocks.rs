@@ -4,7 +4,8 @@
 //! renderer and the compositor alike.
 
 /// An analytic clip of a draw: window pixel to the clip shape's centred units (`linear`: a b c d; `moved`: e f and
-/// the half size), its corner radius and pixels per unit (`corner`: radius, pixels, unused, unused).
+/// the half size), its corner radius, pixels per unit, corner exponent (0: circular) and how far its outline is moved
+/// out (`corner`: radius, pixels, exponent, outset).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClipBlock {
@@ -58,6 +59,8 @@ pub struct FillBlock {
     pub clips: ClipsBlock,
     /// The shape's corner radii when the clips' `info[3]` is set: top left, top right, bottom right, bottom left.
     pub corners: [f32; 4],
+    /// How far the shape's outline is moved out along the distance, before a stroke's half width; then unused.
+    pub outline: [f32; 4],
 }
 
 /// The block of [`crate::shaders::UI_TEXTURE`]: a colour glyph, a layer or an image, times the clips in force.
@@ -112,7 +115,7 @@ macro_rules! floats {
     };
 }
 
-floats!(FillBlock, 140);
+floats!(FillBlock, 144);
 floats!(TextureBlock, 96);
 
 impl FillBlock {
@@ -178,8 +181,9 @@ mod tests {
                 .sum()
         };
         let fill = members(&UI_FILL);
-        assert_eq!(fill.len(), 16, "{fill:?}");
+        assert_eq!(fill.len(), 17, "{fill:?}");
         assert!(fill[15].contains("corners"), "{fill:?}");
+        assert!(fill[16].contains("outline"), "{fill:?}");
         assert_eq!(count(&fill), FillBlock::FLOATS, "{fill:?}");
         assert!(fill[11].contains("clip_info"), "{fill:?}");
         assert_eq!(count(&fill[..11]), FillBlock::CLIPS);

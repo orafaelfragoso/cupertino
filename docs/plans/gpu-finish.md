@@ -142,10 +142,23 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3b. The edge follows the glass
 
-- [ ] The panel strokes its own edge along the glass's continuous outline, using the shared distance of
+- [x] The panel strokes its own edge along the glass's continuous outline, using the shared distance of
       `cupertino-glass` and `ui_fill`, instead of circular arcs. This applies under Reduce Motion and without the
       capability too. The goldens that change at a scope's corners are re-recorded, named with their pixel counts,
-      and shown as before and after pairs at 1.5 and 2 in both appearances.
+      and shown as before and after pairs at 1.5 and 2 in both appearances. The toolkit gained the shape it needed:
+      `Shape::Superellipse` (a corner's extent and exponent, and an outset along the distance, so a stroke lies just
+      outside the outline), drawn by the CPU's analytic coverage and by `ui_fill` (the exponent it already took, the
+      outset a new member of its block, `FillBlock::outline`, and a clip's in `ClipBlock::corner`), and
+      `glass_outline` in `cupertino-ui-core`, a glass shape's continuous outline (a capsule's comes back as the same
+      rounded rectangle as before). Tests: the shared coverage vectors of continuous corners, a stroke moved out by
+      half its width covering the band outside the outline within 1 of 255 at 1, 1.5 and 2
+      (`a_superellipse_stroke_moved_out_by_half_its_width_lies_just_outside_its_outline`), the GPU against the CPU on
+      generated superellipse fills, strokes and clips (`parity::superellipses_match_the_cpu`); against the
+      compositor's edge at rest the panel's is now within 1 of 255 along every side and corner, the corners within
+      0.9 (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). No golden changes: the
+      launcher's goldens draw without glass, where the edge keeps the opaque fill's circular corners, and the
+      server's launcher golden is the search field, whose capsule is stroked as before. The before and after pairs of
+      a scope's corner at rest are in the owner's sheet under "Edge follows the glass".
 - [ ] The scopes' rest, open and close use the compositor's edge (`layers::glass_edge`, within 4 of 255 of the
       panel's along every side and corner), and the scope's edge layer goes.
 

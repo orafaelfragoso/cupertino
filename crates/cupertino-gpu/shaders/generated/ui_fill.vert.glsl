@@ -36,6 +36,7 @@ struct Draw {
     vec4 mask_at;
     Clip clips[4];
     vec4 corners;
+    vec4 outline;
 };
 struct Instance {
     vec4 rect;

@@ -86,11 +86,13 @@ fn place(linear: vec4<f32>, moved: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(linear.x * p.x + linear.z * p.y + moved.x, linear.y * p.x + linear.w * p.y + moved.y);
 }
 
-fn outline_distance(p: vec2<f32>, half: vec2<f32>, corner: f32) -> f32 {
+// Distance to a rectangle (corner 0) or rounded rectangle, its corners circular (exponent 0) or of exponent `n`, its
+// outline moved out by `grow`.
+fn outline_distance(p: vec2<f32>, half: vec2<f32>, corner: f32, n: f32, grow: f32) -> f32 {
     if (corner > 0.0) {
-        return rounded_distance(p, half, corner, 2.0);
+        return rounded_distance(p, half, corner, select(2.0, n, n > 0.0)) - grow;
     }
-    return rect_distance(p, half);
+    return rect_distance(p, half + vec2<f32>(grow));
 }
 
 fn clip_coverage(p: vec2<f32>, wp: vec2<i32>) -> u32 {
@@ -102,7 +104,7 @@ fn clip_coverage(p: vec2<f32>, wp: vec2<i32>) -> u32 {
         }
         let clip = draw.clips[i];
         let q = place(clip.linear, clip.moved.xy, p);
-        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x), clip.corner.y));
+        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x, clip.corner.z, clip.corner.w), clip.corner.y));
         if (c == 0u) {
             m = 0u;
         } else if (c != 255u) {

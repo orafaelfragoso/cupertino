@@ -529,10 +529,9 @@ fn drawn_edges(size: (u32, u32), scale: f64, layers: &[PresentedSurfaceLayer]) -
 /// The edge the compositor draws along the panel's glass is the edge the panel draws itself: at rest, at 1, 1.5 and 2
 /// in both appearances, outside the glass (inside it the faces draw their symbols), the glass's own model of the edge
 /// of [`crate::view::layers::glass_edge`] in each group's look, the search field and its mode button joined in one,
-/// is the panel's edge layers within 4 of 255 along every capsule and every straight side. A scope's continuous
-/// corners are not the circular arcs the panel strokes its edge along, which stand up to 0.57 points off them where
-/// each corner starts to curve: there the compositor's edge follows the glass and the two part by up to the line's own
-/// opacity, at the corners alone (`--no-capture` prints both).
+/// is the panel's edge layers within 4 of 255 along every capsule, every straight side and a scope's continuous
+/// corners, which the panel strokes along the glass's own outline (`--no-capture` prints the sides and the corners
+/// apart).
 #[test]
 fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
     for scale in [1.0, 1.5, 2.0] {
@@ -573,12 +572,9 @@ fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
                     "trace: edge, {what} at {scale}x, dark {dark}: largest difference {most:.1}, at the corners {most_corner:.1}"
                 );
                 assert!(
-                    most <= 4.0,
-                    "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}"
-                );
-                assert!(
-                    capsule || most_corner > 4.0,
-                    "{what}: the corners part as the arcs do"
+                    most <= 4.0 && most_corner <= 4.0,
+                    "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}, \
+                     at the corners {most_corner:.1}"
                 );
             }
         }

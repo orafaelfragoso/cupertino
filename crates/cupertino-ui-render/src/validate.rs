@@ -162,6 +162,19 @@ fn shape_ok(shape: &Shape) -> bool {
         Shape::RoundedRect { rect, radius } => {
             rect_ok(rect) && radius.is_finite() && *radius >= 0.0
         }
+        Shape::Superellipse {
+            rect,
+            extent,
+            exponent,
+            outset,
+        } => {
+            rect_ok(rect)
+                && extent.is_finite()
+                && *extent >= 0.0
+                && exponent.is_finite()
+                && *exponent > 0.0
+                && outset.is_finite()
+        }
         Shape::Path { verbs, .. } => verbs.iter().all(|v| match v {
             PathVerb::MoveTo(p) | PathVerb::LineTo(p) => point_ok(p),
             PathVerb::QuadTo(a, b) => point_ok(a) && point_ok(b),

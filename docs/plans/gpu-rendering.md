@@ -849,15 +849,13 @@ Gate:
             `a_joined_container_s_edge_follows_the_union_and_not_each_shape`). Against the launcher's own edge at rest
             (`layers::glass_edge` in the glass layers' looks), at 1, 1.5 and 2 in both appearances: within 4 of 255
             along the search field and its mode button (capsules) and along every straight side
-            (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). At a scope's corners it is
-            not: the glass's corners are continuous, and the launcher strokes its edge along circular arcs that stand
-            up to 0.57 points off the glass where each corner starts to curve, so there the two part by up to the
+            (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). At a scope's corners it was
+            not: the glass's corners are continuous, and the launcher stroked its edge along circular arcs that stood
+            up to 0.57 points off the glass where each corner starts to curve, so there the two parted by up to the
             line's own opacity (32 of 255 at 1 and 52 at 1.5 in the light appearance, 109 and 178 in the dark, 67 and
             230 at 2). Decided by the owner: the edge follows the glass's continuous outline, the dark boundary being
-            the silhouette of the one enclosure, a change of the launcher's look at a scope's corners and of the
-            goldens there. Until it lands (split below, "The edge follows the glass") the scopes' rest and close keep
-            the edge layer, and the compositor's edge is used where the outline changes shape while the shapes are
-            capsules.
+            the silhouette of the one enclosure, a change of the launcher's look at a scope's corners. The launcher
+            now strokes it there (below, "The edge follows the glass"): within 1 of 255 along every side and corner.
             A glass group's edge is a stroke round each shape cut by the others (`Container::edge_alpha_at`, the
             glass's stage 8, the same in the shader): each shape's band from its outline to the edge's width outside
             it, left out by the share of the pixel each other shape covers, laid over each other. It ran along the
@@ -963,11 +961,20 @@ Gate:
           - [ ] The edge follows the glass (decided by the owner: the edge follows the glass's continuous outline).
                 Through the fold the outline goes from a scope's continuous corners to the field's capsule, which only
                 the compositor's edge can follow. Split, in order:
-            - [ ] The panel's own edge stroked along the glass's continuous outline (the shared distance of
+            - [x] The panel's own edge stroked along the glass's continuous outline (the shared distance of
                   `cupertino-glass` and `ui_fill`) in place of the circular arcs that stand up to 0.57 points off it,
                   under Reduce Motion and without the capability as well: the goldens that change at a scope's
                   corners re-recorded and named with their pixel counts, and before and after pairs of a scope's
-                  corner at rest, both appearances at 1.5 and 2, in the sheet under "Edge follows the glass".
+                  corner at rest, both appearances at 1.5 and 2, in the sheet under "Edge follows the glass". The
+                  toolkit's `Shape::Superellipse` (a corner's extent and exponent and an outset along the distance),
+                  drawn by the CPU's analytic coverage and by `ui_fill` (the outset a new member of its block), and
+                  `cupertino_ui_core::glass_outline`, a glass shape's outline; the launcher strokes its edge along
+                  `glass_outline` moved out by half the line's width wherever it lies on glass. Against the
+                  compositor's edge at rest, 1, 1.5 and 2, both appearances: within 1 of 255 along every side and
+                  corner (corners 0.6 to 0.9). The GPU draws superellipses as the CPU does
+                  (`parity::superellipses_match_the_cpu`). No golden changed: the launcher's goldens draw without
+                  glass, where the edge keeps the opaque fill's circular corners, and the server's launcher golden is
+                  the search field, whose capsule is stroked as before.
             - [ ] The scopes' rest, open and close on the compositor's edge (`layers::glass_edge`, then within 4 of
                   255 of the panel's along every side and corner), the scope's edge layer gone.
             - [ ] The fold and unfold carry it, from here on in order with the items above and below.

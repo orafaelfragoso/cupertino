@@ -288,6 +288,7 @@ fn with_effects(content: Rect, effects: &[Effect]) -> Rect {
 fn shape_bounds(shape: &Shape) -> Option<Rect> {
     match shape {
         Shape::Rect(r) | Shape::RoundedRect { rect: r, .. } => Some(*r),
+        Shape::Superellipse { rect, outset, .. } => Some(rect.outset(outset.max(0.0))),
         Shape::Path { verbs, .. } => {
             let points = verbs.iter().flat_map(|v| match *v {
                 PathVerb::MoveTo(p) | PathVerb::LineTo(p) => vec![p],

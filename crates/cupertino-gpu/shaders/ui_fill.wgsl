@@ -1,14 +1,15 @@
-// The toolkit's coverage draws: a rectangle or rounded rectangle (filled or stroked) by the shared distance, or an
-// 8-bit coverage image (a glyph from the coverage atlas, a path rasterized on the CPU into the mask atlas), times
-// the clips in force, laid in a solid colour or a gradient. The arithmetic is the CPU renderer's, in whole 8-bit
-// steps: coverage and clips stored as bytes, multiplied with rounding, the paint stored as bytes (a gradient
-// dithered by the window pixel), so both renderers give the same bytes up to the blend's own rounding.
+// The toolkit's coverage draws: a rectangle, rounded rectangle or superellipse (filled or stroked) by the shared
+// distance, its outline moved out by `outline.x`, or an 8-bit coverage image (a glyph from the coverage atlas, a
+// path rasterized on the CPU into the mask atlas), times the clips in force, laid in a solid colour or a gradient.
+// The arithmetic is the CPU renderer's, in whole 8-bit steps: coverage and clips stored as bytes, multiplied with
+// rounding, the paint stored as bytes (a gradient dithered by the window pixel), so both renderers give the same
+// bytes up to the blend's own rounding.
 //
 // One instance per quad: its rectangle in target pixels and, for a coverage image, the atlas texel of its first
 // pixel. Positions are window pixels: a target's pixel plus the target's origin in the window.
 
-// An analytic clip: window pixel to the clip shape's centred units (a b c d, e f), its half size, corner and pixels
-// per unit.
+// An analytic clip: window pixel to the clip shape's centred units (a b c d, e f), its half size, corner, pixels
+// per unit, corner exponent (0: circular) and how far its outline is moved out.
 struct Clip {
     linear: vec4<f32>,
     moved: vec4<f32>,
@@ -35,9 +36,9 @@ struct Draw {
     paint_geometry: vec4<f32>,
     offsets: array<vec4<f32>, 2>,
     colors: array<vec4<f32>, 8>,
-    // Analytic clips in force, whether the path clip mask is, the shape's corner exponent (0: circular corners, as
-    // every draw of the toolkit's has; above 2 a continuous corner of the shared distance), and whether the shape's
-    // corners each have their own radius (`corners`) instead of the one in `shape`.
+    // Analytic clips in force, whether the path clip mask is, the shape's corner exponent (0: circular corners;
+    // above 2 a continuous corner of the shared distance, a superellipse's), and whether the shape's corners each
+    // have their own radius (`corners`) instead of the one in `shape`.
     clip_info: vec4<f32>,
     // The path clip mask's window pixels (x0 y0 x1 y1) and the atlas texel of its first pixel.
     mask_rect: vec4<f32>,
@@ -46,6 +47,8 @@ struct Draw {
     // The shape's corner radii when `clip_info.w` is set: top left, top right, bottom right, bottom left (each held to
     // the half size).
     corners: vec4<f32>,
+    // How far the shape's outline is moved out along the distance, before a stroke's half width.
+    outline: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> draw: Draw;
@@ -137,7 +140,7 @@ fn clip_coverage(p: vec2<f32>, wp: vec2<i32>) -> u32 {
         }
         let clip = draw.clips[i];
         let q = place(clip.linear, clip.moved.xy, p);
-        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x, 0.0, 0.0), clip.corner.y));
+        let c = coverage_byte(coverage(outline_distance(q, clip.moved.zw, clip.corner.x, clip.corner.z, clip.corner.w), clip.corner.y));
         if (c == 0u) {
             m = 0u;
         } else if (c != 255u) {
@@ -211,11 +214,12 @@ fn fs_main(in: Varyings) -> @location(0) vec4<f32> {
         if (draw.clip_info.w > 0.5) {
             corner = corner_of(draw.corners, q, half);
         }
+        let grow = draw.outline.x;
         if (width > 0.0) {
-            let outer = outline_distance(q, half, corner, n, width * 0.5);
+            let outer = outline_distance(q, half, corner, n, width * 0.5 + grow);
             k = coverage_byte(stroke_coverage(outer, width, draw.shape.y));
         } else {
-            k = coverage_byte(coverage(outline_distance(q, half, corner, n, 0.0), draw.shape.y));
+            k = coverage_byte(coverage(outline_distance(q, half, corner, n, grow), draw.shape.y));
         }
     }
     if (draw.clip_info.x > 0.5 || draw.clip_info.y > 0.5) {

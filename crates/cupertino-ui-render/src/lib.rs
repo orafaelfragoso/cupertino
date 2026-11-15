@@ -73,6 +73,16 @@ pub enum Shape {
         rect: Rect,
         radius: f64,
     },
+    /// A rectangle whose corners each reach `extent` along both sides as a superellipse quadrant of `exponent` (2 or
+    /// less is a quarter circle of radius `extent`, as [`Shape::RoundedRect`] draws it), by the renderers' shared
+    /// distance, its outline moved out by `outset` along that distance. A stroke of it is centred on the moved
+    /// outline, so a stroke `w` wide with an outset of `w / 2` lies just outside the rectangle's own outline.
+    Superellipse {
+        rect: Rect,
+        extent: f64,
+        exponent: f64,
+        outset: f64,
+    },
     Path {
         verbs: Vec<PathVerb>,
         fill_rule: FillRule,

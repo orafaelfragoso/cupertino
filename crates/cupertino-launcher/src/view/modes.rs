@@ -201,7 +201,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for ModeButton<M> {
             .iter()
             .map(|(r, radius)| (r.translate(-self.rect.x(), -self.rect.y()), *radius))
             .collect();
-        super::edge_outside(cx, rect, radius, edge, &joined);
+        super::edge_outside(cx, rect, radius, edge, &joined, glass);
         if self.focus {
             focus_ring(cx, rect, radius);
         }

@@ -288,7 +288,7 @@ impl<M: 'static> Widget<M> for EdgeLayer<M> {
         let joined: Vec<(Rect, f64)> = self.joined.iter().map(|(r, q)| (at(*r), *q)).collect();
         let radius = self.radius.min(shape.height() / 2.0).max(0.0);
         if self.edge {
-            edge_outside(cx, shape, radius, edge_alpha(dark, true), &joined);
+            edge_outside(cx, shape, radius, edge_alpha(dark, true), &joined, true);
         }
         if self.focus {
             super::browse::focus_ring(cx, shape, radius);

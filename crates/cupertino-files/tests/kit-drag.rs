@@ -38,6 +38,8 @@ struct Browser {
     driver: TestDriver<Files>,
     window: WindowId,
     home: tempfile::TempDir,
+    /// The name of the folder shown, which names its icon grid.
+    folder: &'static str,
 }
 
 impl Browser {
@@ -47,14 +49,41 @@ impl Browser {
 
     /// The window on a system that starts drags if `drags`.
     fn with(appearance: Appearance, drags: bool) -> Browser {
+        Browser::opening(appearance, drags, false)
+    }
+
+    /// The window on Applications, listing the one application `Thing` installed for the user (each test runs in a
+    /// process of its own, so the data folders it names are its own).
+    fn applications() -> Browser {
+        Browser::opening(Appearance::Light, true, true)
+    }
+
+    fn opening(appearance: Appearance, drags: bool, applications: bool) -> Browser {
         let home = tempfile::tempdir().unwrap();
         let documents = home.path().join("Documents");
         std::fs::create_dir_all(documents.join("Notes")).unwrap();
         std::fs::write(documents.join("b.txt"), "bb").unwrap();
         std::fs::write(documents.join("a.txt"), "a").unwrap();
+        let (shown, folder) = if applications {
+            let share = home.path().join("share");
+            std::fs::create_dir_all(share.join("applications")).unwrap();
+            std::fs::write(
+                share.join("applications/thing.desktop"),
+                "[Desktop Entry]\nType=Application\nName=Thing\nExec=true\n",
+            )
+            .unwrap();
+            std::env::set_var("XDG_DATA_HOME", &share);
+            std::env::set_var("XDG_DATA_DIRS", home.path().join("none"));
+            (
+                cupertino_files::applications::location().to_path_buf(),
+                "Applications",
+            )
+        } else {
+            (documents.clone(), "Documents")
+        };
         prepare(
             Start::open(
-                documents.clone(),
+                shown,
                 vec![place("Documents", &documents, PlaceKind::Documents)],
                 None,
                 home.path().join("recently-used.xbel"),
@@ -117,6 +146,7 @@ impl Browser {
             driver,
             window,
             home,
+            folder,
         };
         browser.settle();
         browser.menu("view-icons");
@@ -170,7 +200,7 @@ impl Browser {
             .collect();
         let grid = nodes
             .values()
-            .find(|n| n.role == Role::List && n.name.as_deref() == Some("Documents"))
+            .find(|n| n.role == Role::List && n.name.as_deref() == Some(self.folder))
             .expect("the icon grid");
         grid.children
             .iter()
@@ -469,6 +499,17 @@ fn after_a_cancelled_drag_the_window_selects_and_drags_as_before() {
         .expect("a new drag");
     assert_ne!(again.token, started.token);
     assert_eq!(browser.selected(), ["Notes"]);
+}
+
+/// An application dragged out of Applications is only copied: its entry never leaves the applications folder, so a drop
+/// on a folder or the Trash cannot take it from the launcher.
+#[test]
+fn an_application_drags_out_of_applications_only_as_a_copy() {
+    let mut browser = Browser::applications();
+    let started = browser
+        .drag("Thing", Point::new(30.0, 20.0))
+        .expect("a drag");
+    assert_eq!(started.request.actions, [DropAction::Copy].into());
 }
 
 /// On a system that starts no drags, as on a compositor without drag and drop, the drag is cancelled at once and the

@@ -84,6 +84,8 @@ pub struct MenuState {
     pub read_only: bool,
     /// Copy put items on the pasteboard.
     pub can_paste: bool,
+    /// The pasteboard's items may be moved, not only copied (Move Item Here).
+    pub can_move: bool,
     /// How many tabs the window has.
     pub tabs: usize,
     /// The tab bar shows while the window has one tab.
@@ -526,7 +528,7 @@ pub fn enabled(state: &MenuState) -> Vec<(MenuAction, bool)> {
         (ShowOriginal, state.single_link),
         (Copy, selected),
         (Paste, state.can_paste && !state.in_trash && writable),
-        (MoveHere, state.can_paste && !state.in_trash && writable),
+        (MoveHere, state.can_move && !state.in_trash && writable),
         (Back, state.can_go_back),
         (Forward, state.can_go_forward),
         (EnclosingFolder, state.has_parent),
@@ -721,6 +723,24 @@ mod tests {
         let enabled = enabled(&two);
         assert!(enabled.contains(&(MenuAction::NextTab, true)));
         assert!(enabled.contains(&(MenuAction::Peek, false)));
+    }
+
+    #[test]
+    fn copied_items_that_cannot_leave_their_folder_paste_but_do_not_move() {
+        let movable = enabled(&MenuState {
+            can_paste: true,
+            can_move: true,
+            ..MenuState::default()
+        });
+        assert!(movable.contains(&(MenuAction::Paste, true)));
+        assert!(movable.contains(&(MenuAction::MoveHere, true)));
+        let staying = enabled(&MenuState {
+            can_paste: true,
+            can_move: false,
+            ..MenuState::default()
+        });
+        assert!(staying.contains(&(MenuAction::Paste, true)));
+        assert!(staying.contains(&(MenuAction::MoveHere, false)));
     }
 
     #[test]

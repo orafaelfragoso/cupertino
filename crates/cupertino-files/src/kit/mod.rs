@@ -356,6 +356,8 @@ struct Session {
     prefs_file: Option<PathBuf>,
     /// What Copy took last, for Paste Item and Move Item Here in any window.
     pasteboard: Vec<PathBuf>,
+    /// The pasteboard's items cannot leave their folder ([`Window::items_stay`]): Move Item Here is off.
+    pasteboard_stays: bool,
     /// The file operations, which outlive the windows that started them, and the progress window.
     jobs: jobs::Jobs,
     /// The ends of file operations posted as notices, newest last, by operation id, with the failure each reported: a
@@ -737,6 +739,7 @@ impl Application for Files {
                 prefs: std::cell::Cell::new(start.prefs),
                 prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
+                pasteboard_stays: false,
                 jobs: jobs::Jobs::new(start.progress_delay, start.observer),
                 noticed: VecDeque::new(),
                 places_watch,
@@ -977,7 +980,8 @@ impl Model {
             .iter()
             .filter_map(|&i| Some(entries.get(i)?.path.clone()))
             .collect();
-        vec![dragged::start(id, window_key(id), grab, entries)]
+        let copy_only = window.items_stay(&self.session);
+        vec![dragged::start(id, window_key(id), grab, entries, copy_only)]
     }
 
     /// The drag of the list's rows of `grab` out of window `id`, as [`Self::drag_out`] for the grid.
@@ -997,7 +1001,15 @@ impl Model {
             .and_then(|&i| entries.get(i))
             .map(|e| self.session.icons.icon(e, dragged::ROW_ICON))
             .unwrap_or_default();
-        vec![dragged::start_rows(id, window_key(id), grab, entries, icon)]
+        let copy_only = window.items_stay(&self.session);
+        vec![dragged::start_rows(
+            id,
+            window_key(id),
+            grab,
+            entries,
+            icon,
+            copy_only,
+        )]
     }
 
     /// Put `paths` dropped on window `id` where they go, as a file operation: into the trash, or moved or copied into
@@ -1550,12 +1562,13 @@ impl Model {
         match action {
             MenuAction::Copy => {
                 self.session.pasteboard = window.selected_paths();
+                self.session.pasteboard_stays = window.items_stay(&self.session);
                 return Vec::new();
             }
             MenuAction::Paste | MenuAction::MoveHere => {
                 let moving = action == MenuAction::MoveHere;
                 let session = &mut self.session;
-                if session.pasteboard.is_empty() {
+                if session.pasteboard.is_empty() || (moving && session.pasteboard_stays) {
                     return Vec::new();
                 }
                 let (sources, action) = match moving {
@@ -2357,6 +2370,12 @@ impl BrowserWindow {
 
     /// Whether the folder shown takes nothing new: its medium can't be written, or its file system is mounted
     /// read-only.
+    /// The folder's items can be copied out but not moved: an application's entry in Applications, a file on a
+    /// read-only medium.
+    fn items_stay(&self, session: &Session) -> bool {
+        self.browser.dir() == crate::applications::location() || self.read_only(session)
+    }
+
     fn read_only(&self, session: &Session) -> bool {
         self.mounted_read_only
             || session
@@ -2988,6 +3007,7 @@ impl BrowserWindow {
                 .map(|i| session.places[i].name.clone()),
             read_only: self.read_only(session),
             can_paste: !session.pasteboard.is_empty(),
+            can_move: !session.pasteboard.is_empty() && !session.pasteboard_stays,
             jobs: !session.jobs.is_empty(),
             tabs: self.tabs.len(),
             tab_bar: self.tab_bar_shown(),

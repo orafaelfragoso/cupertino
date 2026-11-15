@@ -147,16 +147,21 @@ fn item_under(keys: &[Key], rows: &HashMap<Key, u64>) -> Option<(Key, u64)> {
     })
 }
 
+/// Where a drop on the sidebar's `place` puts the items: into the trash, or into the folder; none for a place that
+/// takes no items (Recents, Network, Applications).
+fn place_destination(place: &crate::places::Place) -> Option<Destination> {
+    match place.kind {
+        PlaceKind::Trash => Some(Destination::Trash),
+        PlaceKind::Recents | PlaceKind::Network | PlaceKind::Applications => None,
+        _ => Some(Destination::Folder(place.folder()?.to_path_buf())),
+    }
+}
+
 /// The sidebar `content` of window `id`, taking drops on the places that are folders and on the Trash.
 pub(super) fn sidebar(session: &Session, id: u64, content: Element<Message>) -> Element<Message> {
     let places: Rc<[(Key, Destination)]> = (0..session.places.len())
         .filter_map(|i| {
-            let place = &session.places[i];
-            let to = match place.kind {
-                PlaceKind::Trash => Destination::Trash,
-                PlaceKind::Recents | PlaceKind::Network => return None,
-                _ => Destination::Folder(place.folder()?.to_path_buf()),
-            };
+            let to = place_destination(&session.places[i])?;
             Some((super::view::place_key(session, i), to))
         })
         .collect();
@@ -388,6 +393,32 @@ pub(super) fn uri_paths(bytes: &[u8]) -> Option<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sidebar_takes_drops_on_folders_and_the_trash_but_not_on_applications() {
+        use crate::places::{Place, PlaceGroup};
+        let at = |kind, path: &str| Place {
+            name: String::new(),
+            path: PathBuf::from(path),
+            group: PlaceGroup::Favorites,
+            kind,
+        };
+        assert_eq!(
+            place_destination(&at(PlaceKind::Documents, "/home/u/Documents")),
+            Some(Destination::Folder("/home/u/Documents".into()))
+        );
+        assert_eq!(
+            place_destination(&at(PlaceKind::Trash, "/home/u/.local/share/Trash")),
+            Some(Destination::Trash)
+        );
+        assert_eq!(
+            place_destination(&at(
+                PlaceKind::Applications,
+                crate::applications::APPLICATIONS
+            )),
+            None
+        );
+    }
 
     #[test]
     fn a_folder_that_takes_nothing_new_takes_no_drop_and_the_trash_still_does() {

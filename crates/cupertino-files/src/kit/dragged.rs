@@ -67,8 +67,9 @@ pub(super) fn start(
     window: WindowKey,
     grab: &Grab,
     entries: &[Entry],
+    copy_only: bool,
 ) -> Command<Message> {
-    drag(id, window, &grab.indices, entries, preview(grab))
+    drag(id, window, &grab.indices, entries, preview(grab), copy_only)
 }
 
 /// The drag of the list's rows of `grab`, items of `entries`, out of window `id`; `icon` is the renditions of the
@@ -79,11 +80,12 @@ pub(super) fn start_rows(
     grab: &RowGrab,
     entries: &[Entry],
     icon: Vec<ImageSource>,
+    copy_only: bool,
 ) -> Command<Message> {
     let pressed = grab.indices.first().and_then(|&i| entries.get(i));
     let name = pressed.map_or_else(String::new, |e| e.name.clone());
     let image = row_preview(grab, name, icon);
-    drag(id, window, &grab.indices, entries, image)
+    drag(id, window, &grab.indices, entries, image, copy_only)
 }
 
 fn drag(
@@ -92,6 +94,7 @@ fn drag(
     indices: &[usize],
     entries: &[Entry],
     image: DragPreview<Message>,
+    copy_only: bool,
 ) -> Command<Message> {
     let uris: String = indices
         .iter()
@@ -104,7 +107,12 @@ fn drag(
             mime: URI_LIST.into(),
             bytes: uris.into_bytes(),
         }],
-        actions: [DropAction::Copy, DropAction::Move].into(),
+        // items that cannot leave their folder (an application's entry, a read-only medium's file) are only copied
+        actions: if copy_only {
+            [DropAction::Copy].into()
+        } else {
+            [DropAction::Copy, DropAction::Move].into()
+        },
         image: Some(image),
         on_progress: Box::new(move |progress| Message::Window(id, WindowEvent::Dragged(progress))),
     })

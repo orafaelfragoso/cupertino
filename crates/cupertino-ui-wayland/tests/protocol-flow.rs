@@ -3476,6 +3476,14 @@ mod window_system {
             (Some(None), Some((120, 40))),
             "the whole surface takes input again"
         );
+        // a size the window asks for itself does not override the size its role gave it
+        kit.ws
+            .request(w, WindowRequest::SetSize(Size::new(60.0, 30.0)))
+            .unwrap();
+        let Seen::SolidCommitted { destination, .. } = solid(&mut kit, clear) else {
+            unreachable!()
+        };
+        assert_eq!(destination, Some((120, 40)), "the role's size is kept");
 
         kit.ws.request_frame(w);
         kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));

@@ -289,13 +289,22 @@ impl DirectoryModel {
             on_message: Some(notify),
         };
         if opts.watch {
-            let (wsink, listed, spec) = (sink.clone(), dirs.clone(), opts.sort);
+            // an install touches many entries at once: the events only mark the list stale, and one thread lists it
+            // again once for all the events that came while it was listing
+            let (changed, stale) = channel::<()>();
+            let (lsink, listed, spec) = (sink.clone(), dirs.clone(), opts.sort);
+            std::thread::spawn(move || {
+                relist_when_stale(&stale, || {
+                    let mut entries = crate::applications::session_entries(&listed);
+                    sort_entries(&mut entries, &spec);
+                    lsink.send(Msg::Replace(entries));
+                });
+            });
+            let wsink = sink.clone();
             let mut w =
                 notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
                     Ok(ev) if !matches!(ev.kind, EventKind::Access(_)) => {
-                        let mut entries = crate::applications::session_entries(&listed);
-                        sort_entries(&mut entries, &spec);
-                        wsink.send(Msg::Replace(entries));
+                        let _ = changed.send(());
                     }
                     Ok(_) => {}
                     Err(e) => {
@@ -608,10 +617,46 @@ impl Drop for DirectoryModel {
     }
 }
 
+/// Run `relist` once for each burst of marks on `stale`: the marks that came while it ran are taken together, so a
+/// burst of any size costs at most two runs. Returns when every sender of `stale` is gone.
+fn relist_when_stale(stale: &Receiver<()>, mut relist: impl FnMut()) {
+    while stale.recv().is_ok() {
+        while stale.try_recv().is_ok() {}
+        relist();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_burst_of_changes_lists_the_applications_once() {
+        let (changed, stale) = channel();
+        for _ in 0..50 {
+            changed.send(()).unwrap();
+        }
+        drop(changed);
+        let mut runs = 0;
+        relist_when_stale(&stale, || runs += 1);
+        assert_eq!(runs, 1, "fifty marks waiting together are one listing");
+
+        // marks that come while a listing runs make one more listing, not one each
+        let (changed, stale) = channel();
+        changed.send(()).unwrap();
+        let mut runs = 0;
+        let mut during = Some(changed);
+        relist_when_stale(&stale, || {
+            runs += 1;
+            if let Some(changed) = during.take() {
+                for _ in 0..20 {
+                    changed.send(()).unwrap();
+                }
+            }
+        });
+        assert_eq!(runs, 2);
+    }
 
     fn names(m: &DirectoryModel) -> Vec<String> {
         m.entries().iter().map(|e| e.name.clone()).collect()

@@ -127,8 +127,8 @@ struct Window {
     /// A toplevel's application id; empty for a popup.
     app_id: String,
     configured: bool,
-    /// The compositor leaves the window's size to it (no configure yet, or the last one carried no size): `size` follows
-    /// what the runtime asks ([`WindowRequest::SetSize`]).
+    /// The compositor leaves the window's size to it (no configure yet, or the toplevel's last one carried no size):
+    /// `size` follows what the runtime asks ([`WindowRequest::SetSize`]). A popup's or role's configure always sizes it.
     free_size: bool,
     menus: Option<ShownMenus>,
     /// An input region to send with the next present; `Some(None)` gives the whole surface back.
@@ -1159,6 +1159,7 @@ impl WaylandWindowSystem {
                     return;
                 };
                 self.windows[i].size = (configure.width, configure.height);
+                self.windows[i].free_size = false;
                 due = self.resume(i);
                 out.push(PlatformEvent::Window {
                     window: self.windows[i].id,
@@ -1311,6 +1312,7 @@ impl WaylandWindowSystem {
                                 holds_keyboard(&self.windows, i),
                             );
                             self.windows[i].size = size;
+                            self.windows[i].free_size = false;
                             due = self.resume(i);
                             (i, WindowEvent::Configure(configure))
                         }

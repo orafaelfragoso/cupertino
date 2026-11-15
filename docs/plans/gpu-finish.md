@@ -100,6 +100,9 @@ The boxes here are ticked together with their items in the GPU plan.
       the render-node tests cannot skip there; without one they skip as before.
 - [ ] `gpu_slice`'s missed-refresh count leaves out the frames a synchronous screenshot stalls, and counts by frames,
       not a fixed three seconds.
+- [ ] A server test of the search field's open over `ToggleLauncher` (the window 760 points wide with 4 layers,
+      `--no-files`, the field opened and closed once first) counts no buffer of the window or its layers while any
+      layer still animates, in the way the scope's open test counts its own.
 - [ ] `cupertino-ui-gpu`'s `a_large_windows_damaged_frame_stays_within_the_gpu_budget` times the GPU's own work (a
       timer query), not wall-clock time with other GPU users in it.
 
@@ -130,6 +133,12 @@ The boxes here are ticked together with their items in the GPU plan.
       the field).
 - [ ] The real process against the server: one buffer of the row's layer at the switch, and none other.
 - [ ] The GPU plan's open test and mid-way look items, which waited on these, ticked.
+
+### 3d. The caret's blink through the field's open (`cupertino-ui-controls`, `cupertino-launcher`)
+
+- [ ] The field draws its caret into a layer of its own and tells when its blink started; the launcher sends the
+      caret layer's opacity as samples of the blink through the open, so the caret blinks with no buffer. Test: the
+      caret's pixels are the panel's own at the same moments.
 
 ## Wave 4: the lead's gates and measurements (merged `main`)
 

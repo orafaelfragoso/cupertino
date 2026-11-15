@@ -45,10 +45,14 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   height, with exclusive keyboard interactivity. The enclosure (the panel's shape: `view::compact_shape`, `view::search_shape`,
   `view::browse_shape`) sits in a window with room for its shadow on every side (`view::window_extent`). While the shape moves,
   the window holds both the shape presented and the one it heads for, and once it settles the window is exactly the target's, so
-  it never cuts the enclosure off mid-way nor keeps room it no longer needs. Its input region is the enclosure alone
-  (`view::enclosure_rect`) while the panel is open and nothing while it closes, so a press beside the panel reaches the catcher.
-  When the shape changes the model asks the host to resize the surface (`LayerSurface::set_placement`), and the server's
-  configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
+  it never cuts the enclosure off mid-way nor keeps room it no longer needs. Where the window system shows surface layers
+  (and Reduce Motion is off) the window instead keeps the largest size the panel takes for as long as the panel shows
+  (`Model::window_held`, `Model::largest_extent`: both scopes and the tallest list of results, each with its shape's
+  overshoot, on the 4 pt grid and within the output's room below the panel), so a fold or unfold the compositor runs never
+  waits for the window to be configured again; hidden, the panel has no window. Its input region is the enclosure and the
+  mode buttons (`view::enclosure_rect`) while the panel is open and nothing while it closes, so a press beside the panel
+  reaches the catcher. When the window's size changes the model asks the host to resize the surface
+  (`LayerSurface::set_placement`), and the server's configure gives Kit the new size. A settled shape's width and height are multiples of 4 pt (`view::SHAPE_GRID`), so the glass
   ends on whole device pixels at 1, 1.25, 1.5, 1.75 and 2. The window is transparent: the enclosure is large-panel glass
   (`Glass::large_panel`, the regular recipe blurred twice as wide with a refraction band at most 6 pt deep and a face of its
   own: in the dark appearance its tones pressed together, a lower white, a lifted black and a little less saturation; in the

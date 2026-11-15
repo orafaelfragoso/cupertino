@@ -190,13 +190,21 @@ The boxes here are ticked together with their items in the GPU plan.
       is handed over). The search field rests on the compositor's edge too, its edge layer gone (within 1 of 255 of
       the panel's own at 1, 1.5 and 2, both appearances), and the browser's view options button is a layer of its own
       (`layers::OPTIONS_LAYER`), which keeps to the row's end as the glass's width changes.
-- [x] The fold and unfold carry the row, the body, the glass and the edge; `Model::hand_folds` on in the process.
+- [x] The fold and unfold carry the row, the body, the glass and the edge; `Model::hand_folds` and
+      `Model::hand_unfolds` on in the process.
 - [x] The same-moment test, as the open's (`open_moments` over `Escape` from a scope, and the scope's shortcut from
       the field). The unfold, 1.5, both scopes and appearances: the glass the panel's at every moment, the last frame
       within 1 of 255, apart from the outline and the caret within 1 at every frame; along the outline the browser
-      parts by up to 20 of 255 (dark) and 18 (light) where its body's content crosses the moving edge, and the files
-      scope by up to 18 and 14 where its shape waits as the field's capsule under the scope's header, so the bound
-      along the outline is 20, not 4 (`the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`).
+      parted by up to 20 of 255 (dark) and 18 (light) where its body's content crosses the moving edge, and the files
+      scope by up to 18 and 14 where its shape waits as the field's capsule under the scope's header
+      (`the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). With the window held at one
+      size through the unfold (both drawings in it, each panel on whole device pixels in it at 1.5) the bound is split
+      by cause: `UNFOLD_BODY_CUT_ALONG_OUTLINE`, 47, the browser's body cut a fraction of a device pixel apart where it
+      crosses the moving edge (47 in the dark and 37 in the light at one moment, 100 ms in, where its scroll indicator
+      crosses the right edge; 4 at most at the others), and `UNFOLD_GROWING_CAPSULE_ALONG_OUTLINE`, 15, the files
+      scope's edge stroked along the shape the panel draws and along the glass the compositor moves, apart along the
+      capsule's ends while the shape waits (7) and along the bottom and the right edge as it grows out of the capsule
+      (15 in the dark, 11 in the light).
       A scope's close at the same moments too (the browser and the files scope, dark): within 1 apart from the
       outline, along it up to 100 of 255 at its first frame (29 in the light for the field and the browser), as the
       compositor's edge is not blurred with the content.
@@ -219,12 +227,26 @@ The boxes here are ticked together with their items in the GPU plan.
       33 ms on, where it was up to 100 and 29; elsewhere within 1 (bound along the outline now 4, was 104). The
       field's close is no worse than when it blurred its own edge layer, when the test held the whole frame within 8
       at the first frames. No golden changes.
-- [ ] The real process against the server: one buffer of the row's layer at the switch, and none other. The fold
-      holds: 1 buffer of the row's layer and none other over 92 server steps animating, in 3 runs
+- [x] The real process against the server: one buffer of the row's layer at the switch, and none other. The fold
+      holds: 1 buffer of the row's layer and none other over 83 to 94 server steps animating, in 3 runs
       (`shell_processes::the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once`). The
-      unfold does not: the window grows from the field's size to the scope's as it begins, and the frame drawn again
-      at the new size lands after the compositor started the unfold (2 buffers of the row's layer and 7 of the window
-      and its other layers over 94 steps); it has no server test yet.
+      unfold grew the window from the field's size to the scope's as it began, and the frame drawn again at the new
+      size landed after the compositor started (2 buffers of the row's layer and 7 of the window and its other layers
+      over 94 steps). Now, where the window system shows layers and Reduce Motion is off, the panel's window keeps the
+      largest size the panel takes for as long as it shows (`Model::window_held`, `Model::largest_extent`: both scopes
+      on the output known and the tallest list of results, each with its shape spring's overshoot from the field, on
+      the shape grid and within the room the output leaves below the panel), from the first frame on, so a fold that
+      settles no longer shrinks it; without layers or under Reduce Motion the window sizes as before. The input region
+      stays the enclosure and the mode buttons, so a press elsewhere in the larger window reaches the catcher
+      (`the_panel_s_window_keeps_the_largest_size_and_takes_input_on_the_panel_alone`). The unfold has its own flag,
+      `Model::hand_unfolds`, on in the process: 0 buffers of the row's layer and 0 of the window and its other layers
+      over 88 to 94 server steps animating, in 3 runs, the window at one size throughout and each of its 4 layers
+      drawn once in the first frame
+      (`shell_processes::the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_row_at_most_once`;
+      with the window sized as before it counts 1 buffer of the row's layer and 2 others, and the window at another
+      size for 76 steps). The launcher's server tests tell the panels apart by their glass (the browser's 844 points
+      wide, the field's capsule 57 tall) and the panel's close by its window going, since the window no longer
+      changes size between panels.
 - [ ] The GPU plan's open test and mid-way look items, which waited on these, ticked.
 
 ### 3d. The caret's blink through the field's open (`cupertino-ui-controls`, `cupertino-launcher`)

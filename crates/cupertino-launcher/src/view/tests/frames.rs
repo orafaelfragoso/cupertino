@@ -132,6 +132,9 @@ thread_local! {
     /// The next [`Metered`] window system shows surface layers, and its theme is the dark one.
     static LAYERS: Cell<bool> = const { Cell::new(false) };
     static DARK: Cell<bool> = const { Cell::new(false) };
+    /// The next [`Metered`] launcher's window keeps the largest size the panel takes ([`Model::window_held`]) on a
+    /// window system without layers too, so the panel's own drawing lies where its layers do.
+    static HOLD_WINDOW: Cell<bool> = const { Cell::new(false) };
 }
 
 /// What loading and decoding one application icon costs the metered host's icon thread: about what a large theme icon
@@ -251,6 +254,8 @@ impl Application for MeteredApp {
         model.hand_opens = LAYERS.get();
         model.hand_field_opens = LAYERS.get();
         model.hand_folds = LAYERS.get();
+        model.hand_unfolds = LAYERS.get();
+        model.window_held = LAYERS.get() || HOLD_WINDOW.get();
         (model, vec![listen()])
     }
 

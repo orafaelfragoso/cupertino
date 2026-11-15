@@ -1029,6 +1029,9 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     // the compositor runs the panel's close when it shows a window's parts as layers of their own, with glass
     let capabilities = system.capabilities();
     model.compositor_layers = capabilities.surface_layers && capabilities.app_effects;
+    // where it does, the panel's window keeps the largest size the panel takes, so the folds and unfolds the
+    // compositor runs never wait for the window to be configured again
+    model.window_held = model.compositor_layers;
     let app = App { model, signals };
     let first = listen(&app.signals);
     cupertino_kit::app::run_on::<App>(system, (app, vec![first]))?;

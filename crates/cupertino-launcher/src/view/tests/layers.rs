@@ -25,7 +25,22 @@ fn drawn(scale: f64, dark: bool, layers: bool) -> Metered {
     m
 }
 
+/// [`drawn`], its window's frames keeping their pixels only while [`Metered::repaint_kept`] draws them: a walk through
+/// the views draws many frames of the whole window on its way, and copying each one costs more than drawing it.
+fn drawn_kept_when_taken(scale: f64, dark: bool, layers: bool) -> Metered {
+    let mut m = drawn(scale, dark, layers);
+    m.driver.window_system_mut().set_keep_pixels(false);
+    m
+}
+
 impl Metered {
+    /// [`Metered::repaint_whole`] with the window's frames keeping their pixels, so the last one shows it.
+    fn repaint_kept(&mut self) {
+        self.driver.window_system_mut().set_keep_pixels(true);
+        self.repaint_whole();
+        self.driver.window_system_mut().set_keep_pixels(false);
+    }
+
     /// The panel's last window frame, `(width, height, pixels)`.
     fn window_pixels(&self) -> (u32, u32, Vec<u8>) {
         let panel = self.panel().expect("the panel is shown");
@@ -154,6 +169,15 @@ impl Metered {
     }
 }
 
+/// How far two pixels differ: the largest difference of a channel.
+fn apart(p: &[u8], q: &[u8]) -> u8 {
+    let mut most = 0;
+    for k in 0..4 {
+        most = most.max(p[k].abs_diff(q[k]));
+    }
+    most
+}
+
 /// How far two frames `width` pixels wide differ: the largest difference of a channel, and the pixels that differ by
 /// more than 1.
 fn compare(a: &[u8], b: &[u8], width: u32) -> (u8, Vec<(u32, u32)>) {
@@ -161,12 +185,7 @@ fn compare(a: &[u8], b: &[u8], width: u32) -> (u8, Vec<(u32, u32)>) {
     let mut stray = Vec::new();
     for (i, (p, q)) in a.chunks(4).zip(b.chunks(4)).enumerate() {
         let (x, y) = (i as u32 % width, i as u32 / width);
-        let d = p
-            .iter()
-            .zip(q)
-            .map(|(u, v)| u.abs_diff(*v))
-            .max()
-            .unwrap_or(0);
+        let d = apart(p, q);
         most = most.max(d);
         if d > 1 {
             stray.push((x, y));
@@ -190,10 +209,10 @@ struct Rest {
 /// The panel at rest in the search field, its results and the browser, at `scale` in the `dark` or light appearance,
 /// drawn as layers when `layers`.
 fn walk(scale: f64, dark: bool, layers: bool) -> Vec<Rest> {
-    let mut m = drawn(scale, dark, layers);
+    let mut m = drawn_kept_when_taken(scale, dark, layers);
     let mut out = Vec::new();
     let take = |m: &mut Metered, what| {
-        m.repaint_whole();
+        m.repaint_kept();
         let (w, h, pixels) = m.composed();
         let shown = m.shown_layers();
         let panel = m.panel().unwrap();
@@ -437,10 +456,10 @@ fn resting_layers(
     scale: f64,
     dark: bool,
 ) -> Vec<(&'static str, (u32, u32), Vec<PresentedSurfaceLayer>)> {
-    let mut m = drawn(scale, dark, true);
+    let mut m = drawn_kept_when_taken(scale, dark, true);
     let mut out = Vec::new();
     let take = |m: &mut Metered, what| {
-        m.repaint_whole();
+        m.repaint_kept();
         let (w, h, _) = m.window_pixels();
         (what, (w, h), m.shown_layers())
     };
@@ -462,9 +481,76 @@ fn resting_layers(
     out
 }
 
+/// Where the edge drawn along `shapes` (in device pixels), `width` wide and softened by `soft`, can show: no further
+/// than `reach` (the line's width, a pixel and eight deviations, and the group's `spacing`) outside the shapes' bounds,
+/// nor deeper inside a shape than that past its corners, where the line's share of a pixel is 0 (softened, under
+/// 10⁻¹⁴), and where a shape lies over a pixel the others' lines are cut away. The models skip the pixels it cannot
+/// reach, which most of a window's are.
+struct EdgeReach {
+    outer: [f32; 4],
+    inner: Vec<[f32; 4]>,
+}
+
+impl EdgeReach {
+    fn new(
+        shapes: &[cupertino_glass::glass::GlassShape],
+        width: f32,
+        soft: f32,
+        spacing: f32,
+    ) -> EdgeReach {
+        let reach = width + 1.0 + 8.0 * soft + spacing;
+        let mut outer = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let mut inner = Vec::new();
+        for s in shapes {
+            let [x, y, w, h] = s.rect;
+            outer = [
+                outer[0].min(x),
+                outer[1].min(y),
+                outer[2].max(x + w),
+                outer[3].max(y + h),
+            ];
+            // the corners' curves lie within this far of each side, the straight sides on them
+            let m = reach + s.radius.max(0.0) * cupertino_glass::glass::CONTINUOUS_EXTENT;
+            if w > 2.0 * m && h > 2.0 * m {
+                inner.push([x + m, y + m, x + w - m, y + h - m]);
+            }
+        }
+        EdgeReach {
+            outer: [
+                outer[0] - reach,
+                outer[1] - reach,
+                outer[2] + reach,
+                outer[3] + reach,
+            ],
+            inner,
+        }
+    }
+
+    /// Whether the line can show at `p`: `Some(true)` where it may, `Some(false)` deep inside a shape and `None` past
+    /// the shapes' bounds.
+    fn at(&self, p: [f32; 2]) -> Option<bool> {
+        let o = self.outer;
+        if p[0] < o[0] || p[1] < o[1] || p[0] > o[2] || p[1] > o[3] {
+            return None;
+        }
+        Some(
+            !self
+                .inner
+                .iter()
+                .any(|r| p[0] > r[0] && p[1] > r[1] && p[0] < r[2] && p[1] < r[3]),
+        )
+    }
+}
+
 /// The edge a compositor draws along the glass of `layers` with `edge` in each glass group's first layer's look, in a
 /// window `size` pixels large at `scale`: for each pixel, its alpha and how far its centre lies outside the glass, in
-/// pixels, as the glass's own model of the edge works them out in device pixels.
+/// pixels, as the glass's own model of the edge works them out in device pixels; beyond the edge's reach
+/// ([`EdgeReach`]) its alpha is 0 and the distance infinite, outside or (negative) inside.
 fn compositor_edge(
     size: (u32, u32),
     scale: f64,
@@ -493,23 +579,31 @@ fn compositor_edge(
             None => groups.push((group, spacing, vec![shape])),
         }
     }
-    let containers: Vec<Container> = groups
+    let containers: Vec<(Container, EdgeReach)> = groups
         .into_iter()
         .map(|(_, spacing, shapes)| {
-            Container::new(shapes, spacing as f32 * s, GlassMode::default()).with_edge(GlassEdge {
-                width: edge.width as f32 * s,
-                color: edge.color,
-                soft: 0.0,
-            })
+            let reach = EdgeReach::new(&shapes, edge.width as f32 * s, 0.0, spacing as f32 * s);
+            let c = Container::new(shapes, spacing as f32 * s, GlassMode::default()).with_edge(
+                GlassEdge {
+                    width: edge.width as f32 * s,
+                    color: edge.color,
+                    soft: 0.0,
+                },
+            );
+            (c, reach)
         })
         .collect();
     let (w, h) = (size.0 as usize, size.1 as usize);
     let mut out = vec![(0.0, f32::INFINITY); w * h];
     for (i, px) in out.iter_mut().enumerate() {
         let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
-        for c in &containers {
-            let d = c.field(p).0;
-            let a = c.edge_alpha_at(p);
+        for (c, reach) in &containers {
+            // past the edge's reach no line shows, and the distance stands for "well outside" or "well inside"
+            let (d, a) = match reach.at(p) {
+                Some(true) => (c.field(p).0, c.edge_alpha_at(p)),
+                Some(false) => (f32::NEG_INFINITY, 0.0),
+                None => (f32::INFINITY, 0.0),
+            };
             *px = (1.0 - (1.0 - px.0) * (1.0 - a), px.1.min(d));
         }
     }
@@ -694,7 +788,7 @@ fn compose_with_edge(
     let (w, h) = (size.0 as usize, size.1 as usize);
     let mut base = vec![[0.0f32; 4]; w * h];
     if !glass.is_empty() {
-        let shapes = glass
+        let shapes: Vec<GlassShape> = glass
             .iter()
             .map(|l| {
                 let b = l.bounds;
@@ -719,6 +813,7 @@ fn compose_with_edge(
         } else {
             0.0
         };
+        let reach = EdgeReach::new(&shapes, edge.width as f32 * s, soft, 0.0);
         let c = Container::new(shapes, 0.0, GlassMode::default()).with_edge(
             GlassEdge {
                 width: edge.width as f32 * s,
@@ -729,6 +824,9 @@ fn compose_with_edge(
         );
         for (i, px) in base.iter_mut().enumerate() {
             let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
+            if reach.at(p) != Some(true) {
+                continue;
+            }
             let a = c.edge_alpha_at(p) * opacity;
             *px = [edge.color[0] * a, edge.color[1] * a, edge.color[2] * a, a];
         }
@@ -748,7 +846,8 @@ fn compose_over(
     let mut out = base;
     for layer in layers {
         let Some(frame) = &layer.frame else { continue };
-        if layer.opacity <= 0.0 || frame.width == 0 {
+        // a frame with nothing in it, blurred or not, lays nothing over the window
+        if layer.opacity <= 0.0 || frame.width == 0 || frame.pixels.iter().all(|&c| c == 0) {
             continue;
         }
         let (fw, fh) = (frame.width as usize, frame.pixel_height as usize);
@@ -761,9 +860,10 @@ fn compose_over(
         let (iw, ih) = (fw + 2 * pad, fh + 2 * pad);
         let mut pixels = vec![[0.0f32; 4]; iw * ih];
         for y in 0..fh {
-            for x in 0..fw {
-                let s = &frame.pixels[y * frame.stride as usize + 4 * x..][..4];
-                pixels[(y + pad) * iw + x + pad] = std::array::from_fn(|c| f32::from(s[c]) / 255.0);
+            let from = &frame.pixels[y * frame.stride as usize..][..4 * fw];
+            let to = &mut pixels[(y + pad) * iw + pad..][..fw];
+            for (d, s) in to.iter_mut().zip(from.as_chunks::<4>().0) {
+                *d = s.map(|c| f32::from(c) / 255.0);
             }
         }
         let mut image = Image::new(iw, ih, pixels);
@@ -806,8 +906,10 @@ fn compose_over(
             reach(pivot.0, origin.0, iw, w),
             reach(pivot.1, origin.1, ih, h),
         );
-        for (py, row) in out.chunks_mut(w).enumerate().skip(ys.start).take(ys.len()) {
-            for (px, d) in row.iter_mut().enumerate().skip(xs.start).take(xs.len()) {
+        for py in ys {
+            let row = &mut out[py * w..][..w];
+            for px in xs.clone() {
+                let d = &mut row[px];
                 // the frame's pixel under this one, from its blurred copy's top left
                 let u = pivot.0 + (px as f64 + 0.5 - pivot.0) / s - origin.0 + pad as f64 - 0.5;
                 let v = pivot.1 + (py as f64 + 0.5 - pivot.1) / s - origin.1 + pad as f64 - 0.5;
@@ -817,16 +919,32 @@ fn compose_over(
                 let (x0, y0) = (u.floor(), v.floor());
                 let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
                 let (x0, y0) = (x0 as i64, y0 as i64);
-                let corners = [
-                    read(x0, y0),
-                    read(x0 + 1, y0),
-                    read(x0, y0 + 1),
-                    read(x0 + 1, y0 + 1),
-                ];
+                // on a texel (a layer at its own scale) the other three weigh nothing: read the one
+                let on_texel = fx == 0.0 && fy == 0.0;
+                let corners = if on_texel {
+                    [read(x0, y0), [0.0; 4], [0.0; 4], [0.0; 4]]
+                } else {
+                    [
+                        read(x0, y0),
+                        read(x0 + 1, y0),
+                        read(x0, y0 + 1),
+                        read(x0 + 1, y0 + 1),
+                    ]
+                };
+                // nothing to lay over the pixel, which keeps what it shows
+                if corners
+                    .iter()
+                    .all(|c| c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 0.0)
+                {
+                    continue;
+                }
                 let cut = mask.as_ref().map_or(1.0, |m| {
                     (0.5 - m.sdf([px as f32 + 0.5, py as f32 + 0.5])).clamp(0.0, 1.0)
                 });
                 let src: [f32; 4] = std::array::from_fn(|k| {
+                    if on_texel {
+                        return corners[0][k] * o * cut;
+                    }
                     let top = corners[0][k] * (1.0 - fx) + corners[1][k] * fx;
                     let bottom = corners[2][k] * (1.0 - fx) + corners[3][k] * fx;
                     (top * (1.0 - fy) + bottom * fy) * o * cut
@@ -838,8 +956,54 @@ fn compose_over(
             }
         }
     }
-    out.iter()
-        .flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8))
+    let mut bytes = vec![0u8; out.len() * 4];
+    for (b, p) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(&out) {
+        for k in 0..4 {
+            if p[k] > 0.0 {
+                b[k] = (p[k].min(1.0) * 255.0).round() as u8;
+            }
+        }
+    }
+    bytes
+}
+
+/// Whether `CUPERTINO_LAUNCHER_QUICK` is set (to anything but `0`): the same-moment tests then check only their key
+/// moments ([`key_moments`]), for a quick look while working on them. Without it they check every moment they take.
+fn quick() -> bool {
+    std::env::var_os("CUPERTINO_LAUNCHER_QUICK").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// `moments` (`after` gives each one's time, seconds into the motion), all of them, or under [`quick`] the key ones:
+/// the first, the last, the first at or past each time of `marks` (where a bound changes or the header switches) and
+/// the one nearest each time of `peaks` (where the figures come nearest their bounds).
+fn key_moments<T>(
+    moments: Vec<T>,
+    after: impl Fn(&T) -> f64,
+    marks: &[f64],
+    peaks: &[f64],
+) -> Vec<T> {
+    if !quick() || moments.is_empty() {
+        return moments;
+    }
+    let times: Vec<f64> = moments.iter().map(&after).collect();
+    let mut keep = vec![false; times.len()];
+    keep[0] = true;
+    keep[times.len() - 1] = true;
+    for &mark in marks {
+        if let Some(i) = times.iter().position(|&t| t >= mark) {
+            keep[i] = true;
+        }
+    }
+    for &peak in peaks {
+        let nearest = (0..times.len())
+            .min_by(|&a, &b| (times[a] - peak).abs().total_cmp(&(times[b] - peak).abs()))
+            .unwrap();
+        keep[nearest] = true;
+    }
+    moments
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(m, k)| k.then_some(m))
         .collect()
 }
 
@@ -1036,12 +1200,15 @@ fn a_scope_s_close_in_the_light_is_the_panel_s_own_drawing_at_the_same_moments()
 /// [`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`] for the panel `open` opens.
 fn the_close_at_the_same_moments(what: &str, open: fn() -> Message, dark: bool) {
     {
-        let own = close_moments(1.5, dark, false, open, &[0.0; 8]);
+        let mut own = close_moments(1.5, dark, false, open, &[0.0; 8]);
         assert!(
             own.len() >= 5,
             "{what}: the panel drew its close: {}",
             own.len() - 1
         );
+        // the key moments: the first and the last, and the first under the bound of the close's second half
+        let closing = key_moments(own.split_off(1), |m| m.after, &[CLOSE_DURATION / 2.0], &[]);
+        own.extend(closing);
         let moments: Vec<f64> = own[1..].iter().map(|m| m.after).collect();
         let handed = close_moments(1.5, dark, true, open, &moments);
         // at rest apart from the caret, which may blink between the two
@@ -1059,13 +1226,7 @@ fn the_close_at_the_same_moments(what: &str, open: fn() -> Message, dark: bool) 
                 );
                 !caret.iter().any(|r| r.contains(at))
             })
-            .map(|(_, (p, q))| {
-                p.iter()
-                    .zip(q)
-                    .map(|(u, v)| u.abs_diff(*v))
-                    .max()
-                    .unwrap_or(0)
-            })
+            .map(|(_, (p, q))| apart(p, q))
             .max()
             .unwrap_or(0);
         eprintln!("trace: close {what}, dark {dark}, at rest: largest difference {most}");
@@ -1094,12 +1255,7 @@ fn the_close_at_the_same_moments(what: &str, open: fn() -> Message, dark: bool) 
                 .collect();
             let (mut most, mut most_apart, mut edge) = (0, 0, 0);
             for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
-                let d = p
-                    .iter()
-                    .zip(q)
-                    .map(|(u, v)| u.abs_diff(*v))
-                    .max()
-                    .unwrap_or(0);
+                let d = apart(p, q);
                 if d == 0 {
                     continue;
                 }
@@ -1462,12 +1618,7 @@ fn apart_from_edge(a: &Moment, b: &Moment, glass: (Rect, f64), scale: f64) -> (u
     let width = a.size.0;
     let (mut content, mut edge) = (0, 0);
     for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
-        let d = p
-            .iter()
-            .zip(q)
-            .map(|(u, v)| u.abs_diff(*v))
-            .max()
-            .unwrap_or(0);
+        let d = apart(p, q);
         if d == 0 {
             continue;
         }
@@ -1488,6 +1639,9 @@ fn apart_from_edge(a: &Moment, b: &Moment, glass: (Rect, f64), scale: f64) -> (u
 /// The band either side of the enclosure's outline, in points, that holds its edge stroke and the stroke's
 /// antialiasing as the open scales it.
 const EDGE_BAND: f64 = 2.0;
+
+/// Where a scope's open comes to its bound of 1 apart from the edge (seconds in).
+const OPEN_PEAKS: [f64; 2] = [0.083, 0.117];
 
 /// The open the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
 /// draws of a scope's open from hidden, the compositor's layers at that moment of the open, scaled, moved and faded as
@@ -1520,6 +1674,8 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 .filter(|(i, _)| i % 2 == 0 || *i == last)
                 .map(|(_, m)| m)
                 .collect();
+            // the key moments: the first, the last, and where the content comes to its bound
+            let own = key_moments(own, |m| m.after, &[], &OPEN_PEAKS);
             let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
             let handed = open_moments(1.5, dark, true, message, &moments);
             // the compositor's edge along the glass, as the panel strokes its own
@@ -1724,6 +1880,10 @@ fn under_reduce_motion_the_search_field_s_open_is_the_panel_s_own() {
 /// crosses the placeholder's ink: a quarter of the ink's contrast at most, at half opacity.
 const CARET_OVER_INK: u8 = 40;
 
+/// Where the search field's open comes nearest its bounds (seconds in): at the caret while the content fades in (35
+/// of 40) and apart from it where the shapes cross (17 of 30 in the dark).
+const FIELD_OPEN_PEAKS: [f64; 2] = [0.05, 0.15];
+
 /// The search field's open the compositor runs against the panel's own drawing of it at the same moments: at each
 /// frame the panel draws of its open from hidden (every other one and its last, at 1.5 in both appearances), the
 /// compositor's layers at that moment of the open, with the edge it draws along the glass group, against its pixels,
@@ -1742,6 +1902,14 @@ fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the
             .filter(|(i, _)| i % 2 == 0 || *i == last)
             .map(|(_, m)| m)
             .collect();
+        // the key moments: the first, the last, the first once the content is opaque (where the caret's bound drops)
+        // and where the caret and the rest come nearest their bounds
+        let own = key_moments(
+            own,
+            |m| m.after,
+            &[crate::motion::OPEN_FADE],
+            &FIELD_OPEN_PEAKS,
+        );
         let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
         let handed = open_moments(1.5, dark, true, || Message::Toggle, &moments);
         // the caret, which blinks in a layer of its own over the query row's through the panel's own blink
@@ -1763,12 +1931,7 @@ fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the
             let width = a.size.0;
             let (mut most, mut most_caret) = (0, 0);
             for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
-                let d = p
-                    .iter()
-                    .zip(q)
-                    .map(|(u, v)| u.abs_diff(*v))
-                    .max()
-                    .unwrap_or(0);
+                let d = apart(p, q);
                 let at = Point::new(
                     (i as u32 % width) as f64 / 1.5,
                     (i as u32 / width) as f64 / 1.5,
@@ -2204,6 +2367,22 @@ fn fold_moments(
     out
 }
 
+/// When the panel's own drawing of a fold or unfold first shows the header it ends in, as [`key_moments`] marks it.
+fn header_switch(own: &[(Moment, bool)]) -> Vec<f64> {
+    own.iter()
+        .find(|(_, switched)| *switched)
+        .map(|(m, _)| m.after)
+        .into_iter()
+        .collect()
+}
+
+/// Where a scope's fold comes nearest its bound along the outline (seconds in): 2 of 4 in the dark.
+const FOLD_PEAKS: [f64; 1] = [0.067];
+
+/// Where the unfold comes to its bounds (seconds in): along the outline into the browser and the files scope (100 ms,
+/// and 200 ms into the files scope in the light), and apart from the outline into the files scope (167 ms).
+const UNFOLD_PEAKS: [f64; 3] = [0.1, 0.167, 0.2];
+
 /// The fold the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
 /// draws of a scope's fold into the search field (every other one and its last, at 1.5, both scopes and appearances),
 /// the compositor's layers at that moment, with the edge it draws along the glass, against its pixels, and their glass
@@ -2230,6 +2409,9 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 .filter(|(i, _)| i % 2 == 0 || *i == last)
                 .map(|(_, m)| m)
                 .collect();
+            // the key moments: the first, the last, the header's switch and where the outline comes nearest its bound
+            let switch = header_switch(&own);
+            let own = key_moments(own, |(m, _)| m.after, &switch, &FOLD_PEAKS);
             let moments: Vec<(f64, bool)> = own.iter().map(|(m, s)| (m.after, *s)).collect();
             let handed = fold_moments(1.5, dark, true, Folding::fold(open), &moments);
             let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
@@ -2253,12 +2435,7 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 let width = a.size.0;
                 let (mut content, mut edge, mut at_caret) = (0, 0, 0);
                 for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
-                    let d = p
-                        .iter()
-                        .zip(q)
-                        .map(|(u, v)| u.abs_diff(*v))
-                        .max()
-                        .unwrap_or(0);
+                    let d = apart(p, q);
                     if d == 0 {
                         continue;
                     }
@@ -2645,12 +2822,7 @@ fn apart_along_outline(a: &Moment, b: &Moment) -> (u8, u8, u8) {
     let width = a.size.0;
     let (mut content, mut edge, mut at_caret) = (0, 0, 0);
     for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
-        let d = p
-            .iter()
-            .zip(q)
-            .map(|(u, v)| u.abs_diff(*v))
-            .max()
-            .unwrap_or(0);
+        let d = apart(p, q);
         if d == 0 {
             continue;
         }
@@ -2736,6 +2908,10 @@ fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments
                 .filter(|(i, _)| i % 2 == 0 || *i == last)
                 .map(|(_, m)| m)
                 .collect();
+            // the key moments: the first, the last, the header's switch and where the content and the outline come to
+            // their bounds
+            let switch = header_switch(&own);
+            let own = key_moments(own, |(m, _)| m.after, &switch, &UNFOLD_PEAKS);
             let moments: Vec<(f64, bool)> = own.iter().map(|(m, s)| (m.after, *s)).collect();
             let handed = fold_moments(1.5, dark, true, how, &moments);
             let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;

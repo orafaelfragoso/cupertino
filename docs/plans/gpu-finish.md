@@ -272,6 +272,12 @@ The boxes here are ticked together with their items in the GPU plan.
       under Reduce Motion nothing changes; the goldens pass unchanged. The blink a field tells is the one it draws, an
       owner's start holds through the window's activation, and a caret in its layer draws no frame as it blinks
       (`bare_field::`).
+- [x] The same-moment tests (`view::tests::frames::layers::`) check every moment they did, to the same figures, in 5
+      to 16 s each beside one another (11 to 29 s before; 40 to 90 s before the build optimised its drawing maths):
+      the tests' own composition skips empty frames, empty texels and a layer's own-scale bilinear weights, and the edge
+      model the pixels past the line's reach; the walks keep window pixels only for the frames they take.
+      `CUPERTINO_LAUNCHER_QUICK=1` checks only the key moments (the first, the last, the header's switch, where a bound
+      changes and where the figures come nearest their bounds), 2 to 10 s each.
 
 ## Wave 4: the lead's gates and measurements (merged `main`)
 

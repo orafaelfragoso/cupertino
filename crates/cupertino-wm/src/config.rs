@@ -84,6 +84,10 @@ impl Default for AnimationConfig {
 pub struct MagnetConfig {
     /// default on.
     pub enabled: bool,
+    /// A moved window's edges stick to other windows' edges too. Off: a plain move follows the
+    /// pointer one-to-one past every other window and sticks only to the usable screen
+    /// rectangle; a resized edge still sticks to other windows.
+    pub move_to_windows: bool,
     /// An edge snaps only if it was closer than this before the crossing step. 30 pt.
     pub snap_distance: f64,
     /// Fastest edge speed that still snaps. 400 pt/s.
@@ -128,6 +132,7 @@ impl Default for MagnetConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            move_to_windows: false,
             snap_distance: 30.0,
             snap_velocity: 400.0,
             unsnap_velocity: 400.0,

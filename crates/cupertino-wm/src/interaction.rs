@@ -8,8 +8,9 @@
 //! The hard hot-zone delay (0 s), the soft hot zone (20 pt, 0.2 s) and the tiled window spacing (8 pt)
 //! are as designed, as are the 20 pt corner zones, the 15 pt preview outset, the
 //! 0.2268 s preview fade spring and the 5 pt dwell stillness; the Alt side extent and
-//! the workspace-edge dwell are approximate / unknown and configurable. Moved and resized edges stick to other windows and the
-//! usable screen rectangle through [`crate::magnet`] (thresholds).
+//! the workspace-edge dwell are approximate / unknown and configurable. Moved edges stick to the usable
+//! screen rectangle and resized edges to other windows through [`crate::magnet`] (thresholds); a
+//! moved window passes other windows one-to-one unless `magnet.move_to_windows` is on.
 
 use cupertino_animation::AnimatedValue;
 use cupertino_input::drag_started;
@@ -261,7 +262,13 @@ impl Wm {
             return;
         }
         let usable = self.output(m.output).map_or(Rect::default(), |o| o.usable);
-        let guides = self.magnet_guides(m.window, m.output, true, now);
+        let guides = self.magnet_guides(
+            m.window,
+            m.output,
+            self.cfg.magnet.move_to_windows,
+            true,
+            now,
+        );
         let mcfg = &self.cfg.magnet;
         let w = self.windows.get_mut(&m.window).unwrap();
         let normal_size = w.lifecycle.normal_frame().size();
@@ -545,7 +552,7 @@ impl Wm {
         }
     }
 
-    /// Snapping guides for `window` on `output` (selection): other
+    /// Snapping guides for `window` on `output` (selection): with `windows` the other
     /// on-screen windows drawn at an opacity of at least the guide minimum, without a scale or
     /// minimize transform, outside the window's movement group (itself and its children), walked
     /// front to back so that a partly covered window guides only with its visible pieces
@@ -555,13 +562,18 @@ impl Wm {
         &self,
         window: WindowId,
         output: OutputId,
+        windows: bool,
         screen: bool,
         now: f64,
     ) -> Vec<Guide> {
         let cfg = &self.cfg.magnet;
         let group = self.descendants(window);
-        let front_to_back: Vec<Rect> = self
-            .visible_windows(output)
+        let others = if windows {
+            self.visible_windows(output)
+        } else {
+            Vec::new()
+        };
+        let front_to_back: Vec<Rect> = others
             .into_iter()
             .rev()
             .filter(|id| *id != window && !group.contains(id))
@@ -592,7 +604,9 @@ impl Wm {
     ) {
         // sheets and child windows do not snap while resizing
         let guides = match self.windows.get(&r.window) {
-            Some(w) if w.parent.is_none() => self.magnet_guides(r.window, w.output, false, now),
+            Some(w) if w.parent.is_none() => {
+                self.magnet_guides(r.window, w.output, true, false, now)
+            }
             _ => Vec::new(),
         };
         let mcfg = &self.cfg.magnet;

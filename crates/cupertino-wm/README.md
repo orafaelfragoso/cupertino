@@ -17,7 +17,7 @@ shadow, minimize progress).
 | `pieces` | visible pieces of a window (`visible_pieces`) and the magnetic guides they make (`window_guides`) |
 | `kind` | window kind of a new window from its protocol facts (`window_kind(modal, utility)`), where dialogs open (`sheet_frame`, `modal_panel_frame`, `child_frame`); `Map` turns a modal child into a `Sheet` when `place_modal_children_as_sheets` is on |
 | `interaction` | move, resize, snap hot zones, option-accelerator preview, edge-dwell workspace switching, resize hit zones, size snapping to the screen edges |
-| `magnet` | magnetic edges: moved and resized edges stick to other windows and the usable screen rectangle |
+| `magnet` | magnetic edges: moved edges stick to the usable screen rectangle, resized edges to other windows |
 | `workspace` | per-output workspaces, sticky and full-screen workspaces, MRU reordering, gesture switching with rubber band, app assignment |
 | `zoom` | best-fit sizing from min/max size, content hint and usable area |
 | `tiling` | tile kinds, hot zones, tile rectangles with optional margins |
@@ -67,7 +67,7 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 | unsnap pull | `35 + 105·(θ/60°)²`, 140 pt from 60°; instant within 15° pulling away |
 | re-snap guard | 55 pt travel or a reversal |
 | window gap, overlap margin | 1 pt, 1 pt |
-| guides | other windows with opacity ≥ 0.2 and no transform, outside the movement group; usable screen rectangle (moves only) |
+| guides | a move: the usable screen rectangle only, so the window passes other windows one-to-one (`magnet.move_to_windows`, off, adds them); a resize: other windows with opacity ≥ 0.2 and no transform, outside the movement group |
 | visible pieces | a window minus the windows in front of it, in bands; pieces under `min(20 pt, window size)` (`magnet.min_piece`) are kept only next to a piece sharing a full edge; a piece guides only along edges on the real frame |
 | size snap while resizing | off (`snap.snap_size_to_screen_edges`); once the pointer rests 0.4 s within 50 pt of a screen edge, the dragged edge jumps to the usable edge |
 | double click on a resize edge | on (`snap.snap_size_on_double_click`); clicked edges go to the usable edges, Alt adds the opposite ones; size limits kept, not in full screen |

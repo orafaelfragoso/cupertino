@@ -46,6 +46,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Harness> {
+        Self::sized(OUTPUT, 1.0)
+    }
+
+    /// A display of `size` pixels at `scale`.
+    fn sized(size: (i32, i32), scale: f64) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
@@ -59,7 +64,7 @@ impl Harness {
         )
         .expect("creating the compositor");
         common::each_connection_a_process(&mut state);
-        match headless::init(&mut state, OUTPUT, 1.0) {
+        match headless::init(&mut state, size, scale) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
                 common::egl_unavailable(format!("{e:#}"));
@@ -525,4 +530,74 @@ fn a_title_bar_press_moves_the_window_only_past_the_drag_threshold() {
         vec![],
         "the title bar presses were the server's"
     );
+}
+
+/// A title bar drag in 0.25 pt steps every 10 ms (25 pt/s) takes a window's right edge across the
+/// facing edge of the window beside it: at every step the window is where it was taken plus the
+/// pointer's travel, without stopping at the other window's edge, on a display at `scale`.
+fn a_slow_drag_past_another_window_follows_the_pointer_at(scale: f64) {
+    let Some(mut h) = Harness::sized((2400, 1400), scale) else {
+        return;
+    };
+    let _a = TestClient::spawn(h.socket_path(), "org.example.a", (300, 200), false);
+    let _b = TestClient::spawn(h.socket_path(), "org.example.b", (300, 200), false);
+    h.mapped(2);
+    let ids: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();
+    let (moved, other) = (ids[0], ids[1]);
+    // the other window 20 pt right of the moved one, level with it, placed in one jump
+    let m = h.frame(moved);
+    let o = h.frame(other);
+    let grab = cupertino_wm::Point::new(o.x + 10.0, o.y + 10.0);
+    h.state.command(cupertino_wm::Command::BeginMove {
+        window: other,
+        pointer: grab,
+    });
+    h.state.command(cupertino_wm::Command::PointerMotion {
+        pointer: cupertino_wm::Point::new(grab.x + m.right() + 20.0 - o.x, grab.y + m.y - o.y),
+        modifiers: Default::default(),
+    });
+    h.state.command(cupertino_wm::Command::PointerRelease);
+    h.advance(1.0);
+    let o = h.frame(other);
+    assert!(
+        (o.x - m.right() - 20.0).abs() < 1e-6 && (o.y - m.y).abs() < 1e-6,
+        "the other window beside the moved one: {m:?} and {o:?}"
+    );
+
+    let press = (m.x + m.w / 2.0, m.y + 10.0);
+    h.move_to(press.0, press.1);
+    h.button(BTN_LEFT, ButtonState::Pressed);
+    let mut time = h.state.now();
+    for i in 1..=160 {
+        let x = press.0 + 0.25 * f64::from(i);
+        time += 0.01;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
+        h.move_to(x, press.1);
+        if !h.state.wm.is_interacting() {
+            assert!(x - press.0 <= 5.5, "the drag started past the drag box");
+            continue;
+        }
+        let f = h.frame(moved);
+        assert!(
+            (f.x - (m.x + x - press.0)).abs() < 1e-6 && (f.y - m.y).abs() < 1e-6,
+            "at scale {scale}, {} pt into the drag: {f:?}, the pointer asks for x {}",
+            x - press.0,
+            m.x + x - press.0
+        );
+    }
+    h.button(BTN_LEFT, ButtonState::Released);
+    assert!(
+        h.frame(moved).right() > o.x + 10.0,
+        "the right edge ended well past the other window's left edge"
+    );
+}
+
+#[test]
+fn a_slow_drag_past_another_window_follows_the_pointer_at_scale_1() {
+    a_slow_drag_past_another_window_follows_the_pointer_at(1.0);
+}
+
+#[test]
+fn a_slow_drag_past_another_window_follows_the_pointer_at_scale_1_5() {
+    a_slow_drag_past_another_window_follows_the_pointer_at(1.5);
 }

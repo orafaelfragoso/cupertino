@@ -28,7 +28,7 @@
 
     <enum name="error">
       <entry name="invalid_surface" value="0" summary="a surface belongs to another client or is gone"/>
-      <entry name="role" value="1" summary="the surface already has a role or is the parent, or the parent is a layer"/>
+      <entry name="role" value="1" summary="the surface already has a role or a layer object or is the parent, or the parent is not a window's, a popup's or a layer shell surface's main surface"/>
       <entry name="too_many_layers" value="2" summary="the parent or the client holds as many layers as the server allows"/>
     </enum>
 
@@ -45,16 +45,18 @@
         initial state: at the parent's origin, its bounds the size of its content, opacity 1,
         scale 1, no corner radius, no glass, the normal blend role and the flat elevation.
         Layers of a parent are drawn in creation order, later ones above, and raised layers above
-        all flat ones. The parent is a window's or a layer shell surface's main surface, and is not
-        a layer itself. A surface that is a layer of the parent may become one again after its
-        layer object was destroyed.
+        all flat ones. The parent is a window's (xdg_toplevel), a popup's (xdg_popup) or a layer
+        shell surface's main surface: not a layer, a subsurface or a surface without a role. A
+        surface that is a layer of the parent may become one again after its layer object was
+        destroyed, and not while that object lives.
 
         The layer's content is the surface's own buffer and applies on the surface's own commit,
         never waiting for the parent: see the late-content rule of cupertino_layer_v1. Its
         geometry and look apply with the parent's commit.
 
         Posts invalid_surface when either surface belongs to another client, role when the surface
-        already has a role or is the parent or the parent is a layer, and too_many_layers when the parent already holds 64
+        already has a role (a layer of the parent whose layer object lives included) or is the
+        parent, or the parent has none of the roles above, and too_many_layers when the parent already holds 64
         layers or the client 256 (layers that are not destroyed count).
       </description>
       <arg name="id" type="new_id" interface="cupertino_layer_v1"/>
@@ -126,8 +128,24 @@
       layer's content are its target values; settled tells desktop control when they are what is
       shown.
 
-      Clipping: a layer is drawn only inside its parent's window, its rounded corners included,
-      and with masks_to_bounds inside its own rounded bounds.
+      Clipping: a layer of a window is drawn only inside that window, its rounded corners
+      included, wherever its place and scale take it, and with masks_to_bounds
+      inside both its own rounded bounds and the window; its glass and placeholder are cut to the
+      window too. A window that draws its own decorations is clipped to its window geometry.
+      Where masked bounds cross the window's rounded corners, the part inside is rounded by the
+      larger of the two radii. The layers of a layer shell surface are clipped only by
+      masks_to_bounds.
+
+      Ranges: values the server shows are held in a range far past any output, so no request
+      takes the scene past what it can draw: an origin within a million points either way of
+      the parent's, a width, height and corner radius up to a million points, a scale up to 64,
+      and a timed curve's Bézier y control points from -10 to 11. A value set, a target, a
+      sample or a velocity past its end is held at it, as is a value an animation overshoots to;
+      nothing is posted for it.
+
+      Queued requests: a value set again, or a look request made again, before the parent's
+      commit replaces the earlier one, so repeated requests never pile up; the animations
+      queued and not yet applied count towards the client's 512 as running and waiting ones do.
 
       Content blur (version 4): content_blur blurs the layer's own content, not its glass nor what
       lies behind it, by a Gaussian whose standard deviation is in the layer's points, so a panel's
@@ -135,8 +153,12 @@
       blurred as a whole picture, transparent beyond its edges, and scales, moves, fades and is
       clipped with the layer as its sharp content is. It applies to a layer of the normal blend
       role; a vibrant layer draws its content sharp. 0, the initial value, draws the content as it
-      is; a client's blurred layers count towards its limits as its other layers do. On a layer
-      object below version 4, content_blur is an invalid_property.
+      is; a client's blurred layers count towards its limits as its other layers do. The server
+      blurs only the part of the content that can show, on the output and inside the layer's
+      mask, with the blur's reach around it; content whose visible part would still need more
+      than the server's limit for one blurred copy (content far larger than the output, scaled far
+      down) is drawn sharp. On a layer object below version 4, content_blur is an
+      invalid_property.
 
       Late content: the parent's commit never waits for a layer's content. When a commit shows a
       part of the layer's bounds its content does not cover (a scroll that outruns the drawing),
@@ -153,6 +175,7 @@
       <entry name="invalid_property" value="1" summary="a property, glass style, blend role, elevation or highlight not defined at the object's version"/>
       <entry name="invalid_curve" value="2" summary="a duration over 10 seconds, Bézier x control points outside 0 to 1, or a spring response outside 0.01 to 10 seconds or damping ratio outside 0.05 to 4"/>
       <entry name="too_many_animations" value="3" summary="the client has as many animations running or waiting as the server allows"/>
+      <entry name="group_full" value="4" summary="the glass group already holds 16 layers of the parent"/>
     </enum>
 
     <enum name="property">
@@ -296,8 +319,9 @@
 
     <request name="set_masks_to_bounds">
       <description summary="clip the content to the rounded bounds">
-        1 clips the layer's content to its rounded bounds, 0 (the initial state) only to the
-        parent's window.
+        1 clips the layer's content to its rounded bounds within the parent's window, 0 (the
+        initial state) only to the window. A masked layer whose bounds lie outside the window
+        draws nothing.
       </description>
       <arg name="masks" type="uint"/>
     </request>
@@ -325,8 +349,10 @@
         move, scale and resize. The joined glass takes the style, lens, highlight, blur ramp,
         elevation and (from version 5) edge of the group's first layer in drawing order and the highest opacity of its
         layers, and is drawn below the content of that layer. 0, the initial group, keeps the
-        layer's glass alone; a layer without glass adds nothing to its group. Posts invalid_value
-        for a negative spacing or one above 64.
+        layer's glass alone; a layer without glass adds nothing to its group. A group holds at most
+        16 layers of a parent, as many shapes as one joined glass takes: the request that would
+        put a 17th layer in it posts group_full, so no layer's glass is ever silently left out.
+        Posts invalid_value for a negative spacing or one above 64.
       </description>
       <arg name="group" type="uint"/>
       <arg name="spacing" type="fixed"/>

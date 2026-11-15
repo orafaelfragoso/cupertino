@@ -2,7 +2,8 @@
 //! its grab, and the dismissed popups leave the popup tree at once, but a client may keep showing a closing menu for a
 //! moment, fading it, before it destroys it. Such a popup stays drawn where it was, over its parent, until its client
 //! destroys it or [`LINGER_LIMIT`] passes. It is out of the tree, so it takes no input (the pointer and the keyboard
-//! find only the tree's popups); it is still called back each frame, so its fade advances.
+//! find only the tree's popups); it is still called back each frame, so its fade advances. Each limit is also a tick
+//! deadline ([`Expiries`]), so a popup whose client hangs leaves the screen on time with nothing else drawing.
 
 use std::sync::Mutex;
 
@@ -33,11 +34,39 @@ pub fn snapshot(root: &WlSurface) -> Vec<(PopupKind, Point<i32, Logical>)> {
     PopupManager::popups_for_surface(root).collect()
 }
 
+/// When dismissed popups reach their [`LINGER_LIMIT`], so the run loop wakes then and the frame that takes them away
+/// is drawn even when nothing else damages the output.
+#[derive(Debug, Default)]
+pub struct Expiries(Vec<f64>);
+
+impl Expiries {
+    /// Wake at `until`, when a dismissed popup stops being drawn.
+    pub fn add(&mut self, until: f64) {
+        self.0.push(until);
+    }
+
+    /// The earliest limit not yet reached, if any.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.0.iter().copied().reduce(f64::min)
+    }
+
+    /// Forgets the limits reached by `now`; true if any was, so the outputs are drawn again without those popups.
+    pub fn tick(&mut self, now: f64) -> bool {
+        let before = self.0.len();
+        self.0.retain(|&until| now < until);
+        self.0.len() != before
+    }
+}
+
 /// Keeps drawing the popups of `before` (a [`snapshot`] of `root`) that are alive but no longer in the popup tree, from
-/// `now` for up to [`LINGER_LIMIT`].
-pub fn keep_dismissed(root: &WlSurface, before: Vec<(PopupKind, Point<i32, Logical>)>, now: f64) {
+/// `now` for up to [`LINGER_LIMIT`]. Returns when they stop being drawn, if any are kept.
+pub fn keep_dismissed(
+    root: &WlSurface,
+    before: Vec<(PopupKind, Point<i32, Logical>)>,
+    now: f64,
+) -> Option<f64> {
     if !root.alive() {
-        return;
+        return None;
     }
     let still: Vec<WlSurface> = PopupManager::popups_for_surface(root)
         .map(|(p, _)| p.wl_surface().clone())
@@ -52,7 +81,7 @@ pub fn keep_dismissed(root: &WlSurface, before: Vec<(PopupKind, Point<i32, Logic
         })
         .collect();
     if gone.is_empty() {
-        return;
+        return None;
     }
     with_states(root, |states| {
         states
@@ -68,6 +97,7 @@ pub fn keep_dismissed(root: &WlSurface, before: Vec<(PopupKind, Point<i32, Logic
             list.extend(gone);
         }
     });
+    Some(now + LINGER_LIMIT)
 }
 
 /// The dismissed popups of `root` still drawn at `now`, oldest first, with where they lie from it; the ones destroyed or

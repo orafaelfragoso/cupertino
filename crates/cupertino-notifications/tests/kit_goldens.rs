@@ -28,7 +28,9 @@ use cupertino_notifications::view::{
 };
 use cupertino_notifications::{CenterConfig, NotificationCenter, NotifyInput, Urgency};
 use cupertino_theme::Theme;
-use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{
+    AssistiveTechnology, HeadlessWindowSystem, Inspector, ManualClock, TestDriver,
+};
 
 /// What the test does to the model between frames.
 #[derive(Clone, Debug)]
@@ -259,8 +261,11 @@ impl Run {
                 let system = self.driver.window_system_mut();
                 if !self.configured.contains(&window) {
                     self.configured.push(window);
+                    // a layer surface's configure always carries its size, so the window keeps it after its spec
+                    // changes: the size it asks for now, as the compositor gives it
+                    let size = self.size.unwrap_or_else(|| asked_size(system, window));
                     system
-                        .configure(window, self.size, WindowStates::default())
+                        .configure(window, Some(size), WindowStates::default())
                         .unwrap();
                     busy = true;
                 } else if system.frame_requested(window).unwrap() {
@@ -377,6 +382,20 @@ impl Run {
             .map(|said| (said.live, said.text))
             .collect()
     }
+}
+
+/// The size `window` asks for: the last one it asked for since it was made, else the one it was made at.
+fn asked_size(system: &HeadlessWindowSystem, window: WindowId) -> Size {
+    let asked = system
+        .requests(window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::SetSize(size) => Some(*size),
+            _ => None,
+        });
+    asked.unwrap_or_else(|| system.spec(window).unwrap().size)
 }
 
 /// The dump without the numbers of image resources, which the process's tests share and take in any order.

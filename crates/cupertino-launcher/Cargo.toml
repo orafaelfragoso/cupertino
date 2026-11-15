@@ -59,6 +59,7 @@ cupertino-raster-math = { path = "../cupertino-raster-math" }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-test = { path = "../cupertino-ui-test" }
+gungraun = "=0.20.0"
 tempfile = "3"
 
 [[bin]]
@@ -71,6 +72,10 @@ name = "search"
 
 [[bench]]
 name = "matching"
+harness = false
+
+[[bench]]
+name = "instructions"
 harness = false
 
 [[test]]

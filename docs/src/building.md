@@ -632,6 +632,44 @@ can leave a test `dbus-daemon` behind: stop it, never your real session bus.
 for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one without, for a reason), `scripts/test`,
 `scripts/dev/build` and `scripts/preview --changed`.
 
+### Instruction-count benchmarks
+
+The functions a frame spends its time in have benchmarks counted in instructions, not timed: each runs once under
+Valgrind's Callgrind, so its count is the same on a loaded machine as on an idle one, and a rise of a fraction of a
+percent shows. They are library benchmarks of the [gungraun](https://crates.io/crates/gungraun) crate, one bench target
+named `instructions` per crate (`benches/instructions.rs`), with what each measures in its header:
+
+| Crate | What is counted |
+|---|---|
+| `cupertino-raster-math` | The blur's plan and kernel for a 4K output, the blur of a 4K backdrop, the coverage of a continuous-corner rounded rectangle and the dithered store over a panel's pixels at 2x |
+| `cupertino-glass` | One glass sample of the CPU model: inside, on the edge, in a corner, in the neck between joined shapes |
+| `cupertino-ui-layout` | A file manager window's solve (about 480 nodes): cold, cached, resized |
+| `cupertino-ui-render` | A 1280 × 800 window with text, a drop shadow and a blur at 2x: its first frame, a whole repaint, one row's damage |
+| `cupertino-ui-text` | 64 file names shaped and laid out, as a list and as an icon grid shows them, and laid out again |
+| `cupertino-launcher` | The index of 5 000 applications, seven queries, the scorer alone |
+
+```bash
+scripts/dev/microbench                        # every crate's benches, with a table of their counts
+scripts/dev/microbench raster-math glass      # only these crates
+scripts/dev/microbench --save-baseline main   # keep the counts as the baseline `main`
+scripts/dev/microbench --baseline main        # compare with it; fails when a count rises by more than 3% (--limit)
+```
+
+It needs Valgrind (`pacman -S valgrind`). The framework's runner, `gungraun-runner`, must be the library's version in
+`Cargo.lock` exactly: the script uses `GUNGRAUN_RUNNER` or the one on `PATH` when it is that version, and otherwise
+installs that version once into `target/gungraun-runner/VERSION`. Counts and baselines are kept under `target/gungraun`
+with the Callgrind profile of each benchmark, which `callgrind_annotate` reads. The setup a benchmark names (building
+the tree, the scene, the index) is not counted. The wall-clock benches beside them (`cargo bench -p cupertino-ui-layout
+--bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo bench`) stay, for the
+time a call takes.
+
+CI's **Instruction counts** job runs the benches of the selected crates at the commit before the change (saved as the
+baseline `base`, through `--checkout` on a worktree of that commit) and then at the change, on the same runner, and
+fails when a count rises by more than `MICROBENCH_LIMIT_PERCENT` (3) over it. A benchmark the earlier commit does not
+have is counted with nothing to compare it with, and so is every benchmark of a new branch. Counts move a little with
+the hash seeds of a run (under 0.1% here), so a change has to rise well past that to fail. A change to a function these
+benches cover comes with its benchmark; a new hot function gets one in its crate's `benches/instructions.rs`.
+
 ## Development scripts
 
 | Script | What it does |
@@ -641,6 +679,7 @@ for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one withou
 | `scripts/dev/shot OUT.png [server flags]` | One headless screenshot of the whole desktop with the current checkout, built first. `SIZE` (default `1512x982`), `SCALE` (default 2), `APPEARANCE` (`dark` or `light`), `AFTER` (seconds before the shot, default 5) and `WALLPAPER` change it. |
 | `scripts/preview` | Shoots every scenario in `scenarios/*.toml` headless with this checkout and with the installed release (or the programs in `PREVIEW_BEFORE=DIR`), at scales 1, 1.5 and 2 in light and dark, and shows them side by side with the changed pixels in `target/preview/index.html`. `--changed` takes only the scenarios of the programs changed since `origin/main`, `--no-before` skips the comparison, and `--live` runs the checkout's desktop in a window of the current session. |
 | `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. |
+| `scripts/dev/microbench [CRATE...]` | The instruction counts of the hot functions under Valgrind, one bench target `instructions` per crate ([Instruction-count benchmarks](#instruction-count-benchmarks)). `--save-baseline NAME` keeps a run's counts, `--baseline NAME` compares with them and fails on a rise of more than `--limit` percent (default 3), `--checkout DIR` benches another checkout into this one's target directory, `--summary FILE` appends the table in Markdown; arguments after `--` go to the framework's runner. It installs the runner at the library's exact version when it finds none. |
 | `scripts/dev/measure` | Memory (PSS, RSS and private dirty) and CPU of every desktop process in a headless session at rest, while used and at rest after use, the median of `RUNS` sessions (default 3). `--out F.json` writes the figures and `--compare A.json B.json` shows the change process by process; `NO_BUILD=1` or `MEASURE_BIN=DIR` measures other programs. |
 | `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
 | `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |

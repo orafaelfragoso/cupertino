@@ -58,6 +58,7 @@ A broken link or anchor in the book fails both commands. CI installs the same tw
 4. **Plain design values.** A constant that shapes the look (a duration, a radius, a spring) is a named value in one place, with a comment that says what it controls. Do not change the shader or physics math without a maintainer's agreement.
 5. **Names.** Crates are `cupertino-*`, files are kebab-case, and user-visible text uses the project's own terms (overview, workspaces, launcher, control panel, file manager).
 6. **Small diffs.** No drive-by renames or reformatting outside the change.
+7. **A benchmark for hot code.** A change to a function a frame spends its time in comes with its instruction-count benchmark in the crate's `benches/instructions.rs` (`scripts/dev/microbench`; see [Building](docs/src/building.md#instruction-count-benchmarks)).
 
 ## What we cannot accept
 

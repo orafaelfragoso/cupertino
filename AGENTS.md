@@ -30,6 +30,7 @@ scripts/dev/warm-target  # in a fresh git worktree: clone the main checkout's ta
 scripts/dev/shot OUT.png [server flags]   # one headless screenshot of the current checkout (builds first)
 scripts/dev/review-sheet [OUT_DIR]       # windows overlapping, dock name and menu, menus, control panel, both appearances, with crops of corners and pointers; look at it before packaging
 scripts/preview          # every scenario in scenarios/, this checkout beside the installed release, changed pixels marked
+scripts/dev/microbench [CRATE...]        # instruction counts of the hot functions under Valgrind; --save-baseline NAME, then --baseline NAME fails on a rise over 3%
 scripts/done             # everything a change must pass before it is called done
 ```
 

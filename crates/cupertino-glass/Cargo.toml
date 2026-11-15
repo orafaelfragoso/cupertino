@@ -27,7 +27,12 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 anyhow = "1"
 
 [dev-dependencies]
+gungraun = "=0.20.0"
 naga = { version = "24", features = ["wgsl-in"] }
+
+[[bench]]
+name = "instructions"
+harness = false
 
 [[test]]
 name = "suite"

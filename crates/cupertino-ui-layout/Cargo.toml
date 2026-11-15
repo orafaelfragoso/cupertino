@@ -13,10 +13,15 @@ layer = "ui"
 cupertino-geometry = { path = "../cupertino-geometry" }
 
 [dev-dependencies]
+gungraun = "=0.20.0"
 proptest = "1.12"
 
 [[bench]]
 name = "layout"
+harness = false
+
+[[bench]]
+name = "instructions"
 harness = false
 
 [[test]]

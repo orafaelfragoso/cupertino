@@ -17,7 +17,12 @@ cupertino-ui-text = { path = "../cupertino-ui-text" }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 
 [dev-dependencies]
+gungraun = "=0.20.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[bench]]
+name = "instructions"
+harness = false
 
 [[test]]
 name = "suite"

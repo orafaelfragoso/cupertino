@@ -76,11 +76,19 @@ The boxes here are ticked together with their items in the GPU plan.
 - [ ] The client's warm-up thread is stopped and joined at exit, as the server's is.
 - [ ] The Files grid's idle work resumes where its last slice stopped, so a folder of long names ends its idle work.
       Test: on a clock that gives each slice too little time for the whole walk, the work still ends.
+- [ ] With two windows and idle work left, the run loop no longer waits with a zero timeout over and over
+      (`runtime/idle.rs`).
+- [ ] A draw-into frame that finds no free buffer marks its damage again, so kept scroll images are repainted where
+      that frame would have drawn. Test: a frame skipped for want of a buffer, then the next frame, shows the change.
 
-### 2c. CI (`ci/`, `.github/`)
+### 2c. Tests and scripts (`scripts/`, the server's and `cupertino-ui-gpu`'s GPU tests)
 
-- [ ] The render-node tests are required where CI has a render node (`CUPERTINO_GPU_REQUIRED=1` on that job), and
-      skipped and reported as skipped elsewhere.
+- [ ] `scripts/test --slow` and `scripts/done` set `CUPERTINO_GPU_REQUIRED=1` when the machine has a render node, so
+      the render-node tests cannot skip there; without one they skip as before.
+- [ ] `gpu_slice`'s missed-refresh count leaves out the frames a synchronous screenshot stalls, and counts by frames,
+      not a fixed three seconds.
+- [ ] `cupertino-ui-gpu`'s `a_large_windows_damaged_frame_stays_within_the_gpu_budget` times the GPU's own work (a
+      timer query), not wall-clock time with other GPU users in it.
 
 ## Wave 3: the launcher's fold and unfold (`cupertino-launcher`, after 1c)
 

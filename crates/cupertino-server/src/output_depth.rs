@@ -1,5 +1,5 @@
-//! The bit depth of a display's primary plane: 8 bits a channel by default, 10 (`Abgr2101010`) when the
-//! configuration's `output_depth` is 10. The formats are tried in order when the display is set up, so a plane or
+//! The bit depth of a display's primary plane: 10 bits a channel (`Abgr2101010`) by default, 8 when the
+//! configuration's `output_depth` is 8. The formats are tried in order when the display is set up, so a plane or
 //! driver without a 10-bit format falls back to 8 bits.
 //!
 //! Captures never read the plane. A screenshot, a screen share and a recording each draw the scene into a target of
@@ -26,17 +26,17 @@ const TEN_BIT: [Fourcc; 4] = [
 /// The depth of the primary planes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Depth {
-    #[default]
     Eight,
+    #[default]
     Ten,
 }
 
 impl Depth {
-    /// The depth `output_depth` asks for: 10 bits for 10, 8 bits for anything else or nothing.
+    /// The depth `output_depth` asks for: 8 bits for 8, 10 bits for anything else or nothing.
     pub fn from_setting(bits: Option<u8>) -> Depth {
         match bits {
-            Some(10) => Depth::Ten,
-            _ => Depth::Eight,
+            Some(8) => Depth::Eight,
+            _ => Depth::Ten,
         }
     }
 
@@ -46,6 +46,15 @@ impl Depth {
             Depth::Eight => &EIGHT_BIT,
             Depth::Ten => &TEN_BIT,
         }
+    }
+
+    /// The format a primary plane offering `offered` gets: the first of [`Depth::primary_formats`] it offers, as the
+    /// display's setup tries them; `None` when it offers none of them.
+    pub fn format_on(self, offered: &[Fourcc]) -> Option<Fourcc> {
+        self.primary_formats()
+            .iter()
+            .copied()
+            .find(|f| offered.contains(f))
     }
 
     /// Bits a channel.
@@ -70,12 +79,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_plane_is_8_bits_unless_the_setting_asks_for_10() {
-        assert_eq!(Depth::from_setting(None), Depth::Eight);
+    fn the_plane_is_10_bits_unless_the_setting_asks_for_8() {
+        assert_eq!(Depth::from_setting(None), Depth::Ten, "an absent key");
         assert_eq!(Depth::from_setting(Some(8)), Depth::Eight);
-        assert_eq!(Depth::from_setting(Some(12)), Depth::Eight);
         assert_eq!(Depth::from_setting(Some(10)), Depth::Ten);
-        assert_eq!(Depth::default(), Depth::Eight);
+        assert_eq!(Depth::from_setting(Some(12)), Depth::Ten);
+        assert_eq!(Depth::default(), Depth::Ten);
+    }
+
+    #[test]
+    fn a_plane_offering_only_8_bit_formats_gets_8_bits() {
+        let eight_only = [Fourcc::Argb8888, Fourcc::Xrgb8888, Fourcc::Abgr8888];
+        let got = Depth::Ten.format_on(&eight_only).unwrap();
+        assert_eq!(got, Fourcc::Abgr8888);
+        assert_eq!(format_bits(got), 8);
+        assert_eq!(
+            Depth::Ten.format_on(&[Fourcc::Argb8888]),
+            Some(Fourcc::Argb8888)
+        );
+        // one with a 10-bit format gets it, unless 8 bits are asked for
+        let both = [Fourcc::Argb8888, Fourcc::Abgr2101010];
+        assert_eq!(Depth::Ten.format_on(&both), Some(Fourcc::Abgr2101010));
+        assert_eq!(Depth::Eight.format_on(&both), Some(Fourcc::Argb8888));
+        assert_eq!(Depth::Ten.format_on(&[Fourcc::Nv12]), None);
     }
 
     #[test]

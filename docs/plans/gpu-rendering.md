@@ -1125,11 +1125,11 @@ Gate:
       it off; "Measurements").
 - [x] Pointer-to-screen latency reported by the DRM backend's log (`pointer-to-flip`; the bench reports the headless
       figure, `pointer_latency_p50_ms` and `_p95_ms`, `ptr95` in its table).
-- [x] 10-bit primary plane (`Abgr2101010`) behind `output_depth` in `compositor.json`, 8 bits by default, falling back
-      to 8 bits on a plane without a 10-bit format; capture paths never read the plane and stay 8-bit
-      (`output_depth::tests`).
-- [ ] 10 bits by default. Decided by the owner (2026-11-15): 10 bits on the target display, without waiting on the
-      step 0 probe ("Measurements", "Turning 10 bits on").
+- [x] 10-bit primary plane (`Abgr2101010`) behind `output_depth` in `compositor.json`, 8 bits by default at first (10 since,
+      below), falling back to 8 bits on a plane without a 10-bit format; capture paths never read the plane and stay
+      8-bit (`output_depth::tests`).
+- [x] 10 bits by default. Decided by the owner (2026-11-15): 10 bits on the target display, without waiting on the
+      step 0 probe (`Depth::from_setting` gives 10 bits without the key; "Measurements", "Turning 10 bits off").
 
 Gate:
 
@@ -2310,14 +2310,24 @@ by one by the renderer: that is step 8's title bar work, which moves the same el
 
     vblank + min(period - (recent maximum render time + margin), period / 2), and at once when that is not positive
 
-with the recent maximum the longest of the last 60 frames' render times (from the start of drawing to the flip being
-queued: one second at 60 Hz) and a margin of 2 ms (the GPU's work after the flip is queued, the commit and the loop's
-wake-up). A flip shown after the vblank its frame was drawn for counts as a whole period in the window, which turns
-the delay off until it leaves the window. Without render times yet, on the `own-clock` branch, with a test's fixed
+with the recent maximum the longest of the last 60 frames' render times (one second at 60 Hz) and a margin of 2 ms
+(the commit, the flip's own latency and the loop's wake-up). A frame's render time runs from the start of drawing to
+the moment its render fence signalled: the commit returns before the GPU is done where the plane takes an in-fence,
+so the time to the flip being queued alone missed the GPU's work. The backend keeps the fence the primary plane waits
+for as a sync file and reads its signal time, which the kernel keeps, without waiting once the flip has come
+(`sync_file.rs`). Where the renderer waited for the GPU, or a client buffer is scanned out, the CPU time is the
+render time; where the fence cannot be exported or read, the render time is the CPU time plus a kept estimate of the
+GPU's part, which a late-started frame that still missed raises to at least the time it had less its CPU time, and
+which stays for the session. A flip shown after the vblank its frame was drawn for counts as a whole period in the
+window and turns the delay off for 60 frames; a miss within 60 frames of the delay coming back turns it off for twice
+as long as the last time, up to 960 frames (16 s at 60 Hz). Without render times yet, on the `own-clock` branch, with a test's fixed
 time, on the headless and nested backends, and with `CUPERTINO_LATE_LATCH=0` (or `off`), frames start at once as
 before. At 60 Hz with frames under 6.3 ms the delay is the half period, 8.33 ms: an input in the first half of a
 period is drawn into the frame flipped at the period's end instead of the one after it. Tests: `latch::tests` (the
-delay, the half-period cap, the window, a miss, the branch and the switch) and
+delay, the half-period cap, the window, a miss, the branch and the switch; a frame cheap on the CPU and heavy on the
+GPU gets no late start, or one that leaves its GPU time and the margin; a display whose GPU time cannot be read misses
+once in ten seconds rather than once a second; misses that follow one another lengthen the off period),
+`sync_file::tests` and
 `schedule::tests::a_held_frame_waits_for_its_late_start_and_the_next_cycle_ends_the_hold`.
 
 **What the DRM trace adds.** `missed` now also counts a flip shown after the vblank its frame was drawn for (before,
@@ -2328,16 +2338,16 @@ logs at start whether the late start is on (`late_latch=`) and the depth asked f
 its primary plane got (`output initialised … format=… bits=…`). `scripts/dev/drm-trace-summary` reads a log (its
 tests: `python3 -I scripts/dev/test_drm_trace_summary.py`).
 
-**Turning 10 bits on.** OWNER DECISION, after the step 0 probe (`tools/gpu-probes/depth.sh`, above). To turn it on,
-add `"output_depth": 10` to `~/.config/cupertino/compositor.json` (a JSON object; keep the other keys) and start a new
-session; the server log's `output initialised` line then says `format=AB30 bits=10` (or the 8-bit format, where the
-plane has no 10-bit one). To turn it off, remove the key or set it to 8. If the probe shows a visible gain, the
-default changes in `crates/cupertino-server/src/output_depth.rs` (`Depth::from_setting`) with the probe's result
-recorded here. Screenshots, screen sharing and recordings draw the scene into 8-bit targets of their own and read
-those back, so they are the same at either depth
-(`output_depth::tests::every_capture_reads_back_8_bits_whatever_the_plane_s_depth` pins every read back in the server
-to an 8-bit format). A display on a second card shows the render
-GPU's 8-bit copy whatever its plane's depth.
+**Turning 10 bits off.** 10 bits are the default, decided by the owner (2026-11-15) without waiting on the step 0
+probe (`tools/gpu-probes/depth.sh`, above): `Depth::from_setting` in `crates/cupertino-server/src/output_depth.rs`
+gives 10 bits when `output_depth` is absent, and a plane without a 10-bit format falls back to 8 bits. To turn it
+off, add `"output_depth": 8` to `~/.config/cupertino/compositor.json` (a JSON object; keep the other keys) and start
+a new session; the server log's `output initialised` line then names an 8-bit format (`AB24` or `AR24`) and
+`bits=8`, where it said `format=AB30 bits=10`. To turn it back on, remove the key or set it to 10. Screenshots,
+screen sharing and recordings draw the scene into 8-bit targets of their own and read those back, so they are the
+same at either depth (`output_depth::tests::every_capture_reads_back_8_bits_whatever_the_plane_s_depth` pins every
+read back in the server to an 8-bit format). A display on a second card shows the render GPU's 8-bit copy whatever
+its plane's depth.
 
 **The step 11 gate.** DEFERRED by the owner (2026-11-15): it needs the desktop session, two hours of it. Install a package built
 from `main` (`scripts/package-local.sh`, then `pacman -U`), log out, switch to a text console (Ctrl+Alt+F3), log in,

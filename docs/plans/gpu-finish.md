@@ -21,11 +21,11 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 1a. 10 bits by default (`cupertino-server`, `cupertino-defaults`)
 
-- [ ] `Depth::from_setting` gives 10 bits when the key is absent; `"output_depth": 8` keeps 8. A plane without a
+- [x] `Depth::from_setting` gives 10 bits when the key is absent; `"output_depth": 8` keeps 8. A plane without a
       10-bit format still falls back to 8 bits.
-- [ ] The settings table in `cupertino-defaults`, `docs/src/displays-and-gpus.md` and the GPU plan's step 11 item
+- [x] The settings table in `cupertino-defaults`, `docs/src/displays-and-gpus.md` and the GPU plan's step 11 item
       say so.
-- [ ] Tests: absent key gives 10 bits, `8` gives 8, and a plane offering only 8-bit formats gets 8 bits.
+- [x] Tests: absent key gives 10 bits, `8` gives 8, and a plane offering only 8-bit formats gets 8 bits.
 
 ### 1b. Docs sweep (`docs/`, crate READMEs)
 
@@ -73,7 +73,7 @@ The boxes here are ticked together with their items in the GPU plan.
       decorations too. Test: a layer placed outside its window draws nothing there.
 - [x] Layer requests validated: the gaps the review found, each rejected with a protocol error and tested.
 - [x] A dismissed popup's linger ends on a timer of its own, so the frame that removes it comes without other damage.
-- [ ] The late frame start counts the GPU's time: the latch is fed the time the render fence signals (or a kept
+- [x] The late frame start counts the GPU's time: the latch is fed the time the render fence signals (or a kept
       estimate from lateness), and backs off for longer after repeated misses. Test: a frame cheap on the CPU but
       heavy on the GPU gets no late start.
 

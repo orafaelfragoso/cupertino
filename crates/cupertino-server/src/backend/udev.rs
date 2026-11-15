@@ -55,13 +55,14 @@ use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
 use crate::gpu_reset::Loss;
-use crate::latch::LateLatch;
+use crate::latch::{FrameTimes, LateLatch};
 use crate::output_depth::Depth;
 use crate::render::gles::{Gles, GlesCompletion, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::schedule::{Overdue, PresentationId};
 use crate::software_render;
 use crate::state::Cupertino;
+use crate::sync_file::RenderFence;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 
@@ -99,6 +100,17 @@ struct Surface {
     latch: LateLatch,
     /// The vblank the frame in flight was drawn for, where the vblank phase was known when it started.
     target: Option<Duration>,
+    /// The times of the frame in flight, read into the latch when its flip comes.
+    in_flight: Option<InFlight>,
+}
+
+/// A queued frame's start, CPU time and render fence, kept until its flip ([`crate::latch::FrameTimes`]).
+struct InFlight {
+    /// On the monotonic clock of the flips' timestamps.
+    started: Duration,
+    cpu: Duration,
+    fence: RenderFence,
+    held: bool,
 }
 
 /// A connected display: its connector and the DRM modes behind its head's modes.
@@ -1108,6 +1120,7 @@ pub(crate) fn head_op(
                             refresh,
                             latch: LateLatch::default(),
                             target: None,
+                            in_flight: None,
                         },
                     );
                     let format = u.surfaces[&crtc].drm_output.format();
@@ -1366,6 +1379,8 @@ struct Drawn {
     failed: Option<RenderError>,
     /// The client buffers of the surfaces the frame was drawn from ([`crate::frame::drawn_buffers`]).
     buffers: Vec<Buffer>,
+    /// What tells when the GPU finished the frame.
+    fence: RenderFence,
 }
 
 impl Drawn {
@@ -1374,6 +1389,7 @@ impl Drawn {
         rendered: false,
         failed: None,
         buffers: Vec::new(),
+        fence: RenderFence::WithinCpu,
     };
 
     /// The outcome of a render of the scene of output `idx` from `buffers`.
@@ -1396,6 +1412,7 @@ impl Drawn {
                     rendered,
                     failed: None,
                     buffers,
+                    fence: RenderFence::WithinCpu,
                 }
             }
             Err(e) => {
@@ -1418,14 +1435,20 @@ fn render_surface(
     crtc: crtc::Handle,
     idx: usize,
 ) -> Option<HeadId> {
-    // the frame's render time runs from here to its flip being queued, and the vblank it is drawn for is the first after
-    // this moment
+    // the frame's render time runs from here to its render fence signalling (its CPU time, to its flip being queued),
+    // and the vblank it is drawn for is the first after this moment
     let started = Instant::now();
+    let started_at = Duration::from(state.clock.now());
     let target = {
         let refresh = state.refresh_of(idx);
         let now = state.frame_now();
         state.outputs[idx].scheduler.presentation_at(now, refresh)
     };
+    let held = u.late_latch
+        && u.cards
+            .get(&node)
+            .and_then(|c| c.surfaces.get(&crtc))
+            .is_some_and(|s| !s.latch.delay(s.refresh).is_zero());
     // without a scene (no render resources or no mode yet) or a drawn frame, nothing is queued, but the tail still runs
     let drawn = if node == u.render_node {
         draw_direct(state, u, node, crtc, idx)?
@@ -1460,7 +1483,12 @@ fn render_surface(
         match surface.drm_output.queue_frame(frame) {
             Ok(()) => {
                 surface.pending = true;
-                surface.latch.rendered(started.elapsed());
+                surface.in_flight = Some(InFlight {
+                    started: started_at,
+                    cpu: started.elapsed(),
+                    fence: drawn.fence,
+                    held,
+                });
                 surface.target = target;
                 let locked = state.scene_built_locked(idx);
                 let now = state.frame_now();
@@ -1523,8 +1551,14 @@ fn draw_direct(
             crate::drm_trace::log(&line);
         }
     }
+    let fence = match &result {
+        Ok(GlesCompletion::Direct { sync, .. }) => RenderFence::of(sync.as_ref()),
+        _ => RenderFence::WithinCpu,
+    };
     let result = result.map(|completion| completion.status() == RenderStatus::Rendered);
-    Some(Drawn::of(state, idx, result, buffers, &mut u.renderer_lost))
+    let mut drawn = Drawn::of(state, idx, result, buffers, &mut u.renderer_lost);
+    drawn.fence = fence;
+    Some(drawn)
 }
 
 /// Draw a frame of a display of another card: the render GPU draws the scene into a buffer of the display's copy, and
@@ -1604,6 +1638,7 @@ fn draw_copy(
         Ok(_) => Ok(None),
         Err(e) => Err(e),
     };
+    let mut fence = RenderFence::WithinCpu;
     let result = match drawn {
         Ok(Some((damage, sync))) => {
             let copied = match copy.bring(
@@ -1619,7 +1654,12 @@ fn draw_copy(
             surface
                 .drm_output
                 .render_frame(&mut card.renderer, &[copied], CLEAR, FrameFlags::DEFAULT)
-                .map(|r| !r.is_empty)
+                .map(|r| {
+                    fence = RenderFence::of(
+                        crate::render::gles::primary_sync(&r.primary_element).as_ref(),
+                    );
+                    !r.is_empty
+                })
                 .map_err(|e| match e {
                     RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
                     RenderFrameError::RenderFrame(e) => RenderError::Target(format!("{e:?}")),
@@ -1636,13 +1676,9 @@ fn draw_copy(
         }
         Err(e) => Err(e),
     };
-    Some(Ok(Drawn::of(
-        state,
-        idx,
-        result,
-        buffers,
-        &mut u.renderer_lost,
-    )))
+    let mut drawn = Drawn::of(state, idx, result, buffers, &mut u.renderer_lost);
+    drawn.fence = fence;
+    Some(Ok(drawn))
 }
 
 fn frame_finish(
@@ -1675,6 +1711,7 @@ fn frame_finish(
     surface.pending = false;
     let (output, refresh) = (surface.output, surface.refresh);
     let target = surface.target.take();
+    let in_flight = surface.in_flight.take();
     // `Ok(None)`: no frame of ours waited (it was dropped with its CRTC's state). An error comes after Smithay took the
     // shown frame, whose id goes with it, and failed to submit the frame parked behind it (queued while a dropped frame
     // was still pending): that is the flip in flight, and it never reaches the screen
@@ -1698,12 +1735,19 @@ fn frame_finish(
     // the late start needs the driver's timestamps on the presentation clock, which a test's fixed time is not
     let stamp = hardware.filter(|_| state.fixed_time.is_none());
     let late_latch = udev(state).is_some_and(|u| u.late_latch);
+    // the fence has signalled by now, the flip having waited for it, so reading its time does not wait
+    let frame = in_flight.map(|f| FrameTimes {
+        started: f.started,
+        cpu: f.cpu,
+        gpu: f.fence.done(f.started, stamp),
+        held: f.held,
+    });
     let flipped = match (presented.is_some(), udev(state)) {
         (true, Some(u)) => u
             .cards
             .get_mut(&node)
             .and_then(|c| c.surfaces.get_mut(&crtc))
-            .map(|s| s.latch.flipped(stamp, target, refresh, late_latch)),
+            .map(|s| s.latch.flipped(frame, stamp, target, refresh, late_latch)),
         _ => None,
     };
     if let (Some(presented), Some(trace)) = (presented.as_ref(), state.drm_trace.as_mut()) {

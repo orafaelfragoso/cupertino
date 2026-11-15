@@ -157,6 +157,12 @@ fn open_model(
             model_options(sort, types),
             notify,
         )
+    } else if dir == crate::applications::location() {
+        DirectoryModel::open_applications(
+            crate::applications::application_dirs(),
+            model_options(sort, types),
+            notify,
+        )
     } else {
         DirectoryModel::open_notifying(dir, model_options(sort, types), notify)
     }
@@ -202,9 +208,10 @@ impl Browser {
         })
     }
 
-    /// The folder is not a directory of the file system (Recents): it has no enclosing folder and no free space.
+    /// The folder is not a directory of the file system (Recents, Applications): it has no enclosing folder and no
+    /// free space.
     pub fn is_virtual(&self) -> bool {
-        self.dir() == recents::location()
+        self.dir() == recents::location() || self.dir() == crate::applications::location()
     }
 
     /// Number of the folder's own items (not those of expanded folders), or of those the search finds.
@@ -261,8 +268,12 @@ impl Browser {
         Ok(Some(fs.f_bavail as u64 * fs.f_frsize as u64))
     }
 
-    /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`].
+    /// Whether the folder's file system is mounted read-only; see [`mounted_read_only`]. Applications lists what is
+    /// installed: nothing is made, renamed or moved there.
     pub fn read_only(&self) -> io::Result<bool> {
+        if self.dir() == crate::applications::location() {
+            return Ok(true);
+        }
         match self.is_virtual() {
             true => Ok(false),
             false => mounted_read_only(self.dir()),
@@ -1361,6 +1372,28 @@ mod tests {
         b.go(d.path().to_path_buf()).unwrap();
         assert!(!b.is_virtual());
         assert!(b.available_space().unwrap().is_some_and(|bytes| bytes > 0));
+    }
+
+    /// Applications is a listing of what is installed: no enclosing folder, no file system, and nothing made, renamed
+    /// or moved there.
+    #[test]
+    fn applications_has_no_enclosing_folder_and_takes_no_changes() {
+        let d = tree();
+        let mut b = Browser::open(
+            crate::applications::location().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            waking(),
+        )
+        .unwrap();
+        assert!(b.is_virtual());
+        assert!(b.read_only().unwrap());
+        assert!(!b.parent().unwrap(), "Applications has no enclosing folder");
+        assert_eq!(b.available_space().unwrap(), None, "and no file system");
+        b.go(d.path().to_path_buf()).unwrap();
+        assert!(!b.is_virtual());
+        assert!(!b.read_only().unwrap());
     }
 
     #[test]

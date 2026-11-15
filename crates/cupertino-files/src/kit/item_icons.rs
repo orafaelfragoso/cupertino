@@ -14,6 +14,11 @@ use cupertino_kit::core::next_resource_id;
 use cupertino_kit::file_icons::{FileIcons, RENDITION_SCALES};
 use cupertino_kit::render::{ImageResource, PixelFormat, ResourceId};
 
+use cupertino_icons::{SystemIcons, ThemeIcons};
+
+/// The icon of an application whose own the icon themes lack.
+const GENERIC_APPLICATION: &str = "application.generic";
+
 use crate::item_art::{self, Art};
 use crate::thumbnail::Thumbnailer;
 use crate::thumbnail_service::{
@@ -39,6 +44,11 @@ pub(super) struct ItemIcons {
     art: RefCell<HashMap<ArtKey, Vec<ImageSource>>>,
     /// Whether an asset pack ships its own icon, by semantic name.
     packed: RefCell<HashMap<&'static str, bool>>,
+    /// Where the icons applications name are looked up, and the generic application icon drawn for one the themes
+    /// lack; `None` draws an application with its type's icon.
+    apps: Option<RefCell<(ThemeIcons, SystemIcons)>>,
+    /// The icons applications name, by name and size in points (as bits), each looked up once.
+    app_icons: RefCell<HashMap<(String, u64), Vec<ImageSource>>>,
 }
 
 /// The edge in device pixels of the thumbnails of icons `points` square.
@@ -86,7 +96,53 @@ impl ItemIcons {
                 .map(|cache| ThumbnailService::new(cache, WORKERS, MEMORY_BUDGET, wake, ids)),
             art: RefCell::new(HashMap::new()),
             packed: RefCell::new(HashMap::new()),
+            apps: None,
+            app_icons: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Applications drawn with the icons their entries name, looked up in `themes`, else with `system`'s generic
+    /// application icon.
+    pub(super) fn with_app_icons(self, themes: Option<(ThemeIcons, SystemIcons)>) -> Self {
+        Self {
+            apps: themes.map(RefCell::new),
+            ..self
+        }
+    }
+
+    /// The renditions of the icon `name` an item names itself, `points` square at each rendition scale, the generic
+    /// application icon where the icon themes lack it (or `name` is empty); none without icon themes.
+    fn named(&self, name: &str, points: f64) -> Vec<ImageSource> {
+        let Some(themes) = &self.apps else {
+            return Vec::new();
+        };
+        let key = (name.to_owned(), points.to_bits());
+        if let Some(images) = self.app_icons.borrow().get(&key) {
+            return images.clone();
+        }
+        let mut sources = themes.borrow_mut();
+        let (themes, system) = &mut *sources;
+        let images: Vec<ImageSource> = RENDITION_SCALES
+            .iter()
+            .map(|&scale| {
+                let px = (points * f64::from(scale)).round().max(1.0) as u32;
+                let own = (!name.is_empty()).then(|| themes.load(name, px)).flatten();
+                let pixmap = own.unwrap_or_else(|| system.raster(GENERIC_APPLICATION, px).clone());
+                ImageSource {
+                    id: next_resource_id(),
+                    image: cupertino_kit::render::ImageResource {
+                        revision: 1,
+                        width: pixmap.width(),
+                        height: pixmap.height(),
+                        stride: pixmap.width() * 4,
+                        format: PixelFormat::Rgba8Premultiplied,
+                        pixels: Arc::from(pixmap.data()),
+                    },
+                }
+            })
+            .collect();
+        self.app_icons.borrow_mut().insert(key, images.clone());
+        images
     }
 
     /// Whether the windows' items get thumbnails.
@@ -103,6 +159,12 @@ impl ItemIcons {
             .and_then(|service| service.get(&entry.path, thumbnail_edge(points)));
         if let Some(thumbnail) = thumbnail {
             return vec![source(&thumbnail)];
+        }
+        // an application draws its own icon, where the themes have it
+        if let Some(own) = entry.icon.as_deref().map(|name| self.named(name, points)) {
+            if !own.is_empty() {
+                return own;
+            }
         }
         let mime = mime::entry_mime(entry);
         let mut files = self.files.borrow_mut();

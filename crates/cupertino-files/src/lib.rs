@@ -10,7 +10,8 @@
 //!   applications and the Open With list (`mimeapps.list`);
 //! * [`layout`]: icon and list layout engines with the measured metrics of [`metrics`];
 //! * [`format`]: how sizes and dates read;
-//! * [`places`], [`recents`], [`history`], [`browser`]: the sidebar's standard places, the Recents folder, back / forward history and
+//! * [`places`], [`recents`], [`applications`], [`history`], [`browser`]: the sidebar's standard places, the Recents
+//!   folder, the installed applications, back / forward history and
 //!   the state of one browser window; [`window`]: its size limits, view modes, path bar and status bar text;
 //! * [`context_menu`], [`menu_spec`], [`menu_bar`]: the rows of the context menus and the menus of the menu bar;
 //! * [`desktop`]: where the desktop folder's items sit on the desktop, and what keeps their places;
@@ -20,6 +21,7 @@
 //! * `udisks` (feature `app`): removable media on the system bus; `notice` (feature `app`): failures as notifications;
 //!   `instance` (feature `app`): one Files process per session, serving `org.freedesktop.Application`.
 
+pub mod applications;
 pub mod browser;
 pub mod columns;
 pub mod context_menu;

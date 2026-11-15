@@ -112,6 +112,9 @@ pub struct Start {
     /// Folders whose changes may change the places, besides the trash.
     places_folders: Vec<PathBuf>,
     file_icons: Option<FileIcons>,
+    /// Where the applications' own icons are looked up, and the generic one; without them an application shows its
+    /// type's icon.
+    app_icons: Option<(cupertino_icons::ThemeIcons, cupertino_icons::SystemIcons)>,
     thumbnails: Option<Thumbnailer>,
     /// What the list words its dates relative to.
     clock: fn() -> SystemTime,
@@ -163,6 +166,7 @@ impl Start {
             places_source: None,
             places_folders: Vec::new(),
             file_icons: None,
+            app_icons: None,
             thumbnails: None,
             clock: SystemTime::now,
             instance: None,
@@ -231,6 +235,18 @@ impl Start {
     pub fn with_file_icons(self, icons: FileIcons) -> Start {
         Start {
             file_icons: Some(icons),
+            ..self
+        }
+    }
+
+    /// The applications of the Applications folder drawn with their own icons, looked up in `icons`.
+    pub fn with_app_icons(
+        self,
+        icons: cupertino_icons::ThemeIcons,
+        system: cupertino_icons::SystemIcons,
+    ) -> Start {
+        Start {
+            app_icons: Some((icons, system)),
             ..self
         }
     }
@@ -694,11 +710,10 @@ impl Application for Files {
             let types = start.types.as_deref().cloned().unwrap_or_default();
             FileIcons::builtin(types, HashMap::new())
         });
-        let icons = Rc::new(item_icons::ItemIcons::new(
-            file_icons,
-            start.thumbnails,
-            thumbnails_wake,
-        ));
+        let icons = Rc::new(
+            item_icons::ItemIcons::new(file_icons, start.thumbnails, thumbnails_wake)
+                .with_app_icons(start.app_icons),
+        );
         let mut model = Model {
             windows: BTreeMap::new(),
             next_window: 0,

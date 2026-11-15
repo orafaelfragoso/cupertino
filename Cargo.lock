@@ -1291,6 +1291,7 @@ dependencies = [
  "cupertino-capture",
  "cupertino-defaults",
  "cupertino-diagnostic-events",
+ "cupertino-icons",
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-modifiers",

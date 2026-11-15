@@ -264,7 +264,11 @@ impl Peek {
         let apps = self
             .apps
             .get_or_insert_with(|| (session.applications)().ok());
+        // an application opens itself: its button reads Open
         let name = apps.as_ref().and_then(|apps| {
+            if crate::open::application_at(apps, path).is_some() {
+                return None;
+            }
             crate::open::open_with(apps, path, path.is_dir())
                 .into_iter()
                 .find(|item| item.is_default)

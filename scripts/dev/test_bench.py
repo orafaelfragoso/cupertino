@@ -208,5 +208,80 @@ class ReadingTest(unittest.TestCase):
         self.assertEqual((s["median"], s["spread"], s["runs"]), (178, 10, 3))
 
 
+def figure(median, spread=0.0, runs=3):
+    return {"median": median, "spread": spread, "runs": runs}
+
+
+class CompareTest(unittest.TestCase):
+    def test_the_figures_compared_are_the_work_the_frames_the_memory_and_the_wakeups(self):
+        for name in ("compositor.work_p99_ms", "compositor.submit_p99_ms", "compositor.gpu_p99_ms",
+                     "clients.cupertino-files.frame_p99_ms", "clients.cupertino-files --desktop.raster_p99_ms"):
+            self.assertEqual(bench.compared(name), "ms", name)
+        self.assertEqual(bench.compared("compositor.missed"), "count")
+        self.assertEqual(bench.compared("clients.cupertino-dock.slow_frames"), "count")
+        self.assertEqual(bench.compared("processes.cupertino-dock.private_mib"), "mib")
+        self.assertEqual(bench.compared("idle.cupertino-menubar.wakeups_per_minute"), "per_minute")
+        for name in ("compositor.frames", "compositor.work_p50_ms", "clients.cupertino-dock.frame_p50_ms",
+                     "processes.cupertino-dock.pss_mib", "processes.cupertino-dock.cpu_percent"):
+            self.assertIsNone(bench.compared(name), name)
+
+    def test_a_figure_regresses_only_past_a_quarter_three_spreads_and_the_floor(self):
+        # 25% of 10 ms is 2.5 ms, over three spreads (1.5 ms) and the floor
+        self.assertIsNone(bench.verdict(10.0, 0.5, 12.5, "ms"))
+        self.assertEqual(bench.verdict(10.0, 0.5, 12.6, "ms"), "regression")
+        # a noisy figure: three spreads (6 ms) is the bound
+        self.assertIsNone(bench.verdict(10.0, 2.0, 15.9, "ms"))
+        self.assertEqual(bench.verdict(10.0, 2.0, 16.1, "ms"), "regression")
+        # a small time: the 0.5 ms floor is the bound
+        self.assertIsNone(bench.verdict(0.2, 0.0, 0.7, "ms"))
+        self.assertEqual(bench.verdict(0.2, 0.0, 0.71, "ms"), "regression")
+        # one more missed refresh than none is within the floor, two are not
+        self.assertIsNone(bench.verdict(0.0, 0.0, 1.0, "count"))
+        self.assertEqual(bench.verdict(0.0, 0.0, 2.0, "count"), "regression")
+        # better by as much is an improvement
+        self.assertEqual(bench.verdict(10.0, 0.5, 7.4, "ms"), "improvement")
+        self.assertIsNone(bench.verdict(10.0, 0.5, 7.6, "ms"))
+
+    def test_a_comparison_names_each_regression_and_its_program_and_notes_a_figure_gone_missing(self):
+        baseline = {"60 Hz launcher": {
+            "compositor.work_p99_ms": figure(4.0, 0.2), "compositor.frames": figure(100),
+            "clients.cupertino-launcher.update_p99_ms": figure(20.0, 2.0),
+            "clients.cupertino-launcher.raster_p99_ms": figure(30.0, 1.0),
+            "clients.cupertino-dock.frame_p99_ms": figure(3.0, 0.1),
+            "processes.cupertino-launcher.private_mib": figure(40.0, 0.5)},
+            "60 Hz idle": {"idle.cupertino-menubar.wakeups_per_minute": figure(2.0)}}
+        current = {"60 Hz launcher": {
+            "compositor.work_p99_ms": figure(4.2, 0, 1), "compositor.frames": figure(10, 0, 1),
+            "clients.cupertino-launcher.update_p99_ms": figure(59.0, 0, 1),
+            "clients.cupertino-launcher.raster_p99_ms": figure(12.0, 0, 1),
+            "processes.cupertino-launcher.private_mib": figure(40.4, 0, 1)}}
+        rows, notes = bench.compare(baseline, current)
+        self.assertEqual([(r["verdict"], r["figure"], r["program"]) for r in rows], [
+            ("regression", "clients.cupertino-launcher.update_p99_ms", "cupertino-launcher"),
+            ("improvement", "clients.cupertino-launcher.raster_p99_ms", "cupertino-launcher")])
+        self.assertIn("60 Hz launcher: clients.cupertino-dock.frame_p99_ms is missing from this run", notes)
+        table = bench.comparison_table(rows, notes)
+        self.assertIn("1 regressions, 1 improvements", table)
+        self.assertIn("+195%", table)
+        self.assertEqual(bench.owner("compositor.missed"), "cupertino-server")
+
+    def test_a_scenario_measured_now_that_the_baseline_lacks_is_noted(self):
+        rows, notes = bench.compare({}, {"60 Hz drag": {"compositor.missed": figure(5)}})
+        self.assertEqual(rows, [])
+        self.assertEqual(notes, ["60 Hz drag: not in the baseline"])
+
+    def test_the_idle_wakeups_of_a_programs_threads_are_summed_and_kept_in_the_summary(self):
+        idle = [{"program": "cupertino-menubar", "thread": "main", "per_minute": 1.5},
+                {"program": "cupertino-menubar", "thread": "clock", "per_minute": 1.0},
+                {"program": "cupertino-menubar", "timerfd": 4, "per_minute": 60.0}]
+        runs = [{"rate": 60.0, "scenario": "idle", "compositor": {}, "clients": {}, "processes": {}, "idle": idle}]
+        s = bench.summarise(runs)["60 Hz idle"]["idle.cupertino-menubar.wakeups_per_minute"]
+        self.assertEqual(s["median"], 2.5)
+
+    def test_the_profilers_processes_are_not_measured_as_the_desktops(self):
+        for name in ("perf", "samply", "heaptrack_interpret", "zstd", "bash"):
+            self.assertIn(name, bench.NOT_MEASURED)
+
+
 if __name__ == "__main__":
     unittest.main()

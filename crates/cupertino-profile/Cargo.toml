@@ -1,0 +1,41 @@
+[package]
+name = "cupertino-profile"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Frame timelines of every Cupertino process: the spans of its frames written as a trace a timeline viewer opens, or streamed to the Tracy profiler, when CUPERTINO_PROFILE asks"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[lib]
+name = "cupertino_profile"
+
+[features]
+# The Tracy client. It takes effect only with `--cfg cupertino_tracy` as well (see the README), so `--all-features`, which
+# every package and CI build uses, never compiles it in.
+tracy = ["dep:tracing-tracy"]
+
+[dependencies]
+libc = "0.2"
+rustix = { version = "1", features = ["thread", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+
+[target.'cfg(cupertino_tracy)'.dependencies]
+# collecting only while a profiler is connected, reachable from this machine alone; without the client's own handlers
+# of fatal signals, which would take the server's place
+tracing-tracy = { version = "0.12", optional = true, default-features = false, features = [
+    "enable",
+    "ondemand",
+    "broadcast",
+    "only-localhost",
+] }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+
+[lints.rust]
+# `--cfg cupertino_tracy` is set only by a build that asks for the Tracy client (see the README); no cargo feature sets it
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cupertino_tracy)'] }

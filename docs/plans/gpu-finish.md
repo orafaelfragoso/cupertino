@@ -285,11 +285,31 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ## Wave 4: the lead's gates and measurements (merged `main`)
 
-- [ ] `scripts/done`, `scripts/test --slow` and the slow tier with `CUPERTINO_GPU_REQUIRED=1`.
+- [x] `scripts/done`, `scripts/test --slow` and the slow tier with `CUPERTINO_GPU_REQUIRED=1`. The fast tier 7606 of
+      7606 and the slow tier 274 of 274 (the render node required, as the scripts now set it); 15 compositor tests over
+      the fast tier's 2 s (2.0 to 3.2 s) moved to the slow tier.
 - [ ] The benchmarks, run once, each of the GPU plan's "measured at the end" figures recorded where it stands:
   - Files' scroll and layout (step 4);
   - the control panel's opening frames and the memory per process (step 7);
   - the window drag over glass, its p99 taken over a span long enough to show the once-a-second driver stall as
     such (step 2).
   A budget still missed is recorded with its figures and its cause, not hidden.
+
+  Measured 2026-11-15, release build, headless at 3840 x 2160, 60 Hz, three runs a scenario on an otherwise idle
+  machine (NVIDIA RTX 3060), medians of the runs:
+  - Files' two-finger scroll: client frame p99 1.57 ms at scale 1 and 1.36 at 1.5 on the GPU path, 1.63 and 1.57 on
+    the CPU path; layout p99 0.13 to 0.30 ms; no slow frame. Both step 4 gates met.
+  - Window drag over glass at 1.5: compositor GPU p99 2.60 ms (budget 4), CPU p99 to compose and submit 2.44 ms
+    (budget 2). The frames over 2 ms in a steady drag come once every 0.85 to 0.95 s (2.3 to 2.7 ms each), the driver
+    stall step 2 traced; without them the p99 is 1.95 ms at 1.5 and 1.78 at 1. At 60 frames a second a stall a
+    second is 1.7% of frames, so a p99 always includes it: the gate stays open on the driver.
+  - Resize at 1.5: Files' client frame p99 5.55 ms (budget 8). Compositor work p99 5.13 ms.
+  - Control panel opening: the panel draws 2 frames an opening (6 over three), p50 6.8 ms and p99 26.8 ms (the
+    process's first opening, its band picture drawn once), against the 4 ms animation budget; the fades themselves
+    are the compositor's and draw nothing. Not held for an opening's first frame.
+  - Added private memory per GPU process (GPU against the CPU figures of step 7): dock 93.2 MiB (+39.7), launcher
+    53.6 (+37.7), Files 67.4 (+38.0), Settings 68.0 (+23.6). Under 80 MiB: held.
+  - Idle: no GPU process woke; the menu bar drew one frame.
+  - Launcher: typing frame p50 0.47 ms, but the search field's open has an update phase of 9 to 59 ms and the
+    launcher's first GPU frames raster 33 ms and copy 14 to 42 ms; being traced.
 - [ ] Packages built, and the owner's before and after sheet for the fold and unfold.

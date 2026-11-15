@@ -10,6 +10,11 @@
     NO_BUILD=1 scripts/dev/bench             what target/release holds; BIN_DIR=DIR: the programs in DIR
     BENCH_KEEP=DIR scripts/dev/bench         also keep each session's raw files (frame lines, frame timings, windows)
     BENCH_SHOTS=DIR scripts/dev/bench        a screenshot in the middle of each scenario, to check what it drives
+    scripts/dev/bench --profile[=TOOL]       also every process of each session under perf (the default), samply or
+                                             heaptrack, with the profiling build (`scripts/dev/profile`); --profile-out
+                                             DIR (default target/profile/TIME) gets a folder per scenario and run
+    scripts/dev/bench --compare BASE.json    compare with a stored run (its size, scale, rates and scenarios unless
+                                             given), print the regressions and improvements, exit 1 on a regression
 
 Each scenario runs in a session of its own with Files (400 items in its folder) and Settings open, after a short
 session that finds where the two windows are at this size and scale. The scenarios:
@@ -41,6 +46,12 @@ median of the runs with their spread (max - min), which is the run-to-run noise.
               sampled, and the timers (timerfd) it armed with their period and how often they fired
 The device that rendered is in the JSON and above each table: a software rasteriser (llvmpipe) shows there when no
 GPU is used.
+
+--compare takes, per scenario, the compositor's work, CPU and GPU p99 and its missed refreshes; per program its frame
+p99, each phase's p99, its slow frames and its private memory; and at idle each program's wakeups per minute. A figure
+regresses when it is worse than the stored median by more than 25%, by more than three times the stored spread, and by
+more than a floor (0.5 ms for a time, one frame for a count, 1 MiB of memory, one wakeup a minute); better by as much is
+an improvement.
 """
 import argparse
 import json
@@ -319,7 +330,7 @@ def program(pid: int) -> str:
         return ""
     if exe == "cupertino-files":
         try:
-            if "--desktop" in pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0"):
+            if b"--desktop" in pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0"):
                 return "cupertino-files --desktop"
         except OSError:
             pass
@@ -353,9 +364,13 @@ def memory(pid: int) -> dict:
     return m
 
 
+# processes of the session that are not the desktop's: shells, and the profilers and their helpers under --profile
+NOT_MEASURED = ("bash", "sh", "dash", "python3", "perf", "samply", "heaptrack_interpret", "zstd")
+
+
 def measured(pid: int) -> bool:
     name = program(pid)
-    return bool(name) and not name.endswith(".sh") and name not in ("bash", "sh", "python3")
+    return bool(name) and not name.endswith(".sh") and name not in NOT_MEASURED
 
 
 def sample(root: int) -> dict[int, dict]:
@@ -608,8 +623,11 @@ def wakeups(sampler: Sampler) -> list[dict]:
 
 # ---- one session ---------------------------------------------------------------------------------------------------
 
-def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
+def run_one(bin_dir, size, scale, hz, name, win, idle, keep, profiler=None) -> dict:
+    """One session of scenario `name`; with `profiler` (scripts/dev/profile's), every program under its tool."""
     flags, span = script(name, hz, win, size, scale, idle)
+    if profiler is not None:
+        bin_dir = profiler.wrap(bin_dir)
     end = span[1] + 1.0
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
@@ -638,6 +656,10 @@ def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
         proc.wait(timeout=end + 60)
         sampler.join(timeout=10)
         sampler.stop = True
+        profiled = None
+        if profiler is not None:
+            profiler.name({pid: s["program"] for _, mark in sampler.marks.values() for pid, s in mark.items()})
+            profiled = profiler.finish()
         head, rows = read_frames(stats)
         refresh_ms = int(head.get("refresh_us", round(1e6 / hz))) / 1e3
         server = [p for p, s in sampler.marks.get("end", (0, {}))[1].items() if s["program"] == "cupertino-server"]
@@ -652,6 +674,11 @@ def run_one(bin_dir, size, scale, hz, name, win, idle, keep) -> dict:
                   "windows": {"before": read_windows(before), "after": read_windows(after)}}
         if name == "idle":
             result["idle"] = wakeups(sampler)
+        if profiled is not None:
+            result["profile"] = {"tool": profiler.tool, "dir": str(profiler.out),
+                                 "summary": str(profiler.out / "summary.txt"),
+                                 "processes": [{k: e.get(k) for k in ("program", "pid", "samples", "summary", "data",
+                                                                     "samply")} for e in profiled]}
         if keep:
             keep.mkdir(parents=True, exist_ok=True)
             for f in (stats, timing, before, after):
@@ -711,11 +738,115 @@ def summarise(runs: list[dict]) -> dict:
             f: dict = {}
             for part in ("compositor", "clients", "processes"):
                 flatten(part, r[part], f)
+            if r.get("idle") is not None:
+                flatten("idle", idle_wakeups(r["idle"]), f)
             for k, v in f.items():
                 flat.setdefault(k, []).append(v)
         out[key] = {k: {"median": statistics.median(v), "spread": max(v) - min(v), "runs": len(v)}
                     for k, v in sorted(flat.items())}
     return out
+
+
+def idle_wakeups(rows: list[dict]) -> dict:
+    """Per program, its threads' wakeups per minute at idle."""
+    out: dict[str, dict] = {}
+    for r in rows:
+        if "thread" in r:
+            e = out.setdefault(r["program"], {"wakeups_per_minute": 0.0})
+            e["wakeups_per_minute"] += r["per_minute"]
+    return out
+
+
+# ---- comparing with a stored run -----------------------------------------------------------------------------------
+
+# a figure regresses when it is worse by more than all three: this share of the stored median, this many times the
+# stored run-to-run spread, and the floor of its kind
+RELATIVE = 0.25
+NOISE = 3.0
+FLOORS = {"ms": 0.5, "count": 1.0, "mib": 1.0, "per_minute": 1.0}
+COMPOSITOR_COMPARED = {"work_p99_ms": "ms", "submit_p99_ms": "ms", "gpu_p99_ms": "ms", "missed": "count"}
+CLIENT_COMPARED = {"frame_p99_ms": "ms", **{f"{p}_p99_ms": "ms" for p in PHASES}, "slow_frames": "count"}
+
+
+def compared(figure: str) -> str | None:
+    """The kind of a figure --compare looks at (`ms`, `count`, `mib`, `per_minute`), `None` for the others."""
+    part, _, rest = figure.partition(".")
+    metric = rest.rsplit(".", 1)[-1]
+    if part == "compositor":
+        return COMPOSITOR_COMPARED.get(rest)
+    if part == "clients" and "." in rest:
+        return CLIENT_COMPARED.get(metric)
+    if part == "processes" and "." in rest and metric == "private_mib":
+        return "mib"
+    if part == "idle" and "." in rest and metric == "wakeups_per_minute":
+        return "per_minute"
+    return None
+
+
+def verdict(base: float, spread: float, current: float, kind: str) -> str | None:
+    """`regression`, `improvement` or `None`; lower is better for every figure compared."""
+    margin = max(RELATIVE * abs(base), NOISE * spread, FLOORS[kind])
+    if current - base > margin:
+        return "regression"
+    if base - current > margin:
+        return "improvement"
+    return None
+
+
+def owner(figure: str) -> str:
+    """The program a figure is of; the compositor's are the server's."""
+    part, _, rest = figure.partition(".")
+    return "cupertino-server" if part == "compositor" else rest.rsplit(".", 1)[0]
+
+
+def compare(baseline: dict, current: dict) -> tuple[list[dict], list[str]]:
+    """The figures of `current` that moved beyond the noise from `baseline` (both `summarise` outputs), regressions
+    first, and notes on the scenarios and figures one of the two lacks."""
+    rows, notes = [], []
+    for scenario, figures in current.items():
+        stored = baseline.get(scenario)
+        if stored is None:
+            notes.append(f"{scenario}: not in the baseline")
+            continue
+        for figure, base in stored.items():
+            kind = compared(figure)
+            if kind is None or base.get("median") is None:
+                continue
+            now = figures.get(figure)
+            if now is None or now.get("median") is None:
+                notes.append(f"{scenario}: {figure} is missing from this run")
+                continue
+            spread = base.get("spread") or 0.0
+            v = verdict(base["median"], spread, now["median"], kind)
+            if v:
+                rows.append({"scenario": scenario, "figure": figure, "program": owner(figure), "kind": kind,
+                             "verdict": v, "baseline": base["median"], "spread": spread, "current": now["median"]})
+    rows.sort(key=lambda r: (r["verdict"] != "regression", r["scenario"], r["figure"]))
+    return rows, notes
+
+
+def comparison_table(rows: list[dict], notes: list[str]) -> str:
+    regressions = sum(r["verdict"] == "regression" for r in rows)
+    lines = [f"compared with the baseline: {regressions} regressions, {len(rows) - regressions} improvements"]
+    if rows:
+        lines.append(f"  {'':11} {'scenario':24} {'figure':54} {'baseline':>9} {'spread':>8} {'now':>9} {'change':>7}")
+    for r in rows:
+        change = f"{(r['current'] - r['baseline']) / r['baseline'] * 100:+6.0f}%" if r["baseline"] else "    new"
+        lines.append(f"  {r['verdict']:11} {r['scenario']:24} {r['figure']:54} {r['baseline']:9.2f} {r['spread']:8.2f} "
+                     f"{r['current']:9.2f} {change:>7}")
+    lines += [f"  note: {n}" for n in notes]
+    return "\n".join(lines)
+
+
+def load_profile_tools():
+    """scripts/dev/profile as a module, for --profile."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("profile_tools", str(ROOT / "scripts/dev/profile"))
+    spec = importlib.util.spec_from_loader("profile_tools", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def fmt(v, width=7, digits=2) -> str:
@@ -761,29 +892,54 @@ def idle_table(rows: list[dict]) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--size", default="2560x1600")
-    ap.add_argument("--scale", type=float, default=2.0)
-    ap.add_argument("--rate", default=os.environ.get("RATES", "60"))
-    ap.add_argument("--scenario", default=",".join(BASELINE))
+    ap.add_argument("--size")
+    ap.add_argument("--scale", type=float)
+    ap.add_argument("--rate")
+    ap.add_argument("--scenario")
     ap.add_argument("--runs", type=int, default=1)
-    ap.add_argument("--idle-seconds", type=float, default=30.0)
+    ap.add_argument("--idle-seconds", type=float)
     ap.add_argument("--out", type=pathlib.Path)
+    ap.add_argument("--profile", nargs="?", const="perf", choices=("perf", "samply", "heaptrack"))
+    ap.add_argument("--profile-out", type=pathlib.Path)
+    ap.add_argument("--compare", type=pathlib.Path)
     args = ap.parse_args()
+    # what a comparison is with: the stored run's configuration, unless given
+    stored = json.loads(args.compare.read_text()) if args.compare else None
+    config = stored["config"] if stored else {}
+    args.size = args.size or config.get("size", "2560x1600")
+    args.scale = args.scale or config.get("scale", 2.0)
+    args.rate = args.rate or config.get("rates") or os.environ.get("RATES", "60")
+    args.idle_seconds = args.idle_seconds or config.get("idle_seconds", 30.0)
+    args.scenario = args.scenario or ",".join(config.get("scenarios", BASELINE))
+    if stored and (args.size != config.get("size") or args.scale != config.get("scale")):
+        ap.error(f"the baseline was measured at {config.get('size')} scale {config.get('scale')}, not at {args.size} "
+                 f"scale {args.scale:g}")
     size = tuple(int(v) for v in args.size.split("x"))
     names = BASELINE + EXTRA if args.scenario == "all" else args.scenario.split(",")
     for n in names:
         if n not in BASELINE + EXTRA:
             ap.error(f"no scenario {n!r}; there are {', '.join(BASELINE + EXTRA)}")
-    if not os.environ.get("NO_BUILD") and not os.environ.get("BIN_DIR"):
-        subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
-    bin_dir = pathlib.Path(os.environ.get("BIN_DIR", ROOT / "target/release"))
+    tools = load_profile_tools() if args.profile else None
+    if tools is not None:
+        tools.check(args.profile)
+    if os.environ.get("BIN_DIR"):
+        bin_dir = pathlib.Path(os.environ["BIN_DIR"])
+    elif tools is not None:
+        # the profiling build: the release build with full debug info and frame pointers (NO_BUILD=1: as it is)
+        bin_dir = tools.build()
+    else:
+        if not os.environ.get("NO_BUILD"):
+            subprocess.run([str(ROOT / "scripts/dev/build")], check=True)
+        bin_dir = ROOT / "target/release"
     keep = pathlib.Path(os.environ["BENCH_KEEP"]) if os.environ.get("BENCH_KEEP") else None
+    profile_out = (args.profile_out or tools.default_out()).resolve() if tools else None
     win = layout(bin_dir, size, args.scale)
     runs = []
     for hz in [float(r) for r in args.rate.split(",")]:
         for name in names:
             for i in range(args.runs):
-                r = run_one(bin_dir, size, args.scale, hz, name, win, args.idle_seconds, keep)
+                profiler = tools.Profiler(args.profile, profile_out / f"{hz:g}Hz-{name}-run{i}") if tools else None
+                r = run_one(bin_dir, size, args.scale, hz, name, win, args.idle_seconds, keep, profiler)
                 r["run"] = i
                 warning = check(name, r)
                 if warning:
@@ -800,9 +956,22 @@ def main() -> int:
             break
     if args.out:
         result = {"config": {"size": args.size, "scale": args.scale, "rates": args.rate, "runs": args.runs,
-                             "scenarios": names, "bin_dir": str(bin_dir), "windows": win},
+                             "scenarios": names, "idle_seconds": args.idle_seconds, "bin_dir": str(bin_dir),
+                             "windows": win},
                   "summary": summary, "runs": runs}
+        args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(result, indent=1))
+    if tools is not None:
+        for r in runs:
+            folder = pathlib.Path(r["profile"]["dir"])
+            print(f"\nprofile of {r['rate']:g} Hz {r['scenario']} run {r['run']} ({args.profile}), per process:")
+            print(tools.report_paths(folder, tools.read_index(folder)))
+    if stored:
+        rows, notes = compare(stored["summary"], summary)
+        print()
+        print(comparison_table(rows, notes))
+        if any(r["verdict"] == "regression" for r in rows):
+            return 1
     return 0
 
 

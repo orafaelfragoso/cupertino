@@ -1777,6 +1777,7 @@ impl RenderElement<GlesRenderer> for MaterialElement {
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let _material = tracing::trace_span!("server.material", rects = damage.len()).entered();
         if damage.is_empty() || !self.shared.borrow().is_ready() {
             return Ok(());
         }

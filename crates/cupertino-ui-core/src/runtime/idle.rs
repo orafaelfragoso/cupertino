@@ -138,6 +138,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// One slice: each node that asked is called once, in the order of the windows and of the nodes' ids, until the
     /// slice ends; those not reached and those that asked again wait for the next.
     fn idle_slice(&mut self, until: Timestamp) {
+        let _slice = tracing::trace_span!("ui.idle_slice").entered();
         let clock = &*self.options.clock;
         for w in &mut self.windows {
             if w.idle.is_empty() {

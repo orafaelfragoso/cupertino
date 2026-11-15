@@ -11,6 +11,14 @@ layer = "graphics"
 
 [dependencies]
 
+[dev-dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
+gungraun = "=0.20.0"
+
+[[bench]]
+name = "instructions"
+harness = false
+
 [[test]]
 name = "suite"
 path = "tests/suite.rs"

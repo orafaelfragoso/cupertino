@@ -878,6 +878,8 @@ impl MaterialGl {
         px_per_pt: f32,
         keep_alpha: bool,
     ) -> Option<Target> {
+        let _blur =
+            tracing::trace_span!("server.blur", width = src.1 .0, height = src.1 .1).entered();
         let alpha = if keep_alpha { PASS_KEEP_ALPHA } else { 0 };
         let (ds, ds_loc, bl, bl_loc) = {
             let progs = self.progs.as_ref()?;
@@ -1498,6 +1500,7 @@ impl RenderElement<GlesRenderer> for GlassElement {
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let _glass = tracing::trace_span!("server.glass", rects = damage.len()).entered();
         if damage.is_empty() || !self.shared.borrow().is_ready() {
             return Ok(());
         }

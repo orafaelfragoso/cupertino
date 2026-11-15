@@ -38,6 +38,7 @@ jobs:
     outputs:
       packages: ${{ steps.select.outputs.packages }}
       checks: ${{ steps.select.outputs.checks }}
+      microbench: ${{ steps.microbench.outputs.crates }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +65,14 @@ jobs:
           echo "checks=$checks" >> "$GITHUB_OUTPUT"
           echo "Selected crates: $packages" >> "$GITHUB_STEP_SUMMARY"
           echo "Selected gates: $checks" >> "$GITHUB_STEP_SUMMARY"
+      # the selected crates that have instruction-count benches (benches/instructions.rs)
+      - id: microbench
+        env:
+          PACKAGES: ${{ steps.select.outputs.packages }}
+        run: |
+          crates=$(python3 -I scripts/dev/microbench --list --among "$PACKAGES")
+          echo "crates=$crates" >> "$GITHUB_OUTPUT"
+          echo "Instruction-count benches: $crates" >> "$GITHUB_STEP_SUMMARY"
 
   # Source policy: no provenance text, no vendor names, no forbidden or binary files except the pinned built-in font.
   #
@@ -93,6 +102,9 @@ jobs:
       - run: python3 -I ci/test_replace.py
       - run: python3 -I ci/test_soak.py
       - run: python3 -I scripts/dev/test_bench.py
+      - run: python3 -I scripts/dev/test_microbench.py
+      - run: python3 -I scripts/dev/test_profile.py
+      - run: python3 -I scripts/dev/test_perf_gate.py
       - run: python3 -I scripts/dev/test_drm_trace_summary.py
       - run: python3 -I ci/test_arch_ci.py
       - run: python3 -I ci/test_render_node.py
@@ -379,6 +391,71 @@ jobs:
           df -h .
           if [ -d target ]; then du -sh target; fi
 
+  # Instruction counts of the hot functions (scripts/dev/microbench), under Valgrind, at the commit before the change and
+  # at the change, one after the other on this runner: a count that rises by more than MICROBENCH_LIMIT_PERCENT over the
+  # earlier commit's fails the job. A benchmark the earlier commit does not have is counted and kept, with nothing to
+  # compare it with; without an earlier commit (a new branch) every count is new. Only the selected crates with benches
+  # run. The runner switches address randomisation off for repeatable counts (setarch -R), a personality call the
+  # container's default seccomp profile refuses.
+  microbench:
+    needs: selection
+    if: needs.selection.outputs.microbench != '[]' && needs.selection.outputs.microbench != ''
+    name: Instruction counts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: *arch-image
+      options: --security-opt seccomp=unconfined
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    defaults: *as-ci
+    env:
+      # how much, in percent, an instruction count may rise over the earlier commit's before the job fails
+      MICROBENCH_LIMIT_PERCENT: "3"
+      CRATES: ${{ needs.selection.outputs.microbench }}
+      BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - *free-disk
+      - *arch-bootstrap
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: System packages, Valgrind and the build user
+        shell: bash
+        run: ci/arch-ci.sh install build && pacman -S --noconfirm --needed valgrind && ci/arch-ci.sh user
+      - *rust-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: microbench-arch
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - *own-restored
+      # The counts stay out of the cached target directory, so a restored cache never brings back an old baseline. The
+      # runner (exactly the library's version) is kept in the cargo home, whose binaries the cache keeps.
+      - name: Where the counts and the runner go
+        run: |
+          echo "GUNGRAUN_HOME=$RUNNER_TEMP/gungraun" >> "$GITHUB_ENV"
+          echo "MICROBENCH_RUNNER_ROOT=$CARGO_HOME" >> "$GITHUB_ENV"
+      - run: cargo fetch --locked
+      - name: Counts at the commit before the change
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "::notice::No earlier commit to compare with: every count is new"
+            exit 0
+          fi
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+          if ! python3 -I scripts/dev/microbench --checkout "$RUNNER_TEMP/base" --among "$CRATES" \
+              --save-baseline=base --summary "$GITHUB_STEP_SUMMARY"; then
+            echo "::warning::The benches of $BASE did not all run: the counts they did not save are new"
+          fi
+      - name: Counts at the change, against the commit before
+        run: >-
+          python3 -I scripts/dev/microbench --among "$CRATES" --baseline=base --limit "$MICROBENCH_LIMIT_PERCENT"
+          --summary "$GITHUB_STEP_SUMMARY"
+
   # The C SDK as the cupertino-kit package installs it, built into a staging root: the C samples build as C11 and as
   # C++17 with -Werror and print their traces, the samples' Makefile and the layout probe build with pkg-config alone,
   # `cupertino sdk info` and `sdk check` read and build against the root, and the projects `cupertino sdk new` writes
@@ -467,7 +544,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, c-sdk, weston, goldens]
+    needs: [selection, gate, docs, deny, fmt, layers, clippy, tests, microbench, c-sdk, weston, goldens]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -489,6 +566,8 @@ jobs:
                   expected.update(("clippy", "tests"))
               if {"cupertino-ui-abi", "cupertino-cli", "cupertino-kit"} & set(packages):
                   expected.add("c-sdk")
+              if json.loads(outputs.get("microbench") or "[]"):
+                  expected.add("microbench")
           if os.environ["FULL"] == "true":
               expected.update(("docs", "deny", "fmt", "layers", "clippy", "tests", "c-sdk", "weston", "goldens"))
           failed = {name: job["result"] for name, job in needs.items()

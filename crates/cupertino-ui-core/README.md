@@ -1,7 +1,7 @@
 # cupertino-ui-core
 
-The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `cupertino-menu-model`, `async-task` and
-`rustix`;
+The CupertinoKit runtime. MPL-2.0. Depends on the other `cupertino-ui-*` type crates, `cupertino-menu-model`, `async-task`,
+`rustix` and `tracing` (the spans of each frame's phases, which `cupertino-profile` records when asked);
 never on a server, shell or private-protocol crate.
 
 An `Application` keeps its state in a model, describes its windows as `Element` trees in `view`, and changes the model

@@ -632,6 +632,44 @@ can leave a test `dbus-daemon` behind: stop it, never your real session bus.
 for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one without, for a reason), `scripts/test`,
 `scripts/dev/build` and `scripts/preview --changed`.
 
+### Instruction-count benchmarks
+
+The functions a frame spends its time in have benchmarks counted in instructions, not timed: each runs once under
+Valgrind's Callgrind, so its count is the same on a loaded machine as on an idle one, and a rise of a fraction of a
+percent shows. They are library benchmarks of the [gungraun](https://crates.io/crates/gungraun) crate, one bench target
+named `instructions` per crate (`benches/instructions.rs`), with what each measures in its header:
+
+| Crate | What is counted |
+|---|---|
+| `cupertino-raster-math` | The blur's plan and kernel for a 4K output, the blur of a 4K backdrop, the coverage of a continuous-corner rounded rectangle and the dithered store over a panel's pixels at 2x |
+| `cupertino-glass` | One glass sample of the CPU model: inside, on the edge, in a corner, in the neck between joined shapes |
+| `cupertino-ui-layout` | A file manager window's solve (about 480 nodes): cold, cached, resized |
+| `cupertino-ui-render` | A 1280 × 800 window with text, a drop shadow and a blur at 2x: its first frame, a whole repaint, one row's damage |
+| `cupertino-ui-text` | 64 file names shaped and laid out, as a list and as an icon grid shows them, and laid out again |
+| `cupertino-launcher` | The index of 5 000 applications, seven queries, the scorer alone |
+
+```bash
+scripts/dev/microbench                        # every crate's benches, with a table of their counts
+scripts/dev/microbench raster-math glass      # only these crates
+scripts/dev/microbench --save-baseline main   # keep the counts as the baseline `main`
+scripts/dev/microbench --baseline main        # compare with it; fails when a count rises by more than 3% (--limit)
+```
+
+It needs Valgrind (`pacman -S valgrind`). The framework's runner, `gungraun-runner`, must be the library's version in
+`Cargo.lock` exactly: the script uses `GUNGRAUN_RUNNER` or the one on `PATH` when it is that version, and otherwise
+installs that version once into `target/gungraun-runner/VERSION`. Counts and baselines are kept under `target/gungraun`
+with the Callgrind profile of each benchmark, which `callgrind_annotate` reads. The setup a benchmark names (building
+the tree, the scene, the index) is not counted. The wall-clock benches beside them (`cargo bench -p cupertino-ui-layout
+--bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo bench`) stay, for the
+time a call takes.
+
+CI's **Instruction counts** job runs the benches of the selected crates at the commit before the change (saved as the
+baseline `base`, through `--checkout` on a worktree of that commit) and then at the change, on the same runner, and
+fails when a count rises by more than `MICROBENCH_LIMIT_PERCENT` (3) over it. A benchmark the earlier commit does not
+have is counted with nothing to compare it with, and so is every benchmark of a new branch. Counts move a little with
+the hash seeds of a run (under 0.1% here), so a change has to rise well past that to fail. A change to a function these
+benches cover comes with its benchmark; a new hot function gets one in its crate's `benches/instructions.rs`.
+
 ## Development scripts
 
 | Script | What it does |
@@ -640,10 +678,110 @@ for every crate whose sources changed (`NO_TEST_REASON="..."` accepts one withou
 | `scripts/dev/warm-target` | In a fresh git worktree, a copy-on-write clone of the main checkout's `target/debug` (btrfs, XFS), so the worktree's first build reuses every dependency already compiled; the worktree's own crates still rebuild once. |
 | `scripts/dev/shot OUT.png [server flags]` | One headless screenshot of the whole desktop with the current checkout, built first. `SIZE` (default `1512x982`), `SCALE` (default 2), `APPEARANCE` (`dark` or `light`), `AFTER` (seconds before the shot, default 5) and `WALLPAPER` change it. |
 | `scripts/preview` | Shoots every scenario in `scenarios/*.toml` headless with this checkout and with the installed release (or the programs in `PREVIEW_BEFORE=DIR`), at scales 1, 1.5 and 2 in light and dark, and shows them side by side with the changed pixels in `target/preview/index.html`. `--changed` takes only the scenarios of the programs changed since `origin/main`, `--no-before` skips the comparison, and `--live` runs the checkout's desktop in a window of the current session. |
-| `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. |
+| `scripts/dev/microbench [CRATE...]` | The instruction counts of the hot functions under Valgrind, one bench target `instructions` per crate ([Instruction-count benchmarks](#instruction-count-benchmarks)). `--save-baseline NAME` keeps a run's counts, `--baseline NAME` compares with them and fails on a rise of more than `--limit` percent (default 3), `--checkout DIR` benches another checkout into this one's target directory, `--summary FILE` appends the table in Markdown; arguments after `--` go to the framework's runner. It installs the runner at the library's exact version when it finds none. |
+| `scripts/dev/bench` | The desktop's rest and its busiest moments in headless sessions on the real render path, every process measured. `--size WxH` and `--scale S` set the output (default 2560 × 1600, scale 2), `--rate` the refresh rates (default 60), `--runs N` the sessions per scenario, `--scenario` which ones. The baseline scenarios: idle (which process wakes, how often, where it sleeps and its timers), a window drag over glass, a hover along the window buttons, a live resize, the control panel opened and closed, typing in the launcher and a scrolled Files list; `--scenario all` adds a dock sweep, the overview, the launcher, a context menu with its submenu, and Files full screen (`files-full-repaint`: the appearance turned, each a repaint of the whole window; `files-full-scroll`: its list scrolled). Per scenario: the compositor's frame intervals, missed refreshes, work p50/p99, the CPU time to compose and submit a frame without waiting for the GPU (`cpu99`) and the GPU time p50/p99, title bar and HUD rasters and uploads, blur passes, input latency and CPU time; per program the frames, slow frames (longer than a refresh) and the p50/p99 of each phase (update, view, layout, paint, raster, copy, commit) from `CUPERTINO_FRAME_TIMING`; per program the CPU and private memory. `--out F.json` writes every run and the median of the runs with their spread; `NO_BUILD=1` or `BIN_DIR=DIR` measures other programs, `BENCH_KEEP=DIR` keeps the raw files and `BENCH_SHOTS=DIR` a screenshot of each scenario. `--profile[=perf\|samply\|heaptrack]` also runs every process of each session under the profiler, with the profiling build, and `--compare BASE.json` compares the run with a stored one and exits 1 on a regression ([Profiling and performance](#profiling-and-performance)). |
+| `scripts/dev/profile` | A program (`-- PROGRAM [ARGS]`) or the bench's sessions of some scenarios (`--scenario NAME[,NAME]`) under `perf` (the default), `samply` or `heaptrack`, with the profiling build: the tool's file and a plain-text summary per process ([Profiling and performance](#profiling-and-performance)). |
+| `scripts/dev/perf-gate [BASE]` | The scenarios the crates changed since `BASE` can affect, once each at 3840 × 2160 and scale 1.5, compared with this machine's stored baseline; on a regression the regressed scenario is profiled and the top functions of the regressed program are printed. `--update-baseline` records the baseline (three runs of every mapped scenario). |
 | `scripts/dev/measure` | Memory (PSS, RSS and private dirty) and CPU of every desktop process in a headless session at rest, while used and at rest after use, the median of `RUNS` sessions (default 3). `--out F.json` writes the figures and `--compare A.json B.json` shows the change process by process; `NO_BUILD=1` or `MEASURE_BIN=DIR` measures other programs. |
 | `scripts/package-local.sh [OUT_DIR]` | The Arch packages of the committed HEAD ([Installing a local build](#installing-a-local-build)). |
 | `scripts/build-iso.sh [OUT_DIR]` | The live and install ISO ([Install from a USB stick](install-usb.md)). |
+
+### Frame timelines
+
+`CUPERTINO_PROFILE` records where each frame's time goes, as spans on a timeline, in every process started with it.
+A slow frame then shows which part of it grew, without adding timing prints. The spans:
+
+- the toolkit's run loop: each turn (`ui.turn`); its update (`ui.update`: the wake-ups and fades, each platform event
+  by its kind, the tasks run, each message by its type); `ui.view`; and per window (`ui.window`) its layout, paint,
+  raster per layer (`content`, `raised`, the surface layers) and present; accessibility and semantics; each idle slice;
+- the GPU renderer: `gpu.render` per layer with its prepare, plan, record, submit and image uploads, and the programs
+  made; the CPU renderer: `cpu.raster` per layer with its plan, scroll layers and paint;
+- the Wayland presenter: lease (with allocations), copy, commit, submit and the fence wait or finish, and the GPU
+  warm-up's device, program turn and programs, on the warm-up thread's track;
+- the compositor: each output's frame (`server.output_frame`), its scene, its render (lower, supersample, draw) with the
+  glass, material, blur, content blur, surface and shrink passes inside, the flip submitted, the GPU wait of a timed
+  headless frame, and on the text console the late start after a vblank (`server.latch_wait`) on a track of its own.
+
+| Value | What is recorded |
+|---|---|
+| `chrome:DIR/` | each process's spans in `DIR/<program>-<pid>.json` (Trace Event format), which [Perfetto](https://ui.perfetto.dev) opens; the files' times are the monotonic clock's, so their events concatenated into one array open as one timeline with a track per process |
+| `chrome:FILE` | one process's spans in `FILE` |
+| `tracy` | the spans streamed to the Tracy profiler, in a build with its client (`crates/cupertino-profile/README.md`) |
+
+```sh
+CUPERTINO_PROFILE=chrome:/tmp/trace/ scripts/dev/shot /tmp/files.png --spawn cupertino-files
+CUPERTINO_PROFILE=chrome:/tmp/trace/ cargo run -p cupertino-server -- --spawn cupertino-files
+```
+
+The headless session (`session.sh`, which `scripts/dev/shot` and `scripts/dev/bench` start) passes the variable through,
+and the server passes it to every process it starts. A file is written as the process runs, at most 100 ms behind, and
+closed when the process exits; a process killed first (the shell processes when the server ends) leaves it without the
+closing `]`, which Perfetto reads. Unset, no layer is installed and a span costs its callsite's check that nothing
+listens, about a nanosecond: `scripts/test -p cupertino-ui-core -- --no-capture -E 'test(/frame_spans/)'` prints a
+frame's spans and their cost, recorded and not. The frame timing file (`CUPERTINO_FRAME_TIMING`, the phases
+`scripts/dev/bench` reads) is apart and unchanged.
+## Profiling and performance
+
+Before adding timing code to find out where time goes, profile: one command runs the programs under a profiler and
+writes a summary to read straight away.
+
+| Question | Tool | Command |
+|---|---|---|
+| Which functions take the CPU time of a scenario, per process | perf | `scripts/dev/profile --scenario launcher` |
+| The same, to browse as a call tree, flame graph or timeline | samply | `scripts/dev/profile --scenario launcher --tool samply`, then `samply load FILE` |
+| What allocates, how often, and what the heap holds at its peak | heaptrack | `scripts/dev/profile --scenario files-scroll --tool heaptrack` |
+| Where one program, outside a session, spends its time | any | `scripts/dev/profile -- cupertino-gpu-shaders --check` |
+| Whether a change made a scenario slower | the bench | `scripts/dev/perf-gate`, or `scripts/dev/bench --compare BASE.json` |
+| How fast a scenario is, every figure | the bench | `scripts/dev/bench --scenario launcher --out F.json` |
+| Which part of a slow frame grew, on a timeline across every process | frame timelines | `CUPERTINO_PROFILE=chrome:/tmp/trace/ scripts/dev/bench --scenario launcher`, then open the files in Perfetto ([Frame timelines](#frame-timelines)) |
+| Whether a change made a hot function slower, in instructions | Callgrind | `scripts/dev/microbench CRATE --baseline NAME` ([Instruction-count benchmarks](#instruction-count-benchmarks)) |
+
+`scripts/dev/profile` builds the profiling build first: the `profiling` Cargo profile (the release build with full
+debug info and no stripping), with `RUSTFLAGS="-C force-frame-pointers=yes"`, into `target/profiling-fp/profiling`, a
+target folder of its own so the release build's cache is untouched. `NO_BUILD=1` takes it as it is. `--scenario`
+accepts the bench's scenarios and `--size WxH --scale S`; it runs `scripts/dev/bench --profile=TOOL`, so the bench's
+figures come out too. `--out DIR` sets where the files go (default `target/profile/TIME`, a folder per scenario and run
+inside it). At the end it prints each process's summary and `summary.txt`, which holds all of them, the busiest
+process first; `index.json` lists every file for scripts.
+
+perf samples user space only (`kernel.perf_event_paranoid` 2 allows no more) at 1999 samples per second of CPU time,
+with frame-pointer call chains. The session's server runs under it and every process the server starts is followed, so
+one file, `cupertino-server.PID.perf.data`, holds the whole session; `perf report -i FILE --pid PID` shows one process.
+samply cannot record at `perf_event_paranoid` 2, so `--tool samply` records with perf too and converts the file to
+`*.samply.json.gz`. heaptrack follows no child process, so under it every program of the session runs on its own, a
+`PROGRAM.PID.heaptrack.zst` each (`heaptrack_gui FILE`, `heaptrack_print FILE`). A profiler must start the program:
+attaching to a running process is not allowed here (`kernel.yama.ptrace_scope` 1).
+
+How to read a CPU summary (`PROGRAM.PID.summary.txt`):
+
+- The heading gives the process's samples and, at the sampling rate, about how much CPU time they are.
+- Threads: each thread's share of the process's samples, so a render or warm-up thread shows apart from the main loop.
+- Self time: the functions the samples were in, in percent of the process's samples; a hot loop shows here. A library
+  without symbols (the GPU driver) is one summed row, `(code without symbols)`.
+- Inclusive time: a function and everything it calls; the phase that is slow shows here (a toolkit's update or
+  raster, the compositor's render). A call chain stops at a library built without frame pointers, so a caller's share
+  is a lower bound.
+
+How to read a heap summary: the peak heap and peak RSS (RSS includes the tool's own memory), then the allocation sites
+by number of calls (temporary allocations in a hot path show here) and by bytes held at the heap's peak (what fills
+memory). A site is the innermost frame outside the allocator and the standard containers, with the two frames above it.
+
+`scripts/dev/bench --compare BASE.json` runs the stored run's size, scale, rates and scenarios (unless given) and
+compares, scenario by scenario, the compositor's work, CPU and GPU p99 and its missed refreshes, each program's frame
+p99, each phase's p99, its slow frames and its private memory, and each program's wakeups a minute at idle. A figure
+regresses when it is worse than the stored median by more than 25%, by more than three times the stored spread
+(max − min over the stored runs), and by more than a floor: 0.5 ms for a time, one frame for a count, 1 MiB, one wakeup
+a minute. It prints the regressions and improvements and exits 1 on a regression.
+
+`scripts/dev/perf-gate` is the check to run after a performance-sensitive change or a merge. It takes the files changed
+in `BASE..HEAD` (default: the last commit that passed it, kept in `target/bench/baseline/last-pass`, else
+`origin/main`), the crates they are in and every crate that depends on them, and the scenarios those programs can
+affect (its `SCENARIOS` table: the server and the glass every scenario, Files its scroll and resize, the launcher its
+open and typing, and so on; tests, scripts, CI and documentation none). It runs them once at 3840 × 2160, scale 1.5,
+and compares them with `target/bench/baseline/HOSTNAME-3840x2160-1.5.json`. On a regression it profiles each regressed
+scenario under perf and prints the top functions by self and inclusive time of each regressed program, so the failure
+says where the time went. `scripts/dev/perf-gate --update-baseline` records the baseline: three runs of every scenario
+in the table. Record it again after a change that is meant to move the figures, and after a driver or kernel update.
 
 ## Soak
 

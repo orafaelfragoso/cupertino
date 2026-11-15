@@ -1,0 +1,679 @@
+#!/usr/bin/env python3
+"""Profile the workspace's programs: where the CPU time or the heap goes, per process, with a summary to read at once.
+
+    scripts/dev/profile [--tool perf|samply|heaptrack] [--out DIR] -- PROGRAM [ARGS]
+                        PROGRAM (a workspace program by name, or any path) and the processes it starts, under the tool
+    scripts/dev/profile --scenario launcher[,files-scroll] [--size WxH --scale S] [--tool ...] [--out DIR]
+                        the bench's headless session of each scenario, every process of it (the server and each client)
+                        under the tool: `scripts/dev/bench --profile=TOOL --scenario ...`, a folder per scenario
+
+Both build the profiling build first: the release build with full debug info and frame pointers, in
+target/profiling-fp/profiling (NO_BUILD=1 takes it as it is). The tools:
+  perf       CPU samples of user space with frame-pointer call chains (the default). One file holds every process the
+             program or session started, NAME.PID.perf.data; `perf report -i FILE --pid PID` shows one process.
+  samply     the same samples, also as NAME.PID.samply.json.gz for samply's viewer: `samply load FILE`.
+  heaptrack  every heap allocation with its call stack, a file per process: NAME.PID.heaptrack.zst, read with
+             `heaptrack_gui FILE` or `heaptrack_print FILE`.
+And a summary per process, PROGRAM.PID.summary.txt: for CPU its threads and its top 30 functions by self time and by
+inclusive time, in percent of its samples; for the heap its peak and its top allocation sites by count and by bytes
+held at the peak. summary.txt holds them all, the busiest process first; index.json lists every file. DIR defaults to
+target/profile/TIME.
+"""
+import argparse
+import concurrent.futures
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+PROFILE_TARGET = ROOT / "target/profiling-fp"
+PROFILE_BIN = PROFILE_TARGET / "profiling"
+TOOLS = ("perf", "samply", "heaptrack")
+# the session's first process: under perf every other process of the session is its descendant and is followed
+SESSION_ROOT = "cupertino-server"
+# samples per second of CPU time each process runs
+FREQUENCY = 1999
+# functions listed per table of a summary
+TOP = 30
+# a process with fewer samples than this, and than this share of its file's, is left out of the summary (a helper)
+MIN_SAMPLES = 20
+MIN_SHARE = 0.002
+# how long the tools have to write their files after the session ended, before they are asked to stop
+FINISH_SECONDS = 120.0
+SEP = "\t"
+HEAPTRACK_LIB = pathlib.Path("/usr/lib/heaptrack/libheaptrack_preload.so")
+HEAPTRACK_INTERPRET = pathlib.Path("/usr/lib/heaptrack/libexec/heaptrack_interpret")
+# frames of the allocator and of the standard containers, skipped to find the code that asked for the memory
+ALLOCATOR_FRAMES = ("malloc", "calloc", "realloc", "free", "posix_memalign", "aligned_alloc", "memalign", "valloc",
+                    "operator new", "__rust_alloc", "__rust_realloc", "__rust_alloc_zeroed", "__rdl_", "__rg_",
+                    "_int_malloc", "_int_realloc", "__libc_", "alloc::", "<alloc::", "core::", "<core::", "std::",
+                    "<std::", "hashbrown::", "<hashbrown::", "smallvec::", "<smallvec::", "<&", "<T as ", "<[",
+                    "<str ", "<char ", "<u8 ")
+
+
+# ---- the build and the tools ---------------------------------------------------------------------------------------
+
+def build() -> pathlib.Path:
+    """The profiling build of every program; its folder."""
+    if not os.environ.get("NO_BUILD"):
+        flags = " ".join(filter(None, [os.environ.get("RUSTFLAGS", ""), "-C force-frame-pointers=yes"]))
+        subprocess.run(["cargo", "build", "--locked", "--profile", "profiling", "--workspace", "--all-features",
+                        "--bins", "--target-dir", str(PROFILE_TARGET)],
+                       cwd=ROOT, env=dict(os.environ, RUSTFLAGS=flags), check=True)
+    return PROFILE_BIN
+
+
+def tool_env() -> dict:
+    """The environment the tools' readers run in: no symbol server is asked about the libraries."""
+    env = dict(os.environ)
+    env.pop("DEBUGINFOD_URLS", None)
+    return env
+
+
+def samply() -> str | None:
+    cargo = pathlib.Path.home() / ".cargo/bin/samply"
+    return shutil.which("samply") or (str(cargo) if cargo.exists() else None)
+
+
+_EVENT: list[str] = []
+
+
+def perf_event() -> str:
+    """The sampling event perf may open here: CPU cycles of user space, else the CPU clock."""
+    if _EVENT:
+        return _EVENT[0]
+    perf = shutil.which("perf")
+    if not perf:
+        sys.exit("profile: perf is not installed")
+    with tempfile.TemporaryDirectory() as tmp:
+        for event in ("cycles:u", "cpu-clock:u"):
+            probe = subprocess.run([perf, "record", "-q", "-N", "--call-graph", "fp", "--user-callchains", "-e", event,
+                                    "-o", f"{tmp}/probe.data", "--", "true"], capture_output=True, env=tool_env())
+            if probe.returncode == 0:
+                _EVENT.append(event)
+                return event
+    sys.exit("profile: perf cannot sample here; kernel.perf_event_paranoid must be 2 or lower")
+
+
+def perf_record(event: str) -> list[str]:
+    """perf's recording command, before `-o FILE -- PROGRAM`: user space only (kernel.perf_event_paranoid 2 allows no
+    more), frame-pointer call chains, and every thread and child process followed."""
+    return [shutil.which("perf") or "perf", "record", "-q", "-N", "--call-graph", "fp", "--user-callchains",
+            "-e", event, "-F", str(FREQUENCY), "-m", str(buffer_pages())]
+
+
+def buffer_pages(cpus: int | None = None, memlock: int | None = None) -> int:
+    """Pages of each of perf's per-CPU buffers: a power of two, the buffers of all CPUs (and a header page each) within
+    half of what a process may lock, so a second perf of the user's can still start."""
+    cpus = cpus or os.cpu_count() or 1
+    if memlock is None:
+        import resource
+        memlock = resource.getrlimit(resource.RLIMIT_MEMLOCK)[0]
+        memlock = 64 << 20 if memlock == resource.RLIM_INFINITY else memlock
+    pages = 8
+    while pages < 256 and (pages * 2 + 1) * 4096 * cpus <= memlock // 2:
+        pages *= 2
+    return pages
+
+
+def check(tool: str) -> None:
+    if tool in ("perf", "samply"):
+        perf_event()
+    if tool == "samply" and not samply():
+        sys.exit("profile: samply is not installed (cargo install samply)")
+    if tool == "heaptrack" and not (HEAPTRACK_LIB.exists() and HEAPTRACK_INTERPRET.exists() and shutil.which("zstd")
+                                    and shutil.which("heaptrack_print")):
+        sys.exit(f"profile: heaptrack needs {HEAPTRACK_LIB}, {HEAPTRACK_INTERPRET}, heaptrack_print and zstd")
+
+
+# ---- running programs under a tool ---------------------------------------------------------------------------------
+
+WRAPPER = """#!/bin/sh
+# Runs @REAL@ under @TOOL@ (scripts/dev/profile). The wrapper stays the process its parent started for as long as the
+# program runs and passes a request to stop on; the tool runs apart from it, so a parent that kills the wrapper still
+# leaves the tool to write its file.
+out=@OUT@
+name=@NAME@
+case " $* " in *" --desktop "*) name="$name-desktop" ;; esac
+tag="$name.$$"
+@START@
+echo "$child" > "$out/.pids/$tag"
+trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
+status=0
+wait "$child" || status=$?
+while kill -0 "$child" 2>/dev/null; do
+    status=0
+    wait "$child" || status=$?
+done
+exit "$status"
+"""
+
+# perf puts its own folder first on the program's PATH: `env` gives the program the PATH it was started with, so it
+# still finds the session's programs before the installed ones
+PERF_START = """@RECORD@ -o "$out/$tag.perf.data" -- @ENV@ PATH="$PATH" @REAL@ "$@" <&0 &
+child=$!"""
+
+HEAPTRACK_START = """pipe="$out/.pids/$tag.fifo"
+mkfifo "$pipe"
+@INTERPRET@ < "$pipe" | @ZSTD@ -q -c > "$out/$tag.heaptrack.zst" &
+echo "$!" > "$out/.pids/$tag.writer"
+LD_PRELOAD="@LIB@${LD_PRELOAD:+:$LD_PRELOAD}" DUMP_HEAPTRACK_OUTPUT="$pipe" @REAL@ "$@" <&0 &
+child=$!"""
+
+
+def wrapper(tool: str, real: pathlib.Path, out: pathlib.Path) -> str:
+    """A shell script that runs `real` with its arguments under `tool`, its file in `out`."""
+    if tool == "heaptrack":
+        start = (HEAPTRACK_START.replace("@INTERPRET@", shlex.quote(str(HEAPTRACK_INTERPRET)))
+                 .replace("@ZSTD@", shlex.quote(shutil.which("zstd") or "zstd")).replace("@LIB@", str(HEAPTRACK_LIB)))
+    else:
+        start = (PERF_START.replace("@RECORD@", " ".join(shlex.quote(a) for a in perf_record(perf_event())))
+                 .replace("@ENV@", shutil.which("env") or "/usr/bin/env"))
+    return (WRAPPER.replace("@START@", start).replace("@TOOL@", tool).replace("@REAL@", shlex.quote(str(real)))
+            .replace("@OUT@", shlex.quote(str(out))).replace("@NAME@", shlex.quote(real.name)))
+
+
+def programs(bin_dir: pathlib.Path) -> list[pathlib.Path]:
+    return sorted(p for p in bin_dir.iterdir() if p.is_file() and os.access(p, os.X_OK) and "." not in p.name)
+
+
+class Profiler:
+    """Programs run under one tool, the files in `out`. perf follows every process a program starts, so only the
+    first one is run under it; heaptrack follows none, so every program is."""
+
+    def __init__(self, tool: str, out: pathlib.Path):
+        check(tool)
+        self.tool, self.out = tool, out.resolve()
+        self.bin = self.out / ".bin"
+        self.names: dict[int, str] = {}
+        # the programs a process's cut name is matched with
+        self.known: list[str] = []
+
+    def wrap(self, bin_dir: pathlib.Path, root: str = SESSION_ROOT) -> pathlib.Path:
+        """A folder to run the programs of `bin_dir` from: `root` (every program, under heaptrack) runs under the
+        tool, the others are links to the programs."""
+        (self.out / ".pids").mkdir(parents=True, exist_ok=True)
+        self.bin.mkdir(exist_ok=True)
+        self.known = [p.name for p in programs(bin_dir)]
+        for real in programs(bin_dir):
+            path = self.bin / real.name
+            if self.tool == "heaptrack" or real.name == root:
+                path.write_text(wrapper(self.tool, real.resolve(), self.out))
+                path.chmod(0o755)
+            else:
+                path.symlink_to(real.resolve())
+        return self.bin
+
+    def wrap_one(self, real: pathlib.Path) -> pathlib.Path:
+        """A wrapper of a program outside the build."""
+        (self.out / ".pids").mkdir(parents=True, exist_ok=True)
+        self.bin.mkdir(exist_ok=True)
+        self.known = [real.name]
+        path = self.bin / real.name
+        path.write_text(wrapper(self.tool, real.resolve(), self.out))
+        path.chmod(0o755)
+        return path
+
+    def name(self, pids: dict[int, str]) -> None:
+        """What the processes are, by pid (the session's own record, which tells `cupertino-files --desktop` apart)."""
+        self.names.update(pids)
+
+    def finish(self) -> list[dict]:
+        """Waits for the tools to write their files, then summarises them; the processes summarised."""
+        wait_for_tools(self.out / ".pids", FINISH_SECONDS)
+        shutil.rmtree(self.out / ".pids", ignore_errors=True)
+        shutil.rmtree(self.bin, ignore_errors=True)
+        return summarise_folder(self.out, self.tool, self.names, self.known)
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = pathlib.Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")
+
+
+def wait_for_tools(pids: pathlib.Path, seconds: float) -> None:
+    """Every tool process the wrappers started has ended; asked to stop after `seconds` (SIGTERM, which perf answers
+    by writing its file)."""
+    tracked = []
+    for f in sorted(pids.glob("*")) if pids.exists() else []:
+        if f.suffix == ".fifo":
+            continue
+        try:
+            tracked.append(int(f.read_text().split()[0]))
+        except (OSError, ValueError, IndexError):
+            pass
+    deadline, stopped = time.monotonic() + seconds, False
+    while True:
+        running = [p for p in tracked if alive(p)]
+        if not running:
+            return
+        if time.monotonic() > deadline:
+            if stopped:
+                print(f"profile: {len(running)} tool processes did not end; their files may be cut short",
+                      file=sys.stderr)
+                return
+            for p in running:
+                try:
+                    os.kill(p, signal.SIGTERM)
+                except OSError:
+                    pass
+            stopped, deadline = True, time.monotonic() + 30
+        time.sleep(0.1)
+
+
+# ---- perf's files --------------------------------------------------------------------------------------------------
+
+def percent(cell: str) -> float:
+    return float(cell.strip().rstrip("%"))
+
+
+def symbol(cell: str) -> str:
+    cell = cell.strip()
+    for mark in ("[.] ", "[k] ", "[g] ", "[u] "):
+        if cell.startswith(mark):
+            return cell[len(mark):].strip()
+    return cell
+
+
+def parse_report(text: str, fields: list[str]) -> list[dict]:
+    """The rows of `perf report --stdio -q -t TAB -F FIELDS`: percentages and counts as numbers, symbols without
+    their mark ([.] user, [k] kernel)."""
+    rows = []
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cells = line.split(SEP)
+        if len(cells) < len(fields):
+            continue
+        # a symbol is the last field, and may hold the separator
+        cells = cells[:len(fields) - 1] + [SEP.join(cells[len(fields) - 1:])]
+        row = {}
+        try:
+            for name, cell in zip(fields, cells):
+                if name.startswith("overhead"):
+                    row[name] = percent(cell)
+                elif name == "sample":
+                    row[name] = int(cell.strip() or 0)
+                elif name == "sym":
+                    row[name] = symbol(cell)
+                else:
+                    row[name] = cell.strip()
+        except ValueError:
+            continue
+        rows.append(row)
+    return rows
+
+
+def parse_tasks(text: str) -> dict[int, dict]:
+    """`perf report --tasks`: per thread id, its process id, its parent and its name."""
+    out = {}
+    for line in text.splitlines():
+        if line.lstrip().startswith("#") or "|" not in line:
+            continue
+        ids, _, comm = line.partition("|")
+        try:
+            pid, tid, ppid = (int(v) for v in ids.split())
+        except ValueError:
+            continue
+        out[tid] = {"pid": pid, "ppid": ppid, "comm": comm.strip()}
+    return out
+
+
+def processes(threads: list[dict], tasks: dict[int, dict]) -> list[dict]:
+    """The processes of a perf file, the busiest first, from its samples per thread (`-F overhead,sample,pid`, whose
+    pid is the thread's) and its tasks: per process its pid, its main thread's name, its samples."""
+    by: dict[int, dict] = {}
+    for t in threads:
+        tid, _, comm = t["pid"].partition(":")
+        try:
+            tid = int(tid)
+        except ValueError:
+            continue
+        pid = tasks.get(tid, {}).get("pid", tid)
+        main = tasks.get(pid, {}).get("comm") or comm.strip()
+        p = by.setdefault(pid, {"pid": pid, "comm": main, "samples": 0})
+        p["samples"] += t["sample"]
+    return sorted(by.values(), key=lambda p: (-p["samples"], p["pid"]))
+
+
+def program_name(comm: str, known: list[str]) -> str:
+    """The program a process's name stands for: the kernel keeps 15 characters of it."""
+    matches = [k for k in known if k[:15] == comm[:15]]
+    return matches[0] if len(matches) == 1 else comm
+
+
+def perf_report(data: pathlib.Path, fields: list[str], *extra: str) -> list[dict]:
+    # --no-inline: without it perf reads every inlined frame from the debug info, a minute a report
+    args = ["perf", "report", "-i", str(data), "--stdio", "-q", "-t", SEP, "-g", "none", "--no-inline",
+            "--percent-limit", "0", "-F", ",".join(fields), *extra]
+    run = subprocess.run(args, capture_output=True, text=True, env=tool_env())
+    return parse_report(run.stdout, fields) if run.returncode == 0 else []
+
+
+def cpu_profile(data: pathlib.Path, pid: int) -> dict:
+    """One process's threads and its functions by self and inclusive time, in percent of its samples."""
+    only = ["--pid", str(pid), "--percentage", "relative"]
+    threads = perf_report(data, ["overhead", "sample", "comm"], "--no-children", *only)
+    own = perf_report(data, ["overhead", "sample", "dso", "sym"], "--no-children", *only)
+    inclusive = perf_report(data, ["overhead_children", "overhead", "dso", "sym"], "--children", *only)
+    return {"threads": threads[:12], "self": merge_unnamed(own)[:TOP],
+            "inclusive": sorted((r for r in inclusive if not unnamed(r["sym"])),
+                                key=lambda r: -r["overhead_children"])[:TOP]}
+
+
+def unnamed(sym: str) -> bool:
+    """A bare address: code of a library without symbols (a driver), or the kernel's edge of a user-space sample."""
+    return BARE_ADDRESS.fullmatch(sym) is not None
+
+
+def merge_unnamed(rows: list[dict]) -> list[dict]:
+    """Self-time rows with the bare addresses of each object summed into one row, the largest first; an object
+    without symbols otherwise fills the table with its addresses one by one."""
+    out, by = [], {}
+    for r in rows:
+        if not unnamed(r["sym"]):
+            out.append(r)
+            continue
+        m = by.get(r["dso"])
+        if m is None:
+            label = "(entering or leaving the kernel)" if r["dso"] == "[unknown]" else "(code without symbols)"
+            m = by[r["dso"]] = {"overhead": 0.0, "sample": 0, "dso": r["dso"], "sym": label}
+            out.append(m)
+        m["overhead"] += r["overhead"]
+        m["sample"] += r.get("sample", 0)
+    return sorted(out, key=lambda r: -r["overhead"])
+
+
+def cpu_text(program: str, data: pathlib.Path, proc: dict, prof: dict, event: str) -> str:
+    seconds = proc["samples"] / FREQUENCY
+    lines = [f"== {program} (pid {proc['pid']}): {proc['samples']} samples of {event}, about {seconds:.2f} s of CPU",
+             f"   perf report -i {data} --pid {proc['pid']}", "", "threads, by their share of the samples:"]
+    lines += [f"  {t['overhead']:6.2f}%  {t['comm']}" for t in prof["threads"]]
+    lines += ["", f"top {TOP} functions by self time (in the function itself):", "   self%  function  [object]"]
+    lines += [f"  {r['overhead']:6.2f}%  {r['sym']}  [{r['dso']}]" for r in prof["self"]]
+    lines += ["", f"top {TOP} functions by inclusive time (the function and what it calls; a call chain ends at a "
+              "library built without frame pointers, so a caller's share is a lower bound):",
+              "   incl%   self%  function  [object]"]
+    lines += [f"  {r['overhead_children']:6.2f}%  {r['overhead']:6.2f}%  {r['sym']}  [{r['dso']}]"
+              for r in prof["inclusive"]]
+    return "\n".join(lines) + "\n"
+
+
+def summarise_perf(data: pathlib.Path, names: dict[int, str], known: list[str], pool) -> list[dict]:
+    """A summary per process of a perf file, PROGRAM.PID.summary.txt beside it."""
+    tasks = subprocess.run(["perf", "report", "-i", str(data), "--tasks"], capture_output=True, text=True,
+                           env=tool_env()).stdout
+    procs = processes(perf_report(data, ["overhead", "sample", "pid"], "--no-children"), parse_tasks(tasks))
+    total = sum(p["samples"] for p in procs)
+    kept = [p for p in procs if p["samples"] >= MIN_SAMPLES and p["samples"] >= MIN_SHARE * total] or procs[:1]
+    event = perf_event()
+    jobs = [(p, pool.submit(cpu_profile, data, p["pid"])) for p in kept if p["samples"]]
+    entries = []
+    for p, job in jobs:
+        program = names.get(p["pid"]) or program_name(p["comm"], known)
+        prof = job.result()
+        summary = data.with_name(f"{program.replace(' ', '')}.{p['pid']}.summary.txt")
+        summary.write_text(cpu_text(program, data, p, prof, event))
+        entries.append({"program": program, "pid": p["pid"], "samples": p["samples"], "data": str(data),
+                        "summary": str(summary), "profile": prof})
+    return entries
+
+
+def to_samply(data: pathlib.Path) -> pathlib.Path | None:
+    out = data.with_name(data.name.removesuffix(".perf.data") + ".samply.json.gz")
+    run = subprocess.run([samply(), "import", "--save-only", "-o", str(out), str(data)], capture_output=True,
+                         env=tool_env())
+    return out if run.returncode == 0 and out.exists() else None
+
+
+# ---- heaptrack's files ---------------------------------------------------------------------------------------------
+
+def split_stack(text: str) -> list[str]:
+    """The frames of a folded stack, root first; a `;` inside brackets (`[u8; 4]`) is part of a name."""
+    frames, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch in "[<(":
+            depth += 1
+        elif ch in "]>)" and depth:
+            depth -= 1
+        elif ch == ";" and depth == 0:
+            frames.append(text[start:i])
+            start = i + 1
+    frames.append(text[start:])
+    return [f.strip() for f in frames if f.strip()]
+
+
+BARE_ADDRESS = re.compile(r"0x[0-9a-fA-F]+|[0-9a-fA-F]{8,}")
+CRATE_HASH = re.compile(r"\[[0-9a-f]{16}\]")
+
+
+def demangle(text: str) -> str:
+    """Rust's symbol names readable (heaptrack_print leaves the newer mangling as it is), without the crates' hashes."""
+    filt = shutil.which("c++filt")
+    if filt:
+        run = subprocess.run([filt], input=text, capture_output=True, text=True)
+        if run.returncode == 0:
+            text = run.stdout
+    return CRATE_HASH.sub("", text)
+
+
+def parse_folded(text: str) -> list[tuple[list[str], int]]:
+    """heaptrack_print's flame graph lines, `root;...;leaf; VALUE`."""
+    out = []
+    for line in text.splitlines():
+        stack, _, value = line.rstrip().rpartition(" ")
+        try:
+            out.append((split_stack(stack), int(value)))
+        except ValueError:
+            continue
+    return out
+
+
+def allocator(frame: str) -> bool:
+    return frame.startswith(ALLOCATOR_FRAMES)
+
+
+def sites(stacks: list[tuple[list[str], int]], top: int = TOP) -> list[dict]:
+    """Allocation sites, the costliest first: the innermost frame of each stack outside the allocator and the standard
+    containers (the leaf when every frame is one of those), with the two frames that called it most."""
+    by: dict[str, dict] = {}
+    for frames, value in stacks:
+        if not frames or value <= 0:
+            continue
+        at = next((i for i in range(len(frames) - 1, -1, -1) if not allocator(frames[i])), len(frames) - 1)
+        site = by.setdefault(frames[at], {"site": frames[at], "value": 0, "callers": {}})
+        site["value"] += value
+        callers = " < ".join(reversed(frames[max(0, at - 2):at]))
+        site["callers"][callers] = site["callers"].get(callers, 0) + value
+    out = sorted(by.values(), key=lambda s: (-s["value"], s["site"]))[:top]
+    for s in out:
+        s["via"] = max(s["callers"], key=s["callers"].get) if s["callers"] else ""
+        del s["callers"]
+    return out
+
+
+HEAP_TOTALS = {"total runtime": "runtime", "calls to allocation functions": "allocations",
+               "temporary memory allocations": "temporary", "peak heap memory consumption": "peak_heap",
+               "peak RSS (including heaptrack overhead)": "peak_rss", "total memory leaked": "leaked"}
+
+
+def parse_heap_totals(text: str) -> dict:
+    """The closing lines of heaptrack_print: runtime, allocation calls, the heap's peak, peak RSS, leaks."""
+    out = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() in HEAP_TOTALS:
+            out[HEAP_TOTALS[key.strip()]] = value.strip()
+    return out
+
+
+def heap_bytes(text: str) -> float:
+    """heaptrack's sizes (`372.41K`, `5.93M`, `12B`) in bytes."""
+    text = text.strip()
+    scale = {"B": 1, "K": 1e3, "M": 1e6, "G": 1e9}
+    try:
+        return float(text[:-1]) * scale[text[-1]] if text and text[-1] in scale else float(text or 0)
+    except ValueError:
+        return 0.0
+
+
+def size(n: float) -> str:
+    for unit in ("B", "KiB", "MiB"):
+        if abs(n) < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GiB"
+
+
+def heap_text(program: str, data: pathlib.Path, totals: dict, count: list[dict], peak: list[dict]) -> str:
+    lines = [f"== {program}: peak heap {totals.get('peak_heap', '?')}, peak RSS {totals.get('peak_rss', '?')} (the "
+             f"tool's own included), {totals.get('allocations', '?')} allocation calls, temporary "
+             f"{totals.get('temporary', '?')}, leaked at exit {totals.get('leaked', '?')}, "
+             f"over {totals.get('runtime', '?')}",
+             f"   heaptrack_gui {data}", "", f"top {TOP} allocation sites by count:",
+             "     calls  site  (the two frames above it)"]
+    lines += [f"  {s['value']:8d}  {s['site']}" + (f"  ({s['via']})" if s["via"] else "") for s in count]
+    lines += ["", f"top {TOP} allocation sites by bytes held at the heap's peak:",
+              "     bytes  site  (the two frames above it)"]
+    lines += [f"  {size(s['value']):>10}  {s['site']}" + (f"  ({s['via']})" if s["via"] else "") for s in peak]
+    return "\n".join(lines) + "\n"
+
+
+def summarise_heap(data: pathlib.Path, program: str) -> list[dict]:
+    summary = data.with_name(data.name.removesuffix(".heaptrack.zst") + ".summary.txt")
+    found = {"totals": {}}
+    with tempfile.TemporaryDirectory() as tmp:
+        for cost in ("allocations", "peak"):
+            stacks = pathlib.Path(tmp) / f"{cost}.txt"
+            run = subprocess.run(["heaptrack_print", "-f", str(data), "-a", "0", "-p", "0", "-T", "0",
+                                  "-F", str(stacks), "--flamegraph-cost-type", cost],
+                                 capture_output=True, text=True, env=tool_env())
+            found["totals"] = parse_heap_totals(run.stdout) or found["totals"]
+            found[cost] = sites(parse_folded(demangle(stacks.read_text(errors="replace")))) if stacks.exists() else []
+    summary.write_text(heap_text(program, data, found["totals"], found["allocations"], found["peak"]))
+    pid = data.name.removesuffix(".heaptrack.zst").rsplit(".", 1)[-1]
+    return [{"program": program, "pid": int(pid) if pid.isdigit() else None, "data": str(data),
+             "summary": str(summary), "totals": found["totals"], "by_count": found["allocations"][:10],
+             "by_peak": found["peak"][:10]}]
+
+
+# ---- a folder of files ---------------------------------------------------------------------------------------------
+
+def tag_program(path: pathlib.Path, suffix: str) -> str:
+    """The program a file is of: NAME.PID.SUFFIX -> NAME."""
+    return path.name.removesuffix(suffix).rsplit(".", 1)[0]
+
+
+def summarise_folder(out: pathlib.Path, tool: str, names: dict[int, str] | None = None,
+                     known: list[str] | None = None) -> list[dict]:
+    """Summarise every file of `out`; writes summary.txt (the busiest process first) and index.json."""
+    names, known = names or {}, known or []
+    entries = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        if tool == "heaptrack":
+            jobs = [pool.submit(summarise_heap, d, tag_program(d, ".heaptrack.zst").replace("-desktop", " --desktop"))
+                    for d in sorted(out.glob("*.heaptrack.zst"))]
+            entries = [e for j in jobs for e in j.result()]
+            entries.sort(key=lambda e: -heap_bytes(e["totals"].get("peak_heap", "0")))
+        else:
+            files = [d for d in sorted(out.glob("*.perf.data")) if d.stat().st_size]
+            converted = {d: pool.submit(to_samply, d) for d in files} if tool == "samply" else {}
+            for d in files:
+                entries += summarise_perf(d, names, known, pool)
+            for e in entries:
+                job = converted.get(pathlib.Path(e["data"]))
+                if job is not None and job.result():
+                    e["samply"] = str(job.result())
+            entries.sort(key=lambda e: -e["samples"])
+    (out / "summary.txt").write_text("\n".join(pathlib.Path(e["summary"]).read_text() for e in entries))
+    (out / "index.json").write_text(json.dumps({"tool": tool, "processes": entries}, indent=1))
+    return entries
+
+
+def read_index(out: pathlib.Path) -> list[dict]:
+    try:
+        return json.loads((out / "index.json").read_text())["processes"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def report_paths(out: pathlib.Path, entries: list[dict]) -> str:
+    lines = []
+    for e in entries:
+        what = f"{e['samples']} samples" if "samples" in e else f"peak heap {e['totals'].get('peak_heap', '?')}"
+        lines.append(f"  {e['program']:30} {what:>16}  {e['summary']}")
+    for viewer in sorted({e["samply"] for e in entries if e.get("samply")}):
+        lines.append(f"  samply load {viewer}")
+    lines.append(f"every process: {out / 'summary.txt'}")
+    return "\n".join(lines)
+
+
+# ---- the command ---------------------------------------------------------------------------------------------------
+
+def default_out() -> pathlib.Path:
+    return ROOT / "target/profile" / time.strftime("%Y%m%d-%H%M%S")
+
+
+def resolve(program: str, bin_dir: pathlib.Path) -> pathlib.Path:
+    if "/" in program:
+        return pathlib.Path(program).resolve()
+    if (bin_dir / program).is_file():
+        return bin_dir / program
+    found = shutil.which(program)
+    if not found:
+        sys.exit(f"profile: no program {program!r} in {bin_dir} or on PATH")
+    return pathlib.Path(found)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--tool", choices=TOOLS, default="perf")
+    ap.add_argument("--out", type=pathlib.Path)
+    ap.add_argument("--scenario")
+    ap.add_argument("--size")
+    ap.add_argument("--scale")
+    ap.add_argument("--runs", type=int, default=1)
+    ap.add_argument("command", nargs=argparse.REMAINDER)
+    args = ap.parse_args()
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    out = (args.out or default_out()).resolve()
+    if args.scenario:
+        if command:
+            ap.error("give either --scenario or a program, not both")
+        bench = [sys.executable, str(ROOT / "scripts/dev/bench"), f"--profile={args.tool}", "--profile-out", str(out),
+                 "--scenario", args.scenario, "--runs", str(args.runs)]
+        bench += ["--size", args.size] if args.size else []
+        bench += ["--scale", args.scale] if args.scale else []
+        os.execv(sys.executable, bench)
+    if not command:
+        ap.error("name a program after --, or scenarios with --scenario")
+    if args.size or args.scale:
+        ap.error("--size and --scale go with --scenario")
+    check(args.tool)
+    bin_dir = build()
+    real = resolve(command[0], bin_dir)
+    profiler = Profiler(args.tool, out)
+    if real.parent == bin_dir:
+        run = profiler.wrap(bin_dir, root=real.name) / real.name
+    else:
+        run = profiler.wrap_one(real)
+    status = subprocess.run([str(run), *command[1:]]).returncode
+    entries = profiler.finish()
+    print(f"profile: {real.name} exited with {status}; per process:")
+    print(report_paths(out, entries))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

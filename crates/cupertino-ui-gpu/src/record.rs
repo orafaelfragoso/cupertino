@@ -1973,6 +1973,12 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
         if u64::from(image.width) * u64::from(image.height) > self.r.config.max_pixels {
             return Err(RenderError::ResourceLimit);
         }
+        let _upload = tracing::trace_span!(
+            "gpu.upload_image",
+            width = image.width,
+            height = image.height
+        )
+        .entered();
         let row = image.width as usize * 4;
         let mut pixels = Vec::with_capacity(row * image.height as usize);
         for y in 0..image.height as usize {

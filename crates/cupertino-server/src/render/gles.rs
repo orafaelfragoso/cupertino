@@ -92,7 +92,8 @@ impl Gles {
         fresh: bool,
     ) -> Result<Final, RenderError> {
         let frame = take_frame(scene, resources)?;
-        let (elements, top) = Self::lower_parts(renderer, scene, frame, resources);
+        let (elements, top) = tracing::trace_span!("server.lower")
+            .in_scope(|| Self::lower_parts(renderer, scene, frame, resources));
         let own = |output: &Output, elements| Final {
             elements,
             size: (output.physical_size.width, output.physical_size.height).into(),
@@ -363,6 +364,7 @@ impl Renderer for Gles {
         resources: &mut GlesResources<'_>,
         target: GlesTarget<'_>,
     ) -> Result<GlesCompletion, RenderError> {
+        let _render = tracing::trace_span!("server.render").entered();
         match target {
             GlesTarget::Texture {
                 renderer,
@@ -376,6 +378,8 @@ impl Renderer for Gles {
                     .bind(texture)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let _frame = resources.programs.passes.frame();
+                let _draw =
+                    tracing::trace_span!("server.draw", elements = fin.elements.len()).entered();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Drawn {
@@ -395,6 +399,8 @@ impl Renderer for Gles {
                     .bind(dmabuf)
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let _frame = resources.programs.passes.frame();
+                let _draw =
+                    tracing::trace_span!("server.draw", elements = fin.elements.len()).entered();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Offscreen {
@@ -417,6 +423,8 @@ impl Renderer for Gles {
                     .bind()
                     .map_err(|e| RenderError::Target(e.to_string()))?;
                 let _frame = resources.programs.passes.frame();
+                let _draw =
+                    tracing::trace_span!("server.draw", elements = fin.elements.len()).entered();
                 tracker
                     .render_output(renderer, &mut framebuffer, age, &fin.elements, clear)
                     .map(|r| GlesCompletion::Drawn {
@@ -433,6 +441,8 @@ impl Renderer for Gles {
                 let fin = Gles::final_elements(renderer, scene, resources, clear, false)?;
                 // the primary plane's one frame (the cursor plane is drawn on the CPU)
                 let _frame = resources.programs.passes.frame();
+                let _draw =
+                    tracing::trace_span!("server.draw", elements = fin.elements.len()).entered();
                 output
                     .render_frame(
                         renderer,

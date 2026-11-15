@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 92 crates, 456 internal dependencies
-// per layer: foundation 23, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
+// 93 crates, 460 internal dependencies
+// per layer: foundation 24, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -10,7 +10,7 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (23)";
+    label="foundation (24)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
@@ -26,6 +26,7 @@ digraph "layers" {
     "cupertino-keyboard";
     "cupertino-menu-model";
     "cupertino-modifiers";
+    "cupertino-profile";
     "cupertino-test-bus";
     "cupertino-test-pam";
     "cupertino-test-pam-shim";
@@ -415,6 +416,7 @@ digraph "layers" {
   "cupertino-protocol-app" -> "cupertino-semantics";
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
+  "cupertino-raster-math" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";
@@ -455,6 +457,7 @@ digraph "layers" {
   "cupertino-server" -> "cupertino-modifiers";
   "cupertino-server" -> "cupertino-overview";
   "cupertino-server" -> "cupertino-peer";
+  "cupertino-server" -> "cupertino-profile";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-protocols" [label="dev"];
   "cupertino-server" -> "cupertino-raster-math";
@@ -527,6 +530,7 @@ digraph "layers" {
   "cupertino-ui-core" -> "cupertino-defaults";
   "cupertino-ui-core" -> "cupertino-geometry";
   "cupertino-ui-core" -> "cupertino-menu-model";
+  "cupertino-ui-core" -> "cupertino-profile" [label="dev"];
   "cupertino-ui-core" -> "cupertino-semantics";
   "cupertino-ui-core" -> "cupertino-ui-layout";
   "cupertino-ui-core" -> "cupertino-ui-platform";
@@ -577,6 +581,7 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-gpu";
   "cupertino-ui-wayland" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-modifiers";
+  "cupertino-ui-wayland" -> "cupertino-profile";
   "cupertino-ui-wayland" -> "cupertino-protocol-app";
   "cupertino-ui-wayland" -> "cupertino-test-bus" [label="dev"];
   "cupertino-ui-wayland" -> "cupertino-ui-gpu";

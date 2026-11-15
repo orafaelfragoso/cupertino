@@ -49,7 +49,8 @@ its unconstrained width and shrinks.
   costs `O(nodes)`; a warm call with no changes does no sizing or leaf measuring (the bench shows about 3.5 times less
   time).
 - **Stats.** `LayoutResult::stats` counts the sizing cache misses and leaf measurements of the call; `cargo bench -p
-  cupertino-ui-layout` prints them next to the time for 1k and 10k node trees.
+  cupertino-ui-layout --bench layout` prints them next to the time for 1k and 10k node trees. `scripts/dev/microbench
+  ui-layout` counts the instructions of a file manager window's solve (about 480 nodes), cold, cached and resized.
 - **Errors.** Non-finite or negative spec values, a node reached twice (a cycle), more than `node_limit` nodes or more
   than 256 levels return a `LayoutError`; leaf measurements that are not finite do too. The engine does not panic on them.
 

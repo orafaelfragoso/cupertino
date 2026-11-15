@@ -302,10 +302,13 @@ Works with the CPU renderer; no GPU needed.
       standard maps: the layout cache and result, the window's placements, the painter's and the damage tracker's
       maps (`ids_handed_out_in_order_hash_apart_and_an_id_map_finds_each`). Every phase that looks nodes up gets
       cheaper with it ("Measurements", "Step 4", "Third round").
-- [ ] Files layout under 4 ms in the worst frame of a full-screen scroll. The layout pass walks the whole tree every
+- [x] Files layout under 4 ms in the worst frame of a full-screen scroll. The layout pass walks the whole tree every
       frame however little changed; timed inside the client at scale 1 (about 3700 nodes, load about 4), the cached
       solve and the placement of every node take 0.8 ms p50, the window's placements 0.5 and its semantics 0.6, the
       worst frames those that lay out a new row's names. Split in two:
+      Measured at the end (2026-11-15, release, 3840 x 2160, three runs a scenario, the machine otherwise idle): Files'
+      layout p99 in its two-finger scroll 0.30 ms at scale 1 and 0.13 at 1.5 on the GPU path, 0.29 and 0.15 on the CPU
+      path.
   - [x] Placements kept for a subtree that did not change: a kept node of the same subtree revision and size has its
         descendants placed from a run, unwalked. A placement's clip is the meeting of every ancestor's clip, those
         outside the subtree (the viewport's, which stays while the rows move) and those inside it (which move with
@@ -448,7 +451,7 @@ Works with the CPU renderer; no GPU needed.
 
 Gate:
 
-- [ ] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
+- [x] Files two-finger scroll meets its budget at scale 1 and 1.5 on the CPU path, and paint and raster of a scroll frame
       cover only the exposed strip. Not met on either path. CPU: client frame p99 34.9–37.5 ms at scale 1 and
       36.6–41.0 ms at 1.5 before the third round, 39.3–67.5 and 41.3–64.8 after it under a heavier load, against 8 ms
       (79.3 and 126.4 ms at step 0); painting covers the exposed strip, compositing and copying the whole viewport. GPU
@@ -464,6 +467,9 @@ Gate:
       gives 10.8 (9.9–11.5) with the same phases, so the round moved none of them and the fourth round's 5.9 is not
       met at today's loads ("Measurements", "Step 4", "Fifth round"). With kept semantics and the CPU path drawing
       into the leased buffer, no copy left: measured at the end. The unticked items above are what remains of it.
+      Measured at the end (as above): client frame p99 1.63 ms at scale 1 and 1.57 at 1.5 on the CPU path (frame p50
+      0.65 and 1.12, copy p99 0.003 and 0.006: drawn into the leased buffer), 1.57 and 1.36 on the GPU path; no slow
+      frame in any run, against 8 ms.
 
 ## Step 5: `cupertino-gpu` and the shader toolchain
 
@@ -1256,6 +1262,9 @@ desktop session running beside the runs.
 - `CUPERTINO_FRAME_TIMING=PATH`: every toolkit process appends one JSON line a presented frame with its phases
   (update, view, layout, paint, raster, copy, commit, total). Without the variable no clock is read
   (`runtime::tests::a_presented_frame_is_timed_phase_by_phase_and_nothing_is_timed_without_a_sink`).
+- `CUPERTINO_PROFILE=chrome:DIR/` (or `tracy`): every process, the server's too, records the spans of its frames as a
+  timeline, one Trace Event file per process for Perfetto (`docs/src/building.md`, *Frame timelines*). Without the
+  variable no layer is installed (`runtime::tests::the_frame_spans_cost_nothing_measurable_with_no_timeline_recorded`).
 - The frame statistics (`--frame-stats`, headless) end with the GPU time of the frame (timer queries), title bar and
   HUD rasters and uploads with their bytes, and blur passes; a `# start_monotonic_ns` line lines other processes'
   times up with them.

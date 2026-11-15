@@ -152,6 +152,11 @@ impl<A: Application> TestDriver<A> {
         );
     }
 
+    /// The clock the runtime reads, to make it tick ([`ManualClock::tick_on_read`]).
+    pub fn clock(&self) -> &ManualClock {
+        &self.clock
+    }
+
     pub fn advance_to(&mut self, at: Timestamp) -> Result<(), DriverError> {
         self.clock.advance_to(at).map_err(DriverError::Time)
     }

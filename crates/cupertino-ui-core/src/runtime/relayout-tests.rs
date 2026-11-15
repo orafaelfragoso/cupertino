@@ -1,7 +1,8 @@
 //! What a frame repaints after a layout: a node that moved damages where it was and where it is, a layout that moves
 //! nothing damages nothing, a group fading damages what its nodes draw and not the space between them, a configure
 //! that changes nothing repaints nothing, a window the compositor keeps activated paints nothing again while another
-//! surface has the keyboard, and a window drawn from damage alone is the window drawn whole, pixel for pixel.
+//! surface has the keyboard, and a window drawn from damage alone is the window drawn whole, pixel for pixel. A frame
+//! drawn into a lent buffer that found none free is drawn by the next, which has the bytes of the copy path.
 
 use super::*;
 use crate::test_support::{options, FakeSystem};
@@ -19,13 +20,15 @@ use std::rc::Rc;
 const WINDOW: Size = Size::new(200.0, 100.0);
 
 /// What the window shows: blocks at their places, on a board that may fill itself and fade as one group, and blank
-/// spacers, which change the board's children without drawing anything.
+/// spacers, which change the board's children without drawing anything. With `scrolled`, the blocks are on a sheet
+/// in a scroll view as big as the window, scrolled that far down.
 #[derive(Clone, Debug, PartialEq)]
 struct Scene {
     blocks: Vec<(u32, Rect, Color)>,
     fill: Option<Color>,
     opacity: f32,
     spacers: usize,
+    scrolled: Option<f64>,
 }
 
 const RED: Color = Color::new(0.9, 0.1, 0.1, 1.0);
@@ -42,6 +45,7 @@ impl Scene {
             fill: None,
             opacity: 1.0,
             spacers: 0,
+            scrolled: None,
         }
     }
 }
@@ -95,7 +99,13 @@ impl Application for Boards {
             content: Element::new(Board {
                 fill: model.fill,
                 opacity: model.opacity,
-                children,
+                children: match model.scrolled {
+                    None => children,
+                    Some(offset) => vec![Element::new(Pane {
+                        offset,
+                        sheet: Some(Element::new(Sheet { children })),
+                    })],
+                },
             }),
             menus: None,
         }]
@@ -214,6 +224,109 @@ impl Widget<Scene> for Block {
                 paint: Paint::Solid(self.color),
             });
         }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+/// A scroll view as big as its board, scrolled `offset` down its sheet.
+struct Pane {
+    offset: f64,
+    sheet: Option<Element<Scene>>,
+}
+
+impl Widget<Scene> for Pane {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(WINDOW.width),
+            height: SizeSpec::Fixed(WINDOW.height),
+            overflow: cupertino_ui_layout::Overflow::Clip,
+            ..LayoutSpec::new(ContainerKind::Scroll {
+                horizontal: false,
+                vertical: true,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Scene>> {
+        self.sheet.take().into_iter().collect()
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.offset != old.offset {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: WINDOW,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Scene>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn scroll_offset(&self, _: &()) -> Point {
+        Point::new(0.0, self.offset)
+    }
+}
+
+/// What a [`Pane`] scrolls: as wide as the window and three times as tall, a pale fill under the blocks it places.
+struct Sheet {
+    children: Vec<Element<Scene>>,
+}
+
+impl Widget<Scene> for Sheet {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(WINDOW.width),
+            height: SizeSpec::Fixed(3.0 * WINDOW.height),
+            ..LayoutSpec::new(ContainerKind::Absolute)
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<Scene>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::new(WINDOW.width, 3.0 * WINDOW.height),
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Scene>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        cx.push(PaintOp::Fill {
+            shape: Shape::Rect(Rect::new(0.0, 0.0, size.width, size.height)),
+            paint: Paint::Solid(Color::new(0.95, 0.93, 0.9, 1.0)),
+        });
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
@@ -537,5 +650,94 @@ fn a_window_drawn_from_damage_alone_is_the_window_drawn_whole() {
                 );
             }
         }
+    }
+}
+
+/// A runtime drawing with the CPU renderer at `scale`, showing `scene` first, whose window system keeps the pixels of
+/// every frame shown and lends `lend` buffers to draw frames into, or with none copies every frame.
+fn lending(scene: Scene, scale: f64, lend: usize) -> (Rt, WindowId) {
+    let mut options = options(&Rc::default());
+    options.renderers = Box::new(|| {
+        Box::new(CpuRenderer::new(
+            CpuConfig {
+                max_pixels: 1 << 20,
+                glyph_cache_bytes: 1 << 16,
+                image_cache_bytes: 1 << 16,
+                font_smoothing: true,
+            },
+            NoText,
+        ))
+    });
+    let mut system = FakeSystem::default();
+    system.lend = lend;
+    system.keep_pixels = true;
+    let mut rt = Rt::new(system, options);
+    rt.messages.push_back(scene);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    rt.window_system_mut()
+        .send(window, WindowEvent::Scale(scale));
+    configure(&mut rt, window, 1, WINDOW);
+    (rt, window)
+}
+
+#[test]
+fn a_frame_that_found_no_free_buffer_to_draw_into_is_drawn_by_the_next_as_the_copy_path_draws_it() {
+    // rows on a sheet in a scroll view, which the renderer keeps as an image between frames
+    let rows: Vec<(u32, Rect, Color)> = (0..9)
+        .map(|i| {
+            let shade = 0.1 * f64::from(i) as f32;
+            (
+                i,
+                Rect::new(10.0, 8.0 + 30.0 * f64::from(i), 180.0, 22.0),
+                Color::new(0.2 + shade / 2.0, 0.3, 0.9 - shade, 1.0),
+            )
+        })
+        .collect();
+    let first = Scene {
+        blocks: rows,
+        scrolled: Some(20.0),
+        ..Scene::two()
+    };
+    // a row changes, the view scrolls, and a row changes in a frame no buffer is free for
+    let mut scenes = Vec::new();
+    let mut scene = first.clone();
+    scene.blocks[2].2 = RED;
+    scenes.push((scene.clone(), false));
+    scene.scrolled = Some(35.0);
+    scenes.push((scene.clone(), false));
+    scene.blocks[3].2 = GREY;
+    scenes.push((scene.clone(), true));
+    for scale in [1.0, 1.5, 2.0] {
+        let mut shown = Vec::new();
+        for lend in [0, 2] {
+            let (mut rt, window) = lending(first.clone(), scale, lend);
+            for (time, (scene, refused)) in scenes.iter().enumerate() {
+                rt.window_system_mut().refuse_next = *refused;
+                show(&mut rt, window, scene.clone(), time as u64 + 1);
+                // a buffer comes free: the next frame draws
+                rt.window_system_mut().release(window);
+                rt.step(steps()).unwrap();
+            }
+            let system = rt.window_system();
+            assert_eq!(
+                system.shown_pixels.len(),
+                4,
+                "scale {scale}, lent {lend}: four frames shown"
+            );
+            shown.push(system.shown_pixels.clone());
+        }
+        let (copied, drawn) = (&shown[0], &shown[1]);
+        let width = (WINDOW.width * scale).ceil() as usize;
+        for (frame, (copied, drawn)) in copied.iter().zip(drawn).enumerate() {
+            if let Some(i) = copied.iter().zip(drawn).position(|(a, b)| a != b) {
+                panic!(
+                    "scale {scale}, frame {frame}: pixel ({}, {}) drawn into the buffer differs from the copied one",
+                    i / 4 % width,
+                    i / 4 / width
+                );
+            }
+        }
+        assert_ne!(drawn[2], drawn[3], "scale {scale}: the change shows");
     }
 }

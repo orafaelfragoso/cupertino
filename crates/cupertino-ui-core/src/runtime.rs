@@ -554,14 +554,14 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             if !self.exit {
                 // the time until the next event or frame goes to the widgets that asked for it
-                self.run_idle()?;
+                let resume = self.run_idle()?;
                 if self.exit || self.ready() {
                     continue;
                 }
                 // a wake due later bounds the wait; `ready` makes one already due run before waiting at all. Idle work
                 // left for a frame that was due goes on once the frame is late, so a window the compositor stopped
                 // drawing does not hold it back
-                let wake = self.next_wake().into_iter().chain(self.idle_resume()).min();
+                let wake = self.next_wake().into_iter().chain(resume).min();
                 let timeout = wake.map(|at| {
                     Duration::from_nanos(at.0.saturating_sub(self.options.clock.now().0))
                 });
@@ -2836,6 +2836,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Err(UiError::Render(e));
             }
             if let Lent::Drawn(outcome) = outcome {
+                if drawn.is_none() {
+                    // no buffer was free and the renderer never saw the frame, whose damage the tracker has already
+                    // taken: the next frame draws it all, so what the renderer keeps between frames (its scroll
+                    // images among it) is painted again where this one would have changed it
+                    w.damage.invalidate();
+                }
                 handed_over(&mut self.frame_timing, &mut self.system, committing);
                 lent = Some((outcome, drawn));
             }

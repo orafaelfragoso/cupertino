@@ -3,7 +3,7 @@
 //! work left goes on in a later slice, and once it is done the loop waits as it did without it. What the work shapes
 //! the next frame's layout finds in the text system's cache, as it would have shaped it.
 
-use super::idle::{FrameClock, FRAME_MARGIN_NS, IDLE_SLICE_NS};
+use super::idle::{waits_for_frame, FrameClock, FRAME_MARGIN_NS, IDLE_SLICE_NS};
 use super::*;
 use crate::test_support::{options, FakeClock, FakeSystem};
 use crate::{Change, EventCx, IdleCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget};
@@ -75,6 +75,8 @@ struct Shown {
     interrupts: bool,
     /// The node is in the view.
     ahead_shown: bool,
+    /// A second window, with nothing in it.
+    second: bool,
 }
 
 struct Idle;
@@ -112,8 +114,8 @@ impl Application for Idle {
                 Element::new(Label { text: text.clone() }).key(format!("label-{i}"))
             }),
         );
-        vec![Window {
-            key: WindowKey("main".into()),
+        let window = |key: &'static str, children: Vec<Element<Shown>>| Window {
+            key: WindowKey(key.into()),
             spec: WindowSpec {
                 title: "Idle".into(),
                 app_id: "test.idle".into(),
@@ -130,7 +132,12 @@ impl Application for Idle {
             background: WindowBackground::None,
             content: Element::new(Column { children }),
             menus: None,
-        }]
+        };
+        let mut windows = vec![window("main", children)];
+        if model.second {
+            windows.push(window("second", Vec::new()));
+        }
+        windows
     }
 }
 
@@ -349,6 +356,13 @@ fn start(shown: Shown) -> (Rt, WindowId) {
     rt.messages.push_back(shown);
     rt.step(steps()).unwrap();
     let window = rt.windows()[0].1;
+    configure(&mut rt, window);
+    assert!(!rt.windows[0].frame_ready, "the first frame is presented");
+    (rt, window)
+}
+
+/// `window` configured and its first frame presented.
+fn configure(rt: &mut Rt, window: WindowId) {
     rt.window_system_mut().send(
         window,
         WindowEvent::Configure(Configure {
@@ -369,8 +383,6 @@ fn start(shown: Shown) -> (Rt, WindowId) {
         }),
     );
     rt.step(steps()).unwrap();
-    assert!(!rt.windows[0].frame_ready, "the first frame is presented");
-    (rt, window)
 }
 
 /// The compositor is ready for the next frame at `at`; the window draws `shown` in it.
@@ -507,7 +519,7 @@ fn slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_
     let due = 3 * PERIOD;
     // the frame took 3 ms
     set_now(2 * PERIOD + 3 * MS);
-    rt.run_idle().unwrap();
+    let resume = rt.run_idle().unwrap();
     let slices = calls();
     assert!(slices.len() > 1, "{slices:?}");
     for call in &slices {
@@ -533,7 +545,7 @@ fn slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_
     );
     assert!(rt.has_idle_work(), "work is left for after the frame");
     assert_eq!(
-        rt.idle_resume(),
+        resume,
         Some(Timestamp(due + PERIOD)),
         "a frame a period late no longer holds the work back"
     );
@@ -560,11 +572,10 @@ fn slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_
     // to go on at that is already past
     set_now(due + 2 * PERIOD);
     assert_eq!(
-        rt.idle_resume(),
+        rt.run_idle().unwrap(),
         None,
         "a frame that late holds nothing back"
     );
-    rt.run_idle().unwrap();
     assert!(!rt.has_idle_work(), "done");
 
     // a wake ends a slice too
@@ -576,6 +587,83 @@ fn slices_end_before_the_next_frame_is_due_and_before_a_wake_and_work_left_goes_
     assert_eq!(woke.len(), 1, "{woke:?}");
     assert_eq!(woke[0].until, MS / 2, "the slice ends at the wake");
     assert!(asleep.has_idle_work());
+}
+
+#[test]
+fn with_two_windows_the_wait_ends_when_the_frame_holding_the_work_back_is_late_and_is_never_for_a_time_past(
+) {
+    const PERIOD: u64 = 16 * MS;
+    let shown = Shown {
+        ahead: names(400),
+        cost: MS / 4,
+        ahead_shown: true,
+        second: true,
+        ..Shown::default()
+    };
+    let (mut rt, window) = start(shown.clone());
+    // the second window drew its first frame and had one more, long ago, then was hidden: the compositor holds back
+    // the frame its last commit asked for
+    let hidden = rt.windows()[1].1;
+    configure(&mut rt, hidden);
+    rt.windows[1].frame_clock.frame(Timestamp(0));
+    rt.windows[1].frame_clock.frame(Timestamp(PERIOD));
+    assert!(waits_for_frame(&rt.windows[1]));
+    let stale = rt.windows[1].frame_clock.held_back().unwrap();
+    assert_eq!(stale, Timestamp(3 * PERIOD));
+    // the first window is shown and draws a frame a period
+    for i in 1..=6 {
+        frame(
+            &mut rt,
+            window,
+            i * PERIOD,
+            Some(Shown {
+                revision: i as u32,
+                ..shown.clone()
+            }),
+        );
+    }
+    assert!(waits_for_frame(&rt.windows[0]));
+
+    // the loop runs as `Runtime::run` does, but each wait on the window system moves the clock to its end and no frame
+    // comes: every wait has a time and lasts, the first window's frame a period late ends the last of them
+    set_now(6 * PERIOD + 3 * MS);
+    let mut waits = Vec::new();
+    loop {
+        let resume = rt.run_idle().unwrap();
+        if !rt.has_idle_work() {
+            break;
+        }
+        assert!(!rt.ready());
+        let at = resume.expect("work held back by a frame names when it goes on");
+        assert!(
+            at > Timestamp(now()),
+            "{at:?} is still to come at {}",
+            now()
+        );
+        assert_ne!(at, stale, "the hidden window's frame holds nothing back");
+        waits.push((now(), at.0));
+        assert!(waits.len() < 8, "the loop waits over and over: {waits:?}");
+        set_now(at.0);
+    }
+    let [(from, to)] = waits[..] else {
+        panic!("one wait: {waits:?}");
+    };
+    assert!(
+        from <= 7 * PERIOD - FRAME_MARGIN_NS + MS / 4,
+        "it waits from just before the frame is due: {from}"
+    );
+    assert_eq!(
+        to,
+        8 * PERIOD,
+        "until the first window's frame is a period late"
+    );
+    let slices = calls();
+    assert!(
+        slices
+            .iter()
+            .all(|c| c.until <= 7 * PERIOD - FRAME_MARGIN_NS || c.at >= 8 * PERIOD),
+        "the work never ran into the frame it waited for: {slices:?}"
+    );
 }
 
 #[test]

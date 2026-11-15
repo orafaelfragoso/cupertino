@@ -5,7 +5,9 @@ the `Inspector`'s deterministic dumps, and `semantic_gaps`, which lists every no
 reader could not announce (no name, or a child the tree does not hold). MPL-2.0; no display or session bus is needed.
 
 `TestDriver::new` owns the production runtime and uses the supplied `ManualClock` for both runtime work and trace
-receipt timestamps, replacing `RuntimeOptions::clock`. Use `runtime()` to inspect the model, windows, focus and
+receipt timestamps, replacing `RuntimeOptions::clock`; `clock()` returns it, and `ManualClock::tick_on_read(step,
+limit)` makes each read of the time move it on, as work that takes time does, panicking past `limit` reads so a loop
+that never ends fails. Use `runtime()` to inspect the model, windows, focus and
 snapshots, and `window_system_mut()` to queue input, configure windows, control frame callbacks and inspect presentation.
 `HeadlessWindowSystem::drags` lists the drags the runtime started (with `Capabilities::drag_and_drop`; without it they
 are refused); a start takes the pointer from the window with a leave, and the test enqueues each `PlatformEvent::Drag`

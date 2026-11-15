@@ -17,8 +17,8 @@ use cupertino_ui_platform::{
     WindowSpec, WindowSystem,
 };
 use cupertino_ui_render::{
-    CpuFrame, DamageRegion, Paint, PaintOp, PixelFormat, RenderError, RenderFrameId, RenderRequest,
-    Shape, UiRenderer,
+    CpuFrame, DamageRegion, Paint, PaintOp, PixelFormat, PixelRect, RenderError, RenderFrameId,
+    RenderRequest, Shape, UiRenderer,
 };
 use cupertino_ui_text::{
     ChangeCause, ContentHints, ContentPurpose, FontIndex, Surrounding, TextInputState, TextSystem,
@@ -363,6 +363,15 @@ pub(crate) struct FakeSystem {
     pub(crate) frames_requested: usize,
     /// The next present is refused, as when no buffer is free; the window then waits like the Wayland system's does.
     pub(crate) refuse_next: bool,
+    /// Lends this many buffers in turn to draw frames into ([`WindowSystem::present_into`]); none while zero, and every
+    /// frame is copied.
+    pub(crate) lend: usize,
+    /// The buffers lent: their pixels, and where each differs from the frame shown last (`None` while unknown).
+    lent: Vec<(Vec<u8>, Option<Vec<PixelRect>>)>,
+    next_lent: usize,
+    /// Keeps the pixels of every frame shown in `shown_pixels`: the buffer drawn into, or the frame copied.
+    pub(crate) keep_pixels: bool,
+    pub(crate) shown_pixels: Vec<Vec<u8>>,
     stalled: Option<WindowId>,
     frame_wanted: bool,
     pub(crate) text_input: Vec<Option<TextInputState>>,
@@ -648,10 +657,63 @@ impl WindowSystem for FakeSystem {
         }
         self.presented.push((window, configure));
         self.frame_ids.push(frame.id);
+        if self.keep_pixels {
+            self.shown_pixels.push(frame.pixels.clone());
+        }
         if self.timed_copies {
             self.copy_time += Duration::from_nanos(1);
         }
         Ok(PresentOutcome::Presented)
+    }
+
+    /// Lends the next of its buffers, as the Wayland system does: a refused present draws nothing and every buffer
+    /// misses the frame's damage, and a frame drawn into one is missed by the others.
+    fn present_into(
+        &mut self,
+        window: WindowId,
+        (width, height): (u32, u32),
+        configure: Option<ConfigureId>,
+        damage: &[PixelRect],
+        draw: &mut cupertino_ui_platform::DrawInto<'_>,
+    ) -> Result<cupertino_ui_platform::Lent, PlatformError> {
+        use cupertino_ui_platform::Lent;
+        if self.lend == 0 {
+            return Ok(Lent::No);
+        }
+        let len = width as usize * height as usize * 4;
+        if self.lent.len() != self.lend || self.lent.iter().any(|(p, _)| p.len() != len) {
+            self.lent = vec![(vec![0; len], None); self.lend];
+            self.next_lent = 0;
+        }
+        if std::mem::take(&mut self.refuse_next) {
+            self.stalled = Some(window);
+            for missed in self.lent.iter_mut().filter_map(|(_, m)| m.as_mut()) {
+                missed.extend_from_slice(damage);
+            }
+            return Ok(Lent::Drawn(PresentOutcome::NotReady));
+        }
+        let at = self.next_lent;
+        self.next_lent = (at + 1) % self.lend;
+        let (pixels, missed) = &mut self.lent[at];
+        let Some((id, told)) = draw(cupertino_ui_render::MemoryTarget {
+            pixels,
+            stride: width as usize * 4,
+            missed: missed.as_deref(),
+        }) else {
+            return Ok(Lent::Drawn(PresentOutcome::NotReady));
+        };
+        *missed = Some(Vec::new());
+        if self.keep_pixels {
+            self.shown_pixels.push(pixels.clone());
+        }
+        for (i, (_, missed)) in self.lent.iter_mut().enumerate() {
+            if let Some(missed) = missed.as_mut().filter(|_| i != at) {
+                missed.extend_from_slice(&told);
+            }
+        }
+        self.presented.push((window, configure));
+        self.frame_ids.push(id);
+        Ok(Lent::Drawn(PresentOutcome::Presented))
     }
 
     fn present_layer(

@@ -131,10 +131,11 @@ all on one thread.
   and before any wake. The window system is looked at before each slice and the first event that arrives ends the
   idle time; the work left waits for the next. A node does its work a piece at a time while `has_time()` and asks
   again for what is left. The work does now what a later frame would do (Files' icon grid shapes the names of the
-  cells about to be built into the text system's cache, which holds two generations of 512 paragraphs) and changes
-  nothing shown: the widget's state is only read. Once no node asks, the loop waits as it does without idle work,
-  so the work adds no wakeup; with work left for a frame that is due, the wait ends when the frame is a period late
-  (`runtime/idle.rs`).
+  cells about to be built into the text system's cache, which holds two generations of 512 paragraphs, and keeps in
+  a cell of its state where its last slice stopped, so a walk longer than a slice still ends) and changes nothing
+  shown: the widget's state is only read. Once no node asks, the loop waits as it does without idle work, so the
+  work adds no wakeup; with work left for a frame that is due, the wait ends when the first frame holding it back is
+  a period late, a time `run_idle` returns as it stops, so it is never one already past (`runtime/idle.rs`).
 - **Tasks.** `Command::Perform` futures run only inside a step, on the UI thread; a wake from any thread wakes the
   window system. Dropping the runtime cancels every task.
 - **Frames.** A step lays out every changed window, rebuilds its accessibility tree and focus, and paints when the

@@ -88,9 +88,13 @@ pub fn delay_ms(p: usize) -> u32 {
     ms(DELAY_UNITS[p])
 }
 
-/// The first level whose value is ≤ `units`, 0 when none is (the walk).
+/// The first level whose value is ≤ `units` (the walk). The levels run from longest to shortest, so a value below every
+/// level is past the shortest one and reads as the last level, the slider's short (fast) end.
 fn walk(levels: &[f64], units: f64) -> usize {
-    levels.iter().position(|l| *l <= units).unwrap_or(0)
+    levels
+        .iter()
+        .position(|l| *l <= units)
+        .unwrap_or(levels.len() - 1)
 }
 
 /// A stored value in units. `keyboard.conf` keeps whole milliseconds, rounded from the units the slider wrote (83 ms for
@@ -108,7 +112,8 @@ pub fn rate_position(delay_ms: u32, interval_ms: u32) -> usize {
     }
 }
 
-/// The delay position of a stored delay: the walk, clamped into the slider's 1…6 (approximate clamp, §6.3).
+/// The delay position of a stored delay: the walk, clamped into the slider's 1…6 (approximate clamp, §6.3). A delay
+/// longer than the longest step shows at the Long end, one shorter than the shortest step at the Short end.
 pub fn delay_position(delay_ms: u32) -> usize {
     walk(&DELAY_UNITS, units(delay_ms)).clamp(DELAY_FIRST, DELAY_LAST)
 }
@@ -207,11 +212,6 @@ mod tests {
         assert_eq!(rate_position(0, 83), 0, "a delay of 0 is repeat off");
         assert_eq!(delay_position(600), 4, "600 ms = 36 units");
         assert_eq!(
-            delay_position(100),
-            DELAY_FIRST,
-            "no level qualifies: the walk's 0 clamps to 1"
-        );
-        assert_eq!(
             delay_position(5_000_000),
             DELAY_FIRST,
             "level 0 is not on the slider"
@@ -226,6 +226,73 @@ mod tests {
         for p in DELAY_FIRST..=DELAY_LAST {
             assert_eq!(delay_position(delay_ms(p)), p);
         }
+    }
+
+    #[test]
+    fn a_delay_past_either_end_shows_at_that_end_and_one_between_steps_at_the_step_below_it() {
+        assert_eq!(
+            delay_position(100),
+            DELAY_LAST,
+            "shorter than the shortest step (250 ms): the Short end"
+        );
+        assert_eq!(delay_position(1), DELAY_LAST, "1 ms: the Short end");
+        assert_eq!(
+            delay_position(249),
+            DELAY_LAST,
+            "just under the shortest step"
+        );
+        assert_eq!(
+            delay_position(3000),
+            DELAY_FIRST,
+            "longer than the longest step (2000 ms): the Long end"
+        );
+        assert_eq!(
+            delay_position(1_000_000),
+            DELAY_FIRST,
+            "far past the longest step"
+        );
+        assert_eq!(
+            delay_position(800),
+            DELAY_DEFAULT,
+            "800 ms lies between 1133 ms and 500 ms and reads as the step at or below it"
+        );
+        assert_eq!(
+            delay_position(300),
+            DELAY_LAST,
+            "300 ms reads as the 250 ms step"
+        );
+    }
+
+    #[test]
+    fn a_rate_past_either_end_shows_at_that_end_and_the_delay_never_moves_it() {
+        assert_eq!(
+            rate_position(500, 10),
+            RATE_POSITIONS - 1,
+            "an interval shorter than the fastest step (33 ms): the Fast end"
+        );
+        assert_eq!(rate_position(500, 1), RATE_POSITIONS - 1);
+        assert_eq!(
+            rate_position(500, 5000),
+            1,
+            "an interval longer than the slowest step (2000 ms): the slowest position past Off"
+        );
+        assert_eq!(
+            rate_position(500, 700),
+            4,
+            "700 ms reads as the 500 ms step"
+        );
+        for delay in [100, 250, 500, 2000, 3000] {
+            assert_eq!(
+                rate_position(delay, 83),
+                RATE_DEFAULT,
+                "the delay ({delay} ms) never changes the rate's position"
+            );
+        }
+        assert_eq!(
+            rate_write(6, delay_position(100), 33),
+            (250, 83),
+            "writing the rate from a short stored delay keeps the delay at its Short step"
+        );
     }
 }
 

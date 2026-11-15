@@ -129,6 +129,39 @@ pub fn pick(reuses: impl IntoIterator<Item = Reuse>, commits: u64) -> Option<usi
     oldest.map(|(_, i)| i)
 }
 
+/// What a surface's next frame draws into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Next {
+    /// The buffer at this index.
+    Buffer(usize),
+    /// A buffer allocated for it: the surface has fewer than it keeps.
+    Allocate,
+    /// None: the compositor holds every buffer.
+    Busy,
+}
+
+/// The buffer a surface draws its next frame into, of buffers in states `reuses` when `commits` frames were committed
+/// in all, keeping `count` ([`buffer_count`]): a free one, else a new one while there are fewer than `count`, else
+/// [`pick`]'s.
+pub fn next_buffer(reuses: &[Reuse], commits: u64, count: usize) -> Next {
+    if let Some(i) = reuses.iter().position(|r| r.free(commits)) {
+        return Next::Buffer(i);
+    }
+    if reuses.len() < count {
+        return Next::Allocate;
+    }
+    pick(reuses.iter().copied(), commits).map_or(Next::Busy, Next::Buffer)
+}
+
+/// A buffer's state after a look at the compositor's releases without explicit sync, `busy` being whether the
+/// compositor still holds it, `commits` frames having been committed.
+pub fn after_release(reuse: Reuse, busy: bool, commits: u64) -> Reuse {
+    match reuse {
+        Reuse::Release if !busy => Reuse::ReleasedAt(commits),
+        other => other,
+    }
+}
+
 /// Why a frame was not shown from a GPU buffer.
 #[derive(Debug)]
 pub enum PresentError {
@@ -329,8 +362,9 @@ impl GpuSurface {
                         self.stats.release_waits += 1;
                     }
                 }
-                Reuse::Release if !conn.gpu_buffer_busy(slot.buffer) => {
-                    slot.reuse = Reuse::ReleasedAt(commits);
+                Reuse::Release => {
+                    slot.reuse =
+                        after_release(slot.reuse, conn.gpu_buffer_busy(slot.buffer), commits);
                 }
                 _ => {}
             }
@@ -340,9 +374,13 @@ impl GpuSurface {
     /// Whether a frame could be drawn now: a buffer is free or another may be allocated.
     pub fn has_free_buffer(&mut self, gpu: &GpuDevice, conn: &Connection) -> bool {
         self.refresh(gpu, conn);
-        let commits = self.commits;
-        self.slots.len() < buffer_count(gpu.explicit())
-            || pick(self.slots.iter().map(|s| s.reuse), commits).is_some()
+        self.next(gpu) != Next::Busy
+    }
+
+    /// What the next frame draws into, as the buffers' states stand.
+    fn next(&self, gpu: &GpuDevice) -> Next {
+        let reuses: Vec<Reuse> = self.slots.iter().map(|s| s.reuse).collect();
+        next_buffer(&reuses, self.commits, buffer_count(gpu.explicit()))
     }
 
     /// The staging texture no longer holds the last frame (after a purge): the next present uploads all of it.
@@ -489,17 +527,13 @@ impl GpuSurface {
         let allocated = self.allocated.expect("set above");
         self.stats.allocated = allocated;
         self.refresh(gpu, conn);
-        let commits = self.commits;
-        let index = match self.slots.iter().position(|s| s.reuse.free(commits)) {
-            Some(i) => i,
-            None if self.slots.len() < buffer_count(gpu.explicit()) => {
+        let index = match self.next(gpu) {
+            Next::Buffer(i) => i,
+            Next::Allocate => {
                 self.allocate(gpu, conn, allocated)?;
                 self.slots.len() - 1
             }
-            None => match pick(self.slots.iter().map(|s| s.reuse), commits) {
-                Some(i) => i,
-                None => return Err(PresentError::Busy),
-            },
+            Next::Busy => return Err(PresentError::Busy),
         };
         if let Some(source) = source {
             self.draw_from(gpu, index, source.texture())?;

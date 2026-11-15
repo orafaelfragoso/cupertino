@@ -137,6 +137,15 @@ pub struct Context {
     export: Option<Export>,
     pub robust: bool,
     pub purge: bool,
+    /// The EGL images and GBM buffer objects made here and not yet destroyed.
+    live: std::cell::Cell<ExternalTally>,
+}
+
+/// The EGL images and GBM buffer objects a device made and has not destroyed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExternalTally {
+    pub images: u32,
+    pub buffer_objects: u32,
 }
 
 fn text(p: *const c_char) -> String {
@@ -255,6 +264,7 @@ impl Context {
             export: None,
             robust,
             purge,
+            live: Default::default(),
         };
         ctx.load_extensions();
         Ok(ctx)
@@ -291,6 +301,7 @@ impl Context {
             export: None,
             robust,
             purge,
+            live: Default::default(),
         };
         ctx.load_extensions();
         Ok(ctx)
@@ -458,17 +469,31 @@ impl Context {
                     stride: (gbm.gbm_bo_get_stride_for_plane)(bo, i),
                 });
             }
+            self.tally(|t| t.buffer_objects += 1);
             Ok((planes, modifier, bo))
         }
     }
 
-    /// Destroy a buffer object [`Context::gbm_allocate`] made.
+    /// Destroy a buffer object [`Context::gbm_allocate`] made. It needs no current context, so a lost device frees
+    /// its buffer objects too.
     ///
     /// Safety: `bo` came from this context's GBM device and is destroyed once.
     pub unsafe fn gbm_free(&self, bo: *mut c_void) {
         if let Some((gbm, _)) = &self.gbm {
             (gbm.gbm_bo_destroy)(bo);
+            self.tally(|t| t.buffer_objects = t.buffer_objects.saturating_sub(1));
         }
+    }
+
+    /// The EGL images and GBM buffer objects made here and not yet destroyed.
+    pub fn live(&self) -> ExternalTally {
+        self.live.get()
+    }
+
+    fn tally(&self, f: impl FnOnce(&mut ExternalTally)) {
+        let mut t = self.live.get();
+        f(&mut t);
+        self.live.set(t);
     }
 
     /// An EGL image of the dmabuf described.
@@ -523,6 +548,7 @@ impl Context {
         if image.is_null() {
             return Err(self.error("eglCreateImage of a dmabuf"));
         }
+        self.tally(|t| t.images += 1);
         Ok(image)
     }
 
@@ -546,6 +572,7 @@ impl Context {
             if image.is_null() {
                 return Err(self.error("eglCreateImage of a texture"));
             }
+            self.tally(|t| t.images += 1);
             let (mut fourcc, mut count, mut modifier) = (0, 0, 0u64);
             if query(self.display, image, &mut fourcc, &mut count, &mut modifier) == 0 || count != 1
             {
@@ -568,12 +595,13 @@ impl Context {
         }
     }
 
-    /// Destroy an image this context made.
+    /// Destroy an image this context made. It needs no current context, so a lost device frees its images too.
     ///
     /// Safety: `image` came from this display and is destroyed once.
     pub unsafe fn destroy_image(&self, image: EGLImage) {
         if let Some(destroy) = self.destroy_image {
             destroy(self.display, image);
+            self.tally(|t| t.images = t.images.saturating_sub(1));
         }
     }
 
@@ -684,9 +712,13 @@ impl Drop for Context {
         if !self.owned {
             return;
         }
-        // Safety: this context's own objects, destroyed once, the context released first.
+        // Safety: this context's own objects, destroyed once. It is released first where it is current on this thread;
+        // where another device's context is current here, that one stays current (a context current on no thread is
+        // destroyed at once, and EGL defers it for one still current on another).
         unsafe {
-            (self.egl.eglMakeCurrent)(self.display, null_mut(), null_mut(), null_mut());
+            if self.is_current() {
+                (self.egl.eglMakeCurrent)(self.display, null_mut(), null_mut(), null_mut());
+            }
             (self.egl.eglDestroyContext)(self.display, self.context);
             // a GBM device's display is this context's alone; the surfaceless display is one per process, shared
             // by every device on it, and terminating it would end the others' contexts

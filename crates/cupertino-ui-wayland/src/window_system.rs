@@ -57,6 +57,19 @@ enum Stall {
 /// How often a window waiting for a GPU buffer looks at its release points.
 const GPU_RELEASE_POLL: Duration = Duration::from_millis(2);
 
+/// How long the run loop waits for the wire: the runtime's `timeout`, cut to [`GPU_RELEASE_POLL`] while a window
+/// waits for a GPU buffer (a release point signals through an eventfd the connection does not poll), and to `warm_up`
+/// while the warm-up thread is inside `Device::new` (so a hung one is noticed without anything waking the loop). A
+/// window that has its buffer again leaves the runtime's own timeout, so an idle process sleeps.
+fn wait_timeout(
+    timeout: Option<Duration>,
+    gpu_stalled: bool,
+    warm_up: Option<Duration>,
+) -> Option<Duration> {
+    let poll = gpu_stalled.then_some(GPU_RELEASE_POLL);
+    [timeout, poll, warm_up].into_iter().flatten().min()
+}
+
 /// The most drops kept while their data is read, as the transport keeps them.
 const MAX_LANDED: usize = 8;
 
@@ -2285,11 +2298,11 @@ impl WindowSystem for WaylandWindowSystem {
             .windows
             .iter()
             .any(|w| w.stalled == Some(Stall::Buffer) && self.gpu.draws(w.surface));
-        let timeout = match (gpu_stalled, timeout) {
-            (true, Some(t)) => Some(t.min(GPU_RELEASE_POLL)),
-            (true, None) => Some(GPU_RELEASE_POLL),
-            (false, t) => t,
-        };
+        let warm_up = self
+            .gpu
+            .deadline()
+            .map(|d| d.saturating_duration_since(Instant::now()));
+        let timeout = wait_timeout(timeout, gpu_stalled, warm_up);
         let wire = self
             .conn
             .wait(if ready { Some(Duration::ZERO) } else { timeout })
@@ -2515,6 +2528,99 @@ mod tests {
         assert_eq!(
             GlassStyle::of_material("TrackGlass"),
             Some(GlassStyle::Track)
+        );
+    }
+
+    /// Without explicit sync and with three buffers, three frames committed back to back (a configure lets a window
+    /// commit without waiting for its frame callback) leave the two spare buffers released at the same commit count
+    /// while the third is shown, and no commit to come raises the count. The next frame is still presented, every
+    /// frame after it too, and the run loop then waits for the runtime's own timeout instead of every 2 ms.
+    #[test]
+    fn without_explicit_sync_three_frames_back_to_back_never_leave_a_window_waiting_for_good() {
+        use crate::gpu_present::{after_release, buffer_count, next_buffer, Next, Reuse};
+        let count = buffer_count(false);
+        assert_eq!(count, 3);
+        /// The client's buffers and commits, and what the compositor holds: the one buffer it shows (it releases the
+        /// one before as a later one is committed).
+        #[derive(Default)]
+        struct Surface {
+            reuses: Vec<Reuse>,
+            commits: u64,
+            shown: Option<usize>,
+        }
+        impl Surface {
+            fn present(&mut self, count: usize) -> Option<usize> {
+                let i = match next_buffer(&self.reuses, self.commits, count) {
+                    Next::Buffer(i) => i,
+                    Next::Allocate => {
+                        self.reuses.push(Reuse::Free);
+                        self.reuses.len() - 1
+                    }
+                    Next::Busy => return None,
+                };
+                self.reuses[i] = Reuse::Release;
+                self.commits += 1;
+                self.shown = Some(i);
+                Some(i)
+            }
+            /// The compositor's releases read, as the run loop does between frames that are not back to back.
+            fn refresh(&mut self) {
+                let (shown, commits) = (self.shown, self.commits);
+                for (i, r) in self.reuses.iter_mut().enumerate() {
+                    *r = after_release(*r, shown == Some(i), commits);
+                }
+            }
+        }
+        let mut s = Surface::default();
+        for _ in 0..3 {
+            assert!(s.present(count).is_some());
+        }
+        assert_eq!(s.shown, Some(2));
+        s.refresh();
+        let (reuses, commits) = (s.reuses.clone(), s.commits);
+        // the state traced: both spares released at the count of the last commit, the third shown
+        assert_eq!(
+            reuses,
+            [Reuse::ReleasedAt(3), Reuse::ReleasedAt(3), Reuse::Release]
+        );
+        assert!(
+            !reuses.iter().any(|r| r.free(commits)),
+            "no buffer is free by the one-more-commit rule alone"
+        );
+        // the window is stalled on a buffer until it gets one: the loop looks again every 2 ms meanwhile
+        let stalled = next_buffer(&reuses, commits, count) == Next::Busy;
+        assert_eq!(
+            wait_timeout(None, stalled, None),
+            None,
+            "a buffer is there, so the window is not stalled"
+        );
+        assert_eq!(
+            wait_timeout(None, true, None),
+            Some(GPU_RELEASE_POLL),
+            "a stalled window would wake the loop every 2 ms"
+        );
+        // the next frame is presented into the buffer released longest ago, and so is every later one, with the
+        // releases read between frames as a run loop does
+        assert_eq!(s.present(count), Some(0));
+        for frame in 0..60 {
+            s.refresh();
+            assert!(
+                s.present(count).is_some(),
+                "frame {frame}: {:?} at {}",
+                s.reuses,
+                s.commits
+            );
+        }
+        // with nothing to draw the loop waits for the runtime's own timeout, or for ever
+        assert_eq!(
+            wait_timeout(Some(Duration::from_secs(1)), false, None),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(wait_timeout(None, false, None), None);
+        // a warm-up still making its device bounds the wait, so a hung one is noticed
+        assert_eq!(
+            wait_timeout(None, false, Some(Duration::from_secs(4))),
+            Some(Duration::from_secs(4))
         );
     }
 

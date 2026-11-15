@@ -66,14 +66,14 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 2b. GPU device and toolkit (`cupertino-gpu`, `cupertino-ui-wayland`, `cupertino-ui-gpu`, `cupertino-files`)
 
-- [ ] Device loss releases every image and buffer object (only the GL deletes are skipped), and nothing is deleted
+- [x] Device loss releases every image and buffer object (only the GL deletes are skipped), and nothing is deleted
       with another context current. Test: after a loss, `Device::live_textures()` is 0 and the buffer objects are
       freed.
-- [ ] Without explicit sync, a GPU window never stops drawing for good: the state the review traced recovers. Test:
+- [x] Without explicit sync, a GPU window never stops drawing for good: the state the review traced recovers. Test:
       the stall it describes, forced, ends in a presented frame.
-- [ ] `take_turn` tells "cannot be held" from "timed out", and `make_ahead` gives up at once on the former. Test: an
+- [x] `take_turn` tells "cannot be held" from "timed out", and `make_ahead` gives up at once on the former. Test: an
       unwritable cache directory returns within one poll.
-- [ ] The client's warm-up thread is stopped and joined at exit, as the server's is.
+- [x] The client's warm-up thread is stopped and joined at exit, as the server's is.
 - [ ] The Files grid's idle work resumes where its last slice stopped, so a folder of long names ends its idle work.
       Test: on a clock that gives each slice too little time for the whole walk, the work still ends.
 - [ ] With two windows and idle work left, the run loop no longer waits with a zero timeout over and over

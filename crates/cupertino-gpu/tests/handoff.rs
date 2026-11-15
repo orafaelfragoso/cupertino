@@ -208,6 +208,40 @@ fn programs_made_ahead_stop_before_the_next_program_and_while_waiting_for_the_tu
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A cache that cannot hold the turn (here a path under a file, where no directory can be made) is not waited on for
+/// the patience: the programs are made at once, and none is saved.
+#[test]
+fn programs_made_ahead_into_a_cache_that_cannot_hold_the_turn_do_not_wait_for_it() {
+    let dir = scratch("unwritable");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("file");
+    std::fs::write(&file, b"").unwrap();
+    let Some(mut device) = common::device() else {
+        return;
+    };
+    device.set_program_cache(Some(&file));
+    if device.program_cache_dir().is_none() {
+        common::has(false, "program binary format");
+        return;
+    }
+    drop(device);
+    let patience = Duration::from_secs(30);
+    let started = std::time::Instant::now();
+    let made = program_cache::make_ahead(
+        platform(),
+        &file,
+        &shaders::TOOLKIT[..1],
+        patience,
+        &Default::default(),
+    )
+    .unwrap()
+    .unwrap();
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(5), "waited {took:?}");
+    assert_eq!((made.compiled, made.stored), (1, 0), "{made:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A saved program the driver refuses (written by an earlier driver of the same strings, or damaged) is compiled again
 /// and replaced when the programs are made ahead; the programs another driver version saved, in that driver's own
 /// directory, are never loaded: the current driver's are compiled into its directory, and the next device loads them.

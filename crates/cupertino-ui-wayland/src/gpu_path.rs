@@ -8,7 +8,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_gpu::syncobj::SyncNode;
@@ -53,22 +56,67 @@ pub struct WarmTiming {
 /// all takes some 80 ms with the compiler and 5 ms from saved binaries; the frames meanwhile go out on the CPU.
 const PROGRAM_TURN_PATIENCE: Duration = Duration::from_secs(2);
 
+/// What the warm-up thread and its owner share: the stop the owner sets as it goes, and whether the thread is past
+/// making the device (the one step a stop cannot cut short, and the one a hung driver keeps it in).
+#[derive(Debug, Default)]
+pub struct WarmSignals {
+    stop: AtomicBool,
+    device_made: AtomicBool,
+}
+
+impl WarmSignals {
+    /// Ask the thread to end after the step it is in.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Whether `Device::new` returned (made the device or failed).
+    pub fn device_made(&self) -> bool {
+        self.device_made.load(Ordering::Acquire)
+    }
+
+    fn note_device_made(&self) {
+        self.device_made.store(true, Ordering::Release);
+    }
+}
+
+/// What [`warm`] gives once its owner stopped it.
+const STOPPED: &str = "the warm-up was stopped";
+
 /// Make the device on `node` (or the driver's default device), with saved programs under `cache`, and its programs.
-pub fn warm(node: Option<&Path>, cache: Option<&Path>) -> Result<Warm, String> {
+/// Once `signals` asks it to stop it returns after the step it is in (making the device, waiting for the programs'
+/// turn, making them), the device going on this thread.
+pub fn warm(
+    node: Option<&Path>,
+    cache: Option<&Path>,
+    signals: &WarmSignals,
+) -> Result<Warm, String> {
     let started = Instant::now();
     let platform = match node {
         Some(node) => Platform::RenderNode(node.to_path_buf()),
         None => Platform::Surfaceless,
     };
-    let mut device = Device::new(&DeviceDesc { platform }).map_err(|e| e.to_string())?;
+    let made = Device::new(&DeviceDesc { platform });
+    signals.note_device_made();
+    let mut device = made.map_err(|e| e.to_string())?;
     let context = started.elapsed();
+    if signals.stopped() {
+        return Err(STOPPED.into());
+    }
     device.set_program_cache(cache);
     let compiling = Instant::now();
     // the processes of a session starting together make their programs in turn, so on a cold cache only the first
-    // loads the driver's compiler
+    // loads the driver's compiler; a turn that cannot be held is not waited for, and a stop ends the wait
     let turn = device
         .program_cache_dir()
-        .and_then(|dir| program_cache::take_turn(dir, PROGRAM_TURN_PATIENCE));
+        .and_then(|dir| program_cache::wait_turn(dir, PROGRAM_TURN_PATIENCE, &signals.stop));
+    if signals.stopped() {
+        return Err(STOPPED.into());
+    }
     let programs = Programs::new(&device).map_err(|e| e.to_string())?;
     drop(turn);
     let timing = WarmTiming {
@@ -83,6 +131,142 @@ pub fn warm(node: Option<&Path>, cache: Option<&Path>) -> Result<Warm, String> {
         timing,
     })
 }
+
+/// The longest `Device::new` may take on the warm-up thread before the process gives the GPU up and stays on the CPU,
+/// reported as a fallback: a context is made in well under a second, so one still being made after this is a driver
+/// that hangs.
+pub const DEVICE_HANG: Duration = Duration::from_secs(10);
+
+/// The longest a process ending waits for a warm-up thread still inside `Device::new` before leaving it behind.
+const WARM_UP_WAIT_AT_EXIT: Duration = Duration::from_secs(5);
+
+/// The warm-up thread: its result as it comes, its stop and its handle. Dropping it stops the thread after the step
+/// it is in and joins it, so the process never exits with the thread inside the driver; a thread still inside
+/// `Device::new` (which no stop cuts short) is waited for up to [`WarmUp::exit_wait`] and then left behind.
+pub struct WarmUp {
+    rx: Receiver<Result<Warm, String>>,
+    signals: Arc<WarmSignals>,
+    thread: Option<JoinHandle<()>>,
+    started: Instant,
+    /// How long dropping waits for a thread still inside `Device::new`.
+    pub exit_wait: Duration,
+}
+
+impl WarmUp {
+    /// Start the thread making the device and programs on `node` with saved programs under `cache`; `wake` is called
+    /// on the thread once its result is ready.
+    pub fn start(
+        node: Option<PathBuf>,
+        cache: Option<PathBuf>,
+        wake: impl FnOnce() + Send + 'static,
+    ) -> std::io::Result<WarmUp> {
+        WarmUp::spawn(
+            move |signals| warm(node.as_deref(), cache.as_deref(), signals),
+            wake,
+        )
+    }
+
+    /// Start the thread running `work` (the warm-up, or a test's stand-in), then `wake`.
+    pub fn spawn(
+        work: impl FnOnce(&WarmSignals) -> Result<Warm, String> + Send + 'static,
+        wake: impl FnOnce() + Send + 'static,
+    ) -> std::io::Result<WarmUp> {
+        let (tx, rx) = mpsc::channel();
+        let signals = Arc::new(WarmSignals::default());
+        let theirs = Arc::clone(&signals);
+        let thread = std::thread::Builder::new()
+            .name(WARM_UP_THREAD.into())
+            .spawn(move || {
+                // a result nobody takes any more (its owner gave the thread up) goes here, on this thread
+                let _ = tx.send(work(&theirs));
+                wake();
+            })?;
+        Ok(WarmUp {
+            rx,
+            signals,
+            thread: Some(thread),
+            started: Instant::now(),
+            exit_wait: WARM_UP_WAIT_AT_EXIT,
+        })
+    }
+
+    pub fn signals(&self) -> &WarmSignals {
+        &self.signals
+    }
+
+    /// When the warm-up started.
+    pub fn started(&self) -> Instant {
+        self.started
+    }
+
+    /// The result, once there (without waiting, or waiting up to `wait`); the thread is joined as it is taken.
+    pub fn take(&mut self, wait: Option<Duration>) -> Option<Result<Warm, String>> {
+        let result = match wait {
+            None => match self.rx.try_recv() {
+                Ok(r) => r,
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Disconnected) => Err("the warm-up thread ended".into()),
+            },
+            Some(d) => match self.rx.recv_timeout(d) {
+                Ok(r) => r,
+                Err(mpsc::RecvTimeoutError::Timeout) => return None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err("the warm-up thread ended".into()),
+            },
+        };
+        // the thread has sent its result and only wakes its owner now
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        Some(result)
+    }
+
+    /// Whether the thread has been inside `Device::new` for [`DEVICE_HANG`] or longer at `now`, from its deadline
+    /// ([`WarmUp::hang_deadline`]) on.
+    pub fn hung(&self, now: Instant) -> bool {
+        self.thread.is_some()
+            && !self.signals.device_made()
+            && now.saturating_duration_since(self.started) >= DEVICE_HANG
+    }
+
+    /// When the thread counts as hung if it is still inside `Device::new` then; `None` once it is past it.
+    pub fn hang_deadline(&self) -> Option<Instant> {
+        (self.thread.is_some() && !self.signals.device_made()).then(|| self.started + DEVICE_HANG)
+    }
+}
+
+impl Drop for WarmUp {
+    fn drop(&mut self) {
+        self.signals.stop();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        // past `Device::new` the thread ends after the step it is in; inside it, no stop reaches it
+        let result = match self.rx.recv_timeout(self.exit_wait) {
+            Ok(r) => Some(r),
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            Err(mpsc::RecvTimeoutError::Timeout) if self.signals.device_made() => {
+                self.rx.recv().ok()
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                eprintln!(
+                    "renderer: the warm-up thread is still making its device after {} s; the process leaves it",
+                    self.started.elapsed().as_secs()
+                );
+                // dropping the handle detaches the thread; its result, if it ever comes, is dropped on it
+                drop(thread);
+                return;
+            }
+        };
+        if let Some(Ok(warm)) = result {
+            // made current here to be destroyed
+            drop(warm.device.attach());
+        }
+        let _ = thread.join();
+    }
+}
+
+/// The warm-up thread's name.
+pub const WARM_UP_THREAD: &str = "gpu-warm-up";
 
 /// The render node of the device `dev` names (a `dev_t` from dmabuf feedback): the node itself when it is one, else
 /// the render node of the same device; `None` when the process cannot see one (a sandbox without `/dev/dri`).
@@ -163,10 +347,7 @@ enum State {
     /// The process draws on the CPU.
     Cpu,
     /// The device and programs are being made; frames are drawn on the CPU meanwhile.
-    Warming {
-        rx: Receiver<Result<Warm, String>>,
-        started: Instant,
-    },
+    Warming(WarmUp),
     On(Box<GpuDevice>),
 }
 
@@ -208,6 +389,8 @@ pub struct GpuPath {
     /// Events for the runtime: a change of renderer.
     events: Vec<PlatformEvent>,
     renderers: GpuRenderers,
+    /// A warm-up given up while its thread hung in `Device::new`, kept to be waited for (a while) at exit.
+    abandoned: Option<WarmUp>,
 }
 
 impl GpuPath {
@@ -236,6 +419,7 @@ impl GpuPath {
             warmed: None,
             events: Vec::new(),
             renderers: GpuRenderers::default(),
+            abandoned: None,
         };
         let wanted = renderer::on_at_start(class);
         if requested == Requested::Default && class == RendererClass::ByUse {
@@ -331,21 +515,10 @@ impl GpuPath {
     }
 
     fn begin_warm(&mut self, conn: &Connection) {
-        let (tx, rx) = mpsc::channel();
-        let (node, cache) = (self.node.clone(), self.cache.clone());
         let waker = conn.waker();
-        let spawned = std::thread::Builder::new()
-            .name("gpu-warm-up".into())
-            .spawn(move || {
-                let _ = tx.send(warm(node.as_deref(), cache.as_deref()));
-                waker.wake();
-            });
-        match spawned {
-            Ok(_) => {
-                self.state = State::Warming {
-                    rx,
-                    started: Instant::now(),
-                };
+        match WarmUp::start(self.node.clone(), self.cache.clone(), move || waker.wake()) {
+            Ok(warm_up) => {
+                self.state = State::Warming(warm_up);
                 renderer::set_active(Choice {
                     kind: RendererKind::Cpu,
                     reason: Reason::WarmingUp,
@@ -375,23 +548,34 @@ impl GpuPath {
         std::mem::take(&mut self.events)
     }
 
-    /// Take the warm-up's result when it is ready (without waiting); with `wait`, wait up to that long for it.
+    /// When the run loop must look at the warm-up again even if nothing wakes it: the moment a thread still inside
+    /// `Device::new` counts as hung ([`DEVICE_HANG`]).
+    pub fn deadline(&self) -> Option<Instant> {
+        match &self.state {
+            State::Warming(warm_up) => warm_up.hang_deadline(),
+            _ => None,
+        }
+    }
+
+    /// Take the warm-up's result when it is ready (without waiting); with `wait`, wait up to that long for it. A
+    /// warm-up whose thread hung in `Device::new` is given up: the process stays on the CPU, reported as a fallback.
     pub fn poll(&mut self, conn: &mut Connection, wait: Option<Duration>) {
-        let State::Warming { rx, started } = &self.state else {
+        let State::Warming(warm_up) = &mut self.state else {
             return;
         };
-        let started = *started;
-        let result = match wait {
-            None => match rx.try_recv() {
-                Ok(r) => r,
-                Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => Err("the warm-up thread ended".into()),
-            },
-            Some(d) => match rx.recv_timeout(d) {
-                Ok(r) => r,
-                Err(mpsc::RecvTimeoutError::Timeout) => return,
-                Err(mpsc::RecvTimeoutError::Disconnected) => Err("the warm-up thread ended".into()),
-            },
+        let started = warm_up.started();
+        let Some(result) = warm_up.take(wait) else {
+            if warm_up.hung(Instant::now()) {
+                warm_up.signals().stop();
+                if let State::Warming(warm_up) = std::mem::replace(&mut self.state, State::Cpu) {
+                    self.abandoned = Some(warm_up);
+                }
+                self.settle(Err(format!(
+                    "the GPU device was not made within {} s",
+                    DEVICE_HANG.as_secs()
+                )));
+            }
+            return;
         };
         let switched_after = started.elapsed();
         match result.and_then(|w| {
@@ -512,8 +696,9 @@ impl GpuPath {
         self.renderers.set(None);
         for (_, kind) in self.surfaces.drain() {
             if let SurfaceKind::Gpu(mut s) = kind {
-                // the textures went with the context; the protocol objects are destroyed
-                s.free(None, conn);
+                // the GL names went with the context; the buffers' images, buffer objects and timelines, which a loss
+                // leaves, are freed with the protocol objects
+                s.free(Some(&gpu), conn);
             }
         }
         drop(gpu);
@@ -627,22 +812,6 @@ impl GpuPath {
     }
 }
 
-impl Drop for GpuPath {
-    /// A process that ends while its device is still being made waits for the warm-up thread (a little while at most):
-    /// the driver must not be torn down under a thread still compiling in it.
-    fn drop(&mut self) {
-        if let State::Warming { rx, .. } = &self.state {
-            if let Ok(Ok(warm)) = rx.recv_timeout(WARM_UP_WAIT_AT_EXIT) {
-                // the context is made current here to be destroyed
-                drop(warm.device.attach());
-            }
-        }
-    }
-}
-
-/// The longest a process ending during its warm-up waits for the warm-up thread.
-const WARM_UP_WAIT_AT_EXIT: Duration = Duration::from_secs(5);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +826,174 @@ mod tests {
             | ((0x56789u64 & 0xffffff00) << 12)
             | (0x56789u64 & 0xff);
         assert_eq!((libc_major(big), libc_minor(big)), (0x1234, 0x56789));
+    }
+
+    /// The process's threads named as the warm-up thread is.
+    fn warm_up_threads() -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .flatten()
+            .filter(|t| {
+                std::fs::read_to_string(t.path().join("comm"))
+                    .is_ok_and(|c| c.trim_end() == WARM_UP_THREAD)
+            })
+            .count()
+    }
+
+    /// Waits up to `limit` for `done`.
+    fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
+        let end = Instant::now() + limit;
+        while !done() {
+            if Instant::now() > end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Whether the process has no warm-up thread: a joined thread's entry leaves `/proc` a moment after the join
+    /// returns, so it is given a little while.
+    fn no_warm_up_thread() -> bool {
+        within(Duration::from_millis(500), || warm_up_threads() == 0)
+    }
+
+    #[test]
+    fn dropping_a_warm_up_past_its_device_stops_and_joins_its_thread_at_once() {
+        let mut warm_up = WarmUp::spawn(
+            |signals| {
+                signals.note_device_made();
+                // the turn's wait or the programs: steps that look at the stop
+                while !signals.stopped() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(STOPPED.into())
+            },
+            || {},
+        )
+        .unwrap();
+        warm_up.exit_wait = Duration::from_secs(30);
+        assert!(within(Duration::from_secs(5), || warm_up
+            .signals()
+            .device_made()));
+        assert_eq!(warm_up_threads(), 1);
+        let dropping = Instant::now();
+        drop(warm_up);
+        assert!(
+            dropping.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            dropping.elapsed()
+        );
+        assert!(no_warm_up_thread(), "the thread was joined");
+    }
+
+    #[test]
+    fn a_warm_up_hung_in_making_its_device_counts_as_hung_and_is_left_behind_at_exit() {
+        let (release, hold) = mpsc::channel::<()>();
+        let mut warm_up = WarmUp::spawn(
+            move |signals| {
+                // `Device::new` stuck in the driver: no stop reaches it
+                let _ = hold.recv();
+                signals.note_device_made();
+                Err("made late".into())
+            },
+            || {},
+        )
+        .unwrap();
+        let start = warm_up.started();
+        assert!(!warm_up.hung(start + DEVICE_HANG / 2));
+        assert!(warm_up.hung(start + DEVICE_HANG + Duration::from_secs(1)));
+        assert_eq!(warm_up.hang_deadline(), Some(start + DEVICE_HANG));
+        assert!(warm_up.take(None).is_none());
+        warm_up.exit_wait = Duration::from_millis(50);
+        let dropping = Instant::now();
+        drop(warm_up);
+        let took = dropping.elapsed();
+        assert!(
+            took >= Duration::from_millis(50) && took < Duration::from_secs(2),
+            "{took:?}"
+        );
+        // the thread left behind ends by itself once the driver lets it go
+        assert_eq!(warm_up_threads(), 1);
+        release.send(()).unwrap();
+        assert!(within(Duration::from_secs(5), || warm_up_threads() == 0));
+    }
+
+    #[test]
+    fn a_finished_warm_up_is_taken_once_and_its_thread_joined() {
+        let mut warm_up = WarmUp::spawn(
+            |signals| {
+                signals.note_device_made();
+                Err("no device here".into())
+            },
+            || {},
+        )
+        .unwrap();
+        let taken = warm_up.take(Some(Duration::from_secs(5)));
+        assert!(matches!(taken, Some(Err(ref why)) if why == "no device here"));
+        assert!(no_warm_up_thread(), "the thread was joined");
+        assert_eq!(warm_up.hang_deadline(), None);
+        assert!(!warm_up.hung(Instant::now() + 2 * DEVICE_HANG));
+    }
+
+    /// The real warm-up on the machine's render node, kept waiting for the programs' turn another process holds:
+    /// dropping it ends the wait at once instead of after the turn's patience, and leaves no thread.
+    #[test]
+    fn dropping_the_real_warm_up_while_it_waits_for_the_turn_returns_promptly_and_leaves_no_thread()
+    {
+        let required = std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() == Ok("1");
+        let node = std::fs::read_dir("/dev/dri").ok().and_then(|nodes| {
+            let mut nodes: Vec<PathBuf> = nodes
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("renderD"))
+                })
+                .collect();
+            nodes.sort();
+            nodes.into_iter().next()
+        });
+        let Some(node) = node else {
+            assert!(!required, "CUPERTINO_GPU_REQUIRED=1: no render node");
+            eprintln!("skipped: no render node");
+            return;
+        };
+        let cache = std::env::temp_dir().join(format!("cupertino-warm-up-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let mut device = match Device::new(&DeviceDesc {
+            platform: Platform::RenderNode(node.clone()),
+        }) {
+            Ok(d) => d,
+            Err(e) => {
+                assert!(!required, "CUPERTINO_GPU_REQUIRED=1: {e}");
+                eprintln!("skipped: {e}");
+                return;
+            }
+        };
+        device.set_program_cache(Some(&cache));
+        let Some(dir) = device.program_cache_dir().map(Path::to_path_buf) else {
+            assert!(!required, "CUPERTINO_GPU_REQUIRED=1: no program binaries");
+            return;
+        };
+        drop(device);
+        // another process making its programs
+        let held = program_cache::take_turn(&dir, Duration::ZERO).expect("a free turn");
+        let warm_up = WarmUp::start(Some(node), Some(cache.clone()), || {}).unwrap();
+        assert!(within(Duration::from_secs(10), || warm_up
+            .signals()
+            .device_made()));
+        std::thread::sleep(Duration::from_millis(20));
+        let dropping = Instant::now();
+        drop(warm_up);
+        let took = dropping.elapsed();
+        assert!(
+            took < PROGRAM_TURN_PATIENCE / 2,
+            "dropping waited {took:?}, the turn's patience is {PROGRAM_TURN_PATIENCE:?}"
+        );
+        assert!(no_warm_up_thread(), "the thread was joined");
+        drop(held);
+        let _ = std::fs::remove_dir_all(&cache);
     }
 }

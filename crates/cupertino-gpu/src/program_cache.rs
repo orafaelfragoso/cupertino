@@ -89,26 +89,71 @@ pub struct Turn {
 /// How often a process waiting for its turn looks again.
 const TURN_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
+/// Why [`take_turn`] gave no turn.
+#[derive(Debug)]
+pub enum NoTurn {
+    /// The turn cannot be held at all: the directory or its turn file cannot be made or opened (a read-only or full
+    /// cache), or the lock failed for another reason than another process holding it. Waiting gains nothing.
+    Unavailable(std::io::Error),
+    /// Another process held the turn for all of the patience.
+    TimedOut,
+}
+
+impl std::fmt::Display for NoTurn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NoTurn::Unavailable(e) => write!(f, "the turn cannot be held: {e}"),
+            NoTurn::TimedOut => f.write_str("another process kept the turn"),
+        }
+    }
+}
+
+impl std::error::Error for NoTurn {}
+
 /// Waits up to `patience` for this process's turn to make programs in `dir`, a driver's directory
 /// ([`crate::Device::program_cache_dir`]): processes that start together then make their programs one after the other,
 /// so on a cold cache the first compiles and saves them and the rest load what it saved. Loading the driver's compiler
-/// costs a process some 50 MiB that it keeps until it exits; taking turns leaves that to one process. `None` when the
-/// directory cannot hold the turn's file or the turn did not come in time: the caller makes its programs anyway.
-pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Option<Turn> {
-    std::fs::create_dir_all(dir).ok()?;
+/// costs a process some 50 MiB that it keeps until it exits; taking turns leaves that to one process. A turn that
+/// cannot be held ([`NoTurn::Unavailable`]) is reported at once, without waiting; on either error the caller makes its
+/// programs anyway.
+pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Result<Turn, NoTurn> {
+    std::fs::create_dir_all(dir).map_err(NoTurn::Unavailable)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(dir.join(".turn"))
-        .ok()?;
+        .map_err(NoTurn::Unavailable)?;
     let deadline = std::time::Instant::now() + patience;
     loop {
         match file.try_lock() {
-            Ok(()) => return Some(Turn { _held: file }),
+            Ok(()) => return Ok(Turn { _held: file }),
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(TURN_POLL);
             }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(NoTurn::TimedOut),
+            Err(std::fs::TryLockError::Error(e)) => return Err(NoTurn::Unavailable(e)),
+        }
+    }
+}
+
+/// [`take_turn`] waited on in steps of at most [`STOP_POLL`], so a thread waiting while another process holds the
+/// turn sees `stop`: `None` once `stop` is set, when the patience ran out, or at once when the turn cannot be held.
+pub fn wait_turn(
+    dir: &Path,
+    patience: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Option<Turn> {
+    use std::sync::atomic::Ordering;
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match take_turn(dir, left.min(STOP_POLL)) {
+            Ok(turn) => return Some(turn),
+            Err(NoTurn::TimedOut) if left > STOP_POLL => {}
             Err(_) => return None,
         }
     }
@@ -116,7 +161,7 @@ pub fn take_turn(dir: &Path, patience: std::time::Duration) -> Option<Turn> {
 
 /// Makes `programs` into the cache under `base` for the driver of a device on `platform`, as a process that later makes
 /// them on that device does, so that process loads every one instead of compiling: a device of its own, the driver's
-/// directory's turn ([`take_turn`], waited on up to `patience`), each program loaded where a saved binary the driver
+/// directory's turn ([`wait_turn`], waited on up to `patience`, and not at all when it cannot be held), each program loaded where a saved binary the driver
 /// takes is there, else compiled and saved (a refused binary is replaced). The directory and the file names are the
 /// ones that process looks up, keyed by the driver's strings and the programs' sources, so a binary of another
 /// driver is never loaded. The device is gone when it returns. It takes the compiles' time and the driver's compiler:
@@ -136,19 +181,12 @@ pub fn make_ahead(
     let Some(dir) = device.program_cache_dir().map(Path::to_path_buf) else {
         return Ok(None);
     };
-    // the turn is waited on in short steps so a stop is seen while another process holds it
-    let deadline = std::time::Instant::now() + patience;
-    let turn = loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(Some(device.program_cache_stats()));
-        }
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        match take_turn(&dir, left.min(STOP_POLL)) {
-            Some(turn) => break Some(turn),
-            None if left > STOP_POLL => continue,
-            None => break None,
-        }
-    };
+    // waited on in short steps so a stop is seen while another process holds it; a turn that cannot be held at all
+    // is not waited for
+    let turn = wait_turn(&dir, patience, stop);
+    if stop.load(Ordering::Relaxed) {
+        return Ok(Some(device.program_cache_stats()));
+    }
     for program in programs {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -159,7 +197,7 @@ pub fn make_ahead(
     Ok(Some(device.program_cache_stats()))
 }
 
-/// How often [`make_ahead`] looks at its stop while it waits for the turn.
+/// How often [`wait_turn`] looks at its stop while it waits for the turn.
 const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl ProgramCache {
@@ -272,17 +310,63 @@ mod tests {
         // another holder of the directory (the lock is the open file's, so this thread stands for another process)
         let waited = Instant::now();
         assert!(
-            take_turn(&dir, Duration::from_millis(30)).is_none(),
+            matches!(
+                take_turn(&dir, Duration::from_millis(30)),
+                Err(NoTurn::TimedOut)
+            ),
             "taken"
         );
         assert!(waited.elapsed() >= Duration::from_millis(30), "it waited");
         let later = std::thread::spawn({
             let dir = dir.clone();
-            move || take_turn(&dir, Duration::from_secs(5)).is_some()
+            move || take_turn(&dir, Duration::from_secs(5)).is_ok()
         });
         std::thread::sleep(Duration::from_millis(20));
         drop(first);
         assert!(later.join().unwrap(), "the turn passes when given up");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cache_that_cannot_hold_the_turn_is_given_up_at_once_not_after_the_patience() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        let root =
+            std::env::temp_dir().join(format!("cupertino-gpu-noturn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // a cache path under a file (no directory can be made there, whoever runs the test), and a cache directory
+        // without write permission (its turn file cannot be made, unless the test runs with every permission)
+        let file = root.join("file");
+        std::fs::write(&file, b"").unwrap();
+        let read_only = root.join("read-only");
+        std::fs::create_dir_all(&read_only).unwrap();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let everything_allowed = std::fs::write(read_only.join("probe"), b"").is_ok();
+        let mut dirs = vec![file.join("driver")];
+        if !everything_allowed {
+            dirs.push(read_only.clone());
+        }
+        let patience = Duration::from_secs(10);
+        for dir in &dirs {
+            let started = Instant::now();
+            let r = take_turn(dir, patience);
+            assert!(matches!(r, Err(NoTurn::Unavailable(_))), "{dir:?}: {r:?}");
+            assert!(
+                started.elapsed() < STOP_POLL,
+                "{dir:?}: {:?}",
+                started.elapsed()
+            );
+            let started = Instant::now();
+            assert!(wait_turn(dir, patience, &AtomicBool::new(false)).is_none());
+            assert!(
+                started.elapsed() < STOP_POLL,
+                "{dir:?}: {:?}",
+                started.elapsed()
+            );
+        }
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

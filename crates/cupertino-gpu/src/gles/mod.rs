@@ -7,6 +7,8 @@
 mod egl;
 mod state;
 
+pub use egl::ExternalTally;
+
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -891,17 +893,22 @@ impl Device {
             textures: t.textures.saturating_sub(1),
             bytes: t.bytes.saturating_sub(texture.counted),
         });
-        if self.ready().is_err() {
-            return;
+        // the GL names go with a lost context; the image and the buffer object are the display's and GBM's, which a
+        // loss leaves, so they are freed whatever the context's state
+        if self.ready().is_ok() {
+            // Safety: a texture of this device, its context current (`ready`), destroyed once.
+            unsafe {
+                if let Some(fb) = texture.framebuffer {
+                    self.gl.delete_framebuffer(fb);
+                }
+                if !texture.foreign {
+                    self.gl.delete_texture(texture.raw);
+                }
+            }
         }
-        // Safety: a texture of this device and what it owns, destroyed once.
+        // Safety: the image and buffer object this texture owns, made by this device's display and GBM device,
+        // destroyed once; neither call needs a current context.
         unsafe {
-            if let Some(fb) = texture.framebuffer {
-                self.gl.delete_framebuffer(fb);
-            }
-            if !texture.foreign {
-                self.gl.delete_texture(texture.raw);
-            }
             if let Some(image) = texture.image {
                 self.ctx.destroy_image(image);
             }
@@ -909,6 +916,18 @@ impl Device {
                 self.ctx.gbm_free(bo);
             }
         }
+    }
+
+    /// The EGL images and GBM buffer objects the device made and has not destroyed: those of its dmabufs and
+    /// imports, freed with their textures, a lost device's too.
+    pub fn live_external(&self) -> ExternalTally {
+        self.ctx.live()
+    }
+
+    /// Whether the device's own context is current on this thread (always false for a borrowed device, whose context
+    /// is its owner's).
+    pub fn is_current(&self) -> bool {
+        !self.borrowed && self.ctx.is_current()
     }
 
     // ---- external memory ----
@@ -1499,8 +1518,16 @@ impl Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
-        if self.ready().is_ok() || self.lost.get().is_some() {
-            // Safety: the device's own vertex array, deleted once while its context is current.
+        // a device not lost makes its context current first (`ready`); a lost one deletes nothing unless its own
+        // context is current already, as the same GL name may be another device's in the context current here (its
+        // own goes with the context)
+        let ours = match self.lost.get() {
+            None => self.ready().is_ok(),
+            Some(_) => self.is_current(),
+        };
+        if ours {
+            // Safety: the device's own vertex array, deleted once, its own context current (checked just above, or
+            // a borrowed device between enter and leave, which `ready` checks).
             unsafe { self.gl.delete_vertex_array(self.vao) };
         }
     }

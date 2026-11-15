@@ -7,7 +7,8 @@
 # 1. the project gate and the test suite layout
 # 2. formatting, and clippy on the changed crates and their dependents
 # 3. a change to a crate's sources comes with a change to its tests
-# 4. the fast tier of the changed crates' tests, within budget (scripts/test)
+# 4. the fast tier of the changed crates' tests, within budget (scripts/test), with CUPERTINO_GPU_REQUIRED=1 when a
+#    render node opens (ci/render_node.py), so the tests that need one cannot skip here
 # 5. the release build of every program (scripts/dev/build)
 # 6. the screens of the changed programs (scripts/preview --changed), shown in target/preview/index.html
 set -euo pipefail
@@ -56,6 +57,7 @@ fi
 [ ${#missing[@]} -eq 0 ] || echo "no test change, accepted: $NO_TEST_REASON"
 
 step "tests"
+eval "$(python3 -I ci/render_node.py --export)"
 scripts/test
 
 step "release build"

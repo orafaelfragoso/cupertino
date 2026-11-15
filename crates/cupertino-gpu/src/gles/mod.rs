@@ -226,6 +226,8 @@ pub struct Device {
     driver_key: String,
     /// The textures made and not yet destroyed.
     live: Cell<TextureTally>,
+    /// Whether the driver times the GPU's own work (`GL_EXT_disjoint_timer_query`).
+    timer_query: bool,
 }
 
 /// The textures a device made and has not destroyed, and the bytes of the storage it gave them: a texture's own
@@ -347,6 +349,7 @@ impl Device {
         };
         let driver = driver_key(&vendor, &renderer, &version);
         let float_targets = has("GL_EXT_color_buffer_float");
+        let timer_query = has("GL_EXT_disjoint_timer_query");
         let allocator = if ctx.has_gbm() {
             Some(Allocator::Gbm)
         } else if ctx.can_export() {
@@ -384,6 +387,7 @@ impl Device {
             program_cache: None,
             driver_key: driver,
             live: Cell::new(TextureTally::default()),
+            timer_query,
         };
         if !borrowed {
             // Safety: our own context: its state is ours to set once.
@@ -1505,6 +1509,50 @@ impl Device {
             // Safety: a fence of this device, destroyed once.
             unsafe { self.gl.delete_sync(fence.raw) };
         }
+    }
+
+    /// Whether [`Device::gpu_time`] can time the GPU's own work.
+    pub fn times_gpu_work(&self) -> bool {
+        self.timer_query
+    }
+
+    /// Run `work` (recording and submitting on this device) and time what the GPU spends on it, with a timer query,
+    /// waiting for its result: the GPU's own time, which other work on the machine does not stretch the way it
+    /// stretches the time until the work is finished. None when the driver cannot time its work
+    /// ([`Device::times_gpu_work`]) or the GPU's timing was disrupted on the way (a change of its clock, say).
+    pub fn gpu_time<T>(
+        &self,
+        work: impl FnOnce() -> T,
+    ) -> Result<(T, Option<std::time::Duration>)> {
+        /// The state that says a disruption made the timer's result meaningless since it was last read.
+        const GPU_DISJOINT: u32 = 0x8FBB;
+        self.ready()?;
+        if !self.timer_query {
+            return Ok((work(), None));
+        }
+        // Safety: a current context with the timer query extension; one query, begun once and ended below.
+        let query = unsafe {
+            let query = self.gl.create_query().map_err(Error::Driver)?;
+            // reading the state clears a disruption seen before this work
+            self.gl.get_parameter_i32(GPU_DISJOINT);
+            self.gl.begin_query(glow::TIME_ELAPSED, query);
+            query
+        };
+        let out = work();
+        self.ready()?;
+        // Safety: the context current again; the query begun above, ended and deleted once.
+        let (elapsed, disjoint) = unsafe {
+            self.gl.end_query(glow::TIME_ELAPSED);
+            let elapsed = self.gl.get_query_parameter_u32(query, glow::QUERY_RESULT);
+            let disjoint = self.gl.get_parameter_i32(GPU_DISJOINT) != 0;
+            self.gl.delete_query(query);
+            (elapsed, disjoint)
+        };
+        self.status()?;
+        Ok((
+            out,
+            (!disjoint).then(|| std::time::Duration::from_nanos(u64::from(elapsed))),
+        ))
     }
 
     /// Wait on the CPU for all work submitted so far.

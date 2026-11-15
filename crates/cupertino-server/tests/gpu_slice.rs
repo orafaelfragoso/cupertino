@@ -41,10 +41,16 @@ fn unavailable(why: &str) {
     eprintln!("SKIPPED: {why}; set CUPERTINO_GPU_REQUIRED=1 to fail instead");
 }
 
+/// The most screenshots taken to find the window at full opacity once its opening animation has ended.
+const SETTLE_SHOTS: usize = 10;
+
 struct Session {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     home: tempfile::TempDir,
+    /// The refreshes each synchronous screenshot held the loop through, from the one it was asked in to the one its
+    /// check of the pixels ended in: the slice's frames are not shown then.
+    stalls: Vec<(u64, u64)>,
 }
 
 impl Session {
@@ -69,6 +75,7 @@ impl Session {
             state,
             event_loop,
             home: tempfile::tempdir().unwrap(),
+            stalls: Vec::new(),
         })
     }
 
@@ -149,6 +156,14 @@ impl Session {
         }
     }
 
+    /// The number of the refresh now, as the session's presentation feedback numbers it.
+    fn refresh(&self) -> u64 {
+        cupertino_server::frame::refresh_count(
+            Duration::from(self.state.clock.now()),
+            Some(self.state.refresh_of(0)),
+        )
+    }
+
     fn screenshot(&mut self) -> image::RgbaImage {
         let path = self.home.path().join("shot.png");
         self.state.screenshot_requests.push(path.clone());
@@ -186,18 +201,28 @@ impl Session {
     }
 
     /// Whether the window's content, inside its rounded corners, is one colour in every capture taken while it draws.
+    /// Every screenshot's stall is noted in [`Session::stalls`].
     fn uniform_captures(&mut self, captures: usize) -> Vec<[u8; 4]> {
-        // past the window's opening animation: until the window shows one of the slice's colours at full opacity
+        // past the window's opening animation, with no screenshot while it runs, then until the window shows one of
+        // the slice's colours at full opacity, in a few screenshots at most
         let end = Instant::now() + common::HANG_GUARD;
-        loop {
+        while self.state.windows.iter().all(|w| !w.mapped)
+            || self.state.wm.wants_tick(self.state.now())
+        {
             assert!(
                 Instant::now() < end,
-                "the window never showed a colour of its own at full opacity"
+                "the window's opening animation never ended"
             );
+            self.pump();
+        }
+        let mut shown = false;
+        for _ in 0..SETTLE_SHOTS {
+            for _ in 0..20 {
+                self.pump();
+            }
+            let from = self.refresh();
             let shot = self.screenshot();
-            let Some(window) = self.state.windows.iter().find(|w| w.mapped) else {
-                continue;
-            };
+            let window = self.state.windows.iter().find(|w| w.mapped).unwrap();
             let frame = self.state.wm.window(window.id).unwrap().geometry();
             let px = shot
                 .get_pixel(
@@ -205,13 +230,19 @@ impl Session {
                     (frame.y + frame.h / 2.0) as u32,
                 )
                 .0;
+            self.stalls.push((from, self.refresh()));
             if SLICE_COLOURS
                 .iter()
                 .any(|c| c.iter().zip(px).all(|(a, b)| a.abs_diff(b) <= 1))
             {
+                shown = true;
                 break;
             }
         }
+        assert!(
+            shown,
+            "the window showed no colour of its own at full opacity in {SETTLE_SHOTS} screenshots after it opened"
+        );
         let mut colours = Vec::new();
         for _ in 0..captures {
             for _ in 0..20 {
@@ -221,6 +252,7 @@ impl Session {
                 continue;
             };
             let frame = self.state.wm.window(window.id).unwrap().geometry();
+            let from = self.refresh();
             let shot = self.screenshot();
             const INSET: f64 = 24.0;
             let (x0, y0) = ((frame.x + INSET) as u32, (frame.y + INSET) as u32);
@@ -248,6 +280,7 @@ impl Session {
                 shot.save(&path).unwrap();
                 panic!("a capture of the window {frame:?} is not one colour: {worst} apart from {first:?} ({})", path.display());
             }
+            self.stalls.push((from, self.refresh()));
             colours.push(first);
         }
         colours
@@ -427,9 +460,63 @@ fn the_slice_without_explicit_sync_waits_for_its_own_fence_and_keeps_three_buffe
     assert_eq!(report["syncobj_surfaces_created"], "0");
 }
 
+/// The breaks in the refreshes a slice report numbers (`breaks`) that no screenshot of `stalls` held up: a break is
+/// the capture's when the refreshes from the frame before it to its own meet the refreshes the capture held the loop
+/// through, a refresh either side included (the frame shown just before the stall, and the one the loop shows as it
+/// goes on).
+fn breaks_outside(breaks: &str, stalls: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    if breaks == "none" {
+        return Vec::new();
+    }
+    breaks
+        .split(',')
+        .map(|r| {
+            let (a, b) = r.split_once('-').expect("a break is FROM-TO");
+            (a.parse().unwrap(), b.parse().unwrap())
+        })
+        .filter(|&(a, b): &(u64, u64)| {
+            !stalls
+                .iter()
+                .any(|&(from, to)| a <= to + 1 && b + 1 >= from)
+        })
+        .collect()
+}
+
+/// The refreshes a run of frames with these breaks missed: those skipped, less the frames shown twice in one.
+fn missed(breaks: &[(u64, u64)]) -> i64 {
+    breaks.iter().map(|&(a, b)| b as i64 - a as i64 - 1).sum()
+}
+
+#[test]
+fn a_break_in_the_refreshes_is_left_out_only_when_a_capture_held_the_loop_through_it() {
+    let stalls = [(100, 103), (200, 200)];
+    assert_eq!(breaks_outside("none", &stalls), []);
+    let outside = breaks_outside(
+        "94-96,97-99,103-105,104-106,150-152,152-152,199-201,202-204",
+        &stalls,
+    );
+    assert_eq!(
+        outside,
+        [(94, 96), (150, 152), (152, 152), (202, 204)],
+        "breaks that meet a stall or the refresh either side of it are the capture's"
+    );
+    assert_eq!(
+        missed(&outside),
+        2,
+        "a frame shown twice in a refresh makes up for one shown a refresh late"
+    );
+}
+
+/// The slice draws a frame each refresh for a fixed number of frames, and the session keeps up: over the frames, no
+/// refresh is missed but those the overdraw captures' synchronous screenshots hold the loop through. Real refreshes
+/// are timed, so the test runs with no other beside it (`.config/nextest.toml`).
 #[test]
 fn the_slice_counts_no_missed_refresh_when_the_session_keeps_up_and_every_overdraw_capture_is_flat()
 {
+    /// The frames the slice draws: four seconds at 60 Hz.
+    const FRAMES: u64 = 240;
+    /// The most refreshes missed outside the captures, for a scheduler's hiccup on a loaded machine.
+    const MISSED: i64 = 4;
     let Some(mut s) = Session::start(false) else {
         return;
     };
@@ -438,18 +525,28 @@ fn the_slice_counts_no_missed_refresh_when_the_session_keeps_up_and_every_overdr
         return;
     }
     s.state.fixed_time = None;
-    let (child, report) = s.slice(&["--seconds", "3"]);
+    let (child, report) = s.slice(&["--frames", &FRAMES.to_string()]);
     let mut colours = Vec::new();
     let report = s.until_done(child, &report, |s| {
         if colours.is_empty() && matches!(s.window_buffer(), Some((Some(_), _))) {
             colours = s.uniform_captures(8);
         }
     });
-    eprintln!("{report:#?} captures {colours:?}");
+    let outside = breaks_outside(&report["breaks"], &s.stalls);
+    eprintln!(
+        "{report:#?} captures {colours:?} stalls {:?} breaks outside them {outside:?}",
+        s.stalls
+    );
     assert_eq!(colours.len(), 8);
+    assert_eq!(report["frames"], FRAMES.to_string());
     let presented: u64 = report["presented"].parse().unwrap();
-    let missed: u64 = report["missed"].parse().unwrap();
-    assert!(presented > 60, "{presented} frames presented in 3 s");
-    // the captures themselves hold the loop up for a few refreshes each
-    assert!(missed <= 8 * 6, "{missed} refreshes missed");
+    assert!(
+        presented + 2 >= FRAMES,
+        "{presented} of {FRAMES} frames presented"
+    );
+    let missed = missed(&outside);
+    assert!(
+        missed <= MISSED,
+        "{missed} refreshes missed outside the captures: {outside:?}"
+    );
 }

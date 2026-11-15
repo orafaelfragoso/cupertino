@@ -96,15 +96,17 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 2c. Tests and scripts (`scripts/`, the server's and `cupertino-ui-gpu`'s GPU tests)
 
-- [ ] `scripts/test --slow` and `scripts/done` set `CUPERTINO_GPU_REQUIRED=1` when the machine has a render node, so
+- [x] `scripts/test --slow` and `scripts/done` set `CUPERTINO_GPU_REQUIRED=1` when the machine has a render node, so
       the render-node tests cannot skip there; without one they skip as before.
-- [ ] `gpu_slice`'s missed-refresh count leaves out the frames a synchronous screenshot stalls, and counts by frames,
+- [x] `gpu_slice`'s missed-refresh count leaves out the frames a synchronous screenshot stalls, and counts by frames,
       not a fixed three seconds.
-- [ ] A server test of the search field's open over `ToggleLauncher` (the window 760 points wide with 4 layers,
+- [x] A server test of the search field's open over `ToggleLauncher` (the window 760 points wide with 4 layers,
       `--no-files`, the field opened and closed once first) counts no buffer of the window or its layers while any
       layer still animates, in the way the scope's open test counts its own.
-- [ ] `cupertino-ui-gpu`'s `a_large_windows_damaged_frame_stays_within_the_gpu_budget` times the GPU's own work (a
-      timer query), not wall-clock time with other GPU users in it.
+- [x] `cupertino-ui-gpu`'s `a_large_windows_damaged_frame_stays_within_the_gpu_budget` times the GPU's own work (a
+      timer query), not wall-clock time with other GPU users in it. The damaged frame takes about 0.05 ms on the GPU
+      here. The test's other check, a whole frame recorded and issued within 4 ms (now of the thread's CPU time), still
+      fails: 5.7 to 6.3 ms of CPU time in the dev build, against 2.5 ms when the budget was set; open.
 
 ## Wave 3: the launcher's fold and unfold (`cupertino-launcher`, after 1c)
 

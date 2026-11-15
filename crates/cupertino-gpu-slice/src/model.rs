@@ -81,15 +81,25 @@ impl Reuse {
 /// Missed refreshes counted from presentation feedback: the refreshes between consecutive presented frames of a
 /// window that draws one frame each refresh. A compositor that numbers its refreshes gives the count by its sequence
 /// numbers; one that does not (sequence 0) by the time between presentations over the refresh period.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Gaps {
     last: Option<(u64, u64)>,
     pub presented: u64,
     pub discarded: u64,
     pub missed: u64,
+    /// Each frame the compositor numbered that was not shown at the refresh after the last one's, as the numbers of
+    /// the last one's refresh and of its own (at most [`Gaps::MAX_BREAKS`]): `b - a - 1` refreshes missed, or one
+    /// more frame than refreshes when both are shown at one (-1). A compositor that numbers its refreshes by its
+    /// clock as it draws, not by a display's vblank, shows a frame a little late as a refresh missed and the next as
+    /// one shown twice; over a run of frames the breaks sum to the refreshes it really missed, and a reader can leave
+    /// out those it caused itself.
+    pub breaks: Vec<(u64, u64)>,
 }
 
 impl Gaps {
+    /// The most breaks kept; later ones still count in `missed`.
+    pub const MAX_BREAKS: usize = 4096;
+
     /// A frame shown at refresh `seq`, at `time_ns`, on an output refreshing every `refresh_ns` (0 when unknown).
     pub fn presented(&mut self, seq: u64, time_ns: u64, refresh_ns: u64) {
         self.presented += 1;
@@ -102,6 +112,10 @@ impl Gaps {
                     .map_or(0, |periods| periods.saturating_sub(1))
             };
             self.missed += skipped;
+            let numbered = seq != 0 && last_seq != 0;
+            if numbered && seq != last_seq + 1 && self.breaks.len() < Self::MAX_BREAKS {
+                self.breaks.push((last_seq, seq));
+            }
         }
         self.last = Some((seq, time_ns));
     }
@@ -162,10 +176,15 @@ mod tests {
     #[test]
     fn missed_refreshes_are_the_gaps_in_the_presented_sequence() {
         let mut gaps = Gaps::default();
-        for seq in [100, 101, 102, 105, 106, 108] {
+        for seq in [100, 101, 102, 105, 106, 108, 108, 109] {
             gaps.presented(seq, 0, 16_666_667);
         }
-        assert_eq!((gaps.presented, gaps.missed), (6, 3));
+        assert_eq!((gaps.presented, gaps.missed), (8, 3));
+        assert_eq!(
+            gaps.breaks,
+            [(102, 105), (106, 108), (108, 108)],
+            "the refreshes missed and the one shown twice"
+        );
     }
 
     #[test]
@@ -177,6 +196,10 @@ mod tests {
             gaps.presented(0, period * refresh + 300_000, refresh);
         }
         assert_eq!(gaps.missed, 1);
+        assert!(
+            gaps.breaks.is_empty(),
+            "unnumbered refreshes have no breaks"
+        );
         gaps.discarded();
         assert_eq!(gaps.discarded, 1);
     }

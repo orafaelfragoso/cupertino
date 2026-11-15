@@ -1,0 +1,122 @@
+# Plan: finishing the GPU rendering plan
+
+What is left of `docs/plans/gpu-rendering.md` once the owner's checks are deferred and steps 12 and 13 are on hold.
+Each task is one change with its own tests, in the crates it names; tasks that share a crate run one after the other.
+The boxes here are ticked together with their items in the GPU plan.
+
+## Rules
+
+- One task per implementer, about an hour of work. Each implementer runs the tests of its own change only, plus
+  `cargo fmt`, clippy on its crates, `ci/gate.py` and `ci/test_suite.py --check`; no benchmark, no `scripts/done`, no
+  slow tier.
+- At most three implementers at a time, never two in the same crate.
+- A change that adds a test tier clause to `.config/nextest.toml` adds it as the first clause of both filters, and
+  `scripts/test -p cupertino-ui-abi` proves the file still parses.
+- No `sleep` or `pgrep` loops waiting on another process. A long command runs in the background, and its notice is
+  waited for.
+- The full gates (`scripts/done`, `scripts/test --slow`, the slow tier with `CUPERTINO_GPU_REQUIRED=1`) and every
+  benchmark run once, in the last wave, on merged `main`.
+
+## Wave 1: independent pieces (in parallel)
+
+### 1a. 10 bits by default (`cupertino-server`, `cupertino-defaults`)
+
+- [ ] `Depth::from_setting` gives 10 bits when the key is absent; `"output_depth": 8` keeps 8. A plane without a
+      10-bit format still falls back to 8 bits.
+- [ ] The settings table in `cupertino-defaults`, `docs/src/displays-and-gpus.md` and the GPU plan's step 11 item
+      say so.
+- [ ] Tests: absent key gives 10 bits, `8` gives 8, and a plane offering only 8-bit formats gets 8 bits.
+
+### 1b. Docs sweep (`docs/`, crate READMEs)
+
+- [ ] `docs/src/architecture.md` names `cupertino-gpu`, `cupertino-gpu-shaders` and `cupertino-gpu-slice` in its
+      layer table.
+- [ ] `docs/src/gpu-rendering.md` no longer says CI runs with `CUPERTINO_RENDERER=gpu` (or CI does, see 2c). Its
+      section on allocation names the fallback when there is no allocator.
+- [ ] The project's term is "control panel" on the lines the GPU work added.
+- [ ] Each page the GPU plan's steps changed (`apps-on-kit.md`, `kit-getting-started.md`, `displays-and-gpus.md`,
+      crate READMEs) matches the code. This ticks the plan's documentation item.
+
+### 1c. The search field's open on the compositor's clock (`cupertino-launcher`)
+
+- [ ] The handed open, and the caret hold with it, ends on the layer's `finished` or `settled` event, not on the
+      launcher's own timer. This is the likely source of the 4 stray buffers: caret fade frames committed while the
+      compositor is still at rest.
+- [ ] The caret blinks through the open. It becomes a layer of its own whose opacity goes through samples of the
+      panel's blink, so a blink makes no buffer.
+- [ ] `Model::hand_field_opens` on. Against the server, the real process commits no buffer of its window or its
+      layers while the open is part way, in 3 runs
+      (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over
+      `ToggleLauncher`). Its warm-up wait reads the launcher's renderer record as `gpu`, instead of waiting for 500 ms
+      of quiet.
+
+## Wave 2: stability fixes from the review (in parallel with wave 1's launcher chain)
+
+### 2a. Compositor (`cupertino-server`)
+
+- [ ] Content blur cropped to the visible output plus its reach and capped in size; past the cap the layer draws
+      sharp. Test: a 1x1 buffer with a 20000 x 20000 destination allocates within the cap.
+- [ ] A layer is always clipped to its window, with or without `set_masks_to_bounds`, and with client-side
+      decorations too. Test: a layer placed outside its window draws nothing there.
+- [ ] Layer requests validated: the gaps the review found, each rejected with a protocol error and tested.
+- [ ] A dismissed popup's linger ends on a timer of its own, so the frame that removes it comes without other damage.
+- [ ] The late frame start counts the GPU's time: the latch is fed the time the render fence signals (or a kept
+      estimate from lateness), and backs off for longer after repeated misses. Test: a frame cheap on the CPU but
+      heavy on the GPU gets no late start.
+
+### 2b. GPU device and toolkit (`cupertino-gpu`, `cupertino-ui-wayland`, `cupertino-ui-gpu`, `cupertino-files`)
+
+- [ ] Device loss releases every image and buffer object (only the GL deletes are skipped), and nothing is deleted
+      with another context current. Test: after a loss, `Device::live_textures()` is 0 and the buffer objects are
+      freed.
+- [ ] Without explicit sync, a GPU window never stops drawing for good: the state the review traced recovers. Test:
+      the stall it describes, forced, ends in a presented frame.
+- [ ] `take_turn` tells "cannot be held" from "timed out", and `make_ahead` gives up at once on the former. Test: an
+      unwritable cache directory returns within one poll.
+- [ ] The client's warm-up thread is stopped and joined at exit, as the server's is.
+- [ ] The Files grid's idle work resumes where its last slice stopped, so a folder of long names ends its idle work.
+      Test: on a clock that gives each slice too little time for the whole walk, the work still ends.
+
+### 2c. CI (`ci/`, `.github/`)
+
+- [ ] The render-node tests are required where CI has a render node (`CUPERTINO_GPU_REQUIRED=1` on that job), and
+      skipped and reported as skipped elsewhere.
+
+## Wave 3: the launcher's fold and unfold (`cupertino-launcher`, after 1c)
+
+### 3a. Row and body as layers
+
+- [ ] The query row and the body are layers of their own instead of the one content layer. At rest they are the
+      panel's pixels within 1 of 255 (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`
+      over the browser, the files scope and the field).
+- [ ] The glass's place, size and corner go through samples of the panel's own values on the shape spring, with the
+      corner held to half the height. The body's opacity goes through samples of its own curve. The row's frame is
+      drawn again once, at the header's switch, which is the only buffer the fold makes.
+
+### 3b. The edge follows the glass
+
+- [ ] The panel strokes its own edge along the glass's continuous outline, using the shared distance of
+      `cupertino-glass` and `ui_fill`, instead of circular arcs. This applies under Reduce Motion and without the
+      capability too. The goldens that change at a scope's corners are re-recorded, named with their pixel counts,
+      and shown as before and after pairs at 1.5 and 2 in both appearances.
+- [ ] The scopes' rest, open and close use the compositor's edge (`layers::glass_edge`, within 4 of 255 of the
+      panel's along every side and corner), and the scope's edge layer goes.
+
+### 3c. The fold and unfold on the compositor's clock
+
+- [ ] The fold and unfold carry the row, the body, the glass and the edge.
+- [ ] The same-moment test, as the open's (`open_moments` over `Escape` from a scope, and the scope's shortcut from
+      the field).
+- [ ] The real process against the server: one buffer of the row's layer at the switch, and none other.
+- [ ] The GPU plan's open test and mid-way look items, which waited on these, ticked.
+
+## Wave 4: the lead's gates and measurements (merged `main`)
+
+- [ ] `scripts/done`, `scripts/test --slow` and the slow tier with `CUPERTINO_GPU_REQUIRED=1`.
+- [ ] The benchmarks, run once, each of the GPU plan's "measured at the end" figures recorded where it stands:
+  - Files' scroll and layout (step 4);
+  - the control panel's opening frames and the memory per process (step 7);
+  - the window drag over glass, its p99 taken over a span long enough to show the once-a-second driver stall as
+    such (step 2).
+  A budget still missed is recorded with its figures and its cause, not hidden.
+- [ ] Packages built, and the owner's before and after sheet for the fold and unfold.

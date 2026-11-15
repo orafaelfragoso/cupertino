@@ -44,7 +44,7 @@ Baseline:
 - [x] Each scenario run five times; the run-to-run spread of every figure recorded as its noise.
 - [x] One measured table for Files replacing the two figures in the docs (full repaint at 3840 x 2160, two-finger scroll
       p99 at scales 1, 1.5 and 2).
-- [ ] Presentation-time branch and plane assignment on the target driver recorded. BLOCKED (owner action): it needs
+- [ ] Presentation-time branch and plane assignment on the target driver recorded. DEFERRED by the owner (2026-11-15): it needs
       the session server on the display ("Measurements").
 
 Probes (small programs outside the product; results recorded here):
@@ -84,8 +84,8 @@ One owner review, one re-recording of the goldens.
       to GPU pipelines changes no pixel.
 - [x] Compositor dithering from the shared definition (blur, material, glass and shadow outputs), tested against the
       vectors. On from the look freeze (see "The definitions and where the renderers disagree").
-- [ ] Before/after sheet of every golden at scales 1, 1.5 and 2, reviewed by the owner. The sheet is made (see "The
-      look freeze"); the owner's review is pending.
+- [x] Before/after sheet of every golden at scales 1, 1.5 and 2, reviewed by the owner. The sheet is made (see "The
+      look freeze"); the owner approved it on 2026-11-15.
 - [x] One re-recording of every golden.
 
 ### The definitions and where the renderers disagree
@@ -189,9 +189,9 @@ and an inside border at scales 1, 1.5 and 2 and compares every pixel with the sh
 
 Gate:
 
-- [ ] The owner approved the look, the goldens are re-recorded, and no bench scenario's client CPU p99 is more than
+- [x] The owner approved the look, the goldens are re-recorded, and no bench scenario's client CPU p99 is more than
       10% above its baseline. The goldens are re-recorded and the bench holds (see "Step 1: the look freeze" under
-      Measurements); the owner's review of the before/after sheet is pending.
+      Measurements); the owner approved the before/after sheet on 2026-11-15.
 
 ## Step 2: compositor wins
 
@@ -228,13 +228,13 @@ The risk is the handoff, so it is proven first with the smallest renderer possib
 - [x] The compositor imports the client's buffers with the driver's default modifier (recorded).
 - [x] Probe: the slice on llvmpipe in the goldens image, allocating by texture export; result recorded.
 - [ ] Runs in a headless session and in the live session on the target machine. Headless: done
-      (`crates/cupertino-server/tests/gpu_slice.rs`). Live: BLOCKED (owner action), one command ("Measurements",
+      (`crates/cupertino-server/tests/gpu_slice.rs`). Live: DEFERRED by the owner (2026-11-15), one command ("Measurements",
       "Step 3").
 
 Gate:
 
 - [ ] One hour in the live session on the target machine beside a `wl_shm` control client of the same size: no more
-      missed refreshes than the control, and every overdraw capture uniform. BLOCKED (owner action): the command is
+      missed refreshes than the control, and every overdraw capture uniform. DEFERRED by the owner (2026-11-15): the command is
       under "Measurements", "Step 3".
 - [x] The slice's offscreen loop of 10 million frames meets the fence budget.
 
@@ -607,7 +607,7 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
       size in points (its dmabuf's viewport had taken the frame's pixel size, so the button faces showed 1.5 and 2 times
       too large, `GpuFrame::preferred`), the launcher at rest shot with every process on the CPU and on the GPU is the
       same within 1/255 at 1.5 and 2 in both appearances (2699 to 4668 pixels a shot at 1, none past it).
-- [ ] A week of daily use on the target machine without a fallback. BLOCKED (owner action): a week of use. A
+- [ ] A week of daily use on the target machine without a fallback. DEFERRED by the owner (2026-11-15): a week of use. A
       fallback is logged (`renderer: fell back to the CPU (<scope>): <why>`) and recorded as the diagnostic event
       `toolkit.renderer.fallback` in the user's event store (kept a fortnight); `cupertino diagnose events --since 7d`
       lists any, and `cupertino-diagnose`'s `gpu.client_renderers` names a process on the CPU after a failure. Purges
@@ -652,7 +652,7 @@ Gate:
     `programs::the_renderers_programs_made_ahead_are_all_loaded_and_none_compiled` (`cupertino-ui-gpu`),
     `gpu_presenter::the_presenter_finds_every_program_the_server_made_at_its_start_and_compiles_none` and
     `gpu_presenter::the_server_shows_its_first_frames_while_it_still_makes_the_toolkit_s_programs` (`cupertino-server`).
-    OWNER DECISION: implemented and on; keep it on or turn it off by default. The added memory per process after it:
+    Decided by the owner (2026-11-15): on by default. The added memory per process after it:
     measured at the end.
   - GPU memory per GPU window, open and closed (`nvidia-smi`, Files with a second window opened and closed twice):
     51, 116, 84, 116, 84 MiB. A window adds 65 MiB; closed, 33 MiB stay and serve the next window, never growing.
@@ -1062,8 +1062,8 @@ Gate:
       launcher's close holds (no buffer of its window or layers), and so does a scope's open from hidden (no buffer
       of its window or layers while the open is part way,
       `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the search
-      field's open with its mode buttons and the fold and unfold wait on their split items above. The review by eye is
-      pending the owner's review of the sheet.
+      field's open with its mode buttons and the fold and unfold wait on their split items above. The owner approved the
+      sheet by eye on 2026-11-15; the pairs still missing are reviewed by the lead against the approved ones.
 - [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
       compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
@@ -1120,16 +1120,19 @@ Gate:
 - [x] 10-bit primary plane (`Abgr2101010`) behind `output_depth` in `compositor.json`, 8 bits by default, falling back
       to 8 bits on a plane without a 10-bit format; capture paths never read the plane and stay 8-bit
       (`output_depth::tests`).
-- [ ] 10 bits by default if the step 0 probe showed a visible gain. OWNER DECISION: the probe's result decides
-      ("Measurements", "Turning 10 bits on").
+- [ ] 10 bits by default. Decided by the owner (2026-11-15): 10 bits on the target display, without waiting on the
+      step 0 probe ("Measurements", "Turning 10 bits on").
 
 Gate:
 
 - [ ] In the live session over an hour: input-to-flip latency below the baseline and no more missed flips than the
-      baseline, from the DRM backend's log; the 10-bit decision recorded. BLOCKED (owner action): it needs the
+      baseline, from the DRM backend's log; the 10-bit decision recorded. DEFERRED by the owner (2026-11-15): it needs the
       desktop session; the one command is under "Measurements", "The step 11 gate".
 
 ## Step 12: Vulkan backend for the toolkit (gated)
+
+On hold (owner, 2026-11-15): stability across the whole desktop comes first. Steps 12 and 13 are not started until
+the owner lifts the hold, whatever the benchmarks show.
 
 - [ ] Entry: a named budget the GLES backend cannot meet, or a driver problem Vulkan avoids, recorded here.
 - [ ] The `wgpu` decision re-checked against the cost of a second hand-kept backend.
@@ -1141,6 +1144,8 @@ Gate:
 
 ## Step 13: Vulkan renderer for the compositor (gated)
 
+On hold, as step 12.
+
 - [ ] Entry: as step 12, for the compositor.
 - [ ] Smithay's renderer traits implemented for Vulkan; `DrmCompositor` and damage tracking unchanged.
 - [ ] Material, glass and mesh passes on `cupertino-gpu`.
@@ -1148,6 +1153,20 @@ Gate:
 Gate:
 
 - [ ] Goldens, GPU reset tests and the daily-driver checks pass on Vulkan, and the entry budget met.
+
+## Owner checks (deferred)
+
+The checks that need the owner's display and session to themselves. Deferred by the owner on 2026-11-15 (the desktop
+runs smoothly in daily use); each is ready to run as written under "Measurements", and none blocks other work:
+
+1. Presentation-time branch and plane assignment (step 0): a five-minute traced session, then the `drm_trace` lines
+   of the server log ("Presentation-time branch and plane assignment on the target driver").
+2. The 10-bit gradient (step 0): `tools/gpu-probes/depth.sh` from a text console, noting whether the 10-bit half of
+   each band is smoother ("10-bit gradient on the primary plane"). Informational: the owner chose 10 bits.
+3. The vertical slice for an hour beside a shared-memory control (step 3): `cupertino-gpu-slice --minutes 60
+   --control-shm` ("The live session and the one-hour gate").
+4. A week without a fallback to the CPU (step 7): `cupertino diagnose events --since 7d` lists none.
+5. Output timing (step 11): two traced one-hour sessions and `scripts/dev/drm-trace-summary` ("The step 11 gate").
 
 ## Documentation
 
@@ -1359,7 +1378,7 @@ layout about 3 ms each): above 4 ms, so step 4 gains the incremental view and la
 | Client CPU after the look freeze: no scenario's client p99 more than 10% above its baseline | client p99 spreads: 1–10% for resize, Control Center, the launcher and the scrolls; 9–29% for the sub-millisecond drag and hover frames | revised: 10% or the recorded spread, whichever is larger, since 10% of a 0.6 ms frame is inside its noise |
 | Fence overhead under 1 byte a frame | -0.25 bytes a frame | confirmed |
 | Idle desktop: no frames, no GPU work; listed timers only | one menu bar frame and its composite a minute (the clock); wakeups as listed below | revised: the clock's one frame a minute is named as the exception |
-| Pointer motion to screen below the baseline; cursor on the cursor plane | BLOCKED (owner action): the traced live session gives the baseline | confirmed as written; its baseline comes with the owner's trace |
+| Pointer motion to screen below the baseline; cursor on the cursor plane | DEFERRED by the owner (2026-11-15): the traced live session gives the baseline | confirmed as written; its baseline comes with the owner's trace |
 
 **Context, first program, later programs, teardown** (`gpu-probes context --runs 5`, median of five fresh processes,
 spread in brackets; private memory is clean + dirty, after each stage):
@@ -1412,14 +1431,14 @@ the same on the EGL device platform and with the driver's threaded optimisations
 frame and must show whether presenting stops it; until then a GPU toolkit process that draws without presenting
 (offscreen work) is assumed to grow.
 
-**10-bit gradient on the primary plane.** BLOCKED (owner action): it needs the display to itself. Tested as far as it
+**10-bit gradient on the primary plane.** DEFERRED by the owner (2026-11-15): it needs the display to itself. Tested as far as it
 goes without the display (`gpu-probes depth --dry-run`): the primary plane of the connected DisplayPort output takes
 `AB30` and `XR24`, both 3840 x 2160 framebuffers are made, the connector offers `dithering mode` (auto now; the probe
 sets off) and no `max bpc`; the CRTC has 1024-entry gamma and degamma tables. To run it: log out, switch to a text
 console (Ctrl+Alt+F3), log in, and from the checkout run `tools/gpu-probes/depth.sh`; then note for each band whether
 the 10-bit half is smoother than the 8-bit half, beside `target/gpu-probes/depth.jsonl`.
 
-**Presentation-time branch and plane assignment on the target driver.** BLOCKED (owner restart): it needs the session
+**Presentation-time branch and plane assignment on the target driver.** DEFERRED by the owner (2026-11-15): it needs the session
 server on the display. With a build that has the trace installed: log out, switch to a text console, log in, run
 `CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=300 cupertino-session`, use the desktop for a few minutes (move and
 resize a window, scroll in Files, play a video full screen), let it end, then
@@ -1552,7 +1571,7 @@ surface (120 shared-memory frames). With `/dev/udmabuf` passed into the same ima
 /dev/udmabuf`), texture export works: 120 of 120 dmabuf frames, linear, imported. So the dmabuf presenter can run
 in CI on llvmpipe only where the runner gives the container `/dev/udmabuf`.
 
-**The live session and the one-hour gate.** BLOCKED (owner action): it needs the desktop session. From a terminal in
+**The live session and the one-hour gate.** DEFERRED by the owner (2026-11-15): it needs the desktop session. From a terminal in
 the session, in the checkout:
 
 ```sh
@@ -2312,7 +2331,7 @@ those back, so they are the same at either depth
 to an 8-bit format). A display on a second card shows the render
 GPU's 8-bit copy whatever its plane's depth.
 
-**The step 11 gate.** BLOCKED (owner action): it needs the desktop session, two hours of it. Install a package built
+**The step 11 gate.** DEFERRED by the owner (2026-11-15): it needs the desktop session, two hours of it. Install a package built
 from `main` (`scripts/package-local.sh`, then `pacman -U`), log out, switch to a text console (Ctrl+Alt+F3), log in,
 and from the checkout run:
 

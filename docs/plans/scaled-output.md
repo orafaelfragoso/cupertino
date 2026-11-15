@@ -81,16 +81,16 @@ across a pixel to leave.
 
 ## Checklist
 
-- [ ] `fractional_scale_mode` read from `compositor.json`, per display, `"supersample"` by default.
-- [ ] Surfaces on a supersampled output are told the render scale (fractional and buffer scale); the cursor surface
+- [x] `fractional_scale_mode` read from `compositor.json`, per display, `"supersample"` by default.
+- [x] Surfaces on a supersampled output are told the render scale (fractional and buffer scale); the cursor surface
       the output's own.
-- [ ] The scene composed at the render scale into the output's offscreen frame through its own damage tracker; the
+- [x] The scene composed at the render scale into the output's offscreen frame through its own damage tracker; the
       pointer, notices and fades composed at the output's scale above it.
-- [ ] The filter's definition with its frequency and step tests against plain bilinear; the shader tested against it.
-- [ ] The final pass on every target: the display (cursor plane kept), another card's copy, the headless and nested
+- [x] The filter's definition with its frequency and step tests against plain bilinear; the shader tested against it.
+- [x] The final pass on every target: the display (cursor plane kept), another card's copy, the headless and nested
       outputs, screenshots and screen capture.
-- [ ] Damage mapped to the panel widened by the footprint; no frame without damage.
-- [ ] 10-bit offscreen frame and the final pass dithered at the output's depth.
-- [ ] Declared-opaque transparent rows drawn black under `"direct"`.
-- [ ] Docs: displays page, GPU rendering design (the texture program by name), the settings table.
+- [x] Damage mapped to the panel widened by the footprint; no frame without damage.
+- [x] 10-bit offscreen frame and the final pass dithered at the output's depth.
+- [x] Declared-opaque transparent rows drawn black under `"direct"`.
+- [x] Docs: displays page, GPU rendering design (the texture program by name), the settings table.
 - [ ] Measured on the target display: frame time at 1.5 supersampled against direct (lead).

@@ -10,7 +10,7 @@
 
 use cupertino_scene::{Clip, ContentBlur, SceneKind, SurfaceRole, VibrantBlend};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Physical, Point, Rectangle};
 
 use super::compose::{corner_style, logical_rect, output_rect, Piece, Tree};
 use super::scene::{rrect_item, SceneParams};
@@ -302,8 +302,13 @@ pub fn layer_pieces(
             place.origin.x + l.x - c.x + mc.x,
             place.origin.y + l.y - c.y + mc.y,
         ));
-        // inside the window always; masked, inside its own rounded bounds too, and nothing when they lie outside it
+        let drawn: Point<i32, Physical> = origin.to_physical_precise_round(p.scale);
+        // inside the window always; masked, inside its own rounded bounds too, and nothing when they lie outside it.
+        // The bounds move with the content onto the device pixels, as one picture, as a window's content and the
+        // clips inside it do
         let clip = if l.masks {
+            let snap = drawn.to_f64().to_logical(p.scale) - origin;
+            let shown = Rectangle::new(shown.loc + snap, shown.size);
             match masked_clip(shown, radius * s_min, place.clip) {
                 Some(clip) => clip,
                 None => continue,
@@ -317,7 +322,7 @@ pub fn layer_pieces(
             surface: l.surface.clone(),
             kind: place.kind,
             role,
-            origin: origin.to_physical_precise_round(p.scale),
+            origin: drawn,
             pivot: mc.to_physical_precise_round(p.scale),
             scale: (l.scale * place.scale.0, l.scale * place.scale.1),
             opacity,

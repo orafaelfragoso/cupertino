@@ -3,40 +3,36 @@
 //! While the panel rests (and through a close the compositor runs), and the window system shows surface layers, its
 //! parts draw into layers of their own ([`PanelView::layered`]) with the same pixels as when they paint in place:
 //!
-//! * the enclosure's glass, a layer with the glass in its look and nothing of its own ([`GLASS_LAYER`]);
-//! * the search field's thin dark edge just outside the enclosure, in a layer around it whose centre is the point the
-//!   enclosure grows about, so the layer's scale grows the edge with the glass ([`EDGE_LAYER`]); a scope's edge is the
-//!   compositor's, along its glass ([`compositor_edge`]);
+//! * the enclosure's glass, a layer with the glass in its look and nothing of its own ([`GLASS_LAYER`]), which carries
+//!   the thin dark edge just outside the enclosure, drawn by the compositor along the glass ([`glass_edge`]);
 //! * the content, unscaled, in two layers: the query row ([`ROW_LAYER`]) and the body below it ([`BODY_LAYER`]),
 //!   which a fold fades on its own curve while the row does not, both from the content's top ([`ContentPart`]);
-//! * each mode button's glass, in the field's glass group, and its face (its edge, focus ring and symbol) in a layer
-//!   around it ([`button_glass_layer`], [`button_face_layer`]).
+//! * the browser's view options button at the row's end, in a layer around it ([`OPTIONS_LAYER`]), which keeps to
+//!   the row's end as the enclosure's width changes, where the rest of the row keeps to its start;
+//! * each mode button's glass, in the field's glass group, and its face (its focus ring and symbol) in a layer around
+//!   it ([`button_glass_layer`], [`button_face_layer`]).
 //!
 //! A layer that draws strokes or content starts on whole device pixels at every quarter-step backing scale
 //! ([`LAYER_GRID`]), as the window's frame does, so its pixels are the ones the window would draw. The glass layers
 //! carry no pixels of their own: their glass is drawn by the compositor in their bounds, wherever those lie.
 //!
-//! While the compositor runs the search field's open with its mode buttons ([`field_open_changes`]) the shapes join and
-//! part every frame, which a fixed frame of an edge cannot follow: the field's glass layer then carries the edge in its
-//! look ([`glass_edge`]), which the compositor draws round each shape of the glass group cut by the others, as the panel
-//! cuts its own edges, and neither the edge layer nor the buttons' faces draw one.
-//!
-//! While the compositor runs a scope's fold into the search field ([`fold_changes`]) the shape changes from a scope's
-//! to the field's capsule, which a fixed frame of an edge cannot follow either: the glass carries the edge then too.
-//! A scope's glass carries it at rest, through its open from hidden and through its close as well: the panel strokes
-//! its own edge along the glass's continuous outline, as the compositor draws it ([`super::edge_outside`]).
+//! The edge is the compositor's at rest and through every transition the compositor runs, as no fixed frame of an
+//! edge can follow them: while the search field opens with its mode buttons ([`field_open_changes`]) the shapes join
+//! and part every frame, and the compositor draws the edge round each shape of the glass group cut by the others, as
+//! the panel cuts its own edges; while a scope folds into the search field or the field unfolds into a scope
+//! ([`fold_changes`]) the outline changes between a scope's continuous corners and the field's capsule. The panel
+//! strokes its own edge along the glass's continuous outline, as the compositor draws it ([`super::edge_outside`]).
 //!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
-//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it (the edge layer's)
-//! or follows it (the compositor's), the content and the edge layer blur to the close's blur, everything fades out,
-//! and the mode buttons move out with the group.
+//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, its edge following it, sharp, the content
+//! blurs to the close's blur, everything fades out, and the mode buttons move out with the group.
 
 use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
     edge_alpha, edge_outside, enclosure_radius, enclosure_rect, mode_rects_of, Input, EDGE_WIDTH,
 };
 use crate::motion::{
-    Frame, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_DAMPING, OPEN_FADE, OPEN_RESPONSE,
+    Frame, Header, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_DAMPING, OPEN_FADE, OPEN_RESPONSE,
 };
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
@@ -50,11 +46,12 @@ use cupertino_kit::platform::{
 use std::cell::Cell;
 use std::sync::Arc;
 
-/// The keys of the panel's layers: the enclosure's glass, its edge, and its content's query row and body.
+/// The keys of the panel's layers: the enclosure's glass, and its content's query row and body.
 pub const GLASS_LAYER: u64 = 1;
-pub const EDGE_LAYER: u64 = 2;
 pub const ROW_LAYER: u64 = 3;
 pub const BODY_LAYER: u64 = 4;
+/// The key of the layer of the browser's view options button, at the query row's end.
+pub const OPTIONS_LAYER: u64 = 5;
 
 /// The key of the layer of mode button `index`'s glass.
 pub fn button_glass_layer(index: usize) -> u64 {
@@ -70,16 +67,12 @@ pub fn button_face_layer(index: usize) -> u64 {
 /// backing scale.
 pub const LAYER_GRID: f64 = 4.0;
 
-/// Room around an edge for its stroke and its antialiasing, and around a button for its focus ring.
+/// Room around a button for its edge's stroke and its antialiasing, and for its focus ring.
 const EDGE_ROOM: f64 = EDGE_WIDTH + 1.5;
 const FOCUS_ROOM: f64 = 4.0;
 
 /// The close's blur as the deviation of a Gaussian, in points: half the blur's radius.
 pub const CLOSE_DEVIATION: f64 = CLOSE_BLUR / 2.0;
-
-/// How many values the edge's blur is carried through over the close: its deviation in the edge layer's points is
-/// the close's blur over the layer's scale, which no single curve draws.
-pub const EDGE_BLUR_SAMPLES: usize = 25;
 
 fn grid_floor(v: f64) -> f64 {
     (v / LAYER_GRID).floor() * LAYER_GRID
@@ -87,13 +80,6 @@ fn grid_floor(v: f64) -> f64 {
 
 fn grid_ceil(v: f64) -> f64 {
     (v / LAYER_GRID).ceil() * LAYER_GRID
-}
-
-/// The smallest rect on the grid that holds `rect` and whose centre is `pivot`.
-fn centred_on(rect: Rect, pivot: Point) -> Rect {
-    let x = grid_floor(pivot.x - (pivot.x - rect.x()).max(rect.max_x() - pivot.x));
-    let y = grid_floor(pivot.y - (pivot.y - rect.y()).max(rect.max_y() - pivot.y));
-    Rect::new(x, y, 2.0 * (pivot.x - x), 2.0 * (pivot.y - y))
 }
 
 /// The smallest rect on the grid that holds `rect`.
@@ -104,21 +90,6 @@ fn on_grid(rect: Rect) -> Rect {
         y,
         grid_ceil(rect.max_x()) - x,
         grid_ceil(rect.max_y()) - y,
-    )
-}
-
-/// The point the enclosure grows about as `frame` presents it in a window `extent` large: the window's middle across
-/// (the group is placed about it) and the enclosure's middle down.
-pub fn pivot(extent: Size, frame: &Frame) -> Point {
-    let rect = enclosure_rect(extent, frame);
-    Point::new(extent.width / 2.0, rect.y() + rect.height() / 2.0)
-}
-
-/// The enclosure's edge layer in the window: around the edge, centred on [`pivot`].
-pub fn edge_layer_rect(extent: Size, frame: &Frame) -> Rect {
-    centred_on(
-        enclosure_rect(extent, frame).outset(EDGE_ROOM),
-        pivot(extent, frame),
     )
 }
 
@@ -164,14 +135,6 @@ pub fn glass_edge(dark: bool) -> LayerEdge {
         width: EDGE_WIDTH,
         color: [0.0, 0.0, 0.0, edge_alpha(dark, true)],
     }
-}
-
-/// Whether the compositor draws the edge of the panel `frame` presents along its glass, in place of the edge layer, at
-/// rest, through the open from hidden and through the close: a scope's, one shape without mode buttons, whose edge the
-/// panel strokes along the glass's continuous outline as the compositor does. The search field's edge stays a layer of
-/// its own there, scaled and blurred with the enclosure as the field closes.
-pub fn compositor_edge(frame: &Frame) -> bool {
-    frame.header.is_scope() && frame.modes.count == 0
 }
 
 /// A layer that carries only the glass of its look: it draws nothing, the compositor draws the glass in its bounds.
@@ -367,15 +330,157 @@ impl<M: 'static> Widget<M> for SymbolBox<M> {
     }
 }
 
+/// The browser's view options button in the content `width` points wide, in the content's points: at the query row's
+/// end, centred down it.
+pub fn options_button(width: f64) -> Rect {
+    let side = super::browse::OPTIONS_SIZE;
+    Rect::new(
+        width - super::SIDE_PADDING - side,
+        (super::COLLAPSED_HEIGHT - side) / 2.0,
+        side,
+        side,
+    )
+}
+
+/// How far the view options button's layer reaches in from the row's end, in points: around the button and its focus
+/// ring, on the grid, so the button keeps one place in it whatever the row's width.
+const OPTIONS_REACH: f64 = 56.0;
+
+/// The layer of the view options button in the content `width` points wide, in the content's points: around the
+/// button and its focus ring, a whole number of grid steps in from the row's end and down from its top.
+pub fn options_layer_rect(width: f64) -> Rect {
+    let button = options_button(width);
+    let top = grid_floor(button.y() - FOCUS_ROOM);
+    Rect::new(
+        width - OPTIONS_REACH,
+        top,
+        OPTIONS_REACH,
+        grid_ceil(button.max_y() + FOCUS_ROOM) - top,
+    )
+}
+
+/// What is placed at `rect` in its parent, its children in the same coordinates, drawn at `alpha` (as one layer when
+/// under 1); a compositor layer of its own (`key`) when `layer`; on whole device pixels as one picture when
+/// `on_pixels`.
+pub struct PlacedLayer<M> {
+    pub key: u64,
+    pub layer: bool,
+    pub rect: Rect,
+    pub alpha: f64,
+    pub on_pixels: bool,
+    pub children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for PlacedLayer<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        placed(self.rect)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.rect != old.rect || self.on_pixels != old.on_pixels {
+            Change::Layout
+        } else if (self.key, self.layer, self.alpha) != (old.key, old.layer, old.alpha) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        leaf(self.rect)
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if self.alpha < 1.0 {
+            cx.set_group(self.alpha.clamp(0.0, 1.0) as f32, Vec::new());
+        }
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn on_pixels(&self, _: &()) -> bool {
+        self.on_pixels
+    }
+
+    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        self.layer.then_some(SurfaceLayerMark {
+            key: self.key,
+            look: SurfaceLayerLook::default(),
+        })
+    }
+}
+
+/// Room of `size` in a row, which draws nothing: where a part placed apart from the row stands in it.
+pub struct Room(pub Size);
+
+impl<M: 'static> Widget<M> for Room {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.0.width),
+            height: SizeSpec::Fixed(self.0.height),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if self.0 != old.0 {
+            Change::Layout
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.0,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// A part of the panel's content, `size` large at the content's top left, its children one above the other from `top`
-/// down, across its width; a compositor layer of its own (`key`) when `layer`. The body's part starts at the content's
-/// top as the row's does, with room for the row above its children, so both lie on the device pixels the content
-/// lies on.
+/// down, across its width; a compositor layer of its own (`key`) when `layer`, cut to its shape as shown when `masks`
+/// holds the corner radius it starts with. The body's part starts at the content's top as the row's does, with room
+/// for the row above its children, so both lie on the device pixels the content lies on.
 pub struct ContentPart<M> {
     pub key: u64,
     pub layer: bool,
     pub size: Size,
     pub top: f64,
+    pub masks: Option<f64>,
+    pub on_pixels: bool,
     pub children: Vec<Element<M>>,
 }
 
@@ -408,9 +513,9 @@ impl<M: 'static> Widget<M> for ContentPart<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.size, self.top) != (old.size, old.top) {
+        if (self.size, self.top, self.on_pixels) != (old.size, old.top, old.on_pixels) {
             Change::Layout
-        } else if (self.key, self.layer) != (old.key, old.layer) {
+        } else if (self.key, self.layer, self.masks) != (old.key, old.layer, old.masks) {
             Change::Paint
         } else {
             Change::None
@@ -437,10 +542,18 @@ impl<M: 'static> Widget<M> for ContentPart<M> {
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 
+    fn on_pixels(&self, _: &()) -> bool {
+        self.on_pixels
+    }
+
     fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
         self.layer.then_some(SurfaceLayerMark {
             key: self.key,
-            look: SurfaceLayerLook::default(),
+            look: SurfaceLayerLook {
+                masks: self.masks.is_some(),
+                radius: self.masks.unwrap_or(0.0),
+                ..SurfaceLayerLook::default()
+            },
         })
     }
 }
@@ -519,15 +632,13 @@ pub fn symbol_in_place<M: 'static>(button: Rect, rest: Rect, symbol: Element<M>)
 /// The changes of the panel's layers for a close the compositor runs, from the panel at rest as `from` presents it
 /// to `to`, the motion's last frame of the close, in a window `extent` large with `modes` mode buttons laid out. Every
 /// value the close draws is linear in the close's one ease-out (the enclosure's scale, its opacity and its blur all
-/// move on it), so each property goes to its last value on that curve, but the edge's blur: in the edge layer's points
-/// it is the close's blur over the layer's scale, carried through `motion`'s values from `start`.
+/// move on it), so each property goes to its last value on that curve. The edge the glass carries stays sharp, where
+/// the panel's own close blurs it with the content.
 pub fn close_changes(
     extent: Size,
     from: &Frame,
     to: &Frame,
     modes: usize,
-    motion: &Motion,
-    start: f64,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let curve = Some(LayerCurve::Timed {
         duration: CLOSE_DURATION,
@@ -547,20 +658,6 @@ pub fn close_changes(
             fade(),
         ],
     )];
-    if !compositor_edge(from) {
-        out.push((
-            EDGE_LAYER,
-            vec![
-                go(LayerProperty::Scale, to.scale.max(to.scale_y)),
-                LayerChange::through(
-                    LayerProperty::ContentBlur,
-                    CLOSE_DURATION,
-                    edge_blur(motion, start),
-                ),
-                fade(),
-            ],
-        ));
-    }
     // the content keeps its size, centred across the enclosure and from its top edge
     let content_at = |frame: &Frame, rect: Rect| {
         Point::new(
@@ -580,6 +677,10 @@ pub fn close_changes(
         content.push(go(LayerProperty::Y, b.y));
     }
     out.push((ROW_LAYER, content.clone()));
+    if from.header == Header::Browse {
+        let at = options_layer_rect(from.shape.width);
+        out.push((OPTIONS_LAYER, moved_by(&content, at.x(), at.y())));
+    }
     out.push((BODY_LAYER, content));
     let (here, there) = (
         mode_rects_of(extent, from, modes, &rest),
@@ -610,11 +711,10 @@ pub fn close_changes(
 /// panel with no mode buttons (a scope). The open only scales the enclosure about its centre (on the open's spring)
 /// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale. The
 /// content's place, which keeps its size, springs from where the first frame has it on the same spring, as the
-/// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner, and the edge
-/// layer's scale about the enclosure's middle where the edge is not the compositor's ([`compositor_edge`]), are
-/// carried through `motion`'s own values ([`open_values`]): a spring of the compositor comes to rest within a
-/// thousandth of its unit of its target, which for a scale is a third of a device pixel at the panel's sides, and the
-/// panel's own spring comes to rest at its own time. A scope's edge is the compositor's, along the glass.
+/// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner are carried
+/// through `motion`'s own values ([`open_values`]): a spring of the compositor comes to rest within a thousandth of its
+/// unit of its target, which for a scale is a third of a device pixel at the panel's sides, and the panel's own spring
+/// comes to rest at its own time. The edge is the compositor's, along the glass.
 pub fn open_changes(
     extent: Size,
     first: &Frame,
@@ -664,14 +764,36 @@ pub fn open_changes(
     from_to(&mut content, LayerProperty::X, p.x, q.x, spring);
     from_to(&mut content, LayerProperty::Y, p.y, q.y, spring);
     opacity(&mut content);
-    let mut out = vec![(GLASS_LAYER, glass)];
-    if !compositor_edge(rest) {
-        let mut edge = vec![through(LayerProperty::Scale, &|f| f.scale.max(f.scale_y))];
-        opacity(&mut edge);
-        out.push((EDGE_LAYER, edge));
+    let mut out = vec![(GLASS_LAYER, glass), (ROW_LAYER, content.clone())];
+    if rest.header == Header::Browse {
+        let at = options_layer_rect(rest.shape.width);
+        out.push((OPTIONS_LAYER, moved_by(&content, at.x(), at.y())));
     }
-    out.extend([(ROW_LAYER, content.clone()), (BODY_LAYER, content)]);
+    out.push((BODY_LAYER, content));
     out
+}
+
+/// `changes` of the content's place moved by `dx` across and `dy` down: the place of a part of the content that keeps
+/// that offset from its top left.
+fn moved_by(changes: &[LayerChange], dx: f64, dy: f64) -> Vec<LayerChange> {
+    changes
+        .iter()
+        .map(|c| {
+            let by = match c.property {
+                LayerProperty::X => dx,
+                LayerProperty::Y => dy,
+                _ => return c.clone(),
+            };
+            LayerChange {
+                to: c.to + by,
+                samples: c
+                    .samples
+                    .as_ref()
+                    .map(|s| s.iter().map(|v| (f64::from(*v) + by) as f32).collect()),
+                ..c.clone()
+            }
+        })
+        .collect()
 }
 
 /// The blur of a mode button's symbol `sharp` of the way to sharp, as the deviation of a Gaussian in points: half the
@@ -696,8 +818,7 @@ pub fn button_at(extent: Size, frame: &Frame, count: usize, index: usize) -> Rec
 /// product of two springs, a button's place the product of the open's scale and its place along the split, its size a
 /// clamped ramp of the split, so each value the layers show is carried through `motion`'s own values
 /// ([`open_values`]), left out where it never changes; everything fades in on the linear [`OPEN_FADE`]. The field's
-/// glass carries the edge ([`glass_edge`], set by the view while the open is the compositor's), so no frame of an edge
-/// is drawn; each button's face (its symbol alone) fades in and sharpens through its opacity and content blur.
+/// glass carries the edge ([`glass_edge`]), so no frame of an edge is drawn; each button's face (its symbol alone) fades in and sharpens through its opacity and content blur.
 pub fn field_open_changes(
     extent: Size,
     first: &Frame,
@@ -776,26 +897,31 @@ pub fn field_open_changes(
 }
 
 /// The enclosure's corner radius as `frame` presents it, held to half its height as the panel draws it.
-fn held_radius(extent: Size, frame: &Frame) -> f64 {
+pub fn held_radius(extent: Size, frame: &Frame) -> f64 {
     enclosure_radius(frame)
         .min(enclosure_rect(extent, frame).height() / 2.0)
         .max(0.0)
 }
 
 /// The changes of the panel's layers for a fold of a scope into the search field the compositor runs, or an unfold of
-/// the field into a scope, from `start` over `duration` (the enclosure's own motion, [`Motion::shaping_left`]), in a
-/// window `extent` large. The layers stay as they are drawn: the glass at the enclosure's place, size and corner as
-/// the fold starts, the row and the body at the content's top. The enclosure moves on the shape spring, its top edge
-/// fixed and its sides closing in or opening out evenly, its corner the shape's held to half its height; the content
-/// keeps its size from the enclosure's left edge. So the glass's place, size and corner and the content's place go
-/// through `motion`'s own values, left out where they never change, and the body fades through its own curve (the
-/// content's opacity times the enclosure's), which the row does not. The edge is the compositor's, along the glass
-/// ([`glass_edge`], set by the view while the fold is the compositor's), so no frame of an edge follows the shape.
+/// the field into a scope (`unfold`), from `start` over `duration` (the enclosure's own motion,
+/// [`Motion::shaping_left`]), in a window `extent` large with `modes` mode buttons beside the field as it starts. The
+/// layers stay as they are drawn: the glass at the enclosure's place, size and corner as it starts, the row and the
+/// body at the content's top. The enclosure moves on the shape spring, its top edge fixed and its sides closing in or
+/// opening out, its corner the shape's held to half its height; the content keeps its size from the enclosure's left
+/// edge. So the glass's place, size and corner and the content's place go through `motion`'s own values, left out
+/// where they never change, and the body fades through its own curve (the content's opacity times the enclosure's),
+/// which the row does not. An unfold's body is drawn as the scope rests, its layer cut to the glass
+/// ([`ContentPart::masks`]): its size and corner follow the glass's. Mode buttons merge into the field through the
+/// panel's own values, their glass and their faces moving with their places and gone once they merged. The edge is
+/// the compositor's, along the glass ([`glass_edge`]), so no frame of an edge follows the shape.
 pub fn fold_changes(
     extent: Size,
     motion: &Motion,
     start: f64,
     duration: f64,
+    modes: usize,
+    unfold: bool,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
         let values = values_over(motion, start, duration, value);
@@ -821,7 +947,67 @@ pub fn fold_changes(
     through(&mut row, LayerProperty::Y, &|f| rect(f).y());
     let mut body = row.clone();
     through(&mut body, LayerProperty::Opacity, &|f| f.content * f.alpha);
-    vec![(GLASS_LAYER, glass), (ROW_LAYER, row), (BODY_LAYER, body)]
+    if unfold {
+        // cut to the glass: to the content's own size as the shape moves, which is where the panel's own drawing cuts
+        // the body, on the device pixels the content lies on, with the glass's corners
+        through(&mut body, LayerProperty::Width, &|f| f.shape.width);
+        through(&mut body, LayerProperty::Height, &|f| {
+            f.shape.height.max(super::COLLAPSED_HEIGHT)
+        });
+        through(&mut body, LayerProperty::CornerRadius, &|f| {
+            held_radius(extent, f)
+        });
+    }
+    let first = motion.frame(start);
+    let mut out = vec![(GLASS_LAYER, glass), (ROW_LAYER, row.clone())];
+    if first.header == Header::Browse {
+        // the button keeps to the row's end, from where it is drawn as the fold starts
+        let content_x = |f: &Frame| {
+            let r = rect(f);
+            r.x() + (r.width() - f.shape.width) / 2.0
+        };
+        let at = options_layer_rect(first.shape.width);
+        let mut options: Vec<LayerChange> = moved_by(&row, 0.0, at.y())
+            .into_iter()
+            .filter(|c| c.property != LayerProperty::X)
+            .collect();
+        through(&mut options, LayerProperty::X, &|f| {
+            content_x(f) + f.shape.width - OPTIONS_REACH
+        });
+        out.push((OPTIONS_LAYER, options));
+    }
+    out.push((BODY_LAYER, body));
+    for index in 0..modes {
+        let at = |f: &Frame| button_at(extent, f, modes, index);
+        // shown while the frame lays the buttons out, at the enclosure's opacity
+        let shown = |f: &Frame| if f.modes.count > index { f.alpha } else { 0.0 };
+        let mut button = Vec::new();
+        through(&mut button, LayerProperty::X, &|f| at(f).x());
+        through(&mut button, LayerProperty::Y, &|f| at(f).y());
+        through(&mut button, LayerProperty::Width, &|f| at(f).width());
+        through(&mut button, LayerProperty::Height, &|f| at(f).height());
+        through(&mut button, LayerProperty::CornerRadius, &|f| {
+            at(f).width() / 2.0
+        });
+        through(&mut button, LayerProperty::Opacity, &shown);
+        out.push((button_glass_layer(index), button));
+        // the face keeps its place about the button's centre, from where it is drawn as the unfold starts
+        let drawn = at(&first);
+        let face = face_layer_rect(drawn);
+        let centre = |r: Rect| Point::new(r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+        let mut symbol = Vec::new();
+        through(&mut symbol, LayerProperty::X, &|f| {
+            face.x() + centre(at(f)).x - centre(drawn).x
+        });
+        through(&mut symbol, LayerProperty::Y, &|f| {
+            face.y() + centre(at(f)).y - centre(drawn).y
+        });
+        through(&mut symbol, LayerProperty::Opacity, &|f| {
+            shown(f) * f.modes.sharp
+        });
+        out.push((button_face_layer(index), symbol));
+    }
+    out
 }
 
 /// A value of the panel as `motion` presents it from `start` over `duration`, at [`OPEN_SAMPLES`] even steps, the
@@ -857,54 +1043,13 @@ pub fn open_values(
     (duration, values)
 }
 
-/// The edge's blur through the close in the edge layer's points: the close's deviation over the layer's scale, at
-/// [`EDGE_BLUR_SAMPLES`] even steps of the close from `start`.
-fn edge_blur(motion: &Motion, start: f64) -> Arc<[f32]> {
-    let last = EDGE_BLUR_SAMPLES - 1;
-    (0..EDGE_BLUR_SAMPLES)
-        .map(|i| {
-            let f = motion.frame(start + CLOSE_DURATION * i as f64 / last as f64);
-            (CLOSE_DEVIATION * f.blur / f.scale.max(f.scale_y).max(1e-6)) as f32
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::motion::{Header, Modes, Shape};
-
-    fn rest(shape: Shape, modes: usize) -> Frame {
-        Frame {
-            shape,
-            anchor: shape.width.max(crate::motion::GROUP_WIDTH),
-            alpha: 1.0,
-            scale: 1.0,
-            scale_y: 1.0,
-            content: 0.0,
-            blur: 0.0,
-            header: Header::Search,
-            modes: Modes {
-                count: modes,
-                spread: if modes > 0 { 1.0 } else { 0.0 },
-                sharp: 1.0,
-            },
-        }
-    }
+    use crate::motion::Shape;
 
     #[test]
-    fn the_layers_that_draw_start_on_the_grid_and_the_edge_s_centre_is_the_enclosure_s_pivot() {
-        let extent = Size::new(761.0, 177.0);
-        let frame = rest(Shape::new(640.0, 57.0, 28.5), 0);
-        let edge = edge_layer_rect(extent, &frame);
-        let p = pivot(extent, &frame);
-        assert_eq!((edge.x() % LAYER_GRID, edge.y() % LAYER_GRID), (0.0, 0.0));
-        assert!((edge.x() + edge.width() / 2.0 - p.x).abs() < 1e-9);
-        assert!((edge.y() + edge.height() / 2.0 - p.y).abs() < 1e-9);
-        assert_eq!(
-            edge.union(&enclosure_rect(extent, &frame).outset(EDGE_ROOM)),
-            edge
-        );
+    fn a_button_s_face_layer_starts_on_the_grid_and_holds_its_focus_ring() {
         let button = Rect::new(581.3, 45.0, 55.0, 55.0);
         let face = face_layer_rect(button);
         assert_eq!((face.x() % LAYER_GRID, face.y() % LAYER_GRID), (0.0, 0.0));
@@ -921,7 +1066,7 @@ mod tests {
         let from = motion.frame(1.0);
         motion.hide(1.0);
         let to = motion.frame(1.0 + CLOSE_DURATION);
-        let changes = close_changes(extent, &from, &to, 0, &motion, 1.0);
+        let changes = close_changes(extent, &from, &to, 0);
         let of = |key: u64, p: LayerProperty| {
             changes
                 .iter()
@@ -941,11 +1086,7 @@ mod tests {
             of(ROW_LAYER, LayerProperty::ContentBlur),
             Some(CLOSE_DEVIATION)
         );
-        assert_eq!(of(EDGE_LAYER, LayerProperty::Scale), Some(to.scale));
-        // the edge's blur ends at the close's deviation in the scaled layer's points
-        let blur = changes[1].1[1].samples.clone().unwrap();
-        assert_eq!(blur.len(), EDGE_BLUR_SAMPLES);
-        assert_eq!(blur[0], 0.0);
-        assert!((f64::from(blur[EDGE_BLUR_SAMPLES - 1]) - CLOSE_DEVIATION / to.scale).abs() < 1e-5);
+        // the glass is never blurred
+        assert_eq!(of(GLASS_LAYER, LayerProperty::ContentBlur), None);
     }
 }

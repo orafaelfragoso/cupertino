@@ -58,6 +58,8 @@ const MAX_SAID: usize = 32;
 /// rest ([`Message::OpenSettled`]) before it takes the open back, in seconds: well past the frame or two the compositor
 /// starts it late.
 pub const OPEN_REST_FALLBACK: f64 = 1.0;
+/// The step, in seconds, the window's size looks ahead along the shape's motion by for the largest shape on its way.
+const SHAPE_STEP: f64 = 1.0 / 240.0;
 /// The most application icons the browser has being loaded at once, off the loop: those nearest the view are asked
 /// first, and each one that arrives makes room for the next.
 pub const MAX_APP_ICON_LOADS: usize = 14;
@@ -400,11 +402,14 @@ pub struct Model {
     /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass,
     /// as the panel strokes its own. On in the process; a test turns it off to compare the panel's own fold.
     pub hand_folds: bool,
-    /// A fold to hand to the compositor once the mode buttons are placed.
+    /// A fold or unfold to hand to the compositor once the mode buttons are placed.
     hand_fold: bool,
-    /// The fold the compositor runs: the panel as its layers show it before the header switches, when it switches,
-    /// and after, which differs in the header alone.
+    /// The fold or unfold the compositor runs: the panel as its layers show it before the header switches, when it
+    /// switches, and after, which differs in the header alone.
     fold_shown: Option<(Frame, f64, Frame)>,
+    /// The unfold the compositor runs: the scope's shape at rest, which its body is drawn at from the unfold's first
+    /// frame, the glass cutting it as it grows.
+    unfold_body: Option<Shape>,
 }
 
 impl Model {
@@ -474,6 +479,7 @@ impl Model {
             hand_folds: true,
             hand_fold: false,
             fold_shown: None,
+            unfold_body: None,
         }
     }
 
@@ -503,6 +509,18 @@ impl Model {
     fn end_open(&mut self) {
         self.open_rest = None;
         self.fold_shown = None;
+        self.unfold_body = None;
+    }
+
+    /// The shape of the scope the compositor unfolds the search field into, which the body is drawn at while it does.
+    pub fn unfold_body(&self) -> Option<Shape> {
+        self.unfold_body
+    }
+
+    /// Whether an unfold starting now leaves the search field drawn as layers at rest, which then unfolds on the
+    /// compositor's clock ([`Model::hand_folds`]).
+    fn unfolds_from_field(&self) -> bool {
+        self.layered() && self.open_rest.is_none() && self.presented().header == Header::Search
     }
 
     /// Whether the panel's parts draw into compositor layers of their own now: while it rests, open, and while the
@@ -766,6 +784,8 @@ impl Model {
                 self.motion.fold(self.target_shape(), now.mono);
             }
             Step::Unfold => {
+                // the search field drawn as layers at rest unfolds on the compositor's clock, once the buttons merge
+                self.hand_fold = self.unfolds_from_field();
                 let query = self.filter_text();
                 let text = self.panel.query().to_owned();
                 self.panel.set_text_quiet(&text);
@@ -788,6 +808,7 @@ impl Model {
                 self.motion.unfold(self.target_shape(), now.mono);
             }
             Step::UnfoldFiles => {
+                self.hand_fold = self.unfolds_from_field();
                 let text = self.panel.query().to_owned();
                 self.panel.set_text_quiet(&text);
                 self.tracker.cancel();
@@ -884,14 +905,8 @@ impl Model {
         }
         if let Some(from) = rest {
             let to = self.motion.frame(now.mono + crate::motion::CLOSE_DURATION);
-            self.layer_changes = view::layers::close_changes(
-                self.extent,
-                &from,
-                &to,
-                self.modes().len(),
-                &self.motion,
-                now.mono,
-            );
+            self.layer_changes =
+                view::layers::close_changes(self.extent, &from, &to, self.modes().len());
             self.handed = Some(from);
         }
         if let Err(e) = self.launcher.frecency.save_if_dirty() {
@@ -933,12 +948,15 @@ impl Model {
         self.open_end = now + self.motion.moving_left(now);
     }
 
-    /// A fold of a scope that rested as layers into the search field runs on the compositor's clock
-    /// ([`Model::hand_folds`]): its layers keep what they show as the fold begins and the compositor moves the glass
-    /// and the content and fades the body through the panel's own values ([`view::layers::fold_changes`]), the edge
-    /// drawn along the glass; the panel draws its query row once more, when the header switches to the field's. It
-    /// ends when the compositor tells its layers came to rest past the enclosure's own motion; the mode buttons then
-    /// bud out of the field drawn by the panel. Never under Reduce Motion, nor where the panel settles at once.
+    /// A fold of a scope that rested as layers into the search field, or an unfold of the field into a scope, runs on
+    /// the compositor's clock ([`Model::hand_folds`]): its layers keep what they show as it begins and the compositor
+    /// moves the glass and the content and fades the body through the panel's own values
+    /// ([`view::layers::fold_changes`]), the edge drawn along the glass; the panel draws its query row once more, when
+    /// the header switches. An unfold draws the scope's body at once, at the scope's shape at rest, which the compositor
+    /// fades in and cuts to the glass as it grows, and the mode buttons merge into the field through the panel's own
+    /// values. It ends when the compositor tells its layers came to rest past the enclosure's own motion; after a fold
+    /// the mode buttons then bud out of the field drawn by the panel. Never under Reduce Motion, nor where the panel
+    /// settles at once.
     fn hand_fold(&mut self, now: f64) -> Vec<Command<Message>> {
         if !(self.hand_folds
             && self.compositor_layers
@@ -949,13 +967,36 @@ impl Model {
             return Vec::new();
         }
         let first = self.motion.frame(now);
-        let duration = self.motion.shaping_left(now).max(1e-3);
+        // the enclosure's own motion; an unfold's buttons merge well within it
+        let duration = self
+            .motion
+            .shaping_left(now)
+            .max(crate::motion::MERGE_DURATION)
+            .max(1e-3);
         let switch = self.motion.header_switch(now);
         let rest = self.resting(now);
+        let unfold = rest.header.is_scope();
         let _ = self.resize();
-        self.layer_changes = view::layers::fold_changes(self.extent, &self.motion, now, duration);
-        let (at, header) = switch.unwrap_or((now, first.header));
-        self.fold_shown = Some((first, at, Frame { header, ..first }));
+        self.layer_changes = view::layers::fold_changes(
+            self.extent,
+            &self.motion,
+            now,
+            duration,
+            first.modes.count,
+            unfold,
+        );
+        // an unfold's body shows from its first frame, as it rests, the compositor fading it in
+        let shown = if unfold {
+            Frame {
+                content: rest.content,
+                ..first
+            }
+        } else {
+            first
+        };
+        let (at, header) = switch.unwrap_or((now, shown.header));
+        self.fold_shown = Some((shown, at, Frame { header, ..shown }));
+        self.unfold_body = unfold.then_some(rest.shape);
         self.open_rest = Some(rest);
         self.open_timer = false;
         self.open_number += 1;
@@ -1315,9 +1356,17 @@ impl Model {
         let now = self.now().mono;
         let target = self.motion.target();
         // settled, the window is the target's (what the motion presents may be a hair off it); while the shape
-        // changes, it holds both and never shrinks
+        // changes, it holds both and the largest the shape grows to on its way, a spring's overshoot included, from
+        // the motion's start, so it is not configured again part way, and never shrinks
         let needed = if self.motion.animating(now) {
-            let both = view::window_extent(target.union(self.motion.frame(now).shape));
+            let mut both = view::window_extent(target.union(self.motion.frame(now).shape));
+            let left = self.motion.shaping_left(now);
+            let steps = (left / SHAPE_STEP).ceil() as usize;
+            for i in 1..=steps {
+                let shape = self.motion.frame(now + i as f64 * SHAPE_STEP).shape;
+                let on_way = view::window_extent(shape);
+                both = Size::new(both.width.max(on_way.width), both.height.max(on_way.height));
+            }
             Size::new(
                 both.width.max(self.extent.width),
                 both.height.max(self.extent.height),
@@ -2270,10 +2319,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         layered: model.layered(),
         handed: model.close_handed(),
         opening: model.open_handed(),
-        group_edge: model.field_open_handed()
-            || model.fold_handed()
-            || view::layers::compositor_edge(&frame),
         moving: !model.layered() && model.motion.animating(model.now().mono),
+        unfold_body: model.unfold_body(),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

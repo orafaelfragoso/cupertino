@@ -183,13 +183,29 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3c. The fold and unfold on the compositor's clock
 
-- [ ] The unfold (the scope's shortcut from the field) handed over as the fold is: the scope's body drawn into the
+- [x] The unfold (the scope's shortcut from the field) handed over as the fold is: the scope's body drawn into the
       body layer at the first frame, that layer masked to the glass as it grows, the mode buttons' layers carried
-      through their merge, and masks in the same-moment test's composition.
-- [ ] The fold and unfold carry the row, the body, the glass and the edge; `Model::hand_folds` on in the process.
-- [ ] The same-moment test, as the open's (`open_moments` over `Escape` from a scope, and the scope's shortcut from
-      the field).
-- [ ] The real process against the server: one buffer of the row's layer at the switch, and none other.
+      through their merge, and masks in the same-moment test's composition
+      (`the_search_field_unfolds_on_the_compositor_s_clock_drawing_its_row_at_most_once`; under Reduce Motion nothing
+      is handed over). The search field rests on the compositor's edge too, its edge layer gone (within 1 of 255 of
+      the panel's own at 1, 1.5 and 2, both appearances), and the browser's view options button is a layer of its own
+      (`layers::OPTIONS_LAYER`), which keeps to the row's end as the glass's width changes.
+- [x] The fold and unfold carry the row, the body, the glass and the edge; `Model::hand_folds` on in the process.
+- [x] The same-moment test, as the open's (`open_moments` over `Escape` from a scope, and the scope's shortcut from
+      the field). The unfold, 1.5, both scopes and appearances: the glass the panel's at every moment, the last frame
+      within 1 of 255, apart from the outline and the caret within 1 at every frame; along the outline the browser
+      parts by up to 20 of 255 (dark) and 18 (light) where its body's content crosses the moving edge, and the files
+      scope by up to 18 and 14 where its shape waits as the field's capsule under the scope's header, so the bound
+      along the outline is 20, not 4 (`the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`).
+      A scope's close at the same moments too (the browser and the files scope, dark): within 1 apart from the
+      outline, along it up to 100 of 255 at its first frame (29 in the light for the field and the browser), as the
+      compositor's edge is not blurred with the content.
+- [ ] The real process against the server: one buffer of the row's layer at the switch, and none other. The fold
+      holds: 1 buffer of the row's layer and none other over 92 server steps animating, in 3 runs
+      (`shell_processes::the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once`). The
+      unfold does not: the window grows from the field's size to the scope's as it begins, and the frame drawn again
+      at the new size lands after the compositor started the unfold (2 buffers of the row's layer and 7 of the window
+      and its other layers over 94 steps); it has no server test yet.
 - [ ] The GPU plan's open test and mid-way look items, which waited on these, ticked.
 
 ### 3d. The caret's blink through the field's open (`cupertino-ui-controls`, `cupertino-launcher`)

@@ -593,13 +593,12 @@ pub struct PanelView<'a> {
     /// The compositor runs the panel's open or a fold on its layers: the field holds its caret, which would draw the
     /// query row's layer again.
     pub opening: bool,
-    /// The compositor draws the panel's edge along its glass ([`layers::glass_edge`]): while it runs the search field's
-    /// open, the shapes joining and parting every frame, or a fold, the shape changing, and for a scope at rest, in its
-    /// open and in its close ([`layers::compositor_edge`]); no layer draws an edge then.
-    pub group_edge: bool,
     /// The panel's own motion runs and it draws it itself: its content lies on whole device pixels as one picture, as
     /// the compositor puts the content's layers when it runs a motion.
     pub moving: bool,
+    /// The compositor runs an unfold of the search field into a scope: the body is drawn at this, the scope's shape at
+    /// rest, and its layer is cut to the glass as the glass grows ([`layers::fold_changes`]).
+    pub unfold_body: Option<PanelShape>,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -656,25 +655,8 @@ where
     } else {
         Vec::new()
     });
+    // drawn as layers, the panel's edge is the compositor's, along its glass ([`layers::glass_edge`])
     let mut root = vec![panel_content(view).key("panel")];
-    if view.layered && !view.group_edge {
-        root.push(
-            Element::new(layers::EdgeLayer {
-                key: layers::EDGE_LAYER,
-                rect: layers::edge_layer_rect(view.extent, &view.frame),
-                shape: rect,
-                radius: enclosure_radius(&view.frame),
-                joined: mode_rects(view, &rect)
-                    .into_iter()
-                    .map(|r| (r, r.width() / 2.0))
-                    .collect(),
-                focus: false,
-                edge: true,
-                children: Vec::new(),
-            })
-            .key("panel-edge"),
-        );
-    }
     for (i, (_, _, button)) in buttons.into_iter().enumerate() {
         let ModeParts { button, face } = button;
         root.push(button.key(format!("mode-{i}")));
@@ -692,6 +674,41 @@ where
         popup: None,
         menus: None,
     }
+}
+
+/// The browser's view options button at the query row's end, placed apart from the row in a layer of its own while the
+/// panel is drawn as layers ([`layers::OPTIONS_LAYER`]): it keeps to the row's end as the enclosure's width changes,
+/// where the rest of the row keeps to its start. While the panel `moves` it lies on whole device pixels as one picture,
+/// as its layer does when the compositor moves it; it is drawn at `alpha`, as the row is.
+fn options_button<M>(view: &PanelView<'_>, moves: bool, alpha: f64) -> Option<Element<M>>
+where
+    M: From<Input> + Clone + 'static,
+{
+    let frame = &view.frame;
+    let browser = view.browser.filter(|_| frame.header == Header::Browse)?;
+    let layer = layers::options_layer_rect(frame.shape.width);
+    let at = layers::options_button(frame.shape.width).translate(-layer.x(), -layer.y());
+    let button = Element::new(browse::OptionsButton {
+        focus: browser.zone() == crate::browse::Zone::Options
+            && view.nested != Some(Nested::ViewOptions),
+        expanded: view.nested == Some(Nested::ViewOptions),
+    })
+    .key(browse::OPTIONS_BUTTON);
+    Some(
+        Element::new(layers::PlacedLayer {
+            key: layers::OPTIONS_LAYER,
+            layer: view.layered,
+            rect: layer,
+            alpha,
+            on_pixels: moves,
+            children: vec![Element::new(layers::SymbolBox {
+                rect: at,
+                on_pixels: false,
+                children: vec![button],
+            })],
+        })
+        .key("options"),
+    )
 }
 
 /// A mode button's elements: the button, and while the panel is drawn as layers, or its symbol moves, its face apart.
@@ -734,14 +751,7 @@ where
             };
             let (children, face) = if view.layered {
                 let symbol = modes::glyph(mode, frame.modes.sharp, 1.0);
-                let face = layers::button_face(
-                    index,
-                    rect,
-                    joined.clone(),
-                    focus,
-                    !view.group_edge,
-                    symbol,
-                );
+                let face = layers::button_face(index, rect, joined.clone(), focus, false, symbol);
                 (Vec::new(), Some(face))
             } else if rect != rest {
                 let symbol = modes::glyph(mode, frame.modes.sharp, frame.alpha);
@@ -963,14 +973,15 @@ where
             .key("mode-chips"),
         );
     }
-    if let Some(browser) = view.browser.filter(|_| browsing) {
+    // the view options button at the row's end is placed apart from the row, which keeps its room for it
+    // ([`options_button`])
+    if view.browser.is_some() && browsing {
         row.push(
-            Element::new(browse::OptionsButton {
-                focus: browser.zone() == crate::browse::Zone::Options
-                    && view.nested != Some(Nested::ViewOptions),
-                expanded: view.nested == Some(Nested::ViewOptions),
-            })
-            .key(browse::OPTIONS_BUTTON),
+            Element::new(layers::Room(Size::new(
+                browse::OPTIONS_SIZE,
+                browse::OPTIONS_SIZE,
+            )))
+            .key("options-room"),
         );
     }
     let showing_browser = view.browser.filter(|_| browsing || frame.content > 0.0);
@@ -980,12 +991,18 @@ where
     // over a scope the enclosure fades its two parts one by one rather than as one layer: they do not overlap,
     // so the look is the same, and the scope's own fade then needs no layer inside another
     let split = showing_browser.is_some() || showing_scope.is_some();
+    // while the panel scales in or out, or its shape moves (a fold), each part of the content (the query row, the
+    // view options button and the body) moves as one picture on whole device pixels, as the compositor moves its
+    // layers when it runs the open or the fold, rather than its text snapping to the pixels line by line while its
+    // shapes and images fall between them
+    let moves = view.moving || frame.scale != 1.0 || frame.scale_y != 1.0;
     let query_row = Element::new(Bar {
         height: COLLAPSED_HEIGHT,
         leading: icon_inset,
         spacing: QUERY_INSET - icon_inset - icon_size,
         alpha: if split { frame.alpha } else { 1.0 },
         layer: view.layered.then_some(layers::ROW_LAYER),
+        on_pixels: moves,
         children: row,
     })
     .key("query-row");
@@ -1016,31 +1033,40 @@ where
     } else {
         body.extend(search_body(view));
     }
-    // while the panel scales in or out its content keeps its size, cut off by the glass, and moves on whole device
-    // pixels, as one picture, as the content's layers do when the compositor runs the open
-    let scaled = frame.scale != 1.0 || frame.scale_y != 1.0;
     // the query row keeps its height where the shape springs a little shorter than the field on its way to it
     let size = Size::new(frame.shape.width, frame.shape.height.max(COLLAPSED_HEIGHT));
     // the query row and the body are layers of their own, both from the content's top, on the device pixels it lies
-    // on; the body's children start below the row
-    let parts = vec![
-        query_row,
+    // on; the body's children start below the row. While the compositor unfolds the field into a scope the body is
+    // drawn as the scope rests, its layer cut to the glass as the glass grows.
+    let body_size = view.unfold_body.map_or(size, |shape| {
+        Size::new(shape.width, shape.height.max(COLLAPSED_HEIGHT))
+    });
+    let unfolding = view.unfold_body.is_some();
+    let mut parts = vec![query_row];
+    parts.extend(options_button(
+        view,
+        moves,
+        if split { frame.alpha } else { 1.0 },
+    ));
+    parts.push(
         Element::new(layers::ContentPart {
             key: layers::BODY_LAYER,
             layer: view.layered,
-            size,
+            size: body_size,
             top: COLLAPSED_HEIGHT,
+            masks: unfolding.then(|| layers::held_radius(view.extent, frame)),
+            on_pixels: moves,
             children: body,
         })
         .key("body-part"),
-    ];
+    );
     let inner = Element::new(PanelRoot {
         keys: view.keys,
         size,
         offset: (rect.width() - frame.shape.width) / 2.0,
         handed: view.handed,
         holding: view.opening,
-        scaled: scaled || view.moving,
+        crops: unfolding,
         children: parts,
     });
     let mut children = vec![inner.key("content")];
@@ -1051,7 +1077,7 @@ where
                 rect: Rect::new(0.0, 0.0, rect.width(), rect.height()),
                 look: layers::glass_look(frame),
                 key: layers::GLASS_LAYER,
-                edge: view.group_edge,
+                edge: true,
             })
             .key("glass"),
         );
@@ -1068,7 +1094,7 @@ where
             .collect(),
         split,
         layered: view.layered,
-        crops: scaled || view.moving,
+        crops: moves,
         content: Size::new(frame.shape.width, frame.shape.height),
         children,
     })
@@ -1532,7 +1558,7 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
             material = material.container(modes::JOIN_CONTAINER, modes::JOIN_SPACING);
         }
         if self.layered {
-            // the glass layer draws the glass and the edge layer the edge; the content lies on the glass as in place
+            // the glass layer draws the glass, the compositor the edge along it; the content lies on the glass as in place
             cx.layer_glass(material);
             return;
         }
@@ -1608,9 +1634,9 @@ struct PanelRoot<M> {
     handed: bool,
     /// The compositor runs an open or a fold ([`PanelView::opening`]): a key's release reaches nothing inside.
     holding: bool,
-    /// The panel scales in or out, or moves by itself: the content lies on whole device pixels
-    /// ([`Widget::on_pixels`]).
-    scaled: bool,
+    /// A part keeps its own size past its edge, cut off there ([`Overflow::Crop`]): the body as the scope it unfolds
+    /// into rests.
+    crops: bool,
     children: Vec<Element<M>>,
 }
 
@@ -1622,6 +1648,11 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
             width: SizeSpec::Fixed(self.size.width.max(0.0)),
             height: SizeSpec::Fixed(self.size.height.max(0.0)),
             position: Point::new(self.offset, 0.0),
+            overflow: if self.crops {
+                Overflow::Crop
+            } else {
+                Overflow::Visible
+            },
             ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
@@ -1634,7 +1665,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     /// It draws nothing: which keys it takes changes no pixel.
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.size, self.offset, self.scaled) != (old.size, old.offset, old.scaled) {
+        if (self.size, self.offset, self.crops) != (old.size, old.offset, old.crops) {
             Change::Layout
         } else {
             Change::None
@@ -1689,13 +1720,6 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
     /// The query field is where the panel's keys go: a press on a button or in the content leaves it editing.
     fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
         cx.keeps_editing();
-    }
-
-    /// While the enclosure scales about its middle or its shape moves (a fold) the content moves as one picture on
-    /// whole device pixels, as the compositor moves its layers when it runs the open or the fold, rather than its text
-    /// snapping to the pixels line by line while its shapes and images fall between them.
-    fn on_pixels(&self, _: &()) -> bool {
-        self.scaled
     }
 }
 
@@ -2003,6 +2027,8 @@ struct Bar<M> {
     alpha: f64,
     /// The compositor layer of its own it draws into, while the panel is drawn as layers ([`layers::ROW_LAYER`]).
     layer: Option<u64>,
+    /// It lies on whole device pixels as one picture ([`Widget::on_pixels`]): while the panel scales or moves.
+    on_pixels: bool,
     children: Vec<Element<M>>,
 }
 
@@ -2035,7 +2061,9 @@ impl<M: 'static> Widget<M> for Bar<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.height, self.leading, self.spacing) != (old.height, old.leading, old.spacing) {
+        if (self.height, self.leading, self.spacing, self.on_pixels)
+            != (old.height, old.leading, old.spacing, old.on_pixels)
+        {
             Change::Layout
         } else if (self.alpha, self.layer) != (old.alpha, old.layer) {
             Change::Paint
@@ -2059,6 +2087,10 @@ impl<M: 'static> Widget<M> for Bar<M> {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn on_pixels(&self, _: &()) -> bool {
+        self.on_pixels
+    }
 
     fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
         self.layer.map(|key| cupertino_kit::core::SurfaceLayerMark {

@@ -2369,8 +2369,9 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
     const ESCAPE: u32 = 1 + 8;
     // the search field's window, with the room for its shadow
     const SEARCH: i32 = 640 + 120;
-    // the field's glass, its edge, its query row and body and the mode button's glass and face
-    const LAYERS: usize = 6;
+    // the field's glass, which carries the edge the compositor draws along it, its query row and body and the mode
+    // button's glass and face
+    const LAYERS: usize = 5;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -2392,10 +2393,12 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
         commands: Vec::new(),
         ops: vec![ShellOp::ToggleLauncher],
     });
-    // the field opens drawn by the application, then rests as layers
+    // the field opens on the compositor's clock, then rests as layers
     server.wait_until("the search field to rest as layers", |s| {
-        launcher_surfaces(s, SEARCH).is_some_and(|(_, layers)| {
-            layers.len() == LAYERS && layers.iter().all(|l| buffer_commit(l).is_some())
+        launcher_surfaces(s, SEARCH).is_some_and(|(panel, layers)| {
+            layers.len() == LAYERS
+                && layers.iter().all(|l| buffer_commit(l).is_some())
+                && settled(&panel, s.now())
         })
     });
     let (panel, layers) = launcher_surfaces(&server.state, SEARCH).unwrap();
@@ -2458,7 +2461,8 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
 }
 
 /// The launcher's application browser opens from hidden on the compositor's clock: its window draws one frame, with
-/// its layers (the glass, which carries the edge the compositor draws along it, the query row and the body) at rest,
+/// its layers (the glass, which carries the edge the compositor draws along it, the query row, the view options button
+/// and the body) at rest,
 /// and while the compositor grows and fades them in from where the open starts neither the window nor any of its
 /// layers commits a buffer. The browser opens
 /// once first and closes, as a resident launcher's has by the time it is asked again, so the renderer has warmed up
@@ -2468,8 +2472,9 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::{present, settled};
     // the browser's window, with the room for its shadow
     const BROWSER: i32 = 844 + 120;
-    // the browser's glass, its query row and its body; the compositor draws the edge along the glass
-    const LAYERS: usize = 3;
+    // the browser's glass, its query row, its view options button and its body; the compositor draws the edge along
+    // the glass
+    const LAYERS: usize = 4;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -2672,6 +2677,162 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
         new_buffers, 0,
         "the window and its layers drew no frame while they opened"
     );
+}
+
+/// The launcher's application browser at rest folds into the search field on Escape on the compositor's clock: the
+/// window draws the fold's first frame as it begins, and then, while any layer still animates, neither the window nor
+/// any of its layers commits a buffer but the query row's layer once, where the header switches part way (a layer the
+/// field does not have, the view options button's, goes then). Three runs, each from the browser opened from hidden,
+/// after a first open and close in which the renderer warms up. Run with `--no-capture` for the counts.
+#[test]
+fn the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once() {
+    use cupertino_server::layers_v1::{present, settled};
+    const ESCAPE: u32 = 1 + 8;
+    // the panels' windows, with the room for their shadows
+    const BROWSER: i32 = 844 + 120;
+    const SEARCH: i32 = 640 + 120;
+    // the query row's height, its layer's content's
+    const ROW_HEIGHT: f64 = 57.0;
+    // the server steps the fold's first frame, drawn as it begins, takes to reach the server
+    const FIRST_FRAME_STEPS: usize = 6;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("launcher-fold-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
+        return;
+    };
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    let connection = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .expect("connect to the test bus");
+    let owned = || {
+        zbus::block_on(connection.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "NameHasOwner",
+            &"org.cupertino.Launcher1",
+        ))
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false)
+    };
+    server.wait_until(
+        "the launcher to map its hidden window and own its name",
+        |s| committed_buffer(s, "cupertino-launcher").is_some() && owned(),
+    );
+    let toggle = |server: &mut Server| {
+        server.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::ToggleAppGrid],
+        })
+    };
+    let escape = |server: &mut Server| {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            server
+                .state
+                .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+            server.step();
+        }
+    };
+    let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
+    // the browser at rest as layers: its layers settled and drawn, and nothing drawn for a while
+    let at_rest = |server: &mut Server| {
+        server.wait_until("the browser to rest as layers", |s| {
+            launcher_surfaces(s, BROWSER).is_some_and(|(panel, layers)| {
+                !layers.is_empty()
+                    && layers.iter().all(|l| buffer_commit(l).is_some())
+                    && settled(&panel, s.now())
+            })
+        });
+        let (panel, layers) = launcher_surfaces(&server.state, BROWSER).unwrap();
+        let all: Vec<_> = std::iter::once(panel).chain(layers).collect();
+        let mut last = commits(&all);
+        let mut quiet = Instant::now();
+        server.wait_until("the browser to stop drawing", |_| {
+            let now = commits(&all);
+            if now != last {
+                last = now;
+                quiet = Instant::now();
+            }
+            quiet.elapsed() > Duration::from_millis(300)
+        });
+        launcher_surfaces(&server.state, BROWSER).unwrap()
+    };
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
+    // the close
+    toggle(&mut server);
+    at_rest(&mut server);
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the launcher runs");
+    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join("cupertino/renderers")
+        .join(pid.to_string());
+    server.wait_until("the launcher to draw on the GPU", |_| {
+        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
+    });
+    toggle(&mut server);
+    server.wait_until("the browser to close", |s| !launcher_panel(s, BROWSER));
+    for run in 0..3 {
+        toggle(&mut server);
+        let (panel, layers) = at_rest(&mut server);
+        let all: Vec<_> = std::iter::once(panel.clone()).chain(layers).collect();
+        escape(&mut server);
+        server.wait_until("the fold to start", |s| !settled(&panel, s.now()));
+        let mut last = commits(&all);
+        let (mut steps, mut row, mut other) = (0, 0, 0);
+        server.wait_until("the fold to be over", |s| {
+            let now = s.now();
+            let animating = !settled(&panel, now);
+            let commit = commits(&all);
+            if animating {
+                steps += 1;
+                let shown = present(&panel, now, false);
+                for (i, surface) in all.iter().enumerate() {
+                    // a layer that went drew nothing
+                    let Some(layer) = shown.iter().find(|l| &l.surface == surface) else {
+                        continue;
+                    };
+                    if commit[i] == last[i] || steps <= FIRST_FRAME_STEPS {
+                        continue;
+                    }
+                    if layer.glass.is_none() && layer.content.1 == ROW_HEIGHT {
+                        row += 1;
+                    } else {
+                        other += 1;
+                    }
+                }
+            }
+            last = commit;
+            !animating
+        });
+        eprintln!(
+            "trace: fold, run {run}: {steps} server steps animating, {row} new buffers of the query row's layer, \
+             {other} of the window and its other layers"
+        );
+        assert!(steps > FIRST_FRAME_STEPS, "the fold ran on the server");
+        assert!(row <= 1, "the fold drew its query row at most once: {row}");
+        assert_eq!(other, 0, "the fold drew no other frame");
+        // the field closes
+        server.wait_until("the search field", |s| launcher_panel(s, SEARCH));
+        escape(&mut server);
+        server.wait_until("the panel to close", |s| {
+            !launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
+        });
+    }
 }
 
 /// The window manager process with the stage on puts the older of two applications in the strip;

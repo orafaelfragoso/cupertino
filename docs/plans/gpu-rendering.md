@@ -958,8 +958,12 @@ Gate:
                 (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). Behind
                 `Model::hand_folds`, off in the process until the edge followed the glass (below), on since: along
                 the outline then within 2 of 255 in the dark and 1 in the light.
-          - [ ] The unfold: the scope's body drawn into the body's layer at its first frame and masked to the glass as
-                it grows, and the mode buttons' layers carried through their merge; not done.
+          - [x] The unfold: the scope's body drawn into the body's layer at its first frame, as the scope rests, and
+                masked to the glass as it grows (the mask on the device pixels the content lies on, as the panel's own
+                drawing cuts it), and the mode buttons' layers carried through their merge
+                (`the_search_field_unfolds_on_the_compositor_s_clock_drawing_its_row_at_most_once`); under Reduce
+                Motion nothing is handed over. The browser's view options button is a layer of its own
+                (`layers::OPTIONS_LAYER`), which keeps to the row's end as the glass's width changes.
           - [ ] The edge follows the glass (decided by the owner: the edge follows the glass's continuous outline).
                 Through the fold the outline goes from a scope's continuous corners to the field's capsule, which only
                 the compositor's edge can follow. Split, in order:
@@ -982,15 +986,29 @@ Gate:
                   (`layers::compositor_edge`; the search field keeps its edge layer). At rest within 1 of 255 along
                   every side and corner at 1, 1.5 and 2 in both appearances; the open from hidden at the same moments
                   within 1 along the edge (it was up to 90 with the scaled edge layer); against the server the
-                  browser's open 0 buffers over 113 steps part way with 3 layers. The scope's close draws the
-                  compositor's edge unblurred where the panel's own close blurs it; it has no same-moment test.
-            - [ ] The fold and unfold carry it, from here on in order with the items above and below. The fold does
+                  browser's open 0 buffers over 113 steps part way with 3 layers. The search field's rest too, its
+                  edge layer gone: within 1 of 255 along its capsule at 1, 1.5 and 2 in both appearances. A close
+                  draws the compositor's edge unblurred where the panel's own close blurs it with the content: at the
+                  same moments (the field, the browser and the files scope) within 1 apart from the outline, along it
+                  up to 100 of 255 in the dark and 29 in the light at the close's first frame, less as it fades
+                  (`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`); the field's close
+                  blurred its edge layer before. The compositor does not blur a glass layer's edge.
+            - [x] The fold and unfold carry it, from here on in order with the items above and below. The fold does
                   (`Model::hand_folds` on in the process; at the same moments along the outline 2 of 255 in the dark
-                  and 1 in the light, where it was 178 and 52); the unfold waits on its own item above.
+                  and 1 in the light, where it was 178 and 52), and so does the unfold.
           - [ ] Their same-moment test, as the open's (`open_moments` over `Escape` from a scope and the scope's
                 shortcut from the field), and the real process's count against the server, as
                 `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` (one
-                buffer of the row's layer allowed, at the switch).
+                buffer of the row's layer allowed, at the switch). The same-moment tests are made: the unfold's at 1.5,
+                both scopes and appearances, the glass the panel's at every moment, the last frame within 1 of 255,
+                apart from the outline and the caret within 1, along the outline up to 20 of 255 (the browser's body
+                cut by the moving edge a fraction of a device pixel apart) and 18 (the files scope's own edge on the
+                field's capsule under the scope's header)
+                (`the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). Against the
+                server the fold holds, 1 buffer of the row's layer and none other over 92 steps in 3 runs
+                (`shell_processes::the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once`);
+                the unfold does not yet: the window grows to the scope's size as it begins and draws its first frame
+                again at that size after the compositor started (2 buffers of the row's layer, 7 of the rest).
       - [ ] The search field's open with its mode buttons: the field's layer and each button's on sampled curves of
             the products above, in one glass group with the field, each button's symbol sharpening as its layer's
             content blur goes from its starting blur to 0 on `GLYPH_SHARPEN` after `GLYPH_DELAY`. Through the bud

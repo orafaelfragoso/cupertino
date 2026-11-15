@@ -4,7 +4,7 @@
 use super::*;
 use crate::motion::CLOSE_DURATION;
 use crate::view::layers::{
-    button_face_layer, button_glass_layer, BODY_LAYER, EDGE_LAYER, GLASS_LAYER, ROW_LAYER,
+    button_face_layer, button_glass_layer, BODY_LAYER, GLASS_LAYER, OPTIONS_LAYER, ROW_LAYER,
 };
 use cupertino_kit::platform::{LayerProperty, SurfaceLayerLook};
 use cupertino_ui_test::PresentedSurfaceLayer;
@@ -230,6 +230,7 @@ fn walk(scale: f64, dark: bool, layers: bool) -> Vec<Rest> {
     m.until_quiet(4, 200);
     m.step(|s, w| key(s, w, '1' as u32, Some('1'), Mods::PRIMARY));
     m.until_quiet(4, 200);
+    m.finish_handed_open();
     assert_eq!(m.model().nav.view, View::Browse);
     out.push(take(&mut m, "the browser"));
     to_files(&mut m);
@@ -309,21 +310,15 @@ fn a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place() {
                     GLASS_LAYER,
                     ROW_LAYER,
                     BODY_LAYER,
-                    EDGE_LAYER,
                     button_glass_layer(0),
                     button_face_layer(0)
                 ],
-                "the field's glass, query row, body and edge, then the button's glass and face"
+                "the field's glass, query row and body, then the button's glass and face"
             );
-            // the browser and the files scope: the glass, carrying the edge the compositor draws along it, the query
-            // row and the body
-            for rest in &layered[2..] {
-                assert_eq!(
-                    rest.keys,
-                    vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER],
-                    "{}",
-                    rest.what
-                );
+            // every view: the glass, carrying the edge the compositor draws along it, the query row (and the
+            // browser's view options button) and the body
+            for rest in &layered[1..] {
+                assert_eq!(rest.keys, scope_layers(rest.what), "{}", rest.what);
                 assert_eq!(
                     rest.glass[0].1.edge,
                     crate::view::layers::glass_edge(dark),
@@ -356,7 +351,6 @@ fn a_resting_panel_closes_on_the_compositor_s_clock_without_a_frame() {
         keys,
         vec![
             GLASS_LAYER,
-            EDGE_LAYER,
             ROW_LAYER,
             BODY_LAYER,
             button_glass_layer(0),
@@ -457,6 +451,7 @@ fn resting_layers(
     m.until_quiet(4, 200);
     m.step(|s, w| key(s, w, '1' as u32, Some('1'), Mods::PRIMARY));
     m.until_quiet(4, 200);
+    m.finish_handed_open();
     out.push(take(&mut m, "the browser"));
     to_files(&mut m);
     out.push(take(&mut m, "the files scope"));
@@ -516,48 +511,17 @@ fn compositor_edge(
     out
 }
 
-/// The alpha the panel's own edges draw at each pixel of a window `size` pixels large at `scale`: its edge layer's and
-/// its mode buttons' faces' frames laid where they stand.
-fn drawn_edges(size: (u32, u32), scale: f64, layers: &[PresentedSurfaceLayer]) -> Vec<f32> {
-    let (w, h) = (size.0 as i64, size.1 as i64);
-    let mut out = vec![0.0f32; (w * h) as usize];
-    for l in layers
-        .iter()
-        .filter(|l| l.key == EDGE_LAYER || (l.key >= 16 && l.key % 2 == 1))
-    {
-        let frame = l.frame.as_ref().expect("an edge layer drew a frame");
-        let (x0, y0) = (
-            (l.rect.x() * scale).round() as i64,
-            (l.rect.y() * scale).round() as i64,
-        );
-        for y in 0..i64::from(frame.pixel_height) {
-            for x in 0..i64::from(frame.width) {
-                let (tx, ty) = (x0 + x, y0 + y);
-                if tx < 0 || ty < 0 || tx >= w || ty >= h {
-                    continue;
-                }
-                let a = f32::from(
-                    frame.pixels[y as usize * frame.stride as usize + x as usize * 4 + 3],
-                ) / 255.0;
-                let d = &mut out[(ty * w + tx) as usize];
-                *d = 1.0 - (1.0 - *d) * (1.0 - a);
-            }
-        }
-    }
-    out
-}
-
 /// The edge the compositor draws along the panel's glass is the edge the panel draws itself: at rest, at 1, 1.5 and 2
 /// in both appearances, outside the glass (inside it the faces draw their symbols), the glass's own model of the edge
 /// of [`crate::view::layers::glass_edge`] in each group's look, the search field and its mode button joined in one,
-/// is the panel's own edge (its edge layers, or a scope's drawn in place) within 4 of 255 along every capsule, every
-/// straight side and a scope's continuous corners, which the panel strokes along the glass's own outline
-/// (`--no-capture` prints the sides and the corners apart).
+/// is the panel's own edge drawn in place within 1 of 255 along every capsule, every straight side and a scope's
+/// continuous corners, which the panel strokes along the glass's own outline (`--no-capture` prints the sides and the
+/// corners apart).
 #[test]
 fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
     for scale in [1.0, 1.5, 2.0] {
         for dark in [false, true] {
-            // the panel drawn in place: around a scope, which has no edge layer, the window shows its edge alone
+            // the panel drawn in place: outside its glass the window shows its edge alone
             let in_place = walk(scale, dark, false);
             for ((what, size, layers), flat) in
                 resting_layers(scale, dark).into_iter().zip(in_place)
@@ -565,15 +529,21 @@ fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
                 assert_eq!((flat.what, flat.size), (what, size));
                 let model =
                     compositor_edge(size, scale, &layers, crate::view::layers::glass_edge(dark));
-                // the edge layer's where it draws one, else the window's, drawn in place
-                let own: Vec<f32> = if layers.iter().any(|l| l.key == EDGE_LAYER) {
-                    drawn_edges(size, scale, &layers)
-                } else {
-                    flat.pixels
-                        .chunks(4)
-                        .map(|p| f32::from(p[3]) / 255.0)
-                        .collect()
-                };
+                // the layers' content lies over the edge, as the compositor draws it on the glass under them
+                let content = compose(size, scale, &shown_after(&layers, &[], 0.0));
+                let model: Vec<(f32, f32)> = model
+                    .into_iter()
+                    .zip(content.chunks(4))
+                    .map(|((a, d), c)| {
+                        let c = f32::from(c[3]) / 255.0;
+                        (c + a * (1.0 - c), d)
+                    })
+                    .collect();
+                let own: Vec<f32> = flat
+                    .pixels
+                    .chunks(4)
+                    .map(|p| f32::from(p[3]) / 255.0)
+                    .collect();
                 let enclosure = layers.iter().find(|l| l.key == GLASS_LAYER).unwrap();
                 let (r, radius) = (enclosure.rect, enclosure.look.radius);
                 // a corner's curve reaches this far along the sides of a continuous corner
@@ -606,7 +576,7 @@ fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
                     "trace: edge, {what} at {scale}x, dark {dark}: largest difference {most:.1}, at the corners {most_corner:.1}"
                 );
                 assert!(
-                    most <= 4.0 && most_corner <= 4.0,
+                    most <= 1.0 && most_corner <= 1.0,
                     "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}, \
                      at the corners {most_corner:.1}"
                 );
@@ -619,7 +589,7 @@ fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
 const SHARP_BELOW_PX: f64 = 0.3;
 
 /// One layer as a compositor shows it at one moment: its bounds, opacity, scale about the bounds' centre, corner
-/// radius and content blur, with the frame it drew.
+/// radius and content blur, whether it is cut to its shape, with the frame it drew.
 #[derive(Clone, Debug)]
 struct ShownLayer {
     bounds: Rect,
@@ -628,6 +598,7 @@ struct ShownLayer {
     radius: f64,
     blur: f64,
     glass: bool,
+    masks: bool,
     frame: Option<cupertino_ui_test::PresentedLayer>,
 }
 
@@ -684,6 +655,7 @@ fn shown_after(
                 radius: v(6).max(0.0),
                 blur: v(7).max(0.0),
                 glass: layer.look.glass.is_some(),
+                masks: layer.look.masks,
                 frame: layer.frame.clone(),
             }
         })
@@ -692,7 +664,8 @@ fn shown_after(
 
 /// `layers` laid over a transparent window `size` pixels large at `scale` as a compositor draws them: each frame
 /// blurred by its deviation in device pixels, its origin on the window's device pixels, scaled about the device pixel
-/// nearest its bounds' centre, sampled between pixels, at its opacity, back to front.
+/// nearest its bounds' centre, sampled between pixels, at its opacity, cut to its bounds with its continuous corners
+/// where it masks, back to front.
 fn compose(size: (u32, u32), scale: f64, layers: &[ShownLayer]) -> Vec<u8> {
     let (w, h) = (size.0 as usize, size.1 as usize);
     compose_over(size, scale, layers, vec![[0.0f32; 4]; w * h])
@@ -790,6 +763,20 @@ fn compose_over(
         let s = layer.scale.max(1e-6);
         let o = layer.opacity as f32;
         let read = |x: i64, y: i64| image.read(x, y, Edge::Transparent);
+        // the share of a device pixel inside the layer's shape as shown, where it cuts its frame to it: its bounds on
+        // the device pixels its content lies on
+        let mask = layer.masks.then(|| {
+            let f = scale as f32;
+            cupertino_glass::glass::GlassShape::new(
+                [
+                    origin.0 as f32,
+                    origin.1 as f32,
+                    b.width() as f32 * f,
+                    b.height() as f32 * f,
+                ],
+                layer.radius as f32 * f,
+            )
+        });
         // the window's pixels the scaled copy can reach, a pixel either way
         let reach = |pivot: f64, origin: f64, size: usize, most: usize| {
             let at = |u: f64| pivot + (u + origin - pad as f64 - pivot) * s;
@@ -818,10 +805,13 @@ fn compose_over(
                     read(x0, y0 + 1),
                     read(x0 + 1, y0 + 1),
                 ];
+                let cut = mask.as_ref().map_or(1.0, |m| {
+                    (0.5 - m.sdf([px as f32 + 0.5, py as f32 + 0.5])).clamp(0.0, 1.0)
+                });
                 let src: [f32; 4] = std::array::from_fn(|k| {
                     let top = corners[0][k] * (1.0 - fx) + corners[1][k] * fx;
                     let bottom = corners[2][k] * (1.0 - fx) + corners[3][k] * fx;
-                    (top * (1.0 - fy) + bottom * fy) * o
+                    (top * (1.0 - fy) + bottom * fy) * o * cut
                 });
                 let keep = 1.0 - src[3];
                 for k in 0..4 {
@@ -863,19 +853,35 @@ struct Moment {
     apart: Vec<Rect>,
 }
 
-/// The search field's close at `scale` in the `dark` or light appearance, from Escape on: drawn by the panel itself
-/// (`layers` false) at each frame it draws of it, or handed to the compositor and shown at `moments` (seconds after
-/// Escape) by [`shown_after`] and [`compose`].
-fn close_moments(scale: f64, dark: bool, layers: bool, moments: &[f64]) -> Vec<Moment> {
+/// The close of the panel `open` opens (the search field or a scope) at `scale` in the `dark` or light appearance, from
+/// Escape on (two for a scope, the first folding it into the field, or the scope's own close where it opens alone):
+/// drawn by the panel itself (`layers` false) at each frame it draws of it, or handed to the compositor and shown at
+/// `moments` (seconds after Escape) by [`shown_after`] and [`compose_with_edge`], the edge the compositor draws along
+/// the glass.
+fn close_moments(
+    scale: f64,
+    dark: bool,
+    layers: bool,
+    open: fn() -> Message,
+    moments: &[f64],
+) -> Vec<Moment> {
     let mut m = drawn(scale, dark, layers);
-    m.settle_on(Message::Toggle);
+    m.settle_on(open());
     let rest = m.shown_layers();
     let asked = m.layer_requests().len();
+    let edge = rest
+        .iter()
+        .find(|l| l.look.edge.width > 0.0)
+        .map(|l| l.look.edge);
+    let composed = |size, shown: &[ShownLayer]| match edge {
+        Some(edge) => compose_with_edge(size, scale, shown, edge),
+        None => compose(size, scale, shown),
+    };
     // the panel at rest first, as it shows before Escape
     let mut out = vec![{
         let (w, h, pixels) = m.window_pixels();
         let pixels = if layers {
-            compose((w, h), scale, &shown_after(&rest, &[], 0.0))
+            composed((w, h), &shown_after(&rest, &[], 0.0))
         } else {
             pixels
         };
@@ -887,7 +893,13 @@ fn close_moments(scale: f64, dark: bool, layers: bool, moments: &[f64]) -> Vec<M
             apart: Vec::new(),
         }
     }];
-    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    // the field closes on Escape, a scope on the shortcut that opened the panel (Escape folds it into the field)
+    if matches!(open(), Message::Toggle) {
+        m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    } else {
+        send(Message::Toggle);
+        m.step(|_, _| {});
+    }
     let start = CLOCK.get();
     if layers {
         assert!(m.model().close_handed(), "the close is the compositor's");
@@ -913,7 +925,7 @@ fn close_moments(scale: f64, dark: bool, layers: bool, moments: &[f64]) -> Vec<M
             out.push(Moment {
                 after,
                 size: (w, h),
-                pixels: compose((w, h), scale, &shown),
+                pixels: composed((w, h), &shown),
                 glass: shown
                     .iter()
                     .filter(|l| l.glass)
@@ -959,32 +971,99 @@ fn close_moments(scale: f64, dark: bool, layers: bool, moments: &[f64]) -> Vec<M
     out
 }
 
-/// The close the compositor runs is the panel's own drawing of it at the same moments: at each frame the panel draws
-/// of its close, the compositor's layers at that moment of the close, blurred, scaled and faded as a compositor draws
-/// them, are its pixels but where the two are known to part ([`Moment::apart`]): within 8 of 255 at the first frames,
-/// where the blur is a pixel or two wide and two blurs of the same deviation round differently, and within 1 from the
-/// close's middle on. Their glass is the glass it stands on (rect, corner and opacity). Run with `--no-capture` for the
-/// largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+/// How far a close the compositor runs may stand from the panel's own drawing along the outline, of 255: the panel
+/// blurs its edge with its content as it closes, where the compositor draws its edge along the glass sharp, so the two
+/// part there, by 100 in the dark appearance and 29 in the light at the close's first frame, less as it fades.
+const CLOSE_ALONG_OUTLINE: u8 = 104;
+
+/// How far either side of the glass's outline, in points, a close's edge reaches: the edge stroke, and the panel's own
+/// blur of it at its widest, three deviations either way.
+const CLOSE_EDGE_BAND: f64 = EDGE_BAND + 3.0 * crate::view::layers::CLOSE_DEVIATION;
+
+/// The close the compositor runs is the panel's own drawing of it at the same moments, for the search field in both
+/// appearances and the browser and the files scope in the dark one, where the edge is strongest: at each frame the panel draws of its close, the compositor's layers at that moment of the
+/// close, blurred, scaled and faded as a compositor draws them, with the edge it draws along the glass, are its pixels
+/// at rest within 1 of 255, and part way but where the two are known to part ([`Moment::apart`]) and along the outline
+/// ([`CLOSE_EDGE_BAND`]): within 8 at the first frames, where the blur is a pixel or two wide and two blurs of the same
+/// deviation round differently, and within 1 from the close's middle on. Along the outline they part by up to
+/// [`CLOSE_ALONG_OUTLINE`]. Their glass is the glass it stands on (rect, corner and opacity). Run with `--no-capture`
+/// for the largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
 #[test]
 fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
-    for dark in [true, false] {
-        let own = close_moments(1.5, dark, false, &[0.0; 8]);
+    let panels: [(&str, Opening); 3] = [
+        ("the search field", || Message::Toggle),
+        ("the browser", || Message::Browse),
+        ("the files scope", || Message::Files),
+    ];
+    for (n, (what, open)) in panels.into_iter().enumerate() {
+        for dark in [true, false] {
+            if n == 0 || dark {
+                the_close_at_the_same_moments(what, open, dark);
+            }
+        }
+    }
+}
+
+/// [`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`] for the panel `open` opens.
+fn the_close_at_the_same_moments(what: &str, open: fn() -> Message, dark: bool) {
+    {
+        let own = close_moments(1.5, dark, false, open, &[0.0; 8]);
         assert!(
             own.len() >= 5,
-            "the panel drew its close: {}",
+            "{what}: the panel drew its close: {}",
             own.len() - 1
         );
         let moments: Vec<f64> = own[1..].iter().map(|m| m.after).collect();
-        let handed = close_moments(1.5, dark, true, &moments);
-        let (most, _) = compare(&own[0].pixels, &handed[0].pixels, own[0].size.0);
-        eprintln!("trace: close, dark {dark}, at rest: largest difference {most}");
-        keep_moment("rest", dark, &own[0], &handed[0]);
-        assert!(most <= 1, "at rest, dark {dark}: {most}");
+        let handed = close_moments(1.5, dark, true, open, &moments);
+        // at rest apart from the caret, which may blink between the two
+        let caret = handed.get(1).map_or(Vec::new(), |m| m.apart.clone());
+        let width = own[0].size.0;
+        let most = own[0]
+            .pixels
+            .chunks(4)
+            .zip(handed[0].pixels.chunks(4))
+            .enumerate()
+            .filter(|(i, _)| {
+                let at = Point::new(
+                    (*i as u32 % width) as f64 / 1.5,
+                    (*i as u32 / width) as f64 / 1.5,
+                );
+                !caret.iter().any(|r| r.contains(at))
+            })
+            .map(|(_, (p, q))| {
+                p.iter()
+                    .zip(q)
+                    .map(|(u, v)| u.abs_diff(*v))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .max()
+            .unwrap_or(0);
+        eprintln!("trace: close {what}, dark {dark}, at rest: largest difference {most}");
+        keep_moment(&format!("rest-{what}"), dark, &own[0], &handed[0]);
+        assert!(most <= 1, "{what} at rest, dark {dark}: {most}");
+        let mut worst_edge = 0;
         for (a, b) in own[1..].iter().zip(&handed[1..]) {
             assert_eq!(a.size, b.size);
             let ms = a.after * 1000.0;
             let width = a.size.0;
-            let (mut most, mut most_apart) = (0, 0);
+            let shapes: Vec<cupertino_glass::glass::GlassShape> = a
+                .glass
+                .iter()
+                .filter(|g| g.2 > 0.0)
+                .map(|(r, radius, _)| {
+                    cupertino_glass::glass::GlassShape::new(
+                        [
+                            r.x() as f32,
+                            r.y() as f32,
+                            r.width() as f32,
+                            r.height() as f32,
+                        ],
+                        *radius as f32,
+                    )
+                })
+                .collect();
+            let (mut most, mut most_apart, mut edge) = (0, 0, 0);
             for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
                 let d = p
                     .iter()
@@ -992,26 +1071,43 @@ fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments(
                     .map(|(u, v)| u.abs_diff(*v))
                     .max()
                     .unwrap_or(0);
+                if d == 0 {
+                    continue;
+                }
                 let at = Point::new(
                     (i as u32 % width) as f64 / 1.5,
                     (i as u32 / width) as f64 / 1.5,
                 );
+                let near = shapes
+                    .iter()
+                    .any(|s| f64::from(s.sdf([at.x as f32, at.y as f32])).abs() < CLOSE_EDGE_BAND);
                 if b.apart.iter().any(|r| r.contains(at)) {
                     most_apart = most_apart.max(d);
+                } else if near {
+                    edge = edge.max(d);
                 } else {
                     most = most.max(d);
                 }
             }
+            worst_edge = worst_edge.max(edge);
             eprintln!(
-                "trace: close, dark {dark}, {ms:.0} ms: largest difference {most}, {most_apart} on the buttons' faces and the caret"
+                "trace: close {what}, dark {dark}, {ms:.0} ms: largest difference {most}, {edge} along the outline, \
+                 {most_apart} on the buttons' faces and the caret"
             );
-            keep_moment("close", dark, a, b);
+            assert!(
+                edge <= CLOSE_ALONG_OUTLINE,
+                "{what}, dark {dark}, {ms:.0} ms: {edge} along the outline"
+            );
+            keep_moment(&format!("close-{what}"), dark, a, b);
             let bound = if a.after < crate::motion::CLOSE_DURATION / 2.0 {
                 8
             } else {
                 1
             };
-            assert!(most <= bound, "close, dark {dark}, {ms:.0} ms: {most}");
+            assert!(
+                most <= bound,
+                "close {what}, dark {dark}, {ms:.0} ms: {most}"
+            );
             assert_eq!(a.glass.len(), b.glass.len(), "{:?} {:?}", a.glass, b.glass);
             for ((r0, q0, o0), (r1, q1, o1)) in a.glass.iter().zip(&b.glass) {
                 let off = (r0.x() - r1.x())
@@ -1026,6 +1122,7 @@ fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments(
                 );
             }
         }
+        eprintln!("trace: close {what}, dark {dark}: largest {worst_edge} along the outline");
     }
 }
 
@@ -1062,7 +1159,7 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
         assert!(m.model().open_handed(), "{what}: still the compositor's");
         let first = m.presents();
         let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
-        assert_eq!(keys, vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER], "{what}");
+        assert_eq!(keys, scope_layers(what), "{what}");
         let look = m.shown_layers()[0].look;
         assert_eq!(
             look.edge,
@@ -1106,10 +1203,6 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
                 "{what}: layer {key} fades in"
             );
         }
-        assert!(
-            of(EDGE_LAYER, LayerProperty::Scale).is_empty(),
-            "{what}: no edge layer to scale"
-        );
         // the open's frames: none drawn, none asked for, the browser's scroll indicator, which shows as it comes into
         // view, kept as it is meanwhile
         let open = {
@@ -1456,14 +1549,13 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
 
 /// The search field opening from hidden hands its open to the compositor: the panel draws its layers once, at rest
 /// (the field's glass, its content and each mode button's glass and face), the field's glass carrying the edge the
-/// compositor draws along the glass group in place of the edge layer, and asks the compositor to move them from where
-/// the open starts, each value through the panel's own; then it draws no frame of its window or a layer, and asks for
-/// none, until the open is over, when the edge layer and the faces' edges draw the edge again.
+/// compositor draws along the glass group, and asks the compositor to move them from where the open starts, each value
+/// through the panel's own; then it draws no frame of its window or a layer, and asks for none, until the open is over,
+/// and at rest the glass carries the edge still.
 #[test]
 fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
     use crate::view::layers::{glass_edge, OPEN_SAMPLES};
     use crate::view::modes::{JOIN_CONTAINER, JOIN_SPACING};
-    use cupertino_kit::platform::LayerEdge;
     let mut m = drawn(1.5, true, true);
     send(Message::Toggle);
     m.step(|_, _| {});
@@ -1544,13 +1636,12 @@ fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame(
     m.layers_settle();
     assert!(!m.model().open_handed(), "the open is over");
     m.until_quiet(4, 200);
+    // at rest the glass carries the edge still
     let rest = m.shown_layers();
-    assert!(
-        rest.iter().any(|l| l.key == EDGE_LAYER),
-        "the edge layer again"
-    );
+    let keys: Vec<u64> = rest.iter().map(|l| l.key).collect();
+    assert_eq!(keys, want, "no edge layer at rest either");
     let glass = rest.iter().find(|l| l.key == GLASS_LAYER).unwrap();
-    assert_eq!(glass.look.edge, LayerEdge::NONE);
+    assert_eq!(glass.look.edge, glass_edge(true));
 }
 
 /// Under Reduce Motion the search field's open is not handed over: the panel opens drawn in place.
@@ -1743,7 +1834,7 @@ fn a_scope_folds_on_the_compositor_s_clock_drawing_its_row_once() {
         let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
         assert_eq!(
             keys,
-            vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER],
+            scope_layers(what),
             "{what}: the edge drawn along the glass"
         );
         let glass = m
@@ -1866,24 +1957,76 @@ fn under_reduce_motion_a_scope_s_fold_is_the_panel_s_own() {
     assert_eq!(m.layer_requests().len(), asked);
 }
 
-/// A scope's fold into the search field at `scale` in the `dark` or light appearance, from Escape on, the scope opened
-/// by `open` and at rest: drawn by the panel itself (`layers` false) at each frame it draws of the fold, with whether
-/// its header had switched; or handed to the compositor and shown at `moments` (seconds after Escape, and whether the
-/// header had switched by then) by [`shown_after`] and [`compose_with_edge`], the query row's second frame from the
-/// switch on.
+/// How a fold or an unfold goes: the view it starts from at rest, opened from hidden by its message, and the scope's
+/// shortcut it unfolds by, or Escape for a fold.
+#[derive(Clone, Copy)]
+struct Folding {
+    from: Opening,
+    unfold: Option<Opening>,
+}
+
+impl Folding {
+    /// A scope folding into the search field.
+    fn fold(open: Opening) -> Folding {
+        Folding {
+            from: open,
+            unfold: None,
+        }
+    }
+
+    /// The search field unfolding into a scope by its shortcut.
+    fn unfold(shortcut: Opening) -> Folding {
+        Folding {
+            from: || Message::Toggle,
+            unfold: Some(shortcut),
+        }
+    }
+
+    /// The panel at rest, as the fold or unfold starts from it.
+    fn rest(self, m: &mut Metered) {
+        m.settle_on((self.from)());
+    }
+
+    /// Starts the fold (Escape) or the unfold (the scope's shortcut).
+    fn start(self, m: &mut Metered) {
+        match self.unfold {
+            Some(shortcut) => {
+                send(shortcut());
+                m.step(|_, _| {});
+            }
+            None => {
+                m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+            }
+        }
+    }
+
+    /// The view it ends in.
+    fn header(self) -> crate::motion::Header {
+        match self.unfold.map(|f| f()) {
+            Some(Message::Browse) => crate::motion::Header::Browse,
+            Some(_) => crate::motion::Header::Files,
+            None => crate::motion::Header::Search,
+        }
+    }
+}
+
+/// A scope's fold into the search field, or the field's unfold into a scope, at `scale` in the `dark` or light
+/// appearance, from Escape or the scope's shortcut on, the view it starts from at rest (`how`): drawn by the panel
+/// itself (`layers` false) at each frame it draws of it, with whether its header had switched; or handed to the
+/// compositor and shown at `moments` (seconds after it began, and whether the header had switched by then) by
+/// [`shown_after`] and [`compose_with_edge`], the query row's second frame from the switch on.
 fn fold_moments(
     scale: f64,
     dark: bool,
     layers: bool,
-    open: fn() -> Message,
+    how: Folding,
     moments: &[(f64, bool)],
 ) -> Vec<(Moment, bool)> {
-    use crate::motion::Header;
     let mut m = drawn(scale, dark, layers);
-    m.settle_on(open());
+    how.rest(&mut m);
     let asked = m.layer_requests().len();
     let seen = m.window_frames();
-    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    how.start(&mut m);
     let start = CLOCK.get();
     let length = m.model().motion.shaping_left(start);
     let materials = |m: &Metered| -> Vec<(Rect, f64, f64)> {
@@ -1907,17 +2050,23 @@ fn fold_moments(
     let mut out = Vec::new();
     if layers {
         assert!(m.model().fold_handed(), "the fold is the compositor's");
+        // the first frame, which draws what the layers show as it starts
+        m.step(|_, _| {});
         let before = m.shown_layers();
         let changes = m.layer_requests()[asked..].to_vec();
         let (w, h, _) = m.window_pixels();
-        let (switch, _) = m.model().motion.header_switch(start).unwrap();
-        let number = m.model().open_number;
-        while CLOCK.get() < switch {
-            m.step(|_, _| {});
-        }
-        send(Message::HeaderSwitch(number));
-        m.step(|_, _| {});
-        let after = m.shown_layers();
+        let after = match m.model().motion.header_switch(start) {
+            Some((switch, _)) => {
+                let number = m.model().open_number;
+                while CLOCK.get() < switch {
+                    m.step(|_, _| {});
+                }
+                send(Message::HeaderSwitch(number));
+                m.step(|_, _| {});
+                m.shown_layers()
+            }
+            None => before.clone(),
+        };
         let edge = before
             .iter()
             .find(|l| l.look.edge.width > 0.0)
@@ -1948,8 +2097,12 @@ fn fold_moments(
     loop {
         let after = CLOCK.get() - start;
         let now = m.window_frames();
-        if now != drawn {
-            drawn = now;
+        // a frame drawn while the window waits for its new size lays the panel out for a window it is not yet
+        let extent = m.model().extent();
+        let whole = |v: f64| (v * scale).round() as u32;
+        let (w, h, _) = m.window_pixels();
+        let laid_out = (whole(extent.width), whole(extent.height)) == (w, h);
+        if std::mem::replace(&mut drawn, now) != now && laid_out {
             let (w, h, pixels) = m.window_pixels();
             out.push((
                 Moment {
@@ -1959,7 +2112,7 @@ fn fold_moments(
                     glass: materials(&m),
                     apart: Vec::new(),
                 },
-                m.model().presented().header == Header::Search,
+                m.model().presented().header == how.header(),
             ));
         }
         if after >= length || out.len() >= 60 {
@@ -1983,7 +2136,7 @@ fn fold_moments(
 fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
     for (what, open) in FOLDING {
         for dark in [true, false] {
-            let own = fold_moments(1.5, dark, false, open, &[]);
+            let own = fold_moments(1.5, dark, false, Folding::fold(open), &[]);
             assert!(
                 own.len() >= 12,
                 "{what}: the panel drew its fold: {}",
@@ -1997,7 +2150,7 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 .map(|(_, m)| m)
                 .collect();
             let moments: Vec<(f64, bool)> = own.iter().map(|(m, s)| (m.after, *s)).collect();
-            let handed = fold_moments(1.5, dark, true, open, &moments);
+            let handed = fold_moments(1.5, dark, true, Folding::fold(open), &moments);
             let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
             let (mut worst, mut worst_edge, mut worst_caret) = (0, 0, 0);
             for ((a, _), (b, _)) in own.iter().zip(&handed) {
@@ -2074,6 +2227,341 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
             eprintln!(
                 "trace: fold {what}, dark {dark}: {} of its {} frames, largest {worst} apart from the outline and the \
                  caret, {worst_edge} along the outline (the line {line:.0}), {worst_caret} at the caret",
+                own.len(),
+                last + 1
+            );
+        }
+    }
+}
+
+/// The scopes the search field unfolds into by their shortcuts.
+const UNFOLDING: [(&str, Opening); 2] = [
+    ("the browser", || Message::Browse),
+    ("the files scope", || Message::Files),
+];
+
+/// A scope's shortcut from the search field at rest as layers hands its unfold to the compositor: the mode buttons
+/// merge into the field through the panel's own values, the glass grows through them from the field's capsule to the
+/// scope's shape, the scope's body, drawn at once as the scope rests, fades in through its own curve cut to the glass
+/// as the glass grows, and the edge is the compositor's along the glass throughout. Once its first frame is drawn the
+/// panel draws no frame of its window and none of a layer but one of the query row, at the header's switch (into the
+/// files scope; into the browser the header switches at once), and asks for none, until the compositor tells the
+/// layers came to rest.
+#[test]
+fn the_search_field_unfolds_on_the_compositor_s_clock_drawing_its_row_at_most_once() {
+    use crate::view::layers::glass_edge;
+    for (what, shortcut) in UNFOLDING {
+        let mut m = drawn(1.5, true, true);
+        m.settle_on(Message::Toggle);
+        assert!(m.model().layered(), "{what}: the field at rest as layers");
+        let count = m.model().modes().len();
+        let rest_glass = m
+            .shown_layers()
+            .into_iter()
+            .find(|l| l.key == GLASS_LAYER)
+            .unwrap();
+        assert_eq!(rest_glass.look.edge, glass_edge(true), "{what}: at rest");
+        let asked = m.layer_requests().len();
+        send(shortcut());
+        m.step(|_, _| {});
+        assert!(
+            m.model().fold_handed(),
+            "{what}: the unfold is the compositor's"
+        );
+        let start = CLOCK.get();
+        let length = m.model().motion.shaping_left(start);
+        let switch = m.model().motion.header_switch(start);
+        let changes = m.layer_requests()[asked..].to_vec();
+        let of = |key: u64, p: LayerProperty| -> Vec<cupertino_kit::platform::LayerChange> {
+            changes
+                .iter()
+                .filter(|(k, _)| *k == key)
+                .flat_map(|(_, c)| c.iter().filter(|c| c.property == p).cloned())
+                .collect()
+        };
+        // the glass from the field's capsule to the scope's shape through the panel's own values
+        let height = of(GLASS_LAYER, LayerProperty::Height)[0]
+            .samples
+            .clone()
+            .expect("samples");
+        assert_eq!(
+            f64::from(height[0]),
+            crate::view::COLLAPSED_HEIGHT,
+            "{what}"
+        );
+        let target = m.model().motion_target();
+        assert_eq!(f64::from(*height.last().unwrap()), target.height, "{what}");
+        // the body fades in on its own curve, cut to the glass as the glass grows; the row does not fade
+        let fade = of(BODY_LAYER, LayerProperty::Opacity)[0]
+            .samples
+            .clone()
+            .unwrap();
+        assert_eq!((fade[0], *fade.last().unwrap()), (0.0, 1.0), "{what}");
+        assert!(of(ROW_LAYER, LayerProperty::Opacity).is_empty(), "{what}");
+        assert_eq!(
+            of(BODY_LAYER, LayerProperty::Height),
+            of(GLASS_LAYER, LayerProperty::Height),
+            "{what}: the body's shape is the glass's"
+        );
+        let body = m
+            .shown_layers()
+            .into_iter()
+            .find(|l| l.key == BODY_LAYER)
+            .unwrap();
+        assert!(body.look.masks, "{what}: the body is cut to its shape");
+        assert_eq!(
+            (body.rect.width(), body.rect.height()),
+            (target.width, target.height),
+            "{what}: the body drawn as the scope rests"
+        );
+        // the mode buttons merge through the panel's own values, and are gone once merged
+        for index in 0..count {
+            let shown = of(button_glass_layer(index), LayerProperty::Opacity);
+            let face = of(button_face_layer(index), LayerProperty::Opacity);
+            match m
+                .shown_layers()
+                .iter()
+                .any(|l| l.key == button_glass_layer(index))
+            {
+                true => {
+                    let shown = shown[0].samples.clone().expect("samples");
+                    assert_eq!((shown[0], *shown.last().unwrap()), (1.0, 0.0), "{what}");
+                    let face = face[0].samples.clone().expect("samples");
+                    assert_eq!(*face.last().unwrap(), 0.0, "{what}");
+                }
+                // into the browser the header switches at once and the buttons are gone from the first frame
+                false => assert!(switch.is_none(), "{what}: buttons gone at once"),
+            }
+        }
+        // the unfold's first frame: the window at its size through the unfold, and every layer drawn as it starts
+        m.step(|_, _| {});
+        let (windows, layers) = (m.window_frames(), m.layer_frames());
+        eprintln!(
+            "trace: unfold {what}: {length:.3} s, the header switching at {:?}; at its first frame {windows} window \
+             frames, layers {layers:?}",
+            switch.map(|(at, _)| at - start)
+        );
+        let mut steps = 0;
+        let number = m.model().open_number;
+        let mut switched = false;
+        while CLOCK.get() < start + length + 0.1 {
+            if let Some((at, _)) = switch.filter(|(at, _)| !switched && CLOCK.get() >= *at) {
+                let _ = at;
+                switched = true;
+                send(Message::HeaderSwitch(number));
+            }
+            m.step(|_, _| {});
+            steps += 1;
+            assert!(
+                !m.model().animating(),
+                "{what}: the unfold asks for no frame"
+            );
+        }
+        assert!(
+            m.model().fold_handed(),
+            "{what}: until the compositor tells"
+        );
+        let mut more = m.layer_frames();
+        for (k, n) in &layers {
+            *more.entry(*k).or_default() -= n;
+        }
+        more.retain(|_, n| *n > 0);
+        eprintln!("trace: unfold {what}: over {steps} steps, new frames {more:?}");
+        assert_eq!(m.window_frames(), windows, "{what}: no frame of the window");
+        let want = if switch.is_some() {
+            vec![(ROW_LAYER, 1)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            more.into_iter().collect::<Vec<_>>(),
+            want,
+            "{what}: one frame of the row at the switch, if it switches part way"
+        );
+        m.layers_settle();
+        assert!(!m.model().fold_handed(), "{what}: the unfold is over");
+        assert_eq!(
+            m.model().presented().header,
+            Folding::unfold(shortcut).header()
+        );
+        m.until_quiet(4, 200);
+        let body = m
+            .shown_layers()
+            .into_iter()
+            .find(|l| l.key == BODY_LAYER)
+            .unwrap();
+        assert!(!body.look.masks, "{what}: at rest the body is not cut");
+    }
+}
+
+/// Under Reduce Motion nothing of an unfold is handed over: the panel draws it in place.
+#[test]
+fn under_reduce_motion_the_search_field_s_unfold_is_the_panel_s_own() {
+    for (what, shortcut) in UNFOLDING {
+        let mut m = drawn(1.5, true, true);
+        m.settle_on(Message::ReduceMotion(true));
+        m.settle_on(Message::Toggle);
+        let asked = m.layer_requests().len();
+        send(shortcut());
+        m.step(|_, _| {});
+        assert!(!m.model().fold_handed(), "{what}");
+        assert_eq!(m.layer_requests().len(), asked, "{what}");
+    }
+}
+
+/// How far the compositor's drawing `b` of a moment is from the panel's own `a` at 1.5: `(apart from the outline and
+/// the caret, along the outline, at the caret)`, the outline that of each glass shape `a` shows (the enclosure's and
+/// the mode buttons'), the caret the field's at the enclosure's left.
+fn apart_along_outline(a: &Moment, b: &Moment) -> (u8, u8, u8) {
+    let shapes: Vec<cupertino_glass::glass::GlassShape> = a
+        .glass
+        .iter()
+        .filter(|g| g.2 > 0.0)
+        .map(|(r, radius, _)| {
+            cupertino_glass::glass::GlassShape::new(
+                [
+                    r.x() as f32,
+                    r.y() as f32,
+                    r.width() as f32,
+                    r.height() as f32,
+                ],
+                *radius as f32,
+            )
+        })
+        .collect();
+    let (rect, _, _) = a.glass[0];
+    let caret = Rect::new(
+        rect.x() + crate::view::QUERY_INSET - 8.0,
+        rect.y(),
+        32.0,
+        crate::view::COLLAPSED_HEIGHT,
+    );
+    let width = a.size.0;
+    let (mut content, mut edge, mut at_caret) = (0, 0, 0);
+    for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
+        let d = p
+            .iter()
+            .zip(q)
+            .map(|(u, v)| u.abs_diff(*v))
+            .max()
+            .unwrap_or(0);
+        if d == 0 {
+            continue;
+        }
+        let x = ((i as u32 % width) as f64 + 0.5) / 1.5;
+        let y = ((i as u32 / width) as f64 + 0.5) / 1.5;
+        let near = shapes
+            .iter()
+            .any(|s| f64::from(s.sdf([x as f32, y as f32])).abs() < EDGE_BAND);
+        if near {
+            edge = edge.max(d);
+        } else if caret.contains(Point::new(x, y)) {
+            at_caret = at_caret.max(d);
+        } else {
+            content = content.max(d);
+        }
+    }
+    (content, edge, at_caret)
+}
+
+/// The layers of the scope `what` names at rest: the glass, the query row, the browser's view options button, the body.
+fn scope_layers(what: &str) -> Vec<u64> {
+    if what == "the browser" {
+        vec![GLASS_LAYER, ROW_LAYER, OPTIONS_LAYER, BODY_LAYER]
+    } else {
+        vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER]
+    }
+}
+
+/// How far the unfold the compositor runs may stand from the panel's own drawing along the outline, of 255: where the
+/// body's content crosses the glass's moving edge the panel's own drawing cuts it a fraction of a device pixel further
+/// in than the compositor's cut (20 of 255 at most), and while the files scope's shape waits as the field's capsule
+/// under the scope's header the panel's own edge parts from the compositor's along the capsule's ends by up to 18.
+const UNFOLD_ALONG_OUTLINE: u8 = 20;
+
+/// The unfold the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
+/// draws of the search field's unfold into a scope by its shortcut (every other one and its last, at 1.5, both scopes
+/// and appearances), the compositor's layers at that moment, the body cut to the glass and the edge drawn along it,
+/// against its pixels, and their glass against the glass it stands on (rect, corner and opacity), which it is at every
+/// moment. The last frame is the panel's within 1 of 255; the first and those part way, apart from the outline and the
+/// caret (the field holds its caret while the compositor runs the unfold), within 1, and along the outline, which the
+/// compositor's edge and the panel's both follow from the field's capsule to a scope's continuous corners, within
+/// [`UNFOLD_ALONG_OUTLINE`].
+/// Run with `--no-capture` for the figures, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+#[test]
+fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
+    for (what, shortcut) in UNFOLDING {
+        for dark in [true, false] {
+            let how = Folding::unfold(shortcut);
+            let mut own = fold_moments(1.5, dark, false, how, &[]);
+            // the window grows to hold the scope as the unfold starts: a frame the panel drew before at the field's
+            // size is not the unfold's
+            let size = own.last().map(|(m, _)| m.size);
+            own.retain(|(m, _)| Some(m.size) == size);
+            assert!(
+                own.len() >= 8,
+                "{what}: the panel drew its unfold: {}",
+                own.len()
+            );
+            let last = own.len() - 1;
+            let own: Vec<(Moment, bool)> = own
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == 0 || *i == last)
+                .map(|(_, m)| m)
+                .collect();
+            let moments: Vec<(f64, bool)> = own.iter().map(|(m, s)| (m.after, *s)).collect();
+            let handed = fold_moments(1.5, dark, true, how, &moments);
+            let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
+            let (mut worst, mut worst_edge, mut worst_caret) = (0, 0, 0);
+            let shown = |g: &[(Rect, f64, f64)]| -> Vec<(Rect, f64, f64)> {
+                g.iter().filter(|g| g.2 > 0.0).copied().collect()
+            };
+            for (n, ((a, _), (b, _))) in own.iter().zip(&handed).enumerate() {
+                assert_eq!(a.size, b.size);
+                let ms = a.after * 1000.0;
+                let (content, edge, at_caret) = apart_along_outline(a, b);
+                worst = worst.max(content);
+                worst_edge = worst_edge.max(edge);
+                worst_caret = worst_caret.max(at_caret);
+                eprintln!(
+                    "trace: unfold {what}, dark {dark}, {ms:.0} ms: largest difference {content}, {edge} along the \
+                     outline, {at_caret} at the caret"
+                );
+                keep_moment(&format!("unfold-{what}"), dark, a, b);
+                if n == own.len() - 1 {
+                    let (most, _) = compare(&a.pixels, &b.pixels, a.size.0);
+                    assert!(
+                        most <= 1 || at_caret == most,
+                        "{what}, dark {dark}, {ms:.0} ms: the last frame {most} apart"
+                    );
+                }
+                assert!(
+                    content <= 1,
+                    "{what}, dark {dark}, {ms:.0} ms: {content} apart from the outline"
+                );
+                assert!(
+                    edge <= UNFOLD_ALONG_OUTLINE,
+                    "{what}, dark {dark}, {ms:.0} ms: {edge} along the outline"
+                );
+                let (ga, gb) = (shown(&a.glass), shown(&b.glass));
+                assert_eq!(ga.len(), gb.len(), "{what} {ms:.0} ms: {ga:?} {gb:?}");
+                for ((r0, q0, o0), (r1, q1, o1)) in ga.iter().zip(&gb) {
+                    let off = (r0.x() - r1.x())
+                        .abs()
+                        .max((r0.y() - r1.y()).abs())
+                        .max((r0.width() - r1.width()).abs())
+                        .max((r0.height() - r1.height()).abs());
+                    assert!(off < 0.05, "{what} {ms:.0} ms: glass {r0:?} against {r1:?}");
+                    assert!(
+                        (q0 - q1).abs() < 0.05 && (o0 - o1).abs() < 0.01,
+                        "{what} {ms:.0} ms: {q0} {o0} / {q1} {o1}"
+                    );
+                }
+            }
+            eprintln!(
+                "trace: unfold {what}, dark {dark}: {} of its {} frames, largest {worst} apart from the outline and \
+                 the caret, {worst_edge} along the outline (the line {line:.0}), {worst_caret} at the caret",
                 own.len(),
                 last + 1
             );

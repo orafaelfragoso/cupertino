@@ -72,7 +72,7 @@ impl FrameClock {
 }
 
 /// Whether the window waits for the frame its last commit asked for.
-fn waits_for_frame<M>(w: &WindowState<M>) -> bool {
+pub(super) fn waits_for_frame<M>(w: &WindowState<M>) -> bool {
     w.committed && !w.frame_ready
 }
 
@@ -86,7 +86,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// every node was called and none asked again, an event arrived or something else is ready (a wake that came due,
     /// a message, a frame to draw), or a window's next frame is about to be due. [`Runtime::run`] calls it before it
     /// waits on the window system; it never runs inside a frame and does not move time.
-    pub fn run_idle(&mut self) -> Result<(), UiError> {
+    ///
+    /// When it stopped for a window's frame, it returns when the work left goes on without that frame: once the first
+    /// of the frames that held it back is a whole period late, as seen at the moment it stopped. The loop waits no
+    /// longer than that, and the time is never one already past then: a frame that late held nothing back.
+    pub fn run_idle(&mut self) -> Result<Option<Timestamp>, UiError> {
         while !self.exit && self.has_idle_work() {
             // what arrived since the last look goes first
             self.system
@@ -95,44 +99,40 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             if self.ready() {
                 break;
             }
-            let Some(until) = self.idle_until(self.options.clock.now()) else {
-                break;
-            };
-            self.idle_slice(until);
+            match self.idle_until(self.options.clock.now()) {
+                Ok(until) => self.idle_slice(until),
+                Err(resume) => return Ok(resume),
+            }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// When a slice started at `now` ends: a slice's length on, before the next wake and before any window's next
-    /// frame is due; `None` when that leaves no time.
-    pub(super) fn idle_until(&self, now: Timestamp) -> Option<Timestamp> {
+    /// frame is due. With no time left, the error is when the work goes on without the frames that hold it back (each
+    /// a whole period after it was due), `None` when only a wake does, which is then ready.
+    pub(super) fn idle_until(&self, now: Timestamp) -> Result<Timestamp, Option<Timestamp>> {
         let mut until = now.0.saturating_add(IDLE_SLICE_NS);
         if let Some(wake) = self.next_wake() {
             until = until.min(wake.0);
         }
+        let mut resume: Option<Timestamp> = None;
         for w in self.windows.iter().filter(|w| waits_for_frame(w)) {
-            if let Some(due) = w.frame_clock.due(now) {
-                until = until.min(due.0.saturating_sub(FRAME_MARGIN_NS));
+            // a frame a whole period late is not due: it holds nothing back
+            let (Some(due), Some(late)) = (w.frame_clock.due(now), w.frame_clock.held_back())
+            else {
+                continue;
+            };
+            let ends = due.0.saturating_sub(FRAME_MARGIN_NS);
+            until = until.min(ends);
+            if ends <= now.0 {
+                resume = Some(resume.map_or(late, |r| r.min(late)));
             }
         }
-        (until > now.0).then_some(Timestamp(until))
-    }
-
-    /// When the loop, waiting with idle work left because a frame was due, gives up on the frame and goes on with the
-    /// work: once the frame is a whole period late. `None` with no idle work. A frame already that late holds nothing
-    /// back, so it is left out: with two windows, one of them not drawn, its frame would otherwise name a time past and
-    /// the loop would wait for nothing, over and over, until the other's frame came.
-    pub(super) fn idle_resume(&self) -> Option<Timestamp> {
-        if !self.has_idle_work() {
-            return None;
+        if until > now.0 {
+            Ok(Timestamp(until))
+        } else {
+            Err(resume)
         }
-        let now = self.options.clock.now();
-        self.windows
-            .iter()
-            .filter(|w| waits_for_frame(w))
-            .filter_map(|w| w.frame_clock.held_back())
-            .filter(|&at| at > now)
-            .min()
     }
 
     /// One slice: each node that asked is called once, in the order of the windows and of the nodes' ids, until the

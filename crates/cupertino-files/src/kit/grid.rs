@@ -7,7 +7,8 @@
 //! press on the name of the only selected item renames it after the double-click interval ([`super::clicks`]), and a
 //! press with Ctrl held opens the context menu. Read as a list of items.
 
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 use cupertino_kit::controls::{Image, ImageFit, ImageSource, Selection, Text, TextRole};
 use cupertino_kit::core::{
@@ -22,9 +23,10 @@ use cupertino_kit::layout::{
 use cupertino_kit::platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, Wrap,
+    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, TextStyle, TextSystem,
+    Wrap,
 };
-use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant};
+use cupertino_kit::theme::{Color, ColorRole, InteractionVariant, StateVariant, TypeRole};
 
 use super::band::{self, Band};
 use super::clicks::Clicks;
@@ -198,6 +200,58 @@ pub(super) struct TypeSelect {
     clicks: Clicks,
     /// The last scroll went toward the start: the names before the cells built are shaped ahead, else those after.
     back: bool,
+    /// How far the idle time's shaping of the names past the band got, so the next slice goes on from there.
+    walk: RefCell<Option<Walk>>,
+}
+
+/// How far the shaping of the names past the band got ([`IconGrid::ahead`]), and what it shaped them for: the band, the
+/// direction, the layout and the items, how the names are shaped and the environment they are shaped in. Another band,
+/// another layout, width or scale makes other or differently laid out names, which start again from the first.
+struct Walk {
+    band: (f64, f64),
+    back: bool,
+    layout: Weak<IconLayout>,
+    items: Weak<[crate::Entry]>,
+    revision: u64,
+    names: NameShape,
+    scale: f64,
+    body: TypeRole,
+    text: std::sync::Weak<TextSystem>,
+    /// How many of the walk's names are shaped.
+    done: usize,
+}
+
+impl Walk {
+    /// The walk of `grid`'s names past its band toward the start when `back`, shaped as `names` says in `env`, none of
+    /// them shaped yet.
+    fn of(grid: &IconGrid, back: bool, names: NameShape, env: &Environment) -> Walk {
+        Walk {
+            band: grid.band(),
+            back,
+            layout: Rc::downgrade(&grid.layout),
+            items: Rc::downgrade(&grid.items),
+            revision: grid.revision,
+            names,
+            scale: env.scale,
+            body: env.theme.type_scale.body,
+            text: std::sync::Arc::downgrade(&env.text),
+            done: 0,
+        }
+    }
+
+    /// Whether `self` walks the names `other` walks, laid out the same way. A weak handle keeps its allocation, so the
+    /// same address is the same layout and the same items.
+    fn same(&self, other: &Walk) -> bool {
+        self.band == other.band
+            && self.back == other.back
+            && self.layout.ptr_eq(&other.layout)
+            && self.items.ptr_eq(&other.items)
+            && self.revision == other.revision
+            && self.names == other.names
+            && self.scale == other.scale
+            && self.body == other.body
+            && self.text.ptr_eq(&other.text)
+    }
 }
 
 /// How a grid's names are shaped: in the view's text size, keeping at most `max_lines` lines ([`name`]).
@@ -905,16 +959,25 @@ impl Widget<Message> for IconGrid {
 
     /// Shapes the names past the band of built cells, in the direction of the last scroll, as each cell's name shapes
     /// its own: laid out in its cell's name width, then at the width it took, as its measure and its paint lay it out.
-    /// The text system's cache keeps them for the frame that builds their cells, which then shapes none.
+    /// The text system's cache keeps them for the frame that builds their cells, which then shapes none. A slice that
+    /// runs out of time keeps where it stopped, and the next goes on from there while the walk is the same, so the work
+    /// ends however long the names take to shape.
     fn idle(&self, state: &TypeSelect, cx: &mut IdleCx<'_>) {
         let Some(names) = self.names.filter(|_| !self.strip) else {
             return;
         };
-        for index in self.ahead(state.back) {
+        let mut walk = Walk::of(self, state.back, names, cx.env());
+        let mut kept = state.walk.borrow_mut();
+        if let Some(last) = kept.as_ref().filter(|last| last.same(&walk)) {
+            walk.done = last.done;
+        }
+        let ahead = self.ahead(state.back);
+        while let Some(&index) = ahead.get(walk.done) {
             if !cx.has_time() {
                 cx.request_idle();
-                return;
+                break;
             }
+            walk.done += 1;
             let (Some(cell), Some(item)) = (self.layout.cells.get(index), self.items.get(index))
             else {
                 continue;
@@ -927,6 +990,7 @@ impl Widget<Message> for IconGrid {
                 laid_out_name(cx.env(), &content, lines, laid.size().width);
             }
         }
+        *kept = Some(walk);
     }
 
     fn semantics(&self, _: &TypeSelect, cx: &mut SemanticsCx<'_>) {

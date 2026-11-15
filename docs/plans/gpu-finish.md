@@ -87,11 +87,11 @@ The boxes here are ticked together with their items in the GPU plan.
 - [x] `take_turn` tells "cannot be held" from "timed out", and `make_ahead` gives up at once on the former. Test: an
       unwritable cache directory returns within one poll.
 - [x] The client's warm-up thread is stopped and joined at exit, as the server's is.
-- [ ] The Files grid's idle work resumes where its last slice stopped, so a folder of long names ends its idle work.
+- [x] The Files grid's idle work resumes where its last slice stopped, so a folder of long names ends its idle work.
       Test: on a clock that gives each slice too little time for the whole walk, the work still ends.
-- [ ] With two windows and idle work left, the run loop no longer waits with a zero timeout over and over
+- [x] With two windows and idle work left, the run loop no longer waits with a zero timeout over and over
       (`runtime/idle.rs`).
-- [ ] A draw-into frame that finds no free buffer marks its damage again, so kept scroll images are repainted where
+- [x] A draw-into frame that finds no free buffer marks its damage again, so kept scroll images are repainted where
       that frame would have drawn. Test: a frame skipped for want of a buffer, then the next frame, shows the change.
 
 ### 2c. Tests and scripts (`scripts/`, the server's and `cupertino-ui-gpu`'s GPU tests)

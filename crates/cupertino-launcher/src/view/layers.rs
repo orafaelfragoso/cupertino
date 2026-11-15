@@ -6,7 +6,8 @@
 //! * the enclosure's glass, a layer with the glass in its look and nothing of its own ([`GLASS_LAYER`]);
 //! * the thin dark edge just outside the enclosure, in a layer around it whose centre is the point the enclosure grows
 //!   about, so the layer's scale grows the edge with the glass ([`EDGE_LAYER`]);
-//! * the content, unscaled ([`CONTENT_LAYER`]);
+//! * the content, unscaled, in two layers: the query row ([`ROW_LAYER`]) and the body below it ([`BODY_LAYER`]),
+//!   which a fold fades on its own curve while the row does not, both from the content's top ([`ContentPart`]);
 //! * each mode button's glass, in the field's glass group, and its face (its edge, focus ring and symbol) in a layer
 //!   around it ([`button_glass_layer`], [`button_face_layer`]).
 //!
@@ -18,6 +19,9 @@
 //! part every frame, which a fixed frame of an edge cannot follow: the field's glass layer then carries the edge in its
 //! look ([`glass_edge`]), which the compositor draws round each shape of the glass group cut by the others, as the panel
 //! cuts its own edges, and neither the edge layer nor the buttons' faces draw one.
+//!
+//! While the compositor runs a scope's fold into the search field ([`fold_changes`]) the shape changes from a scope's
+//! to the field's capsule, which a fixed frame of an edge cannot follow either: the glass carries the edge then too.
 //!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
 //! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it and the content and
@@ -42,10 +46,11 @@ use cupertino_kit::platform::{
 use std::cell::Cell;
 use std::sync::Arc;
 
-/// The keys of the panel's layers: the enclosure's glass, its edge and its content.
+/// The keys of the panel's layers: the enclosure's glass, its edge, and its content's query row and body.
 pub const GLASS_LAYER: u64 = 1;
 pub const EDGE_LAYER: u64 = 2;
-pub const CONTENT_LAYER: u64 = 3;
+pub const ROW_LAYER: u64 = 3;
+pub const BODY_LAYER: u64 = 4;
 
 /// The key of the layer of mode button `index`'s glass.
 pub fn button_glass_layer(index: usize) -> u64 {
@@ -350,6 +355,84 @@ impl<M: 'static> Widget<M> for SymbolBox<M> {
     }
 }
 
+/// A part of the panel's content, `size` large at the content's top left, its children one above the other from `top`
+/// down, across its width; a compositor layer of its own (`key`) when `layer`. The body's part starts at the content's
+/// top as the row's does, with room for the row above its children, so both lie on the device pixels the content
+/// lies on.
+pub struct ContentPart<M> {
+    pub key: u64,
+    pub layer: bool,
+    pub size: Size,
+    pub top: f64,
+    pub children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for ContentPart<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(self.size.width.max(0.0)),
+            height: SizeSpec::Fixed(self.size.height.max(0.0)),
+            insets: cupertino_kit::geometry::Insets {
+                top: self.top,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            },
+            ..LayoutSpec::new(ContainerKind::Stack {
+                axis: cupertino_kit::layout::Axis::Vertical,
+                spacing: 0.0,
+                align: cupertino_kit::layout::Align::Stretch,
+                justify: cupertino_kit::layout::Justify::Start,
+            })
+        }
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        if (self.size, self.top) != (old.size, old.top) {
+            Change::Layout
+        } else if (self.key, self.layer) != (old.key, old.layer) {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    /// The body's part lies over the row's: a point reaches what each holds, never the part itself.
+    fn hit(&self, _: &(), _: Point) -> bool {
+        false
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn surface_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        self.layer.then_some(SurfaceLayerMark {
+            key: self.key,
+            look: SurfaceLayerLook::default(),
+        })
+    }
+}
+
 fn placed(rect: Rect) -> LayoutSpec {
     LayoutSpec {
         width: SizeSpec::Fixed(rect.width().max(0.0)),
@@ -484,7 +567,8 @@ pub fn close_changes(
     if a.y != b.y {
         content.push(go(LayerProperty::Y, b.y));
     }
-    out.push((CONTENT_LAYER, content));
+    out.push((ROW_LAYER, content.clone()));
+    out.push((BODY_LAYER, content));
     let (here, there) = (
         mode_rects_of(extent, from, modes, &rest),
         mode_rects_of(extent, to, modes, &end),
@@ -572,7 +656,8 @@ pub fn open_changes(
     vec![
         (GLASS_LAYER, glass),
         (EDGE_LAYER, edge),
-        (CONTENT_LAYER, content),
+        (ROW_LAYER, content.clone()),
+        (BODY_LAYER, content),
     ]
 }
 
@@ -638,7 +723,11 @@ pub fn field_open_changes(
     });
     through(&mut content, LayerProperty::Y, &|f| rect(f).y());
     opacity(&mut content);
-    let mut out = vec![(GLASS_LAYER, glass), (CONTENT_LAYER, content)];
+    let mut out = vec![
+        (GLASS_LAYER, glass),
+        (ROW_LAYER, content.clone()),
+        (BODY_LAYER, content),
+    ];
     for index in 0..count {
         let at = |f: &Frame| button_at(extent, f, count, index);
         let mut button = Vec::new();
@@ -671,6 +760,69 @@ pub fn field_open_changes(
         out.push((button_face_layer(index), symbol));
     }
     out
+}
+
+/// The enclosure's corner radius as `frame` presents it, held to half its height as the panel draws it.
+fn held_radius(extent: Size, frame: &Frame) -> f64 {
+    enclosure_radius(frame)
+        .min(enclosure_rect(extent, frame).height() / 2.0)
+        .max(0.0)
+}
+
+/// The changes of the panel's layers for a fold of a scope into the search field the compositor runs, or an unfold of
+/// the field into a scope, from `start` over `duration` (the enclosure's own motion, [`Motion::shaping_left`]), in a
+/// window `extent` large. The layers stay as they are drawn: the glass at the enclosure's place, size and corner as
+/// the fold starts, the row and the body at the content's top. The enclosure moves on the shape spring, its top edge
+/// fixed and its sides closing in or opening out evenly, its corner the shape's held to half its height; the content
+/// keeps its size from the enclosure's left edge. So the glass's place, size and corner and the content's place go
+/// through `motion`'s own values, left out where they never change, and the body fades through its own curve (the
+/// content's opacity times the enclosure's), which the row does not. The edge is the compositor's, along the glass
+/// ([`glass_edge`], set by the view while the fold is the compositor's), so no frame of an edge follows the shape.
+pub fn fold_changes(
+    extent: Size,
+    motion: &Motion,
+    start: f64,
+    duration: f64,
+) -> Vec<(u64, Vec<LayerChange>)> {
+    let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
+        let values = values_over(motion, start, duration, value);
+        if values.iter().any(|v| *v != values[0]) {
+            out.push(LayerChange::through(property, duration, values));
+        }
+    };
+    let rect = |frame: &Frame| enclosure_rect(extent, frame);
+    let mut glass = Vec::new();
+    through(&mut glass, LayerProperty::X, &|f| rect(f).x());
+    through(&mut glass, LayerProperty::Y, &|f| rect(f).y());
+    through(&mut glass, LayerProperty::Width, &|f| rect(f).width());
+    through(&mut glass, LayerProperty::Height, &|f| rect(f).height());
+    through(&mut glass, LayerProperty::CornerRadius, &|f| {
+        held_radius(extent, f)
+    });
+    // the content keeps its size, centred across the enclosure and from its top edge
+    let mut row = Vec::new();
+    through(&mut row, LayerProperty::X, &|f| {
+        let r = rect(f);
+        r.x() + (r.width() - f.shape.width) / 2.0
+    });
+    through(&mut row, LayerProperty::Y, &|f| rect(f).y());
+    let mut body = row.clone();
+    through(&mut body, LayerProperty::Opacity, &|f| f.content * f.alpha);
+    vec![(GLASS_LAYER, glass), (ROW_LAYER, row), (BODY_LAYER, body)]
+}
+
+/// A value of the panel as `motion` presents it from `start` over `duration`, at [`OPEN_SAMPLES`] even steps, the
+/// first where it starts and the last where it ends.
+pub fn values_over(
+    motion: &Motion,
+    start: f64,
+    duration: f64,
+    value: &dyn Fn(&Frame) -> f64,
+) -> Arc<[f32]> {
+    let last = OPEN_SAMPLES - 1;
+    (0..OPEN_SAMPLES)
+        .map(|i| value(&motion.frame(start + duration * i as f64 / last as f64)) as f32)
+        .collect()
 }
 
 /// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight
@@ -770,10 +922,10 @@ mod tests {
         assert_eq!(of(GLASS_LAYER, LayerProperty::Opacity), Some(0.0));
         // the search field widens and never grows taller; its content stays where it is
         assert_eq!(of(GLASS_LAYER, LayerProperty::Height), Some(57.0));
-        assert_eq!(of(CONTENT_LAYER, LayerProperty::X), None);
-        assert_eq!(of(CONTENT_LAYER, LayerProperty::Y), None);
+        assert_eq!(of(ROW_LAYER, LayerProperty::X), None);
+        assert_eq!(of(ROW_LAYER, LayerProperty::Y), None);
         assert_eq!(
-            of(CONTENT_LAYER, LayerProperty::ContentBlur),
+            of(ROW_LAYER, LayerProperty::ContentBlur),
             Some(CLOSE_DEVIATION)
         );
         assert_eq!(of(EDGE_LAYER, LayerProperty::Scale), Some(to.scale));

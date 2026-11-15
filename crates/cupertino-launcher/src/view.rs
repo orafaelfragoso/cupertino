@@ -590,12 +590,15 @@ pub struct PanelView<'a> {
     pub layered: bool,
     /// The compositor runs the panel's close on its layers: the panel takes every key, so nothing in it draws again.
     pub handed: bool,
-    /// The compositor runs the panel's open on its layers: the field holds its caret, which would draw the content's
-    /// layer again.
+    /// The compositor runs the panel's open or a fold on its layers: the field holds its caret, which would draw the
+    /// query row's layer again.
     pub opening: bool,
     /// The compositor draws the panel's edge along its glass ([`layers::glass_edge`]): while it runs the search field's
-    /// open, the shapes joining and parting every frame; no layer draws an edge then.
+    /// open, the shapes joining and parting every frame, or a fold, the shape changing; no layer draws an edge then.
     pub group_edge: bool,
+    /// The panel's own motion runs and it draws it itself: its content lies on whole device pixels as one picture, as
+    /// the compositor puts the content's layers when it runs a motion.
+    pub moving: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -913,7 +916,7 @@ where
             initial: true,
         },
         size: QUERY_SIZE,
-        // while the compositor runs the close, the caret's blink would draw the content's layer again
+        // while the compositor runs the close, an open or a fold, the caret's blink would draw the row's layer again
         hold_caret: view.handed || view.opening,
     })
     .key("query")
@@ -973,12 +976,13 @@ where
         leading: icon_inset,
         spacing: QUERY_INSET - icon_inset - icon_size,
         alpha: if split { frame.alpha } else { 1.0 },
+        layer: view.layered.then_some(layers::ROW_LAYER),
         children: row,
     })
     .key("query-row");
-    let mut children = vec![query_row];
+    let mut body = Vec::new();
     if let Some(browser) = showing_browser {
-        children.push(
+        body.push(
             browse::body(
                 browser,
                 view.app_icons,
@@ -990,7 +994,7 @@ where
             .key("browser"),
         );
     } else if let Some(scope) = showing_scope {
-        children.push(
+        body.push(
             scope::body(
                 scope,
                 view.file_images,
@@ -1001,20 +1005,34 @@ where
             .key("scope"),
         );
     } else {
-        children.extend(search_body(view));
+        body.extend(search_body(view));
     }
     // while the panel scales in or out its content keeps its size, cut off by the glass, and moves on whole device
-    // pixels, as one picture, as the content's layer does when the compositor runs the open
+    // pixels, as one picture, as the content's layers do when the compositor runs the open
     let scaled = frame.scale != 1.0 || frame.scale_y != 1.0;
+    // the query row keeps its height where the shape springs a little shorter than the field on its way to it
+    let size = Size::new(frame.shape.width, frame.shape.height.max(COLLAPSED_HEIGHT));
+    // the query row and the body are layers of their own, both from the content's top, on the device pixels it lies
+    // on; the body's children start below the row
+    let parts = vec![
+        query_row,
+        Element::new(layers::ContentPart {
+            key: layers::BODY_LAYER,
+            layer: view.layered,
+            size,
+            top: COLLAPSED_HEIGHT,
+            children: body,
+        })
+        .key("body-part"),
+    ];
     let inner = Element::new(PanelRoot {
         keys: view.keys,
-        alpha: frame.alpha,
-        size: Size::new(frame.shape.width, frame.shape.height),
+        size,
         offset: (rect.width() - frame.shape.width) / 2.0,
-        layer: view.layered,
         handed: view.handed,
-        scaled,
-        children,
+        holding: view.opening,
+        scaled: scaled || view.moving,
+        children: parts,
     });
     let mut children = vec![inner.key("content")];
     if view.layered {
@@ -1041,7 +1059,7 @@ where
             .collect(),
         split,
         layered: view.layered,
-        crops: scaled,
+        crops: scaled || view.moving,
         content: Size::new(frame.shape.width, frame.shape.height),
         children,
     })
@@ -1573,16 +1591,16 @@ impl<M: 'static> Widget<M> for Enclosure<M> {
 /// reports when its window loses the keyboard.
 struct PanelRoot<M> {
     keys: KeyMode,
-    alpha: f64,
     size: Size,
     /// Where it lies in the enclosure: centred across it.
     offset: f64,
-    /// It is the content's own compositor layer ([`layers::CONTENT_LAYER`]).
-    layer: bool,
     /// The compositor runs the close ([`PanelView::handed`]): a key, its release included, reaches nothing inside, as
     /// a field would restart its caret's blink and draw again.
     handed: bool,
-    /// The panel scales in or out: the content lies on whole device pixels ([`Widget::on_pixels`]).
+    /// The compositor runs an open or a fold ([`PanelView::opening`]): a key's release reaches nothing inside.
+    holding: bool,
+    /// The panel scales in or out, or moves by itself: the content lies on whole device pixels
+    /// ([`Widget::on_pixels`]).
     scaled: bool,
     children: Vec<Element<M>>,
 }
@@ -1595,7 +1613,7 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
             width: SizeSpec::Fixed(self.size.width.max(0.0)),
             height: SizeSpec::Fixed(self.size.height.max(0.0)),
             position: Point::new(self.offset, 0.0),
-            ..column(Insets::default())
+            ..LayoutSpec::new(ContainerKind::Absolute)
         }
     }
 
@@ -1605,11 +1623,10 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
 
     fn state(&self) {}
 
+    /// It draws nothing: which keys it takes changes no pixel.
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.size, self.offset, self.scaled) != (old.size, old.offset, old.scaled) {
             Change::Layout
-        } else if (self.alpha, self.keys, self.layer) != (old.alpha, old.keys, old.layer) {
-            Change::Paint
         } else {
             Change::None
         }
@@ -1631,8 +1648,15 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
                     && (cx.phase() == Phase::Capture || cx.node() == cx.target()) =>
             {
                 cx.emit(M::from(Input::Primary(key.pressed)));
-                Propagation::Continue
+                if self.holding && !key.pressed {
+                    Propagation::Stop
+                } else {
+                    Propagation::Continue
+                }
             }
+            // a release reaches nothing inside while the compositor runs an open or a fold: the field would show its
+            // held caret again for it and draw the query row
+            Event::Key(key, _) if self.holding && !key.pressed => Propagation::Stop,
             Event::Key(key, _) if cx.phase() == Phase::Capture || cx.node() == cx.target() => {
                 match panel_key(key) {
                     Some((k, mods)) if self.keys.takes(k, mods) => {
@@ -1658,18 +1682,11 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
         cx.keeps_editing();
     }
 
-    /// While the enclosure scales about its middle the content moves as one picture on whole device pixels, as the
-    /// compositor moves its layer when it runs the open, rather than its text snapping to the pixels line by line
-    /// while its shapes and images fall between them.
+    /// While the enclosure scales about its middle or its shape moves (a fold) the content moves as one picture on
+    /// whole device pixels, as the compositor moves its layers when it runs the open or the fold, rather than its text
+    /// snapping to the pixels line by line while its shapes and images fall between them.
     fn on_pixels(&self, _: &()) -> bool {
         self.scaled
-    }
-
-    fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
-        self.layer.then_some(cupertino_kit::core::SurfaceLayerMark {
-            key: layers::CONTENT_LAYER,
-            look: cupertino_kit::platform::SurfaceLayerLook::default(),
-        })
     }
 }
 
@@ -1975,6 +1992,8 @@ struct Bar<M> {
     spacing: f64,
     /// The opacity it is drawn at, as one layer when under 1.
     alpha: f64,
+    /// The compositor layer of its own it draws into, while the panel is drawn as layers ([`layers::ROW_LAYER`]).
+    layer: Option<u64>,
     children: Vec<Element<M>>,
 }
 
@@ -2009,7 +2028,7 @@ impl<M: 'static> Widget<M> for Bar<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if (self.height, self.leading, self.spacing) != (old.height, old.leading, old.spacing) {
             Change::Layout
-        } else if self.alpha != old.alpha {
+        } else if (self.alpha, self.layer) != (old.alpha, old.layer) {
             Change::Paint
         } else {
             Change::None
@@ -2031,6 +2050,13 @@ impl<M: 'static> Widget<M> for Bar<M> {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn surface_layer(&self, _: &()) -> Option<cupertino_kit::core::SurfaceLayerMark> {
+        self.layer.map(|key| cupertino_kit::core::SurfaceLayerMark {
+            key,
+            look: cupertino_kit::platform::SurfaceLayerLook::default(),
+        })
+    }
 }
 
 /// The results: a list of every result, of which the shown ones are children of their sections.

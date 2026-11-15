@@ -112,12 +112,33 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3a. Row and body as layers
 
-- [ ] The query row and the body are layers of their own instead of the one content layer. At rest they are the
-      panel's pixels within 1 of 255 (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`
-      over the browser, the files scope and the field).
-- [ ] The glass's place, size and corner go through samples of the panel's own values on the shape spring, with the
-      corner held to half the height. The body's opacity goes through samples of its own curve. The row's frame is
-      drawn again once, at the header's switch, which is the only buffer the fold makes.
+- [x] The query row and the body are layers of their own instead of the one content layer (`layers::ROW_LAYER`, the
+      query bar's own mark, and `layers::BODY_LAYER`, a `layers::ContentPart` from the content's top with room for
+      the row, so both lie on the content's device pixels). At rest they are the panel's pixels within 1 of 255 at 1,
+      1.5 and 2 in both appearances (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place` over
+      the field, its results, the browser and the files scope). The opens and the close are as before at the same
+      moments; against the server the close 0 buffers over 14 to 16 steps part way with 6 layers, the browser's open 0 over
+      91 to 96 with 4. The pixel goldens are unchanged; the tree goldens gain the body's node.
+- [x] The fold (`Escape` from a scope): the glass's place, size and corner go through samples of the panel's own values
+      on the shape spring (`layers::fold_changes` over `Motion::shaping_left`, the enclosure's motion without the
+      buttons' later bud), with the corner held to half the height. The body's opacity goes through samples of its
+      own curve and the row's does not. The row's frame is drawn again once, at the header's switch
+      (`Message::HeaderSwitch`), the only buffer the fold makes part way; the fold's first frame commits the glass's
+      look once (its edge, no pixels), and the edge is the compositor's along the glass. Behind `Model::hand_folds`,
+      off in the process: the compositor's edge follows a scope's continuous corners where the panel strokes circular
+      arcs, so until 3b the fold's first frames part at the corners. Tests: the counts
+      (`a_scope_folds_on_the_compositor_s_clock_drawing_its_row_once`, both scopes: no window frame, one row frame);
+      at the same moments (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, every other
+      frame of 30 and the last, 1.5, both scopes and appearances) the glass is the panel's at every moment, every pixel
+      away from the outline and the caret within 0 of 255; along the outline 178 of 255 in the dark and 52 in the light
+      (the line's 237 and 69) while the corners are a scope's, within 1 from 300 ms, when the shape is the field's
+      capsule; the caret, which the field holds, 255 where the panel's own blinks. Under Reduce Motion nothing is
+      handed over. The panel's own fold now lies on whole device pixels and keeps the row's height where the shape
+      springs shorter than the field (`PanelView::moving`).
+- [ ] The unfold (the scope's shortcut from the field). Not done: its first frame needs the scope's body drawn into
+      the body's layer, masked to the glass as it grows (`masks`, with the glass's samples), and the mode buttons'
+      layers kept through their merge (as `layers::field_open_changes` carries them); the same-moment test's
+      composition does not yet apply a layer's mask.
 
 ### 3b. The edge follows the glass
 

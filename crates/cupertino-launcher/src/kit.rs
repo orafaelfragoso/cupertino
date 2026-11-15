@@ -250,6 +250,9 @@ pub enum Message {
     OpenOver(u64),
     /// The panel's layers came to rest in the compositor: the open it runs is over, its last values shown.
     OpenSettled,
+    /// The header of the fold the compositor runs switches now: the panel draws its query row again. For the fold of
+    /// this number, as [`Message::OpenOver`].
+    HeaderSwitch(u64),
 }
 
 impl From<Input> for Message {
@@ -390,6 +393,20 @@ pub struct Model {
     open_timer: bool,
     /// How many opens were handed to the compositor: the number of the one that runs.
     pub(crate) open_number: u64,
+    /// When the panel's own motion of the open or fold the compositor runs ends, on the panel's clock.
+    open_end: f64,
+    /// A scope's fold into the search field hands itself to the compositor where the panel rested as layers
+    /// ([`view::layers::fold_changes`]): its glass the panel's own at every moment, the body fading on its own curve,
+    /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass.
+    /// Off in the process: the compositor's edge follows a scope's continuous corners where the panel strokes its own
+    /// along circular arcs, so the fold's first frames would part from the rest's at the corners until the panel's own
+    /// edge follows the glass too. A test turns it on.
+    pub hand_folds: bool,
+    /// A fold to hand to the compositor once the mode buttons are placed.
+    hand_fold: bool,
+    /// The fold the compositor runs: the panel as its layers show it before the header switches, when it switches,
+    /// and after, which differs in the header alone.
+    fold_shown: Option<(Frame, f64, Frame)>,
 }
 
 impl Model {
@@ -455,6 +472,10 @@ impl Model {
             open_rest: None,
             open_timer: false,
             open_number: 0,
+            open_end: 0.0,
+            hand_folds: false,
+            hand_fold: false,
+            fold_shown: None,
         }
     }
 
@@ -463,11 +484,27 @@ impl Model {
     }
 
     /// What is presented now: while the compositor runs the close, the panel as the close began, which its layers
-    /// keep.
+    /// keep; while it runs a fold, the panel as the fold began, its header switched part way; while it runs an open,
+    /// the panel at rest.
     pub fn presented(&self) -> Frame {
+        let now = self.now().mono;
         self.handed
+            .or(self
+                .fold_shown
+                .map(|(before, at, after)| if now >= at { after } else { before }))
             .or(self.open_rest)
-            .unwrap_or_else(|| self.motion.frame(self.now().mono))
+            .unwrap_or_else(|| self.motion.frame(now))
+    }
+
+    /// Whether the compositor runs a fold or unfold now ([`Model::hand_folds`]).
+    pub fn fold_handed(&self) -> bool {
+        self.fold_shown.is_some()
+    }
+
+    /// The open or fold the compositor runs is over, or taken back: the panel draws what it presents itself again.
+    fn end_open(&mut self) {
+        self.open_rest = None;
+        self.fold_shown = None;
     }
 
     /// Whether the panel's parts draw into compositor layers of their own now: while it rests, open, and while the
@@ -487,8 +524,10 @@ impl Model {
 
     /// Whether the compositor runs the search field's open with its mode buttons now, drawing the edge along their glass.
     pub fn field_open_handed(&self) -> bool {
-        self.open_rest
-            .is_some_and(|rest| rest.modes.count > 0 && rest.header == Header::Search)
+        self.fold_shown.is_none()
+            && self
+                .open_rest
+                .is_some_and(|rest| rest.modes.count > 0 && rest.header == Header::Search)
     }
 
     /// The panel as it rests once what moves now comes to rest.
@@ -682,7 +721,8 @@ impl Model {
                 // a close the compositor ran is turned around by the panel itself, which draws its opening
                 let from_hidden = self.handed.is_none() && self.motion.gone(now.mono);
                 self.handed = None;
-                self.open_rest = None;
+                self.end_open();
+                self.hand_fold = false;
                 self.layer_changes.clear();
                 match view {
                     View::Browse => {
@@ -714,11 +754,17 @@ impl Model {
             }
             Step::Hide => self.hide(false),
             Step::Fold => {
+                // a scope drawn as layers at rest folds on the compositor's clock, once the buttons are placed
+                self.hand_fold = self.layered() && self.open_rest.is_none();
+                // the field shows the cleared query; one already empty and not selected is shown as it is, so the
+                // query row draws nothing new
+                if !self.panel.query().is_empty() || self.select_query {
+                    self.revision += 1;
+                }
                 self.panel.set_query("", &self.launcher, now);
                 self.searched = None;
                 self.held = false;
                 self.select_query = false;
-                self.revision += 1;
                 self.motion.fold(self.target_shape(), now.mono);
             }
             Step::Unfold => {
@@ -886,6 +932,43 @@ impl Model {
         self.open_rest = Some(rest);
         self.open_timer = false;
         self.open_number += 1;
+        self.open_end = now + self.motion.moving_left(now);
+    }
+
+    /// A fold of a scope that rested as layers into the search field runs on the compositor's clock
+    /// ([`Model::hand_folds`]): its layers keep what they show as the fold begins and the compositor moves the glass
+    /// and the content and fades the body through the panel's own values ([`view::layers::fold_changes`]), the edge
+    /// drawn along the glass; the panel draws its query row once more, when the header switches to the field's. It
+    /// ends when the compositor tells its layers came to rest past the enclosure's own motion; the mode buttons then
+    /// bud out of the field drawn by the panel. Never under Reduce Motion, nor where the panel settles at once.
+    fn hand_fold(&mut self, now: f64) -> Vec<Command<Message>> {
+        if !(self.hand_folds
+            && self.compositor_layers
+            && !self.motion.reduce_motion()
+            && !self.settled
+            && self.handed.is_none())
+        {
+            return Vec::new();
+        }
+        let first = self.motion.frame(now);
+        let duration = self.motion.shaping_left(now).max(1e-3);
+        let switch = self.motion.header_switch(now);
+        let rest = self.resting(now);
+        let _ = self.resize();
+        self.layer_changes = view::layers::fold_changes(self.extent, &self.motion, now, duration);
+        let (at, header) = switch.unwrap_or((now, first.header));
+        self.fold_shown = Some((first, at, Frame { header, ..first }));
+        self.open_rest = Some(rest);
+        self.open_timer = false;
+        self.open_number += 1;
+        self.open_end = now + duration;
+        match switch {
+            // the row's symbol and placeholder switch part way: its one frame of the fold
+            Some((at, _)) => self
+                .host
+                .after(at - now, Message::HeaderSwitch(self.open_number)),
+            None => Vec::new(),
+        }
     }
 
     fn animate(&mut self) -> Vec<Command<Message>> {
@@ -1091,6 +1174,9 @@ impl Model {
             commands.extend(self.load_file_images());
         }
         commands.extend(self.place_modes());
+        if std::mem::take(&mut self.hand_fold) {
+            commands.extend(self.hand_fold(self.now().mono));
+        }
         if self.icons.len() > MAX_ICONS {
             self.icons.clear();
         }
@@ -2053,22 +2139,24 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
         Message::OpenOver(number) if number == model.open_number => {
             model.open_timer = false;
-            if !model.motion.animating(now.mono) {
-                model.open_rest = None;
+            if now.mono >= model.open_end {
+                model.end_open();
             }
             model.animate()
         }
         Message::OpenOver(_) => Vec::new(),
+        // what the fold's layers show is the panel with the header it switched to by now ([`Model::presented`])
+        Message::HeaderSwitch(_) => Vec::new(),
         Message::OpenSettled => {
             // the compositor shows the open's last values: whatever the panel draws from now on comes after them. Where
             // it came to rest before the panel's own motion (it skipped to the end), the panel's motion ends first.
             let mut commands = Vec::new();
             if model.open_rest.is_some() {
-                if model.motion.animating(now.mono) {
-                    let left = model.motion.moving_left(now.mono);
+                if now.mono < model.open_end {
+                    let left = model.open_end - now.mono;
                     commands.extend(model.host.after(left, Message::OpenOver(model.open_number)));
                 } else {
-                    model.open_rest = None;
+                    model.end_open();
                 }
             }
             commands.extend(model.animate());
@@ -2109,10 +2197,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     if let Some(rest) = model.open_rest {
         let now = model.now().mono;
         if !model.nav.is_visible() || model.resting(now) != rest {
-            model.open_rest = None;
+            model.end_open();
         } else if !model.open_timer {
             model.open_timer = true;
-            let left = model.motion.moving_left(now) + OPEN_REST_FALLBACK;
+            let left = (model.open_end - now).max(0.0) + OPEN_REST_FALLBACK;
             commands.extend(model.host.after(left, Message::OpenOver(model.open_number)));
         }
     }
@@ -2184,7 +2272,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         layered: model.layered(),
         handed: model.close_handed(),
         opening: model.open_handed(),
-        group_edge: model.field_open_handed(),
+        group_edge: model.field_open_handed() || model.fold_handed(),
+        moving: !model.layered() && model.motion.animating(model.now().mono),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

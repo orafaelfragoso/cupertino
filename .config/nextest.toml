@@ -50,6 +50,13 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 filter = 'package(cupertino-launcher) & (test(/fits_the_budget/) | test(/keeps_icon_decoding_off_the_frames/))'
 threads-required = "num-cpus"
 
+# The live resize tests time how long each size a window is asked for takes to be shown, against a bound of a few
+# frames; real Files and Settings processes compile and draw on the GPU beside the server, and tests beside them on
+# every other processor push those waits past the bound, so they run with no other test beside them.
+[[profile.default.overrides]]
+filter = 'binary_id(cupertino-server::suite) & test(/^gpu_resize::/)'
+threads-required = "num-cpus"
+
 # The GPU renderer's large window is timed against the CPU budget of recording and issuing a frame; programs compiled
 # and frames drawn on the same device by tests beside it starve the driver's threads, so it runs alone.
 [[profile.default.overrides]]

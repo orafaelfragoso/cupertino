@@ -60,6 +60,14 @@ thread_local! {
     static ASKED: Cell<Option<u64>> = const { Cell::new(None) };
     /// The entries are D-Bus activatable, and their `Activate` call ends in this answer.
     static BUS_ANSWER: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The results' icons and the applications' previews are loaded off the loop, as the session's host does, and
+    /// arrive only when a test delivers them.
+    static LOADS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A load off the loop that a test answers itself, by delivering its message.
+fn pending() -> Vec<Command<Message>> {
+    vec![Command::Perform(Box::pin(std::future::pending()))]
 }
 
 /// Holds the file searches from now on, for a test to answer as it likes.
@@ -125,11 +133,17 @@ impl Host for TestHost {
     }
 
     fn icon(&mut self, _: &ResultItem) -> Vec<Command<Message>> {
+        if LOADS.get() {
+            return pending();
+        }
         Vec::new()
     }
 
     fn preview(&mut self, item: &ResultItem) -> Vec<Command<Message>> {
         log(format!("preview {}", item.id));
+        if LOADS.get() && item.kind == ItemKind::Application {
+            return pending();
+        }
         Vec::new()
     }
 
@@ -2393,6 +2407,63 @@ fn a_typing_trace_in_the_browser_says_no_results_at_most_once_per_settled_filter
         !run.said().contains(&NO_RESULTS.to_owned()),
         "results say no status"
     );
+}
+
+#[test]
+fn a_result_s_icon_loads_off_the_loop_and_its_row_is_blank_until_it_arrives() {
+    LOADS.set(true);
+    let mut run = Run::new();
+    run.type_text("fire");
+    let item = run
+        .model()
+        .panel
+        .selected_item()
+        .cloned()
+        .expect("a result");
+    assert_eq!(
+        run.model().icons.get(&item.id),
+        Some(&Vec::new()),
+        "blank while it loads, not its kind's symbol"
+    );
+    let icon = ImageSource {
+        id: cupertino_kit::core::next_resource_id(),
+        image: cupertino_kit::render::ImageResource {
+            revision: 0,
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: cupertino_kit::render::PixelFormat::Rgba8Premultiplied,
+            pixels: Arc::from(&[0u8, 0, 0, 255][..]),
+        },
+    };
+    run.deliver(Message::ResultIcon(item.id.clone(), vec![icon.clone()]));
+    assert_eq!(run.model().icons.get(&item.id), Some(&vec![icon]));
+    LOADS.set(false);
+}
+
+#[test]
+fn an_application_without_an_icon_of_its_own_previews_only_itself_and_is_never_said_unavailable() {
+    LOADS.set(true);
+    let mut run = Run::new();
+    run.type_text("fire");
+    let item = run
+        .model()
+        .panel
+        .selected_item()
+        .cloned()
+        .expect("a result");
+    assert_eq!(
+        run.model().preview_state(),
+        &kit::PreviewState::Waiting(item.id.clone())
+    );
+    run.deliver(Message::NoPreview(item.id.clone()));
+    assert_eq!(run.model().preview_state(), &kit::PreviewState::Plain);
+    assert!(run.model().preview().is_none());
+    // the deadline passes with the answer already in
+    run.deliver(Message::PreviewOverdue(item.id.clone()));
+    assert_eq!(run.model().preview_state(), &kit::PreviewState::Plain);
+    assert!(!run.announced().contains(&PREVIEW_UNAVAILABLE.to_owned()));
+    LOADS.set(false);
 }
 
 #[test]

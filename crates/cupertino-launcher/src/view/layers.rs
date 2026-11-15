@@ -722,7 +722,7 @@ pub fn close_changes(
 /// while everything fades in (linearly over [`OPEN_FADE`]), and every value it draws is linear in that one scale. The
 /// content's place, which keeps its size, springs from where the first frame has it on the same spring, as the
 /// compositor puts it on whole device pixels as the panel does; the glass's place, size and corner are carried
-/// through `motion`'s own values ([`open_values`]): a spring of the compositor comes to rest within a thousandth of its
+/// through `motion`'s own values ([`open_frames`]): a spring of the compositor comes to rest within a thousandth of its
 /// unit of its target, which for a scale is a third of a device pixel at the panel's sides, and the panel's own spring
 /// comes to rest at its own time. The edge is the compositor's, along the glass.
 pub fn open_changes(
@@ -751,9 +751,9 @@ pub fn open_changes(
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
         out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
     };
+    let (duration, frames) = open_frames(motion, start);
     let through = |property, value: &dyn Fn(&Frame) -> f64| {
-        let (duration, values) = open_values(motion, start, value);
-        LayerChange::through(property, duration, values)
+        LayerChange::through(property, duration, values_of(&frames, value))
     };
     let rect = |frame: &Frame| enclosure_rect(extent, frame);
     let mut glass = vec![
@@ -815,10 +815,15 @@ pub fn glyph_deviation(sharp: f64) -> f64 {
 /// Mode button `index` of `count` as `frame` presents it in a window `extent` large, laid out even at a moment the
 /// frame shows none yet (the open's first, before the buttons leave the field).
 pub fn button_at(extent: Size, frame: &Frame, count: usize, index: usize) -> Rect {
+    buttons_at(extent, frame, count)[index]
+}
+
+/// The `count` mode buttons as `frame` presents them in a window `extent` large ([`button_at`] of each).
+fn buttons_at(extent: Size, frame: &Frame, count: usize) -> Vec<Rect> {
     let mut f = *frame;
     f.modes.count = count;
     let enclosure = enclosure_rect(extent, &f);
-    mode_rects_of(extent, &f, count, &enclosure)[index]
+    mode_rects_of(extent, &f, count, &enclosure)
 }
 
 /// The changes of the panel's layers for the search field's open from hidden the compositor runs: from `start`, the
@@ -827,7 +832,7 @@ pub fn button_at(extent: Size, frame: &Frame, count: usize, index: usize) -> Rec
 /// own, the buttons bud out of it on a third and their symbols sharpen after a delay: the field's glass is the
 /// product of two springs, a button's place the product of the open's scale and its place along the split, its size a
 /// clamped ramp of the split, so each value the layers show is carried through `motion`'s own values
-/// ([`open_values`]), left out where it never changes; everything fades in on the linear [`OPEN_FADE`]. The field's
+/// ([`open_frames`]), left out where it never changes; everything fades in on the linear [`OPEN_FADE`]. The field's
 /// glass carries the edge ([`glass_edge`]), so no frame of an edge is drawn; each button's face (its symbol alone) fades in and sharpens through its opacity and content blur.
 /// With `caret`, the query field's caret is a layer of its own ([`CARET_LAYER`]) that moves with the query row and
 /// fades in with it, blinking as the field blinks it from the open's start ([`caret_opacity`]).
@@ -848,11 +853,15 @@ pub fn field_open_changes(
         out.push(LayerChange::new(LayerProperty::Opacity, first.alpha, None));
         out.push(LayerChange::new(LayerProperty::Opacity, rest.alpha, fade));
     };
-    let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
-        let (duration, values) = open_values(motion, start, value);
+    // the panel at each sample of the open, worked out once for every value it carries
+    let (duration, frames) = open_frames(motion, start);
+    let changing = |out: &mut Vec<LayerChange>, property, values: Arc<[f32]>| {
         if values.iter().any(|v| *v != values[0]) {
             out.push(LayerChange::through(property, duration, values));
         }
+    };
+    let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
+        changing(out, property, values_of(&frames, value));
     };
     let rect = |frame: &Frame| enclosure_rect(extent, frame);
     let mut glass = Vec::new();
@@ -887,29 +896,42 @@ pub fn field_open_changes(
         out.push((CARET_LAYER, changes));
     }
     out.push((BODY_LAYER, content));
+    // every button's place at each sample, laid out once per sample for all of them
+    let buttons: Vec<Vec<Rect>> = frames
+        .iter()
+        .map(|f| buttons_at(extent, f, count))
+        .collect();
     for index in 0..count {
-        let at = |f: &Frame| button_at(extent, f, count, index);
+        let at = |value: &dyn Fn(Rect) -> f64| -> Arc<[f32]> {
+            buttons.iter().map(|b| value(b[index]) as f32).collect()
+        };
         let mut button = Vec::new();
-        through(&mut button, LayerProperty::X, &|f| at(f).x());
-        through(&mut button, LayerProperty::Y, &|f| at(f).y());
-        through(&mut button, LayerProperty::Width, &|f| at(f).width());
-        through(&mut button, LayerProperty::Height, &|f| at(f).height());
-        through(&mut button, LayerProperty::CornerRadius, &|f| {
-            at(f).width() / 2.0
-        });
+        changing(&mut button, LayerProperty::X, at(&|r| r.x()));
+        changing(&mut button, LayerProperty::Y, at(&|r| r.y()));
+        changing(&mut button, LayerProperty::Width, at(&|r| r.width()));
+        changing(&mut button, LayerProperty::Height, at(&|r| r.height()));
+        changing(
+            &mut button,
+            LayerProperty::CornerRadius,
+            at(&|r| r.width() / 2.0),
+        );
         opacity(&mut button);
         out.push((button_glass_layer(index), button));
         // the face keeps its place about the button's centre, its symbol fading in and sharpening
-        let resting = at(rest);
+        let resting = button_at(extent, rest, count, index);
         let face = face_layer_rect(resting);
         let centre = |r: Rect| Point::new(r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
         let mut symbol = Vec::new();
-        through(&mut symbol, LayerProperty::X, &|f| {
-            face.x() + centre(at(f)).x - centre(resting).x
-        });
-        through(&mut symbol, LayerProperty::Y, &|f| {
-            face.y() + centre(at(f)).y - centre(resting).y
-        });
+        changing(
+            &mut symbol,
+            LayerProperty::X,
+            at(&|r| face.x() + centre(r).x - centre(resting).x),
+        );
+        changing(
+            &mut symbol,
+            LayerProperty::Y,
+            at(&|r| face.y() + centre(r).y - centre(resting).y),
+        );
         through(&mut symbol, LayerProperty::Opacity, &|f| {
             f.alpha * f.modes.sharp
         });
@@ -966,8 +988,10 @@ pub fn fold_changes(
     modes: usize,
     unfold: bool,
 ) -> Vec<(u64, Vec<LayerChange>)> {
+    // the panel at each sample of the fold, worked out once for every value it carries
+    let frames = frames_over(motion, start, duration);
     let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
-        let values = values_over(motion, start, duration, value);
+        let values = values_of(&frames, value);
         if values.iter().any(|v| *v != values[0]) {
             out.push(LayerChange::through(property, duration, values));
         }
@@ -1053,37 +1077,29 @@ pub fn fold_changes(
     out
 }
 
-/// A value of the panel as `motion` presents it from `start` over `duration`, at [`OPEN_SAMPLES`] even steps, the
-/// first where it starts and the last where it ends.
-pub fn values_over(
-    motion: &Motion,
-    start: f64,
-    duration: f64,
-    value: &dyn Fn(&Frame) -> f64,
-) -> Arc<[f32]> {
+/// The panel as `motion` presents it from `start` over `duration`, at [`OPEN_SAMPLES`] even steps, the first where it
+/// starts and the last where it ends.
+pub fn frames_over(motion: &Motion, start: f64, duration: f64) -> Vec<Frame> {
     let last = OPEN_SAMPLES - 1;
     (0..OPEN_SAMPLES)
-        .map(|i| value(&motion.frame(start + duration * i as f64 / last as f64)) as f32)
+        .map(|i| motion.frame(start + duration * i as f64 / last as f64))
         .collect()
+}
+
+/// A value of the panel at each of `frames`, as a layer's samples carry it.
+pub fn values_of(frames: &[Frame], value: &dyn Fn(&Frame) -> f64) -> Arc<[f32]> {
+    frames.iter().map(|f| value(f) as f32).collect()
 }
 
 /// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight
 /// line between two of them stands off the spring by about a thousandth of a point.
 pub const OPEN_SAMPLES: usize = cupertino_kit::platform::MAX_LAYER_SAMPLES;
 
-/// A value of the panel through an open from `start` as `motion` presents it, to where nothing moves: the open's
-/// duration and the value at [`OPEN_SAMPLES`] even steps of it, the first where the open starts and the last at rest.
-pub fn open_values(
-    motion: &Motion,
-    start: f64,
-    value: &dyn Fn(&Frame) -> f64,
-) -> (f64, Arc<[f32]>) {
+/// The panel through an open from `start` as `motion` presents it, to where nothing moves: the open's duration and the
+/// panel at [`OPEN_SAMPLES`] even steps of it, the first where the open starts and the last at rest.
+pub fn open_frames(motion: &Motion, start: f64) -> (f64, Vec<Frame>) {
     let duration = motion.moving_left(start).max(1e-3);
-    let last = OPEN_SAMPLES - 1;
-    let values = (0..OPEN_SAMPLES)
-        .map(|i| value(&motion.frame(start + duration * i as f64 / last as f64)) as f32)
-        .collect();
-    (duration, values)
+    (duration, frames_over(motion, start, duration))
 }
 
 #[cfg(test)]

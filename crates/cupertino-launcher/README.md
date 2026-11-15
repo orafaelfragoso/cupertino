@@ -255,9 +255,12 @@ A call from a shell (`gdbus call ... --method org.cupertino.Launcher1.Toggle`) i
 Application results show the entry's own `Icon=` (an absolute path or `hicolor`; `cupertino_icons::ThemeIcons`) and the asset
 `application.generic` when it has none. Folder results are the asset `folder`, file results `document.generic` in the list
 (the preview types the selected file with the MIME database and shows its type's icon through `cupertino_kit::file_icons`); they
-are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. The web
+are loaded at the icon size for scales 1, 2 and 3 and shown as Kit images, which draw the rendition that covers the output's scale. They
+are looked up, read and decoded off the loop, on the browser's icon thread (`Host::icon`, answered as `Message::ResultIcon`), and a row is
+blank until its icon arrives; the preview's application icon loads there too (`Message::Previewed`, or `Message::NoPreview` when the
+application has no icon of its own and the preview shows only the result). The web
 search row is Kit's `symbol.magnifyingglass` symbol in the secondary label colour, as is the symbol in front of the query. The
-calculator and conversion rows have no icon. Missing assets are reported once at start and drawn as placeholders.
+calculator and conversion rows have no icon. Missing assets are reported once, when the icon thread starts, and drawn as placeholders.
 
 ## Values applied
 

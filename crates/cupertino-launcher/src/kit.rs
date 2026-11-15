@@ -281,6 +281,8 @@ pub enum PreviewState {
     /// Asked for the result with this id; not arrived yet.
     Waiting(String),
     Ready(Arc<Preview>),
+    /// The host found the result shows only itself ([`Message::NoPreview`]).
+    Plain,
     /// It did not arrive in time.
     Unavailable,
 }
@@ -2317,13 +2319,14 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
         Message::NoPreview(id) => {
             if model.preview == PreviewState::Waiting(id) {
-                model.preview = PreviewState::None;
+                model.preview = PreviewState::Plain;
             }
             Vec::new()
         }
         Message::PreviewOverdue(id) => {
-            // still waiting: an answer, or word that there is none to show, ends the wait
-            if model.preview == PreviewState::Waiting(id) {
+            // an answer, or word that there is none to show, ends the wait
+            let answered = matches!(model.preview, PreviewState::Ready(_) | PreviewState::Plain);
+            if model.previewed.as_deref() == Some(id.as_str()) && !answered {
                 model.preview = PreviewState::Unavailable;
             }
             Vec::new()

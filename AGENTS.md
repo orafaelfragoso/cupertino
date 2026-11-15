@@ -26,6 +26,7 @@ scripts/test             # the fast tier of the changed crates' tests (and their
 scripts/test --all       # the fast tier of the workspace: 5 minutes at most, 2 seconds a test
 scripts/test --slow      # the slow tier (whole programs, buses, displays, measurements); CI runs it too
 scripts/dev/build        # the release build of every program, one feature set, into target/release
+scripts/dev/warm-target  # in a fresh git worktree: clone the main checkout's target/debug (copy-on-write), so its first build is warm
 scripts/dev/shot OUT.png [server flags]   # one headless screenshot of the current checkout (builds first)
 scripts/dev/review-sheet [OUT_DIR]       # windows overlapping, dock name and menu, menus, control panel, both appearances, with crops of corners and pointers; look at it before packaging
 scripts/preview          # every scenario in scenarios/, this checkout beside the installed release, changed pixels marked

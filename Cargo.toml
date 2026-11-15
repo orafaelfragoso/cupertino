@@ -50,6 +50,24 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.cupertino-ui-render]
 opt-level = 3
+# The shared drawing maths every pixel test and model runs through.
+[profile.dev.package.cupertino-raster-math]
+opt-level = 3
+# Our crates whose tests draw and compare whole frames (the glass model, the toolkit's layout and recording, the
+# launcher's same-moment compositions): level 1 makes their loops several times faster and keeps an edit's rebuild
+# quick.
+[profile.dev.package.cupertino-glass]
+opt-level = 1
+[profile.dev.package.cupertino-ui-core]
+opt-level = 1
+[profile.dev.package.cupertino-ui-gpu]
+opt-level = 1
+[profile.dev.package.cupertino-launcher]
+opt-level = 1
+# Every other dependency: built once and kept, so optimising it costs nothing after the first build and speeds up
+# everything that calls it in a test. The entries above for single dependencies still win.
+[profile.dev.package."*"]
+opt-level = 2
 
 [patch.crates-io]
 # Pure-Rust replacement for the C-binding crate of the same name (no libxkbcommon)

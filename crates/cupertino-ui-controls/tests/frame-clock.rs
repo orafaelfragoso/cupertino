@@ -32,6 +32,8 @@ impl Application for Motion {
                 value: Some(0.5),
             }),
             on_frame: (*steps < STEPS).then_some(()),
+            // once the motion is over, the window's layers coming to rest step it too
+            on_layers_settled: (*steps >= STEPS).then_some(()),
         }))
     }
 }
@@ -74,4 +76,30 @@ fn frame_clock_steps_once_per_frame_callback_and_never_between() {
     }
     assert_eq!(*h.model(), STEPS);
     assert!(!h.rt.window_system().frame_requested(window).unwrap());
+}
+
+/// While the clock holds a message for it, the window's layers coming to rest in the compositor send it once, without
+/// a frame; while it holds none, they send nothing.
+#[test]
+fn frame_clock_tells_when_the_window_s_layers_come_to_rest() {
+    use cupertino_ui_platform::WindowEvent;
+    let mut h = Harness::<Motion>::animated();
+    let window = h.window;
+    let at_start = *h.model();
+    let settle = |h: &mut Harness<Motion>| {
+        h.rt.window_system_mut()
+            .enqueue_window(window, WindowEvent::LayersSettled)
+            .unwrap();
+        h.rt.step(turns()).unwrap();
+    };
+    settle(&mut h);
+    assert_eq!(*h.model(), at_start, "no message held: nothing sent");
+    while *h.model() < STEPS {
+        h.clock().advance_by(16_666_667);
+        let now = cupertino_ui_core::Clock::now(h.clock());
+        h.rt.window_system_mut().frame_ready(window, now).unwrap();
+        h.rt.step(turns()).unwrap();
+    }
+    settle(&mut h);
+    assert_eq!(*h.model(), STEPS + 1, "the layers came to rest");
 }

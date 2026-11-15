@@ -13,6 +13,7 @@ impl<M: Clone + 'static> From<FrameClock<M>> for Element<M> {
         Element::new(Clock {
             children: vec![clock.content],
             on_frame: clock.on_frame,
+            on_layers_settled: clock.on_layers_settled,
         })
     }
 }
@@ -21,6 +22,7 @@ impl<M: Clone + 'static> From<FrameClock<M>> for Element<M> {
 struct Clock<M> {
     children: Vec<Element<M>>,
     on_frame: Option<M>,
+    on_layers_settled: Option<M>,
 }
 
 impl<M: Clone + 'static> Widget<M> for Clock<M> {
@@ -58,6 +60,9 @@ impl<M: Clone + 'static> Widget<M> for Clock<M> {
                 cx.emit(message.clone());
                 cx.request_animation_frame();
             }
+        }
+        if let (Event::LayersSettled, Some(message)) = (event, &self.on_layers_settled) {
+            cx.emit(message.clone());
         }
         Propagation::Continue
     }

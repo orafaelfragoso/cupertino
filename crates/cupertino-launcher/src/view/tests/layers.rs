@@ -1062,8 +1062,12 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
             first,
             "{what}: no frame of the window or its layers"
         );
-        send(Message::OpenOver);
-        m.step(|_, _| {});
+        // the panel's own motion is over, the compositor's may not be: the open ends when the compositor tells
+        assert!(
+            m.model().open_handed(),
+            "{what}: the open is the compositor's until its layers rest"
+        );
+        m.layers_settle();
         assert!(!m.model().open_handed(), "{what}: the open is over");
         assert!(m.model().layered(), "{what}: at rest as layers");
         assert_eq!(
@@ -1072,6 +1076,54 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
             "{what}: the indicator goes on where it was"
         );
     }
+}
+
+/// An open the compositor runs ends when the compositor tells the panel's layers came to rest, never on the panel's
+/// own clock, which starts a frame or more before the compositor first shows the open: past the panel's own motion it
+/// is still the compositor's, drawing nothing; the word that the layers rest, come while the panel's own motion still
+/// runs (a compositor that skipped to the end), ends it only once that motion is over; and without the word the timer
+/// well past the open's end takes it back, the timer of that open only, not one an earlier open left.
+#[test]
+fn a_handed_open_ends_on_the_compositor_s_word_or_on_the_timer_well_past_it() {
+    let mut m = drawn(1.5, true, true);
+    send(Message::Files);
+    m.step(|_, _| {});
+    assert!(m.model().open_handed(), "the open is the compositor's");
+    let open = {
+        let mut motion = crate::motion::Motion::new(m.model().motion_target());
+        motion.show_in(m.model().motion_target(), m.model().presented().header, 0.0);
+        motion.moving_left(0.0)
+    };
+    m.layers_settle();
+    assert!(
+        m.model().open_handed(),
+        "come to rest early, the panel's own motion still runs"
+    );
+    for _ in 0..(open * 60.0).ceil() as usize + 30 {
+        m.step(|_, _| {});
+        assert!(
+            m.model().open_handed(),
+            "nothing ends it on the panel's clock"
+        );
+        assert!(!m.model().animating(), "the open asks for no frame");
+    }
+    let before = m.presents();
+    // an earlier open's timer, come late, ends nothing
+    let number = m.model().open_number;
+    send(Message::OpenOver(number - 1));
+    m.step(|_, _| {});
+    assert!(m.model().open_handed(), "another open's timer");
+    // the fallback timer, asked for the open's end and a second more
+    send(Message::OpenOver(number));
+    m.step(|_, _| {});
+    assert!(!m.model().open_handed(), "the timer takes it back");
+    assert!(m.model().layered(), "at rest as layers");
+    m.until_quiet(4, 200);
+    assert_eq!(
+        m.presents(),
+        before,
+        "at rest, it drew what its layers show"
+    );
 }
 
 /// Under Reduce Motion a scope's open is not handed over: the panel opens drawn in place.
@@ -1418,8 +1470,12 @@ fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame(
         assert!(!m.model().animating(), "the open asks for no frame");
     }
     assert_eq!(m.presents(), first, "no frame of the window or its layers");
-    send(Message::OpenOver);
-    m.step(|_, _| {});
+    // the panel's own motion is over, the compositor's may not be: the open ends when the compositor tells
+    assert!(
+        m.model().open_handed(),
+        "the compositor's until its layers rest"
+    );
+    m.layers_settle();
     assert!(!m.model().open_handed(), "the open is over");
     m.until_quiet(4, 200);
     let rest = m.shown_layers();

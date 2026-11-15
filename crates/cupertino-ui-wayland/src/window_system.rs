@@ -2297,6 +2297,16 @@ impl WindowSystem for WaylandWindowSystem {
         for event in wire {
             self.translate(event, events);
         }
+        // the windows whose layers' last animation ended in what was read
+        events.extend(
+            self.surface_layers
+                .take_settled()
+                .into_iter()
+                .map(|window| PlatformEvent::Window {
+                    window,
+                    event: WindowEvent::LayersSettled,
+                }),
+        );
         for w in &self.windows {
             if let Some(ShownMenus {
                 published: Published::Shown(menus),

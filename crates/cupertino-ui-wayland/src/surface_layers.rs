@@ -84,7 +84,11 @@ pub(crate) struct SurfaceLayers {
     windows: HashMap<WindowId, Vec<Shown>>,
     pending: HashMap<(WindowId, u64), Vec<LayerChange>>,
     running: HashMap<LayerId, HashSet<u32>>,
+    /// The window of each layer that ran an animation.
+    owners: HashMap<LayerId, WindowId>,
     next_serial: u32,
+    /// The windows whose layers came to rest, not yet taken ([`SurfaceLayers::take_settled`]).
+    came_to_rest: Vec<WindowId>,
 }
 
 impl SurfaceLayers {
@@ -99,12 +103,16 @@ impl SurfaceLayers {
         parent: SurfaceId,
         wanted: &[SurfaceLayer<'_>],
     ) -> Result<Vec<SurfaceId>, PlatformError> {
+        let was = self.settled(window);
         let shown = self.windows.entry(window).or_default();
         let mut gone = Vec::new();
         shown.retain(|s| {
             let keep = wanted.iter().any(|w| w.key == s.key);
             if !keep {
                 gone.push(s.surface);
+                // what it ran goes with it, so it keeps its window from coming to rest no longer
+                self.running.remove(&s.layer.id());
+                self.owners.remove(&s.layer.id());
             }
             keep
         });
@@ -176,8 +184,13 @@ impl SurfaceLayers {
             }
             // the changes asked for before the layer was made go with its first values
             if let Some(changes) = self.pending.remove(&(window, w.key)) {
+                self.owners.insert(s.layer.id(), window);
                 send(&s.layer, &changes, &mut self.next_serial, &mut self.running)?;
             }
+        }
+        // the last layer still running went
+        if !was && self.settled(window) {
+            self.came_to_rest.push(window);
         }
         Ok(gone)
     }
@@ -207,22 +220,20 @@ impl SurfaceLayers {
                 .extend(changes);
             return Ok(false);
         };
+        self.owners.insert(s.layer.id(), window);
         send(&s.layer, &changes, &mut self.next_serial, &mut self.running)?;
         Ok(true)
     }
 
     /// Whether every layer of `window` shows its values: none of their animations runs.
     pub(crate) fn settled(&self, window: WindowId) -> bool {
-        self.windows.get(&window).is_none_or(|v| {
-            v.iter().all(|s| {
-                self.running
-                    .get(&s.layer.id())
-                    .is_none_or(HashSet::is_empty)
-            })
-        })
+        self.running
+            .iter()
+            .all(|(layer, serials)| serials.is_empty() || self.owners.get(layer) != Some(&window))
     }
 
-    /// Follows a layer event of one of the layers; false for any other event.
+    /// Follows a layer event of one of the layers; false for any other event. With it the window of the layer may come
+    /// to rest: it is then given by [`SurfaceLayers::take_settled`].
     pub(crate) fn heard(&mut self, event: &AppEvent) -> bool {
         let (layer, serial) = match *event {
             AppEvent::LayerFinished { layer, serial } => (layer, Some(serial)),
@@ -230,6 +241,8 @@ impl SurfaceLayers {
             AppEvent::LayerSettled { layer } => (layer, None),
             _ => return false,
         };
+        let window = self.owners.get(&layer).copied();
+        let was = window.is_none_or(|w| self.settled(w));
         let Some(running) = self.running.get_mut(&layer) else {
             return false;
         };
@@ -239,7 +252,15 @@ impl SurfaceLayers {
             }
             None => running.clear(),
         }
+        if let Some(window) = window.filter(|&w| !was && self.settled(w)) {
+            self.came_to_rest.push(window);
+        }
         true
+    }
+
+    /// The windows whose layers came to rest since the last call: their last running animation ended.
+    pub(crate) fn take_settled(&mut self) -> Vec<WindowId> {
+        std::mem::take(&mut self.came_to_rest)
     }
 
     /// The window goes: its layers' surfaces, for the caller to let go of their buffers and destroy after the layers.
@@ -249,6 +270,8 @@ impl SurfaceLayers {
         for s in &gone {
             self.running.remove(&s.layer.id());
         }
+        self.owners.retain(|_, w| *w != window);
+        self.came_to_rest.retain(|w| *w != window);
         gone.into_iter().map(|s| s.surface).collect()
     }
 }
@@ -282,6 +305,40 @@ fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window comes to rest once, when the last animation of its last running layer ends, finished or settled;
+    /// another window's layers, an event of a layer it never ran and a window gone tell nothing.
+    #[test]
+    fn a_window_comes_to_rest_once_with_its_last_running_layer() {
+        let mut layers = SurfaceLayers::default();
+        let (window, other) = (WindowId(1), WindowId(2));
+        let (glass, content, elsewhere) = (LayerId(10), LayerId(11), LayerId(12));
+        for (layer, w, serials) in [
+            (glass, window, vec![1, 2]),
+            (content, window, vec![3]),
+            (elsewhere, other, vec![4]),
+        ] {
+            layers.owners.insert(layer, w);
+            layers.running.insert(layer, serials.into_iter().collect());
+        }
+        let finished = |layer, serial| AppEvent::LayerFinished { layer, serial };
+        assert!(layers.heard(&finished(glass, 1)));
+        assert!(layers.heard(&AppEvent::LayerSettled { layer: glass }));
+        assert!(layers.take_settled().is_empty(), "the content still runs");
+        assert!(!layers.settled(window));
+        assert!(layers.heard(&finished(content, 3)));
+        assert_eq!(layers.take_settled(), vec![window]);
+        assert!(layers.settled(window) && !layers.settled(other));
+        assert!(layers.heard(&AppEvent::LayerSettled { layer: content }));
+        assert!(layers.take_settled().is_empty(), "told once");
+        assert!(
+            !layers.heard(&finished(LayerId(99), 5)),
+            "a layer that never ran"
+        );
+        assert!(layers.heard(&finished(elsewhere, 4)));
+        layers.forget(other);
+        assert!(layers.take_settled().is_empty(), "a window gone");
+    }
 
     #[test]
     fn changes_for_a_layer_not_made_yet_wait_for_it_and_go_with_its_window() {

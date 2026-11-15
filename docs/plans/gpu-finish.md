@@ -39,16 +39,29 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 1c. The search field's open on the compositor's clock (`cupertino-launcher`)
 
-- [ ] The handed open, and the caret hold with it, ends on the layer's `finished` or `settled` event, not on the
-      launcher's own timer. This is the likely source of the 4 stray buffers: caret fade frames committed while the
-      compositor is still at rest.
+- [x] The handed open, and the caret hold with it, ends on the layer's `finished` or `settled` event, not on the
+      launcher's own timer. The window system tells a window its layers came to rest (`WindowEvent::LayersSettled`,
+      once, when its last running animation ends), which the panel hears through `FrameClock::on_layers_settled`; a
+      timer a second past the open's end (`OPEN_REST_FALLBACK`) takes it back if no word comes, and carries the open's
+      number, so an earlier open's timer ends nothing
+      (`a_handed_open_ends_on_the_compositor_s_word_or_on_the_timer_well_past_it`). The 4 stray buffers were one
+      commit of the content layer about 700 ms in: an earlier open's timer, or any other message, rebuilt the view
+      and the held caret was painted where its fade had come to, not as it was shown. A held caret now paints as it
+      was last drawn (`a_held_caret_painted_again_part_way_through_its_fade_is_drawn_as_the_hold_began`).
 - [ ] The caret blinks through the open. It becomes a layer of its own whose opacity goes through samples of the
-      panel's blink, so a blink makes no buffer.
-- [ ] `Model::hand_field_opens` on. Against the server, the real process commits no buffer of its window or its
+      panel's blink, so a blink makes no buffer. Not done: the caret is drawn in the field's overlay at a place only
+      its paint knows, and its blink starts when the keyboard focus comes, which the compositor gives after the window
+      maps, later than the open's samples are sent. A caret layer needs the field to draw its caret into a layer of
+      its own and tell when its blink started; meanwhile the held caret stays shown through the open (255 at the
+      caret from 550 to 1000 ms, where the panel's own drawing fades it).
+- [x] `Model::hand_field_opens` on. Against the server, the real process commits no buffer of its window or its
       layers while the open is part way, in 3 runs
       (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over
       `ToggleLauncher`). Its warm-up wait reads the launcher's renderer record as `gpu`, instead of waiting for 500 ms
-      of quiet.
+      of quiet. Measured with a variant of that test over `ToggleLauncher`, not kept in the suite (the window 760 points wide with 4 layers, part way
+      while any layer still animates): 0 buffers in each of 8 opens over two runs (186 to 188 server steps part way); the
+      only commits come after the layers rest, the field's glass dropping the edge and the button's face drawing it
+      again. The scope's open as committed: 0 in 3 runs over 92 to 95 steps part way.
 
 ## Wave 2: stability fixes from the review (in parallel with wave 1's launcher chain)
 

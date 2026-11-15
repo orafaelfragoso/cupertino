@@ -118,6 +118,7 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
                 label: "Sidebar".into(),
                 layout: win.split,
                 min_sidebar: metrics::SIDEBAR_MIN,
+                max_sidebar: metrics::SIDEBAR_MAX,
                 min_content: metrics::BROWSER_MIN.0,
                 on_change: Some(send(id, Event::Split)),
                 sidebar_header: None,

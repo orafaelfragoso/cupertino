@@ -202,7 +202,10 @@ from the application's model and reports changes as messages.
   tint (no separator line and no fill of its own), the content
   pane's window background reaches the window's top edge, so the window paints none; the compositor draws it
   (`Surface::WindowBackground`) where the desktop can, so the toolbar's glass over it reads the window, and the pane
-  paints it where the desktop cannot. The panel meets the
+  paints it where the desktop cannot. A drag on the divider keeps the sidebar between `min_sidebar` and `max_sidebar`
+  and never leaves the content under `min_content`, which wins over the sidebar's maximum in a narrow window; dragged
+  below half its minimum the sidebar collapses, and a drag back out from the edge or Return on the divider restores
+  it. The panel meets the
   window's edges (`SIDEBAR_PANEL_INSET` 0); an inset panel would take the window's 16 pt corner less the inset. The
   floating toolbar controls are 36 pt tall in the middle of the 52 pt row, 8 pt from its edges and 8 pt apart:
   `ToolbarGroup` is a capsule of segments 36.5 pt wide (40 pt for a choice, whose chosen segment shows a pill 4 pt

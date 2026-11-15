@@ -1,6 +1,6 @@
 //! The menus Settings publishes to the desktop's menu bar (menu bar spec §8): Quit by role, the editing items of the
-//! search field and Find, and full screen. No About or Settings… item (the bar's About stands), no pane list, and no
-//! Window or Help menu, which the bar adds.
+//! search field and Find, Hide and Show Sidebar, and full screen. No About or Settings… item (the bar's About stands),
+//! no pane list, and no Window or Help menu, which the bar adds.
 
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Command, Entry, Item, Menu, MenuBar, Scope};
@@ -17,10 +17,12 @@ pub enum MenuAction {
     Paste,
     SelectAll,
     Find,
+    /// Hide the sidebar, or show it again.
+    ToggleSidebar,
     FullScreen,
 }
 
-const ACTIONS: [MenuAction; 9] = [
+const ACTIONS: [MenuAction; 10] = [
     MenuAction::Quit,
     MenuAction::Undo,
     MenuAction::Redo,
@@ -29,6 +31,7 @@ const ACTIONS: [MenuAction; 9] = [
     MenuAction::Paste,
     MenuAction::SelectAll,
     MenuAction::Find,
+    MenuAction::ToggleSidebar,
     MenuAction::FullScreen,
 ];
 
@@ -39,6 +42,8 @@ pub struct MenuState {
     pub search_focused: bool,
     /// Text is selected in the search field.
     pub has_selection: bool,
+    /// The sidebar is shown, not collapsed.
+    pub sidebar: bool,
     pub full_screen: bool,
 }
 
@@ -55,6 +60,7 @@ impl MenuAction {
             Paste => (Scope::Win, "paste"),
             SelectAll => (Scope::Win, "select-all"),
             Find => (Scope::Win, "find"),
+            ToggleSidebar => (Scope::Win, "toggle-sidebar"),
             FullScreen => (Scope::Win, "fullscreen"),
         };
         ActionName::new(scope, name).expect("the menu's action names are valid")
@@ -81,19 +87,24 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
     let standard = standard::menu_bar(
         "Settings",
         &Features {
+            sidebar: Some(state.sidebar),
             full_screen: state.full_screen,
             ..Features::default()
         },
     );
-    let full_screen = standard
-        .menus
-        .iter()
-        .flat_map(|menu| menu.sections.iter().flatten())
-        .find(|entry| {
-            matches!(entry, Entry::Item(item) if item.command == Command::Action(FullScreen.name()))
-        })
-        .cloned()
-        .expect("the standard View menu has full screen");
+    let standard_item = |action: MenuAction| {
+        standard
+            .menus
+            .iter()
+            .flat_map(|menu| menu.sections.iter().flatten())
+            .find(|entry| {
+                matches!(entry, Entry::Item(item) if item.command == Command::Action(action.name()))
+            })
+            .cloned()
+            .expect("the standard View menu has the sidebar and full screen")
+    };
+    let sidebar = standard_item(ToggleSidebar);
+    let full_screen = standard_item(FullScreen);
     let edit = Menu::new(
         "Edit",
         vec![
@@ -110,7 +121,7 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
             vec![item("Find", Find, chord(&[Primary], "f"))],
         ],
     );
-    let view = Menu::new("View", vec![vec![full_screen]]);
+    let view = Menu::new("View", vec![vec![sidebar], vec![full_screen]]);
     MenuBar {
         app: standard.app,
         menus: vec![edit, view],
@@ -177,7 +188,12 @@ mod tests {
                     .map(String::from)
                     .to_vec()
                 ),
-                ("View".to_string(), vec!["Enter Full Screen".to_string()]),
+                (
+                    "View".to_string(),
+                    ["Show Sidebar", "---", "Enter Full Screen"]
+                        .map(String::from)
+                        .to_vec()
+                ),
             ]
         );
     }

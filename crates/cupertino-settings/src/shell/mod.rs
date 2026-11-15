@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use cupertino_kit::controls::{
     unobscured_insets, AccountLook, Modal, Navigation, NavigationStack, ScrollView, Scroller,
-    SearchField, SidebarWindow, SplitLayout, TileSidebar, TileSidebarItem, ToolbarTitle,
+    SearchField, SidebarWindow, SplitLayout, SplitPane, TileSidebar, TileSidebarItem, ToolbarTitle,
 };
 use cupertino_kit::core::{CommandRegistry, Menus, Shortcut};
 use cupertino_kit::geometry::{Insets, Point, Size};
@@ -42,9 +42,11 @@ pub const APP_ID: &str = "cupertino-settings";
 const LEVEL_TICK: Duration = Duration::from_millis(17);
 /// How often a dragged slider without stops checks whether it has settled.
 const SLIDE_TICK: Duration = Duration::from_millis(100);
-/// The sidebar's width at the start and its least; the content's least.
+/// The sidebar's width at the start, its least and the most a drag on the divider gives it (the content's least wins
+/// over that in a narrow window); the content's least.
 const SIDEBAR: f64 = 232.0;
 const MIN_SIDEBAR: f64 = 150.0;
+const MAX_SIDEBAR: f64 = 400.0;
 const MIN_CONTENT: f64 = 320.0;
 /// The page's padding inside the content, below the toolbar row.
 const PAGE_INSET: Insets = Insets {
@@ -290,6 +292,7 @@ impl Shell {
         MenuState {
             search_focused: false,
             has_selection: false,
+            sidebar: self.split.collapsed.is_none(),
             full_screen: self.full_screen,
         }
     }
@@ -443,6 +446,13 @@ impl Shell {
                 return Ok(match MenuAction::from_name(&action) {
                     Some(MenuAction::Quit) => vec![Command::Exit],
                     Some(MenuAction::Find) => vec![Command::Focus(Key::from("search"))],
+                    Some(MenuAction::ToggleSidebar) => {
+                        self.split.collapsed = match self.split.collapsed {
+                            Some(_) => None,
+                            None => Some(SplitPane::Leading),
+                        };
+                        Vec::new()
+                    }
                     Some(MenuAction::FullScreen) => {
                         self.full_screen = !self.full_screen;
                         vec![Command::Window(
@@ -764,6 +774,7 @@ impl Application for SettingsApp {
                 ..shell.split
             },
             min_sidebar: MIN_SIDEBAR,
+            max_sidebar: MAX_SIDEBAR + sidebar_extra(),
             min_content: MIN_CONTENT,
             on_change: Some(Box::new(Message::Split)),
             sidebar_header: None,
@@ -832,7 +843,7 @@ mod tests {
     use std::sync::Arc;
 
     use cupertino_assets::BUILTIN_FONT;
-    use cupertino_kit::core::{AccessibilityUpdate, NodeId, Role};
+    use cupertino_kit::core::{AccessibilityUpdate, AccessibleValue, NodeId, Role};
     use cupertino_kit::core::{PlaceholderIcons, RuntimeOptions};
     use cupertino_kit::layout::LayoutDirection;
     use cupertino_kit::platform::{
@@ -1336,6 +1347,115 @@ mod tests {
         );
         let stored = Settings::load(&paths(dir.path()), 1080.0).unwrap();
         assert_eq!(stored.dock.autohide, Some(true));
+    }
+
+    #[test]
+    fn the_divider_dragged_to_the_far_edge_keeps_the_page_and_hide_sidebar_has_a_way_back() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut driver, window) = start(dir.path(), PaneId::DesktopDock);
+        let toggle = |driver: &mut TestDriver<SettingsApp>| {
+            let menus = driver.window_system_mut().menus(window).unwrap().unwrap();
+            menus
+                .bar
+                .menus
+                .iter()
+                .flat_map(|menu| menu.sections.iter().flatten())
+                .find_map(|entry| match entry {
+                    cupertino_menu_model::Entry::Item(item)
+                        if item.command
+                            == cupertino_menu_model::Command::Action(
+                                MenuAction::ToggleSidebar.name(),
+                            ) =>
+                    {
+                        Some(item.label.clone())
+                    }
+                    _ => None,
+                })
+                .expect("the View menu has the sidebar's item")
+        };
+        let sidebar = |driver: &TestDriver<SettingsApp>| {
+            driver
+                .runtime()
+                .find(window, &Key::from("sidebar"))
+                .is_some()
+        };
+        assert!(sidebar(&driver));
+        assert_eq!(toggle(&mut driver), "Hide Sidebar");
+
+        // the divider dragged to the window's far edge stops at the sidebar's widest, the page beside it
+        let divider = |driver: &TestDriver<SettingsApp>| {
+            driver
+                .runtime()
+                .snapshot(window)
+                .unwrap()
+                .accessibility
+                .into_iter()
+                .find(|(_, n)| n.role == Role::Splitter)
+                .map(|(_, n)| (n.bounds, n.value))
+                .unwrap()
+        };
+        let (strip, _) = divider(&driver);
+        let y = strip.origin.y + strip.size.height / 2.0;
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        let button = |position, pressed| {
+            pointer(PointerEvent::Button {
+                position,
+                button: MouseButton::Left,
+                pressed,
+                serial: 1,
+                mods: Mods::NONE,
+            })
+        };
+        let from = Point::new(strip.origin.x + strip.size.width / 2.0, y);
+        let to = Point::new(5000.0, y);
+        send(
+            &mut driver,
+            window,
+            pointer(PointerEvent::Motion { position: from }),
+        );
+        send(&mut driver, window, button(from, true));
+        send(
+            &mut driver,
+            window,
+            pointer(PointerEvent::Motion { position: to }),
+        );
+        send(&mut driver, window, button(to, false));
+        assert!(
+            matches!(
+                divider(&driver).1,
+                Some(AccessibleValue::Number { value, max, .. }) if value == MAX_SIDEBAR && max == MAX_SIDEBAR
+            ),
+            "{:?}",
+            divider(&driver).1
+        );
+        assert!(sidebar(&driver));
+        assert_eq!(
+            title(&mut driver, window),
+            "Desktop & Dock",
+            "the page stays"
+        );
+
+        send(
+            &mut driver,
+            window,
+            WindowEvent::MenuActivated(MenuAction::ToggleSidebar.name()),
+        );
+        assert!(!sidebar(&driver), "the sidebar collapses");
+        assert_eq!(toggle(&mut driver), "Show Sidebar");
+        assert_eq!(
+            title(&mut driver, window),
+            "Desktop & Dock",
+            "the page stays"
+        );
+
+        send(
+            &mut driver,
+            window,
+            WindowEvent::MenuActivated(MenuAction::ToggleSidebar.name()),
+        );
+        assert!(sidebar(&driver), "and comes back");
+        assert_eq!(toggle(&mut driver), "Hide Sidebar");
     }
 
     #[test]

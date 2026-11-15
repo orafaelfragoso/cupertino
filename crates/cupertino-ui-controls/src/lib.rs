@@ -687,10 +687,13 @@ pub struct SplitLayout {
     pub collapsed: Option<SplitPane>,
 }
 
-/// Two panes along `axis` with a divider between them, which a drag or the keyboard moves. Dragging a pane below half
-/// its minimum collapses it; Return collapses the leading pane or restores a collapsed one. The divider is one Tab
-/// stop; a collapsed pane's content is not built. Each pane's content fills the pane. Build its element with
-/// `Element::from`.
+/// Two panes along `axis` with a divider between them, which a drag or the keyboard moves. The leading pane stays
+/// between `min_leading` and `max_leading`, and never so wide that the trailing pane goes under `min_trailing`: the
+/// trailing pane's minimum wins over the leading pane's maximum, and where both minimums do not fit the leading pane
+/// hides until the room comes back. Dragging the leading pane below half its minimum collapses it, and dragging the
+/// divider back out from the edge restores it; a drag never collapses the trailing pane. Return collapses the leading
+/// pane or restores a collapsed one. The divider is one Tab stop; a collapsed pane's content is not built. Each pane's
+/// content fills the pane. Build its element with `Element::from`.
 pub struct SplitView<M> {
     /// The divider's accessible name.
     pub label: String,
@@ -700,6 +703,8 @@ pub struct SplitView<M> {
     pub trailing: Element<M>,
     pub layout: SplitLayout,
     pub min_leading: f64,
+    /// The widest the leading pane gets; `f64::INFINITY` for no limit but the trailing pane's minimum.
+    pub max_leading: f64,
     pub min_trailing: f64,
     pub on_change: Option<Handler<SplitLayout, M>>,
 }

@@ -93,6 +93,8 @@ pub struct SidebarWindow<M> {
     pub label: String,
     pub layout: SplitLayout,
     pub min_sidebar: f64,
+    /// The widest a drag makes the sidebar; the content's minimum wins over it in a narrow window.
+    pub max_sidebar: f64,
     pub min_content: f64,
     pub on_change: Option<Handler<SplitLayout, M>>,
     /// Below the window control buttons, above `sidebar`: a search field, say.
@@ -146,6 +148,7 @@ impl<M: 'static> From<SidebarWindow<M>> for Element<M> {
                 trailing: content,
                 layout: window.layout,
                 min_leading: window.min_sidebar,
+                max_leading: window.max_sidebar,
                 min_trailing: window.min_content,
                 on_change: window.on_change,
             },

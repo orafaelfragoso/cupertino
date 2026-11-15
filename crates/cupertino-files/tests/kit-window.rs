@@ -454,7 +454,7 @@ fn the_window_reads_its_sidebar_toolbar_and_table_by_role_name_value_and_state()
             " collapsed",
             ["\"Notes\"", "<date>", "\"--\"", "\"Folder\""],
         ));
-        lines.push("  Splitter \"Sidebar\" = 223 of 0..919 focusable".to_owned());
+        lines.push("  Splitter \"Sidebar\" = 223 of 0..400 focusable".to_owned());
         lines
     };
     assert_eq!(
@@ -1406,4 +1406,50 @@ fn the_list_words_its_dates_against_the_clock_it_was_started_with() {
         date,
         cupertino_files::format::relative_date(modified, std::time::SystemTime::now())
     );
+}
+
+/// The divider's place and the farthest it can go, as assistive technology reads them.
+fn divider(run: &Run) -> (f64, f64) {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot
+        .accessibility
+        .iter()
+        .find_map(|(_, node)| match (node.role, &node.value) {
+            (
+                Role::Splitter,
+                Some(cupertino_kit::core::AccessibleValue::Number { value, max, .. }),
+            ) => Some((*value, *max)),
+            _ => None,
+        })
+        .expect("the sidebar's divider")
+}
+
+#[test]
+fn the_divider_dragged_to_the_far_edge_keeps_the_folder_and_hide_sidebar_has_a_way_back() {
+    use cupertino_kit::geometry::Point;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let strip = run.bounds(Role::Splitter, "Sidebar");
+    let y = strip.min_y() + strip.height() / 2.0;
+    let at = |x: f64| Point::new(x, y);
+    run.drag(
+        at(strip.min_x() + strip.width() / 2.0),
+        at(5000.0),
+        Mods::NONE,
+    );
+    assert_eq!(divider(&run), (400.0, 400.0), "the sidebar's widest");
+    assert_eq!(run.rows().len(), 3, "the folder still lists");
+    assert_eq!(run.menu_label("toggle-sidebar"), "Hide Sidebar");
+
+    // a drag to the leading edge collapses the sidebar, and Show Sidebar brings it back where it was
+    let strip = run.bounds(Role::Splitter, "Sidebar");
+    run.drag(at(strip.min_x() + strip.width() / 2.0), at(0.0), Mods::NONE);
+    assert_eq!(divider(&run), (0.0, 400.0));
+    assert_eq!(run.menu_label("toggle-sidebar"), "Show Sidebar");
+    run.menu("toggle-sidebar");
+    assert_eq!(divider(&run), (400.0, 400.0));
+    assert_eq!(run.menu_label("toggle-sidebar"), "Hide Sidebar");
+    run.menu("toggle-sidebar");
+    assert_eq!(divider(&run).0, 0.0, "Hide Sidebar collapses it");
+    assert_eq!(run.rows().len(), 3);
 }

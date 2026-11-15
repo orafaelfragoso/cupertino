@@ -39,6 +39,7 @@ impl Application for Shell {
                 collapsed: None,
             },
             min_sidebar: 100.0,
+            max_sidebar: f64::INFINITY,
             min_content: 200.0,
             on_change: None,
             sidebar_header: Some(spacer("header", 30.0)),

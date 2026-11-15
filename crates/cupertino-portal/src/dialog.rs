@@ -1262,6 +1262,7 @@ fn window(d: &Dialog, places: &[Place], icons: &RefCell<FileIcons>) -> Window<Me
         trailing: files(d, icons),
         layout: d.split,
         min_leading: 120.0,
+        max_leading: f64::INFINITY,
         min_trailing: 320.0,
         on_change: Some(Box::new(move |l| Message::Split(id, l))),
     })

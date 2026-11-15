@@ -71,7 +71,7 @@ fn chrome(title: &str) -> [String; 5] {
         "Button \"Back\" disabled".to_owned(),
         "Button \"Forward\" disabled".to_owned(),
         "TextInput \"Search\" = \"\" focusable".to_owned(),
-        "Splitter \"Sidebar\" = 232 of 0..739 focusable".to_owned(),
+        "Splitter \"Sidebar\" = 232 of 0..400 focusable".to_owned(),
     ]
 }
 
@@ -260,7 +260,7 @@ fn sub_page_chrome(pane: &str, title: &str) -> [String; 6] {
         "Button \"Back\" focusable".to_owned(),
         "Button \"Forward\" disabled".to_owned(),
         "TextInput \"Search\" = \"\" focusable".to_owned(),
-        "Splitter \"Sidebar\" = 232 of 0..739 focusable".to_owned(),
+        "Splitter \"Sidebar\" = 232 of 0..400 focusable".to_owned(),
     ]
 }
 

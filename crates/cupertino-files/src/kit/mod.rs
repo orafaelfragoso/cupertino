@@ -51,7 +51,7 @@ use std::time::{Duration, SystemTime};
 
 use cupertino_apps::{launch, MimeApps, MimeDatabase};
 use cupertino_kit::controls::{
-    MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, TextChange,
+    MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, SplitPane, TextChange,
 };
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::layout::ScrollState;
@@ -1616,6 +1616,12 @@ impl Model {
             MenuAction::SortBy(key, ascending) => window.browser.set_sort(key, ascending),
             MenuAction::TogglePathBar => window.path_bar = !window.path_bar,
             MenuAction::ToggleStatusBar => window.status_bar = !window.status_bar,
+            MenuAction::ToggleSidebar => {
+                window.split.collapsed = match window.split.collapsed {
+                    Some(_) => None,
+                    None => Some(SplitPane::Leading),
+                }
+            }
             MenuAction::Back => window.step(Step::Back, session),
             MenuAction::Forward => window.step(Step::Forward, session),
             MenuAction::EnclosingFolder => window.step(Step::Parent, session),
@@ -2957,6 +2963,7 @@ impl BrowserWindow {
             in_trash: self.browser.dir() == session.trash.home_trash().join("files"),
             path_bar: self.path_bar,
             status_bar: self.status_bar,
+            sidebar: self.split.collapsed.is_none(),
             full_screen: self.full_screen,
             can_go_back: history.back_target().is_some(),
             can_go_forward: history.forward_target().is_some(),

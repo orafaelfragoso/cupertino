@@ -131,6 +131,15 @@ pub(crate) fn path(shape: &Shape) -> Option<Path> {
             b.close();
         }
         Shape::RoundedRect { rect, radius } => rounded(&mut b, rect, *radius),
+        // the rectangle the outline lies in: a superellipse quadrant stays inside its corner's square
+        Shape::Superellipse { rect, outset, .. } => {
+            let r = rect.outset(outset.max(0.0));
+            b.move_to(r.min_x() as f32, r.min_y() as f32);
+            b.line_to(r.max_x() as f32, r.min_y() as f32);
+            b.line_to(r.max_x() as f32, r.max_y() as f32);
+            b.line_to(r.min_x() as f32, r.max_y() as f32);
+            b.close();
+        }
         Shape::Path { verbs, .. } => {
             for verb in verbs {
                 match *verb {
@@ -328,7 +337,7 @@ pub(crate) fn clip_cover(
             rect,
             radius.clamp(0.0, rect.width().min(rect.height()) / 2.0),
         ),
-        Shape::Path { .. } => return None,
+        Shape::Superellipse { .. } | Shape::Path { .. } => return None,
     };
     let cut = |v: f64| v.clamp(-f64::from(1 << 28), f64::from(1 << 28));
     let on_edge = |v: f64| (v - v.round()).abs() < 1e-9;
@@ -445,8 +454,12 @@ pub(crate) struct Outline {
     /// Window pixel position to the shape's units, relative to its centre.
     pub inv: [f32; 6],
     pub half: [f32; 2],
-    /// Corner radius in the shape's units; zero for square corners.
+    /// Corner radius (a superellipse's extent) in the shape's units; zero for square corners.
     pub corner: f32,
+    /// The corners' superellipse exponent: 2 or less a quarter circle.
+    pub exponent: f32,
+    /// How far the outline is moved out along the distance, in the shape's units, before a stroke's half width.
+    pub outset: f32,
     /// Window pixels per unit of the shape.
     pub px: f32,
     /// Stroke width in the shape's units; `None` for a fill.
@@ -463,11 +476,20 @@ impl Outline {
         ts: tiny_skia::Transform,
         stroke: Option<f64>,
     ) -> Option<Outline> {
-        let (rect, radius) = match shape {
-            Shape::Rect(r) => (r, 0.0),
-            Shape::RoundedRect { rect, radius } => (rect, *radius),
+        let (rect, radius, exponent, outset) = match shape {
+            Shape::Rect(r) => (r, 0.0, 2.0, 0.0),
+            Shape::RoundedRect { rect, radius } => (rect, *radius, 2.0, 0.0),
+            Shape::Superellipse {
+                rect,
+                extent,
+                exponent,
+                outset,
+            } => (rect, *extent, *exponent, *outset),
             Shape::Path { .. } => return None,
         };
+        if !(exponent.is_finite() && outset.is_finite()) {
+            return None;
+        }
         let (w, h) = (rect.width(), rect.height());
         if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()) {
             return None;
@@ -494,7 +516,8 @@ impl Outline {
         let ie = -(ia * e + ic * f) - cx;
         let if_ = -(ib * e + id * f) - cy;
         let half = [(w / 2.0) as f32, (h / 2.0) as f32];
-        let grow = stroke.map_or(0.0, |s| s / 2.0);
+        let outset = outset as f32;
+        let grow = stroke.map_or(0.0, |s| s / 2.0) + outset.max(0.0);
         let mut lo = [f32::INFINITY; 2];
         let mut hi = [f32::NEG_INFINITY; 2];
         for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
@@ -510,6 +533,8 @@ impl Outline {
             inv: [ia, ib, ic, id, ie, if_],
             half,
             corner: corner as f32,
+            exponent: exponent as f32,
+            outset,
             px: det.abs().sqrt(),
             stroke,
             bounds: Bounds {

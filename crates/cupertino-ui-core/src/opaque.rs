@@ -117,7 +117,7 @@ fn moves_only(t: &Transform) -> Option<(f64, f64)> {
 }
 
 /// The rectangle a clip of `shape` shows whole: a rectangle itself, a rounded one less its corners on both axes (the
-/// largest rectangle both bars of its cross hold), and none for a path.
+/// largest rectangle both bars of its cross hold), and none for a superellipse or a path.
 fn inside(shape: &Shape) -> Option<Rect> {
     match shape {
         Shape::Rect(r) => Some(*r),
@@ -125,7 +125,7 @@ fn inside(shape: &Shape) -> Option<Rect> {
             let r = corner(rect, *radius);
             inset_by(*rect, r, r)
         }
-        Shape::Path { .. } => None,
+        Shape::Superellipse { .. } | Shape::Path { .. } => None,
     }
 }
 

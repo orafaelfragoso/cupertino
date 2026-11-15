@@ -371,7 +371,7 @@ pub struct Model {
     pub compositor_layers: bool,
     /// An open from hidden hands itself to the compositor where the window system shows layers: a scope's
     /// ([`view::layers::open_changes`]), its glass the panel's own at every moment, its content the panel's pixels and
-    /// its edge the rest's stroke scaled; and the search field's with its mode buttons
+    /// its edge drawn by the compositor along the glass; and the search field's with its mode buttons
     /// ([`view::layers::field_open_changes`]), the glass of the field and the buttons the panel's own at every moment
     /// and the edge drawn by the compositor along it. On in the process; a test turns it off to compare the panel's own
     /// open.
@@ -397,10 +397,8 @@ pub struct Model {
     open_end: f64,
     /// A scope's fold into the search field hands itself to the compositor where the panel rested as layers
     /// ([`view::layers::fold_changes`]): its glass the panel's own at every moment, the body fading on its own curve,
-    /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass.
-    /// Off in the process: the compositor's edge follows a scope's continuous corners where the panel strokes its own
-    /// along circular arcs, so the fold's first frames would part from the rest's at the corners until the panel's own
-    /// edge follows the glass too. A test turns it on.
+    /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass,
+    /// as the panel strokes its own. On in the process; a test turns it off to compare the panel's own fold.
     pub hand_folds: bool,
     /// A fold to hand to the compositor once the mode buttons are placed.
     hand_fold: bool,
@@ -473,7 +471,7 @@ impl Model {
             open_timer: false,
             open_number: 0,
             open_end: 0.0,
-            hand_folds: false,
+            hand_folds: true,
             hand_fold: false,
             fold_shown: None,
         }
@@ -2272,7 +2270,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         layered: model.layered(),
         handed: model.close_handed(),
         opening: model.open_handed(),
-        group_edge: model.field_open_handed() || model.fold_handed(),
+        group_edge: model.field_open_handed()
+            || model.fold_handed()
+            || view::layers::compositor_edge(&frame),
         moving: !model.layered() && model.motion.animating(model.now().mono),
     };
     let mut window = view::panel_window(&panel);

@@ -6,7 +6,8 @@
 //! pixel's coverage depends on nothing but its own position, so a shape painted into any scratch image, cut anywhere by
 //! the damage, gives the same bytes. Strokes are centred on the outline, as the stroker draws a path's: the shared
 //! stroke of the outline moved out by half the width (a rectangle's corners stay square, a rounded one's stay round).
-//! Paths keep the path rasterizer's coverage.
+//! A superellipse's corners are the shared distance's corners of its exponent, and its outline is moved out by its
+//! outset before a stroke's half width. Paths keep the path rasterizer's coverage.
 
 use crate::effects::{div255, mul_px, over_px};
 use crate::geometry::Bounds;
@@ -25,8 +26,12 @@ pub(crate) struct Outline {
     /// Window pixel position to the shape's units, relative to its centre.
     inv: [f32; 6],
     half: [f32; 2],
-    /// Corner radius in the shape's units; zero for square corners.
+    /// Corner radius (a superellipse's extent) in the shape's units; zero for square corners.
     corner: f32,
+    /// The corners' superellipse exponent: 2 or less a quarter circle.
+    exponent: f32,
+    /// How far the outline is moved out along the distance, in the shape's units, before a stroke's half width.
+    outset: f32,
     /// Window pixels per unit of the shape.
     px: f32,
     /// Stroke width in the shape's units; `None` for a fill.
@@ -43,11 +48,20 @@ impl Outline {
         ts: tiny_skia::Transform,
         stroke: Option<f64>,
     ) -> Option<Outline> {
-        let (rect, radius) = match shape {
-            Shape::Rect(r) => (r, 0.0),
-            Shape::RoundedRect { rect, radius } => (rect, *radius),
+        let (rect, radius, exponent, outset) = match shape {
+            Shape::Rect(r) => (r, 0.0, 2.0, 0.0),
+            Shape::RoundedRect { rect, radius } => (rect, *radius, 2.0, 0.0),
+            Shape::Superellipse {
+                rect,
+                extent,
+                exponent,
+                outset,
+            } => (rect, *extent, *exponent, *outset),
             Shape::Path { .. } => return None,
         };
+        if !(exponent.is_finite() && outset.is_finite()) {
+            return None;
+        }
         let (w, h) = (rect.width(), rect.height());
         if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()) {
             return None;
@@ -75,7 +89,8 @@ impl Outline {
         let ie = -(ia * e + ic * f) - cx;
         let if_ = -(ib * e + id * f) - cy;
         let half = [(w / 2.0) as f32, (h / 2.0) as f32];
-        let grow = stroke.map_or(0.0, |s| s / 2.0);
+        let outset = outset as f32;
+        let grow = stroke.map_or(0.0, |s| s / 2.0) + outset.max(0.0);
         let mut lo = [f32::INFINITY; 2];
         let mut hi = [f32::NEG_INFINITY; 2];
         for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
@@ -91,6 +106,8 @@ impl Outline {
             inv: [ia, ib, ic, id, ie, if_],
             half,
             corner: corner as f32,
+            exponent: exponent as f32,
+            outset,
             px: det.abs().sqrt(),
             stroke,
             bounds: Bounds {
@@ -126,11 +143,12 @@ impl Outline {
         }
     }
 
-    /// Distance from `p` to the outline moved out by `grow`.
+    /// Distance from `p` to the outline moved out by the outset and `grow`.
     #[inline]
     fn distance(&self, p: [f32; 2], grow: f32) -> f32 {
+        let grow = grow + self.outset;
         if self.corner > 0.0 {
-            rounded_distance(p, self.half, self.corner, 2.0) - grow
+            rounded_distance(p, self.half, self.corner, self.exponent) - grow
         } else {
             rect_distance(p, [self.half[0] + grow, self.half[1] + grow])
         }
@@ -480,21 +498,28 @@ mod tests {
         tiny_skia::Transform::from_scale(scale, scale)
     }
 
-    /// Every coverage vector, for the shapes the renderer draws (circular corners), at the pixel whose centre is the
-    /// vector's point: the shape is moved so that point falls on a pixel centre.
+    /// Every coverage vector, circular corners as rounded rectangles and continuous ones as superellipses, at the
+    /// pixel whose centre is the vector's point: the shape is moved so that point falls on a pixel centre.
     #[test]
     fn coverage_matches_the_shared_vectors() {
-        let mut checked = 0;
+        let (mut checked, mut continuous) = (0, 0);
         for row in vectors::rows(vectors::COVERAGE) {
             let [px, py, hx, hy, extent, exponent, pixels, _, want] =
                 row[..].try_into().expect("nine columns");
-            if exponent > 2.001 {
-                continue;
-            }
             let rect = Rect::new(-hx, -hy, 2.0 * hx, 2.0 * hy);
-            let shape = Shape::RoundedRect {
-                rect,
-                radius: extent,
+            let shape = if exponent > 2.001 {
+                continuous += 1;
+                Shape::Superellipse {
+                    rect,
+                    extent,
+                    exponent,
+                    outset: 0.0,
+                }
+            } else {
+                Shape::RoundedRect {
+                    rect,
+                    radius: extent,
+                }
             };
             // the vector's point at the centre of pixel (100, 100)
             let s = pixels as f32;
@@ -515,7 +540,49 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked >= 48, "{checked}");
+        assert!(checked >= 48 && continuous > 0, "{checked} {continuous}");
+    }
+
+    /// A superellipse's stroke `w` wide moved out by `w / 2` covers each pixel by the share of it the band from the
+    /// outline to `w` outside it holds, by the shared distance: at 1, 1.5 and 2 pixels a unit, along a continuous
+    /// corner, its straight sides and a corner easing towards a circle.
+    #[test]
+    fn a_superellipse_stroke_moved_out_by_half_its_width_lies_just_outside_its_outline() {
+        let width = 0.5f32;
+        for (extent, exponent) in [(18.36f64, 3.33f64), (20.0, 2.6)] {
+            for scale in [1.0f32, 1.5, 2.0] {
+                let rect = Rect::new(10.0, 10.0, 80.0, 40.0);
+                let shape = Shape::Superellipse {
+                    rect,
+                    extent,
+                    exponent,
+                    outset: f64::from(width) / 2.0,
+                };
+                let outline = Outline::new(&shape, place(scale), Some(f64::from(width))).unwrap();
+                let (mut lit, mut hollow) = (0, 0);
+                for y in 0..(60.0 * scale) as i32 {
+                    for x in 0..(100.0 * scale) as i32 {
+                        let p = [
+                            (x as f32 + 0.5) / scale - 50.0,
+                            (y as f32 + 0.5) / scale - 30.0,
+                        ];
+                        let d = rounded_distance(p, [40.0, 20.0], extent as f32, exponent as f32)
+                            * scale;
+                        let band = width * scale;
+                        let share = ((d + 0.5).min(band) - (d - 0.5).max(0.0)).clamp(0.0, 1.0);
+                        let (got, inside) = outline.at(x, y);
+                        let want = (share * 255.0 + 0.5) as u8;
+                        assert!(
+                            got.abs_diff(want) <= 1,
+                            "{extent} {exponent} at {scale}: pixel {x} {y}, {d} outside: {got}, the band {want}"
+                        );
+                        lit += usize::from(got > 0);
+                        hollow += usize::from(inside);
+                    }
+                }
+                assert!(lit > 0 && hollow > 0, "{lit} {hollow}");
+            }
+        }
     }
 
     #[test]

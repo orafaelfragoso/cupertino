@@ -9,7 +9,7 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_layout::LayoutDirection;
 use cupertino_ui_platform::{CursorShape, GlassRegion, GlassStyle, Timestamp};
 use cupertino_ui_render::{
-    Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling,
+    Effect, Group, ImageResource, PaintOp, ResourceId, ResourceRef, Sampling, Shape,
 };
 use cupertino_ui_text::TextInputState;
 use cupertino_ui_theme::Surface;
@@ -701,6 +701,64 @@ pub(crate) fn translucent(surface: Surface) -> bool {
 /// The glass style a material name of the theme stands for.
 pub(crate) fn glass_style(material: &str) -> Option<GlassStyle> {
     GlassStyle::of_material(material)
+}
+
+/// How far a glass shape's continuous corner reaches along each side, per point of its radius.
+pub const GLASS_CORNER_REACH: f64 = 1.53;
+/// The superellipse exponent of a glass shape's continuous corner (2 is a quarter circle).
+pub const GLASS_CORNER_EXPONENT: f64 = 3.33;
+
+/// The outline of glass over `rect` with corners of `radius` as the glass draws it, moved out by `outset` along its
+/// distance: continuous corners, each a superellipse reaching [`GLASS_CORNER_REACH`] times the radius along the sides;
+/// once that would pass half the short side the reach stays there and the exponent eases to 2 as the radius grows to
+/// half the short side, so a capsule has round ends. A stroke of it `w` wide with an outset of `w / 2` lies just
+/// outside the glass, where a line along the glass's edge lies. Corners that end as quarter circles (a capsule's) come
+/// back as the [`Shape::RoundedRect`] of the same outline.
+///
+/// ```
+/// use cupertino_geometry::Rect;
+/// use cupertino_ui_core::glass_outline;
+/// use cupertino_ui_render::Shape;
+///
+/// // a 12 point corner reaches 18.36 points along each side of a large panel
+/// let Shape::Superellipse { extent, exponent, .. } = glass_outline(Rect::new(0.0, 0.0, 600.0, 400.0), 12.0, 0.0)
+/// else { unreachable!() };
+/// assert!((extent - 18.36).abs() < 1e-9 && exponent == 3.33);
+/// // a capsule's ends are half circles
+/// let capsule = glass_outline(Rect::new(0.0, 0.0, 200.0, 40.0), 20.0, 0.5);
+/// assert_eq!(capsule, Shape::RoundedRect { rect: Rect::new(-0.5, -0.5, 201.0, 41.0), radius: 20.5 });
+/// ```
+pub fn glass_outline(rect: Rect, radius: f64, outset: f64) -> Shape {
+    let half = rect.width().min(rect.height()).max(0.0) / 2.0;
+    let r = if radius.is_finite() {
+        radius.clamp(0.0, half)
+    } else {
+        half
+    };
+    let (extent, exponent) = if r <= 0.0 {
+        (0.0, 2.0)
+    } else if GLASS_CORNER_REACH * r <= half {
+        (GLASS_CORNER_REACH * r, GLASS_CORNER_EXPONENT)
+    } else {
+        let from = half / GLASS_CORNER_REACH;
+        let t = ((r - from) / (half - from).max(1e-6)).clamp(0.0, 1.0);
+        (
+            half,
+            GLASS_CORNER_EXPONENT + (2.0 - GLASS_CORNER_EXPONENT) * t,
+        )
+    };
+    if exponent <= 2.0 {
+        return Shape::RoundedRect {
+            rect: rect.outset(outset),
+            radius: if extent > 0.0 { extent + outset } else { 0.0 },
+        };
+    }
+    Shape::Superellipse {
+        rect,
+        extent,
+        exponent,
+        outset,
+    }
 }
 
 /// The corners of a glass node.

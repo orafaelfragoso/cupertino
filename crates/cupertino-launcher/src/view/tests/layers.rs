@@ -63,10 +63,23 @@ impl Metered {
     }
 
     /// The panel's window frame with its layers' frames laid over it where they stand, as a compositor shows them
-    /// without its glass.
+    /// without its glass, over the edge a glass layer's look carries, which the compositor draws along the glass.
     fn composed(&self) -> (u32, u32, Vec<u8>) {
         let (w, h, mut out) = self.window_pixels();
-        for layer in self.shown_layers() {
+        let shown = self.shown_layers();
+        if let Some(edge) = shown
+            .iter()
+            .find(|l| l.look.edge.width > 0.0)
+            .map(|l| l.look.edge)
+        {
+            let model = compositor_edge((w, h), self.scale, &shown, edge);
+            for (d, (a, _)) in out.chunks_mut(4).zip(model) {
+                let keep = 1.0 - f32::from(d[3]) / 255.0;
+                let alpha = f32::from(d[3]) + 255.0 * a * keep;
+                d[3] = alpha.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        for layer in shown {
             let frame = layer.frame.expect("every shown layer drew a frame");
             let (x0, y0) = (
                 (layer.rect.x() * self.scale).round() as i64,
@@ -242,9 +255,10 @@ fn to_files(m: &mut Metered) {
 }
 
 /// The panel at rest in each view (the search field, its results, the browser and the files scope), drawn in place and
-/// drawn as layers, its query row and its body each a layer of its own: the layers laid over the window's frame are
-/// the window's frame drawn in place, pixel for pixel, at whole and fractional scales and in both appearances; and
-/// the glass the layers carry is the glass the panel stands on in place, the window standing on none of its own.
+/// drawn as layers, its query row and its body each a layer of its own, a scope's edge the compositor's along its
+/// glass: the layers laid over the window's frame (and that edge) are the window's frame drawn in place, pixel for
+/// pixel, at whole and fractional scales and in both appearances; and the glass the layers carry is the glass the
+/// panel stands on in place, the window standing on none of its own.
 #[test]
 fn a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place() {
     for scale in [1.0, 1.5, 2.0] {
@@ -301,11 +315,18 @@ fn a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place() {
                 ],
                 "the field's glass, query row, body and edge, then the button's glass and face"
             );
-            // the browser and the files scope: the glass, the query row, the body and the edge
+            // the browser and the files scope: the glass, carrying the edge the compositor draws along it, the query
+            // row and the body
             for rest in &layered[2..] {
                 assert_eq!(
                     rest.keys,
-                    vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER, EDGE_LAYER],
+                    vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER],
+                    "{}",
+                    rest.what
+                );
+                assert_eq!(
+                    rest.glass[0].1.edge,
+                    crate::view::layers::glass_edge(dark),
                     "{}",
                     rest.what
                 );
@@ -529,18 +550,30 @@ fn drawn_edges(size: (u32, u32), scale: f64, layers: &[PresentedSurfaceLayer]) -
 /// The edge the compositor draws along the panel's glass is the edge the panel draws itself: at rest, at 1, 1.5 and 2
 /// in both appearances, outside the glass (inside it the faces draw their symbols), the glass's own model of the edge
 /// of [`crate::view::layers::glass_edge`] in each group's look, the search field and its mode button joined in one,
-/// is the panel's edge layers within 4 of 255 along every capsule and every straight side. A scope's continuous
-/// corners are not the circular arcs the panel strokes its edge along, which stand up to 0.57 points off them where
-/// each corner starts to curve: there the compositor's edge follows the glass and the two part by up to the line's own
-/// opacity, at the corners alone (`--no-capture` prints both).
+/// is the panel's own edge (its edge layers, or a scope's drawn in place) within 4 of 255 along every capsule, every
+/// straight side and a scope's continuous corners, which the panel strokes along the glass's own outline
+/// (`--no-capture` prints the sides and the corners apart).
 #[test]
 fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
     for scale in [1.0, 1.5, 2.0] {
         for dark in [false, true] {
-            for (what, size, layers) in resting_layers(scale, dark) {
+            // the panel drawn in place: around a scope, which has no edge layer, the window shows its edge alone
+            let in_place = walk(scale, dark, false);
+            for ((what, size, layers), flat) in
+                resting_layers(scale, dark).into_iter().zip(in_place)
+            {
+                assert_eq!((flat.what, flat.size), (what, size));
                 let model =
                     compositor_edge(size, scale, &layers, crate::view::layers::glass_edge(dark));
-                let own = drawn_edges(size, scale, &layers);
+                // the edge layer's where it draws one, else the window's, drawn in place
+                let own: Vec<f32> = if layers.iter().any(|l| l.key == EDGE_LAYER) {
+                    drawn_edges(size, scale, &layers)
+                } else {
+                    flat.pixels
+                        .chunks(4)
+                        .map(|p| f32::from(p[3]) / 255.0)
+                        .collect()
+                };
                 let enclosure = layers.iter().find(|l| l.key == GLASS_LAYER).unwrap();
                 let (r, radius) = (enclosure.rect, enclosure.look.radius);
                 // a corner's curve reaches this far along the sides of a continuous corner
@@ -573,12 +606,9 @@ fn the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws() {
                     "trace: edge, {what} at {scale}x, dark {dark}: largest difference {most:.1}, at the corners {most_corner:.1}"
                 );
                 assert!(
-                    most <= 4.0,
-                    "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}"
-                );
-                assert!(
-                    capsule || most_corner > 4.0,
-                    "{what}: the corners part as the arcs do"
+                    most <= 4.0 && most_corner <= 4.0,
+                    "{what} at {scale}x, dark {dark}: the compositor's edge differs from the panel's by {most:.1}, \
+                     at the corners {most_corner:.1}"
                 );
             }
         }
@@ -999,8 +1029,9 @@ fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments(
     }
 }
 
-/// A scope opening from hidden hands its open to the compositor: the panel draws its layers once, at rest, and asks
-/// the compositor to move them from where the open starts, the glass from 1.1 of its size on the open's spring and
+/// A scope opening from hidden hands its open to the compositor: the panel draws its layers once, at rest (the glass,
+/// carrying the edge the compositor draws along it, the query row and the body; no edge layer), and asks the
+/// compositor to move them from where the open starts, the glass from 1.1 of its size on the open's spring and
 /// everything fading in; then it draws no frame of its window or of a layer, and asks for none, until the open is over.
 #[test]
 fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
@@ -1031,10 +1062,12 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
         assert!(m.model().open_handed(), "{what}: still the compositor's");
         let first = m.presents();
         let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
+        assert_eq!(keys, vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER], "{what}");
+        let look = m.shown_layers()[0].look;
         assert_eq!(
-            keys,
-            vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER, EDGE_LAYER],
-            "{what}"
+            look.edge,
+            crate::view::layers::glass_edge(true),
+            "{what}: the glass carries the edge"
         );
         let open = m.layer_requests()[asked..].to_vec();
         let of = |key: u64, p: LayerProperty| -> Vec<cupertino_kit::platform::LayerChange> {
@@ -1065,7 +1098,7 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
             Some(cupertino_kit::platform::LayerCurve::Spring { response, damping })
                 if response == crate::motion::OPEN_RESPONSE && damping == crate::motion::OPEN_DAMPING
         ));
-        for key in [GLASS_LAYER, EDGE_LAYER, ROW_LAYER, BODY_LAYER] {
+        for key in [GLASS_LAYER, ROW_LAYER, BODY_LAYER] {
             let fade = of(key, LayerProperty::Opacity);
             assert_eq!(
                 (fade[0].to, fade[1].to),
@@ -1073,14 +1106,10 @@ fn a_scope_opens_from_hidden_on_the_compositor_s_clock_without_a_frame() {
                 "{what}: layer {key} fades in"
             );
         }
-        // the edge's scale through the panel's own values, from where the open starts to its rest
-        let scale = of(EDGE_LAYER, LayerProperty::Scale);
-        let samples = scale[0].samples.clone().expect("carried as samples");
-        assert_eq!(
-            f64::from(samples[0]),
-            crate::motion::ENTER_SCALE as f32 as f64
+        assert!(
+            of(EDGE_LAYER, LayerProperty::Scale).is_empty(),
+            "{what}: no edge layer to scale"
         );
-        assert_eq!((scale[0].to, *samples.last().unwrap()), (1.0, 1.0));
         // the open's frames: none drawn, none asked for, the browser's scroll indicator, which shows as it comes into
         // view, kept as it is meanwhile
         let open = {
@@ -1342,9 +1371,8 @@ const EDGE_BAND: f64 = 2.0;
 /// draws of a scope's open from hidden, the compositor's layers at that moment of the open, scaled, moved and faded as
 /// a compositor draws them, against its pixels, and their glass against the glass it stands on (rect, corner and
 /// opacity), which it is at every moment. Their pixels are the same within 1 of 255 at every moment but along the edge
-/// (the content lies on whole device pixels in both, [`crate::view`]'s `PanelRoot::on_pixels`); the edge is the rest's
-/// stroke scaled by the compositor where the panel strokes it afresh at the fractional place the scaled shape puts it,
-/// a half-point line on a device pixel grid, so there the two part by up to two fifths of the line's opacity. Run with
+/// (the content lies on whole device pixels in both, [`crate::view`]'s `PanelRoot::on_pixels`); along the edge, which
+/// the compositor draws along the glass at every moment as the panel strokes its own afresh, within 4. Run with
 /// `--no-capture` for the largest differences, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures
 /// ([`keep_moment`]).
 #[test]
@@ -1372,9 +1400,8 @@ fn the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                 .collect();
             let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
             let handed = open_moments(1.5, dark, true, message, &moments);
-            // the line's own opacity, of which the scaled edge may differ by two fifths
-            let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
-            let edge_bound = (0.4 * line).ceil() as u8;
+            // the compositor's edge along the glass, as the panel strokes its own
+            let edge_bound = 4;
             let (mut worst, mut worst_edge) = (0, 0);
             for (a, b) in own.iter().zip(&handed) {
                 assert_eq!(a.size, b.size);
@@ -1949,10 +1976,9 @@ fn fold_moments(
 /// against the glass it stands on (rect, corner and opacity), which it is at every moment. Apart from the outline and
 /// the caret with the glyph beside it (the field holds its caret while the compositor runs the fold where the panel's
 /// own drawing blinks it, and the panel's own moving caret falls a device pixel apart from the row it is drawn over),
-/// every frame is the panel's within 1 of 255. Along the outline the compositor's edge follows the glass's continuous
-/// corners where the panel strokes circular arcs, so there they part at a scope's corners by up to the line's own
-/// opacity, and within an eighth of it once the shape is the field's capsule. Run with `--no-capture` for the
-/// figures, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+/// every frame is the panel's within 1 of 255. Along the outline the compositor's edge and the panel's both follow the
+/// glass's outline, from a scope's continuous corners to the field's capsule: within 4 of 255. Run with
+/// `--no-capture` for the figures, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
 #[test]
 fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
     for (what, open) in FOLDING {
@@ -1974,7 +2000,7 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
             let handed = fold_moments(1.5, dark, true, open, &moments);
             let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
             let (mut worst, mut worst_edge, mut worst_caret) = (0, 0, 0);
-            for (index, ((a, _), (b, _))) in own.iter().zip(&handed).enumerate() {
+            for ((a, _), (b, _)) in own.iter().zip(&handed) {
                 assert_eq!(a.size, b.size);
                 let ms = a.after * 1000.0;
                 let (rect, radius, _) = a.glass[0];
@@ -2028,15 +2054,9 @@ fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments()
                     "{what}, dark {dark}, {ms:.0} ms: {content} apart from the outline"
                 );
                 assert!(
-                    f64::from(edge) <= line.ceil(),
+                    edge <= 4,
                     "{what}, dark {dark}, {ms:.0} ms: {edge} along the outline"
                 );
-                if index == own.len() - 1 {
-                    assert!(
-                        f64::from(edge) <= (line / 8.0).ceil(),
-                        "{what}, dark {dark}: at the field's capsule {edge} along the outline"
-                    );
-                }
                 assert_eq!(a.glass.len(), b.glass.len(), "{:?} {:?}", a.glass, b.glass);
                 for ((r0, q0, o0), (r1, q1, o1)) in a.glass.iter().zip(&b.glass) {
                     let off = (r0.x() - r1.x())

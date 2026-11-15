@@ -225,6 +225,15 @@ pub(crate) fn path(shape: &Shape) -> Option<Path> {
             b.close();
         }
         Shape::RoundedRect { rect, radius } => rounded(&mut b, rect, *radius),
+        // the rectangle the outline lies in: a superellipse quadrant stays inside its corner's square
+        Shape::Superellipse { rect, outset, .. } => {
+            let r = rect.outset(outset.max(0.0));
+            b.move_to(r.min_x() as f32, r.min_y() as f32);
+            b.line_to(r.max_x() as f32, r.min_y() as f32);
+            b.line_to(r.max_x() as f32, r.max_y() as f32);
+            b.line_to(r.min_x() as f32, r.max_y() as f32);
+            b.close();
+        }
         Shape::Path { verbs, .. } => {
             for verb in verbs {
                 match *verb {
@@ -325,7 +334,7 @@ pub(crate) fn clip_holds(shape: &Shape, node: &Transform, scale: f64, area: &Bou
             rect,
             radius.clamp(0.0, rect.width().min(rect.height()) / 2.0),
         ),
-        Shape::Path { .. } => return false,
+        Shape::Superellipse { .. } | Shape::Path { .. } => return false,
     };
     if !(rect.width() > 0.0 && rect.height() > 0.0) {
         return false;
@@ -370,7 +379,7 @@ pub(crate) fn clip_cover(
             rect,
             radius.clamp(0.0, rect.width().min(rect.height()) / 2.0),
         ),
-        Shape::Path { .. } => return None,
+        Shape::Superellipse { .. } | Shape::Path { .. } => return None,
     };
     let cut = |v: f64| v.clamp(-f64::from(1 << 28), f64::from(1 << 28));
     let on_edge = |v: f64| (v - v.round()).abs() < 1e-9;

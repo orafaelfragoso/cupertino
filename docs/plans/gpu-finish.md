@@ -128,14 +128,13 @@ The boxes here are ticked together with their items in the GPU plan.
       own curve and the row's does not. The row's frame is drawn again once, at the header's switch
       (`Message::HeaderSwitch`), the only buffer the fold makes part way; the fold's first frame commits the glass's
       look once (its edge, no pixels), and the edge is the compositor's along the glass. Behind `Model::hand_folds`,
-      off in the process: the compositor's edge follows a scope's continuous corners where the panel strokes circular
-      arcs, so until 3b the fold's first frames part at the corners. Tests: the counts
+      off in the process until 3b, when the panel's edge followed the glass and it was turned on. Tests: the counts
       (`a_scope_folds_on_the_compositor_s_clock_drawing_its_row_once`, both scopes: no window frame, one row frame);
       at the same moments (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, every other
       frame of 30 and the last, 1.5, both scopes and appearances) the glass is the panel's at every moment, every pixel
       away from the outline and the caret within 0 of 255; along the outline 178 of 255 in the dark and 52 in the light
       (the line's 237 and 69) while the corners are a scope's, within 1 from 300 ms, when the shape is the field's
-      capsule; the caret, which the field holds, 255 where the panel's own blinks. Under Reduce Motion nothing is
+      capsule (since 3b within 2 throughout); the caret, which the field holds, 255 where the panel's own blinks. Under Reduce Motion nothing is
       handed over. The panel's own fold now lies on whole device pixels and keeps the row's height where the shape
       springs shorter than the field (`PanelView::moving`).
 - [ ] The unfold (the scope's shortcut from the field). Not done: its first frame needs the scope's body drawn into
@@ -145,12 +144,42 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3b. The edge follows the glass
 
-- [ ] The panel strokes its own edge along the glass's continuous outline, using the shared distance of
+- [x] The panel strokes its own edge along the glass's continuous outline, using the shared distance of
       `cupertino-glass` and `ui_fill`, instead of circular arcs. This applies under Reduce Motion and without the
       capability too. The goldens that change at a scope's corners are re-recorded, named with their pixel counts,
-      and shown as before and after pairs at 1.5 and 2 in both appearances.
-- [ ] The scopes' rest, open and close use the compositor's edge (`layers::glass_edge`, within 4 of 255 of the
-      panel's along every side and corner), and the scope's edge layer goes.
+      and shown as before and after pairs at 1.5 and 2 in both appearances. The toolkit gained the shape it needed:
+      `Shape::Superellipse` (a corner's extent and exponent, and an outset along the distance, so a stroke lies just
+      outside the outline), drawn by the CPU's analytic coverage and by `ui_fill` (the exponent it already took, the
+      outset a new member of its block, `FillBlock::outline`, and a clip's in `ClipBlock::corner`), and
+      `glass_outline` in `cupertino-ui-core`, a glass shape's continuous outline (a capsule's comes back as the same
+      rounded rectangle as before). Tests: the shared coverage vectors of continuous corners, a stroke moved out by
+      half its width covering the band outside the outline within 1 of 255 at 1, 1.5 and 2
+      (`a_superellipse_stroke_moved_out_by_half_its_width_lies_just_outside_its_outline`), the GPU against the CPU on
+      generated superellipse fills, strokes and clips (`parity::superellipses_match_the_cpu`); against the
+      compositor's edge at rest the panel's is now within 1 of 255 along every side and corner, the corners within
+      0.9 (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`). No golden changes: the
+      launcher's goldens draw without glass, where the edge keeps the opaque fill's circular corners, and the
+      server's launcher golden is the search field, whose capsule is stroked as before. The before and after pairs of
+      a scope's corner at rest are in the owner's sheet under "Edge follows the glass".
+- [x] The scopes' rest, open and close use the compositor's edge (`layers::glass_edge`, within 4 of 255 of the
+      panel's along every side and corner), and the scope's edge layer goes. A scope's glass layer carries the edge
+      at rest, through its open from hidden and its close (`layers::compositor_edge`), and neither `open_changes` nor
+      `close_changes` moves an edge layer for it; the search field keeps its edge layer at rest and through its close.
+      Along the outline at rest, 1, 1.5 and 2, both appearances: within 1 of 255 (corners 0.6 to 0.9)
+      (`the_edge_the_compositor_draws_along_the_glass_is_the_edge_the_panel_draws`, a scope's own edge drawn in
+      place); the resting layers with that edge are the panel's pixels within 1
+      (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`). The open from hidden at the same
+      moments: along the edge within 1 of 255 in both scopes and appearances, where the scaled edge layer parted by up
+      to 90 (`the_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, now bound at 4). Against
+      the server the browser's open 0 buffers over 113 steps part way with 3 layers (the test now counts the glass
+      growing in from where the open starts, as no layer scales), the field's close 0 over 15 with 6, the field's open
+      0 over 181 with 5 (that test still counted 4 layers, from before the row and the body split; corrected). The
+      scope's close is not compared at the same moments (that test is the search field's): the compositor's edge
+      there follows the glass as it grows and fades, unblurred, where the panel's own close blurs its edge with the
+      content.
+- [x] The fold uses the compositor's edge too, and `Model::hand_folds` is on in the process: at the same moments
+      (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, now bound at 4 along the
+      outline) along the outline 2 of 255 in the dark and 1 in the light, where it was 178 and 52.
 
 ### 3c. The fold and unfold on the compositor's clock
 

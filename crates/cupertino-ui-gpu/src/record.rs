@@ -397,7 +397,7 @@ impl ClipDraw {
             *clip = ClipBlock {
                 linear: [o.inv[0], o.inv[1], o.inv[2], o.inv[3]],
                 moved: [o.inv[4], o.inv[5], o.half[0], o.half[1]],
-                corner: [o.corner, o.px, 0.0, 0.0],
+                corner: [o.corner, o.px, corner_exponent(o.exponent), o.outset],
             };
         }
     }
@@ -1376,12 +1376,12 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
             match clip {
                 ClipItem::Path { key, .. } => key.hash(&mut h),
                 ClipItem::Shape { outline, .. } => {
-                    for v in outline
-                        .inv
-                        .iter()
-                        .chain(&outline.half)
-                        .chain([&outline.corner, &outline.px])
-                    {
+                    for v in outline.inv.iter().chain(&outline.half).chain([
+                        &outline.corner,
+                        &outline.exponent,
+                        &outline.outset,
+                        &outline.px,
+                    ]) {
                         v.to_bits().hash(&mut h);
                     }
                 }
@@ -1548,6 +1548,8 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
                 b.shape_linear = [o.inv[0], o.inv[1], o.inv[2], o.inv[3]];
                 b.shape_moved = [o.inv[4], o.inv[5], o.half[0], o.half[1]];
                 b.shape = [o.corner, o.px, o.stroke.unwrap_or(0.0), 0.0];
+                b.clips.info[2] = corner_exponent(o.exponent);
+                b.outline = [o.outset, 0.0, 0.0, 0.0];
                 (Tex::Empty, (0.0, 0.0))
             }
             Cover::Image { tex, at } => {
@@ -2074,6 +2076,15 @@ fn skip_layer(node: &PaintNode, pos: &mut usize) {
     }
 }
 
+/// A shape's corner exponent as the coverage programs take it: 0 for a quarter circle, else the exponent.
+fn corner_exponent(exponent: f32) -> f32 {
+    if exponent > cupertino_raster_math::coverage::CIRCULAR_EXPONENT {
+        exponent
+    } else {
+        0.0
+    }
+}
+
 fn div255(v: u32) -> u32 {
     let v = v + 128;
     (v + (v >> 8)) >> 8
@@ -2089,9 +2100,9 @@ fn clip_by_outline(mask: &mut tiny_skia::Mask, o: &Outline, origin: (i32, i32)) 
         let [a, b, c, d, e, f] = o.inv;
         let p = [a * fx + c * fy + e, b * fx + d * fy + f];
         let dist = if o.corner > 0.0 {
-            rounded_distance(p, o.half, o.corner, 2.0)
+            rounded_distance(p, o.half, o.corner, o.exponent) - o.outset
         } else {
-            rect_distance(p, o.half)
+            rect_distance(p, [o.half[0] + o.outset, o.half[1] + o.outset])
         };
         let cov = (coverage(dist, o.px) * 255.0 + 0.5) as u8;
         *m = match cov {

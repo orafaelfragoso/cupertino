@@ -2458,17 +2458,18 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
 }
 
 /// The launcher's application browser opens from hidden on the compositor's clock: its window draws one frame, with
-/// its layers (the glass, the query row, the body and the edge) at rest, and while the compositor scales and fades
-/// them in from where the open starts neither the window nor any of its layers commits a buffer. The browser opens
+/// its layers (the glass, which carries the edge the compositor draws along it, the query row and the body) at rest,
+/// and while the compositor grows and fades them in from where the open starts neither the window nor any of its
+/// layers commits a buffer. The browser opens
 /// once first and closes, as a resident launcher's has by the time it is asked again, so the renderer has warmed up
 /// (its first frames are the CPU's, then the GPU draws them again). Run with `--no-capture` for the counts.
 #[test]
 fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
-    use cupertino_server::layers_v1::present;
+    use cupertino_server::layers_v1::{present, settled};
     // the browser's window, with the room for its shadow
     const BROWSER: i32 = 844 + 120;
-    // the browser's glass, its query row, its body and its edge
-    const LAYERS: usize = 4;
+    // the browser's glass, its query row and its body; the compositor draws the edge along the glass
+    const LAYERS: usize = 3;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -2548,15 +2549,13 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
     let mut last = commits(&all);
     server.wait_until("the open to be over", |s| {
         let shown = present(&panel, s.now(), false);
-        // part way: a layer fading in, or scaled from where the open starts
-        let part_way = shown
-            .iter()
-            .any(|l| l.opacity < 1.0 || (l.scale - 1.0).abs() > 1e-9);
+        // part way: a layer fading in, or still moving from where the open starts
+        let part_way = shown.iter().any(|l| l.opacity < 1.0) || !settled(&panel, s.now());
         steps += 1;
         let commit = commits(&all);
         if part_way {
             between += 1;
-            largest = shown.iter().fold(largest, |m, l| m.max(l.scale));
+            largest = shown.iter().fold(largest, |m, l| m.max(l.width));
             new_buffers += commit.iter().zip(&last).filter(|(a, b)| a != b).count();
         }
         last = commit;
@@ -2567,9 +2566,13 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
          layers"
     );
     assert!(between > 0, "the open ran on the server");
+    // the widest layer at rest, the glass
+    let rest = present(&panel, server.state.now(), false)
+        .iter()
+        .fold(0.0_f64, |m, l| m.max(l.width));
     assert!(
-        largest > 1.05,
-        "the edge scaled from where the open starts: {largest}"
+        largest > 1.05 * rest,
+        "the glass grew in from where the open starts: {largest} against {rest} at rest"
     );
     assert_eq!(
         new_buffers, 0,
@@ -2578,9 +2581,9 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
 }
 
 /// The launcher's search field opens from hidden on the compositor's clock: its window draws one frame, with its
-/// layers (the field's glass, its content and the mode button's glass and face) at rest, and while the compositor
-/// moves, sizes and fades them in from where the open starts neither the window nor any of its layers commits a
-/// buffer. The field opens and closes once first, as a resident launcher's has by the time it is asked again, so the
+/// layers (the field's glass, its query row and body and the mode button's glass and face) at rest, and while the
+/// compositor moves, sizes and fades them in from where the open starts neither the window nor any of its layers
+/// commits a buffer. The field opens and closes once first, as a resident launcher's has by the time it is asked again, so the
 /// renderer has warmed up. The open's samples move the layers through places and sizes, which no opacity or scale
 /// shows part way, so every step while any layer still animates is counted. Run with `--no-capture` for the counts.
 #[test]
@@ -2588,8 +2591,8 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
     use cupertino_server::layers_v1::settled;
     // the search field's window, with the room for its shadow
     const SEARCH: i32 = 640 + 120;
-    // the field's glass, its content and its one mode button's glass and face
-    const LAYERS: usize = 4;
+    // the field's glass, its query row and body and its one mode button's glass and face
+    const LAYERS: usize = 5;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;

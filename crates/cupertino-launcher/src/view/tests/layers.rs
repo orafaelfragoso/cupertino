@@ -10,13 +10,16 @@ use cupertino_kit::platform::{LayerProperty, SurfaceLayerLook};
 use cupertino_ui_test::PresentedSurfaceLayer;
 
 /// The launcher drawing its frames at `scale` in the `dark` or light appearance, on a window system that shows
-/// surface layers when `layers`.
+/// surface layers when `layers`; its window keeps the largest size the panel takes either way, as it does where the
+/// window system shows layers, so the panel's own drawing and its layers lie in the same window.
 fn drawn(scale: f64, dark: bool, layers: bool) -> Metered {
     LAYERS.set(layers);
     DARK.set(dark);
+    HOLD_WINDOW.set(true);
     let mut m = Metered::new(scale, true);
     LAYERS.set(false);
     DARK.set(false);
+    HOLD_WINDOW.set(false);
     m.driver.window_system_mut().set_keep_pixels(true);
     m
 }
@@ -2262,11 +2265,17 @@ fn the_search_field_unfolds_on_the_compositor_s_clock_drawing_its_row_at_most_on
             .unwrap();
         assert_eq!(rest_glass.look.edge, glass_edge(true), "{what}: at rest");
         let asked = m.layer_requests().len();
+        let extent = m.model().extent();
         send(shortcut());
         m.step(|_, _| {});
         assert!(
             m.model().fold_handed(),
             "{what}: the unfold is the compositor's"
+        );
+        assert_eq!(
+            m.model().extent(),
+            extent,
+            "{what}: the window is not configured again as the unfold starts"
         );
         let start = CLOCK.get();
         let length = m.model().motion.shaping_left(start);
@@ -2394,6 +2403,125 @@ fn the_search_field_unfolds_on_the_compositor_s_clock_drawing_its_row_at_most_on
     }
 }
 
+/// Where the window system shows layers the panel's window keeps the largest size the panel takes, from its first frame
+/// on: the search field, its unfold into a scope, the scope at rest, its fold back and the field at rest again lie in
+/// one window, configured at that size alone, which holds the browser, the files scope and the tallest list of
+/// results. Only the enclosure and the mode buttons beside it take the pointer, so a press elsewhere in the window
+/// reaches what lies under it (the catcher, which closes the panel). Hidden, the panel has no window; shown again, its
+/// window is that size from the first frame. Under Reduce Motion the window is the panel's own size, as it is on a
+/// window system without layers.
+#[test]
+fn the_panel_s_window_keeps_the_largest_size_and_takes_input_on_the_panel_alone() {
+    use crate::browse::BrowseLayout;
+    use crate::scope::ScopeLayout;
+    let inside = |r: &Rect, x: f64, y: f64| {
+        x >= r.x() && x < r.x() + r.width() && y >= r.y() && y < r.y() + r.height()
+    };
+    for (what, shortcut) in UNFOLDING {
+        let mut m = drawn(1.5, false, true);
+        m.settle_on(Message::Toggle);
+        let largest = m.model().largest_extent();
+        let panel = m.panel().unwrap();
+        let (w, h, _) = m.window_pixels();
+        eprintln!("trace: {what}: the window held at {largest:?}, {w} by {h} device pixels at 1.5");
+        for shape in [
+            crate::view::browse_shape(BrowseLayout::HEIGHT),
+            crate::view::scope_shape(ScopeLayout::HEIGHT),
+            crate::view::search_shape(&m.model().panel, &crate::providers::Status::Results, None),
+        ] {
+            let held = window_extent(shape);
+            assert!(
+                held.width <= largest.width && held.height <= largest.height,
+                "{what}: {held:?} within {largest:?}"
+            );
+        }
+        let check = |m: &Metered, when: &str| {
+            assert_eq!(m.model().extent(), largest, "{what}, {when}: the window");
+            assert_eq!(
+                m.configured.get(&panel),
+                Some(&Some(largest)),
+                "{what}, {when}: configured at the largest size"
+            );
+            // the region the window was made with, or the last it was given
+            let system = m.driver.runtime().window_system();
+            let region = system
+                .requests(panel)
+                .unwrap()
+                .iter()
+                .rev()
+                .find_map(|r| match r {
+                    WindowRequest::SetInputRegion(region) => Some(region.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| system.spec(panel).unwrap().input_region.clone())
+                .expect("an input region");
+            let frame = m.model().presented();
+            let enclosure = crate::view::enclosure_rect(largest, &frame);
+            assert!(
+                region.contains(&enclosure),
+                "{what}, {when}: the enclosure takes the pointer: {region:?}"
+            );
+            // beside the enclosure only the mode buttons, each within the field's row
+            for r in region.iter().filter(|r| **r != enclosure) {
+                assert!(
+                    r.width() <= crate::modes::BUTTON_SIZE + 1e-6
+                        && r.y() >= enclosure.y()
+                        && r.y() + r.height()
+                            <= enclosure.y() + crate::view::COLLAPSED_HEIGHT + 1e-6,
+                    "{what}, {when}: {r:?} is a mode button"
+                );
+            }
+            // the window's corners lie outside the panel and take no input
+            for (x, y) in [
+                (1.0, 1.0),
+                (largest.width - 1.0, 1.0),
+                (1.0, largest.height - 1.0),
+                (largest.width - 1.0, largest.height - 1.0),
+            ] {
+                assert!(
+                    !region.iter().any(|r| inside(r, x, y)),
+                    "{what}, {when}: ({x}, {y}) of the window takes no input"
+                );
+            }
+        };
+        check(&m, "the field at rest");
+        m.settle_on(shortcut());
+        assert_eq!(
+            m.model().presented().header,
+            Folding::unfold(shortcut).header()
+        );
+        check(&m, "the scope at rest after its unfold");
+        m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+        m.until_quiet(4, 200);
+        m.finish_handed_open();
+        assert_eq!(m.model().presented().header, crate::motion::Header::Search);
+        check(&m, "the field at rest after the fold");
+        // the close the compositor runs, until it is over
+        m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+        for _ in 0..8 {
+            m.step(|_, _| {});
+        }
+        send(Message::CloseOver);
+        m.step(|_, _| {});
+        assert!(
+            m.panel().is_none(),
+            "{what}: hidden, the panel has no window"
+        );
+        m.settle_on(Message::Toggle);
+        let panel_again = m.panel().unwrap();
+        assert_eq!(
+            m.configured.get(&panel_again),
+            Some(&Some(largest)),
+            "{what}: shown again at the largest size"
+        );
+    }
+    // under Reduce Motion the window is the field's own
+    let mut m = drawn(1.5, false, true);
+    m.settle_on(Message::ReduceMotion(true));
+    m.settle_on(Message::Toggle);
+    assert_eq!(m.model().extent(), window_extent(compact_shape()));
+}
+
 /// Under Reduce Motion nothing of an unfold is handed over: the panel draws it in place.
 #[test]
 fn under_reduce_motion_the_search_field_s_unfold_is_the_panel_s_own() {
@@ -2473,11 +2601,28 @@ fn scope_layers(what: &str) -> Vec<u64> {
     }
 }
 
-/// How far the unfold the compositor runs may stand from the panel's own drawing along the outline, of 255: where the
-/// body's content crosses the glass's moving edge the panel's own drawing cuts it a fraction of a device pixel further
-/// in than the compositor's cut (20 of 255 at most), and while the files scope's shape waits as the field's capsule
-/// under the scope's header the panel's own edge parts from the compositor's along the capsule's ends by up to 18.
-const UNFOLD_ALONG_OUTLINE: u8 = 20;
+/// How far the unfold into the browser the compositor runs may stand from the panel's own drawing along the outline,
+/// of 255: where the browser's body (its scroll indicator, by the right edge, 100 ms in) crosses the glass's moving
+/// edge, the panel's own drawing cuts the body a fraction of a device pixel further in than the compositor's cut of
+/// the body's layer to the glass, so the pixels along the edge part by how much of the body each leaves in them (47 in
+/// the dark, 37 in the light, at that one moment; 4 at most at the others).
+const UNFOLD_BODY_CUT_ALONG_OUTLINE: u8 = 47;
+
+/// How far the unfold into the files scope the compositor runs may stand from the panel's own drawing along the outline,
+/// of 255: while the files scope's shape waits as the field's capsule under the scope's header and then grows out of it,
+/// the panel strokes its edge along the outline of the shape it draws and the compositor along the glass it moves, a
+/// fraction of a device pixel apart, so the line's pixels part along the capsule's ends while it waits (7) and along
+/// the bottom and the right edge as it grows (15 in the dark, 11 in the light).
+const UNFOLD_GROWING_CAPSULE_ALONG_OUTLINE: u8 = 15;
+
+/// How far the unfold into the scope `what` names may stand from the panel's own drawing along the outline.
+fn unfold_along_outline(what: &str) -> u8 {
+    if what == "the browser" {
+        UNFOLD_BODY_CUT_ALONG_OUTLINE
+    } else {
+        UNFOLD_GROWING_CAPSULE_ALONG_OUTLINE
+    }
+}
 
 /// The unfold the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
 /// draws of the search field's unfold into a scope by its shortcut (every other one and its last, at 1.5, both scopes
@@ -2486,18 +2631,21 @@ const UNFOLD_ALONG_OUTLINE: u8 = 20;
 /// moment. The last frame is the panel's within 1 of 255; the first and those part way, apart from the outline and the
 /// caret (the field holds its caret while the compositor runs the unfold), within 1, and along the outline, which the
 /// compositor's edge and the panel's both follow from the field's capsule to a scope's continuous corners, within
-/// [`UNFOLD_ALONG_OUTLINE`].
+/// [`UNFOLD_BODY_CUT_ALONG_OUTLINE`] into the browser and [`UNFOLD_GROWING_CAPSULE_ALONG_OUTLINE`] into the files
+/// scope.
 /// Run with `--no-capture` for the figures, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
 #[test]
 fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
     for (what, shortcut) in UNFOLDING {
         for dark in [true, false] {
             let how = Folding::unfold(shortcut);
-            let mut own = fold_moments(1.5, dark, false, how, &[]);
-            // the window grows to hold the scope as the unfold starts: a frame the panel drew before at the field's
-            // size is not the unfold's
+            let own = fold_moments(1.5, dark, false, how, &[]);
+            // the window keeps its size through the unfold: every frame the panel draws of it is at the one size
             let size = own.last().map(|(m, _)| m.size);
-            own.retain(|(m, _)| Some(m.size) == size);
+            assert!(
+                own.iter().all(|(m, _)| Some(m.size) == size),
+                "{what}: the window kept its size through the unfold"
+            );
             assert!(
                 own.len() >= 8,
                 "{what}: the panel drew its unfold: {}",
@@ -2541,7 +2689,7 @@ fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments
                     "{what}, dark {dark}, {ms:.0} ms: {content} apart from the outline"
                 );
                 assert!(
-                    edge <= UNFOLD_ALONG_OUTLINE,
+                    edge <= unfold_along_outline(what),
                     "{what}, dark {dark}, {ms:.0} ms: {edge} along the outline"
                 );
                 let (ga, gb) = (shown(&a.glass), shown(&b.glass));

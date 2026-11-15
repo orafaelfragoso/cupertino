@@ -402,6 +402,17 @@ pub struct Model {
     /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass,
     /// as the panel strokes its own. On in the process; a test turns it off to compare the panel's own fold.
     pub hand_folds: bool,
+    /// The search field's unfold into a scope hands itself to the compositor where the field rested as layers, as a
+    /// fold does ([`Model::hand_folds`]), the scope's body drawn at once at the scope's shape at rest and cut to the
+    /// glass as it grows. It needs the window to keep its size through the unfold ([`Model::window_held`]). On in the
+    /// process; a test turns it off to compare the panel's own unfold.
+    pub hand_unfolds: bool,
+    /// The panel's window keeps the largest size the panel takes ([`Model::largest_extent`]) for as long as the panel
+    /// shows, so a fold or unfold the compositor runs never waits for the window to be configured again part way: on
+    /// where the window system shows the panel's parts as layers of their own, never under Reduce Motion.
+    pub window_held: bool,
+    /// [`Model::largest_extent`] as last worked out, and the output it was worked out on.
+    largest: Option<(Option<Size>, Size)>,
     /// A fold or unfold to hand to the compositor once the mode buttons are placed.
     hand_fold: bool,
     /// The fold or unfold the compositor runs: the panel as its layers show it before the header switches, when it
@@ -477,6 +488,9 @@ impl Model {
             open_number: 0,
             open_end: 0.0,
             hand_folds: true,
+            hand_unfolds: true,
+            window_held: false,
+            largest: None,
             hand_fold: false,
             fold_shown: None,
             unfold_body: None,
@@ -518,9 +532,12 @@ impl Model {
     }
 
     /// Whether an unfold starting now leaves the search field drawn as layers at rest, which then unfolds on the
-    /// compositor's clock ([`Model::hand_folds`]).
+    /// compositor's clock ([`Model::hand_unfolds`]).
     fn unfolds_from_field(&self) -> bool {
-        self.layered() && self.open_rest.is_none() && self.presented().header == Header::Search
+        self.hand_unfolds
+            && self.layered()
+            && self.open_rest.is_none()
+            && self.presented().header == Header::Search
     }
 
     /// Whether the panel's parts draw into compositor layers of their own now: while it rests, open, and while the
@@ -771,7 +788,7 @@ impl Model {
             Step::Hide => self.hide(false),
             Step::Fold => {
                 // a scope drawn as layers at rest folds on the compositor's clock, once the buttons are placed
-                self.hand_fold = self.layered() && self.open_rest.is_none();
+                self.hand_fold = self.hand_folds && self.layered() && self.open_rest.is_none();
                 // the field shows the cleared query; one already empty and not selected is shown as it is, so the
                 // query row draws nothing new
                 if !self.panel.query().is_empty() || self.select_query {
@@ -949,8 +966,8 @@ impl Model {
     }
 
     /// A fold of a scope that rested as layers into the search field, or an unfold of the field into a scope, runs on
-    /// the compositor's clock ([`Model::hand_folds`]): its layers keep what they show as it begins and the compositor
-    /// moves the glass and the content and fades the body through the panel's own values
+    /// the compositor's clock ([`Model::hand_folds`], [`Model::hand_unfolds`]): its layers keep what they show as it
+    /// begins and the compositor moves the glass and the content and fades the body through the panel's own values
     /// ([`view::layers::fold_changes`]), the edge drawn along the glass; the panel draws its query row once more, when
     /// the header switches. An unfold draws the scope's body at once, at the scope's shape at rest, which the compositor
     /// fades in and cuts to the glass as it grows, and the mode buttons merge into the field through the panel's own
@@ -958,8 +975,7 @@ impl Model {
     /// the mode buttons then bud out of the field drawn by the panel. Never under Reduce Motion, nor where the panel
     /// settles at once.
     fn hand_fold(&mut self, now: f64) -> Vec<Command<Message>> {
-        if !(self.hand_folds
-            && self.compositor_layers
+        if !(self.compositor_layers
             && !self.motion.reduce_motion()
             && !self.settled
             && self.handed.is_none())
@@ -1351,14 +1367,80 @@ impl Model {
         commands
     }
 
-    /// The window holds the shape presented and the one it heads for; it shrinks once the shape settled.
+    /// Whether the panel's window keeps [`Model::largest_extent`] now ([`Model::window_held`]).
+    fn holds_window(&self) -> bool {
+        self.window_held && !self.motion.reduce_motion()
+    }
+
+    /// The largest window the panel takes: the browser's and the files scope's on the output known (their tallest
+    /// before it is known) and the search field's with the tallest list of results it shows, each with the most its
+    /// shape overshoots on its way from the search field, within the room the output known leaves below the panel.
+    pub fn largest_extent(&self) -> Size {
+        let compact = view::compact_shape();
+        let rows = [
+            view::ROW_HEIGHT,
+            view::HEADER_HEIGHT,
+            view::CALCULATOR_ROW_HEIGHT,
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+        let list = view::COLLAPSED_HEIGHT + 1.0 + 2.0 * view::LIST_PADDING + MAX_ROWS as f64 * rows;
+        let search = Shape::new(
+            view::WIDTH,
+            view::on_shape_grid(list.max(view::MIN_EXPANDED_HEIGHT)),
+            compact.radius,
+        );
+        let mut largest = view::window_extent(compact);
+        for (shape, header) in [
+            (view::browse_shape(self.browse_height()), Header::Browse),
+            (view::scope_shape(self.scope_height()), Header::Files),
+            (search, Header::Search),
+        ] {
+            let mut motion = Motion::new(compact);
+            if header == Header::Search {
+                motion.reshape(shape, 0.0);
+            } else {
+                motion.unfold_to(shape, header, 0.0);
+            }
+            let steps = (motion.shaping_left(0.0) / SHAPE_STEP).ceil() as usize;
+            for i in 0..=steps {
+                let on_way =
+                    view::window_extent(motion.frame(i as f64 * SHAPE_STEP).shape.union(shape));
+                largest = Size::new(
+                    largest.width.max(on_way.width),
+                    largest.height.max(on_way.height),
+                );
+            }
+        }
+        // a whole number of grid steps wide, as each panel's own window is (the panels are, and the room for their
+        // shadows), so the window centred on the output and each panel centred in it lie on whole device pixels at
+        // the scales the panel's own windows did
+        let largest = Size::new(view::on_shape_grid(largest.width), largest.height);
+        // no larger than the room the output leaves below the panel's top, which the window system holds it to
+        match self.output {
+            Some(output) => {
+                let top = (output.height * view::TOP_FRACTION - view::SHADOW_TOP)
+                    .round()
+                    .max(0.0);
+                Size::new(
+                    largest.width.min(output.width.floor()),
+                    largest.height.min((output.height - top).floor()),
+                )
+            }
+            None => largest,
+        }
+    }
+
+    /// The window holds the shape presented and the one it heads for; it shrinks once the shape settled. Where it is
+    /// held ([`Model::window_held`]) it is the largest the panel takes ([`Model::largest_extent`]) from the panel's
+    /// first frame on, and it never shrinks while the panel shows: a fold that settles leaves it as it is.
     fn resize(&mut self) -> Vec<Command<Message>> {
         let now = self.now().mono;
         let target = self.motion.target();
         // settled, the window is the target's (what the motion presents may be a hair off it); while the shape
         // changes, it holds both and the largest the shape grows to on its way, a spring's overshoot included, from
         // the motion's start, so it is not configured again part way, and never shrinks
-        let needed = if self.motion.animating(now) {
+        let mut needed = if self.motion.animating(now) {
             let mut both = view::window_extent(target.union(self.motion.frame(now).shape));
             let left = self.motion.shaping_left(now);
             let steps = (left / SHAPE_STEP).ceil() as usize;
@@ -1374,6 +1456,30 @@ impl Model {
         } else {
             view::window_extent(target)
         };
+        if self.holds_window() {
+            // worked out again only when the output changes
+            let largest = match self.largest {
+                Some((output, largest)) if output == self.output => largest,
+                _ => {
+                    let largest = self.largest_extent();
+                    self.largest = Some((self.output, largest));
+                    largest
+                }
+            };
+            // hidden, the panel has no window: the next one starts at the largest as it is then
+            let held = if self.presenting() {
+                Size::new(
+                    largest.width.max(self.extent.width),
+                    largest.height.max(self.extent.height),
+                )
+            } else {
+                largest
+            };
+            needed = Size::new(
+                view::on_shape_grid(needed.width.max(held.width)),
+                needed.height.max(held.height),
+            );
+        }
         if needed != self.extent {
             self.extent = needed;
             self.host.resize(needed);

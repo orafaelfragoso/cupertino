@@ -2248,19 +2248,84 @@ fn the_dock_process_opens_a_menu_above_what_was_clicked_inside_the_output() {
     );
 }
 
-/// The launcher's layer whose window is `width` points wide (the panel; its catcher covers the output and its hidden
-/// window is a point).
-fn launcher_panel(state: &Cupertino, width: i32) -> bool {
-    let Some(output) = state.outputs.first() else {
-        return false;
-    };
+/// One of the launcher's panels, told apart by the glass its enclosure stands on at the size it rests at: while the
+/// compositor shows the panel's parts as layers the panel's window keeps one size for every panel.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LauncherPanel {
+    /// The application browser, its glass 844 points wide.
+    Browser,
+    /// The search field, its glass the field's capsule, 57 points tall.
+    Field,
+}
+
+impl LauncherPanel {
+    /// Whether the enclosure's glass at rest, `width` by `height` points, is this panel's.
+    fn is(self, (width, height): (f64, f64)) -> bool {
+        match self {
+            LauncherPanel::Browser => (width - 844.0).abs() < 0.5,
+            LauncherPanel::Field => (height - 57.0).abs() < 0.5,
+        }
+    }
+}
+
+/// The launcher's panel window: of its windows the one on the overlay layer larger than a point (its catcher is on the
+/// top layer and its hidden window is a point).
+fn launcher_window(
+    state: &Cupertino,
+) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+    use smithay::wayland::shell::wlr_layer::Layer;
+    let output = state.outputs.first()?;
     let map = layer_map_for_output(&output.output);
     let found = map
-        .layers()
+        .layers_on(Layer::Overlay)
         .filter(|l| l.namespace() == "cupertino-launcher")
-        .filter_map(|l| map.layer_geometry(l))
-        .any(|g| g.size.w == width);
+        .find(|l| map.layer_geometry(l).is_some_and(|g| g.size.w > 1))
+        .map(|l| l.wl_surface().clone());
     found
+}
+
+/// The launcher's panel window and its enclosure's glass, the widest of its glass layers (the mode buttons' are
+/// narrower), at the size it rests at: the size it animates to, or its content's where none is set; none while the
+/// panel draws itself without layers.
+fn launcher_glass(
+    state: &Cupertino,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    (f64, f64),
+)> {
+    let panel = launcher_window(state)?;
+    let glass = cupertino_server::layers_v1::with_parent(&panel, |layers| {
+        layers
+            .iter()
+            .filter(|l| l.surface.is_alive() && !l.whole && l.glass.is_some())
+            .map(|l| {
+                let content = l.content_size();
+                let (w, h) = (l.target(2), l.target(3));
+                (
+                    if w > 0.0 { w } else { content.0 },
+                    if h > 0.0 { h } else { content.1 },
+                )
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+    })?;
+    Some((panel, glass))
+}
+
+/// Whether the launcher shows `which` panel.
+fn launcher_panel(state: &Cupertino, which: LauncherPanel) -> bool {
+    launcher_glass(state).is_some_and(|(_, glass)| which.is(glass))
+}
+
+/// Whether the launcher's panel window went.
+fn launcher_closed(state: &Cupertino) -> bool {
+    launcher_window(state).is_none()
+}
+
+/// Whether the launcher shows `which` panel with its layers at rest.
+fn launcher_resting(state: &Cupertino, which: LauncherPanel) -> bool {
+    launcher_glass(state).is_some_and(|(panel, glass)| {
+        which.is(glass) && cupertino_server::layers_v1::settled(&panel, state.now())
+    })
 }
 
 /// The app-grid action opens the launcher process's application browser (the server calls it on the session bus), a
@@ -2268,9 +2333,9 @@ fn launcher_panel(state: &Cupertino, width: i32) -> bool {
 #[test]
 fn the_app_grid_action_opens_the_launcher_s_browser_and_escape_folds_then_closes_it() {
     const ESCAPE: u32 = 1 + 8;
-    // the panels' windows: the browser and the search field, each with the room for its shadow
-    const BROWSER: i32 = 844 + 120;
-    const SEARCH: i32 = 640 + 120;
+    // the panels, told apart by their glass
+    const BROWSER: LauncherPanel = LauncherPanel::Browser;
+    const SEARCH: LauncherPanel = LauncherPanel::Field;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -2325,31 +2390,25 @@ fn the_app_grid_action_opens_the_launcher_s_browser_and_escape_folds_then_closes
     };
     escape(&mut server);
     server.wait_until("the browser to fold into the search field", |s| {
-        launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
+        launcher_resting(s, SEARCH)
     });
     escape(&mut server);
-    server.wait_until("the panel to close", |s| {
-        !launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
-    });
+    server.wait_until("the panel to close", launcher_closed);
 }
 
-/// The launcher's window `width` points wide, with its layers: the window's surface and each layer's, the layers in
+/// The launcher's window showing `which` panel, with its layers: the window's surface and each layer's, the layers in
 /// the order they were made.
 fn launcher_surfaces(
     state: &Cupertino,
-    width: i32,
+    which: LauncherPanel,
 ) -> Option<(
     smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     Vec<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
 )> {
-    let output = state.outputs.first()?;
-    let map = layer_map_for_output(&output.output);
-    let panel = map
-        .layers()
-        .filter(|l| l.namespace() == "cupertino-launcher")
-        .find(|l| map.layer_geometry(l).is_some_and(|g| g.size.w == width))?
-        .wl_surface()
-        .clone();
+    let (panel, glass) = launcher_glass(state)?;
+    if !which.is(glass) {
+        return None;
+    }
     let layers = cupertino_server::layers_v1::with_parent(&panel, |layers| {
         layers
             .iter()
@@ -2367,8 +2426,8 @@ fn launcher_surfaces(
 fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::{present, settled};
     const ESCAPE: u32 = 1 + 8;
-    // the search field's window, with the room for its shadow
-    const SEARCH: i32 = 640 + 120;
+    // the search field, told apart by its glass
+    const SEARCH: LauncherPanel = LauncherPanel::Field;
     // the field's glass, which carries the edge the compositor draws along it, its query row and body and the mode
     // button's glass and face
     const LAYERS: usize = 5;
@@ -2470,8 +2529,8 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
 #[test]
 fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::{present, settled};
-    // the browser's window, with the room for its shadow
-    const BROWSER: i32 = 844 + 120;
+    // the browser, told apart by its glass
+    const BROWSER: LauncherPanel = LauncherPanel::Browser;
     // the browser's glass, its query row, its view options button and its body; the compositor draws the edge along
     // the glass
     const LAYERS: usize = 4;
@@ -2545,7 +2604,7 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
         std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
     });
     toggle(&mut server);
-    server.wait_until("the browser to close", |s| !launcher_panel(s, BROWSER));
+    server.wait_until("the browser to close", launcher_closed);
     // the open counted
     toggle(&mut server);
     let (panel, layers) = first_frame(&mut server);
@@ -2594,8 +2653,8 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
 #[test]
 fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::settled;
-    // the search field's window, with the room for its shadow
-    const SEARCH: i32 = 640 + 120;
+    // the search field, told apart by its glass
+    const SEARCH: LauncherPanel = LauncherPanel::Field;
     // the field's glass, its query row and body and its one mode button's glass and face
     const LAYERS: usize = 5;
     let Some(bus) = PrivateBus::start() else {
@@ -2649,7 +2708,7 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
         std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
     });
     toggle(&mut server);
-    server.wait_until("the search field to close", |s| !launcher_panel(s, SEARCH));
+    server.wait_until("the search field to close", launcher_closed);
     // the open counted
     toggle(&mut server);
     let (panel, layers) = first_frame(&mut server);
@@ -2688,9 +2747,9 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
 fn the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once() {
     use cupertino_server::layers_v1::{present, settled};
     const ESCAPE: u32 = 1 + 8;
-    // the panels' windows, with the room for their shadows
-    const BROWSER: i32 = 844 + 120;
-    const SEARCH: i32 = 640 + 120;
+    // the panels, told apart by their glass
+    const BROWSER: LauncherPanel = LauncherPanel::Browser;
+    const SEARCH: LauncherPanel = LauncherPanel::Field;
     // the query row's height, its layer's content's
     const ROW_HEIGHT: f64 = 57.0;
     // the server steps the fold's first frame, drawn as it begins, takes to reach the server
@@ -2785,7 +2844,7 @@ fn the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_
         std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
     });
     toggle(&mut server);
-    server.wait_until("the browser to close", |s| !launcher_panel(s, BROWSER));
+    server.wait_until("the browser to close", launcher_closed);
     for run in 0..3 {
         toggle(&mut server);
         let (panel, layers) = at_rest(&mut server);
@@ -2827,11 +2886,218 @@ fn the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_
         assert!(row <= 1, "the fold drew its query row at most once: {row}");
         assert_eq!(other, 0, "the fold drew no other frame");
         // the field closes
-        server.wait_until("the search field", |s| launcher_panel(s, SEARCH));
+        server.wait_until("the search field", |s| launcher_resting(s, SEARCH));
         escape(&mut server);
-        server.wait_until("the panel to close", |s| {
-            !launcher_panel(s, SEARCH) && !launcher_panel(s, BROWSER)
+        server.wait_until("the panel to close", launcher_closed);
+    }
+}
+
+/// The launcher's search field at rest unfolds into the application browser on the compositor's clock: the window
+/// keeps its size, the window and its layers draw the unfold's first frame as it begins (the browser's body at rest,
+/// which the compositor fades in and cuts to the glass as it grows), and then, while any layer still animates, neither
+/// the window nor any of its layers, those the browser adds included, commits a buffer but the query row's layer at
+/// most once, where the header switches (into the browser it switches as the unfold begins). Three runs, each from the
+/// field opened from hidden, after a first open and close in which the renderer warms up. Run with `--no-capture` for
+/// the counts.
+#[test]
+fn the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_row_at_most_once() {
+    use cupertino_server::layers_v1::{present, settled, with_parent};
+    use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+    const ESCAPE: u32 = 1 + 8;
+    // the panels, told apart by their glass
+    const BROWSER: LauncherPanel = LauncherPanel::Browser;
+    const SEARCH: LauncherPanel = LauncherPanel::Field;
+    // the query row's height, its layer's content's
+    const ROW_HEIGHT: f64 = 57.0;
+    // how long the unfold's first frame, drawn as it begins, may take to reach the server, each of its surfaces
+    // committing on its own, in seconds: well past the few milliseconds it takes on a busy machine. A surface that
+    // draws again is counted whenever it does.
+    const FIRST_FRAME: f64 = 0.05;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("launcher-unfold-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
+        return;
+    };
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    let connection = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .expect("connect to the test bus");
+    let owned = || {
+        zbus::block_on(connection.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "NameHasOwner",
+            &"org.cupertino.Launcher1",
+        ))
+        .ok()
+        .and_then(|reply| reply.body().deserialize::<bool>().ok())
+        .unwrap_or(false)
+    };
+    server.wait_until(
+        "the launcher to map its hidden window and own its name",
+        |s| committed_buffer(s, "cupertino-launcher").is_some() && owned(),
+    );
+    let op = |server: &mut Server, op: ShellOp| {
+        server.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![op],
+        })
+    };
+    let escape = |server: &mut Server| {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            server
+                .state
+                .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+            server.step();
+        }
+    };
+    // the window's surface and each of its layers' now, with its last buffer
+    let surfaces = |panel: &WlSurface| -> Vec<(WlSurface, Option<_>)> {
+        let layers: Vec<WlSurface> = with_parent(panel, |layers| {
+            layers
+                .iter()
+                .filter(|l| l.surface.is_alive() && !l.whole)
+                .map(|l| l.surface.clone())
+                .collect()
         });
+        std::iter::once(panel.clone())
+            .chain(layers)
+            .map(|s| {
+                let commit = buffer_commit(&s);
+                (s, commit)
+            })
+            .collect()
+    };
+    // the window's size on the output
+    let window = |s: &Cupertino, panel: &WlSurface| {
+        let output = s.outputs.first()?;
+        let map = layer_map_for_output(&output.output);
+        let layer = map.layers().find(|l| l.wl_surface() == panel)?;
+        map.layer_geometry(layer).map(|g| (g.size.w, g.size.h))
+    };
+    // the search field at rest as layers: its layers settled and drawn, and nothing drawn for a while
+    let at_rest = |server: &mut Server| {
+        server.wait_until("the search field to rest as layers", |s| {
+            launcher_surfaces(s, SEARCH).is_some_and(|(panel, layers)| {
+                !layers.is_empty()
+                    && layers.iter().all(|l| buffer_commit(l).is_some())
+                    && settled(&panel, s.now())
+            })
+        });
+        let (panel, _) = launcher_surfaces(&server.state, SEARCH).unwrap();
+        let mut last = surfaces(&panel);
+        let mut quiet = Instant::now();
+        server.wait_until("the search field to stop drawing", |_| {
+            let now = surfaces(&panel);
+            if now != last {
+                last = now;
+                quiet = Instant::now();
+            }
+            quiet.elapsed() > Duration::from_millis(300)
+        });
+        panel
+    };
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
+    // the close
+    op(&mut server, ShellOp::ToggleLauncher);
+    at_rest(&mut server);
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the launcher runs");
+    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join("cupertino/renderers")
+        .join(pid.to_string());
+    server.wait_until("the launcher to draw on the GPU", |_| {
+        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
+    });
+    op(&mut server, ShellOp::ToggleLauncher);
+    server.wait_until("the search field to close", launcher_closed);
+    for run in 0..3 {
+        op(&mut server, ShellOp::ToggleLauncher);
+        let panel = at_rest(&mut server);
+        let size = window(&server.state, &panel).expect("the panel's window");
+        // the browser's shortcut, as the app-grid action sends it
+        op(&mut server, ShellOp::ToggleAppGrid);
+        server.wait_until("the unfold to start", |s| !settled(&panel, s.now()));
+        let start = server.state.now();
+        let mut last = surfaces(&panel);
+        // the surfaces whose part of the first frame has come
+        let mut first: Vec<WlSurface> = Vec::new();
+        let (mut steps, mut row, mut resized) = (0, 0, 0);
+        // each other buffer: when it came after the unfold started, in milliseconds, and its layer's content size (none
+        // for the window's)
+        let mut other = Vec::new();
+        server.wait_until("the unfold to be over", |s| {
+            let now = s.now();
+            let animating = !settled(&panel, now);
+            let commit = surfaces(&panel);
+            if animating {
+                steps += 1;
+                resized += usize::from(window(s, &panel) != Some(size));
+                let shown = present(&panel, now, false);
+                for (surface, buffer) in &commit {
+                    let before = last
+                        .iter()
+                        .find(|(l, _)| l == surface)
+                        .and_then(|(_, b)| *b);
+                    if *buffer == before {
+                        continue;
+                    }
+                    // a surface's first buffer soon after the start is its part of the first frame
+                    if !first.contains(surface) && now - start < FIRST_FRAME {
+                        first.push(surface.clone());
+                        continue;
+                    }
+                    let layer = shown.iter().find(|l| &l.surface == surface);
+                    if layer.is_some_and(|l| l.glass.is_none() && l.content.1 == ROW_HEIGHT) {
+                        row += 1;
+                    } else {
+                        let ms = ((now - start) * 1000.0).round();
+                        other.push((ms, layer.map(|l| l.content)));
+                    }
+                }
+            }
+            last = commit;
+            !animating
+        });
+        eprintln!(
+            "trace: unfold, run {run}: {steps} server steps animating, {} surfaces drawn in its first frame, {row} new \
+             buffers of the query row's layer after it, {} of the window and its other layers {other:?}, the window \
+             {size:?} ({resized} steps at another size), {} layers",
+            first.len(),
+            other.len(),
+            last.len() - 1
+        );
+        assert!(steps > 1, "the unfold ran on the server");
+        assert_eq!(resized, 0, "the window kept its size through the unfold");
+        assert!(
+            row <= 1,
+            "the unfold drew its query row at most once: {row}"
+        );
+        assert!(
+            other.is_empty(),
+            "the unfold drew no other frame: {other:?}"
+        );
+        // the browser closes
+        server.wait_until("the browser", |s| launcher_resting(s, BROWSER));
+        escape(&mut server);
+        server.wait_until("the search field", |s| launcher_resting(s, SEARCH));
+        escape(&mut server);
+        server.wait_until("the panel to close", launcher_closed);
     }
 }
 

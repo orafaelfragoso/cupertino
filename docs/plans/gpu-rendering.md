@@ -25,7 +25,7 @@ Nothing is optimised before it is measured on the target machine, and no gate ma
 Instruments:
 
 - [x] `scripts/dev/bench` takes size and scale as arguments.
-- [x] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, Control Center open, launcher
+- [x] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, the control panel opened, launcher
       typing (the Files two-finger scroll exists).
 - [x] Toolkit processes write per-phase frame timings (update, view, layout, paint, raster, copy, commit) to a file
       named by an environment variable; bench collects them per process.
@@ -167,11 +167,11 @@ What each renderer now computes, and what it was tested against (rule 4):
 
 The freeze was taken pending the owner's review of the before/after sheet: every golden image (before: the base
 commit's, after: re-recorded), the preview scenes at scales 1, 1.5 and 2 in both appearances, and the review sheet's
-windows, corners, dock, menus and Control Center in both appearances, side by side with the changed pixels and
+windows, corners, dock, menus and the control panel in both appearances, side by side with the changed pixels and
 enlarged crops of the most changed places.
 
 The one re-recording changed 67 golden images: 46 of the kit's 52 control fixtures (and the text box's semantics dump, whose scrolled text now sits on a whole point), 5 of
-Control Center's, Files' icon view, the menu bar's 3, 5 of the renderer's 10 (its chrome and clip scenes) and 7 of the
+the control panel's, Files' icon view, the menu bar's 3, 5 of the renderer's 10 (its chrome and clip scenes) and 7 of the
 compositor's 8 (all but the empty desktop; the launcher's drawn region is one pixel taller). Edge pixels of
 rectangles and rounded rectangles move by up to about 30/255, fully covered and empty pixels not at all; shadows and
 blurs move by the Gaussian against three box passes; gradients and the compositor's blurred and glass outputs move by
@@ -573,14 +573,14 @@ connects, and `CUPERTINO_RENDERER=cpu|gpu` overrides it.
       `renderer::tests` (`cupertino-ui-wayland`), `gpu_presenter::the_rule_moves_*`, `a_cpu_class_*`,
       `a_sandboxed_process_*` (a process in a user namespace with an empty `/dev/dri`), and
       `a_c_application_takes_the_size_and_repaint_rule` (`cupertino-ui-abi`).
-- [x] Dock (and overview), launcher and Control Center measured on both renderers with layers; each assigned to the
+- [x] Dock (and overview), launcher and the control panel measured on both renderers with layers; each assigned to the
       class that meets its budgets; numbers recorded. The dock and the launcher on the GPU: the overview's frames miss
       a refresh on the CPU (p99 27.7 ms, 4 slow frames a run) and a typed letter's frame passes the 4 ms there (p99
-      5.4 ms), both under 2.1 ms on the GPU. Control Center on the CPU: it draws two whole frames an opening and its
+      5.4 ms), both under 2.1 ms on the GPU. The control panel on the CPU: it draws two whole frames an opening and its
       motion is the compositor's; the GPU's p99 is no better (17.9 against 16.9 ms) for about 73 MiB.
 - [x] CPU classes confirmed in a full session: OSD, banners, menu bar, prompts, portal overlays and chooser, screenshot
       toolbar and overlay, lock screen, login, the Files desktop instance. In a headless session at 1.5 with a banner,
-      the volume overlay, Control Center and the screenshot toolbar shown, each records `renderer=cpu`, "its class
+      the volume overlay, the control panel and the screenshot toolbar shown, each records `renderer=cpu`, "its class
       draws on the CPU"; the lock screen's record is checked by
       `lock_screen::the_right_password_unlocks_the_session_and_the_application_gets_its_input_back`. Login and the
       portal's chooser need the system bus the headless session lacks; their classes are checked by
@@ -618,7 +618,7 @@ Gate:
 - [ ] The resize, animation-frame, memory and idle budgets hold across a full session. Resize holds (client CPU
       beyond the raster 3.8 ms p99 at 1.5, under 8 ms); launcher typing holds (1.9 ms p99, under 4 ms); idle holds
       (one menu bar frame a minute, the clock's wakeups only, GPU processes 0 wakeups). Not held:
-  - Control Center's opening frames took 14.7 ms p50 and 16.9 ms p99 on the CPU (11.8 and 17.9 ms on the GPU)
+  - The control panel's opening frames took 14.7 ms p50 and 16.9 ms p99 on the CPU (11.8 and 17.9 ms on the GPU)
     against the 4 ms animation budget. What they drew: each opening makes the card's window, so a new renderer, and
     its whole frames; 7.8 of a warm whole frame's 8.1 ms at 1.5 (654 x 969 pixels) was the shadow, 26 even-odd rings
     each as large as the window filled through the rasterizer, and a new renderer added the glyphs' rasters (0.4 ms)
@@ -739,7 +739,7 @@ Gate:
         the application draws its transitions as before. The server retargets from the value and velocity shown,
         applies the time scale and ends spatial motion under Reduce Motion; input and semantics stay with the layout,
         the target.
-  - [x] Control Center's open and close run as the card's presentation on the curves it draws itself: the
+  - [x] The control panel's open and close run as the card's presentation on the curves it draws itself: the
         critically damped rise as a spring of the same rate, exact up to the 0.23 s where the drawn curve jumps its
         last hundredth, and the 0.18 s fall as a cubic Bezier within a two-thousandth of it
         (`the_compositor_runs_the_same_fades`,
@@ -814,7 +814,7 @@ Gate:
       content a sibling that does not scale, the search field's layer animating its width, each mode button a layer on
       its own spring in a glass group with the field, and the close animating the content blur; its look at every
       moment that of the launcher's drawing within the goldens' tolerance, and no application buffer for the open or the
-      close (counted as Control Center's is, a test like
+      close (counted as the control panel's is, a test like
       `shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`). It needs the subtree
       layers above. Not every value the launcher draws is one curve of one property: where the search field opens with
       its mode buttons, the enclosure's drawn width is the opening spring's scale (response 0.30, damping 0.74, from
@@ -1074,8 +1074,8 @@ Gate:
 
 Gate:
 
-- [ ] Opening Control Center and the launcher costs the application no repaint per frame, and each material effect is
-      reviewed by eye in both appearances. Control Center holds: its card draws no frame of its fade in or out (a single
+- [ ] Opening the control panel and the launcher costs the application no repaint per frame, and each material effect is
+      reviewed by eye in both appearances. The control panel holds: its card draws no frame of its fade in or out (a single
       frame after its first as it opens)
       (`shell_processes::the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer`, "Measurements",
       "Step 9"). Popovers and menus hold: a popover's growth and shrinking and a menu's fade present no frame. The
@@ -1084,10 +1084,10 @@ Gate:
       `shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer`); the search
       field's open with its mode buttons and the fold and unfold wait on their split items above. The owner approved the
       sheet by eye on 2026-11-15; the pairs still missing are reviewed by the lead against the approved ones.
-- [ ] The before and after sheet of Control Center's fades and the launcher's open and close, mid-way and settled,
+- [ ] The before and after sheet of the control panel's fades and the launcher's open and close, mid-way and settled,
       light and dark, from a headless server, for that review: "before" drawn by the application, "after" by the
-      compositor. It goes with the launcher's layers, whose "after" it shows; Control Center's "before" is the card's
-      own fade from before its presentation. Control Center's half is made ("Measurements", "Step 9", "The sheet");
+      compositor. It goes with the launcher's layers, whose "after" it shows; the control panel's "before" is the card's
+      own fade from before its presentation. The control panel's half is made ("Measurements", "Step 9", "The sheet");
       the launcher's close is in it at the same moment, its own drawing against the compositor's layers, and at rest,
       and so is a scope's open from hidden (the browser and the files scope, both appearances, 7 moments each from
       50 ms to the open's last frame at 500 ms: within 1 of 255 apart from the outline, along it up to 90 of 255 in
@@ -1194,7 +1194,7 @@ runs smoothly in daily use); each is ready to run as written under "Measurements
 - [x] Rules in `docs/architecture/rendering.md`.
 - [x] Rendering paragraph of `docs/src/architecture.md`, the roadmap section and `docs/src/displays-and-gpus.md` point
       here.
-- [ ] Each step that changes behaviour updates the pages it affects (`apps-on-kit.md`, `kit-getting-started.md`,
+- [x] Each step that changes behaviour updates the pages it affects (`apps-on-kit.md`, `kit-getting-started.md`,
       `displays-and-gpus.md`, crate READMEs) in the same change.
 
 ## Measurements
@@ -1238,7 +1238,7 @@ Each JSON holds every run and, per scenario, the median of the runs with their s
 compositor frame interval p50/p99, missed refreshes, work and GPU time p50/p99, compositor CPU time, slow client frames
 per program, the per-phase client split (p50 and p99 of each phase), and per-program CPU and private memory. The
 scenarios: idle, drag (Settings over Files and its glass), hover (along the window buttons), resize (Files' corner),
-control-center, launcher-typing and files-scroll.
+control-panel, launcher-typing and files-scroll.
 
 **Smoke run** (one run each, 1280 x 800 at scale 1, 60 Hz; it only shows that each scenario drives what it should):
 
@@ -1248,7 +1248,7 @@ control-center, launcher-typing and files-scroll.
 | drag | 180 | 0 | 0.76 / 2.19 | 1.72 | 60 | 7.6 | 0 | 0 | 0.48 |
 | hover | 288 | 0 | 0.52 / 0.83 | 0.30 | 42 | 0 | 36 (5.3 MiB) | 0 | 1.88 |
 | resize | 181 | 0 | 2.91 / 4.20 | 2.91 | 213 | 9.2 | 319 (284 MiB) | 0 | 5.43 |
-| control-center | 86 | 0 | 1.13 / 2.30 | 1.64 | 22 | 6.8 | 0 | 0 | 8.24 |
+| control-panel | 86 | 0 | 1.13 / 2.30 | 1.64 | 22 | 6.8 | 0 | 0 | 8.24 |
 | launcher-typing | 240 | 0 | 0.91 / 2.26 | 1.11 | 45 | 3.5 | 0 | 0 | 2.99 |
 | files-scroll | 182 | 0 | 0.88 / 1.32 | 0.67 | 69 | 7.0 | 0 | 0 | 3.27 |
 
@@ -1268,7 +1268,7 @@ Scale 1.5:
 | drag | 180 | 0 | 1.32 (0.04) / 2.38 (0.28) | 1.01 / 2.07 (1.13) | 90.0 (3.3) | 0 | Settings (2 frames) | 0.59 (0.06) / 0.64 (0.06) |
 | hover | 288 | 0 | 1.14 (0.05) / 1.54 (0.03) | 0.69 / 0.78 | 77.1 (4.2) | 0 | Settings (12 frames) | 0.49 (0.05) / 1.09 (0.16) |
 | resize | 181 | 0 | 4.33 (0.15) / 7.41 (0.36) | 2.83 (0.20) / 4.35 (0.42) | 332.3 (12.9) | 2 (4) | Files (203 frames) | 9.63 (0.46) / 16.44 (0.83) |
-| control-center | 85 (2) | 0 | 1.95 (0.02) / 2.60 (0.55) | 1.51 / 1.83 (0.21) | 31.7 (3.3) | 0 | Control Center (102 frames) | 12.84 (0.86) / 14.55 (0.54) |
+| control-panel | 85 (2) | 0 | 1.95 (0.02) / 2.60 (0.55) | 1.51 / 1.83 (0.21) | 31.7 (3.3) | 0 | Control panel (102 frames) | 12.84 (0.86) / 14.55 (0.54) |
 | launcher-typing | 242 (1) | 0 | 1.69 (0.06) / 2.98 (0.25) | 1.17 (0.04) / 1.64 (0.02) | 72.3 (1.5) | 0 | launcher (372 frames) | 1.67 (0.13) / 6.44 (0.05) |
 | files-scroll | 182 | 0 | 1.57 (0.01) / 2.47 (0.11) | 1.19 / 1.51 (0.01) | 105.5 (6.6) | 0 | Files (184 frames) | 5.44 (0.05) / 6.23 (0.40) |
 
@@ -1278,13 +1278,13 @@ Scale 1.5:
 | drag | Settings | 0.01 / 0.02 | 0.00 / 0.00 | 0.09 / 0.09 | 0.18 / 0.19 | 0.26 / 0.26 | 0.02 / 0.07 | 0.02 / 0.02 |
 | hover | Settings | 0.02 / 0.02 | 0.00 / 0.00 | 0.09 / 0.13 | 0.16 / 0.24 | 0.18 / 0.22 | 0.01 / 0.58 | 0.02 / 0.03 |
 | resize | Files | 0.02 / 0.03 | 0.39 / 0.61 | 0.22 / 0.41 | 0.20 / 0.38 | 4.67 / 8.59 | 3.95 / 6.49 | 0.27 / 0.85 |
-| control-center | Control Center | 0.01 / 0.02 | 0.03 / 0.11 | 0.02 / 0.11 | 0.07 / 0.35 | 12.09 / 13.05 | 0.61 / 1.75 | 0.01 / 0.05 |
+| control-panel | Control panel | 0.01 / 0.02 | 0.03 / 0.11 | 0.02 / 0.11 | 0.07 / 0.35 | 12.09 / 13.05 | 0.61 / 1.75 | 0.01 / 0.05 |
 | launcher-typing | launcher | 0.01 / 0.11 | 0.01 / 0.07 | 0.03 / 0.10 | 0.03 / 0.21 | 1.18 / 6.19 | 0.28 / 2.20 | 0.01 / 0.28 |
 | files-scroll | Files | 0.00 / 0.01 | 0.00 / 0.38 | 0.08 / 0.19 | 0.20 / 0.30 | 4.66 / 5.02 | 0.47 / 0.61 | 0.01 / 0.02 |
 
-| Program | idle | drag | hover | resize | control-center | launcher-typing | files-scroll | private MiB | private dirty MiB |
+| Program | idle | drag | hover | resize | control-panel | launcher-typing | files-scroll | private MiB | private dirty MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| Control Center | 0 | 0 | 0 | 0 | 20.7 (0.3) | 0 | 0 | 13.3 (0.4) | 4.3 |
+| Control panel | 0 | 0 | 0 | 0 | 20.7 (0.3) | 0 | 0 | 13.3 (0.4) | 4.3 |
 | dock | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 52.0 (1.6) | 41.2 (1.6) |
 | Files | 0 | 0 | 0 | 67.7 (1.6) | 0 | 0 | 37.6 (0.7) | 36.9 (3.6) | 33.8 (3.6) |
 | launcher | 0 | 0 | 0 | 0 | 0 | 12.0 (0.5) | 0 | 15.3 (0.2) | 4.9 |
@@ -1304,7 +1304,7 @@ Scale 2:
 | drag | 180 | 0 | 1.60 (0.02) / 1.97 (0.40) | 1.37 (0.01) / 1.43 (0.63) | 103.3 (3.3) | 0 | Settings (2 frames) | 0.62 (0.10) / 0.77 (0.22) |
 | hover | 288 | 0 | 1.35 (0.11) / 1.96 (0.11) | 1.03 / 1.14 (0.14) | 93.8 | 0 | Settings (12 frames) | 0.53 (0.03) / 1.44 (0.35) |
 | resize | 181 | 0 | 5.90 (0.44) / 10.48 (0.41) | 4.02 (0.12) / 6.80 (0.26) | 483.9 (12.9) | 61 (3) | Files (175 frames) | 13.55 (0.33) / 22.14 (1.27) |
-| control-center | 81 (5) | 0 | 2.74 (0.04) / 3.73 (1.41) | 2.18 / 2.63 (0.64) | 40.0 (3.3) | 64 (57) | Control Center (76 frames) | 17.34 (1.20) / 19.58 (1.28) |
+| control-panel | 81 (5) | 0 | 2.74 (0.04) / 3.73 (1.41) | 2.18 / 2.63 (0.64) | 40.0 (3.3) | 64 (57) | Control panel (76 frames) | 17.34 (1.20) / 19.58 (1.28) |
 | launcher-typing | 240 | 0 | 2.32 (0.06) / 5.15 (0.29) | 1.78 (0.04) / 2.83 (0.09) | 97.9 | 0 | launcher (362 frames) | 2.49 (0.13) / 10.94 (0.08) |
 | files-scroll | 182 | 0 | 2.25 (0.04) / 3.30 (0.09) | 1.77 / 2.05 (0.37) | 141.8 (9.9) | 0 | Files (184 frames) | 5.78 (0.17) / 6.98 (0.68) |
 
@@ -1314,13 +1314,13 @@ Scale 2:
 | drag | Settings | 0.01 / 0.01 | 0.00 / 0.00 | 0.06 / 0.08 | 0.13 / 0.17 | 0.31 / 0.35 | 0.03 / 0.14 | 0.01 / 0.02 |
 | hover | Settings | 0.02 / 0.03 | 0.00 / 0.00 | 0.09 / 0.11 | 0.16 / 0.17 | 0.21 / 0.24 | 0.01 / 0.97 | 0.02 / 0.03 |
 | resize | Files | 0.02 / 0.04 | 0.41 / 0.63 | 0.22 / 0.44 | 0.21 / 0.35 | 5.27 / 8.89 | 7.08 / 11.62 | 0.43 / 1.22 |
-| control-center | Control Center | 0.02 / 0.03 | 0.05 / 0.11 | 0.03 / 0.11 | 0.10 / 0.41 | 16.05 / 17.03 | 1.08 / 2.89 | 0.02 / 0.05 |
+| control-panel | Control panel | 0.02 / 0.03 | 0.05 / 0.11 | 0.03 / 0.11 | 0.10 / 0.41 | 16.05 / 17.03 | 1.08 / 2.89 | 0.02 / 0.05 |
 | launcher-typing | launcher | 0.01 / 0.11 | 0.01 / 0.07 | 0.03 / 0.10 | 0.03 / 0.13 | 1.66 / 10.56 | 0.49 / 3.95 | 0.01 / 0.32 |
 | files-scroll | Files | 0.00 / 0.01 | 0.00 / 0.38 | 0.09 / 0.18 | 0.24 / 0.35 | 4.56 / 5.08 | 0.86 / 0.97 | 0.01 / 0.03 |
 
-| Program | idle | drag | hover | resize | control-center | launcher-typing | files-scroll | private MiB | private dirty MiB |
+| Program | idle | drag | hover | resize | control-panel | launcher-typing | files-scroll | private MiB | private dirty MiB |
 |---|---|---|---|---|---|---|---|---|---|
-| Control Center | 0 | 0 | 0 | 0 | 21.2 (0.3) | 0 | 0 | 13.2 (0.2) | 4.3 |
+| Control panel | 0 | 0 | 0 | 0 | 21.2 (0.3) | 0 | 0 | 13.2 (0.2) | 4.3 |
 | dock | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 54.4 (0.7) | 43.8 (0.7) |
 | Files | 0 | 0 | 0 | 83.2 (1.3) | 0 | 0 | 39.5 (2.0) | 44.7 (2.2) | 41.7 (1.8) |
 | launcher | 0 | 0 | 0 | 0 | 0 | 16.3 (0.3) | 0 | 15.4 (0.2) | 4.9 |
@@ -1337,7 +1337,7 @@ program's CPU (% of one core over the scenario) and its private memory at the en
 
 What the baseline shows:
 
-- **Control Center at scale 2** (slow frames 64, spread 57): its frames take 17.3 ms at p50, at the refresh's edge, so
+- **The control panel at scale 2** (slow frames 64, spread 57): its frames take 17.3 ms at p50, at the refresh's edge, so
   the count swings between runs. Nearly all of it is raster (16.1 / 17.0 ms; 12.1 / 13.1 at 1.5): the card and its
   soft shadow, redrawn whole on every frame of the opening. Its full-output click catcher is not repainted. No plain bug:
   this is the work layers (step 4), the shared shadow (step 1) and the compositor's layers (step 9) remove.
@@ -1386,16 +1386,16 @@ layout about 3 ms each): above 4 ms, so step 4 gains the incremental view and la
 
 | Budget | Baseline | Verdict |
 |---|---|---|
-| Any frame inside one refresh; no missed refreshes or slow client frames | no missed refresh in any scenario; slow client frames only in resize and Control Center at scale 2 and in full-screen Files | confirmed: the scenarios that miss are the ones the owning steps fix |
+| Any frame inside one refresh; no missed refreshes or slow client frames | no missed refresh in any scenario; slow client frames only in resize and the control panel at scale 2 and in full-screen Files | confirmed: the scenarios that miss are the ones the owning steps fix |
 | Files two-finger scroll, p99 client CPU under 8 ms at scales 1 and 1.5 | default size 3.25 / 6.23 ms; full screen 79.2 / 77.9 ms | revised: the budget now names the window filling the output. At its default size Files meets it today, so only the full-screen scroll measures what step 4 must do |
 | Files live resize: client CPU excluding raster under 8 ms, GPU under 4 ms | p99 at 1.5: raster 8.6 ms, copy 6.5 ms, the other phases 2.3 ms together | confirmed: the copy is what the GPU path removes; the rest is a quarter of the budget |
-| Toolkit animation frame under 4 ms client CPU | Control Center 12.8 / 14.6 ms (raster 12.1 / 13.1); launcher p99 6.4 ms (raster 6.2) | confirmed: outside raster the phases' p99s add to 2.4 ms (Control Center) and 3.0 ms (launcher) at 1.5, most of it the copy the GPU path removes |
+| Toolkit animation frame under 4 ms client CPU | Control panel 12.8 / 14.6 ms (raster 12.1 / 13.1); launcher p99 6.4 ms (raster 6.2) | confirmed: outside raster the phases' p99s add to 2.4 ms (the control panel) and 3.0 ms (launcher) at 1.5, most of it the copy the GPU path removes |
 | Client GPU time per frame under 4 ms | no client draws on the GPU yet; the compositor's whole output takes 0.7–6.8 ms of GPU at p99 | confirmed, checked from step 6 |
 | Compositor frame during a drag over glass: under 4 ms GPU, under 2 ms CPU | GPU p99 2.07 ms (1.5) / 1.43 ms (2); CPU p50 1.32 / 1.60 ms, p99 2.38 / 1.97 ms | confirmed: the CPU p99 at 1.5 is over, which step 2 fixes; the GPU room is for the compositor's own drawing that steps 8 and 9 move there. Revised in step 2: the CPU half is the time to compose and submit, without the wait for the GPU, each half against its own budget (Measurements, step 2) |
 | First frame of a GPU process; switch within 150 ms on a warm cache | context 57 ms, first program 0.4 ms from the driver's cache | confirmed |
 | Added private memory per GPU process under 80 MiB | 68.8 MiB after a context and a compiled first program; 21 MiB with the driver's cache | confirmed |
 | GPU memory per GPU window | a process's first 3840 x 2160 target adds 63.5 MiB for 31.6 MiB of pixels and keeps it | revised: the driver reserves one more target's size with a process's first one; the 32 MiB of atlases and pools cannot hold that at 4K, so the budget names it |
-| Client CPU after the look freeze: no scenario's client p99 more than 10% above its baseline | client p99 spreads: 1–10% for resize, Control Center, the launcher and the scrolls; 9–29% for the sub-millisecond drag and hover frames | revised: 10% or the recorded spread, whichever is larger, since 10% of a 0.6 ms frame is inside its noise |
+| Client CPU after the look freeze: no scenario's client p99 more than 10% above its baseline | client p99 spreads: 1–10% for resize, the control panel, the launcher and the scrolls; 9–29% for the sub-millisecond drag and hover frames | revised: 10% or the recorded spread, whichever is larger, since 10% of a 0.6 ms frame is inside its noise |
 | Fence overhead under 1 byte a frame | -0.25 bytes a frame | confirmed |
 | Idle desktop: no frames, no GPU work; listed timers only | one menu bar frame and its composite a minute (the clock); wakeups as listed below | revised: the clock's one frame a minute is named as the exception |
 | Pointer motion to screen below the baseline; cursor on the cursor plane | DEFERRED by the owner (2026-11-15): the traced live session gives the baseline | confirmed as written; its baseline comes with the owner's trace |
@@ -1523,7 +1523,7 @@ Kept, with what they cost per minute after the changes (Settings open on Account
 |---|---|---|---|
 | Settings, while Sound, Displays, Wi-Fi, Network or Notifications shows | 1 s (100 ms while the input level meter shows) | readings without a change signal: the sound server's volume and outputs, the display list (a fresh connection to the display server), the kernel's interface addresses (Wi-Fi also scans every 10 s), a new notification's application | Settings one refresh a period; no other pane arms a timer |
 | Settings, while Focus or Battery shows | 60 s | the durations offered follow the time of day; the charge history | Settings 1 |
-| menu bar clock | at each minute | the clock; it reads do-not-disturb and the control panel's state with it | menu bar 21–26 over its threads, notifications 8–17, Control Center 2, bus daemon 9 |
+| menu bar clock | at each minute | the clock; it reads do-not-disturb and the control panel's state with it | menu bar 21–26 over its threads, notifications 8–17, the control panel 2, bus daemon 9 |
 | session and headless main loop | 60 s | backstop for a deadline left unnamed | server 1 |
 | Files' folder watches and the dock's trash watch | on activity only | their file watch library asks for open events too; they wake only when a process opens a file in the shown folder or the trash, which nothing does on an idle desktop | 0 |
 
@@ -1826,7 +1826,7 @@ and 15 minutes) before and after each run is given.
 |---|---|---|---|---|
 | Files live resize: frame p50 / p99 | 2.3 / 5.1 (4.5–5.3) | 9.6 / 15.8 | GPU 3.0 / 5.3 (5.0–5.4) | GPU |
 | Files live resize: raster p99, copy p99, beyond the raster p99 | 2.9, 2.8, 4.7 | 8.9, 5.8, 6.8 (1 slow frame) | 2.8, 3.0, 3.8 | |
-| Control Center, six frames (two an opening, none at the close): p50 / p99 | 11.8 / 17.9 (17.7–28.0), raster p50 11.3 | 14.7 / 16.9 (16.6–17.4), raster p50 12.5 | CPU 14.7 / 16.9 (15.8–22.3) | CPU |
+| Control panel, six frames (two an opening, none at the close): p50 / p99 | 11.8 / 17.9 (17.7–28.0), raster p50 11.3 | 14.7 / 16.9 (16.6–17.4), raster p50 12.5 | CPU 14.7 / 16.9 (15.8–22.3) | CPU |
 | Dock sweep p99 | 1.7 | 0.5 | GPU 1.6 | GPU |
 | Overview: p50 / p99, slow frames | 0.7 / 2.0, 0 | 19.1 / 27.7 (27.3–33.3), 4 (copy p99 17.3) | GPU 0.7 / 2.0, 0 | GPU |
 | Overview: compositor work p99 | 4.1 | 9.2 | 3.8 | |
@@ -1846,7 +1846,7 @@ the compositor in any run. Loads: both renderers 2.3 / 6.1 / 7.4 falling to 0.6 
 | Launcher | 16.1 (4.9) | 91.8 (80.7) | 92.1 (80.6) | 76.0 |
 | Settings | 37.5–42.2 (20.4–25.7) | 113.8 (97.0) | 106.6 (89.5) | 64–69 |
 | Files, window and desktop together | 55.9 (53.0) | 184.0 (180.6) | 111.0 (107.9) | 55 (the window only) |
-| Control Center | 13.9 (4.3) | 87.1 (77.5) | 13.9 (4.3) | none: CPU |
+| Control panel | 13.9 (4.3) | 87.1 (77.5) | 13.9 (4.3) | none: CPU |
 | Menu bar | 21.2 (6.7) | 97.1 (82.3) | 21.1 (6.7) | none: CPU |
 | Notifications | 14.3 (4.3) | 86.8 (76.8) | 14.3 (4.3) | none: CPU |
 | OSD | 13.6 (4.4) | 89.5 (80.2) | 14.0 (4.4) | none: CPU |
@@ -1858,10 +1858,10 @@ once the large windows come as dmabufs.
 
 **Idle** (the bench's idle scenario, 60 s, classes at 1.5): one menu bar frame and its composite in two runs of three,
 none in the third (no minute turned). Wakeups a minute over each process's threads: menu bar 44 (0–56), notifications
-16 (0–30), Control Center 4, the server 2, the bus daemon 18, all the clock's minute; the GPU-class processes 0.
+16 (0–30), the control panel 4, the server 2, the bus daemon 18, all the clock's minute; the GPU-class processes 0.
 
 **A full session** (`crates/cupertino-server/scripts/session.sh --scale 1.5`, Files and Settings opened, then the
-launcher with two letters typed, Control Center opened and closed, the volume raised and lowered, the screenshot
+launcher with two letters typed, the control panel opened and closed, the volume raised and lowered, the screenshot
 toolbar, a banner; load 0.5 / 2.6 / 4.2 to 0.3 / 2.1 / 3.9, and 0.7 / 1.4 / 2.8 to 0.5 / 1.2 / 2.6 for the same
 session with `CUPERTINO_RENDERER=cpu`). The renderer records:
 
@@ -1873,7 +1873,7 @@ session with `CUPERTINO_RENDERER=cpu`). The renderer records:
 | Settings | gpu, the GPU | 114.5 | 42.7 | 71.8 | 45 MiB |
 | Menu bar | cpu, its class draws on the CPU | 20.6 | 20.5 | | |
 | Notifications (a banner shown) | cpu, its class draws on the CPU | 18.9 | 19.1 | | |
-| Control Center | cpu, its class draws on the CPU | 25.8 | 25.5 | | |
+| Control panel | cpu, its class draws on the CPU | 25.8 | 25.5 | | |
 | OSD | cpu, its class draws on the CPU | 16.3 | 16.3 | | |
 | Files desktop | cpu, its class draws on the CPU | 17.0 | 16.9 | | |
 | Screenshot toolbar | cpu, its class draws on the CPU | | | | |
@@ -1897,7 +1897,7 @@ In the cold sessions with turns the GPU was ready 161–387 ms after each proces
 ("1 loaded and 7 compiled"), the others loading ("8 loaded and 0 compiled"). Files' GPU memory with a second window
 opened and closed twice (warm cache): 51, 116, 84, 116, 84 MiB.
 
-Control Center: a whole frame of the panel at rest at 1.5 (654 x 969 pixels, dark), in the panel's test driver with
+The control panel: a whole frame of the panel at rest at 1.5 (654 x 969 pixels, dark), in the panel's test driver with
 a timing renderer, release build: 13.8 ms on a new renderer and 8.1–9.0 ms warm before (the shadow's rings 7.8 ms of
 it); after, 2.5–3.2 ms on the new renderer each opening makes (the shadow's picture laid over 0.9 ms; the first
 opening of a process 5.0 ms).
@@ -1938,7 +1938,7 @@ Headless server, `cupertino-controlcenter --fake-backends` on a private bus, deb
 `--no-capture`): the buffers the card committed between its first frame and the end of each fade, against the server
 steps that showed the fade part way.
 
-| Control Center | Server steps part way | New buffers of the card |
+| Control panel | Server steps part way | New buffers of the card |
 |---|---|---|
 | Fade in, with the compositor's presentation | 58 | 1 |
 | Fade out, with the compositor's presentation | 27 | 0 |
@@ -1960,12 +1960,12 @@ toolkit's runtime over its in-memory window system, frame callbacks answered eve
 | Menu fading (0.236 s) | 14 | 0 | one per frame until it goes |
 
 **The sheet.** Headless server at 1280 x 720 points, scale 1.5, release builds, recorded at 60 frames a second:
-"before" from the commit before Control Center's presentation (the card drawing its own fade), "after" from this step's
+"before" from the commit before the control panel's presentation (the card drawing its own fade), "after" from this step's
 branch (the compositor fading the card). Each pair is taken the same number of frames after the first frame that
 changes, the after frame the closest of that frame and its two neighbours, as the two runs start up to a frame apart;
 the number is the largest difference of any channel in the crop, out of 255.
 
-| Control Center | Mid-way pairs (frames after the start) | Largest mid-way | Settled |
+| Control panel | Mid-way pairs (frames after the start) | Largest mid-way | Settled |
 |---|---|---|---|
 | Open, dark | 1, 2, 4, 7, 10 | 7 | 1 |
 | Close, dark | 1, 3, 5, 8 | 14 | 0 |
@@ -2036,7 +2036,7 @@ after a run the machine disturbed, whose spread was 0.6 and 0.8 ms). Client fram
 | drag | Settings | 0.75 (0.03) | 0.77 (0.26) | 1.02 |
 | hover | Settings | 1.27 (0.05) | 0.96 (0.00) | 0.76 |
 | resize | Files | 17.61 (6.16) | 17.05 (2.61) | 0.97 |
-| control-center | Control Center | 14.99 (18.08) | 16.12 (5.88) | 1.08 |
+| control-panel | Control panel | 14.99 (18.08) | 16.12 (5.88) | 1.08 |
 | launcher-typing | launcher | 6.77 (0.46) | 5.99 (0.55) | 0.88 |
 | files-scroll | Files | 7.64 (6.06) | 8.03 (2.20) | 1.05 |
 

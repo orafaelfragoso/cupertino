@@ -85,7 +85,7 @@ printf 'Sample download.\n' >"$FHOME/Downloads/Release Notes.txt"
 [ -z "${FIXTURE_DIR:-}" ] || cp -rL "$FIXTURE_DIR"/. "$FHOME"/
 
 # A stand-in `wpctl` first on PATH: one output and two inputs, the default sink and source at a fixed level and the chosen
-# input kept in the scratch folder, so the volume the Control Center, the volume overlay and Settings show is the same on
+# input kept in the scratch folder, so the volume the control panel, the volume overlay and Settings show is the same on
 # every run, an input can be chosen and no sound device is read.
 AUDIO=$SCRATCH/audio
 mkdir -p "$AUDIO/bin"

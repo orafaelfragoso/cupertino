@@ -2,7 +2,7 @@
 //! and the menu gets `popup_done`. Each menu belongs to a window or to a layer surface placed as the shell process places
 //! its panel (the dock's bar at the bottom edge, the menu bar along the top, the launcher's panel on the overlay layer,
 //! which holds the keyboard), opened with a grab after a press on it. The keyboard is then taken by each kind of surface
-//! that can take it: another window (the focus policy), an exclusive overlay surface (the launcher, Control Center), an
+//! that can take it: another window (the focus policy), an exclusive overlay surface (the launcher, the control panel), an
 //! exclusive top layer surface (Focus Dock, the menu bar engaged by its shortcut), the lock screen, the authentication
 //! prompt, an on-demand layer surface (by a press), or nothing (the key window goes). A submenu opened from a menu with
 //! a grab of its own belongs to the same chain: focus moving within it keeps both open, and a surface outside it closes
@@ -634,7 +634,7 @@ fn menu_open_on(mut d: Desktop, panel: &'static Panel) -> (Desktop, PanelClient)
 enum Taker {
     /// The launcher: an exclusive overlay surface of a shell process.
     Launcher,
-    /// Control Center's card: an exclusive overlay surface of a shell process.
+    /// The control panel's card: an exclusive overlay surface of a shell process.
     ControlCenter,
     /// The dock's bar engaged by Focus Dock: an exclusive top layer surface at the bottom edge.
     FocusDock,
@@ -698,7 +698,7 @@ fn take_keyboard(d: &mut Desktop, taker: Taker) -> Vec<common::Client> {
         Taker::ControlCenter => {
             let stream =
                 shell_process_connection(&d.state.display_handle, &[ShellRole::Session]).unwrap();
-            vec![overlay(d, stream, "control-center")]
+            vec![overlay(d, stream, "control-panel")]
         }
         Taker::Prompt => {
             let stream = common::prompt_agent(&d.state);
@@ -715,7 +715,7 @@ fn holds_keyboard(s: &Cupertino, taker: Taker) -> bool {
     };
     match taker {
         Taker::Launcher => namespace(s, &focus).as_deref() == Some("launcher-taker"),
-        Taker::ControlCenter => namespace(s, &focus).as_deref() == Some("control-center"),
+        Taker::ControlCenter => namespace(s, &focus).as_deref() == Some("control-panel"),
         Taker::FocusDock => namespace(s, &focus).as_deref() == Some("focus-dock"),
         Taker::EngagedMenuBar => namespace(s, &focus).as_deref() == Some("engaged-menu-bar"),
         Taker::Window => s.windows.last().is_some_and(|w| w.surface() == &focus),

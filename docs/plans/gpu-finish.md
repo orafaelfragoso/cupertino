@@ -29,12 +29,12 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 1b. Docs sweep (`docs/`, crate READMEs)
 
-- [ ] `docs/src/architecture.md` names `cupertino-gpu`, `cupertino-gpu-shaders` and `cupertino-gpu-slice` in its
+- [x] `docs/src/architecture.md` names `cupertino-gpu`, `cupertino-gpu-shaders` and `cupertino-gpu-slice` in its
       layer table.
-- [ ] `docs/src/gpu-rendering.md` no longer says CI runs with `CUPERTINO_RENDERER=gpu` (or CI does, see 2c). Its
+- [x] `docs/src/gpu-rendering.md` no longer says CI runs with `CUPERTINO_RENDERER=gpu` (or CI does, see 2c). Its
       section on allocation names the fallback when there is no allocator.
-- [ ] The project's term is "control panel" on the lines the GPU work added.
-- [ ] Each page the GPU plan's steps changed (`apps-on-kit.md`, `kit-getting-started.md`, `displays-and-gpus.md`,
+- [x] The project's term is "control panel" on the lines the GPU work added.
+- [x] Each page the GPU plan's steps changed (`apps-on-kit.md`, `kit-getting-started.md`, `displays-and-gpus.md`,
       crate READMEs) matches the code. This ticks the plan's documentation item.
 
 ### 1c. The search field's open on the compositor's clock (`cupertino-launcher`)

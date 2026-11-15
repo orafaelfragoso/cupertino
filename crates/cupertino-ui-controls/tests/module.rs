@@ -10,7 +10,7 @@ use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{Color, ColorRole, InteractionVariant};
 use support::{color, window, Harness, RETURN, SPACE, TAB};
 
-/// A Control Center's modules: Wi-Fi as a row, Stage as a compact tile, a brightness slider and two batteries.
+/// A control panel's modules: Wi-Fi as a row, Stage as a compact tile, a brightness slider and two batteries.
 struct Panel;
 
 #[derive(Clone, Debug, PartialEq)]

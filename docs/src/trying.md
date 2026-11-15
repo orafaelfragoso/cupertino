@@ -26,7 +26,7 @@ Each has rough edges; the list above means the feature exists, not that it is fi
 
 A selection of the open p1 problems a tester hits first. Each issue has the current state and any workaround; the live list is [open p1 issues](https://github.com/orafaelfragoso/cupertino/issues?q=is%3Aissue+is%3Aopen+label%3A%22priority%3A+p1%22).
 
-- The installed-session quality backlog: menus and the pointer, sidebars, the Control Center, notifications, Trash, quick preview, scrollbars and materials. [Desktop quality and open issues](desktop-quality.md) lists each item with its issue.
+- The installed-session quality backlog: menus and the pointer, sidebars, the control panel, notifications, Trash, quick preview, scrollbars and materials. [Desktop quality and open issues](desktop-quality.md) lists each item with its issue.
 - Applications installed during a session are missing from the launcher until it restarts: [#190](https://github.com/orafaelfragoso/cupertino/issues/190).
 - The launcher and the overview stutter as they close: [#158](https://github.com/orafaelfragoso/cupertino/issues/158).
 - Audio: [#21](https://github.com/orafaelfragoso/cupertino/issues/21).

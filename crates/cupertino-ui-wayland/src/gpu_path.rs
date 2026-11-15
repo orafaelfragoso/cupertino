@@ -127,10 +127,12 @@ pub fn warm(
     if signals.stopped() {
         return Err(STOPPED.into());
     }
-    // the driver finishes each program at its first draw: drawn once here, in the turn, so the process's first
-    // frames do not wait on its compiler
-    programs.ui.prime(&device).map_err(|e| e.to_string())?;
+    // the turn covers making the programs only: drawing with them is each process's own work, and holding the turn
+    // through it would make processes starting together wait on one another's draws
     drop(turn);
+    // the driver finishes each program at its first draw: drawn once here, so the process's first frames do not
+    // wait on its compiler
+    programs.ui.prime(&device).map_err(|e| e.to_string())?;
     let timing = WarmTiming {
         context,
         programs: compiling.elapsed(),

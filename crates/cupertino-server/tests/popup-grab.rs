@@ -500,6 +500,33 @@ fn a_dismissed_popup_stays_drawn_without_input_until_its_limit() {
         shown(&root, now + LINGER_LIMIT + 0.01).is_empty(),
         "a client that never destroys it does not keep it on screen"
     );
+
+    // its limit is a tick deadline of its own, so it leaves the screen on time with nothing else drawing
+    let until = h
+        .state
+        .popup_linger
+        .next_deadline()
+        .expect("the dismissed popup's limit is a tick deadline");
+    assert!(
+        until > now && until <= now + LINGER_LIMIT,
+        "the limit {until} lies within {LINGER_LIMIT} s of {now}"
+    );
+    assert!(h.state.next_tick_deadline().is_some_and(|at| at <= until));
+    h.wait_until("the outputs to have nothing left to draw", |s| {
+        !s.outputs.iter().any(|o| o.scheduler.damaged())
+    });
+    h.state.fixed_time = Some(until);
+    h.state.tick();
+    assert!(
+        h.state.outputs.iter().all(|o| o.scheduler.damaged()),
+        "reaching the limit draws the outputs again"
+    );
+    assert!(shown(&root, until).is_empty());
+    assert_eq!(
+        h.state.popup_linger.next_deadline(),
+        None,
+        "a reached limit is no deadline any more, so the loop does not spin on it"
+    );
 }
 
 #[test]

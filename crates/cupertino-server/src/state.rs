@@ -549,6 +549,8 @@ pub struct Cupertino {
     pub send_signal: crate::force_quit::SendSignal,
     /// The popup chain that holds the pointer and keyboard, with the toplevel it belongs to (`popup_grab.rs`).
     pub popup_grab: Option<crate::popup_grab::ActivePopupGrab>,
+    /// When the dismissed popups still drawn reach their limit (`popup_linger.rs`).
+    pub popup_linger: crate::popup_linger::Expiries,
 
     pub seat: Seat<Cupertino>,
     pub pointer: PointerHandle<Cupertino>,
@@ -927,6 +929,7 @@ impl Cupertino {
             force_quits: Default::default(),
             send_signal: Box::new(crate::force_quit::signal_process),
             popup_grab: None,
+            popup_linger: Default::default(),
             seat,
             pointer,
             pointer_mode: PointerMode::Normal,
@@ -2156,6 +2159,10 @@ impl Cupertino {
         self.tick_input_timers(now);
         self.tick_overlays(now);
         self.tick_layers(now);
+        if self.popup_linger.tick(now) {
+            // a dismissed popup reached its limit: the next frame no longer draws it
+            self.request_redraw();
+        }
         self.control_release_observations(now);
         self.sync_button_access();
         let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
@@ -2185,7 +2192,8 @@ impl Cupertino {
     /// The earliest model time at which [`Cupertino::tick`] has time-driven work that no event and no frame brings
     /// about: a ping or the pong timeout, a promised SIGKILL, the idle countdowns, the end of the wait for lock
     /// surfaces, a hot corner's dwell, the menu bar edge's reveal or hide, a stale menu edit, and the keyboard filters'
-    /// repeat, slow keys and mouse keys, and pending native-control action replies. Animation is not here: it draws frames ([`Cupertino::animating`]).
+    /// repeat, slow keys and mouse keys, pending native-control action replies, and the limit of a dismissed popup still
+    /// drawn. Animation is not here: it draws frames ([`Cupertino::animating`]).
     pub fn next_tick_deadline(&self) -> Option<f64> {
         let filters = &self.key_filters;
         let ms = |t: u64| t as f64 / 1000.0;
@@ -2199,6 +2207,7 @@ impl Cupertino {
             self.bar_edge.next_deadline(),
             self.menu_bars.set.next_deadline(),
             self.menu_bars.edit_deadline(),
+            self.popup_linger.next_deadline(),
             filters.slow.as_ref().and_then(|s| s.deadline()).map(ms),
             filters.mouse.deadline().map(ms),
             filters.repeat.next_deadline().map(ms),

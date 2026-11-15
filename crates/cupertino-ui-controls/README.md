@@ -214,7 +214,8 @@ from the application's model and reports changes as messages.
   buttons, a segment with a menu as a pop-up button that opens on the press; a group with an empty label adds no
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
-  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. Each control's glass gets an
+  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave, on one line that ends in an ellipsis
+  when it does not fit (nothing at all when not even the ellipsis does), so the row keeps its height. Each control's glass gets an
   outline from the toolkit: a grey rim on its outermost device pixel (26 % black at the sides, 7 % at the top and bottom)
   and a faint shade below it in the light appearance, a dark rim along its sides (60 % black) in the dark one. `NavigationStack` puts its back and
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the

@@ -375,3 +375,136 @@ fn the_toolbar_glass_gets_an_outline_of_the_toolkit() {
         "the sides only, no shade"
     );
 }
+
+/// A toolbar of a title, an action and the search field open `SEARCH` pt wide, over a page; the title is a long
+/// folder name with `LONG`, else a short one.
+struct Titled<const SEARCH: u32, const LONG: bool>;
+
+/// A folder name of sixty characters.
+const LONG_TITLE: &str = "Quarterly reports and the drafts that went with them in 2026";
+
+impl<const SEARCH: u32, const LONG: bool> Application for Titled<SEARCH, LONG> {
+    type Model = ();
+    type Message = ();
+
+    fn init() -> ((), Vec<Command<()>>) {
+        ((), Vec::new())
+    }
+
+    fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
+        Vec::new()
+    }
+
+    fn view(_: &()) -> Vec<Window<()>> {
+        let field = Element::new(TextField {
+            label: "Search".into(),
+            placeholder: "Search".into(),
+            value: String::new(),
+            revision: 0,
+            purpose: ContentPurpose::Normal,
+            enabled: true,
+            on_change: None,
+            on_submit: None,
+            selection: None,
+            initial: false,
+        });
+        window(Element::from(NavigationStack {
+            content: Element::new(Spacer { min: 0.0 }).key("page"),
+            toolbar: vec![
+                Element::new(ToolbarTitle {
+                    text: if LONG { LONG_TITLE } else { "Documents" }.into(),
+                })
+                .key("title"),
+                Element::from(ToolbarButton {
+                    key: Some(Key::from("share")),
+                    glyph: ToolbarGlyph::Symbol("symbol.share".into()),
+                    label: "Share".into(),
+                    on_press: None,
+                }),
+                Element::from(ToolbarSearch {
+                    field,
+                    collapsed: false,
+                })
+                .key("search")
+                .width(f64::from(SEARCH)),
+            ],
+            can_go_back: false,
+            can_go_forward: false,
+            on_navigate: None,
+            under_toolbar: false,
+        }))
+    }
+}
+
+/// The title's text, at each window width from wide to narrow, stays on one line inside the title's own box, which
+/// ends a gap before the next control; the row keeps its height and the page starts below it.
+fn title_on_one_line<const SEARCH: u32, const LONG: bool>() {
+    assert_eq!(LONG_TITLE.chars().count(), 60);
+    let text = if LONG { LONG_TITLE } else { "Documents" };
+    let mut h = Harness::<Titled<SEARCH, LONG>>::new();
+    let mut cut = false;
+    for width in [900.0, 600.0, 400.0, 300.0, 240.0, 200.0] {
+        h.resize(cupertino_geometry::Size::new(width, 200.0));
+        h.settle();
+        let title = h.rect("title");
+        let share = h.rect("share");
+        let search = h.rect("search");
+        let context = format!("{SEARCH} pt search, {width} pt window");
+        assert_eq!(title.height(), TOOLBAR_CONTROL, "{context}");
+        assert_eq!(
+            title.min_y() + title.height() / 2.0,
+            TOOLBAR_ROW / 2.0,
+            "{context}"
+        );
+        assert!(
+            title.max_x() + TOOLBAR_GAP <= share.min_x() + 1e-9,
+            "{context}"
+        );
+        assert_eq!(search.min_x() - share.max_x(), TOOLBAR_GAP, "{context}");
+        assert_eq!(h.rect("page").min_y(), TOOLBAR_ROW, "{context}");
+        let runs: Vec<_> = h
+            .ops("title")
+            .into_iter()
+            .filter_map(|op| match op {
+                PaintOp::Glyphs { origin, run, .. } => Some((origin, run)),
+                _ => None,
+            })
+            .collect();
+        let baselines: Vec<f64> = runs.iter().map(|(origin, _)| origin.y).collect();
+        assert!(
+            baselines.windows(2).all(|w| w[0] == w[1]),
+            "one line, {context}: {baselines:?}"
+        );
+        let glyphs: usize = runs.iter().map(|(_, run)| run.glyphs.len()).sum();
+        for (origin, run) in &runs {
+            for glyph in &run.glyphs {
+                let x = origin.x + f64::from(glyph.x);
+                assert!(
+                    (0.0..title.width()).contains(&x),
+                    "a glyph at {x} past the title's {} pt, {context}",
+                    title.width()
+                );
+            }
+            let top = origin.y - f64::from(run.size);
+            assert!(top >= 0.0 && origin.y <= title.height(), "{context}");
+        }
+        cut |= glyphs > 0 && glyphs < text.chars().filter(|c| !c.is_whitespace()).count();
+        assert_eq!(
+            h.accessible("title").name.as_deref(),
+            Some(text),
+            "the whole title for assistive technology, {context}"
+        );
+    }
+    assert!(cut, "the title ends in an ellipsis once it does not fit");
+}
+
+#[test]
+fn a_long_title_stays_on_one_line_clear_of_the_controls_as_the_search_opens_and_the_window_narrows()
+{
+    // the field resting, part of the way open and open
+    title_on_one_line::<36, true>();
+    title_on_one_line::<120, true>();
+    title_on_one_line::<200, true>();
+    title_on_one_line::<36, false>();
+    title_on_one_line::<200, false>();
+}

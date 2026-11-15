@@ -248,7 +248,9 @@ pub(crate) fn top(layout: &ParagraphLayout, chrome: Rect, env: &Environment) -> 
 
 /// Paints `layout` with its top-left corner at `origin`.
 /// `paragraph` on one line: as it is when it fits `width`, else cut to end in its style's ellipsis within `width` and
-/// laid out again at the cut line's width, so its box is the line's in either direction.
+/// laid out again at the cut line's width, so its box is the line's in either direction. It stays one line only when
+/// the paragraph's style does not wrap (`Wrap::None`); a wrapping paragraph is laid out again on the lines it breaks
+/// into.
 pub(crate) fn one_line(paragraph: &Paragraph, width: f64) -> ParagraphLayout {
     let line = paragraph.layout(None);
     if !width.is_finite() || line.size().width <= width {

@@ -22,7 +22,7 @@ use cupertino_ui_layout::{
 };
 use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
-use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextStyle};
+use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextStyle, Wrap};
 use cupertino_ui_theme::{Color, ColorRole};
 
 /// The toolbar row's height: the controls lie in its middle.
@@ -1016,7 +1016,10 @@ impl ToolbarTitle {
             .text
             .paragraph(
                 &AttributedText::plain(self.text.clone(), Self::style()),
+                // one line whatever the room: a title that wrapped would push the toolbar's height and run into
+                // the page
                 &ParagraphStyle {
+                    wrap: Wrap::None,
                     ellipsis: true,
                     ..ParagraphStyle::default()
                 },
@@ -1075,6 +1078,10 @@ impl<M: 'static> Widget<M> for ToolbarTitle {
         let Some(layout) = self.laid_out(cx.env(), width) else {
             return;
         };
+        // with no room even for the ellipsis the title shows nothing rather than run under the next control
+        if layout.size().width > width {
+            return;
+        }
         let theme = cx.env().theme.clone();
         let state = ControlState {
             enabled: true,

@@ -164,6 +164,11 @@ impl FrameScheduler {
     /// The next frame starts no earlier than `until` (`None`: at once): a display whose vblank phase is known starts
     /// its frame late, so it shows the latest input ([`crate::latch`]). The hold ends with the next frame cycle and with a
     /// reset.
+    /// When the display last reported a vblank ([`FrameScheduler::vblank`]).
+    pub fn last_vblank(&self) -> Option<Duration> {
+        self.last_vblank
+    }
+
     pub fn hold_until(&mut self, until: Option<Duration>) {
         self.held_until = until;
     }

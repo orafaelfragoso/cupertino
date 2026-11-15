@@ -436,6 +436,7 @@ impl RenderElement<GlesRenderer> for BlurredContent {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let _blurred = tracing::trace_span!("server.content_blur").entered();
         frame.render_texture_from_to(
             &self.texture,
             src,

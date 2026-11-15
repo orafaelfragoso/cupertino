@@ -332,6 +332,7 @@ impl RenderElement<GlesRenderer> for ReducedElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let _surface = tracing::trace_span!("server.surface", rects = damage.len()).entered();
         // a surface no clip element draws minifies itself
         let own = self.minify.as_ref().and_then(|program| {
             let (texture, texels) = self.sampled(src, dst)?;

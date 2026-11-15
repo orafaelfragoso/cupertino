@@ -6214,3 +6214,91 @@ fn a_request_for_a_window_the_view_opens_goes_before_its_first_frame() {
         "asked before the panel drew"
     );
 }
+
+/// The frame timeline's spans cost nothing measurable with no timeline recorded. The run loop draws many frames, each
+/// handling a click and a focus move and repainting; the spans a frame passes (counted in a recorded timeline) times what a span costs
+/// unrecorded is set against the frame's own time. The frames are timed recorded too, for what a timeline adds. Prints
+/// the figures: `scripts/test -p cupertino-ui-core -- --no-capture -E 'test(/frame_spans/)'`.
+#[test]
+fn the_frame_spans_cost_nothing_measurable_with_no_timeline_recorded() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    const FRAMES: u32 = 300;
+    let (mut rt, window, _) = start();
+    configure(&mut rt, window, 1);
+    /// The time a frame takes over `FRAMES` frames, and how many presented.
+    fn frames(rt: &mut Rt, window: WindowId) -> (f64, usize) {
+        let presented = rt.window_system().frame_ids.len();
+        let began = Instant::now();
+        for _ in 0..FRAMES {
+            // a click counts up (a message and a view), a tab moves the focus (a repaint)
+            click(rt, window, 5.0);
+            key(rt, window, 0xff09, Mods::NONE);
+            let at = Timestamp(rt.window_system().frame_ids.len() as u64 + 2);
+            rt.window_system_mut().send(window, WindowEvent::Frame(at));
+            rt.step(steps()).unwrap();
+        }
+        let took = began.elapsed().as_nanos() as f64 / f64::from(FRAMES);
+        (took, rt.window_system().frame_ids.len() - presented)
+    }
+    // the fastest of three runs, so another process's moment on this core is not counted
+    fn best(rt: &mut Rt, window: WindowId) -> f64 {
+        (0..3)
+            .map(|_| frames(rt, window).0)
+            .fold(f64::MAX, f64::min)
+    }
+    // the caches warm first
+    frames(&mut rt, window);
+    let unrecorded = best(&mut rt, window);
+
+    let path = std::env::temp_dir().join(format!("frame-spans-{}.json", std::process::id()));
+    let sinks = [cupertino_profile::Sink::Chrome(path.clone())];
+    let layer =
+        cupertino_profile::layer_of::<tracing_subscriber::Registry>(&sinks, "test").unwrap();
+    let (recorded, presented) =
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            let recorded = best(&mut rt, window);
+            let (_, presented) = frames(&mut rt, window);
+            (recorded, presented)
+        });
+    cupertino_profile::finish();
+    let trace = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    // the recorded runs: three timed, one counted
+    let spans = trace.matches("\"ph\":\"X\"").count() as f64 / f64::from(4 * FRAMES);
+    assert!(presented > 0, "the frames repainted");
+    assert!(spans >= 8.0, "a frame passes the loop's spans: {spans}");
+
+    // a span unrecorded, against the same loop without it
+    const ROUNDS: u32 = 1_000_000;
+    let callsite = |with: bool| {
+        let began = Instant::now();
+        for i in 0..ROUNDS {
+            if with {
+                let _g = tracing::trace_span!("ui.bench").entered();
+                black_box(i);
+            } else {
+                black_box(i);
+            }
+        }
+        began.elapsed().as_nanos() as f64 / f64::from(ROUNDS)
+    };
+    let fastest = |with: bool| (0..5).map(|_| callsite(with)).fold(f64::MAX, f64::min);
+    let span = (fastest(true) - fastest(false)).max(0.0);
+    let off = spans * span;
+    eprintln!(
+        "a frame: {unrecorded:.0} ns unrecorded, {recorded:.0} ns recorded (+{:.0} ns, {:.1}%); {spans:.1} spans a \
+         frame, {span:.2} ns a span unrecorded: {off:.0} ns a frame ({:.3}% of it)",
+        recorded - unrecorded,
+        100.0 * (recorded - unrecorded) / unrecorded,
+        100.0 * off / unrecorded
+    );
+    // this frame is a small window's, tens of microseconds, and the test build is not optimised (a span about 10 ns,
+    // 1.3 ns optimised); a real frame takes milliseconds
+    assert!(
+        off < 0.05 * unrecorded,
+        "unrecorded spans cost {off:.0} ns of a {unrecorded:.0} ns frame"
+    );
+}

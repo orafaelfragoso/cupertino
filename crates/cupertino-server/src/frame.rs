@@ -231,6 +231,7 @@ impl Cupertino {
         paint_cursor: bool,
         for_capture: bool,
     ) -> Option<Composed> {
+        let _scene = tracing::trace_span!("server.scene", output = idx, for_capture).entered();
         self.with_scene(renderer, idx, |r, mut p| {
             if !paint_cursor {
                 p.cursor = CursorPlan::Hidden;

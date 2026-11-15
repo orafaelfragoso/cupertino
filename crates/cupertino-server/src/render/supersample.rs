@@ -180,6 +180,13 @@ impl Supersample {
         panel: (i32, i32),
         clear: Color32F,
     ) -> Result<ResampledElement, String> {
+        let _supersample = tracing::trace_span!(
+            "server.supersample",
+            width = size.0,
+            height = size.1,
+            elements = elements.len()
+        )
+        .entered();
         let fits = self
             .frame
             .as_ref()
@@ -317,6 +324,7 @@ impl RenderElement<GlesRenderer> for ResampledElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        let _shrink = tracing::trace_span!("server.shrink").entered();
         frame.render_texture_from_to(
             &self.texture,
             src,

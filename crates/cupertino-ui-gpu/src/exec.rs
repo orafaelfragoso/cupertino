@@ -14,7 +14,9 @@ impl<R> GpuRenderer<R> {
         if rec.cmds.is_empty() {
             return Ok(());
         }
+        let _submit = tracing::trace_span!("gpu.submit", commands = rec.cmds.len()).entered();
         let device = std::rc::Rc::clone(&self.device);
+        let uploading = tracing::trace_span!("gpu.upload_buffers").entered();
         let instance_bytes: Vec<u8> = rec.instances.iter().flat_map(|f| f.to_le_bytes()).collect();
         crate::upload(
             &device,
@@ -30,6 +32,7 @@ impl<R> GpuRenderer<R> {
         )?;
         self.stats.uniform_bytes += rec.uniforms.len() as u64;
         self.stats.instance_bytes += instance_bytes.len() as u64;
+        drop(uploading);
         let cmds = std::mem::take(&mut rec.cmds);
         let programs = &self
             .programs
@@ -66,6 +69,9 @@ impl<R> GpuRenderer<R> {
                     target, program, ..
                 } => (*target, *program),
             };
+            // one span a draw call, each a batch of quads or a whole-target pass
+            let _draw =
+                tracing::trace_span!("gpu.draw", label = tracing::field::debug(program)).entered();
             let whole = matches!(cmd, Cmd::Whole { .. });
             // a whole-target pass reads other targets: each such pass is its own
             if whole || pass.as_ref().is_none_or(|(t, _)| *t != target) {

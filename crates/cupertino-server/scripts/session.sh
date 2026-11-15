@@ -29,6 +29,8 @@
 # (`scripts/dev/bench` reads it); without it no process times its frames.
 # CUPERTINO_RENDERER: the toolkit renderer every process of the session asks for (`gpu` or `cpu`); without it each takes
 # its default.
+# CUPERTINO_PROFILE: the frame timeline every process of the session records (`chrome:DIR/` writes one trace file per
+# process into DIR; see docs/src/building.md); without it none is recorded.
 # Needs: dbus-run-session, python3.
 set -eu
 
@@ -158,6 +160,7 @@ env -i \
     ${CUPERTINO_ACCESSIBILITY_CONF:+CUPERTINO_ACCESSIBILITY_CONF="$CUPERTINO_ACCESSIBILITY_CONF"} \
     ${CUPERTINO_FRAME_TIMING:+CUPERTINO_FRAME_TIMING="$CUPERTINO_FRAME_TIMING"} \
     ${CUPERTINO_RENDERER:+CUPERTINO_RENDERER="$CUPERTINO_RENDERER"} \
+    ${CUPERTINO_PROFILE:+CUPERTINO_PROFILE="$CUPERTINO_PROFILE"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --dev-shell "$@"

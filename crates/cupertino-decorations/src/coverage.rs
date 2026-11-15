@@ -22,7 +22,9 @@ pub struct Outline {
 
 impl Outline {
     /// `rect` with `radii` and `style` (logical units) at `scale` device pixels per unit; the extents shrink so
-    /// adjacent corners fit, as the window's shape does.
+    /// adjacent corners fit, as the window's shape does. [`Outline::distance`] also cuts each extent to half the
+    /// width and height, so a rounded top on a strip shorter than two extents is tighter than the same corner on a
+    /// taller shape: draw such a strip as the top of the taller shape.
     pub fn rounded(rect: Rect, radii: Radii, style: CornerStyle, scale: f64) -> Outline {
         let extents = RoundedRect::with_radii(rect, radii, style).extents();
         let s = scale as f32;

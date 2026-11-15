@@ -320,12 +320,20 @@ impl Decorations {
         let r = if flush { 0.0 } else { cfg.corner_radius() };
         let fill = cfg.palette.titlebar(cfg.style, state.active);
         let (pw, ph) = (w as f64 / scale, h as f64 / scale);
-        let bar = Outline::rounded(
-            Rect::new(0.0, 0.0, pw, ph),
-            Radii::top(r),
-            cfg.corner_style,
-            scale,
-        );
+        // the bar is the top of the window's outline, the one the rim follows: a strip only as tall as the bar would
+        // have its top corners shrunk to half its height (a continuous corner reaches further down than its radius),
+        // so the fill would stand out past the rim and the outline at the corners
+        let frame = Size::new(pw, ph + 4.0 * r);
+        let bar = if flush {
+            Outline::rounded(
+                Rect::new(0.0, 0.0, pw, ph),
+                Radii::uniform(0.0),
+                cfg.corner_style,
+                scale,
+            )
+        } else {
+            self.frame_outline(frame, scale)
+        };
         list.draws.push(Draw::Shape {
             outline: bar,
             shade: Shade::Solid(fill),
@@ -342,8 +350,7 @@ impl Decorations {
             });
         }
         if !flush {
-            list.draws
-                .extend(self.rim_stroke(Size::new(pw, ph + 4.0 * r), scale));
+            list.draws.extend(self.rim_stroke(frame, scale));
         }
         let cfg = &self.config;
         for b in &layout.buttons {
@@ -410,20 +417,25 @@ impl Decorations {
     /// The stroke of the inner rim of the edge ([`Decorations::edge`]) just inside the outline of a frame of `size`
     /// logical points: whole device pixels, at least one.
     fn rim_stroke(&self, size: Size, scale: f64) -> Option<Draw> {
-        let cfg = &self.config;
         let inner = self.edge(true).inner?;
         let (px, color) = inner.device(scale);
-        let frame = Outline::rounded(
+        Some(Draw::Shape {
+            outline: self.frame_outline(size, scale),
+            shade: Shade::Solid(color),
+            stroke: Some(px as f32),
+        })
+    }
+
+    /// The window's outline for a frame of `size` logical points at `scale`, its four corners rounded; `size` holds
+    /// at least twice a corner's extent in each direction, or the corners shrink.
+    fn frame_outline(&self, size: Size, scale: f64) -> Outline {
+        let cfg = &self.config;
+        Outline::rounded(
             Rect::new(0.0, 0.0, size.width, size.height),
             Radii::uniform(cfg.corner_radius()),
             cfg.corner_style,
             scale,
-        );
-        Some(Draw::Shape {
-            outline: frame,
-            shade: Shade::Solid(color),
-            stroke: Some(px as f32),
-        })
+        )
     }
 
     /// The inner rim of the edge around the whole frame (premultiplied RGBA, transparent inside), whole device pixels
@@ -675,6 +687,47 @@ mod tests {
                 "({x}, {y}) is the fill, no corner and no rim: {:?}",
                 rgba(&flush, x, y)
             );
+        }
+    }
+
+    /// The bar's top corners are the window's: its fill covers nothing outside the window's outline, where the rim and
+    /// the outline round the corner, and covers all of the inside of it.
+    #[test]
+    fn the_title_bar_s_corners_are_the_window_s_outline() {
+        for appearance in [Appearance::Dark, Appearance::Light] {
+            let mut d = decorations(TitlebarStyle::Standard, appearance);
+            for scale in [1.0, 1.5, 2.0] {
+                let bar = d.render_titlebar(420.0, scale, &DecorationState::default());
+                let (w, h) = (bar.width(), bar.height());
+                let window = d.shape(Size::new(420.0, 300.0));
+                let extents = window.extents();
+                let outline = Outline::rounded(
+                    window.rect,
+                    Radii::uniform(d.config.corner_radius()),
+                    d.config.corner_style,
+                    scale,
+                );
+                let reach = (extents[0] * scale).ceil() as u32 + 1;
+                assert!(reach < h, "the corner is taller than the bar at {scale}");
+                for y in 0..reach {
+                    for x in (0..reach).chain(w - reach..w) {
+                        let distance = outline.distance(x, y);
+                        let alpha = rgba(&bar, x, y)[3];
+                        if distance > 0.5 {
+                            assert_eq!(
+                                alpha, 0,
+                                "{appearance:?} at {scale}: ({x}, {y}) lies {distance:.2} px outside the window"
+                            );
+                        } else if distance < -0.5 {
+                            assert_eq!(
+                                alpha, 255,
+                                "{appearance:?} at {scale}: ({x}, {y}) lies {:.2} px inside the window",
+                                -distance
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

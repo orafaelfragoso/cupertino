@@ -176,6 +176,8 @@ mod supersample_gl;
 mod surface_output;
 #[path = "text_input.rs"]
 mod text_input;
+#[path = "titlebar_corners.rs"]
+mod titlebar_corners;
 #[path = "toplevel_icon.rs"]
 mod toplevel_icon;
 #[path = "unified_titlebar.rs"]

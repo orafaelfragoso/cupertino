@@ -988,11 +988,14 @@ Gate:
                   within 1 along the edge (it was up to 90 with the scaled edge layer); against the server the
                   browser's open 0 buffers over 113 steps part way with 3 layers. The search field's rest too, its
                   edge layer gone: within 1 of 255 along its capsule at 1, 1.5 and 2 in both appearances. A close
-                  draws the compositor's edge unblurred where the panel's own close blurs it with the content: at the
-                  same moments (the field, the browser and the files scope) within 1 apart from the outline, along it
-                  up to 100 of 255 in the dark and 29 in the light at the close's first frame, less as it fades
-                  (`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`); the field's close
-                  blurred its edge layer before. The compositor does not blur a glass layer's edge.
+                  blurs the compositor's edge with the content, as the panel's own close blurs its edge: from
+                  `cupertino_layers_v1` version 6 the line along a layer's glass softens by that layer's
+                  `content_blur` (the band blurred by the content's Gaussian in closed form, 0 the sharp band to the
+                  bit; `GlassEdge::soft`, `render::layers::edge_softness`), and `close_changes` blurs the glass layer
+                  as it blurs the content. At the same moments, 1.5, the field, the browser and the files scope in both
+                  appearances: within 1 apart from the outline, and along it 2 of 255 in the dark and 1 in the light
+                  at the close's first frame, 1 from 33 ms on, where the unblurred edge parted by up to 100 and 29
+                  (`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`, bound 4).
             - [x] The fold and unfold carry it, from here on in order with the items above and below. The fold does
                   (`Model::hand_folds` on in the process; at the same moments along the outline 2 of 255 in the dark
                   and 1 in the light, where it was 178 and 52), and so does the unfold.

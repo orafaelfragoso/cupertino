@@ -69,9 +69,9 @@ smooth out vec2 _vs2fs_location0;
 smooth out vec2 _vs2fs_location1;
 
 vec4 fullscreen_position(uint index) {
-    float x_4 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
+    float x_5 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
     float y_2 = ((float((index & 2u)) * 2.0) - 1.0);
-    return vec4(x_4, y_2, 0.0, 1.0);
+    return vec4(x_5, y_2, 0.0, 1.0);
 }
 
 float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
@@ -92,10 +92,10 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     if ((n_1 <= CIRCULAR_EXPONENT)) {
         return (sqrt(((qx * qx) + (qy * qy))) - e);
     }
-    float u = max((qx / e), 1e-6);
+    float u_1 = max((qx / e), 1e-6);
     float v_1 = max((qy / e), 1e-6);
-    float g = pow((pow(u, n_1) + pow(v_1, n_1)), (1.0 / n_1));
-    float grad = (sqrt((pow(u, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
+    float g = pow((pow(u_1, n_1) + pow(v_1, n_1)), (1.0 / n_1));
+    float grad = (sqrt((pow(u_1, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
     float d_9 = (((g - 1.0) / grad) * e);
     return max(d_9, (max(qx, qy) - e));
 }
@@ -363,10 +363,10 @@ float rect_sdf(vec2 p_6, vec4 r, float e_1, float n_2) {
     if ((n_2 <= 2.0)) {
         return (length(q_4) - ext);
     }
-    vec2 u_1 = max((q_4 / vec2(ext)), vec2(1e-6));
-    vec2 un = pow(u_1, vec2(n_2));
+    vec2 u_2 = max((q_4 / vec2(ext)), vec2(1e-6));
+    vec2 un = pow(u_2, vec2(n_2));
     float g_1 = pow((un.x + un.y), (1.0 / n_2));
-    vec2 slope = ((un / u_1) / vec2(pow(g_1, (n_2 - 1.0))));
+    vec2 slope = ((un / u_2) / vec2(pow(g_1, (n_2 - 1.0))));
     return max((((g_1 - 1.0) * ext) / max(length(slope), 1e-6)), (max(q_4.x, q_4.y) - ext));
 }
 
@@ -411,16 +411,37 @@ float rim_brightness(float l0_) {
 }
 
 float rim_direction(vec2 n_3) {
-    float s_2 = ((2.0 * n_3.x) * n_3.y);
-    return (0.15 + ((0.85 * s_2) * s_2));
+    float s_3 = ((2.0 * n_3.x) * n_3.y);
+    return (0.15 + ((0.85 * s_3) * s_3));
 }
 
 float normal_cdf(float x_3) {
     return (1.0 / (1.0 + exp((-1.702 * x_3))));
 }
 
-float edge_share(float d_7, float w_2) {
-    return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+float gaussian_cdf(float x_4) {
+    float z = (abs(x_4) * 0.70710677);
+    float t_5 = (1.0 / (1.0 + (0.3275911 * z)));
+    float poly = (t_5 * (0.2548296 + (t_5 * (-0.28449675 + (t_5 * (1.4214137 + (t_5 * (-1.453152 + (t_5 * 1.0614054)))))))));
+    float erf = (1.0 - (poly * exp((-(z) * z))));
+    return (0.5 * (1.0 + ((x_4 >= 0.0) ? erf : -(erf))));
+}
+
+float gaussian_ramp(float u) {
+    float _e1 = gaussian_cdf(u);
+    return ((u * _e1) + (0.3989423 * exp(((-0.5 * u) * u))));
+}
+
+float edge_share(float d_7, float w_2, float s_2) {
+    if ((s_2 <= 0.0)) {
+        return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+    }
+    float _e19 = gaussian_ramp(((d_7 + 0.5) / s_2));
+    float _e23 = gaussian_ramp(((d_7 - 0.5) / s_2));
+    float _e29 = gaussian_ramp((((d_7 + 0.5) - w_2) / s_2));
+    float _e35 = gaussian_ramp((((d_7 - 0.5) - w_2) / s_2));
+    float r_2 = (s_2 * (((_e19 - _e23) - _e29) + _e35));
+    return clamp(r_2, 0.0, 1.0);
 }
 
 void main() {

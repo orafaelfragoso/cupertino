@@ -495,6 +495,7 @@ fn compositor_edge(
             Container::new(shapes, spacing as f32 * s, GlassMode::default()).with_edge(GlassEdge {
                 width: edge.width as f32 * s,
                 color: edge.color,
+                soft: 0.0,
             })
         })
         .collect();
@@ -705,10 +706,23 @@ fn compose_with_edge(
             })
             .collect();
         let opacity = glass.iter().map(|l| l.opacity).fold(0.0, f64::max) as f32;
-        let c = Container::new(shapes, 0.0, GlassMode::default()).with_edge(GlassEdge {
-            width: edge.width as f32 * s,
-            color: edge.color,
-        });
+        // the edge softens by the first layer's content blur, as its content would be drawn: scaled with it, and none
+        // where the content would be drawn sharp
+        let first = glass[0];
+        let sigma = first.blur * scale;
+        let soft = if sigma >= SHARP_BELOW_PX {
+            (sigma * first.scale) as f32
+        } else {
+            0.0
+        };
+        let c = Container::new(shapes, 0.0, GlassMode::default()).with_edge(
+            GlassEdge {
+                width: edge.width as f32 * s,
+                color: edge.color,
+                soft: 0.0,
+            }
+            .soft(soft),
+        );
         for (i, px) in base.iter_mut().enumerate() {
             let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
             let a = c.edge_alpha_at(p) * opacity;
@@ -972,17 +986,20 @@ fn close_moments(
 }
 
 /// How far a close the compositor runs may stand from the panel's own drawing along the outline, of 255: the panel
-/// blurs its edge with its content as it closes, where the compositor draws its edge along the glass sharp, so the two
-/// part there, by 100 in the dark appearance and 29 in the light at the close's first frame, less as it fades.
-const CLOSE_ALONG_OUTLINE: u8 = 104;
+/// blurs its edge with its content as it closes, and the compositor blurs the edge it draws along the glass by the
+/// glass layer's blur, the content's, so the two part there by 2 in the dark appearance and 1 in the light at the
+/// close's first frame (by 100 and 29 when the compositor's edge stayed sharp).
+const CLOSE_ALONG_OUTLINE: u8 = 4;
 
 /// How far either side of the glass's outline, in points, a close's edge reaches: the edge stroke, and the panel's own
 /// blur of it at its widest, three deviations either way.
 const CLOSE_EDGE_BAND: f64 = EDGE_BAND + 3.0 * crate::view::layers::CLOSE_DEVIATION;
 
 /// The close the compositor runs is the panel's own drawing of it at the same moments, for the search field in both
-/// appearances and the browser and the files scope in the dark one, where the edge is strongest: at each frame the panel draws of its close, the compositor's layers at that moment of the
-/// close, blurred, scaled and faded as a compositor draws them, with the edge it draws along the glass, are its pixels
+/// appearances and the browser and the files scope in the dark one (in the light in
+/// [`a_scope_s_close_in_the_light_is_the_panel_s_own_drawing_at_the_same_moments`]): at each
+/// frame the panel draws of its close, the compositor's layers at that moment of the close, blurred, scaled and faded
+/// as a compositor draws them, with the edge it draws along the glass blurred by the glass layer's blur, are its pixels
 /// at rest within 1 of 255, and part way but where the two are known to part ([`Moment::apart`]) and along the outline
 /// ([`CLOSE_EDGE_BAND`]): within 8 at the first frames, where the blur is a pixel or two wide and two blurs of the same
 /// deviation round differently, and within 1 from the close's middle on. Along the outline they part by up to
@@ -1002,6 +1019,14 @@ fn the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments(
             }
         }
     }
+}
+
+/// [`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`] for the browser and the files scope
+/// in the light appearance, a test of its own so that each stays within the test runner's time.
+#[test]
+fn a_scope_s_close_in_the_light_is_the_panel_s_own_drawing_at_the_same_moments() {
+    the_close_at_the_same_moments("the browser", || Message::Browse, false);
+    the_close_at_the_same_moments("the files scope", || Message::Files, false);
 }
 
 /// [`the_close_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`] for the panel `open` opens.

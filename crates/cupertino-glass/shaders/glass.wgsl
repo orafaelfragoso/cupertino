@@ -9,7 +9,7 @@
 
 struct Glass {
   quad: vec4<f32>,        // where to draw: x, y, w, h
-  uv_x: vec4<f32>,        // u = a·x + b·y + c
+  uv_x: vec4<f32>,        // u = a·x + b·y + c; the deviation of the Gaussian the edge is softened by
   uv_y: vec4<f32>,        // v = d·x + e·y + f
   info: vec4<f32>,        // shapes, blend width, antialiasing width, opacity
   levels: vec4<f32>,      // the edge line's strength, unused (0), target w, h
@@ -255,10 +255,27 @@ fn outside(p: vec2<f32>, d: f32, pos: f32, n: vec2<f32>) -> vec4<f32> {
   return vec4<f32>(G.shadow_color.rgb * (shadow * (1.0 - line) / a), a);
 }
 
+// the share of a unit Gaussian below x deviations, from the error function's rational approximation
+fn gaussian_cdf(x: f32) -> f32 {
+  let z = abs(x) * 0.70710678;
+  let t = 1.0 / (1.0 + 0.3275911 * z);
+  let poly = t * (0.2548296 + t * (-0.28449674 + t * (1.4214137 + t * (-1.453152 + t * 1.0614054))));
+  let erf = 1.0 - poly * exp(-z * z);
+  return 0.5 * (1.0 + select(-erf, erf, x >= 0.0));
+}
+
+// the integral of the Gaussian's share up to u deviations: u·Φ(u) + φ(u)
+fn gaussian_ramp(u: f32) -> f32 {
+  return u * gaussian_cdf(u) + 0.3989423 * exp(-0.5 * u * u);
+}
+
 // the share of a pixel whose centre lies d outside the outline that the edge's band, from the outline to w outside it,
-// covers
-fn edge_share(d: f32, w: f32) -> f32 {
-  return clamp(min(d + 0.5, w) - max(d - 0.5, 0.0), 0.0, 1.0);
+// covers; softened by a Gaussian of deviation s, that band blurred by it, in closed form
+fn edge_share(d: f32, w: f32, s: f32) -> f32 {
+  if (s <= 0.0) { return clamp(min(d + 0.5, w) - max(d - 0.5, 0.0), 0.0, 1.0); }
+  let r = s * (gaussian_ramp((d + 0.5) / s) - gaussian_ramp((d - 0.5) / s) - gaussian_ramp((d + 0.5 - w) / s)
+    + gaussian_ramp((d - 0.5 - w) / s));
+  return clamp(r, 0.0, 1.0);
 }
 
 // stage 8's opacity at p: each shape's band from its outline to w outside it at the edge's opacity, left out by the
@@ -267,17 +284,20 @@ fn edge_share(d: f32, w: f32) -> f32 {
 fn edge_alpha(p: vec2<f32>) -> f32 {
   let w = G.lens.w;
   if (w <= 0.0 || G.edge.a <= 0.0) { return 0.0; }
+  // a soft edge reaches three deviations further both ways
+  let s = G.uv_x.w;
+  let reach = 0.5 + 3.0 * max(s, 0.0);
   let n = i32(G.info.x);
   var d: array<f32, 16>;
   var near = false;
   for (var i = 0; i < n; i++) {
     d[i] = rect_sdf(p, G.shapes[i], G.shape_a[i].x, G.shape_b[i].w);
-    near = near || (d[i] > -0.5 && d[i] < w + 0.5);
+    near = near || (d[i] > -reach && d[i] < w + reach);
   }
   if (!near) { return 0.0; }
   var keep = 1.0;
   for (var i = 0; i < n; i++) {
-    let band = edge_share(d[i], w);
+    let band = edge_share(d[i], w, s);
     if (band <= 0.0) { continue; }
     var outside = 1.0;
     for (var j = 0; j < n; j++) {

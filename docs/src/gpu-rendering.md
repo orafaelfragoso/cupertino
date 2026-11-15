@@ -280,8 +280,9 @@ The launcher's panel is drawn as layers once it rests: the enclosure's glass is 
 glass, its content a layer that does not scale, and its dark edge, drawn just outside the shape, a layer of its own on a
 grid around the enclosure with room for the stroke, centred on the point the panel grows about; each mode button is a
 layer of glass at its rect and a face (edge, focus ring and symbol) above it. The window itself shows no glass. Its
-close is then the compositor's: the glass grows to its end rect and fades, the edge scales with it and blurs, the
-content blurs and fades, all on the close's ease-out, with no frame of the application's. While the panel moves, and
+close is then the compositor's: the glass grows to its end rect and fades, the edge follows it and blurs with the
+content (the line along a layer's glass softens by the layer's content blur), the content blurs and fades, all on the
+close's ease-out, with no frame of the application's. While the panel moves, and
 under Reduce Motion, it draws itself. The compositor can draw the panel's edge along its glass itself
 (`layers::glass_edge` in a glass layer's look): along the search field and its mode buttons, capsules all, and along
 every straight side it is the panel's own edge within 4 of 255, while at a scope's continuous corners it follows the

@@ -11,7 +11,8 @@
 //! and scale apply to everything the surface draws ([`presentation`]), and it is never drawn as a layer. From version
 //! 3 an xdg popup's surface may have one too, and layers of one parent may join their glass into one shape
 //! ([`LayerDraw::group`]). Version 4 blurs a layer's own content by an animatable Gaussian
-//! ([`LayerDraw::content_blur`], drawn by `render::content_blur`).
+//! ([`LayerDraw::content_blur`], drawn by `render::content_blur`). Version 5 draws a line along a layer's glass
+//! ([`GlassEdge`]), and from version 6 that line softens by the layer's content blur ([`GlassEdge::soft`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -55,7 +56,7 @@ pub const START_AT_THE_LATEST: f64 = 0.1;
 /// The wire value of "no glass" in `set_glass`.
 pub const NO_GLASS: u32 = u32::MAX;
 /// The version of the global this server offers.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// The version from which a popup may have a presentation and layers may join their glass.
 pub const POPUP_VERSION: u32 = 3;
 /// Widest blend between the joined shapes of a glass group, in logical points.
@@ -68,6 +69,8 @@ pub const MAX_CONTENT_BLUR: f64 = 64.0;
 pub const GLASS_EDGE_VERSION: u32 = 5;
 /// The widest edge along a layer's glass, in logical points.
 pub const MAX_GLASS_EDGE: f64 = 4.0;
+/// The version from which the edge along a layer's glass softens by the layer's content blur ([`GlassEdge::soft`]).
+pub const SOFT_EDGE_VERSION: u32 = 6;
 /// Layers of one parent in one glass group: as many shapes as one joined glass holds.
 pub const MAX_PER_GROUP: usize = cupertino_glass::glass::MAX_SHAPES;
 /// The farthest a layer's origin, size or corner radius goes, in logical points either way. A value asked or reached
@@ -210,11 +213,13 @@ impl Drop for Queued {
 }
 
 /// The line along the outside of a layer's glass (`set_glass_edge`): its width in logical points, constant whatever
-/// the layer's scale, and its straight colour and opacity; a width of 0 draws none.
+/// the layer's scale, its straight colour and opacity, and whether it softens by the layer's content blur (a layer
+/// object of [`SOFT_EDGE_VERSION`] or later); a width of 0 draws none.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlassEdge {
     pub width: f64,
     pub color: [f32; 4],
+    pub soft: bool,
 }
 
 /// The layer requests queued on a parent surface, by layer serial, in request order.
@@ -1029,7 +1034,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 }
             }
             cupertino_layers_v1::Request::Destroy => {}
-            _ => unreachable!("cupertino_layers_v1 version 5 has no other request"),
+            _ => unreachable!("cupertino_layers_v1 version 6 has no other request"),
         }
     }
 }
@@ -1307,9 +1312,10 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 data.queue(Op::Edge(GlassEdge {
                     width,
                     color: c.map(|v| v as f32),
+                    soft: layer.version() >= SOFT_EDGE_VERSION,
                 }));
             }
-            _ => unreachable!("cupertino_layer_v1 version 5 has no other request"),
+            _ => unreachable!("cupertino_layer_v1 version 6 has no other request"),
         }
     }
 

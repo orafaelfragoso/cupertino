@@ -35,7 +35,8 @@
 //!    outline, left out inside the container's other shapes ([`Container::edge_alpha_at`]), so where the shapes overlap
 //!    only the outline of the whole shows, as a stroke around each shape cut by the others draws it; drawn over all of
 //!    the above: over what lies there and over the glass's own antialiased edge ([`edge_share`], [`over_edge`]), its
-//!    band in the field's units as the glass's own coverage is.
+//!    band in the field's units as the glass's own coverage is. A soft edge is that band blurred by a Gaussian, in
+//!    closed form ([`soft_edge_share`]), so it softens as content blurred with the same deviation does.
 //!
 //! The foreground of text and symbols on glass is [`foreground`]: the face under the glyph through the mode's 4×5 matrix,
 //! mixed over the face by the glyph's coverage.
@@ -60,17 +61,37 @@ pub const MAX_SHAPES: usize = 16;
 pub const MAX_SPACING: f32 = 64.0;
 
 /// The line a container draws along the outside of its outline ([`Container::edge`]): its width in the container's
-/// units (points; pixels in the uniform) and its straight colour and opacity. A width of 0 draws none.
+/// units (points; pixels in the uniform), its straight colour and opacity, and the deviation of the Gaussian it is
+/// softened by in the same units (0: sharp). A width of 0 draws none.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlassEdge {
     pub width: f32,
     pub color: [f32; 4],
+    pub soft: f32,
 }
 
 impl GlassEdge {
     /// Whether the edge draws anything.
     pub fn shows(&self) -> bool {
         self.width > 0.0 && self.color[3] > 0.0
+    }
+
+    /// The edge softened by a Gaussian of deviation `sigma` (negative or not finite is 0, sharp), as content blurred
+    /// with it softens.
+    pub fn soft(self, sigma: f32) -> Self {
+        Self {
+            soft: if sigma.is_finite() {
+                sigma.max(0.0)
+            } else {
+                0.0
+            },
+            ..self
+        }
+    }
+
+    /// How far past the band the softened edge reaches: three deviations, where under a thousandth of it is left.
+    pub fn soft_reach(&self) -> f32 {
+        3.0 * self.soft
     }
 }
 
@@ -81,6 +102,40 @@ pub fn edge_share(d: f32, width: f32) -> f32 {
         return 0.0;
     }
     ((d + 0.5).min(width) - (d - 0.5).max(0.0)).clamp(0.0, 1.0)
+}
+
+/// The share of a unit Gaussian below `x` deviations, from the error function's rational approximation (within
+/// 2·10⁻⁷).
+pub fn gaussian_cdf(x: f32) -> f32 {
+    let z = x.abs() * std::f32::consts::FRAC_1_SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * z);
+    let poly = t
+        * (0.254_829_6
+            + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152 + t * 1.061_405_4))));
+    let erf = 1.0 - poly * (-z * z).exp();
+    0.5 * (1.0 + erf.copysign(x))
+}
+
+/// The integral of [`gaussian_cdf`] from minus infinity to `u`: `u·Φ(u) + φ(u)`, 0 far below and `u` far above.
+fn gaussian_ramp(u: f32) -> f32 {
+    const INV_SQRT_TAU: f32 = 0.398_942_3;
+    u * gaussian_cdf(u) + INV_SQRT_TAU * (-0.5 * u * u).exp()
+}
+
+/// [`edge_share`] softened by a Gaussian of deviation `sigma`: the band from the outline to `width` outside it,
+/// blurred by the Gaussian, over the pixel one unit wide centred `d` outside the outline. In closed form, with `R` the
+/// integral of the Gaussian's share below a distance (`R(x) = σ·ψ(x/σ)`, `ψ(u) = u·Φ(u) + φ(u)`), it is
+/// `R(d + ½) − R(d − ½) − R(d + ½ − width) + R(d − ½ − width)`; `R` goes to `max(x, 0)` as `sigma` goes to 0, so a
+/// deviation of 0 is [`edge_share`] itself.
+pub fn soft_edge_share(d: f32, width: f32, sigma: f32) -> f32 {
+    if width <= 0.0 {
+        return 0.0;
+    }
+    if sigma <= 0.0 {
+        return edge_share(d, width);
+    }
+    let r = |x: f32| sigma * gaussian_ramp(x / sigma);
+    (r(d + 0.5) - r(d - 0.5) - r(d + 0.5 - width) + r(d - 0.5 - width)).clamp(0.0, 1.0)
 }
 
 /// The colour and coverage `(c, a)` of what a pixel shows with `edge` over it at `share` of the pixel (straight
@@ -752,10 +807,10 @@ impl Container {
     }
 
     /// The opacity of the edge over the pixel (one unit wide) centred at `p`: each shape's band from its outline to the
-    /// edge's width outside it ([`edge_share`]) at the edge's opacity, left out by the share of the pixel each other
-    /// shape covers, the bands laid over each other. Where the shapes overlap, a shape's outline inside another draws
-    /// nothing, and where they only blend (the glass's neck between two shapes close to each other) each keeps its own
-    /// outline: the edge is a stroke around each shape cut by the others, not the outline of the blended union.
+    /// edge's width outside it ([`soft_edge_share`]) at the edge's opacity, left out by the share of the pixel each
+    /// other shape covers, the bands laid over each other. Where the shapes overlap, a shape's outline inside another
+    /// draws nothing, and where they only blend (the glass's neck between two shapes close to each other) each keeps its
+    /// own outline: the edge is a stroke around each shape cut by the others, not the outline of the blended union.
     pub fn edge_alpha_at(&self, p: [f32; 2]) -> f32 {
         if !self.edge.shows() {
             return 0.0;
@@ -763,7 +818,7 @@ impl Container {
         let d: Vec<f32> = self.shapes.iter().map(|s| s.sdf(p)).collect();
         let mut keep = 1.0;
         for (i, di) in d.iter().enumerate() {
-            let band = edge_share(*di, self.edge.width);
+            let band = soft_edge_share(*di, self.edge.width, self.edge.soft);
             if band <= 0.0 {
                 continue;
             }
@@ -856,7 +911,7 @@ impl Container {
             0.0
         };
         let edge = if self.edge.shows() {
-            self.edge.width + 2.0
+            self.edge.width + 2.0 + self.edge.soft_reach()
         } else {
             0.0
         };
@@ -994,7 +1049,8 @@ impl Container {
 pub struct GlassUniform {
     /// Where the composite draws: x, y, w, h in target pixels (y down).
     pub quad: [f32; 4],
-    /// Affine map from target pixels to the capture's texture coordinates: `u = a·x + b·y + c` (`[a, b, c, 0]`).
+    /// Affine map from target pixels to the capture's texture coordinates: `u = a·x + b·y + c`, and the deviation in
+    /// pixels of the Gaussian the edge is softened by ([`GlassEdge::soft`]): `[a, b, c, soft]`.
     pub uv_x: [f32; 4],
     /// The same for `v`.
     pub uv_y: [f32; 4],
@@ -1062,7 +1118,12 @@ impl GlassUniform {
         let p = &container.params;
         let mut u: Self = bytemuck::Zeroable::zeroed();
         u.quad = quad;
-        u.uv_x = [uv[0][0], uv[0][1], uv[0][2], 0.0];
+        let soft = if container.edge.shows() {
+            container.edge.soft * scale
+        } else {
+            0.0
+        };
+        u.uv_x = [uv[0][0], uv[0][1], uv[0][2], soft];
         u.uv_y = [uv[1][0], uv[1][1], uv[1][2], 0.0];
         u.info = [
             container.shapes.len() as f32,
@@ -2417,6 +2478,7 @@ mod tests {
         let edge = GlassEdge {
             width: 0.75,
             color: [0.0, 0.0, 0.0, 0.93],
+            soft: 0.0,
         };
         // a pixel centred d outside the outline: the band [0, 0.75] covers what of [d - ½, d + ½] it reaches
         for (d, share) in [
@@ -2466,6 +2528,93 @@ mod tests {
         assert!(x <= -(0.75 + 1.0));
     }
 
+    /// A soft edge is the sharp band blurred by a Gaussian: at every distance its closed form is the sharp band's
+    /// share convolved numerically with the Gaussian, it keeps the band's whole coverage (a blur moves coverage, it
+    /// makes none), and a deviation of 0 is the sharp band to the bit; the container draws it in place of the sharp
+    /// one and reaches three deviations further for it.
+    #[test]
+    fn a_soft_edge_is_the_sharp_band_blurred_by_its_gaussian() {
+        // the sharp band's share at d convolved with a Gaussian of `sigma`, summed in steps of 1/200 of a unit
+        let convolved = |d: f32, width: f32, sigma: f32| -> f64 {
+            let (s, step) = (f64::from(sigma), 5e-3);
+            let n = (8.0 * s / step).ceil() as i64;
+            (-n..=n)
+                .map(|i| {
+                    let t = i as f64 * step;
+                    let g = (-0.5 * (t / s).powi(2)).exp() / (s * (std::f64::consts::TAU).sqrt());
+                    f64::from(edge_share(d - t as f32, width)) * g * step
+                })
+                .sum()
+        };
+        for (width, sigma) in [
+            (0.75f32, 0.3f32),
+            (1.5, 0.5),
+            (1.5, 2.0),
+            (2.0, 6.0),
+            (1.0, 13.5),
+        ] {
+            let mut total = 0.0f64;
+            let reach = ((width + 6.0 * sigma) / 0.25).ceil() as i32;
+            for i in -reach..=reach {
+                let d = i as f32 * 0.25;
+                let got = soft_edge_share(d, width, sigma);
+                let want = convolved(d, width, sigma);
+                assert!(
+                    (f64::from(got) - want).abs() < 2e-4,
+                    "{width} wide, {sigma}: at {d} {got} against {want}"
+                );
+                total += f64::from(got) * 0.25;
+            }
+            assert!(
+                (total - f64::from(width)).abs() < 2e-3,
+                "{width} wide, {sigma}: covers {total}"
+            );
+        }
+        // no deviation is the sharp band exactly, and a tiny one is all but that
+        for i in -40..=40 {
+            let d = i as f32 * 0.05;
+            for width in [0.0, 0.5, 0.75, 1.5] {
+                let sharp = edge_share(d, width);
+                assert_eq!(soft_edge_share(d, width, 0.0).to_bits(), sharp.to_bits());
+                assert!(
+                    (soft_edge_share(d, width, 1e-3) - sharp).abs() < 1e-3,
+                    "{d}"
+                );
+            }
+        }
+        assert_eq!(soft_edge_share(0.0, 0.0, 2.0), 0.0, "no width, no edge");
+        assert_eq!(GlassEdge::default().soft(-1.0).soft, 0.0);
+        assert_eq!(GlassEdge::default().soft(f32::NAN).soft, 0.0);
+        // the container draws it: a soft edge reaches inside the glass and past the band, the sharp one does not
+        let sharp = GlassEdge {
+            width: 1.5,
+            color: [0.0, 0.0, 0.0, 0.9],
+            soft: 0.0,
+        };
+        let shape = || {
+            Container::new(
+                vec![GlassShape::new([0.0, 0.0, 200.0, 100.0], 20.0)],
+                0.0,
+                GlassMode::default(),
+            )
+        };
+        let (a, b) = (shape().with_edge(sharp), shape().with_edge(sharp.soft(2.0)));
+        for y in [97.0, 99.0, 100.5, 101.0, 103.0, 105.0] {
+            let p = [100.0, y];
+            let d = y - 100.0;
+            assert!(close(a.edge_alpha_at(p), 0.9 * edge_share(d, 1.5), 1e-6));
+            assert!(close(
+                b.edge_alpha_at(p),
+                0.9 * soft_edge_share(d, 1.5, 2.0),
+                1e-6
+            ));
+        }
+        assert_eq!(a.edge_alpha_at([100.0, 98.0]), 0.0);
+        assert!(b.edge_alpha_at([100.0, 98.0]) > 0.05);
+        let ([xa, ..], [xb, ..]) = (a.sample_area().unwrap(), b.sample_area().unwrap());
+        assert!(xb <= -(1.5 + 3.0 * 2.0) && xb <= xa);
+    }
+
     /// In a container of joined shapes the edge is each shape's outline cut by the others, as a stroke round each shape
     /// left out inside the others draws it: none where one shape's outline lies inside the other, all of it along the
     /// outer outlines, and where two shapes only blend (a neck of glass between them) each keeps its own outline and
@@ -2475,6 +2624,7 @@ mod tests {
         let edge = GlassEdge {
             width: 1.0,
             color: [0.0, 0.0, 0.0, 1.0],
+            soft: 0.0,
         };
         // a field and a button budding out of its right end
         let c = Container::new(
@@ -2811,16 +2961,23 @@ mod tests {
         let edge = GlassEdge {
             width: 0.5,
             color: [0.0, 0.0, 0.0, 0.93],
+            soft: 0.0,
         };
-        let u = GlassUniform::new(
-            &c.with_edge(edge),
-            1.5,
-            [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
-            [0.0; 4],
-            [100.0; 2],
-            1.0,
-        );
-        assert_eq!((u.lens[3], u.edge), (0.75, edge.color));
+        let uniform = |edge: GlassEdge| {
+            GlassUniform::new(
+                &c.clone().with_edge(edge),
+                1.5,
+                [[0.5, 0.0, 0.0], [0.0, 0.5, 0.0]],
+                [0.0; 4],
+                [100.0; 2],
+                1.0,
+            )
+        };
+        let u = uniform(edge);
+        assert_eq!((u.lens[3], u.edge, u.uv_x[3]), (0.75, edge.color, 0.0));
+        // its softness too, in the spare member of the texture map
+        let u = uniform(edge.soft(2.0));
+        assert_eq!((u.lens[3], u.uv_x), (0.75, [0.5, 0.0, 0.0, 3.0]));
     }
 
     #[test]

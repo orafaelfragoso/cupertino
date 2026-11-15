@@ -136,7 +136,11 @@ composite then, per pixel:
    the pixel each other shape covers and the shapes' bands laid over each other (`Container::edge_alpha_at`), laid
    over everything above and over the glass's own antialiased edge (`over_edge`), as a stroke around each shape cut by
    the others is. Where the shapes overlap only the outline of the whole shows; where two only blend (a neck of glass
-   between them) each keeps its own outline. The compositor draws a layer's `set_glass_edge` through it.
+   between them) each keeps its own outline. A soft edge (`GlassEdge::soft`, a Gaussian's deviation, the uniform's
+   `uv_x.w` in pixels) is that band blurred by the Gaussian in closed form (`soft_edge_share`: `σ·ψ(x/σ)`,
+   `ψ(u) = u·Φ(u) + φ(u)`, over the pixel and the band), so it softens as content blurred by the same deviation does,
+   with no pass of its own; a deviation of 0 is the sharp band to the bit, and the glass draws three deviations further
+   for it. The compositor draws a layer's `set_glass_edge` through it, softened by the layer's content blur.
 
 Unit tests check each stage on the model (`glass::tests`; a one-dimensional run of stages 3 and 4, the blur and the
 fill each a Gaussian of its deviation, shows the large panel blurring a step over twice the distance of regular glass of its

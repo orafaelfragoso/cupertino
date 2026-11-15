@@ -63,8 +63,8 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   window stands on none), its content, its dark edge (a layer on a 4 pt grid around the enclosure with room for the
   stroke, centred on the point the panel grows about), and each mode button's glass and face. Closing it then hands the
   close to the compositor (`view::layers::close_changes`): the glass grows to the close's end rect and fades, the edge
-  scales and blurs, the content blurs to a deviation of 4 pt and fades, all on the close's ease-out over 0.1 s, and the
-  panel draws no frame until the compositor is done and the window goes: the panel takes every key meanwhile and the
+  follows it and blurs, the content blurs to a deviation of 4 pt and fades, all on the close's ease-out over 0.1 s, and
+  the panel draws no frame until the compositor is done and the window goes: the panel takes every key meanwhile and the
   query field holds its caret (`BareField::hold_caret`), so neither a key nor the caret's blink draws the content
   again. At each frame the panel draws of its own close, the compositor's layers at the same moment, from the curves it
   sent, are its pixels (`view::tests::frames::layers`, which writes the pairs out with `CUPERTINO_LAUNCHER_MOMENTS`

@@ -217,6 +217,8 @@ struct Client {
     viewporter: wp_viewporter::WpViewporter,
     shm: wl_shm::WlShm,
     layers: CupertinoLayersV1,
+    /// The same global bound at version 5, for layers that keep an older version's behaviour.
+    layers_v5: CupertinoLayersV1,
     parent: wl_surface::WlSurface,
     /// Each layer's surface and object, in creation order.
     made: Vec<(wl_surface::WlSurface, CupertinoLayerV1)>,
@@ -279,6 +281,15 @@ impl Client {
             surface.attach(Some(&b), 0, 0);
             surface.damage_buffer(0, 0, size.0, size.1);
         }
+        surface.commit();
+        self.made.push((surface, layer));
+        self.made.len() - 1
+    }
+
+    /// A layer with no content made through the global bound at version 5.
+    fn layer_v5(&mut self, qh: &QueueHandle<Client>) -> usize {
+        let surface = self.compositor.create_surface(qh, ());
+        let layer = self.layers_v5.get_layer(&surface, &self.parent, qh, ());
         surface.commit();
         self.made.push((surface, layer));
         self.made.len() - 1
@@ -476,7 +487,8 @@ impl TestClient {
             let viewporter: wp_viewporter::WpViewporter = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=5, ()).unwrap();
+            let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=6, ()).unwrap();
+            let layers_v5: CupertinoLayersV1 = globals.bind(&qh, 5..=5, ()).unwrap();
             let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
             let (layer_surface, window) = match kind {
@@ -518,6 +530,7 @@ impl TestClient {
                 viewporter,
                 shm,
                 layers,
+                layers_v5,
                 parent,
                 made: Vec::new(),
                 paint,
@@ -1374,6 +1387,103 @@ fn a_glass_edge_runs_outside_the_group_s_joined_outline_at_its_width_whatever_th
         client.heard(|e| e.error.clone()).unwrap().1,
         cupertino_layer_v1::Error::InvalidValue as u32
     );
+}
+
+/// From version 6 the edge along a layer's glass blurs with the layer's content blur: across the top of a capsule the
+/// edge shows the band blurred by the Gaussian the content is, as the glass model draws it, in the pixels the sharp
+/// band leaves alone, inside the glass and outside it; a layer of version 5 keeps its edge sharp, and with the blur
+/// back at 0 the edge draws as it did, to the bit.
+#[test]
+fn a_glass_edge_softens_with_the_layer_s_content_blur_from_version_6() {
+    let Some(mut h) = Harness::new(2.0, false) else {
+        return;
+    };
+    let client = TestClient::spawn(h.socket_path(), grey);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    // two capsules of glass with an edge a point wide, black: the first of version 6, the second of version 5
+    client.send(|c, qh| {
+        let a = c.layer(qh, (0, 0), &red);
+        let b = c.layer_v5(qh);
+        for (i, y) in [(a, 100.0), (b, 250.0)] {
+            let l = c.l(i);
+            l.set_value(Property::X, 100.0);
+            l.set_value(Property::Y, y);
+            l.set_value(Property::Width, 200.0);
+            l.set_value(Property::Height, 56.0);
+            l.set_value(Property::CornerRadius, 28.0);
+            l.set_glass(0, 1.0);
+            l.set_glass_edge(1.0, 0.0, 0.0, 0.0, 1.0);
+        }
+        c.parent.commit();
+    });
+    h.wait_until("the edges", |h| {
+        h.layers().len() == 2 && h.layers().iter().all(|l| l.edge.width == 1.0)
+    });
+    assert_eq!(
+        h.layers().iter().map(|l| l.edge.soft).collect::<Vec<_>>(),
+        [true, false]
+    );
+    let sharp = h.screenshot("edge-sharp");
+    let blur = |c: &TestClient, sigma: f64| {
+        c.send(move |c, _| {
+            c.l(0).set_value(Property::ContentBlur, sigma);
+            c.l(1).set_value(Property::ContentBlur, sigma);
+            c.parent.commit();
+        });
+    };
+    blur(&client, 2.0);
+    h.wait_until("the blur", |h| {
+        h.layers().iter().all(|l| l.content_blur == 2.0)
+    });
+    let soft = h.screenshot("edge-soft");
+    // two points are four device pixels; the line is two wide. Across the first capsule's top, a pixel the sharp
+    // line leaves alone shows what it did darkened by the soft line's share
+    let (sigma_px, width_px) = (4.0f32, 2.0f32);
+    let mut most = 0.0f32;
+    for dy in -14..=12 {
+        if dy == -2 || dy == -1 {
+            continue;
+        }
+        // the pixel's centre lies d outside the outline
+        let d = -(dy as f32 + 0.5);
+        let e = cupertino_glass::glass::soft_edge_share(d, width_px, sigma_px);
+        let (was, now) = (
+            at2(&sharp, (200.0, 100.0), (0, dy)),
+            at2(&soft, (200.0, 100.0), (0, dy)),
+        );
+        for c in 0..3 {
+            let want = f32::from(was[c]) * (1.0 - e);
+            most = most.max((f32::from(now[c]) - want).abs());
+            assert!(
+                (f32::from(now[c]) - want).abs() <= 1.0,
+                "{dy} (d {d}, share {e:.3}): {now:?} against {want:.1} from {was:?}"
+            );
+        }
+        if (-6..=3).contains(&dy) {
+            assert!(
+                e > 0.02 && now[0] < was[0],
+                "{dy}: the soft line reaches it"
+            );
+        }
+    }
+    eprintln!("trace: the soft edge against the model: largest difference {most:.2} of 255");
+    // the second capsule's edge is as sharp as it was
+    for dy in -14..=12 {
+        for x in [140.0, 200.0, 260.0] {
+            assert_eq!(
+                at2(&soft, (x, 250.0), (0, dy)),
+                at2(&sharp, (x, 250.0), (0, dy)),
+                "version 5 at {x}, {dy}"
+            );
+        }
+    }
+    // with the blur back at 0 the edges draw as they did
+    blur(&client, 0.0);
+    h.wait_until("no blur", |h| {
+        h.layers().iter().all(|l| l.content_blur == 0.0)
+    });
+    let again = h.screenshot("edge-sharp-again");
+    assert!(again == sharp, "the sharp edge draws as before");
 }
 
 /// The share of a unit Gaussian below `z` standard deviations (its integral), from the error function's rational

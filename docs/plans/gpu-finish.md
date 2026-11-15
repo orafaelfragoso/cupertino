@@ -200,6 +200,25 @@ The boxes here are ticked together with their items in the GPU plan.
       A scope's close at the same moments too (the browser and the files scope, dark): within 1 apart from the
       outline, along it up to 100 of 255 at its first frame (29 in the light for the field and the browser), as the
       compositor's edge is not blurred with the content.
+- [x] The close's edge blurs with the content: `cupertino_layers_v1` version 6 softens the line along a layer's glass
+      by that layer's `content_blur`, with no new request (`layers_v1::SOFT_EDGE_VERSION`; a layer object below 6
+      keeps it sharp). The glass draws the band blurred by a Gaussian in closed form, `σ·ψ(x/σ)` with
+      `ψ(u) = u·Φ(u) + φ(u)` over the pixel and the band, so a deviation of 0 is the sharp band to the bit
+      (`GlassEdge::soft`, `soft_edge_share`, the deviation in the uniform's spare `uv_x.w`, the glass reaching three
+      deviations further), and the server passes the content's deviation as the content is drawn: scaled with the
+      layer, none under a third of a device pixel (`render::layers::edge_softness`). `close_changes` gives the glass
+      layer the content's `ContentBlur` change. Tests: the closed form against the sharp band convolved numerically,
+      within 2·10⁻⁴, keeping its whole coverage, and 0 to the bit
+      (`a_soft_edge_is_the_sharp_band_blurred_by_its_gaussian`); against the server a capsule's edge with a content
+      blur of 2 points at 2 is the model's soft band within 1 of 255 (0.64 at most) where the sharp line does not
+      reach, a version 5 layer's stays sharp to the bit, and with the blur back at 0 the frame is the sharp one to the
+      bit (`a_glass_edge_softens_with_the_layer_s_content_blur_from_version_6`). The close at the same moments, 1.5,
+      now the field, the browser and the files scope in both appearances (the scopes in the light in a slow test of
+      their own, `a_scope_s_close_in_the_light_is_the_panel_s_own_drawing_at_the_same_moments`, as all six overran
+      the runner's 120 s): along the outline 2 of 255 in the dark and 1 in the light at the first frame and 1 from
+      33 ms on, where it was up to 100 and 29; elsewhere within 1 (bound along the outline now 4, was 104). The
+      field's close is no worse than when it blurred its own edge layer, when the test held the whole frame within 8
+      at the first frames. No golden changes.
 - [ ] The real process against the server: one buffer of the row's layer at the switch, and none other. The fold
       holds: 1 buffer of the row's layer and none other over 92 server steps animating, in 3 runs
       (`shell_processes::the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once`). The

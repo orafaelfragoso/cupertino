@@ -4,8 +4,8 @@
 //! vibrant layer draws its coverage blended with the glass behind it ([`SurfaceRole::Vibrant`]). The glass of the layers
 //! of one glass group is one container of their shapes as shown, drawn below the content of its first layer
 //! ([`glass_anchors`]), and the edge of that layer (`set_glass_edge`) runs along the outside of the container's outline at
-//! its width in points, whatever the layers' scale. A layer of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`],
-//! `super::content_blur`). A layer is drawn only inside its parent's window, its glass and placeholder too, wherever its
+//! its width in points, whatever the layers' scale, softened as that layer's content blurs ([`glass_edge`]). A layer
+//! of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`], `super::content_blur`). A layer is drawn only inside its parent's window, its glass and placeholder too, wherever its
 //! values place it ([`masked_clip`], [`clear_of_edges`]).
 
 use cupertino_scene::{Clip, ContentBlur, SceneKind, SurfaceRole, VibrantBlend};
@@ -222,12 +222,30 @@ pub fn content_role(sigma: f64) -> SurfaceRole {
 }
 
 /// The edge a layer's glass carries, in points: drawn by the glass at the output's scale and not the layer's, so its
-/// width stays what the client asked as the layer scales.
-pub fn glass_edge(l: &LayerDraw) -> cupertino_glass::glass::GlassEdge {
+/// width stays what the client asked as the layer scales. An edge that softens ([`crate::layers_v1::GlassEdge::soft`])
+/// is blurred by the layer's content blur as the content's own Gaussian blurs at `scale` device pixels a point: by its
+/// deviation as the layer's scale draws it, and not at all where the content is drawn sharp
+/// ([`super::content_blur::sigma_px`]).
+pub fn glass_edge(l: &LayerDraw, scale: f64) -> cupertino_glass::glass::GlassEdge {
+    let soft = if l.edge.soft {
+        edge_softness(l.content_blur, l.scale, scale)
+    } else {
+        0.0
+    };
     cupertino_glass::glass::GlassEdge {
         width: l.edge.width as f32,
         color: l.edge.color,
+        soft: 0.0,
     }
+    .soft(soft)
+}
+
+/// The deviation in output points of the Gaussian a layer's content blurred by `content_blur` (its points) is drawn
+/// with, the layer at `layer_scale` and the output at `scale` device pixels a point: the content blurs before it
+/// scales, so the deviation scales with it; 0 where the content is drawn sharp.
+pub fn edge_softness(content_blur: f64, layer_scale: f64, scale: f64) -> f32 {
+    super::content_blur::sigma_px(ContentBlur::of_points(content_blur), scale)
+        .map_or(0.0, |px| (px / scale * layer_scale) as f32)
 }
 
 /// Whether a layer drawn at `opacity` and `scale` shows at all.
@@ -408,7 +426,7 @@ pub fn layer_pieces(
                 if let Some(angle) = light {
                     gc.container.params.highlight.angle = angle;
                 }
-                gc.container.edge = glass_edge(l);
+                gc.container.edge = glass_edge(l, p.scale);
                 if l.raised {
                     let s = &mut gc.container.params.shadow;
                     (s.offset, s.amount, s.height) = RAISED_SHADOW;
@@ -427,6 +445,7 @@ pub fn layer_pieces(
                     .f(f64::from(l.edge.color[1]))
                     .f(f64::from(l.edge.color[2]))
                     .f(f64::from(l.edge.color[3]))
+                    .f(f64::from(gc.container.edge.soft))
                     .finish();
                 g.glass = std::rc::Rc::new(gc);
                 // a group's shapes carry their layers' opacities
@@ -443,6 +462,19 @@ pub fn layer_pieces(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The edge along a layer's glass softens by the deviation its content is drawn with: in points, scaled with the
+    /// layer as its blurred content is, and none where the content is drawn sharp (under a third of a device pixel).
+    #[test]
+    fn a_glass_edge_softens_by_the_layer_s_content_blur_as_the_content_is_drawn() {
+        assert_eq!(edge_softness(0.0, 1.0, 1.5), 0.0, "no blur, sharp");
+        assert_eq!(edge_softness(4.0, 1.0, 1.5), 4.0);
+        assert_eq!(edge_softness(4.0, 0.5, 1.5), 2.0, "half the layer's scale");
+        assert_eq!(edge_softness(0.25, 1.0, 1.5), 0.25);
+        // 0.15 points are 0.225 device pixels at 1.5: the content is drawn sharp, and so is the edge
+        assert_eq!(edge_softness(0.15, 1.0, 1.5), 0.0);
+        assert_eq!(edge_softness(0.15, 1.0, 2.0), 0.15);
+    }
 
     #[test]
     fn the_placeholder_fills_what_the_content_does_not_reach() {

@@ -21,7 +21,7 @@
     or animate another client's surface.
   </description>
 
-  <interface name="cupertino_layers_v1" version="5">
+  <interface name="cupertino_layers_v1" version="6">
     <description summary="makes surfaces layers of a parent surface">
       Global singleton, offered to every client.
     </description>
@@ -101,7 +101,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_layer_v1" version="5">
+  <interface name="cupertino_layer_v1" version="6">
     <description summary="a surface placed, blended and animated by the server over its parent">
       All state is double-buffered on the parent surface: it applies on the parent's next
       wl_surface.commit, together with that commit's buffer, and a synchronized parent caches it
@@ -395,7 +395,9 @@
         other shapes, as a stroke around each shape cut by the others: where the shapes overlap only
         the outline of the whole shows, where they only blend each keeps its own, and it follows them
         as they move, scale and resize; the group takes the edge of its first layer in drawing
-        order. The line fades with the glass. 0, the initial
+        order. The line fades with the glass. From version 6 it softens with the content_blur of
+        the layer whose edge it is, blurred by the same Gaussian as that layer's content, so it
+        blurs with the content as a panel closes. 0, the initial
         width, draws none; a layer without glass draws no edge. Posts invalid_value for a width
         below 0 or above 4, or a channel outside 0 to 1.
       </description>

@@ -82,9 +82,9 @@ smooth in vec2 _vs2fs_location1;
 layout(location = 0) out vec4 _fs2p_location0;
 
 vec4 fullscreen_position(uint index) {
-    float x_4 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
+    float x_5 = ((float(((index << 1u) & 2u)) * 2.0) - 1.0);
     float y_2 = ((float((index & 2u)) * 2.0) - 1.0);
-    return vec4(x_4, y_2, 0.0, 1.0);
+    return vec4(x_5, y_2, 0.0, 1.0);
 }
 
 float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
@@ -105,10 +105,10 @@ float rounded_distance(vec2 p, vec2 half_, float e, float n_1) {
     if ((n_1 <= CIRCULAR_EXPONENT)) {
         return (sqrt(((qx * qx) + (qy * qy))) - e);
     }
-    float u = max((qx / e), 1e-6);
+    float u_1 = max((qx / e), 1e-6);
     float v_1 = max((qy / e), 1e-6);
-    float g = pow((pow(u, n_1) + pow(v_1, n_1)), (1.0 / n_1));
-    float grad = (sqrt((pow(u, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
+    float g = pow((pow(u_1, n_1) + pow(v_1, n_1)), (1.0 / n_1));
+    float grad = (sqrt((pow(u_1, ((2.0 * n_1) - 2.0)) + pow(v_1, ((2.0 * n_1) - 2.0)))) / pow(g, (n_1 - 1.0)));
     float d_9 = (((g - 1.0) / grad) * e);
     return max(d_9, (max(qx, qy) - e));
 }
@@ -376,10 +376,10 @@ float rect_sdf(vec2 p_6, vec4 r, float e_1, float n_2) {
     if ((n_2 <= 2.0)) {
         return (length(q_4) - ext);
     }
-    vec2 u_1 = max((q_4 / vec2(ext)), vec2(1e-6));
-    vec2 un = pow(u_1, vec2(n_2));
+    vec2 u_2 = max((q_4 / vec2(ext)), vec2(1e-6));
+    vec2 un = pow(u_2, vec2(n_2));
     float g_1 = pow((un.x + un.y), (1.0 / n_2));
-    vec2 slope = ((un / u_1) / vec2(pow(g_1, (n_2 - 1.0))));
+    vec2 slope = ((un / u_2) / vec2(pow(g_1, (n_2 - 1.0))));
     return max((((g_1 - 1.0) * ext) / max(length(slope), 1e-6)), (max(q_4.x, q_4.y) - ext));
 }
 
@@ -605,8 +605,8 @@ float rim_brightness(float l0_) {
 }
 
 float rim_direction(vec2 n_3) {
-    float s_2 = ((2.0 * n_3.x) * n_3.y);
-    return (0.15 + ((0.85 * s_2) * s_2));
+    float s_3 = ((2.0 * n_3.x) * n_3.y);
+    return (0.15 + ((0.85 * s_3) * s_3));
 }
 
 float normal_cdf(float x_3) {
@@ -698,8 +698,29 @@ vec4 outside(vec2 p_13, float d_6, float pos_3, vec2 n_6) {
     return vec4((_e20.xyz * ((_e4 * (1.0 - _e5)) / a_6)), a_6);
 }
 
-float edge_share(float d_7, float w_2) {
-    return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+float gaussian_cdf(float x_4) {
+    float z = (abs(x_4) * 0.70710677);
+    float t_5 = (1.0 / (1.0 + (0.3275911 * z)));
+    float poly = (t_5 * (0.2548296 + (t_5 * (-0.28449675 + (t_5 * (1.4214137 + (t_5 * (-1.453152 + (t_5 * 1.0614054)))))))));
+    float erf = (1.0 - (poly * exp((-(z) * z))));
+    return (0.5 * (1.0 + ((x_4 >= 0.0) ? erf : -(erf))));
+}
+
+float gaussian_ramp(float u) {
+    float _e1 = gaussian_cdf(u);
+    return ((u * _e1) + (0.3989423 * exp(((-0.5 * u) * u))));
+}
+
+float edge_share(float d_7, float w_2, float s_2) {
+    if ((s_2 <= 0.0)) {
+        return clamp((min((d_7 + 0.5), w_2) - max((d_7 - 0.5), 0.0)), 0.0, 1.0);
+    }
+    float _e19 = gaussian_ramp(((d_7 + 0.5) / s_2));
+    float _e23 = gaussian_ramp(((d_7 - 0.5) / s_2));
+    float _e29 = gaussian_ramp((((d_7 + 0.5) - w_2) / s_2));
+    float _e35 = gaussian_ramp((((d_7 - 0.5) - w_2) / s_2));
+    float r_2 = (s_2 * (((_e19 - _e23) - _e29) + _e35));
+    return clamp(r_2, 0.0, 1.0);
 }
 
 float edge_alpha(vec2 p_14) {
@@ -715,59 +736,61 @@ float edge_alpha(vec2 p_14) {
     if (((w_4 <= 0.0) || (_e10 <= 0.0))) {
         return 0.0;
     }
-    float _e18 = _group_0_binding_0_fs.info.x;
-    int n_8 = int(_e18);
+    float s_4 = _group_0_binding_0_fs.uv_x.w;
+    float reach_2 = (0.5 + (3.0 * max(s_4, 0.0)));
+    float _e28 = _group_0_binding_0_fs.info.x;
+    int n_8 = int(_e28);
     bool loop_init_4 = true;
     while(true) {
         if (!loop_init_4) {
-            int _e62 = i_6;
-            i_6 = (_e62 + 1);
+            int _e71 = i_6;
+            i_6 = (_e71 + 1);
         }
         loop_init_4 = false;
-        int _e25 = i_6;
-        if ((_e25 < n_8)) {
+        int _e35 = i_6;
+        if ((_e35 < n_8)) {
         } else {
             break;
         }
         {
-            int _e27 = i_6;
-            int _e31 = i_6;
-            vec4 _e33 = _group_0_binding_0_fs.shapes[_e31];
-            int _e36 = i_6;
-            float _e39 = _group_0_binding_0_fs.shape_a[_e36].x;
-            int _e42 = i_6;
-            float _e45 = _group_0_binding_0_fs.shape_b[_e42].w;
-            float _e46 = rect_sdf(p_14, _e33, _e39, _e45);
-            d_8[_e27] = _e46;
-            bool _e47 = near;
-            int _e48 = i_6;
-            float _e50 = d_8[_e48];
-            int _e53 = i_6;
-            float _e55 = d_8[_e53];
-            near = (_e47 || ((_e50 > -0.5) && (_e55 < (w_4 + 0.5))));
+            int _e37 = i_6;
+            int _e41 = i_6;
+            vec4 _e43 = _group_0_binding_0_fs.shapes[_e41];
+            int _e46 = i_6;
+            float _e49 = _group_0_binding_0_fs.shape_a[_e46].x;
+            int _e52 = i_6;
+            float _e55 = _group_0_binding_0_fs.shape_b[_e52].w;
+            float _e56 = rect_sdf(p_14, _e43, _e49, _e55);
+            d_8[_e37] = _e56;
+            bool _e57 = near;
+            int _e58 = i_6;
+            float _e60 = d_8[_e58];
+            int _e63 = i_6;
+            float _e65 = d_8[_e63];
+            near = (_e57 || ((_e60 > -(reach_2)) && (_e65 < (w_4 + reach_2))));
         }
     }
-    bool _e64 = near;
-    if (!(_e64)) {
+    bool _e73 = near;
+    if (!(_e73)) {
         return 0.0;
     }
     bool loop_init_5 = true;
     while(true) {
         if (!loop_init_5) {
-            int _e115 = i_7;
-            i_7 = (_e115 + 1);
+            int _e124 = i_7;
+            i_7 = (_e124 + 1);
         }
         loop_init_5 = false;
-        int _e71 = i_7;
-        if ((_e71 < n_8)) {
+        int _e80 = i_7;
+        if ((_e80 < n_8)) {
         } else {
             break;
         }
         {
-            int _e73 = i_7;
-            float _e75 = d_8[_e73];
-            float _e76 = edge_share(_e75, w_4);
-            if ((_e76 <= 0.0)) {
+            int _e82 = i_7;
+            float _e84 = d_8[_e82];
+            float _e85 = edge_share(_e84, w_4, s_4);
+            if ((_e85 <= 0.0)) {
                 continue;
             }
             outside_1 = 1.0;
@@ -775,34 +798,34 @@ float edge_alpha(vec2 p_14) {
             bool loop_init_6 = true;
             while(true) {
                 if (!loop_init_6) {
-                    int _e101 = j_1;
-                    j_1 = (_e101 + 1);
+                    int _e110 = j_1;
+                    j_1 = (_e110 + 1);
                 }
                 loop_init_6 = false;
-                int _e83 = j_1;
-                if ((_e83 < n_8)) {
+                int _e92 = j_1;
+                if ((_e92 < n_8)) {
                 } else {
                     break;
                 }
                 {
-                    int _e85 = j_1;
-                    int _e86 = i_7;
-                    if ((_e85 != _e86)) {
-                        int _e88 = j_1;
-                        float _e90 = d_8[_e88];
-                        float _e98 = outside_1;
-                        outside_1 = (_e98 * (1.0 - clamp((0.5 - _e90), 0.0, 1.0)));
+                    int _e94 = j_1;
+                    int _e95 = i_7;
+                    if ((_e94 != _e95)) {
+                        int _e97 = j_1;
+                        float _e99 = d_8[_e97];
+                        float _e107 = outside_1;
+                        outside_1 = (_e107 * (1.0 - clamp((0.5 - _e99), 0.0, 1.0)));
                     }
                 }
             }
-            float _e106 = _group_0_binding_0_fs.edge.w;
-            float _e108 = outside_1;
-            float _e112 = keep;
-            keep = (_e112 * (1.0 - ((_e106 * _e76) * _e108)));
+            float _e115 = _group_0_binding_0_fs.edge.w;
+            float _e117 = outside_1;
+            float _e121 = keep;
+            keep = (_e121 * (1.0 - ((_e115 * _e85) * _e117)));
         }
     }
-    float _e117 = keep;
-    return clamp((1.0 - _e117), 0.0, 1.0);
+    float _e126 = keep;
+    return clamp((1.0 - _e126), 0.0, 1.0);
 }
 
 vec4 with_edge(vec4 c_7, vec2 p_15) {
@@ -908,8 +931,8 @@ void main() {
     vec3 _e183 = face_at(_e177, _e5.b.z, _e5.b.y, _e182);
     c = _e183;
     if (((_e5.a.w > 0.0) && (_e5.b.x > 0.0))) {
-        float t_5 = clamp((-(d_11) / _e5.b.x), 0.0, 1.0);
-        float w_5 = ((_e5.a.w * (1.0 - t_5)) * (1.0 - t_5));
+        float t_6 = clamp((-(d_11) / _e5.b.x), 0.0, 1.0);
+        float w_5 = ((_e5.a.w * (1.0 - t_6)) * (1.0 - t_6));
         float _e212 = _group_0_binding_0_fs.bleed.y;
         float _e217 = _group_0_binding_0_fs.bleed.x;
         float _e221 = _group_0_binding_0_fs.bleed.y;

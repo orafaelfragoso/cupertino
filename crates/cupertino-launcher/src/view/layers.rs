@@ -24,8 +24,8 @@
 //! strokes its own edge along the glass's continuous outline, as the compositor draws it ([`super::edge_outside`]).
 //!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
-//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, its edge following it, sharp, the content
-//! blurs to the close's blur, everything fades out, and the mode buttons move out with the group.
+//! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, its edge following it, the content and the
+//! glass's edge blur to the close's blur, everything fades out, and the mode buttons move out with the group.
 
 use super::modes::{JOIN_CONTAINER, JOIN_SPACING};
 use super::{
@@ -632,8 +632,8 @@ pub fn symbol_in_place<M: 'static>(button: Rect, rest: Rect, symbol: Element<M>)
 /// The changes of the panel's layers for a close the compositor runs, from the panel at rest as `from` presents it
 /// to `to`, the motion's last frame of the close, in a window `extent` large with `modes` mode buttons laid out. Every
 /// value the close draws is linear in the close's one ease-out (the enclosure's scale, its opacity and its blur all
-/// move on it), so each property goes to its last value on that curve. The edge the glass carries stays sharp, where
-/// the panel's own close blurs it with the content.
+/// move on it), so each property goes to its last value on that curve. The glass blurs as the content does, and so the
+/// edge the compositor draws along it blurs with the content, as the panel's own close blurs its edge.
 pub fn close_changes(
     extent: Size,
     from: &Frame,
@@ -647,6 +647,9 @@ pub fn close_changes(
     let go = |property, value: f64| LayerChange::new(property, value, curve);
     let fade = || go(LayerProperty::Opacity, 0.0);
     let (rest, end) = (enclosure_rect(extent, from), enclosure_rect(extent, to));
+    let blur = || go(LayerProperty::ContentBlur, CLOSE_DEVIATION * to.blur);
+    // the glass has no content of its own: its blur softens the edge the compositor draws along it, as the content's
+    // blurs the content
     let mut out = vec![(
         GLASS_LAYER,
         vec![
@@ -655,6 +658,7 @@ pub fn close_changes(
             go(LayerProperty::Width, end.width()),
             go(LayerProperty::Height, end.height()),
             go(LayerProperty::CornerRadius, enclosure_radius(to)),
+            blur(),
             fade(),
         ],
     )];
@@ -666,10 +670,7 @@ pub fn close_changes(
         )
     };
     let (a, b) = (content_at(from, rest), content_at(to, end));
-    let mut content = vec![
-        go(LayerProperty::ContentBlur, CLOSE_DEVIATION * to.blur),
-        fade(),
-    ];
+    let mut content = vec![blur(), fade()];
     if a.x != b.x {
         content.push(go(LayerProperty::X, b.x));
     }
@@ -1086,7 +1087,10 @@ mod tests {
             of(ROW_LAYER, LayerProperty::ContentBlur),
             Some(CLOSE_DEVIATION)
         );
-        // the glass is never blurred
-        assert_eq!(of(GLASS_LAYER, LayerProperty::ContentBlur), None);
+        // the glass has no content: its blur softens the edge along it with the content
+        assert_eq!(
+            of(GLASS_LAYER, LayerProperty::ContentBlur),
+            Some(CLOSE_DEVIATION)
+        );
     }
 }

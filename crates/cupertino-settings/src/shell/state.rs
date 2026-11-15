@@ -9,7 +9,9 @@ use crate::agent::{Agent, AgentEvent};
 use crate::controls::{Control, LevelWriter, Value};
 use crate::history::History;
 use crate::inflight::Reads;
-use crate::live::{display_name, Live, LoginScreen, Pictures, Reading};
+use crate::live::{
+    display_name, DeviceAction, DeviceFailure, Live, LoginScreen, Pictures, Reading,
+};
 use crate::pages::Page;
 use crate::panes::{self, Call, ControlId, Effect, Section, Session};
 use crate::services::{self, Services, SESSION_NAME, SESSION_PATH};
@@ -35,8 +37,8 @@ pub(crate) type Result<T> = std::result::Result<T, Box<dyn Error>>;
 pub(crate) enum Background {
     ShowPane(PaneId, String),
     Agent(AgentEvent),
-    /// A pairing ended.
-    Paired(std::result::Result<(), String>),
+    /// The pairing with device `.0` ended.
+    Paired(String, std::result::Result<(), String>),
     /// A settings file changed on disk.
     Files(WatchEvent),
     /// A service the panes read sent a change signal ([`crate::watch`]).
@@ -926,11 +928,32 @@ impl State {
             if let Err(e) = outcome {
                 eprintln!("cupertino-settings: {e}");
                 self.settings = before;
-                self.errors.push((id, e));
+                // a device action that could not start says so on its device's row already, which follows the device
+                // when the list changes; the index of the row would not
+                let on_device = matches!(id, ControlId::BluetoothDevice(_))
+                    && self
+                        .live
+                        .bluetooth
+                        .ready()
+                        .is_some_and(|b| b.device_failure.is_some());
+                if !on_device {
+                    self.errors.push((id, e));
+                }
                 break;
             }
         }
         Ok(())
+    }
+
+    /// The action on device `id` failed with `reason`: its row says so until the next action.
+    pub(crate) fn device_failed(&mut self, id: &str, action: DeviceAction, reason: String) {
+        if let Reading::Ready(b) = &mut self.live.bluetooth {
+            b.device_failure = Some(DeviceFailure {
+                id: id.to_string(),
+                action,
+                reason,
+            });
+        }
     }
 
     /// Make `call` on its service; a Join waits for the device until it connects or fails. The readings are refreshed
@@ -940,11 +963,22 @@ impl State {
         id: Option<ControlId>,
         call: &Call,
     ) -> std::result::Result<(), String> {
-        if let Call::Pair(id) = call {
+        // a new action on a device: the last one's error goes
+        if let (Some((_, _)), crate::live::Reading::Ready(b)) =
+            (device_call(call), &mut self.live.bluetooth)
+        {
+            b.clear_failures();
+        }
+        if let Call::Pair(device) = call {
             let notify = self.notify.clone();
-            return self
-                .services
-                .pair(id, move |result| notify(Background::Paired(result)));
+            let paired = device.clone();
+            let started = self.services.pair(device, move |result| {
+                notify(Background::Paired(paired, result))
+            });
+            if let Err(e) = &started {
+                self.device_failed(device, DeviceAction::Pair, e.clone());
+            }
+            return started;
         }
         // a call that can take long runs on a thread: the window goes on, and its end refreshes the readings
         let notify = self.notify.clone();
@@ -956,11 +990,24 @@ impl State {
                 result,
             })
         }) {
-            if let (Ok(()), Call::Join { ssid, .. }) = (&started, call) {
-                if let crate::live::Reading::Ready(w) = &mut self.live.wifi {
-                    w.joining = Some(ssid.clone());
-                    w.failure = None;
+            match (&started, call) {
+                (Ok(()), Call::Join { ssid, .. }) => {
+                    if let crate::live::Reading::Ready(w) = &mut self.live.wifi {
+                        w.joining = Some(ssid.clone());
+                        w.failure = None;
+                    }
                 }
+                (Ok(()), Call::Connect(device)) => {
+                    if let crate::live::Reading::Ready(b) = &mut self.live.bluetooth {
+                        b.connect_asked(device);
+                    }
+                }
+                (Err(e), call) => {
+                    if let Some((device, action)) = device_call(call) {
+                        self.device_failed(device, action, e.clone());
+                    }
+                }
+                _ => {}
             }
             return started;
         }
@@ -1091,13 +1138,16 @@ impl State {
             }
             Outcome::Do(call) => match self.service_call(None, &call) {
                 Ok(()) => self.sheet = None,
-                // the passphrase sheet stays with the error (§7.2); a failed removal closes it and shows the error
+                // the passphrase sheet stays with the error (§7.2); a failed removal closes it, and the device's row
+                // shows the error (service_call put it there)
                 Err(e) => match &mut self.sheet {
                     Some(sheet) if matches!(call, Call::Join { .. }) => sheet.failed(&e),
                     _ => {
                         self.sheet = None;
                         eprintln!("cupertino-settings: {e}");
-                        if let crate::live::Reading::Ready(b) = &mut self.live.bluetooth {
+                        if let (None, crate::live::Reading::Ready(b)) =
+                            (device_call(&call), &mut self.live.bluetooth)
+                        {
                             b.failure = Some(e);
                         }
                     }
@@ -1360,18 +1410,22 @@ impl State {
                 eprintln!("cupertino-settings: watching the settings files: {e}")
             }
             Background::Called { id, call, result } => {
+                if let (Call::Connect(device), crate::live::Reading::Ready(b)) =
+                    (&call, &mut self.live.bluetooth)
+                {
+                    b.connect_returned(device);
+                }
                 if let Err(e) = result {
                     eprintln!("cupertino-settings: {e}");
-                    match (&call, &mut self.live.wifi, &mut self.live.bluetooth) {
+                    match (&call, &mut self.live.wifi, device_call(&call)) {
                         (Call::Join { .. }, crate::live::Reading::Ready(w), _) => {
                             w.joining = None;
                             w.failure = Some(e);
                         }
-                        (
-                            Call::Connect(_) | Call::DisconnectDevice(_) | Call::Remove { .. },
-                            _,
-                            crate::live::Reading::Ready(b),
-                        ) => b.failure = Some(e),
+                        (_, _, Some((device, action))) => {
+                            let device = device.to_string();
+                            self.device_failed(&device, action, e);
+                        }
                         _ => {
                             if let Some(id) = id {
                                 self.errors.retain(|(e, _)| *e != id);
@@ -1383,10 +1437,10 @@ impl State {
                 let now = self.now();
                 self.refresh(now)?;
             }
-            Background::Paired(result) => {
-                if let (Err(e), crate::live::Reading::Ready(b)) = (result, &mut self.live.bluetooth)
-                {
-                    b.failure = Some(e);
+            Background::Paired(device, result) => {
+                if let Err(e) = result {
+                    eprintln!("cupertino-settings: {e}");
+                    self.device_failed(&device, DeviceAction::Pair, e);
                 }
                 let now = self.now();
                 self.refresh(now)?;
@@ -1591,6 +1645,21 @@ impl State {
     }
 }
 
+/// The device a Bluetooth device call acts on, and the action; `None` for any other call (and for a removal not yet
+/// confirmed, which only asks).
+pub(crate) fn device_call(call: &Call) -> Option<(&str, DeviceAction)> {
+    match call {
+        Call::Connect(id) => Some((id, DeviceAction::Connect)),
+        Call::DisconnectDevice(id) => Some((id, DeviceAction::Disconnect)),
+        Call::Remove {
+            id,
+            confirmed: true,
+        } => Some((id, DeviceAction::Forget)),
+        Call::Pair(id) => Some((id, DeviceAction::Pair)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1599,7 +1668,7 @@ mod tests {
     fn an_agent_prompt_at_a_full_queue_is_refused_without_waiting() {
         let (notify, _background) = background_channel(|| {});
         for _ in 0..BACKGROUND_QUEUE {
-            notify(Background::Paired(Ok(())));
+            notify(Background::Paired(String::new(), Ok(())));
         }
         let (answer, reply) = async_channel::bounded(1);
         let agent = notify.clone();
@@ -1639,7 +1708,7 @@ mod tests {
         let worker = notify.clone();
         let (done, finished) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            worker(Background::Paired(Ok(())));
+            worker(Background::Paired(String::new(), Ok(())));
             done.send(()).unwrap();
         });
         assert!(finished
@@ -1651,6 +1720,6 @@ mod tests {
             .expect("the worker's event is queued once there is room");
         let queued: Vec<_> = background.try_iter().collect();
         assert_eq!(queued.len(), BACKGROUND_QUEUE);
-        assert!(matches!(queued.last(), Some(Background::Paired(Ok(())))));
+        assert!(matches!(queued.last(), Some(Background::Paired(_, Ok(())))));
     }
 }

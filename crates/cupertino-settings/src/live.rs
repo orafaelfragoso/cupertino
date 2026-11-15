@@ -281,12 +281,140 @@ pub struct BtDevice {
     pub paired: bool,
     pub connected: bool,
     pub pairing: bool,
+    /// A connection was asked for and has not been made or failed yet.
+    pub connecting: bool,
+}
+
+/// What a device's row says about its link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkState {
+    Connected,
+    Connecting,
+    Pairing,
+    NotConnected,
+}
+
+impl LinkState {
+    pub fn label(self) -> &'static str {
+        match self {
+            LinkState::Connected => "Connected",
+            LinkState::Connecting => "Connecting…",
+            LinkState::Pairing => "Pairing…",
+            LinkState::NotConnected => "Not Connected",
+        }
+    }
+
+    /// The device is busy: its actions wait until this is over.
+    pub fn busy(self) -> bool {
+        matches!(self, LinkState::Connecting | LinkState::Pairing)
+    }
 }
 
 impl BtDevice {
-    /// The name, else the address.
-    pub fn title(&self) -> &str {
-        self.name.as_deref().unwrap_or(&self.address)
+    /// The name, else what the device is and the end of its address.
+    pub fn title(&self) -> String {
+        device_title(self.name.as_deref(), &self.icon, &self.address)
+    }
+
+    /// A pairing says so first, then a link that is up, then one being made.
+    pub fn state(&self) -> LinkState {
+        if self.pairing {
+            LinkState::Pairing
+        } else if self.connected {
+            LinkState::Connected
+        } else if self.connecting {
+            LinkState::Connecting
+        } else {
+            LinkState::NotConnected
+        }
+    }
+}
+
+/// What a device is, by the icon name its daemon gives it (either daemon's names), for a device without a name.
+pub fn device_kind(icon: &str) -> &'static str {
+    match icon {
+        "computer" => "Computer",
+        "tablet" | "input-tablet" => "Tablet",
+        "phone" => "Phone",
+        "watch" => "Watch",
+        "display" | "video-display" => "Display",
+        "headphones" | "audio-headphones" => "Headphones",
+        "headset" | "audio-headset" => "Headset",
+        "speaker" => "Speaker",
+        "audio" | "audio-card" | "multimedia-player" => "Audio Device",
+        "keyboard" | "input-keyboard" => "Keyboard",
+        "mouse" | "input-mouse" => "Mouse",
+        "trackpad" => "Trackpad",
+        "gamepad" | "input-gaming" => "Game Controller",
+        "remote-control" => "Remote Control",
+        "camera" | "camera-photo" | "camera-video" => "Camera",
+        "printer" => "Printer",
+        "scanner" => "Scanner",
+        _ => "Bluetooth Device",
+    }
+}
+
+/// The last two bytes of an address (`AA:BB:CC:DD:EE:FF` gives `EE:FF`): enough to tell two unnamed devices of a kind
+/// apart.
+fn short_address(address: &str) -> String {
+    let parts: Vec<&str> = address.split(':').collect();
+    match parts.as_slice() {
+        [.., a, b] if parts.len() >= 3 => format!("{a}:{b}"),
+        _ => address.to_string(),
+    }
+}
+
+/// A device's label: its name when it has one, else its kind and the end of its address (`Keyboard (EE:FF)`), never
+/// the address alone.
+pub fn device_title(name: Option<&str>, icon: &str, address: &str) -> String {
+    match name.map(display_name).filter(|n| !n.is_empty()) {
+        Some(name) => name,
+        None => format!(
+            "{} ({})",
+            device_kind(icon),
+            short_address(&display_name(address))
+        ),
+    }
+}
+
+/// An action on one device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceAction {
+    Connect,
+    Disconnect,
+    Forget,
+    Pair,
+}
+
+/// An action on a device that failed: shown on that device's row until the next action.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceFailure {
+    pub id: String,
+    pub action: DeviceAction,
+    /// What the service said.
+    pub reason: String,
+}
+
+impl DeviceFailure {
+    /// What failed, then why: `Could not connect. Timed out.`
+    pub fn text(&self) -> String {
+        let lead = match self.action {
+            DeviceAction::Connect => "Could not connect.",
+            DeviceAction::Disconnect => "Could not disconnect.",
+            DeviceAction::Forget => "Could not forget this device.",
+            DeviceAction::Pair => "Could not pair.",
+        };
+        let reason = self.reason.trim();
+        let mut chars = reason.chars();
+        let Some(first) = chars.next() else {
+            return lead.to_string();
+        };
+        let stop = if reason.ends_with(['.', '!', '?', '…']) {
+            ""
+        } else {
+            "."
+        };
+        format!("{lead} {}{}{stop}", first.to_uppercase(), chars.as_str())
     }
 }
 
@@ -300,6 +428,39 @@ pub struct Bluetooth {
     /// Another client's agent holds pairing (`AgentExists`).
     pub agent_elsewhere: bool,
     pub failure: Option<String>,
+    /// The devices whose connection the pane asked for and whose call has not returned: they show as connecting with a
+    /// daemon that does not say so itself.
+    pub asked_connect: Vec<String>,
+    /// The last failed action on a device.
+    pub device_failure: Option<DeviceFailure>,
+}
+
+impl Bluetooth {
+    /// The pane asked to connect device `id`: it shows as connecting until the call returns.
+    pub fn connect_asked(&mut self, id: &str) {
+        if !self.asked_connect.iter().any(|a| a == id) {
+            self.asked_connect.push(id.to_string());
+        }
+        self.mark_connecting();
+    }
+
+    /// The connect call for `id` returned.
+    pub fn connect_returned(&mut self, id: &str) {
+        self.asked_connect.retain(|a| a != id);
+    }
+
+    /// Mark the devices the pane is connecting, over what the daemon said.
+    pub fn mark_connecting(&mut self) {
+        for d in &mut self.devices {
+            d.connecting |= self.asked_connect.contains(&d.id);
+        }
+    }
+
+    /// A new action starts: the errors of the last ones go.
+    pub fn clear_failures(&mut self) {
+        self.failure = None;
+        self.device_failure = None;
+    }
 }
 
 /// The machine's accessibility defaults for the login screen and new users (`org.cupertino.LoginManager1`).
@@ -548,6 +709,125 @@ mod tests {
             ..open
         }
         .needs_passphrase());
+    }
+
+    fn bt(name: Option<&str>, icon: &str) -> BtDevice {
+        BtDevice {
+            id: "AA:BB:CC:DD:3A:7F/bredr".into(),
+            address: "AA:BB:CC:DD:3A:7F".into(),
+            name: name.map(str::to_string),
+            icon: icon.into(),
+            paired: false,
+            connected: false,
+            pairing: false,
+            connecting: false,
+        }
+    }
+
+    #[test]
+    fn an_unnamed_device_is_titled_by_its_kind_and_the_end_of_its_address() {
+        assert_eq!(bt(None, "keyboard").title(), "Keyboard (3A:7F)");
+        assert_eq!(
+            bt(None, "audio-headphones").title(),
+            "Headphones (3A:7F)",
+            "the fallback daemon's icon names too"
+        );
+        assert_eq!(bt(None, "unknown").title(), "Bluetooth Device (3A:7F)");
+        assert_eq!(bt(None, "").title(), "Bluetooth Device (3A:7F)");
+        assert_eq!(
+            bt(Some(" \u{202e} "), "mouse").title(),
+            "Mouse (3A:7F)",
+            "a name with nothing printable is no name"
+        );
+        assert_eq!(bt(Some("Desk Mouse"), "mouse").title(), "Desk Mouse");
+        for icon in [
+            "phone",
+            "gamepad",
+            "input-gaming",
+            "remote-control",
+            "camera-video",
+        ] {
+            let title = bt(None, icon).title();
+            assert!(
+                title.ends_with(" (3A:7F)") && !title.starts_with("AA:"),
+                "{icon}: {title}"
+            );
+        }
+        assert_eq!(device_title(None, "phone", "odd"), "Phone (odd)");
+    }
+
+    #[test]
+    fn a_device_states_its_link_pairing_first() {
+        let d = bt(Some("Phone"), "phone");
+        assert_eq!(d.state(), LinkState::NotConnected);
+        let connecting = BtDevice {
+            connecting: true,
+            ..d.clone()
+        };
+        assert_eq!(connecting.state(), LinkState::Connecting);
+        let connected = BtDevice {
+            connected: true,
+            connecting: true,
+            ..d.clone()
+        };
+        assert_eq!(connected.state(), LinkState::Connected);
+        let pairing = BtDevice {
+            pairing: true,
+            connected: true,
+            ..d
+        };
+        assert_eq!(pairing.state(), LinkState::Pairing);
+        assert_eq!(
+            [
+                LinkState::Connected,
+                LinkState::Connecting,
+                LinkState::Pairing,
+                LinkState::NotConnected
+            ]
+            .map(LinkState::label),
+            ["Connected", "Connecting…", "Pairing…", "Not Connected"]
+        );
+    }
+
+    #[test]
+    fn a_failed_device_action_says_what_failed_and_why() {
+        let failure = |action, reason: &str| DeviceFailure {
+            id: "a".into(),
+            action,
+            reason: reason.into(),
+        };
+        assert_eq!(
+            failure(DeviceAction::Connect, "timed out").text(),
+            "Could not connect. Timed out."
+        );
+        assert_eq!(
+            failure(DeviceAction::Forget, "The service is not available.").text(),
+            "Could not forget this device. The service is not available."
+        );
+        assert_eq!(failure(DeviceAction::Pair, " ").text(), "Could not pair.");
+        assert_eq!(
+            failure(DeviceAction::Disconnect, "the device is not connected").text(),
+            "Could not disconnect. The device is not connected."
+        );
+    }
+
+    #[test]
+    fn a_connection_the_pane_asked_for_shows_until_its_call_returns() {
+        let mut b = Bluetooth {
+            devices: vec![bt(None, "mouse")],
+            ..Bluetooth::default()
+        };
+        let id = b.devices[0].id.clone();
+        b.connect_asked(&id);
+        assert_eq!(b.devices[0].state(), LinkState::Connecting);
+        // a new reading from a daemon that does not report connecting
+        b.devices = vec![bt(None, "mouse")];
+        b.mark_connecting();
+        assert_eq!(b.devices[0].state(), LinkState::Connecting);
+        b.connect_returned(&id);
+        b.devices = vec![bt(None, "mouse")];
+        b.mark_connecting();
+        assert_eq!(b.devices[0].state(), LinkState::NotConnected);
     }
 
     #[test]

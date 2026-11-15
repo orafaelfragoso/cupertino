@@ -59,7 +59,7 @@ with a suffix (`/bredr`, `/le-public`, `/le-random`) when the same address is kn
 | signals `DeviceAdded(a{sv})`, `DeviceChanged(a{sv})`, `DeviceRemoved(s) | `DeviceRemoved` carries the device's `Id`. Each also changes `Devices` |
 
 A device is a dictionary. Always present: `Id`, `Address`, `AddressType`, `Icon`, `Paired`,
-`Bonded`, `Connected`, `Pairing`, `Uuids`. Left out when unknown: `Name`, `Class` (u), `Appearance` (q), `Rssi` (n, dBm).
+`Bonded`, `Connected`, `Connecting` (a `Connect` waits for the link), `Pairing`, `Uuids`. Left out when unknown: `Name`, `Class` (u), `Appearance` (q), `Rssi` (n, dBm).
 `Icon` is one of `phone`, `computer`, `tablet`, `watch`, `display`, `headphones`, `headset`, `speaker`, `audio`,
 `keyboard`, `mouse`, `trackpad`, `gamepad`, `remote-control`, `camera`, `printer`, `unknown`. The class and appearance
 tables are as designed (Bluetooth SIG assigned numbers).

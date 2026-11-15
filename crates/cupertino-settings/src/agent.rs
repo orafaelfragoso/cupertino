@@ -8,7 +8,7 @@ use zbus::message::Header;
 use zbus::zvariant::OwnedValue;
 use zbus::{fdo, Connection};
 
-use crate::live::display_name;
+use crate::live::{device_title as title_of, display_name};
 use crate::sheet::{Answer, Prompt};
 
 /// The daemon whose questions the agent answers.
@@ -45,17 +45,25 @@ pub struct Agent {
     pub on_event: Box<dyn Fn(AgentEvent) + Send + Sync>,
 }
 
-/// The name a prompt shows for the daemon's device record: its name, else its address.
+/// The name a prompt shows for the daemon's device record, as its row shows it: its name, else its kind and the end of
+/// its address.
 fn device_title(device: &HashMap<String, OwnedValue>) -> String {
     let text = |k: &str| {
         device
             .get(k)
             .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
     };
-    text("Name")
-        .or_else(|| text("Address"))
-        .map(|t| display_name(&t))
-        .unwrap_or_else(|| "Unknown device".to_string())
+    match text("Address") {
+        Some(address) => title_of(
+            text("Name").as_deref(),
+            &text("Icon").unwrap_or_default(),
+            &address,
+        ),
+        None => text("Name")
+            .map(|n| display_name(&n))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Unknown device".to_string()),
+    }
 }
 
 /// Accept a call only from the current owner of `name`, the Bluetooth daemon: any client of the bus can call the agent's

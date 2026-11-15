@@ -137,6 +137,8 @@ pub struct DeviceInfo {
     pub connected: bool,
     /// A pairing with this device is in progress.
     pub pairing: bool,
+    /// A connection to this device was asked for and has not been made or failed yet.
+    pub connecting: bool,
     pub uuids: Vec<Uuid>,
 }
 
@@ -229,7 +231,7 @@ impl Device {
     ///   keeps the last reading.
     pub fn merge(&mut self, now: Duration, rssi: Option<i8>, eir: &Eir) -> bool {
         self.last_seen = now;
-        let before = self.info(false);
+        let before = self.info(false, false);
         match &eir.name {
             Some(name) if name.complete => {
                 self.name = Some(name.text.clone());
@@ -246,10 +248,10 @@ impl Device {
             }
         }
         self.rssi = rssi.or(self.rssi);
-        self.info(false) != before
+        self.info(false, false) != before
     }
 
-    pub fn info(&self, pairing: bool) -> DeviceInfo {
+    pub fn info(&self, pairing: bool, connecting: bool) -> DeviceInfo {
         DeviceInfo {
             id: self.id,
             name: self.name.clone(),
@@ -261,6 +263,7 @@ impl Device {
             bonded: self.bonded,
             connected: self.connected,
             pairing,
+            connecting,
             uuids: self.uuids.clone(),
         }
     }

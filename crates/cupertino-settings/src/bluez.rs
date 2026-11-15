@@ -13,7 +13,7 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
 use crate::agent::{from_owner, Agent, AgentEvent, AGENT_PATH};
-use crate::live::{display_name, Bluetooth, BtDevice};
+use crate::live::{device_title, display_name, Bluetooth, BtDevice};
 use crate::sheet::{Answer, Prompt};
 
 pub const NAME: &str = "org.bluez";
@@ -67,8 +67,7 @@ pub fn bluetooth(connection: &Connection, pairing: &HashSet<String>) -> zbus::Re
             powered: false,
             discovering: false,
             devices: Vec::new(),
-            agent_elsewhere: false,
-            failure: None,
+            ..Bluetooth::default()
         });
     };
     let adapter = &objects[adapter_path][ADAPTER];
@@ -88,6 +87,8 @@ pub fn bluetooth(connection: &Connection, pairing: &HashSet<String>) -> zbus::Re
                 paired: flag(d, "Paired")?,
                 connected: flag(d, "Connected")?,
                 pairing: pairing.contains(path.as_str()),
+                // BlueZ has no such state: the pane marks the devices it is connecting
+                connecting: false,
             })
         })
         .collect();
@@ -97,8 +98,7 @@ pub fn bluetooth(connection: &Connection, pairing: &HashSet<String>) -> zbus::Re
         powered: flag(adapter, "Powered").unwrap_or(false),
         discovering: flag(adapter, "Discovering").unwrap_or(false),
         devices,
-        agent_elsewhere: false,
-        failure: None,
+        ..Bluetooth::default()
     })
 }
 
@@ -240,23 +240,26 @@ impl BluezAgent {
     }
 }
 
-/// The name a prompt shows for a device: its alias, which BlueZ sets to the name or the address.
+/// The name a prompt shows for a device, as its row shows it ([`device_title`]): its name, else its kind and the end of
+/// its address.
 async fn title(connection: &zbus::Connection, device: &ObjectPath<'_>) -> String {
-    let alias = async {
-        zbus::proxy::Builder::<zbus::Proxy<'_>>::new(connection)
+    let read = async {
+        let proxy = zbus::proxy::Builder::<zbus::Proxy<'_>>::new(connection)
             .destination(NAME)?
             .path(device.to_owned())?
             .interface(DEVICE)?
             .cache_properties(CacheProperties::No)
             .build()
-            .await?
-            .get_property::<String>("Alias")
+            .await?;
+        let address = proxy.get_property::<String>("Address").await?;
+        let name = proxy.get_property::<String>("Name").await.ok();
+        let icon = proxy
+            .get_property::<String>("Icon")
             .await
+            .unwrap_or_default();
+        Ok::<_, zbus::Error>(device_title(name.as_deref(), &icon, &address))
     };
-    alias
-        .await
-        .map(|a| display_name(&a))
-        .unwrap_or_else(|_: zbus::Error| "Unknown device".to_string())
+    read.await.unwrap_or_else(|_| "Unknown device".to_string())
 }
 
 fn refused() -> BluezError {

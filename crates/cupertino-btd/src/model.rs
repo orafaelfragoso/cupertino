@@ -168,6 +168,9 @@ impl AdapterState {
             self.pairing
                 .as_ref()
                 .is_some_and(|pairing| pairing.device == device.id),
+            self.pending
+                .iter()
+                .any(|p| matches!(p, Pending::Connect { device: d, .. } if *d == device.id)),
         )
     }
 
@@ -228,6 +231,10 @@ impl AdapterState {
             ticket: pending.ticket(),
             result,
         });
+        // the device's row stops saying it is connecting
+        if let Pending::Connect { device, .. } = pending {
+            self.notify_device(out, device);
+        }
     }
 
     /// Loads the stored keys into the model and sets the controller up.
@@ -349,6 +356,7 @@ impl AdapterState {
                     device,
                     deadline: now + CONNECT_TIMEOUT,
                 });
+                self.notify_device(out, device);
             }
             Request::Disconnect(reference) => {
                 let device = self.resolve(reference)?;

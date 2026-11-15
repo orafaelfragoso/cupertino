@@ -62,6 +62,8 @@ pub struct DeviceView {
     pub connected: bool,
     /// A pairing with this device is in progress.
     pub pairing: bool,
+    /// A connection to this device was asked for and has not been made or failed yet.
+    pub connecting: bool,
     pub uuids: Vec<String>,
 }
 
@@ -80,6 +82,7 @@ impl From<&DeviceInfo> for DeviceView {
             bonded: info.bonded,
             connected: info.connected,
             pairing: info.pairing,
+            connecting: info.connecting,
             uuids: info.uuids.iter().map(ToString::to_string).collect(),
         }
     }

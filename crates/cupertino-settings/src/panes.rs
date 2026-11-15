@@ -2381,6 +2381,9 @@ fn network_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
     }]
 }
 
+/// What the nearby list says under it while discovery runs.
+pub const BLUETOOTH_SEARCHING: &str = "Searching for devices…";
+
 /// The power switch, the paired devices under My Devices and the others under Nearby Devices (§6.4).
 fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
     let svc = Backend::Service;
@@ -2408,7 +2411,13 @@ fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
     if !b.available {
         power.disabled = Some("Bluetooth is not available".into());
     }
-    power.error = b.failure.clone();
+    // a failure on a device no longer listed shows here, as one of the switch's does
+    let unlisted = b
+        .device_failure
+        .as_ref()
+        .filter(|f| !b.devices.iter().any(|d| d.id == f.id))
+        .map(crate::live::DeviceFailure::text);
+    power.error = b.failure.clone().or(unlisted);
     let footer = b
         .agent_elsewhere
         .then(|| "Pairing is handled by another application.".to_string());
@@ -2420,12 +2429,10 @@ fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
     if !b.available || !b.powered {
         return out;
     }
+    // each row: the device's name (or kind and address), its link state under it, its actions at the right; while it
+    // pairs or connects the actions wait, and a failed action says so in place of the state
     let device_row = |(i, d): (usize, &crate::live::BtDevice)| {
-        let control = if d.pairing {
-            Control::Text {
-                value: "Pairing…".into(),
-            }
-        } else if d.paired {
+        let control = if d.paired {
             Control::Buttons {
                 titles: vec![
                     if d.connected {
@@ -2441,12 +2448,23 @@ fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
                 title: "Pair".into(),
             }
         };
-        row(
+        let state = d.state();
+        let mut r = row(
             ControlId::BluetoothDevice(i),
-            d.title().to_string(),
+            d.title(),
             control,
             svc(if d.paired { "Connect" } else { "Pair" }),
-        )
+        );
+        r.detail = Some(state.label().to_string());
+        if state.busy() {
+            r.disabled = Some(state.label().to_string());
+        }
+        r.error = b
+            .device_failure
+            .as_ref()
+            .filter(|f| f.id == d.id)
+            .map(crate::live::DeviceFailure::text);
+        r
     };
     let mine: Vec<Row> = b
         .devices
@@ -2467,12 +2485,13 @@ fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
         rows: mine,
         footer: None,
     });
+    // while discovery runs the nearby list says so, even before it finds anything
     out.push(Section {
         header: header("Nearby Devices"),
         rows: nearby,
-        footer: None,
+        footer: b.discovering.then(|| BLUETOOTH_SEARCHING.to_string()),
     });
-    out.retain(|s| !s.rows.is_empty());
+    out.retain(|s| !s.rows.is_empty() || s.footer.is_some());
     out
 }
 
@@ -3111,6 +3130,8 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::More(more) => crate::pane_more::change(more, value, settings, live),
         ControlId::BluetoothDevice(i) => {
             match live.bluetooth.ready().and_then(|b| b.devices.get(i)) {
+                // its actions wait while it pairs or connects
+                Some(d) if d.state().busy() => Vec::new(),
                 Some(d) if !d.paired => vec![Effect::Service(Call::Pair(d.id.clone()))],
                 Some(d) => match index_of(value) {
                     0 if d.connected => vec![Effect::Service(Call::DisconnectDevice(d.id.clone()))],
@@ -3647,6 +3668,7 @@ mod tests {
             paired,
             connected: paired,
             pairing: false,
+            connecting: false,
         };
         let live = Live {
             pictures: crate::live::Pictures::default(),
@@ -4594,6 +4616,242 @@ mod tests {
         );
     }
 
+    fn bt_device(id: &str) -> crate::live::BtDevice {
+        crate::live::BtDevice {
+            id: format!("{id}/bredr"),
+            address: id.into(),
+            name: None,
+            icon: "unknown".into(),
+            paired: false,
+            connected: false,
+            pairing: false,
+            connecting: false,
+        }
+    }
+
+    fn bluetooth_live(devices: Vec<crate::live::BtDevice>, discovering: bool) -> Live {
+        Live {
+            bluetooth: Reading::Ready(Bluetooth {
+                available: true,
+                powered: true,
+                discovering,
+                devices,
+                ..Bluetooth::default()
+            }),
+            ..Live::default()
+        }
+    }
+
+    fn device_rows(live: &Live) -> Vec<Row> {
+        sections(PaneId::Bluetooth, &unset(), LIGHT, live)
+            .into_iter()
+            .flat_map(|s| s.rows)
+            .filter(|r| matches!(r.id, ControlId::BluetoothDevice(_)))
+            .collect()
+    }
+
+    #[test]
+    fn bluetooth_an_unnamed_device_shows_its_kind_and_short_address_never_only_the_address() {
+        let keyboard = crate::live::BtDevice {
+            icon: "keyboard".into(),
+            ..bt_device("C4:11:22:33:3A:7F")
+        };
+        let unknown = bt_device("C4:11:22:33:44:55");
+        let named = crate::live::BtDevice {
+            name: Some("Desk Speaker".into()),
+            icon: "speaker".into(),
+            ..bt_device("C4:11:22:33:66:77")
+        };
+        let rows = device_rows(&bluetooth_live(vec![keyboard, unknown, named], false));
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Keyboard (3A:7F)",
+                "Bluetooth Device (44:55)",
+                "Desk Speaker"
+            ]
+        );
+        assert!(rows.iter().all(|r| !r.label.starts_with("C4:")));
+    }
+
+    #[test]
+    fn bluetooth_each_row_states_its_connection() {
+        let paired = |id: &str| crate::live::BtDevice {
+            paired: true,
+            name: Some(format!("dev {id}")),
+            ..bt_device(id)
+        };
+        let devices = vec![
+            crate::live::BtDevice {
+                connected: true,
+                ..paired("01")
+            },
+            crate::live::BtDevice {
+                connecting: true,
+                ..paired("02")
+            },
+            paired("03"),
+            crate::live::BtDevice {
+                pairing: true,
+                ..bt_device("04")
+            },
+            bt_device("05"),
+        ];
+        let live = bluetooth_live(devices, false);
+        let rows = device_rows(&live);
+        let second: Vec<Option<&str>> = rows
+            .iter()
+            .map(|r| r.disabled.as_deref().or(r.detail.as_deref()))
+            .collect();
+        assert_eq!(
+            second,
+            [
+                Some("Connected"),
+                Some("Connecting…"),
+                Some("Not Connected"),
+                Some("Pairing…"),
+                Some("Not Connected")
+            ]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.disabled.is_some())
+                .collect::<Vec<_>>(),
+            [false, true, false, true, false],
+            "a device's actions wait while it connects or pairs"
+        );
+        let titles = |r: &Row| match &r.control {
+            Control::Buttons { titles } => titles.clone(),
+            Control::Button { title } => vec![title.clone()],
+            other => panic!("a device row has buttons: {other:?}"),
+        };
+        assert_eq!(titles(&rows[0]), ["Disconnect", "Forget…"]);
+        assert_eq!(titles(&rows[2]), ["Connect", "Forget…"]);
+        assert_eq!(titles(&rows[4]), ["Pair"]);
+        let mut s = unset();
+        for busy in [1, 3] {
+            assert!(
+                change(
+                    ControlId::BluetoothDevice(busy),
+                    Value::Index(0),
+                    &mut s,
+                    &live
+                )
+                .is_empty(),
+                "a busy device ignores a press"
+            );
+        }
+        assert_eq!(
+            change(
+                ControlId::BluetoothDevice(2),
+                Value::Index(0),
+                &mut s,
+                &live
+            ),
+            [Effect::Service(Call::Connect("03/bredr".into()))]
+        );
+    }
+
+    #[test]
+    fn bluetooth_the_nearby_list_says_when_discovery_runs() {
+        let searching = sections(
+            PaneId::Bluetooth,
+            &unset(),
+            LIGHT,
+            &bluetooth_live(Vec::new(), true),
+        );
+        let nearby = searching
+            .iter()
+            .find(|s| s.header.as_deref() == Some("Nearby Devices"))
+            .expect("the nearby list shows while searching, before anything is found");
+        assert_eq!(nearby.footer.as_deref(), Some(BLUETOOTH_SEARCHING));
+        let found = sections(
+            PaneId::Bluetooth,
+            &unset(),
+            LIGHT,
+            &bluetooth_live(vec![bt_device("06")], true),
+        );
+        assert_eq!(
+            found
+                .iter()
+                .find(|s| s.header.as_deref() == Some("Nearby Devices"))
+                .and_then(|s| s.footer.as_deref()),
+            Some(BLUETOOTH_SEARCHING)
+        );
+        let idle = sections(
+            PaneId::Bluetooth,
+            &unset(),
+            LIGHT,
+            &bluetooth_live(vec![bt_device("06")], false),
+        );
+        let nearby = idle
+            .iter()
+            .find(|s| s.header.as_deref() == Some("Nearby Devices"))
+            .expect("found devices stay listed");
+        assert_eq!(
+            nearby.footer, None,
+            "nothing says searching once discovery stops"
+        );
+        assert!(
+            !sections(
+                PaneId::Bluetooth,
+                &unset(),
+                LIGHT,
+                &bluetooth_live(Vec::new(), false)
+            )
+            .iter()
+            .any(|s| s.header.as_deref() == Some("Nearby Devices")),
+            "an empty list that is not searching is not shown"
+        );
+    }
+
+    #[test]
+    fn bluetooth_a_failed_action_shows_on_its_device_row() {
+        let mut live = bluetooth_live(
+            vec![
+                crate::live::BtDevice {
+                    paired: true,
+                    icon: "mouse".into(),
+                    ..bt_device("07")
+                },
+                bt_device("08"),
+            ],
+            false,
+        );
+        let Reading::Ready(b) = &mut live.bluetooth else {
+            unreachable!()
+        };
+        b.device_failure = Some(crate::live::DeviceFailure {
+            id: "07/bredr".into(),
+            action: crate::live::DeviceAction::Connect,
+            reason: "timed out".into(),
+        });
+        let rows = device_rows(&live);
+        assert_eq!(
+            rows[0].error.as_deref(),
+            Some("Could not connect. Timed out.")
+        );
+        assert_eq!(rows[1].error, None, "only the device that failed says so");
+        let power = &sections(PaneId::Bluetooth, &unset(), LIGHT, &live)[0].rows[0];
+        assert_eq!(power.error, None);
+
+        // a failure on a device that is gone shows on the switch's row
+        let Reading::Ready(b) = &mut live.bluetooth else {
+            unreachable!()
+        };
+        b.device_failure = Some(crate::live::DeviceFailure {
+            id: "gone/bredr".into(),
+            action: crate::live::DeviceAction::Forget,
+            reason: "the service is not available.".into(),
+        });
+        let power = &sections(PaneId::Bluetooth, &unset(), LIGHT, &live)[0].rows[0];
+        assert_eq!(
+            power.error.as_deref(),
+            Some("Could not forget this device. The service is not available.")
+        );
+    }
+
     #[test]
     fn bluetooth_groups_paired_and_nearby_devices_and_forgets_only_after_confirmation() {
         let dev = |id: &str, paired: bool, connected: bool| crate::live::BtDevice {
@@ -4604,14 +4862,14 @@ mod tests {
             paired,
             connected,
             pairing: false,
+            connecting: false,
         };
         let bt = Bluetooth {
             available: true,
             powered: true,
             discovering: true,
             devices: vec![dev("a", true, true), dev("b", false, false)],
-            agent_elsewhere: false,
-            failure: None,
+            ..Bluetooth::default()
         };
         let live = Live {
             bluetooth: Reading::Ready(bt),

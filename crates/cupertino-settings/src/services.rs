@@ -1010,15 +1010,20 @@ impl Services {
                         powered: p.get_property("Powered")?,
                         discovering: p.get_property("Discovering")?,
                         devices: devices.iter().filter_map(bt_device).collect(),
-                        agent_elsewhere: false,
-                        failure: None,
+                        ..Bluetooth::default()
                     })
                 })
         };
-        reading(self.system.checked(result), "Bluetooth is not available").map(|b| Bluetooth {
-            agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
-            failure: keep.and_then(|k| k.failure.clone()),
-            ..b
+        reading(self.system.checked(result), "Bluetooth is not available").map(|b| {
+            let mut b = Bluetooth {
+                agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
+                failure: keep.and_then(|k| k.failure.clone()),
+                asked_connect: keep.map(|k| k.asked_connect.clone()).unwrap_or_default(),
+                device_failure: keep.and_then(|k| k.device_failure.clone()),
+                ..b
+            };
+            b.mark_connecting();
+            b
         })
     }
 
@@ -1559,6 +1564,8 @@ fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
         paired: flag("Paired")?,
         connected: flag("Connected")?,
         pairing: flag("Pairing")?,
+        // an older daemon does not say
+        connecting: flag("Connecting").unwrap_or(false),
     })
 }
 

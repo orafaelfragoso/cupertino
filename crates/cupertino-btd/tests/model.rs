@@ -463,14 +463,19 @@ fn connecting_opens_a_link_and_finishes_when_the_kernel_reports_the_connection()
     h.discover(phone());
     let (ticket, effects) = h.request(Request::Connect(reference(phone())));
     assert_eq!(
-        effects,
-        [Effect::OpenLink {
+        effects[0],
+        Effect::OpenLink {
             index: C0,
             adapter: ADAPTER,
             device: phone(),
             ticket
-        }]
+        }
     );
+    let Change::DeviceChanged(info) = only_change(&effects) else {
+        panic!("the device is announced as connecting");
+    };
+    assert_eq!((info.connecting, info.connected), (true, false));
+    assert!(h.model.devices()[0].connecting);
 
     let effects = h.packet(Event::DeviceConnected {
         device: phone(),
@@ -478,10 +483,14 @@ fn connecting_opens_a_link_and_finishes_when_the_kernel_reports_the_connection()
         eir: named("Phone", true),
     });
     assert_eq!(completions(&effects), [(ticket, Ok(()))]);
+    let Some(Change::DeviceChanged(last)) = changes(&effects).last().cloned() else {
+        panic!("the device is announced again");
+    };
+    assert_eq!((last.connecting, last.connected), (false, true));
     let info = &h.model.devices()[0];
     assert_eq!(
-        (info.connected, info.name.as_deref()),
-        (true, Some("Phone"))
+        (info.connected, info.connecting, info.name.as_deref()),
+        (true, false, Some("Phone"))
     );
 
     let (ticket, effects) = h.request(Request::Connect(reference(phone())));
@@ -508,6 +517,10 @@ fn a_connection_that_fails_or_takes_too_long_is_an_error() {
         adapter: ADAPTER,
         device: phone()
     }));
+    assert!(
+        !h.model.devices()[0].connecting,
+        "a failed connection is no longer connecting"
+    );
 
     let (ticket, _) = h.request(Request::Connect(reference(phone())));
     assert!(h.advance(CONNECT_TIMEOUT.as_secs() - 1).is_empty());
@@ -520,6 +533,10 @@ fn a_connection_that_fails_or_takes_too_long_is_an_error() {
         adapter: ADAPTER,
         device: phone()
     }));
+    assert!(
+        matches!(changes(&effects).last(), Some(Change::DeviceChanged(info)) if !info.connecting),
+        "a connection that took too long is announced as no longer connecting"
+    );
 }
 
 #[test]
@@ -679,7 +696,7 @@ fn an_address_shared_by_two_address_types_must_be_named_in_full() {
     );
     let (_, effects) = h.request(Request::Connect(reference(low_energy)));
     assert!(
-        matches!(effects.as_slice(), [Effect::OpenLink { device, .. }] if *device == low_energy)
+        matches!(effects.as_slice(), [Effect::OpenLink { device, .. }, Effect::Changed(Change::DeviceChanged(info))] if *device == low_energy && info.connecting)
     );
     let (ticket, effects) = h.request(Request::Connect(DeviceRef {
         address: Address::from_wire([0xFF; 6]),

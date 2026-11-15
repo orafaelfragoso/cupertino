@@ -312,9 +312,11 @@ The compositor stays on Smithay's GLES renderer. Its own work, in order:
 
 Frame scheduling starts a frame later than now only once the output's presentation timestamps are known to be real;
 it latches from the recent maximum render time plus a margin, never later than half a refresh period, because a
-missed refresh costs more than the latency it saves (the recent maximum is the last 60 frames' render times and the
-margin 2 ms; a frame that misses its vblank counts as a whole period, which turns the late start off until it leaves
-those 60; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison). A 10-bit primary plane is a setting
+missed refresh costs more than the latency it saves (the recent maximum is the last 60 frames' render times, each up
+to the moment its render fence signalled, read from the fence without waiting once the flip has come, or, where the
+fence cannot be read, the time to the flip being queued plus an estimate a late-started frame's miss raises; the
+margin is 2 ms; a frame that misses its vblank turns the late start off for 60 frames, twice as long for each miss
+that follows within 60 frames of it coming back, up to 960; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison). A 10-bit primary plane is a setting
 (`output_depth`), off until the probe decides; captures draw into 8-bit targets of their own. Direct scanout and
 the cursor plane are already permitted by the DRM path; they are verified on the target driver rather than built.
 A display at a fractional scale is drawn at the next whole scale into a frame of its own (10 bits a channel where the

@@ -243,10 +243,11 @@ pub enum GlesCompletion {
         sync: SyncPoint,
     },
     /// Drawn by the DRM compositor, which keeps the frame for the queue: `empty` when nothing differs; `planes`, the
-    /// planes it put elements on.
+    /// planes it put elements on; `sync`, what the primary plane waits for, `None` when an element is scanned out on it.
     Direct {
         empty: bool,
         planes: crate::drm_trace::Planes,
+        sync: Option<SyncPoint>,
     },
     Image(RgbaImage),
     Snapshot(GlesTexture),
@@ -329,6 +330,24 @@ fn output_transform(t: cupertino_scene::Transform) -> smithay::utils::Transform 
         T::Flipped90 => S::Flipped90,
         T::Flipped180 => S::Flipped180,
         T::Flipped270 => S::Flipped270,
+    }
+}
+
+/// What the primary plane of a DRM frame waits for before it is shown: the render's sync point, `None` when an element
+/// is scanned out on the plane and nothing was drawn.
+#[cfg(feature = "udev")]
+pub fn primary_sync<B, F, E>(
+    primary: &smithay::backend::drm::compositor::PrimaryPlaneElement<'_, B, F, E>,
+) -> Option<SyncPoint>
+where
+    B: smithay::backend::allocator::Buffer,
+    F: smithay::backend::drm::Framebuffer,
+{
+    match primary {
+        smithay::backend::drm::compositor::PrimaryPlaneElement::Swapchain(e) => {
+            Some(e.sync.clone())
+        }
+        smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_) => None,
     }
 }
 
@@ -431,6 +450,7 @@ impl Renderer for Gles {
                             cursor_plane: r.cursor_element.is_some(),
                             overlays: r.overlay_elements.len(),
                         },
+                        sync: primary_sync(&r.primary_element),
                     })
                     .map_err(|e| match e {
                         RenderFrameError::PrepareFrame(e) => RenderError::Rendering(e.into()),
@@ -477,7 +497,8 @@ mod tests {
         assert_eq!(
             GlesCompletion::Direct {
                 empty: true,
-                planes: Default::default()
+                planes: Default::default(),
+                sync: None,
             }
             .status(),
             RenderStatus::Empty
@@ -485,7 +506,8 @@ mod tests {
         assert_eq!(
             GlesCompletion::Direct {
                 empty: false,
-                planes: Default::default()
+                planes: Default::default(),
+                sync: None,
             }
             .status(),
             RenderStatus::Rendered
@@ -510,6 +532,7 @@ mod tests {
         let direct = GlesCompletion::Direct {
             empty: false,
             planes: Default::default(),
+            sync: None,
         };
         assert_eq!(direct.damage(), None);
     }

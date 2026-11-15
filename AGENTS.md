@@ -31,6 +31,9 @@ scripts/dev/shot OUT.png [server flags]   # one headless screenshot of the curre
 scripts/dev/review-sheet [OUT_DIR]       # windows overlapping, dock name and menu, menus, control panel, both appearances, with crops of corners and pointers; look at it before packaging
 scripts/preview          # every scenario in scenarios/, this checkout beside the installed release, changed pixels marked
 scripts/dev/microbench [CRATE...]        # instruction counts of the hot functions under Valgrind; --save-baseline NAME, then --baseline NAME fails on a rise over 3%
+scripts/dev/profile --scenario NAME [--tool perf|samply|heaptrack]   # every process of a bench scenario under a profiler, a summary per process
+scripts/dev/profile -- PROGRAM [ARGS]   # one program (and what it starts) under a profiler
+scripts/dev/perf-gate    # the scenarios the change since the last pass can affect, against this machine's baseline; profiles a regression
 scripts/done             # everything a change must pass before it is called done
 ```
 

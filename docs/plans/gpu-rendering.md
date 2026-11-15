@@ -1063,14 +1063,14 @@ Gate:
                 `ToggleLauncher`, the window 760 points wide with 4 layers, `--no-files`, one button, the renderer
                 warmed to `gpu` first): 0 buffers of the window and its layers in each of 8 opens over two runs, over
                 186 to 188 server steps part way; the scope's open 0 in 3 runs over 92 to 95.
-          - [ ] The caret's blink through the field's open. The field holds its caret while the compositor runs the
-                open (about a second, the buttons' spring), where the panel's own drawing fades it out from 550 ms and
-                back by 1000 ms (255 of 255 at the caret). A blink on the compositor's clock needs the caret as a
-                layer of its own whose opacity the panel animates, or a frame of the content's layer at each blink.
-                The layer needs the field's help: its caret is drawn in its overlay at a place only its paint knows,
-                and its blink starts when the keyboard focus comes, after the window maps and later than the open's
-                samples go out, so the field would draw its caret into a layer of its own and tell when its blink
-                started.
+          - [x] The caret's blink through the field's open. The caret is a layer of its own while the compositor
+                runs the open (`layers::CARET_LAYER`, over the query row's and at its rect, through the field's
+                `BareField::caret_layer` and the toolkit's `Widget::overlay_layer`), its opacity the content's fade
+                times the field's own blink from the open's start (`BareField::blink_start`, which no later focus
+                gain starts over) through samples, to where the blink holds past the open; a key part way takes the
+                caret back into the row's layer at once. At the same moments the caret is within 1 of 255 from 117 ms
+                on (was 255 from 550 to 1000 ms), 35 at most while the content fades in, where the caret's layer
+                fades over the row's and the panel's own drawing fades both as one group. Against the server the field's open makes 0 buffers of the window and its 6 layers over 183 server steps animating (`shell_processes::the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_buffer`, its count of layers 6 with the caret's).
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over

@@ -10,7 +10,9 @@
 //! * the browser's view options button at the row's end, in a layer around it ([`OPTIONS_LAYER`]), which keeps to
 //!   the row's end as the enclosure's width changes, where the rest of the row keeps to its start;
 //! * each mode button's glass, in the field's glass group, and its face (its focus ring and symbol) in a layer around
-//!   it ([`button_glass_layer`], [`button_face_layer`]).
+//!   it ([`button_glass_layer`], [`button_face_layer`]);
+//! * while the compositor runs the search field's open, the query field's caret, over the query row's layer and at its
+//!   rect ([`CARET_LAYER`]), its opacity the field's own blink ([`caret_opacity`]).
 //!
 //! A layer that draws strokes or content starts on whole device pixels at every quarter-step backing scale
 //! ([`LAYER_GRID`]), as the window's frame does, so its pixels are the ones the window would draw. The glass layers
@@ -34,6 +36,7 @@ use super::{
 use crate::motion::{
     Frame, Header, Motion, CLOSE_BLUR, CLOSE_DURATION, OPEN_DAMPING, OPEN_FADE, OPEN_RESPONSE,
 };
+use cupertino_kit::controls::CaretBlink;
 use cupertino_kit::core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx,
     SurfaceLayerMark, Widget,
@@ -52,6 +55,12 @@ pub const ROW_LAYER: u64 = 3;
 pub const BODY_LAYER: u64 = 4;
 /// The key of the layer of the browser's view options button, at the query row's end.
 pub const OPTIONS_LAYER: u64 = 5;
+/// The key of the query field's caret's layer, over the query row's and at its rect, while the compositor runs the
+/// search field's open ([`field_open_changes`]).
+pub const CARET_LAYER: u64 = 6;
+/// How long the caret's blink holds past the end of its layer's curve, in seconds: room for the compositor's word that
+/// the layers came to rest, after which the field shows the blink itself.
+pub const CARET_HOLD: f64 = 0.1;
 
 /// The key of the layer of mode button `index`'s glass.
 pub fn button_glass_layer(index: usize) -> u64 {
@@ -820,12 +829,15 @@ pub fn button_at(extent: Size, frame: &Frame, count: usize, index: usize) -> Rec
 /// clamped ramp of the split, so each value the layers show is carried through `motion`'s own values
 /// ([`open_values`]), left out where it never changes; everything fades in on the linear [`OPEN_FADE`]. The field's
 /// glass carries the edge ([`glass_edge`]), so no frame of an edge is drawn; each button's face (its symbol alone) fades in and sharpens through its opacity and content blur.
+/// With `caret`, the query field's caret is a layer of its own ([`CARET_LAYER`]) that moves with the query row and
+/// fades in with it, blinking as the field blinks it from the open's start ([`caret_opacity`]).
 pub fn field_open_changes(
     extent: Size,
     first: &Frame,
     rest: &Frame,
     motion: &Motion,
     start: f64,
+    caret: Option<CaretBlink>,
 ) -> Vec<(u64, Vec<LayerChange>)> {
     let count = rest.modes.count;
     let fade = Some(LayerCurve::Timed {
@@ -858,11 +870,23 @@ pub fn field_open_changes(
     });
     through(&mut content, LayerProperty::Y, &|f| rect(f).y());
     opacity(&mut content);
-    let mut out = vec![
-        (GLASS_LAYER, glass),
-        (ROW_LAYER, content.clone()),
-        (BODY_LAYER, content),
-    ];
+    let mut out = vec![(GLASS_LAYER, glass), (ROW_LAYER, content.clone())];
+    // the caret moves with the row and fades in with it, blinking from the open's start as the field blinks it
+    if let Some(blink) = caret {
+        let mut changes: Vec<LayerChange> = content
+            .iter()
+            .filter(|c| c.property != LayerProperty::Opacity)
+            .cloned()
+            .collect();
+        changes.push(caret_opacity(
+            first.alpha,
+            rest.alpha,
+            motion.moving_left(start),
+            blink,
+        ));
+        out.push((CARET_LAYER, changes));
+    }
+    out.push((BODY_LAYER, content));
     for index in 0..count {
         let at = |f: &Frame| button_at(extent, f, count, index);
         let mut button = Vec::new();
@@ -895,6 +919,24 @@ pub fn field_open_changes(
         out.push((button_face_layer(index), symbol));
     }
     out
+}
+
+/// The opacity of the query field's caret's layer through the search field's open, `open` seconds long: the
+/// content's fade in from `first` to `rest` on the linear [`OPEN_FADE`] times the caret's `blink` from the open's
+/// start, at even steps of a millisecond or so to the first moment past the open from which the blink holds for
+/// [`CARET_HOLD`] ([`CaretBlink::steady_from`]), so the field's own blink shows the same once the compositor's ends.
+pub fn caret_opacity(first: f64, rest: f64, open: f64, blink: CaretBlink) -> LayerChange {
+    let duration = blink.steady_from(open.max(0.0), CARET_HOLD).max(1e-3);
+    let count = ((duration * 1000.0).ceil() as usize + 1).clamp(2, OPEN_SAMPLES);
+    let last = (count - 1) as f64;
+    let values: Arc<[f32]> = (0..count)
+        .map(|i| {
+            let t = duration * i as f64 / last;
+            let fade = first + (rest - first) * (t / OPEN_FADE).min(1.0);
+            (fade * f64::from(blink.opacity(t))) as f32
+        })
+        .collect();
+    LayerChange::through(LayerProperty::Opacity, duration, values)
 }
 
 /// The enclosure's corner radius as `frame` presents it, held to half its height as the panel draws it.

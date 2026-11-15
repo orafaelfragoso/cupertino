@@ -2645,7 +2645,7 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
 }
 
 /// The launcher's search field opens from hidden on the compositor's clock: its window draws one frame, with its
-/// layers (the field's glass, its query row and body and the mode button's glass and face) at rest, and while the
+/// layers (the field's glass, its query row, its caret and body and the mode button's glass and face) at rest, and while the
 /// compositor moves, sizes and fades them in from where the open starts neither the window nor any of its layers
 /// commits a buffer. The field opens and closes once first, as a resident launcher's has by the time it is asked again, so the
 /// renderer has warmed up. The open's samples move the layers through places and sizes, which no opacity or scale
@@ -2655,8 +2655,8 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
     use cupertino_server::layers_v1::settled;
     // the search field, told apart by its glass
     const SEARCH: LauncherPanel = LauncherPanel::Field;
-    // the field's glass, its query row and body and its one mode button's glass and face
-    const LAYERS: usize = 5;
+    // the field's glass, its query row, the query field's caret and the body, and its one mode button's glass and face
+    const LAYERS: usize = 6;
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;

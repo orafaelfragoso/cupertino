@@ -94,6 +94,16 @@ pub trait Widget<M>: 'static {
     fn surface_layer(&self, _state: &Self::State) -> Option<crate::SurfaceLayerMark> {
         None
     }
+    /// Whether the node's overlay ([`overlay`](Self::overlay)) draws into a surface layer of its own, over the layer
+    /// the node lies in and at that layer's rect (the window's where it lies in none), so the overlay starts where it
+    /// would and draws the same pixels, and its owner fades it on the compositor's clock while it moves with what it
+    /// lies on: a caret that blinks through a motion the compositor runs. Unlike a mark of
+    /// [`surface_layer`](Self::surface_layer), it is its own layer inside a marked subtree too. Where the window system
+    /// shows no layers the overlay draws in place. A widget whose answer changes returns [`Change::Paint`] from its
+    /// update.
+    fn overlay_layer(&self, _state: &Self::State) -> Option<crate::SurfaceLayerMark> {
+        None
+    }
     /// Whether the node lies on whole device pixels of the window: its origin, and its subtree with it, moves to the
     /// nearest device pixel corner at the window's scale. A subtree that rides on a parent moving by fractions of a
     /// pixel then lands on the pixel grid as one picture, as a compositor layer moved by whole pixels does, instead of
@@ -335,6 +345,7 @@ pub(crate) trait AnyWidget<M> {
     fn raised(&self, state: &dyn Any) -> bool;
     fn obscures(&self, state: &dyn Any) -> bool;
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
+    fn overlay_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark>;
     fn on_pixels(&self, state: &dyn Any) -> bool;
     fn grows_from_anchor(&self) -> bool;
     fn closes_as_menu(&self) -> bool;
@@ -427,6 +438,10 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn surface_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark> {
         Widget::surface_layer(self, state.downcast_ref().expect(STATE))
+    }
+
+    fn overlay_layer(&self, state: &dyn Any) -> Option<crate::SurfaceLayerMark> {
+        Widget::overlay_layer(self, state.downcast_ref().expect(STATE))
     }
 
     fn on_pixels(&self, state: &dyn Any) -> bool {

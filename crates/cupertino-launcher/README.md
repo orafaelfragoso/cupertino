@@ -88,7 +88,10 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   (`WindowEvent::LayersSettled`, heard through `FrameClock::on_layers_settled`), in the frame that shows their last
   values, not on the panel's own clock, which starts a frame or more before the compositor first shows the open; a
   timer a second past the open's end takes it back if no word comes, and a timer of an earlier open ends nothing. The
-  field holds its caret through it, and a paint for any other reason draws the caret as it was shown;
+  field holds its caret through it, and a paint for any other reason draws the caret as it was shown; through the
+  search field's open the caret is a layer of its own over the query row's (`layers::CARET_LAYER`), its opacity the
+  content's fade times the field's own blink from the open's start (`BareField::blink_start`), until the layers rest
+  or a key shows the caret again;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);

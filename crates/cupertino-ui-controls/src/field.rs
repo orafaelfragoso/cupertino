@@ -7,8 +7,8 @@ use crate::{BareField, BareSecureField, SearchField, SecureField, TextChange, Te
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
-    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics,
-    Widget,
+    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx,
+    SurfaceLayerMark, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -525,19 +525,113 @@ const BLINK_FRAME_NS: f64 = 16_000_000.0;
 /// in a cycle just under a second long, steady with Reduce Motion and after [`BLINK_LIMIT_NS`].
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Blink {
-    since: Timestamp,
+    since: Cell<Timestamp>,
     /// The caret holds what it shows ([`BareField::hold_caret`]): a paint for any other reason draws it at the opacity
     /// it was last drawn with, not where its cycle has come to.
     holding: Cell<bool>,
     /// The opacity the caret was last drawn with; none since the blink restarted.
     drawn: Cell<Option<f32>>,
+    /// The owner starts the blink ([`BareField::blink_start`]): the start it last asked for, taken by the field's
+    /// first focus gain, window activation or frame after it, which started the blink.
+    start: Cell<Option<u64>>,
+    /// The owner asks to start the blink, taken or not yet.
+    owned: Cell<bool>,
+    /// The caret draws into a layer of its own ([`BareField::caret_layer`]), fully shown: the layer's opacity shows the
+    /// blink.
+    layered: Cell<bool>,
+}
+
+/// How a field's caret blinks, as its window's theme says ([`Motion::caret_phase_ms`](cupertino_ui_theme::Motion)):
+/// for an owner that shows the blink itself, on the compositor's clock ([`BareField::caret_layer`]). Its default is
+/// the theme's own blink, before a field told its own ([`BareField::on_blink`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaretBlink {
+    /// The phase of its cycle in milliseconds; 0 keeps the caret steady, as with Reduce Motion.
+    pub phase_ms: u32,
+    /// The blink started over as this was told: an edit, a caret move or a press, or a focus gain or the window
+    /// becoming active while the owner starts no blink.
+    pub restarted: bool,
+}
+
+impl Default for CaretBlink {
+    fn default() -> CaretBlink {
+        CaretBlink {
+            phase_ms: cupertino_ui_theme::CARET_PHASE_MS,
+            restarted: false,
+        }
+    }
+}
+
+impl CaretBlink {
+    /// The blink of `env`'s theme.
+    pub fn of(env: &Environment, restarted: bool) -> CaretBlink {
+        CaretBlink {
+            phase_ms: Blink::phase(env).map_or(0, |phase| (phase / 1_000_000) as u32),
+            restarted,
+        }
+    }
+
+    fn phase(&self) -> Option<u64> {
+        (self.phase_ms > 0).then_some(u64::from(self.phase_ms) * 1_000_000)
+    }
+
+    /// The caret's opacity `elapsed` seconds after the blink started, from 0 to 1: as the field draws it.
+    pub fn opacity(&self, elapsed: f64) -> f32 {
+        let elapsed = (elapsed.max(0.0) * 1e9) as u64;
+        match self.phase() {
+            Some(phase) if elapsed < BLINK_LIMIT_NS => match Blink::cycle(phase, elapsed) {
+                Cycle::Shown(_) => 1.0,
+                Cycle::Hidden(_) => 0.0,
+                Cycle::Fading(opacity) => opacity,
+            },
+            _ => 1.0,
+        }
+    }
+
+    /// The first moment, in seconds after the blink started and at or after `elapsed`, from which the caret's opacity
+    /// holds (shown or hidden) for at least `hold` seconds: `elapsed` itself unless it falls in a fade or too near
+    /// one.
+    pub fn steady_from(&self, elapsed: f64, hold: f64) -> f64 {
+        let Some(phase) = self.phase() else {
+            return elapsed.max(0.0);
+        };
+        let hold = hold.max(0.0) * 1e9;
+        let mut at = elapsed.max(0.0) * 1e9;
+        // a cycle has two steady stretches: past a few cycles none that is long enough is left to find
+        for _ in 0..8 {
+            if at >= BLINK_LIMIT_NS as f64 {
+                break;
+            }
+            match Blink::cycle(phase, at as u64) {
+                Cycle::Shown(left) | Cycle::Hidden(left) if left >= hold => break,
+                // on to the next fade, and past it
+                Cycle::Shown(left) | Cycle::Hidden(left) => at += left.max(1.0),
+                Cycle::Fading(_) => at += self.fade_left(phase, at),
+            }
+        }
+        at.min(BLINK_LIMIT_NS as f64).max(elapsed.max(0.0) * 1e9) / 1e9
+    }
+
+    /// How long the fade `at` nanoseconds after the start falls in has left, in nanoseconds.
+    fn fade_left(&self, phase: u64, at: f64) -> f64 {
+        let period = phase as f64 * BLINK_PERIOD_SHARE;
+        let into = (at - BLINK_SHOWN * period).rem_euclid(period);
+        // a fade out ends where the caret hides, a fade in where the shown stretch begins
+        let out = BLINK_FADE_OUT * period;
+        let left = if into < out {
+            out - into
+        } else {
+            period - BLINK_SHOWN * period - into
+        };
+        left.max(1.0)
+    }
 }
 
 /// The opacity of a caret whose blink restarted at `since`, at `now`: shown for the first stretch, then fading out and
 /// in, steady with Reduce Motion and once it has blinked a while. For a caret a view draws itself.
 pub fn caret_opacity(env: &Environment, since: Timestamp, now: Timestamp) -> f32 {
     Blink {
-        since,
+        since: Cell::new(since),
         ..Blink::default()
     }
     .opacity(env, now)
@@ -547,7 +641,7 @@ pub fn caret_opacity(env: &Environment, since: Timestamp, now: Timestamp) -> f32
 /// drawing frames.
 pub fn caret_blinking(env: &Environment, since: Timestamp, now: Timestamp) -> bool {
     Blink {
-        since,
+        since: Cell::new(since),
         ..Blink::default()
     }
     .next_edge(env, now)
@@ -595,7 +689,7 @@ impl Blink {
 
     /// The caret's opacity at `now`, from 0 to 1.
     pub(crate) fn opacity(&self, env: &Environment, now: Timestamp) -> f32 {
-        let elapsed = now.0.saturating_sub(self.since.0);
+        let elapsed = now.0.saturating_sub(self.since.get().0);
         match Self::phase(env) {
             Some(phase) if elapsed < BLINK_LIMIT_NS => match Self::cycle(phase, elapsed) {
                 Cycle::Shown(_) => 1.0,
@@ -608,6 +702,9 @@ impl Blink {
 
     /// The opacity to draw the caret with at `now`: while it holds, the one it was last drawn with.
     fn drawn_opacity(&self, env: &Environment, now: Timestamp) -> f32 {
+        if self.layered.get() {
+            return 1.0;
+        }
         match self.drawn.get() {
             Some(held) if self.holding.get() => held,
             _ => {
@@ -622,7 +719,7 @@ impl Blink {
     /// else when the next fade starts.
     fn next_edge(&self, env: &Environment, now: Timestamp) -> Option<Timestamp> {
         let phase = Self::phase(env)?;
-        let elapsed = now.0.saturating_sub(self.since.0);
+        let elapsed = now.0.saturating_sub(self.since.get().0);
         if elapsed >= BLINK_LIMIT_NS {
             return None;
         }
@@ -631,7 +728,7 @@ impl Blink {
             Cycle::Shown(left) | Cycle::Hidden(left) => left.max(1.0),
         };
         let at = (elapsed + wait as u64).min(BLINK_LIMIT_NS);
-        Some(Timestamp(self.since.0 + at))
+        Some(Timestamp(self.since.get().0 + at))
     }
 
     /// Asks to be woken at the next edge while the caret shows in a focused field of an active window.
@@ -661,10 +758,33 @@ impl Blink {
         self.arm(selecting, cx);
     }
 
+    /// Starts the blink over at `now` when its owner asks for another start ([`BareField::blink_start`]), at the focus
+    /// gain, window activation or frame that takes it; the next wake keeps it going from there.
+    pub(crate) fn start_at(&self, start: Option<u64>, now: Timestamp) {
+        if start.is_some() && start != self.start.get() {
+            self.since.set(now);
+            self.drawn.set(None);
+        }
+        self.start.set(start);
+    }
+
+    /// Whether the owner starts the blink, so gaining focus or the window becoming active does not.
+    fn started_by_owner(&self, event: &Event) -> bool {
+        self.owned.get()
+            && matches!(
+                event,
+                Event::Focus { gained: true, .. } | Event::WindowActive(true)
+            )
+    }
+
     /// Restarts on the events that move the caret, and keeps blinking on a wake, after the field handled `event`.
     pub(crate) fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
-        if Self::restarts(event) {
-            self.since = cx.now();
+        if Self::restarts(event) && self.started_by_owner(event) {
+            // the caret shows, on the blink its owner started
+            self.arm(selecting, cx);
+            cx.request_paint();
+        } else if Self::restarts(event) {
+            self.since.set(cx.now());
             // shown again, even while it holds
             self.drawn.set(None);
             self.arm(selecting, cx);
@@ -1861,6 +1981,15 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
             state.look = bare_look(self.size);
             return Change::Layout;
         }
+        // a new start takes the next frame's time; none takes nothing, and needs no frame
+        if self.blink_start.is_none() {
+            state.blink.start.set(None);
+        }
+        state.blink.owned.set(self.blink_start.is_some());
+        let started = self.blink_start.is_some() && self.blink_start != old.blink_start;
+        if change == Change::None && (started || self.caret_layer != old.caret_layer) {
+            return Change::Paint;
+        }
         change
     }
 
@@ -1878,27 +2007,52 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     }
 
     fn event(&self, state: &mut FieldState, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        if self.hold_caret {
+        // a held caret, or one whose layer shows its blink, draws nothing as it blinks
+        if self.hold_caret || self.caret_layer.is_some() {
             if let Event::Wake(_) = event {
                 let selecting = !state.buffer.selection().is_empty();
                 state.blink.hold(selecting, cx);
                 return Propagation::Continue;
             }
         }
-        self.field.event(state, event, cx)
+        state.blink.owned.set(self.blink_start.is_some());
+        // a new start is taken by the focus or the window's activation that shows the caret, or else by the next frame
+        if state.blink.started_by_owner(event) {
+            state.blink.start_at(self.blink_start, cx.now());
+        }
+        let since = state.blink.since.get();
+        let shows = Blink::restarts(event);
+        let propagation = self.field.event(state, event, cx);
+        if let Some(on_blink) = &self.on_blink {
+            let restarted = state.blink.since.get() != since;
+            if restarted || shows {
+                cx.emit(on_blink(CaretBlink::of(cx.env(), restarted)));
+            }
+        }
+        propagation
     }
 
     fn paint(&self, state: &FieldState, cx: &mut PaintCx<'_>) {
+        state.blink.start_at(self.blink_start, cx.now());
+        state.blink.layered.set(self.caret_layer.is_some());
         self.field.paint(state, cx)
     }
 
     fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
         state.blink.holding.set(self.hold_caret);
+        state.blink.layered.set(self.caret_layer.is_some());
         self.field.overlay(state, cx)
     }
 
     fn semantics(&self, state: &FieldState, cx: &mut SemanticsCx<'_>) {
         self.field.semantics(state, cx)
+    }
+
+    fn overlay_layer(&self, _: &FieldState) -> Option<SurfaceLayerMark> {
+        self.caret_layer.map(|key| SurfaceLayerMark {
+            key,
+            look: cupertino_ui_platform::SurfaceLayerLook::default(),
+        })
     }
 }
 

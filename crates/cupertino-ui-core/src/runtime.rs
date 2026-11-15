@@ -2588,7 +2588,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         let effects = capabilities.app_effects;
         let layered = capabilities.raised_layer;
         let marks = if capabilities.surface_layers {
-            surface_layers::marked(&self.tree, root, &w.geometry)
+            surface_layers::marked(&self.tree, root, &w.geometry, w.size)
         } else {
             Vec::new()
         };

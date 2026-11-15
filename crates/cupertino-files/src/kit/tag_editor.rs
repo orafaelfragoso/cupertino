@@ -177,6 +177,9 @@ pub(super) fn window(
             field: input,
             size: f64::from(TITLE_SIZE),
             hold_caret: false,
+            blink_start: None,
+            caret_layer: None,
+            on_blink: None,
         })
         .key("tag-field")
         // the field takes the frame's width, so its text has room and it can be pressed anywhere in the frame

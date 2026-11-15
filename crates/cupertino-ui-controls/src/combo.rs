@@ -69,6 +69,9 @@ impl<M: Clone + 'static> From<ComboBox<M>> for Element<M> {
                     field: combo.field,
                     size,
                     hold_caret: false,
+                    blink_start: None,
+                    caret_layer: None,
+                    on_blink: None,
                 })
                 .fill(),
                 Element::new(Disclosure {

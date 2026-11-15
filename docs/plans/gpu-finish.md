@@ -48,12 +48,8 @@ The boxes here are ticked together with their items in the GPU plan.
       commit of the content layer about 700 ms in: an earlier open's timer, or any other message, rebuilt the view
       and the held caret was painted where its fade had come to, not as it was shown. A held caret now paints as it
       was last drawn (`a_held_caret_painted_again_part_way_through_its_fade_is_drawn_as_the_hold_began`).
-- [ ] The caret blinks through the open. It becomes a layer of its own whose opacity goes through samples of the
-      panel's blink, so a blink makes no buffer. Not done: the caret is drawn in the field's overlay at a place only
-      its paint knows, and its blink starts when the keyboard focus comes, which the compositor gives after the window
-      maps, later than the open's samples are sent. A caret layer needs the field to draw its caret into a layer of
-      its own and tell when its blink started; meanwhile the held caret stays shown through the open (255 at the
-      caret from 550 to 1000 ms, where the panel's own drawing fades it).
+- [x] The caret blinks through the open. It becomes a layer of its own whose opacity goes through samples of the
+      panel's blink, so a blink makes no buffer (3d).
 - [x] `Model::hand_field_opens` on. Against the server, the real process commits no buffer of its window or its
       layers while the open is part way, in 3 runs
       (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over
@@ -251,9 +247,31 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 3d. The caret's blink through the field's open (`cupertino-ui-controls`, `cupertino-launcher`)
 
-- [ ] The field draws its caret into a layer of its own and tells when its blink started; the launcher sends the
+- [x] The field draws its caret into a layer of its own and tells when its blink started; the launcher sends the
       caret layer's opacity as samples of the blink through the open, so the caret blinks with no buffer. Test: the
-      caret's pixels are the panel's own at the same moments.
+      caret's pixels are the panel's own at the same moments. A node's overlay can be a surface layer of its own
+      (`Widget::overlay_layer`, `cupertino-ui-core`), inside a marked subtree too, over the layer the node lies in and
+      at that layer's rect, so the caret starts where the query row's layer would draw it and moves with the row's own
+      samples. `BareField::caret_layer` draws the caret there fully shown, its blink drawing nothing;
+      `BareField::blink_start` lets the owner start the blink: taken by the field's first focus gain, window
+      activation or frame after the start, after which neither starts it over (an edit, a move or a press still
+      does). The launcher starts it at each show from hidden, so the panel's own open and the compositor's blink from
+      the same moment whenever the keyboard focus comes; sending the samples once focus comes was not sound, as the
+      compositor starts a change when it first draws it, a frame or more after it is sent, and focus comes after the
+      window maps. The caret layer's opacity is the content's fade times the field's blink (`CaretBlink::opacity`,
+      the theme's blink, `CaretBlink::default` until the field tells its own through `BareField::on_blink`), at
+      steps of about a millisecond to the first moment past the open from which the blink holds for 0.1 s
+      (`CaretBlink::steady_from`, `CARET_HOLD`), so when the layers rest the caret goes back into the row's layer at
+      the opacity the compositor shows. A key or a press part way (the field tells its blink started over), or a
+      steady caret, takes the caret back into the row's layer at once; the open runs on
+      (`a_key_during_the_search_field_s_open_shows_the_caret_at_once`). Tests: at the same moments, 1.5, both
+      appearances, the caret within 1 of 255 at every moment from 117 ms on, through the whole blink (was 255 from
+      550 to 1000 ms); 35 at 50 ms and 19 at 83 ms while the content fades in, where the caret's layer fades over the
+      row's and the panel fades both as one group and the caret crosses the placeholder's ink (bound 40); the first
+      and last frames within 1; elsewhere unchanged (17 in the dark, 7 in the light). Against the server the field's open makes 0 buffers of the window and its 6 layers over 183 server steps animating (`shell_processes::the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_buffer`, its count of layers 6 with the caret's). At rest and
+      under Reduce Motion nothing changes; the goldens pass unchanged. The blink a field tells is the one it draws, an
+      owner's start holds through the window's activation, and a caret in its layer draws no frame as it blinks
+      (`bare_field::`).
 
 ## Wave 4: the lead's gates and measurements (merged `main`)
 

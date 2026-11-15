@@ -393,10 +393,21 @@ pub struct Model {
     /// for.
     open_rest: Option<Frame>,
     open_timer: bool,
+    /// How many times the panel showed from hidden: the query field's caret blinks from the start of the open
+    /// this numbers ([`view::PanelView::blink_start`]) until the open is over, whatever the keyboard's focus does.
+    shows: u64,
+    blink_start: Option<u64>,
+    /// The blink of the query field's theme, as the field last told it; the theme's own before it told any.
+    caret_blink: cupertino_kit::controls::CaretBlink,
+    /// The query field's caret draws into a layer of its own whose opacity goes through this blink while the
+    /// compositor runs the search field's open ([`view::layers::CARET_LAYER`]), until the caret shows again by itself.
+    caret_layered: Option<cupertino_kit::controls::CaretBlink>,
     /// How many opens were handed to the compositor: the number of the one that runs.
     pub(crate) open_number: u64,
-    /// When the panel's own motion of the open or fold the compositor runs ends, on the panel's clock.
+    /// When the panel's own motion of the open or fold the compositor runs ends, on the panel's clock, and how long
+    /// an open's lasts.
     open_end: f64,
+    open_length: f64,
     /// A scope's fold into the search field hands itself to the compositor where the panel rested as layers
     /// ([`view::layers::fold_changes`]): its glass the panel's own at every moment, the body fading on its own curve,
     /// the query row drawn again once, at the header's switch, and the edge drawn by the compositor along the glass,
@@ -484,9 +495,14 @@ impl Model {
             handed: None,
             layer_changes: Vec::new(),
             open_rest: None,
+            shows: 0,
+            blink_start: None,
+            caret_blink: Default::default(),
+            caret_layered: None,
             open_timer: false,
             open_number: 0,
             open_end: 0.0,
+            open_length: 0.0,
             hand_folds: true,
             hand_unfolds: true,
             window_held: false,
@@ -522,6 +538,7 @@ impl Model {
     /// The open or fold the compositor runs is over, or taken back: the panel draws what it presents itself again.
     fn end_open(&mut self) {
         self.open_rest = None;
+        self.caret_layered = None;
         self.fold_shown = None;
         self.unfold_body = None;
     }
@@ -548,6 +565,12 @@ impl Model {
             && (self.handed.is_some()
                 || self.open_rest.is_some()
                 || (self.nav.is_visible() && !self.motion.animating(self.now().mono)))
+    }
+
+    /// How long the panel's own motion of the open the compositor runs lasts, from its start.
+    #[cfg(test)]
+    pub fn open_length(&self) -> f64 {
+        self.open_length
     }
 
     /// Whether the compositor runs the panel's open now.
@@ -755,6 +778,10 @@ impl Model {
                 let from_hidden = self.handed.is_none() && self.motion.gone(now.mono);
                 self.handed = None;
                 self.end_open();
+                if from_hidden {
+                    self.shows += 1;
+                    self.blink_start = Some(self.shows);
+                }
                 self.hand_fold = false;
                 self.layer_changes.clear();
                 match view {
@@ -954,15 +981,26 @@ impl Model {
         }
         // the window's size through the open, which places the layers
         let _ = self.resize();
+        // the caret blinks in a layer of its own, from the open's start, where the field's theme blinks it
+        self.caret_layered = Some(self.caret_blink)
+            .filter(|b| field && b.phase_ms > 0 && self.blink_start.is_some());
         self.layer_changes = if field {
-            view::layers::field_open_changes(self.extent, &first, &rest, &self.motion, now)
+            view::layers::field_open_changes(
+                self.extent,
+                &first,
+                &rest,
+                &self.motion,
+                now,
+                self.caret_layered,
+            )
         } else {
             view::layers::open_changes(self.extent, &first, &rest, &self.motion, now)
         };
         self.open_rest = Some(rest);
         self.open_timer = false;
         self.open_number += 1;
-        self.open_end = now + self.motion.moving_left(now);
+        self.open_length = self.motion.moving_left(now);
+        self.open_end = now + self.open_length;
     }
 
     /// A fold of a scope that rested as layers into the search field, or an unfold of the field into a scope, runs on
@@ -2092,6 +2130,21 @@ impl Model {
                 }
                 self.animate()
             }
+            Input::CaretShown(blink) => {
+                // a caret shown again by an edit, a move or a press, or a blink other than the one the compositor
+                // shows, is the field's own from now on
+                if self
+                    .caret_layered
+                    .is_some_and(|shown| blink.restarted || blink.phase_ms != shown.phase_ms)
+                {
+                    self.caret_layered = None;
+                }
+                self.caret_blink = cupertino_kit::controls::CaretBlink {
+                    restarted: false,
+                    ..blink
+                };
+                Vec::new()
+            }
             Input::ModeHover(index) => {
                 self.mode_hover = index;
                 Vec::new()
@@ -2360,6 +2413,13 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
     if model.handed.is_some() && model.motion.gone(model.now().mono) {
         model.handed = None;
     }
+    // once the open is over the caret blinks from each focus gain again
+    if model.blink_start.is_some()
+        && model.open_rest.is_none()
+        && !model.motion.animating(model.now().mono)
+    {
+        model.blink_start = None;
+    }
     // whatever started a transition (a launch or an opened file hides the panel as Escape does), its frames follow
     if !model.frame_waiting && model.motion.animating(model.now().mono) {
         commands.extend(model.animate());
@@ -2427,6 +2487,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         opening: model.open_handed(),
         moving: !model.layered() && model.motion.animating(model.now().mono),
         unfold_body: model.unfold_body(),
+        blink_start: model.blink_start,
+        caret_layer: model.caret_layered.is_some() && model.layered(),
     };
     let mut window = view::panel_window(&panel);
     // what moves by itself steps once per frame the compositor gives the panel's window, never on a timer of its own

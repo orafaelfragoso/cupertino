@@ -58,7 +58,9 @@ checkout and was run on the commit this page was written against.
   `Command::Window(key, WindowRequest::Layer { key, changes })`, which draws no frame; a motion no single curve
   draws (a product of two springs, a clamped ramp) goes as values at even steps of its duration
   (`LayerChange::through`). The window's root hears `Event::LayersSettled` once its layers' last running animation
-  ends. The compositor holds every value it shows in a range far past any
+  ends. A widget whose `Widget::overlay_layer` returns a mark draws its overlay (a caret) into a layer of its own
+  over the layer it lies in and at that layer's rect, inside a marked subtree too, so the overlay can fade on the
+  compositor's clock while it moves with what it lies on (`BareField::caret_layer`). The compositor holds every value it shows in a range far past any
   output (places and sizes within a million points, scales up to 64), and one glass group takes at most 16 layers of
   a window: a 17th is a protocol error (`group_full`). Elsewhere the subtree paints in
   place and the application draws its motion itself.

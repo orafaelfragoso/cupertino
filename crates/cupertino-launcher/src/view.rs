@@ -27,8 +27,8 @@ use crate::preview::{Preview, PreviewBody};
 use crate::providers::Status;
 use crate::scope::{FilesScope, Filter, ScopeLayout};
 use cupertino_kit::controls::{
-    BareField, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text, TextChange,
-    TextField, TextRole,
+    BareField, CaretBlink, Icon, IconDirection, Image, ImageFit, ImageSource, Stack, Text,
+    TextChange, TextField, TextRole,
 };
 use cupertino_kit::core::{
     glass_outline, AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event,
@@ -252,6 +252,8 @@ pub enum Input {
     CloseMenu,
     /// The enlarged preview's close was pressed.
     ClosePreview,
+    /// The query field's caret shows again ([`BareField::on_blink`]), with the blink of the field's theme.
+    CaretShown(CaretBlink),
     /// The pointer moved onto the mode button at this index, or off them all.
     ModeHover(Option<usize>),
     /// The mode button at this index was pressed, or activated by assistive technology.
@@ -599,6 +601,11 @@ pub struct PanelView<'a> {
     /// The compositor runs an unfold of the search field into a scope: the body is drawn at this, the scope's shape at
     /// rest, and its layer is cut to the glass as the glass grows ([`layers::fold_changes`]).
     pub unfold_body: Option<PanelShape>,
+    /// The query field's caret blinks from the moment this starts ([`BareField::blink_start`]): the open's start.
+    pub blink_start: Option<u64>,
+    /// The query field's caret draws into a layer of its own ([`layers::CARET_LAYER`]), whose opacity the compositor
+    /// takes through the blink while it runs the search field's open.
+    pub caret_layer: bool,
 }
 
 fn window_spec(title: &str, app_id: &str, size: Size) -> WindowSpec {
@@ -937,6 +944,12 @@ where
         size: QUERY_SIZE,
         // while the compositor runs the close, an open or a fold, the caret's blink would draw the row's layer again
         hold_caret: view.handed || view.opening,
+        blink_start: view.blink_start,
+        caret_layer: view.caret_layer.then_some(layers::CARET_LAYER),
+        // the panel hears of the caret only while the compositor shows its blink
+        on_blink: view
+            .caret_layer
+            .then(|| Box::new(|blink| M::from(Input::CaretShown(blink))) as Box<dyn Fn(_) -> M>),
     })
     .key("query")
     .fill();

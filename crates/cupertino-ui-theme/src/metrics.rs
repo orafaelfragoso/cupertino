@@ -18,7 +18,7 @@ const FOCUS_RING_WIDTH: f64 = 2.0;
 const FOCUS_RING_OUTSET: f64 = 2.0;
 const FOCUS_RING_RADIUS_EXTRA: f64 = 3.0;
 /// How long the caret stays shown, then hidden, while it blinks.
-const CARET_PHASE_MS: u32 = 500;
+pub const CARET_PHASE_MS: u32 = 500;
 /// Body and caption sizes without theme data: the theme data's regular and small sizes.
 const NEUTRAL_BODY_SIZE: f64 = 13.0;
 const NEUTRAL_CAPTION_SIZE: f64 = 11.0;

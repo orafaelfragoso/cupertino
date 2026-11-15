@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use cupertino_geometry::{Point, Rect};
+use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_platform::{
     PresentOutcome, SurfaceLayer, SurfaceLayerLook, WindowId, WindowSystem,
 };
@@ -28,25 +28,45 @@ pub struct SurfaceLayerMark {
     pub look: SurfaceLayerLook,
 }
 
-/// A marked node of a window: its id, its layout rect in the window and its mark.
-pub(crate) type Marked = (NodeId, Rect, SurfaceLayerMark);
+/// A layer's root paint node in a window (a marked node's, or the overlay's of a node whose overlay is a layer of its
+/// own), the layer's rect in the window and its mark.
+pub(crate) type Marked = (PaintNodeId, Rect, SurfaceLayerMark);
 
-/// The marked nodes under `root` in paint order; a mark inside a marked subtree is part of the outer layer, and a key
-/// marked twice keeps its first node.
-pub(crate) fn marked<M: 'static>(tree: &Tree<M>, root: NodeId, geometry: &Geometry) -> Vec<Marked> {
+/// The layers under `root` in paint order, in a window `window` large: the marked nodes, a mark inside a marked
+/// subtree being part of the outer layer, and the overlays that are layers of their own
+/// ([`Widget::overlay_layer`](crate::Widget::overlay_layer)), each after the layer it lies in and at its rect (the
+/// window's where it lies in none). A key marked twice keeps its first.
+pub(crate) fn marked<M: 'static>(
+    tree: &Tree<M>,
+    root: NodeId,
+    geometry: &Geometry,
+    window: Size,
+) -> Vec<Marked> {
     let mut out: Vec<Marked> = Vec::new();
-    let mut stack = vec![root];
-    while let Some(id) = stack.pop() {
+    let taken = |out: &[Marked], key: u64| out.iter().any(|(_, _, m)| m.key == key);
+    // per node: the rect of the marked subtree it lies in, if any
+    let mut stack = vec![(root, None::<Rect>)];
+    while let Some((id, within)) = stack.pop() {
         let Some(node) = tree.get(id) else { continue };
-        if let Some(mark) = node.widget.surface_layer(&*node.state) {
-            if let Some(placement) = geometry.get(&id) {
-                if !out.iter().any(|(_, _, m)| m.key == mark.key) {
-                    out.push((id, placement.rect, mark));
+        let mut inner = within;
+        if within.is_none() {
+            if let Some(mark) = node.widget.surface_layer(&*node.state) {
+                let Some(placement) = geometry.get(&id) else {
+                    continue;
+                };
+                if !taken(&out, mark.key) {
+                    out.push((PaintNodeId::from(id), placement.rect, mark));
                 }
+                inner = Some(placement.rect);
             }
-            continue;
         }
-        stack.extend(node.children.iter().rev());
+        if let Some(mark) = node.widget.overlay_layer(&*node.state) {
+            if geometry.contains_key(&id) && !taken(&out, mark.key) {
+                let rect = inner.unwrap_or(Rect::from_origin_size(Point::ZERO, window));
+                out.push((crate::paint::overlay_id(id), rect, mark));
+            }
+        }
+        stack.extend(node.children.iter().rev().map(|&c| (c, inner)));
     }
     out
 }
@@ -86,7 +106,7 @@ pub(crate) fn split(painting: &mut Painting, marks: &[Marked]) -> Vec<LayerPaint
     let roots: HashMap<PaintNodeId, usize> = marks
         .iter()
         .enumerate()
-        .map(|(i, (id, ..))| (PaintNodeId::from(*id), i))
+        .map(|(i, (id, ..))| (*id, i))
         .collect();
     let mut owner: HashMap<PaintNodeId, usize> = HashMap::new();
     let nodes = std::mem::take(&mut painting.list.nodes);

@@ -62,7 +62,7 @@ pub use callout::CalloutPointer;
 pub use choice::{segment_at, ChoiceState};
 pub use date_picker::DatePickerState;
 pub use editor::EditorState;
-pub use field::{caret_blinking, caret_opacity, FieldState, SecureState};
+pub use field::{caret_blinking, caret_opacity, CaretBlink, FieldState, SecureState};
 pub use form::{
     FORM_ICON_ROW_HEIGHT, FORM_ICON_TWO_LINE_ROW_HEIGHT, FORM_ROW_HEIGHT,
     FORM_SMALL_ICON_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT,
@@ -1359,6 +1359,25 @@ pub struct BareField<M> {
     /// come to. An edit that restarts the blink shows it again. For a field whose surface the compositor is moving (a
     /// panel's open or close it runs on its own clock).
     pub hold_caret: bool,
+    /// Starts the caret's blink over each time it changes to another number, at the first focus gain, window
+    /// activation or frame of the field after it, and while it is set neither a focus gain nor the window becoming
+    /// active starts it over: the blink then runs from a moment its owner knows (a panel's open, from its start), which
+    /// the owner can follow on the compositor's clock (`caret_layer`). An edit, a caret move or a press still starts
+    /// it over. `None` blinks from each focus gain, as any field.
+    pub blink_start: Option<u64>,
+    /// The caret, and the composition's underlines, draw into the surface layer of this key (unique within the window)
+    /// over the layer the field lies in and at that layer's rect
+    /// ([`Widget::overlay_layer`](cupertino_ui_core::Widget::overlay_layer)), so they move with what they lie on as the
+    /// compositor moves it, with the pixels the field would draw there. The caret is drawn fully shown and its blink
+    /// draws nothing: the owner shows the blink through the layer's opacity, along its curve
+    /// ([`CaretBlink::opacity`]) from the moment `blink_start` started it at. For a window the window system shows
+    /// layers in; elsewhere the caret draws with the field, fully shown. `None` draws it with the field.
+    pub caret_layer: Option<u64>,
+    /// Told the field's blink ([`CaretBlink`]) each time the caret shows again: when the blink starts over (an edit, a
+    /// caret move or a press) and when the field gains focus or its window becomes active. An owner showing the blink
+    /// itself (`caret_layer`) shows the caret again at once on a start over, and follows the blink of the field's
+    /// theme.
+    pub on_blink: Option<Box<dyn Fn(CaretBlink) -> M>>,
 }
 
 /// A [`SecureField`] without chrome, its text set at `size` points (whole points, 1 to 200) in `weight` (the body

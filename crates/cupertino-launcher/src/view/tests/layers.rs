@@ -4,7 +4,8 @@
 use super::*;
 use crate::motion::CLOSE_DURATION;
 use crate::view::layers::{
-    button_face_layer, button_glass_layer, BODY_LAYER, GLASS_LAYER, OPTIONS_LAYER, ROW_LAYER,
+    button_face_layer, button_glass_layer, BODY_LAYER, CARET_LAYER, GLASS_LAYER, OPTIONS_LAYER,
+    ROW_LAYER,
 };
 use cupertino_kit::platform::{LayerProperty, SurfaceLayerLook};
 use cupertino_ui_test::PresentedSurfaceLayer;
@@ -1604,8 +1605,13 @@ fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame(
     for i in 0..count {
         want.extend([button_glass_layer(i), button_face_layer(i)]);
     }
+    // the caret in a layer of its own over the query row's, at its rect
+    let mut opening = want.clone();
+    opening.insert(2, CARET_LAYER);
     let keys: Vec<u64> = shown.iter().map(|l| l.key).collect();
-    assert_eq!(keys, want, "no edge layer");
+    assert_eq!(keys, opening, "no edge layer");
+    let rect = |key: u64| shown.iter().find(|l| l.key == key).unwrap().rect;
+    assert_eq!(rect(CARET_LAYER), rect(ROW_LAYER));
     let glass = shown.iter().find(|l| l.key == GLASS_LAYER).unwrap();
     assert_eq!(
         glass.look.edge,
@@ -1650,6 +1656,37 @@ fn the_search_field_opens_from_hidden_on_the_compositor_s_clock_without_a_frame(
     let fade = of(button_face_layer(0), LayerProperty::Opacity);
     let fade = fade[0].samples.clone().unwrap();
     assert_eq!((fade[0], *fade.last().unwrap()), (0.0, 1.0));
+    // the caret moves with the row, and fades in with it and blinks from the open's first frame through the field's
+    // own blink, to where the blink is steady past the open
+    for p in [LayerProperty::X, LayerProperty::Y] {
+        assert_eq!(of(CARET_LAYER, p), of(ROW_LAYER, p), "{p:?}");
+    }
+    let caret = of(CARET_LAYER, LayerProperty::Opacity);
+    assert_eq!(caret.len(), 1, "one curve through samples");
+    let blink = cupertino_kit::controls::CaretBlink::default();
+    let duration = match caret[0].curve {
+        Some(cupertino_kit::platform::LayerCurve::Timed { duration, .. }) => duration,
+        ref other => panic!("{other:?}"),
+    };
+    let open = m.model().open_length();
+    assert!(duration >= open, "{duration} past the open's {open}");
+    assert_eq!(
+        blink.steady_from(duration, crate::view::layers::CARET_HOLD),
+        duration,
+        "steady from its end"
+    );
+    let values = caret[0].samples.clone().unwrap();
+    let last = (values.len() - 1) as f64;
+    for (i, v) in values.iter().enumerate() {
+        let t = duration * i as f64 / last;
+        let fade = (t / crate::motion::OPEN_FADE).min(1.0);
+        let want = fade * f64::from(blink.opacity(t));
+        assert!(
+            (f64::from(*v) - want).abs() < 1e-6,
+            "{t}: {v} against {want}"
+        );
+    }
+    assert!(values.contains(&0.0), "it hides part way");
     // the open's frames: none drawn, none asked for
     for _ in 0..90 {
         m.step(|_, _| {});
@@ -1683,6 +1720,10 @@ fn under_reduce_motion_the_search_field_s_open_is_the_panel_s_own() {
     assert!(m.layer_requests().is_empty());
 }
 
+/// How far the caret's layer fading over the query row's can part from the two fading as one group, where the caret
+/// crosses the placeholder's ink: a quarter of the ink's contrast at most, at half opacity.
+const CARET_OVER_INK: u8 = 40;
+
 /// The search field's open the compositor runs against the panel's own drawing of it at the same moments: at each
 /// frame the panel draws of its open from hidden (every other one and its last, at 1.5 in both appearances), the
 /// compositor's layers at that moment of the open, with the edge it draws along the glass group, against its pixels,
@@ -1703,7 +1744,7 @@ fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the
             .collect();
         let moments: Vec<f64> = own.iter().map(|m| m.after).collect();
         let handed = open_moments(1.5, dark, true, || Message::Toggle, &moments);
-        // the caret, which the field holds while the compositor runs the open and the panel's own drawing blinks
+        // the caret, which blinks in a layer of its own over the query row's through the panel's own blink
         let field = handed.last().unwrap().glass[0].0;
         let caret = Rect::new(
             field.x() + crate::view::QUERY_INSET - 8.0,
@@ -1747,6 +1788,18 @@ fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the
             assert!(
                 most <= bound,
                 "dark {dark}, {ms:.0} ms: {most} apart from the caret, over {bound}"
+            );
+            // while the content fades in, the caret's layer fades over the row's where the panel fades both as one
+            // group: where the caret crosses the placeholder's ink the two differ by up to a quarter of the ink's
+            // contrast at half opacity; once the content is opaque the blink is the panel's own
+            let caret_bound = if a.after < crate::motion::OPEN_FADE {
+                CARET_OVER_INK
+            } else {
+                1
+            };
+            assert!(
+                most_caret <= caret_bound,
+                "dark {dark}, {ms:.0} ms: {most_caret} at the caret, over {caret_bound}"
             );
             let shows = |g: &[(Rect, f64, f64)]| -> Vec<(Rect, f64, f64)> {
                 g.iter().filter(|g| g.2 > 0.0).copied().collect()
@@ -2740,4 +2793,34 @@ fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments
             );
         }
     }
+}
+
+/// A key while the compositor runs the search field's open shows the caret at once, as the field's own: the field tells
+/// its blink started over, and the caret leaves its layer for the query row's, which draws it; the open runs on.
+#[test]
+fn a_key_during_the_search_field_s_open_shows_the_caret_at_once() {
+    const LEFT: u32 = 0xff51;
+    let mut m = drawn(1.5, true, true);
+    send(Message::Toggle);
+    m.step(|_, _| {});
+    for _ in 0..4 {
+        if m.presents().0 > 0 {
+            break;
+        }
+        m.step(|_, _| {});
+    }
+    let keys = |m: &Metered| -> Vec<u64> { m.shown_layers().iter().map(|l| l.key).collect() };
+    assert!(keys(&m).contains(&CARET_LAYER), "the caret in its layer");
+    for _ in 0..30 {
+        m.step(|_, _| {});
+    }
+    let row = m.layer_frames().get(&ROW_LAYER).copied();
+    m.step(|s, w| key(s, w, LEFT, None, Mods::NONE));
+    m.step(|_, _| {});
+    assert!(!keys(&m).contains(&CARET_LAYER), "the caret left its layer");
+    assert!(
+        m.layer_frames().get(&ROW_LAYER).copied() > row,
+        "the query row's layer draws it"
+    );
+    assert!(m.model().open_handed(), "the open runs on");
 }

@@ -72,14 +72,18 @@ impl Application for Scene {
     }
 
     fn view(model: &(Color, Color)) -> Vec<Window<Message>> {
+        let mut inner = vec![Element::new(Block {
+            rect: Rect::new(10.0, 5.0, 20.0, 20.0),
+            color: model.1,
+        })
+        .key("inner")];
+        if MARKER.get() {
+            inner.push(Element::new(Marker).key("marker"));
+        }
         let panel = Element::new(Holder {
             rect: PANEL,
             mark: true,
-            children: vec![Element::new(Block {
-                rect: Rect::new(10.0, 5.0, 20.0, 20.0),
-                color: model.1,
-            })
-            .key("inner")],
+            children: inner,
         })
         .key("panel");
         let block = Element::new(Block {
@@ -213,6 +217,67 @@ impl Widget<Message> for Block {
     }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
+thread_local! {
+    /// The panel holds a [`Marker`].
+    static MARKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The key of the [`Marker`]'s overlay layer.
+const MARKER_KEY: u64 = 9;
+/// Where the [`Marker`] lies in the panel, and the bar its overlay draws in it.
+const MARKER_AT: Rect = Rect::new(35.0, 4.0, 10.0, 20.0);
+const MARKER_BAR: Rect = Rect::new(2.0, 2.0, 1.0, 16.0);
+
+/// A node whose overlay draws a green bar, in an overlay layer of its own.
+struct Marker;
+
+impl Widget<Message> for Marker {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(MARKER_AT.width()),
+            height: SizeSpec::Fixed(MARKER_AT.height()),
+            position: MARKER_AT.origin,
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: MARKER_AT.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        cx.overlay();
+    }
+
+    fn overlay(&self, _: &(), cx: &mut crate::OverlayCx<'_>) {
+        cx.fill_pixels(MARKER_BAR, GREEN);
+    }
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn overlay_layer(&self, _: &()) -> Option<SurfaceLayerMark> {
+        Some(SurfaceLayerMark {
+            key: MARKER_KEY,
+            look: SurfaceLayerLook::default(),
+        })
+    }
 }
 
 type Rt = Runtime<Scene, FakeSystem>;
@@ -399,5 +464,41 @@ fn without_surface_layers_the_marked_subtree_paints_in_place() {
             (BLUE, Rect::new(110.0, 45.0, 20.0, 20.0))
         ],
         "the panel's block in the window, where it lies"
+    );
+}
+
+/// A node's overlay that is a layer of its own leaves the layer the node lies in for one over it at that layer's rect,
+/// drawing the bar where the outer layer drew it; without surface layers it draws in place.
+#[test]
+fn an_overlay_layer_inside_a_marked_subtree_draws_over_it_at_its_rect() {
+    MARKER.set(true);
+    let (rt, _) = start(true, 1.5);
+    let (no_layers, _) = start(false, 1.5);
+    MARKER.set(false);
+    let (_, layers) = rt.window_system().surface_presents.last().unwrap();
+    let keys: Vec<(u64, Rect)> = layers.iter().map(|l| (l.key, l.rect)).collect();
+    assert_eq!(
+        keys,
+        vec![(KEY, PANEL), (MARKER_KEY, PANEL)],
+        "over the panel, at its rect"
+    );
+    // in place, on the window's device pixels
+    let window = fills(&no_layers.windows[0].display_list);
+    let placed = window
+        .iter()
+        .find(|(c, _)| *c == GREEN)
+        .map(|(_, r)| *r)
+        .expect("in place without layers");
+    let at = MARKER_BAR.translate(PANEL.x() + MARKER_AT.x(), PANEL.y() + MARKER_AT.y());
+    assert!((placed.x() - at.x()).abs() < 1.0 && (placed.y() - at.y()).abs() < 1.0);
+    assert_eq!(
+        fills(&rt.windows[0].surface_layers.layers[&MARKER_KEY].list),
+        vec![(GREEN, placed.translate(-PANEL.x(), -PANEL.y()))],
+        "the bar where the panel's layer would draw it, in its coordinates"
+    );
+    assert_eq!(
+        fills(layer_list(&rt)),
+        vec![(BLUE, Rect::new(10.0, 5.0, 20.0, 20.0))],
+        "the panel's layer without the bar"
     );
 }

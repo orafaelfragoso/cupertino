@@ -3,7 +3,7 @@
 use crate::support;
 
 use cupertino_geometry::{Insets, Size};
-use cupertino_ui_controls::{BareField, Stack, TextChange, TextField};
+use cupertino_ui_controls::{BareField, CaretBlink, Stack, TextChange, TextField};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
@@ -14,16 +14,23 @@ use support::{color, window, Harness};
 thread_local! {
     /// The field holds its caret.
     static HOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The owner starts the field's blink ([`BareField::blink_start`]).
+    static START: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The field's caret draws into a layer of its own ([`BareField::caret_layer`]) and tells its blink.
+    static CARET_LAYER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum Message {
     Edit(TextChange),
+    Blink(CaretBlink),
 }
 
 struct Model {
     query: String,
     revision: u64,
+    /// What the field told of its blink, in order.
+    blinks: Vec<CaretBlink>,
 }
 
 struct Query;
@@ -37,14 +44,20 @@ impl Application for Query {
             Model {
                 query: String::new(),
                 revision: 0,
+                blinks: Vec::new(),
             },
             Vec::new(),
         )
     }
 
-    fn update(model: &mut Model, Message::Edit(change): Message) -> Vec<Command<Message>> {
-        model.query = change.text;
-        model.revision = change.revision;
+    fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
+        match message {
+            Message::Edit(change) => {
+                model.query = change.text;
+                model.revision = change.revision;
+            }
+            Message::Blink(blink) => model.blinks.push(blink),
+        }
         Vec::new()
     }
 
@@ -64,6 +77,11 @@ impl Application for Query {
             },
             size: 26.0,
             hold_caret: HOLD.get(),
+            blink_start: START.get(),
+            caret_layer: CARET_LAYER.get(),
+            on_blink: CARET_LAYER
+                .get()
+                .map(|_| Box::new(Message::Blink) as Box<dyn Fn(CaretBlink) -> Message>),
         })
         .key("query");
         window(Element::new(Stack {
@@ -243,4 +261,157 @@ fn a_held_caret_painted_again_part_way_through_its_fade_is_drawn_as_the_hold_beg
         "where its cycle has come to"
     );
     HOLD.set(false);
+}
+
+/// Moves the clock in display frames to `to` milliseconds, drawing what the field asks for.
+fn run(h: &mut Harness<Query>, to: u64) {
+    use cupertino_ui_core::Clock;
+    use cupertino_ui_platform::Timestamp;
+    let to = Timestamp(to * 1_000_000);
+    while h.clock().now() < to {
+        let next = Timestamp((h.clock().now().0 + 16_000_000).min(to.0));
+        h.clock().advance_to(next).unwrap();
+        h.settle();
+    }
+}
+
+/// The window loses the keyboard and gets it back.
+fn reactivate(h: &mut Harness<Query>) {
+    use cupertino_ui_platform::WindowStates;
+    for activated in [false, true] {
+        let states = WindowStates {
+            activated,
+            ..WindowStates::default()
+        };
+        h.rt.window_system_mut()
+            .configure(h.window, Some(Size::new(400.0, 100.0)), states)
+            .unwrap();
+        h.settle();
+    }
+}
+
+/// The blink a field tells its owner is the one it draws: its opacity at each moment, and where it next holds.
+#[test]
+fn the_blink_a_field_tells_is_the_one_it_draws() {
+    use cupertino_ui_controls::caret_opacity;
+    use cupertino_ui_platform::Timestamp;
+    let env = harness().env();
+    let blink = CaretBlink::of(&env, false);
+    assert_eq!(blink, CaretBlink::default(), "the theme's own");
+    let mut fades = 0;
+    for ms in 0..3000_u64 {
+        let t = ms as f64 / 1000.0;
+        let drawn = caret_opacity(&env, Timestamp(0), Timestamp(ms * 1_000_000));
+        assert_eq!(blink.opacity(t), drawn, "{ms} ms");
+        let steady = blink.steady_from(t, 0.1);
+        if drawn > 0.0 && drawn < 1.0 {
+            fades += 1;
+            assert!(steady > t, "{ms} ms: past the fade");
+        }
+        // it holds from there for a tenth of a second, shown or hidden, and is the first moment that does
+        let held = blink.opacity(steady);
+        assert!(held == 0.0 || held == 1.0, "{ms} ms: {held}");
+        let holds = |from: f64| {
+            (0..100).all(|step| (blink.opacity(from + step as f64 / 1000.0) - held).abs() < 1e-3)
+        };
+        assert!(holds(steady), "{ms} ms");
+        if steady > t + 2e-3 {
+            assert!(!holds(steady - 2e-3), "{ms} ms: an earlier moment holds");
+        }
+    }
+    assert!(fades > 0, "it fades");
+    let steady = CaretBlink {
+        phase_ms: 0,
+        restarted: false,
+    };
+    assert_eq!(
+        (steady.opacity(0.56), steady.steady_from(0.56, 0.1)),
+        (1.0, 0.56)
+    );
+}
+
+/// A blink its owner starts runs from the moment the field took the start: the window losing the keyboard and
+/// getting it back starts it over no more, as it does any other field's.
+#[test]
+fn a_blink_its_owner_starts_runs_on_whatever_the_window_s_activation_does() {
+    use cupertino_ui_controls::caret_opacity;
+    use cupertino_ui_platform::Timestamp;
+    // how far the caret fades in a display frame, the most two fields drawing on frames apart differ by
+    const FRAME_OF_FADE: f32 = 0.15;
+    let text = color(ColorRole::Text, InteractionVariant::Normal, false).a;
+    for start in [None, Some(1)] {
+        START.set(start);
+        let mut h = harness();
+        let env = h.env();
+        run(&mut h, 300);
+        reactivate(&mut h);
+        // a moment part way through a fade of the blink from the field's start, after the window got the
+        // keyboard back
+        let back = cupertino_ui_core::Clock::now(h.clock()).0 / 1_000_000;
+        let fading = (back + 16..back + 2000)
+            .find(|&ms| {
+                (0.25..0.5).contains(&caret_opacity(
+                    &env,
+                    Timestamp(0),
+                    Timestamp(ms * 1_000_000),
+                ))
+            })
+            .expect("it fades");
+        run(&mut h, fading);
+        // the same field at the same moment, its window never losing the keyboard
+        let mut kept = harness();
+        run(&mut kept, fading);
+        let (drawn, from_start) = (caret(&h), caret(&kept));
+        assert_eq!(drawn.len(), 1, "{start:?}");
+        assert!(from_start[0] < 0.6 * text, "part way: {from_start:?}");
+        if start.is_some() {
+            assert!(
+                (drawn[0] - from_start[0]).abs() < FRAME_OF_FADE * text,
+                "{drawn:?} against {from_start:?}"
+            );
+        } else {
+            assert!(
+                (drawn[0] - from_start[0]).abs() > 0.3 * text,
+                "started over: {drawn:?}"
+            );
+        }
+    }
+    START.set(None);
+}
+
+/// A caret in a layer of its own is drawn fully shown, and its blink draws no frame: the owner shows the blink through
+/// the layer. The field tells its blink as the caret shows again, an edit as a start over.
+#[test]
+fn a_caret_in_a_layer_of_its_own_is_drawn_fully_shown_and_its_blink_draws_nothing() {
+    START.set(Some(1));
+    CARET_LAYER.set(Some(6));
+    let mut h = harness();
+    let text = color(ColorRole::Text, InteractionVariant::Normal, false).a;
+    let frames = h.rt.window_system().frames(h.window).unwrap().len();
+    let now = cupertino_ui_core::Clock::now(h.clock()).0 / 1_000_000;
+    run(&mut h, now + 1100);
+    assert_eq!(
+        h.rt.window_system().frames(h.window).unwrap().len(),
+        frames,
+        "its blink drew no frame"
+    );
+    assert_eq!(caret(&h), vec![text], "fully shown");
+    reactivate(&mut h);
+    let told = h.model().blinks.clone();
+    assert!(
+        told.iter().all(|b| !b.restarted && b.phase_ms > 0) && !told.is_empty(),
+        "the window's activation starts nothing over: {told:?}"
+    );
+    h.type_text("d");
+    assert_eq!(
+        h.model().blinks.last(),
+        Some(&CaretBlink {
+            restarted: true,
+            ..told[0]
+        }),
+        "an edit starts it over"
+    );
+    assert_eq!(caret(&h), vec![text]);
+    START.set(None);
+    CARET_LAYER.set(None);
 }

@@ -19,6 +19,7 @@ mod palette;
 mod vibrant;
 
 pub use accent::selection_tint;
+pub use metrics::CARET_PHASE_MS;
 pub use vibrant::{
     glass_foreground, vibrant_level, vibrant_secondary, VIBRANT_PLACEHOLDER, VIBRANT_PRIMARY,
 };

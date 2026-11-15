@@ -2577,6 +2577,100 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
     );
 }
 
+/// The launcher's search field opens from hidden on the compositor's clock: its window draws one frame, with its
+/// layers (the field's glass, its content and the mode button's glass and face) at rest, and while the compositor
+/// moves, sizes and fades them in from where the open starts neither the window nor any of its layers commits a
+/// buffer. The field opens and closes once first, as a resident launcher's has by the time it is asked again, so the
+/// renderer has warmed up. The open's samples move the layers through places and sizes, which no opacity or scale
+/// shows part way, so every step while any layer still animates is counted. Run with `--no-capture` for the counts.
+#[test]
+fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_buffer() {
+    use cupertino_server::layers_v1::settled;
+    // the search field's window, with the room for its shadow
+    const SEARCH: i32 = 640 + 120;
+    // the field's glass, its content and its one mode button's glass and face
+    const LAYERS: usize = 4;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("launcher-field-open-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let Some(mut server) = Server::start(vec![launcher], true) else {
+        return;
+    };
+    server.state.dbus = Some(
+        cupertino_server::dbus::DbusHandle::start_on(Some(bus.address.clone()), || {})
+            .expect("the control bus worker"),
+    );
+    server.wait_until("the launcher to map its hidden window", |s| {
+        committed_buffer(s, "cupertino-launcher").is_some()
+    });
+    let toggle = |server: &mut Server| {
+        server.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::ToggleLauncher],
+        })
+    };
+    // the open's first frame: the window and its layers at rest, which the compositor shows from where the open starts
+    let first_frame = |server: &mut Server| {
+        server.wait_until("the search field's first frame with its layers", |s| {
+            launcher_surfaces(s, SEARCH).is_some_and(|(panel, layers)| {
+                buffer_commit(&panel).is_some()
+                    && layers.len() == LAYERS
+                    && layers.iter().all(|l| buffer_commit(l).is_some())
+            })
+        });
+        launcher_surfaces(&server.state, SEARCH).unwrap()
+    };
+    let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
+    // the close
+    toggle(&mut server);
+    first_frame(&mut server);
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the launcher runs");
+    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join("cupertino/renderers")
+        .join(pid.to_string());
+    server.wait_until("the launcher to draw on the GPU", |_| {
+        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
+    });
+    toggle(&mut server);
+    server.wait_until("the search field to close", |s| !launcher_panel(s, SEARCH));
+    // the open counted
+    toggle(&mut server);
+    let (panel, layers) = first_frame(&mut server);
+    let all: Vec<_> = std::iter::once(panel.clone()).chain(layers).collect();
+    let (mut steps, mut animating, mut new_buffers) = (0, 0, 0);
+    let mut last = commits(&all);
+    server.wait_until("the open to be over", |s| {
+        // part way: any layer still animating, or waiting to start
+        let part_way = !settled(&panel, s.now());
+        steps += 1;
+        let commit = commits(&all);
+        if part_way {
+            animating += 1;
+            new_buffers += commit.iter().zip(&last).filter(|(a, b)| a != b).count();
+        }
+        last = commit;
+        steps > 1 && !part_way
+    });
+    eprintln!(
+        "trace: field open: {steps} server steps, {animating} of them animating, {new_buffers} new buffers of the \
+         window and its layers"
+    );
+    assert!(animating > 0, "the open ran on the server");
+    assert_eq!(
+        new_buffers, 0,
+        "the window and its layers drew no frame while they opened"
+    );
+}
+
 /// The window manager process with the stage on puts the older of two applications in the strip;
 /// killed, its windows are back at once, and the restarted process places them again.
 #[test]

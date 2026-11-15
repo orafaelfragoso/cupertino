@@ -79,6 +79,20 @@ impl Report {
         put("presented", self.gaps.presented.to_string());
         put("discarded", self.gaps.discarded.to_string());
         put("missed", self.gaps.missed.to_string());
+        let breaks: Vec<String> = self
+            .gaps
+            .breaks
+            .iter()
+            .map(|(a, b)| format!("{a}-{b}"))
+            .collect();
+        put(
+            "breaks",
+            if breaks.is_empty() {
+                "none".into()
+            } else {
+                breaks.join(",")
+            },
+        );
         put("explicit_sync", u8::from(self.explicit_sync).to_string());
         put(
             "syncobj_surfaces_created",
@@ -417,7 +431,7 @@ pub fn run(connection: Connection, options: &Options) -> Result<Report, String> 
     // the last frames' presentation
     let _ = queue.roundtrip(&mut state);
     report.frames = n;
-    report.gaps = state.gaps;
+    report.gaps = std::mem::take(&mut state.gaps);
     let _ = state.clock_monotonic;
     if let Some(object) = syncobj_surface.take() {
         object.destroy();

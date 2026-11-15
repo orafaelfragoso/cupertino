@@ -8,6 +8,9 @@
     scripts/test -p CRATE..      the fast tier of the crates named
     scripts/test ... -- ARGS     ARGS go to nextest (a filter, say: -- -E 'test(/dock/)')
 
+With --slow on a machine whose render node opens, CUPERTINO_GPU_REQUIRED=1 is set (unless the environment sets it), so
+the tests that need a render node fail there instead of skipping; the run says which (ci/render_node.py).
+
 The fast tier must finish in 5 minutes for the whole workspace, and each of its tests in 2 seconds. A test over that
 budget fails the run with its name and time: make it faster (the test clock, not sleeps), or move it to the slow tier in
 .config/nextest.toml with a reason. The 20 slowest tests are printed after every run.
@@ -22,6 +25,7 @@ import xml.etree.ElementTree as ET
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ci"))
 import affected  # noqa: E402
+import render_node  # noqa: E402
 
 TEST_BUDGET = 2.0  # seconds, each test of the fast tier
 RUN_BUDGET = 300.0  # seconds, the whole fast tier's run
@@ -61,8 +65,11 @@ def main() -> int:
         opts = [o for p in (fixtures or []) for o in ("--package", p)]
         command = [sys.executable, str(ROOT / "ci" / "build-test-fixtures.py"), "--locked", *opts, "--", *command]
     print("scripts/test:", " ".join(scope if len(scope) < 12 else scope[:12] + ["..."]), flush=True)
+    env = dict(os.environ)
+    if profile == "slow":
+        print("scripts/test:", render_node.require(env), flush=True)
     started = time.monotonic()
-    status = subprocess.run(command, cwd=ROOT).returncode
+    status = subprocess.run(command, cwd=ROOT, env=env).returncode
     total = time.monotonic() - started
     return report(profile, total, status, whole=not packages)
 

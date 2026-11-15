@@ -355,7 +355,8 @@ reviewed change that records the reason.
   `CUPERTINO_RENDERER=gpu`; if the step 3 probe succeeds, the dmabuf presenter runs there too, allocating by texture
   export.
 - What CI cannot exercise (GBM, hardware modifiers, syncobj with the DRM backend, the NVIDIA driver) runs in a local
-  tier before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a missing GPU a failure: dmabuf
+  tier before every push that touches rendering, with `CUPERTINO_GPU_REQUIRED=1` making a missing GPU a failure
+  (`scripts/test --slow` and `scripts/done` set it when the machine's render node opens, and say so): dmabuf
   import, syncobj round trips (the headless backend offers the protocol when its device has a render node, and can
   withhold it), injected context loss and purge, the CPU↔GPU switch mid-session, a failed import falling back to shared
   memory, a resize storm, the fence soak, and the goldens re-run on the NVIDIA GPU.

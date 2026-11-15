@@ -1,9 +1,11 @@
 //! A large window's frames on both renderers, timed: a window of 1600 by 1000 points at scale 1.5 tiled with the
 //! golden scenes (controls with strokes and gradients, a card with a shadow, text, clips and a faded group), drawn
-//! whole and then repainting a control's worth of damage. A GPU frame is
-//! timed from the request to the device finishing it, so its time holds the recording on the CPU as well. On the
-//! local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) a damaged frame must stay within the client's GPU budget per frame,
-//! and a whole frame's recording and issuing of its draws within its CPU budget.
+//! whole and then repainting a control's worth of damage. A GPU frame is timed from the request to the device
+//! finishing it, and on the GPU itself by a timer query, which other work on the machine's GPU does not stretch as it
+//! stretches the time to the finish. On the local GPU tier (`CUPERTINO_GPU_REQUIRED=1`) a damaged frame's time on the
+//! GPU must stay within the client's GPU budget per frame (without timer queries, the CPU time of its recording and
+//! issuing instead, and the GPU's half is skipped with a message), and a whole frame's recording and issuing of its
+//! draws within its CPU budget.
 
 use std::time::{Duration, Instant};
 
@@ -18,10 +20,10 @@ use crate::goldens::scenes;
 const WINDOW: (f64, f64) = (1600.0, 1000.0);
 const SCALE: f64 = 1.5;
 
-/// The most a frame repainting a control's worth of damage may take on the GPU, request to finish.
+/// The most a frame repainting a control's worth of damage may take on the GPU.
 const DAMAGED_BUDGET: Duration = Duration::from_millis(4);
 
-/// The most the recording and issuing of a whole frame's draws may take on the CPU, request to return.
+/// The most the recording and issuing of a whole frame's draws may take of the thread's CPU time, request to return.
 const WHOLE_RECORDING_BUDGET: Duration = Duration::from_millis(4);
 
 /// The window tiled with the golden scenes, each moved to its place.
@@ -66,6 +68,31 @@ fn median(mut v: Vec<Duration>) -> Duration {
     v[v.len() / 2]
 }
 
+/// The CPU time the calling thread has used, which a busy machine does not stretch by the time the thread waits for a
+/// processor or for the driver.
+fn thread_cpu() -> Duration {
+    use std::ffi::{c_int, c_long};
+    /// A `struct timespec` as the C library lays it out.
+    #[repr(C)]
+    struct Timespec {
+        seconds: c_long,
+        nanoseconds: c_long,
+    }
+    extern "C" {
+        fn clock_gettime(clock: c_int, now: *mut Timespec) -> c_int;
+    }
+    /// The clock of the CPU time the calling thread has used.
+    const CLOCK_THREAD_CPUTIME_ID: c_int = 3;
+    let mut now = Timespec {
+        seconds: 0,
+        nanoseconds: 0,
+    };
+    // SAFETY: `now` is a valid timespec for the call to fill, and the C library the test links has the function.
+    let read = unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut now) };
+    assert_eq!(read, 0, "the thread's CPU clock reads");
+    Duration::new(now.seconds as u64, now.nanoseconds as u32)
+}
+
 #[test]
 fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     let Some(device) = common::device() else {
@@ -101,32 +128,52 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
             })
             .collect::<Vec<_>>()
     };
-    // what of a frame is spent before the request returns: recording, uploads and issuing the passes
+    // what of a frame is spent before the request returns (recording, uploads and issuing the passes), in wall and
+    // thread CPU time, and what the GPU spends on it (None without timer queries)
     let submitted = std::cell::RefCell::new(Vec::new());
+    let submitted_cpu = std::cell::RefCell::new(Vec::new());
+    let on_device = std::cell::RefCell::new(Vec::new());
     let last_stats = std::cell::Cell::new(cupertino_ui_gpu::GpuStats::default());
     let mut on_gpu = |f: &Frame<'_>| {
-        let start = Instant::now();
-        gpu.render(&cupertino_ui_render::RenderRequest {
-            list: f.list,
-            resources: f.resources,
-            scale: f.scale,
-            width: f.size.0,
-            height: f.size.1,
-            damage: f.damage,
-        })
-        .expect("the GPU frame");
-        submitted.borrow_mut().push(start.elapsed());
+        let ((), spent) = device
+            .gpu_time(|| {
+                let (start, cpu) = (Instant::now(), thread_cpu());
+                gpu.render(&cupertino_ui_render::RenderRequest {
+                    list: f.list,
+                    resources: f.resources,
+                    scale: f.scale,
+                    width: f.size.0,
+                    height: f.size.1,
+                    damage: f.damage,
+                })
+                .expect("the GPU frame");
+                submitted.borrow_mut().push(start.elapsed());
+                submitted_cpu.borrow_mut().push(thread_cpu() - cpu);
+            })
+            .expect("the frame timed");
+        on_device.borrow_mut().push(spent);
         last_stats.set(*gpu.stats());
         device.finish().expect("the frame finished");
+    };
+    // the median GPU time of the frames timed since the last call, if every one of them was timed
+    let on_device_median = || -> Option<Duration> {
+        let times: Option<Vec<Duration>> = on_device.take().into_iter().collect();
+        times.filter(|t| !t.is_empty()).map(median)
     };
     // the first frame fills the caches and atlases
     let first_gpu = time(&full, 1, &mut on_gpu)[0];
     submitted.borrow_mut().clear();
+    submitted_cpu.borrow_mut().clear();
+    on_device.borrow_mut().clear();
     let whole_gpu = median(time(&full, 9, &mut on_gpu));
     let whole_submitted = median(submitted.take());
+    let whole_on_device = on_device_median();
+    let whole_submitted_cpu = median(submitted_cpu.take());
     let whole_stats = last_stats.get();
     let damaged_gpu = median(time(&damaged, 21, &mut on_gpu));
     let damaged_submitted = median(submitted.take());
+    let damaged_submitted_cpu = median(submitted_cpu.take());
+    let damaged_on_device = on_device_median();
     let mut on_cpu = |f: &Frame<'_>| {
         common::draw_cpu(&mut cpu, f);
     };
@@ -135,8 +182,9 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     let damaged_cpu = median(time(&damaged, 21, &mut on_cpu));
     eprintln!(
         "renderer made in {made:?} (programs compiled); {} nodes, {}x{} pixels: first frame gpu {first_gpu:?} cpu {first_cpu:?}; whole frame (median) gpu \
-         {whole_gpu:?} (returned after {whole_submitted:?}) cpu {whole_cpu:?}; damaged frame (median) gpu \
-         {damaged_gpu:?} (returned after {damaged_submitted:?}) cpu {damaged_cpu:?}; whole {whole_stats:?}; damaged {:?}",
+         {whole_gpu:?} (returned after {whole_submitted:?}, {whole_submitted_cpu:?} of the thread's CPU time, on the GPU {whole_on_device:?}) cpu {whole_cpu:?}; damaged frame (median) gpu \
+         {damaged_gpu:?} (returned after {damaged_submitted:?}, {damaged_submitted_cpu:?} of the thread's CPU time, on the GPU \
+         {damaged_on_device:?}) cpu {damaged_cpu:?}; whole {whole_stats:?}; damaged {:?}",
         list.nodes.len(),
         size.0,
         size.1,
@@ -146,13 +194,25 @@ fn a_large_windows_damaged_frame_stays_within_the_gpu_budget() {
     assert_eq!(whole_stats.targets_made, 0, "{whole_stats:?}");
     assert!(whole_stats.layers > 100, "{whole_stats:?}");
     if common::gpu_required() {
+        match damaged_on_device {
+            Some(spent) => assert!(
+                spent < DAMAGED_BUDGET,
+                "a damaged frame took {spent:?} on the GPU"
+            ),
+            None => {
+                eprintln!(
+                    "SKIPPED the damaged frame's time on the GPU: the device has no timer query; its recording and \
+                     issuing are held to the budget instead"
+                );
+                assert!(
+                    damaged_submitted_cpu < DAMAGED_BUDGET,
+                    "a damaged frame took {damaged_submitted_cpu:?} of the thread's CPU time to record and issue"
+                );
+            }
+        }
         assert!(
-            damaged_gpu < DAMAGED_BUDGET,
-            "a damaged frame took {damaged_gpu:?} on the GPU"
-        );
-        assert!(
-            whole_submitted < WHOLE_RECORDING_BUDGET,
-            "a whole frame's draws took {whole_submitted:?} to record and issue"
+            whole_submitted_cpu < WHOLE_RECORDING_BUDGET,
+            "a whole frame's draws took {whole_submitted_cpu:?} of the thread's CPU time to record and issue"
         );
     }
 }

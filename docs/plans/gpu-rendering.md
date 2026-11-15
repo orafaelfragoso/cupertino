@@ -941,13 +941,25 @@ Gate:
               the row and the body are layers of their own; the shape changes both ways with its corner held to half
               its height, which a fixed frame of the edge cannot follow: it needs the edge drawn by the compositor.
               Split, in order:
-          - [ ] The query row and the body as layers of their own in place of the one content layer, at rest the
-                panel's pixels within 1 of 255 (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place`
-                over the browser, the files scope and the field).
-          - [ ] The glass's place, size and corner through samples of the panel's own values on the shape spring
-                (`layers::open_values` over the fold's motion, the corner the panel's, held to half the height), the
-                body's opacity through samples of its own curve, the row's frame drawn again once at the header's
-                switch (one buffer of the row's layer, the only one the fold makes).
+          - [x] The query row and the body as layers of their own in place of the one content layer
+                (`layers::ROW_LAYER`, `layers::BODY_LAYER`, the body's layer from the content's top), at rest the
+                panel's pixels within 1 of 255 at 1, 1.5 and 2 in both appearances
+                (`a_resting_panel_s_layers_carry_the_pixels_and_the_glass_it_draws_in_place` over the field, its
+                results, the browser and the files scope); the opens and the close as before, and against the server
+                the close 0 buffers over 14 to 16 steps part way, the browser's open 0 over 91 to 96.
+          - [x] The fold: the glass's place, size and corner through samples of the panel's own values on the shape
+                spring (`layers::fold_changes` over the enclosure's motion, `Motion::shaping_left`, the corner the
+                panel's, held to half the height), the body's opacity through samples of its own curve, the row's
+                frame drawn again once at the header's switch (one buffer of the row's layer, the only one the fold
+                makes part way; the first frame commits the glass's look with the compositor's edge, no pixels)
+                (`a_scope_folds_on_the_compositor_s_clock_drawing_its_row_once`). At the same moments, 1.5, both
+                scopes and appearances, the glass the panel's at every moment, away from the outline and the caret
+                within 0 of 255, along the outline 178 and 52 of 255 (dark, light) while the corners are a scope's and
+                within 1 from 300 ms, at the field's capsule
+                (`the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments`). Behind
+                `Model::hand_folds`, off in the process until the edge follows the glass (below).
+          - [ ] The unfold: the scope's body drawn into the body's layer at its first frame and masked to the glass as
+                it grows, and the mode buttons' layers carried through their merge; not done.
           - [ ] The edge follows the glass (decided by the owner: the edge follows the glass's continuous outline).
                 Through the fold the outline goes from a scope's continuous corners to the field's capsule, which only
                 the compositor's edge can follow. Split, in order:

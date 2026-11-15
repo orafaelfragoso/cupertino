@@ -250,6 +250,7 @@ impl Application for MeteredApp {
         model.compositor_layers = LAYERS.get();
         model.hand_opens = LAYERS.get();
         model.hand_field_opens = LAYERS.get();
+        model.hand_folds = LAYERS.get();
         (model, vec![listen()])
     }
 

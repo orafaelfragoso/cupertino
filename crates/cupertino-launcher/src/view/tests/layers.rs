@@ -224,11 +224,14 @@ fn walk(scale: f64, dark: bool, layers: bool) -> Vec<Rest> {
     out
 }
 
-/// From the browser at rest, the files scope at rest: the browser folds and closes, the files scope opens and a letter
-/// is typed, which shows the caret afresh whether or not the compositor ran the open.
+/// From the browser at rest, the files scope at rest: the browser folds (the compositor telling when a fold it ran is
+/// over) and closes, the files scope opens and a letter is typed, which shows the caret afresh whether or not the
+/// compositor ran the open.
 fn to_files(m: &mut Metered) {
     for _ in 0..2 {
         m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+        m.until_quiet(4, 200);
+        m.finish_handed_open();
         m.until_quiet(4, 200);
     }
     send(Message::CloseOver);
@@ -1633,5 +1636,427 @@ fn the_search_field_s_open_the_compositor_runs_is_the_panel_s_own_drawing_at_the
             first <= 1 && end <= 1,
             "dark {dark}: first {first}, last {end}"
         );
+    }
+}
+
+impl Metered {
+    /// How many frames each of the panel's layers drew so far, by key.
+    fn layer_frames(&self) -> std::collections::BTreeMap<u64, usize> {
+        let panel = self.panel().expect("the panel is shown");
+        let mut out = std::collections::BTreeMap::new();
+        for l in self
+            .driver
+            .runtime()
+            .window_system()
+            .surface_layers(panel)
+            .unwrap()
+            .iter()
+            .flatten()
+            .filter(|l| l.frame.is_some())
+        {
+            *out.entry(l.key).or_default() += 1;
+        }
+        out
+    }
+
+    /// The panel's window frames so far that drew pixels, not those that commit with no damage to show its layers'.
+    fn window_frames(&self) -> usize {
+        let panel = self.panel().expect("the panel is shown");
+        self.driver
+            .runtime()
+            .window_system()
+            .frames(panel)
+            .unwrap()
+            .iter()
+            .filter(|f| !f.pixels.is_empty() && !f.damage.is_empty())
+            .count()
+    }
+}
+
+/// How a scope opens from hidden.
+type Opening = fn() -> Message;
+
+/// The scopes a fold folds from, and how each opens.
+const FOLDING: [(&str, Opening); 2] = [
+    ("the browser", || Message::Browse),
+    ("the files scope", || Message::Files),
+];
+
+/// Escape from a scope at rest as layers hands its fold into the search field to the compositor: the glass moves
+/// through the panel's own values on the shape spring from the scope to the field, its corner held to half its height,
+/// the body fades through its own curve and the row does not, and the edge is the compositor's along the glass. Once
+/// the fold began, the panel draws no frame of its window and none of a layer but one of the query row, at the
+/// header's switch, and asks for none, until the compositor tells the layers came to rest.
+#[test]
+fn a_scope_folds_on_the_compositor_s_clock_drawing_its_row_once() {
+    use crate::view::layers::{glass_edge, OPEN_SAMPLES};
+    for (what, open) in FOLDING {
+        let mut m = drawn(1.5, true, true);
+        m.settle_on(open());
+        assert!(m.model().layered(), "{what}: at rest as layers");
+        let asked = m.layer_requests().len();
+        let resting = (m.window_frames(), m.layer_frames());
+        m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+        assert!(
+            m.model().fold_handed(),
+            "{what}: the fold is the compositor's"
+        );
+        eprintln!(
+            "trace: fold {what}: at rest {resting:?}, at Escape {} window frames, layers {:?}",
+            m.window_frames(),
+            m.layer_frames()
+        );
+        let start = CLOCK.get();
+        let length = m.model().motion.shaping_left(start);
+        let switch = m
+            .model()
+            .motion
+            .header_switch(start)
+            .expect("the header switches part way");
+        let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
+        assert_eq!(
+            keys,
+            vec![GLASS_LAYER, ROW_LAYER, BODY_LAYER],
+            "{what}: the edge drawn along the glass"
+        );
+        let glass = m
+            .shown_layers()
+            .into_iter()
+            .find(|l| l.key == GLASS_LAYER)
+            .unwrap();
+        assert_eq!(glass.look.edge, glass_edge(true), "{what}");
+        let changes = m.layer_requests()[asked..].to_vec();
+        let of = |key: u64, p: LayerProperty| -> Vec<cupertino_kit::platform::LayerChange> {
+            changes
+                .iter()
+                .filter(|(k, _)| *k == key)
+                .flat_map(|(_, c)| c.iter().filter(|c| c.property == p).cloned())
+                .collect()
+        };
+        // the glass from the scope's shape to the field's, through the panel's own values
+        match of(GLASS_LAYER, LayerProperty::Width).first() {
+            Some(width) => {
+                let samples = width.samples.clone().expect("samples");
+                assert_eq!(samples.len(), OPEN_SAMPLES);
+                assert_eq!(f64::from(samples[0]), glass.rect.width(), "{what}");
+                assert!(
+                    (f64::from(*samples.last().unwrap()) - crate::motion::GROUP_WIDTH).abs() < 1e-3,
+                    "{what}: to the field's whole width, {}",
+                    samples.last().unwrap()
+                );
+            }
+            // as wide as the field: its width is left out
+            None => assert_eq!(glass.rect.width(), crate::motion::GROUP_WIDTH, "{what}"),
+        }
+        let height = of(GLASS_LAYER, LayerProperty::Height)[0]
+            .samples
+            .clone()
+            .unwrap();
+        let corner = of(GLASS_LAYER, LayerProperty::CornerRadius)[0]
+            .samples
+            .clone()
+            .unwrap();
+        for (h, r) in height.iter().zip(corner.iter()) {
+            assert!(
+                *r <= h / 2.0 + 1e-4,
+                "{what}: the corner held to half the height"
+            );
+        }
+        assert_eq!(
+            *corner.last().unwrap(),
+            *height.last().unwrap() / 2.0,
+            "{what}: a capsule"
+        );
+        // the body fades out on its own curve, the row not at all
+        let fade = of(BODY_LAYER, LayerProperty::Opacity);
+        let fade = fade[0]
+            .samples
+            .clone()
+            .expect("the body fades through samples");
+        assert_eq!((fade[0], *fade.last().unwrap()), (1.0, 0.0), "{what}");
+        assert!(of(ROW_LAYER, LayerProperty::Opacity).is_empty(), "{what}");
+        assert_eq!(
+            of(ROW_LAYER, LayerProperty::X).len(),
+            of(GLASS_LAYER, LayerProperty::X).len(),
+            "{what}: the row keeps to the enclosure's left edge"
+        );
+        assert!(
+            of(ROW_LAYER, LayerProperty::Y).is_empty(),
+            "{what}: the top edge stays"
+        );
+        // the fold's first frame lays the edge along the glass; from then on the row's one frame at the switch alone
+        m.step(|_, _| {});
+        let (windows, layers) = (m.window_frames(), m.layer_frames());
+        eprintln!(
+            "trace: fold {what}: {length:.3} s, the header switching at {:.3} s; at its first frame {windows} window \
+             frames, layers {layers:?}",
+            switch.0 - start
+        );
+        let mut steps = 0;
+        let number = m.model().open_number;
+        let mut switched = false;
+        while CLOCK.get() < start + length + 0.1 {
+            // the timer the panel asked for the switch, on this host's clock
+            if !switched && CLOCK.get() >= switch.0 {
+                switched = true;
+                send(Message::HeaderSwitch(number));
+            }
+            m.step(|_, _| {});
+            steps += 1;
+            assert!(!m.model().animating(), "{what}: the fold asks for no frame");
+        }
+        assert!(
+            m.model().fold_handed(),
+            "{what}: until the compositor tells"
+        );
+        let mut more = m.layer_frames();
+        for (k, n) in &layers {
+            *more.entry(*k).or_default() -= n;
+        }
+        more.retain(|_, n| *n > 0);
+        eprintln!("trace: fold {what}: over {steps} steps, new frames {more:?}");
+        assert_eq!(m.window_frames(), windows, "{what}: no frame of the window");
+        assert_eq!(
+            more.into_iter().collect::<Vec<_>>(),
+            vec![(ROW_LAYER, 1)],
+            "{what}: one frame of the row, at the switch"
+        );
+        m.layers_settle();
+        assert!(!m.model().fold_handed(), "{what}: the fold is over");
+        assert_eq!(m.model().presented().header, crate::motion::Header::Search);
+    }
+}
+
+/// Under Reduce Motion nothing of a fold is handed over: the panel draws it in place.
+#[test]
+fn under_reduce_motion_a_scope_s_fold_is_the_panel_s_own() {
+    let mut m = drawn(1.5, true, true);
+    m.settle_on(Message::ReduceMotion(true));
+    m.settle_on(Message::Browse);
+    let asked = m.layer_requests().len();
+    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    assert!(!m.model().fold_handed());
+    assert_eq!(m.layer_requests().len(), asked);
+}
+
+/// A scope's fold into the search field at `scale` in the `dark` or light appearance, from Escape on, the scope opened
+/// by `open` and at rest: drawn by the panel itself (`layers` false) at each frame it draws of the fold, with whether
+/// its header had switched; or handed to the compositor and shown at `moments` (seconds after Escape, and whether the
+/// header had switched by then) by [`shown_after`] and [`compose_with_edge`], the query row's second frame from the
+/// switch on.
+fn fold_moments(
+    scale: f64,
+    dark: bool,
+    layers: bool,
+    open: fn() -> Message,
+    moments: &[(f64, bool)],
+) -> Vec<(Moment, bool)> {
+    use crate::motion::Header;
+    let mut m = drawn(scale, dark, layers);
+    m.settle_on(open());
+    let asked = m.layer_requests().len();
+    let seen = m.window_frames();
+    m.step(|s, w| key(s, w, ESCAPE, None, Mods::NONE));
+    let start = CLOCK.get();
+    let length = m.model().motion.shaping_left(start);
+    let materials = |m: &Metered| -> Vec<(Rect, f64, f64)> {
+        let panel = m.panel().unwrap();
+        m.driver
+            .runtime()
+            .window_system()
+            .requests(panel)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| match r {
+                WindowRequest::Materials(regions) => Some(regions.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+            .iter()
+            .map(|r| (r.rect, r.radius, r.alpha))
+            .collect()
+    };
+    let mut out = Vec::new();
+    if layers {
+        assert!(m.model().fold_handed(), "the fold is the compositor's");
+        let before = m.shown_layers();
+        let changes = m.layer_requests()[asked..].to_vec();
+        let (w, h, _) = m.window_pixels();
+        let (switch, _) = m.model().motion.header_switch(start).unwrap();
+        let number = m.model().open_number;
+        while CLOCK.get() < switch {
+            m.step(|_, _| {});
+        }
+        send(Message::HeaderSwitch(number));
+        m.step(|_, _| {});
+        let after = m.shown_layers();
+        let edge = before
+            .iter()
+            .find(|l| l.look.edge.width > 0.0)
+            .map(|l| l.look.edge)
+            .expect("the edge drawn along the glass");
+        for &(at, switched) in moments {
+            let rest = if switched { &after } else { &before };
+            let shown = shown_after(rest, &changes, at);
+            out.push((
+                Moment {
+                    after: at,
+                    size: (w, h),
+                    pixels: compose_with_edge((w, h), scale, &shown, edge),
+                    glass: shown
+                        .iter()
+                        .filter(|l| l.glass)
+                        .map(|l| (l.bounds, l.radius, l.opacity))
+                        .collect(),
+                    apart: Vec::new(),
+                },
+                switched,
+            ));
+        }
+        return out;
+    }
+    // each frame the panel draws, at the time it is drawn, to the fold's end (the buttons bud out later)
+    let mut drawn = seen;
+    loop {
+        let after = CLOCK.get() - start;
+        let now = m.window_frames();
+        if now != drawn {
+            drawn = now;
+            let (w, h, pixels) = m.window_pixels();
+            out.push((
+                Moment {
+                    after,
+                    size: (w, h),
+                    pixels,
+                    glass: materials(&m),
+                    apart: Vec::new(),
+                },
+                m.model().presented().header == Header::Search,
+            ));
+        }
+        if after >= length || out.len() >= 60 {
+            break;
+        }
+        m.step(|_, _| {});
+    }
+    out
+}
+
+/// The fold the compositor runs against the panel's own drawing of it at the same moments: at each frame the panel
+/// draws of a scope's fold into the search field (every other one and its last, at 1.5, both scopes and appearances),
+/// the compositor's layers at that moment, with the edge it draws along the glass, against its pixels, and their glass
+/// against the glass it stands on (rect, corner and opacity), which it is at every moment. Apart from the outline and
+/// the caret with the glyph beside it (the field holds its caret while the compositor runs the fold where the panel's
+/// own drawing blinks it, and the panel's own moving caret falls a device pixel apart from the row it is drawn over),
+/// every frame is the panel's within 1 of 255. Along the outline the compositor's edge follows the glass's continuous
+/// corners where the panel strokes circular arcs, so there they part at a scope's corners by up to the line's own
+/// opacity, and within an eighth of it once the shape is the field's capsule. Run with `--no-capture` for the
+/// figures, and with `CUPERTINO_LAUNCHER_MOMENTS` for the pictures ([`keep_moment`]).
+#[test]
+fn the_fold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments() {
+    for (what, open) in FOLDING {
+        for dark in [true, false] {
+            let own = fold_moments(1.5, dark, false, open, &[]);
+            assert!(
+                own.len() >= 12,
+                "{what}: the panel drew its fold: {}",
+                own.len()
+            );
+            let last = own.len() - 1;
+            let own: Vec<(Moment, bool)> = own
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == 0 || *i == last)
+                .map(|(_, m)| m)
+                .collect();
+            let moments: Vec<(f64, bool)> = own.iter().map(|(m, s)| (m.after, *s)).collect();
+            let handed = fold_moments(1.5, dark, true, open, &moments);
+            let line = f64::from(crate::view::edge_alpha(dark, true)) * 255.0;
+            let (mut worst, mut worst_edge, mut worst_caret) = (0, 0, 0);
+            for (index, ((a, _), (b, _))) in own.iter().zip(&handed).enumerate() {
+                assert_eq!(a.size, b.size);
+                let ms = a.after * 1000.0;
+                let (rect, radius, _) = a.glass[0];
+                let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+                let caret = Rect::new(
+                    rect.x() + crate::view::QUERY_INSET - 8.0,
+                    rect.y(),
+                    32.0,
+                    crate::view::COLLAPSED_HEIGHT,
+                );
+                let (cx, cy) = (
+                    rect.x() + rect.width() / 2.0,
+                    rect.y() + rect.height() / 2.0,
+                );
+                let (hw, hh) = (rect.width() / 2.0, rect.height() / 2.0);
+                let width = a.size.0;
+                let (mut content, mut edge, mut at_caret) = (0, 0, 0);
+                for (i, (p, q)) in a.pixels.chunks(4).zip(b.pixels.chunks(4)).enumerate() {
+                    let d = p
+                        .iter()
+                        .zip(q)
+                        .map(|(u, v)| u.abs_diff(*v))
+                        .max()
+                        .unwrap_or(0);
+                    if d == 0 {
+                        continue;
+                    }
+                    let x = ((i as u32 % width) as f64 + 0.5) / 1.5;
+                    let y = ((i as u32 / width) as f64 + 0.5) / 1.5;
+                    let qx = (x - cx).abs() - (hw - radius);
+                    let qy = (y - cy).abs() - (hh - radius);
+                    let outside = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+                    if outside.abs() < EDGE_BAND {
+                        edge = edge.max(d);
+                    } else if caret.contains(Point::new(x, y)) {
+                        at_caret = at_caret.max(d);
+                    } else {
+                        content = content.max(d);
+                    }
+                }
+                worst = worst.max(content);
+                worst_edge = worst_edge.max(edge);
+                worst_caret = worst_caret.max(at_caret);
+                eprintln!(
+                    "trace: fold {what}, dark {dark}, {ms:.0} ms: largest difference {content}, {edge} along the \
+                     outline, {at_caret} at the caret"
+                );
+                keep_moment(&format!("fold-{what}"), dark, a, b);
+                assert!(
+                    content <= 1,
+                    "{what}, dark {dark}, {ms:.0} ms: {content} apart from the outline"
+                );
+                assert!(
+                    f64::from(edge) <= line.ceil(),
+                    "{what}, dark {dark}, {ms:.0} ms: {edge} along the outline"
+                );
+                if index == own.len() - 1 {
+                    assert!(
+                        f64::from(edge) <= (line / 8.0).ceil(),
+                        "{what}, dark {dark}: at the field's capsule {edge} along the outline"
+                    );
+                }
+                assert_eq!(a.glass.len(), b.glass.len(), "{:?} {:?}", a.glass, b.glass);
+                for ((r0, q0, o0), (r1, q1, o1)) in a.glass.iter().zip(&b.glass) {
+                    let off = (r0.x() - r1.x())
+                        .abs()
+                        .max((r0.y() - r1.y()).abs())
+                        .max((r0.width() - r1.width()).abs())
+                        .max((r0.height() - r1.height()).abs());
+                    assert!(off < 0.05, "{what} {ms:.0} ms: glass {r0:?} against {r1:?}");
+                    assert!(
+                        (q0 - q1).abs() < 0.05 && (o0 - o1).abs() < 0.01,
+                        "{what} {ms:.0} ms: {q0} {o0} / {q1} {o1}"
+                    );
+                }
+            }
+            eprintln!(
+                "trace: fold {what}, dark {dark}: {} of its {} frames, largest {worst} apart from the outline and the \
+                 caret, {worst_edge} along the outline (the line {line:.0}), {worst_caret} at the caret",
+                own.len(),
+                last + 1
+            );
+        }
     }
 }

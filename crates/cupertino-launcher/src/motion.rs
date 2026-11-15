@@ -312,6 +312,12 @@ impl Motion {
         self.switch_at = at;
     }
 
+    /// When the header switches after `now`, and to which, while a switch waits.
+    pub fn header_switch(&self, now: f64) -> Option<(f64, Header)> {
+        (now < self.switch_at && self.header.0 != self.header.1)
+            .then_some((self.switch_at, self.header.1))
+    }
+
     fn header_at(&self, now: f64) -> Header {
         if now >= self.switch_at {
             self.header.1
@@ -633,6 +639,28 @@ impl Motion {
             || self.sharp.animating(now)
             || self.dip.is_some_and(|start| now < start + DIP_END)
             || now < self.switch_at
+    }
+
+    /// Whether the enclosure still changes at `now`, its mode buttons aside: its shape, opacity, scale, content, blur,
+    /// the width's dip or the header's switch.
+    fn shaping(&self, now: f64) -> bool {
+        (self.shape.is_animating(now) && !self.shape_rests(now))
+            || self.alpha.animating(now)
+            || self.scale.is_animating(now)
+            || self.content.animating(now)
+            || self.blur.animating(now)
+            || self.dip.is_some_and(|start| now < start + DIP_END)
+            || now < self.switch_at
+    }
+
+    /// How long from `now` until the enclosure stops changing, its mode buttons aside, to the next [`MOVING_STEP`]:
+    /// a fold's own length, after which the buttons bud out of the field again on their own delay.
+    pub fn shaping_left(&self, now: f64) -> f64 {
+        let steps = (MOVING_MOST / MOVING_STEP) as usize;
+        (0..=steps)
+            .map(|i| i as f64 * MOVING_STEP)
+            .find(|&t| !self.shaping(now + t))
+            .unwrap_or(MOVING_MOST)
     }
 
     /// Whether the panel is fully gone at `now` (closed and its fade over).

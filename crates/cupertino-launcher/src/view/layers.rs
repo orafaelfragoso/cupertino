@@ -20,6 +20,9 @@
 //! look ([`glass_edge`]), which the compositor draws round each shape of the glass group cut by the others, as the panel
 //! cuts its own edges, and neither the edge layer nor the buttons' faces draw one.
 //!
+//! While the compositor runs a scope's fold into the search field ([`fold_changes`]) the shape changes from a scope's
+//! to the field's capsule, which a fixed frame of an edge cannot follow either: the glass carries the edge then too.
+//!
 //! [`close_changes`] are the layers' changes for a close from rest: on the close's ease-out over
 //! [`CLOSE_DURATION`], the glass grows to the enclosure's closing shape, the edge scales with it and the content and
 //! the edge blur to the close's blur, everything fades out, and the mode buttons move out with the group.
@@ -757,6 +760,69 @@ pub fn field_open_changes(
         out.push((button_face_layer(index), symbol));
     }
     out
+}
+
+/// The enclosure's corner radius as `frame` presents it, held to half its height as the panel draws it.
+fn held_radius(extent: Size, frame: &Frame) -> f64 {
+    enclosure_radius(frame)
+        .min(enclosure_rect(extent, frame).height() / 2.0)
+        .max(0.0)
+}
+
+/// The changes of the panel's layers for a fold of a scope into the search field the compositor runs, or an unfold of
+/// the field into a scope, from `start` over `duration` (the enclosure's own motion, [`Motion::shaping_left`]), in a
+/// window `extent` large. The layers stay as they are drawn: the glass at the enclosure's place, size and corner as
+/// the fold starts, the row and the body at the content's top. The enclosure moves on the shape spring, its top edge
+/// fixed and its sides closing in or opening out evenly, its corner the shape's held to half its height; the content
+/// keeps its size from the enclosure's left edge. So the glass's place, size and corner and the content's place go
+/// through `motion`'s own values, left out where they never change, and the body fades through its own curve (the
+/// content's opacity times the enclosure's), which the row does not. The edge is the compositor's, along the glass
+/// ([`glass_edge`], set by the view while the fold is the compositor's), so no frame of an edge follows the shape.
+pub fn fold_changes(
+    extent: Size,
+    motion: &Motion,
+    start: f64,
+    duration: f64,
+) -> Vec<(u64, Vec<LayerChange>)> {
+    let through = |out: &mut Vec<LayerChange>, property, value: &dyn Fn(&Frame) -> f64| {
+        let values = values_over(motion, start, duration, value);
+        if values.iter().any(|v| *v != values[0]) {
+            out.push(LayerChange::through(property, duration, values));
+        }
+    };
+    let rect = |frame: &Frame| enclosure_rect(extent, frame);
+    let mut glass = Vec::new();
+    through(&mut glass, LayerProperty::X, &|f| rect(f).x());
+    through(&mut glass, LayerProperty::Y, &|f| rect(f).y());
+    through(&mut glass, LayerProperty::Width, &|f| rect(f).width());
+    through(&mut glass, LayerProperty::Height, &|f| rect(f).height());
+    through(&mut glass, LayerProperty::CornerRadius, &|f| {
+        held_radius(extent, f)
+    });
+    // the content keeps its size, centred across the enclosure and from its top edge
+    let mut row = Vec::new();
+    through(&mut row, LayerProperty::X, &|f| {
+        let r = rect(f);
+        r.x() + (r.width() - f.shape.width) / 2.0
+    });
+    through(&mut row, LayerProperty::Y, &|f| rect(f).y());
+    let mut body = row.clone();
+    through(&mut body, LayerProperty::Opacity, &|f| f.content * f.alpha);
+    vec![(GLASS_LAYER, glass), (ROW_LAYER, row), (BODY_LAYER, body)]
+}
+
+/// A value of the panel as `motion` presents it from `start` over `duration`, at [`OPEN_SAMPLES`] even steps, the
+/// first where it starts and the last where it ends.
+pub fn values_over(
+    motion: &Motion,
+    start: f64,
+    duration: f64,
+    value: &dyn Fn(&Frame) -> f64,
+) -> Arc<[f32]> {
+    let last = OPEN_SAMPLES - 1;
+    (0..OPEN_SAMPLES)
+        .map(|i| value(&motion.frame(start + duration * i as f64 / last as f64)) as f32)
+        .collect()
 }
 
 /// How many values a curve of the open carries: the most the protocol takes. Over an open of half a second a straight

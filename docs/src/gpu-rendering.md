@@ -316,9 +316,9 @@ missed refresh costs more than the latency it saves (the recent maximum is the l
 to the moment its render fence signalled, read from the fence without waiting once the flip has come, or, where the
 fence cannot be read, the time to the flip being queued plus an estimate a late-started frame's miss raises; the
 margin is 2 ms; a frame that misses its vblank turns the late start off for 60 frames, twice as long for each miss
-that follows within 60 frames of it coming back, up to 960; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison). A 10-bit primary plane is a setting
-(`output_depth`), off until the probe decides; captures draw into 8-bit targets of their own. Direct scanout and
-the cursor plane are already permitted by the DRM path; they are verified on the target driver rather than built.
+that follows within 60 frames of it coming back, up to 960; `CUPERTINO_LATE_LATCH=0` turns it off for a comparison).
+Primary planes are 10 bits a channel by default (`output_depth`; 8 where a plane has no 10-bit format, or when the
+setting asks for 8); captures draw into 8-bit targets of their own. Direct scanout and the cursor plane are already permitted by the DRM path; they are verified on the target driver rather than built.
 A display at a fractional scale is drawn at the next whole scale into a frame of its own (10 bits a channel where the
 device renders to it) and shrunk to its pixels by a final pass that dithers at the display's depth; it gives up
 direct scanout, keeps the cursor plane, and draws only the damage of the frame mapped to its pixels and widened by

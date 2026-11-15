@@ -1125,11 +1125,11 @@ Gate:
       it off; "Measurements").
 - [x] Pointer-to-screen latency reported by the DRM backend's log (`pointer-to-flip`; the bench reports the headless
       figure, `pointer_latency_p50_ms` and `_p95_ms`, `ptr95` in its table).
-- [x] 10-bit primary plane (`Abgr2101010`) behind `output_depth` in `compositor.json`, 8 bits by default, falling back
-      to 8 bits on a plane without a 10-bit format; capture paths never read the plane and stay 8-bit
-      (`output_depth::tests`).
-- [ ] 10 bits by default. Decided by the owner (2026-11-15): 10 bits on the target display, without waiting on the
-      step 0 probe ("Measurements", "Turning 10 bits on").
+- [x] 10-bit primary plane (`Abgr2101010`) behind `output_depth` in `compositor.json`, 8 bits by default at first (10 since,
+      below), falling back to 8 bits on a plane without a 10-bit format; capture paths never read the plane and stay
+      8-bit (`output_depth::tests`).
+- [x] 10 bits by default. Decided by the owner (2026-11-15): 10 bits on the target display, without waiting on the
+      step 0 probe (`Depth::from_setting` gives 10 bits without the key; "Measurements", "Turning 10 bits off").
 
 Gate:
 
@@ -2338,16 +2338,16 @@ logs at start whether the late start is on (`late_latch=`) and the depth asked f
 its primary plane got (`output initialised … format=… bits=…`). `scripts/dev/drm-trace-summary` reads a log (its
 tests: `python3 -I scripts/dev/test_drm_trace_summary.py`).
 
-**Turning 10 bits on.** OWNER DECISION, after the step 0 probe (`tools/gpu-probes/depth.sh`, above). To turn it on,
-add `"output_depth": 10` to `~/.config/cupertino/compositor.json` (a JSON object; keep the other keys) and start a new
-session; the server log's `output initialised` line then says `format=AB30 bits=10` (or the 8-bit format, where the
-plane has no 10-bit one). To turn it off, remove the key or set it to 8. If the probe shows a visible gain, the
-default changes in `crates/cupertino-server/src/output_depth.rs` (`Depth::from_setting`) with the probe's result
-recorded here. Screenshots, screen sharing and recordings draw the scene into 8-bit targets of their own and read
-those back, so they are the same at either depth
-(`output_depth::tests::every_capture_reads_back_8_bits_whatever_the_plane_s_depth` pins every read back in the server
-to an 8-bit format). A display on a second card shows the render
-GPU's 8-bit copy whatever its plane's depth.
+**Turning 10 bits off.** 10 bits are the default, decided by the owner (2026-11-15) without waiting on the step 0
+probe (`tools/gpu-probes/depth.sh`, above): `Depth::from_setting` in `crates/cupertino-server/src/output_depth.rs`
+gives 10 bits when `output_depth` is absent, and a plane without a 10-bit format falls back to 8 bits. To turn it
+off, add `"output_depth": 8` to `~/.config/cupertino/compositor.json` (a JSON object; keep the other keys) and start
+a new session; the server log's `output initialised` line then names an 8-bit format (`AB24` or `AR24`) and
+`bits=8`, where it said `format=AB30 bits=10`. To turn it back on, remove the key or set it to 10. Screenshots,
+screen sharing and recordings draw the scene into 8-bit targets of their own and read those back, so they are the
+same at either depth (`output_depth::tests::every_capture_reads_back_8_bits_whatever_the_plane_s_depth` pins every
+read back in the server to an 8-bit format). A display on a second card shows the render GPU's 8-bit copy whatever
+its plane's depth.
 
 **The step 11 gate.** DEFERRED by the owner (2026-11-15): it needs the desktop session, two hours of it. Install a package built
 from `main` (`scripts/package-local.sh`, then `pacman -U`), log out, switch to a text console (Ctrl+Alt+F3), log in,

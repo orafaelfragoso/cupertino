@@ -15,7 +15,7 @@
 //! | `menu_bar_auto_hide`, `edge_tiling`, `tile_margins` | boolean: the menu bar hides until the pointer reaches the top edge; dragging a window to a screen edge tiles it; tiled windows keep a margin around and between them |
 //! | `wallpaper_color` | `#rrggbb`: a solid colour in place of any picture |
 //! | `material_density` | number 0 to 1: how much denser (less see-through) every material is made, 0 leaving the recipes as they are |
-//! | `output_depth` | `8` or `10`: bits a channel of the displays' primary planes, 8 by default; 10 falls back to 8 where a display has no 10-bit format; read when the session starts |
+//! | `output_depth` | `8` or `10`: bits a channel of the displays' primary planes, 10 by default, falling back to 8 where a display has no 10-bit format; 8 keeps 8; read when the session starts |
 //! | `fractional_scale_mode` | `supersample` (the default) or `direct`: how a display at a fractional scale is drawn, at the next whole scale and shrunk to its pixels, or straight at its scale; or an object of display names (the connector, such as `DP-1`, or the display's identity) to those, `*` for the others |
 //! | `prepare_toolkit_programs` | boolean, `true` by default: the compositor makes the toolkit's GPU programs into the per-user program cache on a thread of its own when the session starts, so no application process compiles them; read when the session starts |
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `trackpad_acceleration`, `natural_scrolling` (touchpads), `mouse_natural_scrolling` (wheels), `shake_to_locate` | boolean |
@@ -302,7 +302,7 @@ pub struct CompositorSettings {
     pub wallpaper_color: Option<[u8; 4]>,
     /// How much denser every material is made, 0 to 1.
     pub material_density: Option<f64>,
-    /// Bits a channel of the primary planes: 8 or 10.
+    /// Bits a channel of the primary planes: 8 or 10; absent, 10.
     pub output_depth: Option<u8>,
     /// How displays at a fractional scale are drawn.
     pub fractional_scale_mode: Option<FractionalScaleModes>,
@@ -974,7 +974,14 @@ mod tests {
             assert_eq!(s.output_depth, None, "{bad}");
             assert_eq!(problems.len(), 1, "{bad}");
         }
-        assert_eq!(CompositorSettings::default().output_depth, None);
+        assert_eq!(
+            CompositorSettings::default().output_depth,
+            None,
+            "absent: the server's 10 bits"
+        );
+        let (s, problems) = CompositorSettings::parse(r#"{"appearance":"dark"}"#, None);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(s.output_depth, None, "a file without the key");
     }
 
     #[test]

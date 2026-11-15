@@ -701,7 +701,7 @@ impl Default for Config {
             edge_tiling: true,
             tile_margins: true,
             material_density: 0.0,
-            output_depth: crate::output_depth::Depth::Eight,
+            output_depth: crate::output_depth::Depth::Ten,
             fractional_scale_mode: Default::default(),
             prepare_toolkit_programs: true,
             tint_windows: true,
@@ -1136,16 +1136,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_primary_planes_are_8_bits_unless_the_file_asks_for_10() {
+    fn the_primary_planes_are_10_bits_unless_the_file_asks_for_8() {
         use crate::output_depth::Depth;
         let mut c = Config::default();
-        assert_eq!(c.output_depth, Depth::Eight);
-        c.apply_file(&CompositorSettings::parse(r#"{"appearance":"dark"}"#, None).0);
-        assert_eq!(c.output_depth, Depth::Eight, "a file without the key");
-        c.apply_file(&CompositorSettings::parse(r#"{"output_depth":10}"#, None).0);
         assert_eq!(c.output_depth, Depth::Ten);
+        c.apply_file(&CompositorSettings::parse(r#"{"appearance":"dark"}"#, None).0);
+        assert_eq!(c.output_depth, Depth::Ten, "a file without the key");
         c.apply_file(&CompositorSettings::parse(r#"{"output_depth":8}"#, None).0);
         assert_eq!(c.output_depth, Depth::Eight);
+        c.apply_file(&CompositorSettings::parse(r#"{"output_depth":10}"#, None).0);
+        assert_eq!(c.output_depth, Depth::Ten);
     }
 
     #[test]

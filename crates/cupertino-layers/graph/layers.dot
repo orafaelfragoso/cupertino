@@ -1,5 +1,5 @@
 // cupertino-layers --graph
-// 93 crates, 459 internal dependencies
+// 93 crates, 460 internal dependencies
 // per layer: foundation 24, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
@@ -416,6 +416,7 @@ digraph "layers" {
   "cupertino-protocol-app" -> "cupertino-semantics";
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
+  "cupertino-raster-math" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";

@@ -33,7 +33,13 @@ use wayland_client::protocol::{
     wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
-use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
+use wayland_protocols::xdg::shell::client::{
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use cupertino_layer_v1::Property;
@@ -46,6 +52,17 @@ const MARGIN: (i32, i32) = (100, 50);
 /// A popup of the parent: this size, its top-left corner at this point of the parent.
 const POPUP: (i32, i32) = (200, 100);
 const POPUP_AT: (i32, i32) = (100, 100);
+/// A small window parent ([`Parent::Window`]): its surface this size.
+const WINDOW: (i32, i32) = (200, 150);
+
+/// What the test client's parent surface is.
+#[derive(Clone, Copy)]
+enum Parent {
+    /// A layer shell surface [`PARENT`] large at [`MARGIN`].
+    LayerShell,
+    /// A toplevel [`WINDOW`] large, asking for decorations in a mode (`xdg-decoration`) when one is given.
+    Window(Option<zxdg_toplevel_decoration_v1::Mode>),
+}
 
 struct Harness {
     state: Cupertino,
@@ -118,6 +135,32 @@ impl Harness {
         surface
     }
 
+    /// The mapped window and its frame on the output, for a [`Parent::Window`] client.
+    fn window(
+        &self,
+    ) -> Option<(
+        ServerSurface,
+        smithay::utils::Rectangle<f64, smithay::utils::Logical>,
+    )> {
+        let w = self.state.windows.iter().find(|w| w.mapped)?;
+        let frame = self.state.wm.window(w.id)?.geometry();
+        Some((
+            w.surface().clone(),
+            smithay::utils::Rectangle::new((frame.x, frame.y).into(), (frame.w, frame.h).into()),
+        ))
+    }
+
+    /// The window's layers as the scene shows them at the current time.
+    fn window_layers(&self) -> Vec<LayerDraw> {
+        self.window().map_or_else(Vec::new, |(s, _)| {
+            present(
+                &s,
+                self.state.now(),
+                self.state.display_options().reduce_motion,
+            )
+        })
+    }
+
     /// The parent's first popup.
     fn popup(&self) -> Option<ServerSurface> {
         let parent = self.parent()?;
@@ -171,6 +214,7 @@ type Cmd = Box<dyn FnOnce(&mut Client, &QueueHandle<Client>) + Send>;
 struct Client {
     compositor: wl_compositor::WlCompositor,
     subcompositor: wl_subcompositor::WlSubcompositor,
+    viewporter: wp_viewporter::WpViewporter,
     shm: wl_shm::WlShm,
     layers: CupertinoLayersV1,
     parent: wl_surface::WlSurface,
@@ -180,7 +224,13 @@ struct Client {
     heard: Arc<Mutex<Heard>>,
     configured: bool,
     wm: xdg_wm_base::XdgWmBase,
-    layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    /// A window parent's objects, kept alive.
+    _window: Option<(
+        xdg_surface::XdgSurface,
+        xdg_toplevel::XdgToplevel,
+        Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
+    )>,
     /// The popup's surface and objects, once made ([`Client::popup`]).
     popup: Option<(
         wl_surface::WlSurface,
@@ -248,7 +298,10 @@ impl Client {
         positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
         positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
         let popup = xdg.get_popup(None, &positioner, qh, ());
-        self.layer_surface.get_popup(&popup);
+        self.layer_surface
+            .as_ref()
+            .expect("a layer shell parent")
+            .get_popup(&popup);
         positioner.destroy();
         surface.commit();
         self.popup = Some((surface, xdg, popup));
@@ -284,8 +337,36 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    xdg_toplevel::XdgToplevel,
+    wp_viewporter::WpViewporter,
+    wp_viewport::WpViewport,
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
     CupertinoLayersV1
 );
+
+/// A window parent's xdg surface, whose wl_surface draws its first frame on the first configure.
+impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            xdg.ack_configure(serial);
+            if !state.configured {
+                state.configured = true;
+                let b = buffer(&state.shm, qh, WINDOW, &state.paint);
+                state.parent.attach(Some(&b), 0, 0);
+                state.parent.damage_buffer(0, 0, WINDOW.0, WINDOW.1);
+                state.parent.commit();
+            }
+        }
+    }
+}
 
 impl Dispatch<CupertinoLayerV1, ()> for Client {
     fn event(
@@ -375,6 +456,11 @@ struct TestClient {
 impl TestClient {
     /// A client whose parent is a layer shell surface painted by `paint`.
     fn spawn(socket: PathBuf, paint: fn(i32, i32) -> [u8; 4]) -> TestClient {
+        Self::spawn_as(socket, paint, Parent::LayerShell)
+    }
+
+    /// A client whose parent is `kind`, painted by `paint`.
+    fn spawn_as(socket: PathBuf, paint: fn(i32, i32) -> [u8; 4], kind: Parent) -> TestClient {
         let (commands, inbox): (Sender<Cmd>, Receiver<Cmd>) = channel();
         let heard = Arc::new(Mutex::new(Heard::default()));
         let h = heard.clone();
@@ -387,27 +473,49 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let subcompositor: wl_subcompositor::WlSubcompositor =
                 globals.bind(&qh, 1..=1, ()).unwrap();
+            let viewporter: wp_viewporter::WpViewporter = globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
             let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=5, ()).unwrap();
             let wm: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let parent = compositor.create_surface(&qh, ());
-            let ls = shell.get_layer_surface(
-                &parent,
-                None,
-                zwlr_layer_shell_v1::Layer::Top,
-                "layers-test".into(),
-                &qh,
-                (),
-            );
-            ls.set_size(PARENT.0 as u32, PARENT.1 as u32);
-            ls.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
-            ls.set_margin(MARGIN.1, 0, 0, MARGIN.0);
-            ls.set_exclusive_zone(-1);
+            let (layer_surface, window) = match kind {
+                Parent::LayerShell => {
+                    let ls = shell.get_layer_surface(
+                        &parent,
+                        None,
+                        zwlr_layer_shell_v1::Layer::Top,
+                        "layers-test".into(),
+                        &qh,
+                        (),
+                    );
+                    ls.set_size(PARENT.0 as u32, PARENT.1 as u32);
+                    ls.set_anchor(
+                        zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
+                    );
+                    ls.set_margin(MARGIN.1, 0, 0, MARGIN.0);
+                    ls.set_exclusive_zone(-1);
+                    (Some(ls), None)
+                }
+                Parent::Window(mode) => {
+                    let xdg = wm.get_xdg_surface(&parent, &qh, ());
+                    let toplevel = xdg.get_toplevel(&qh, ());
+                    toplevel.set_app_id("org.example.layers-window".into());
+                    let decoration = mode.map(|mode| {
+                        let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+                            globals.bind(&qh, 1..=1, ()).unwrap();
+                        let d = manager.get_toplevel_decoration(&toplevel, &qh, ());
+                        d.set_mode(mode);
+                        d
+                    });
+                    (None, Some((xdg, toplevel, decoration)))
+                }
+            };
             parent.commit();
             let mut client = Client {
                 compositor,
                 subcompositor,
+                viewporter,
                 shm,
                 layers,
                 parent,
@@ -416,7 +524,8 @@ impl TestClient {
                 heard: h.clone(),
                 configured: false,
                 wm,
-                layer_surface: ls,
+                layer_surface,
+                _window: window,
                 popup: None,
             };
             loop {
@@ -758,6 +867,108 @@ fn layers_take_no_input_and_are_clipped_to_their_bounds_when_asked() {
         }),
         "the layer's surface takes no input"
     );
+}
+
+/// The pixels of `shot` outside `frame` (output points at scale 1) that differ from `before`, a shot of the same scene
+/// without the layers: what the layers drew outside their window.
+fn outside_changes(
+    shot: &image::RgbaImage,
+    before: &image::RgbaImage,
+    frame: smithay::utils::Rectangle<f64, smithay::utils::Logical>,
+) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for (x, y, px) in shot.enumerate_pixels() {
+        let (fx, fy) = (f64::from(x), f64::from(y));
+        let inside = fx >= frame.loc.x - 1.0
+            && fy >= frame.loc.y - 1.0
+            && fx < frame.loc.x + frame.size.w + 1.0
+            && fy < frame.loc.y + frame.size.h + 1.0;
+        if !inside && px.0 != before.get_pixel(x, y).0 {
+            out.push((x, y));
+        }
+    }
+    out
+}
+
+/// A window's layers draw only inside it, whatever their place: one far out on the output and one across the window's
+/// edge, both with glass and a placeholder, change nothing outside the window, masked to their bounds or not, for a
+/// window the server decorates and for one that draws its own decorations (whose content is not clipped at rest).
+#[test]
+fn a_window_s_layers_draw_nothing_outside_it_wherever_they_are_placed() {
+    use zxdg_toplevel_decoration_v1::Mode;
+    for mode in [Mode::ClientSide, Mode::ServerSide] {
+        let Some(mut h) = Harness::new(1.0, false) else {
+            return;
+        };
+        let client = TestClient::spawn_as(h.socket_path(), grey, Parent::Window(Some(mode)));
+        h.wait_until("the window", |h| h.window().is_some());
+        let time = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
+        h.state.tick();
+        let (_, frame) = h.window().unwrap();
+        let before = h.screenshot("window");
+        // the far layer at the output's top-left corner, the other across the window's right edge
+        let far = (8.0 - frame.loc.x, 8.0 - frame.loc.y);
+        assert!(
+            frame.loc.x > 120.0 || frame.loc.y > 70.0,
+            "the far layer lies outside the window at {frame:?}"
+        );
+        client.send(move |c, qh| {
+            for at in [far, (f64::from(WINDOW.0) - 50.0, 20.0)] {
+                let i = c.layer(qh, (100, 50), &red);
+                let l = c.l(i);
+                l.set_value(Property::X, at.0);
+                l.set_value(Property::Y, at.1);
+                l.set_value(Property::Width, 120.0);
+                l.set_value(Property::Height, 60.0);
+                l.set_placeholder(0.0, 0.0, 1.0, 1.0);
+                l.set_glass(0, 1.0);
+            }
+            c.parent.commit();
+        });
+        h.wait_until("the layers", |h| {
+            let l = h.window_layers();
+            l.len() == 2
+                && l.iter()
+                    .all(|l| l.content == (100.0, 50.0) && l.glass.is_some())
+        });
+        let shot = h.screenshot("window-layers");
+        let changed = outside_changes(&shot, &before, frame);
+        let colours: std::collections::BTreeSet<[u8; 4]> = changed
+            .iter()
+            .map(|&(x, y)| shot.get_pixel(x, y).0)
+            .take(20)
+            .collect();
+        assert_eq!(
+            changed.len(),
+            0,
+            "{mode:?}: nothing outside the window {frame:?}: first {:?} last {:?} colours {colours:?}",
+            changed.first(),
+            changed.last()
+        );
+        let red_inside = shot.enumerate_pixels().any(|(x, y, p)| {
+            p.0 == [255, 0, 0, 255] && frame.contains((f64::from(x), f64::from(y)))
+        });
+        assert!(
+            red_inside,
+            "{mode:?}: the layer across the edge shows inside"
+        );
+
+        client.send(|c, _| {
+            for i in 0..2 {
+                c.l(i).set_masks_to_bounds(1);
+            }
+            c.parent.commit();
+        });
+        h.wait_until("masked", |h| h.window_layers().iter().all(|l| l.masks));
+        let shot = h.screenshot("window-layers-masked");
+        assert_eq!(
+            outside_changes(&shot, &before, frame),
+            [],
+            "{mode:?}, masked: nothing outside the window {frame:?}"
+        );
+        assert!(client.heard(|e| e.error.is_none()));
+    }
 }
 
 #[test]
@@ -1331,6 +1542,72 @@ fn a_layer_s_content_blurs_past_its_edges_by_the_gaussian_on_the_server_clock_an
         client.heard(|e| e.error.clone()).unwrap().1,
         cupertino_layer_v1::Error::InvalidValue as u32
     );
+}
+
+/// A layer whose content is one pixel stretched over 20000 points blurs only what of it shows: its blurred copy holds
+/// the output and the blur's reach around it, within the cap, and the frame comes at once; scaled down so far that what
+/// shows of it would need a copy past the cap, it is drawn sharp, and no larger copy is made.
+#[test]
+fn a_huge_layer_s_content_blur_copies_only_what_shows_and_past_the_cap_draws_sharp() {
+    use cupertino_server::render::content_blur::{largest_copy, reach_px, MAX_COPY_PIXELS};
+    let scale = 1.5;
+    let Some(mut h) = Harness::new(scale, false) else {
+        return;
+    };
+    let client = TestClient::spawn(h.socket_path(), grey);
+    h.wait_until("the parent", |h| h.parent().is_some());
+    client.send(|c, qh| {
+        let surface = c.compositor.create_surface(qh, ());
+        let layer = c.layers.get_layer(&surface, &c.parent, qh, ());
+        let b = buffer(&c.shm, qh, (1, 1), &red);
+        surface.attach(Some(&b), 0, 0);
+        surface.damage_buffer(0, 0, 1, 1);
+        let viewport = c.viewporter.get_viewport(&surface, qh, ());
+        viewport.set_destination(20_000, 20_000);
+        surface.commit();
+        layer.set_value(Property::ContentBlur, 64.0);
+        c.parent.commit();
+        c.made.push((surface, layer));
+    });
+    h.wait_until("the huge blurred layer", |h| {
+        h.layers()
+            .first()
+            .is_some_and(|l| l.content == (20_000.0, 20_000.0) && l.content_blur == 64.0)
+    });
+    let start = Instant::now();
+    let shot = h.screenshot("huge-blur");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "the frame came in {:?}",
+        start.elapsed()
+    );
+    // a fractional scale may be drawn at the next whole one
+    let drawn = scale.ceil();
+    let reach = i64::from(reach_px(64.0 * drawn));
+    let output = (
+        (f64::from(OUTPUT.0) * drawn) as i64,
+        (f64::from(OUTPUT.1) * drawn) as i64,
+    );
+    let made = largest_copy();
+    assert!(
+        made > 0 && made <= (output.0 + 2 * reach) * (output.1 + 2 * reach),
+        "the copy holds {made} pixels"
+    );
+    assert!(made <= MAX_COPY_PIXELS);
+    // well inside, the blurred content is its colour
+    assert_eq!(at(&shot, 400, 300)[..3], [255, 0, 0]);
+
+    // scaled down to a twentieth, what shows of it reads more than the cap: drawn sharp, no copy made
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Scale, 0.05);
+        c.parent.commit();
+    });
+    h.wait_until("the scale", |h| (h.layers()[0].scale - 0.05).abs() < 0.01);
+    let start = Instant::now();
+    let _ = h.screenshot("huge-blur-scaled");
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert_eq!(largest_copy(), made, "no larger copy is made");
+    assert!(client.heard(|e| e.error.is_none()));
 }
 
 #[test]

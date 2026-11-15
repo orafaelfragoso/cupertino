@@ -54,9 +54,9 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ### 2a. Compositor (`cupertino-server`)
 
-- [ ] Content blur cropped to the visible output plus its reach and capped in size; past the cap the layer draws
+- [x] Content blur cropped to the visible output plus its reach and capped in size; past the cap the layer draws
       sharp. Test: a 1x1 buffer with a 20000 x 20000 destination allocates within the cap.
-- [ ] A layer is always clipped to its window, with or without `set_masks_to_bounds`, and with client-side
+- [x] A layer is always clipped to its window, with or without `set_masks_to_bounds`, and with client-side
       decorations too. Test: a layer placed outside its window draws nothing there.
 - [x] Layer requests validated: the gaps the review found, each rejected with a protocol error and tested.
 - [x] A dismissed popup's linger ends on a timer of its own, so the frame that removes it comes without other damage.

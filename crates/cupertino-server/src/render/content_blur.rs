@@ -6,11 +6,17 @@
 //! the client draws no frame for it. A blur made for a surface's commit, deviation and scale is drawn again as it is
 //! until one of them changes.
 //!
+//! The copy holds only what can show: the part of the blurred surface the output and the content's mask let through,
+//! with the content the blur's reach around it reads ([`copy_rect`]). A copy that would still hold more than
+//! [`MAX_COPY_PIXELS`] or be longer than [`MAX_COPY_SIDE`] is not made, and the surface is drawn sharp, so no client
+//! makes the server allocate more than that for a blur, however large it makes its content.
+//!
 //! [`SurfaceRole::Blurred`]: cupertino_scene::SurfaceRole::Blurred
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use cupertino_scene::{ContentBlur, SceneItem};
 use smithay::backend::allocator::Fourcc;
@@ -37,6 +43,24 @@ pub const SHARP_BELOW_PX: f64 = 0.3;
 /// Lowerings a blurred copy is kept for after the last that drew it.
 const KEEP: u64 = 8;
 
+/// The most device pixels one blurred copy of a layer's content holds. Two textures this large and the blur's pass
+/// targets are made for a copy, so this bounds what a layer's blur allocates; it holds a whole 4K output drawn at a
+/// scale of 2 (as a fractional scale of 1.5 is drawn) with the widest blur's reach around it. Content whose visible part
+/// needs more is drawn sharp.
+pub const MAX_COPY_PIXELS: i64 = 6144 * 4096;
+
+/// The longest side, in device pixels, of a blurred copy, within what every GPU's textures take; a longer copy is not
+/// made and the content is drawn sharp.
+pub const MAX_COPY_SIDE: i32 = 8192;
+
+/// The most pixels of a blurred copy made in this process, for tests and diagnostics.
+static LARGEST_COPY: AtomicI64 = AtomicI64::new(0);
+
+/// The most pixels of any blurred copy made in this process; never more than [`MAX_COPY_PIXELS`].
+pub fn largest_copy() -> i64 {
+    LARGEST_COPY.load(Ordering::Relaxed)
+}
+
 /// How far, in device pixels, a Gaussian of deviation `sigma_px` reaches past what it blurs: three deviations, where
 /// what is left of it is under a tenth of a percent.
 pub fn reach_px(sigma_px: f64) -> i32 {
@@ -55,6 +79,58 @@ pub fn spread(geometry: Rectangle<i32, Physical>, reach: i32) -> Rectangle<i32, 
         (geometry.loc.x - reach, geometry.loc.y - reach).into(),
         (geometry.size.w + 2 * reach, geometry.size.h + 2 * reach).into(),
     )
+}
+
+/// The rectangle (device pixels) a blurred copy of content lying at `geometry` covers when only `visible` of the output
+/// can show: all of where the blur is drawn ([`spread`]) when that lies in `visible`, else its part in `visible` with
+/// the reach around it, all the content that part reads. `None` when none of it shows.
+pub fn copy_rect(
+    geometry: Rectangle<i32, Physical>,
+    reach: i32,
+    visible: Rectangle<i32, Physical>,
+) -> Option<Rectangle<i32, Physical>> {
+    let drawn = spread(geometry, reach);
+    let shown = drawn
+        .intersection(visible)
+        .filter(|r| r.size.w > 0 && r.size.h > 0)?;
+    if shown == drawn {
+        return Some(drawn);
+    }
+    spread(shown, reach).intersection(drawn)
+}
+
+/// Whether a copy covering `rect` keeps within [`MAX_COPY_PIXELS`] and [`MAX_COPY_SIDE`].
+pub fn fits(rect: Rectangle<i32, Physical>) -> bool {
+    let (w, h) = (rect.size.w, rect.size.h);
+    w > 0
+        && h > 0
+        && w <= MAX_COPY_SIDE
+        && h <= MAX_COPY_SIDE
+        && i64::from(w) * i64::from(h) <= MAX_COPY_PIXELS
+}
+
+/// The output's device pixels `(0, 0)` to `viewport`, mapped back through a rescale about `pivot` by `rescale`: the
+/// rectangle, before the rescale, whose drawing lands on the output. `None` for a rescale that draws nothing.
+pub fn before_rescale(
+    viewport: (i32, i32),
+    pivot: Point<i32, Physical>,
+    rescale: (f64, f64),
+) -> Option<Rectangle<i32, Physical>> {
+    const FAR: f64 = (1 << 30) as f64;
+    let axis = |p: i32, size: i32, k: f64| -> Option<(i32, i32)> {
+        (k > 0.0 && k.is_finite()).then(|| {
+            let p = f64::from(p);
+            let lo = (p - p / k).floor().clamp(-FAR, FAR);
+            let hi = (p + (f64::from(size) - p) / k).ceil().clamp(-FAR, FAR);
+            (lo as i32, hi as i32)
+        })
+    };
+    let (x0, x1) = axis(pivot.x, viewport.0, rescale.0)?;
+    let (y0, y1) = axis(pivot.y, viewport.1, rescale.1)?;
+    Some(Rectangle::new(
+        (x0, y0).into(),
+        (x1.saturating_sub(x0), y1.saturating_sub(y0)).into(),
+    ))
 }
 
 struct Kept {
@@ -105,8 +181,10 @@ impl ContentBlurs {
 }
 
 /// The blurred copy of `element` (drawn at full opacity) by `sigma_px` device pixels at `scale` device pixels a point,
-/// kept or made now: the texture, the rectangle it is drawn over and the signature of what it blurred. `None` for a surface whose buffer is a solid
-/// colour or turned, or when a pass is unavailable: it is drawn sharp.
+/// of the part [`copy_rect`] keeps when only `visible` (device pixels, before the layer's rescale) can show, kept or
+/// made now: the texture, the rectangle it is drawn over and the signature of what it blurred. `None` for a surface
+/// whose buffer is a solid colour or turned, one none of which shows, a copy past [`fits`], or when a pass is
+/// unavailable: it is drawn sharp.
 pub fn blurred(
     renderer: &mut GlesRenderer,
     material: Option<&SharedMaterial>,
@@ -114,6 +192,7 @@ pub fn blurred(
     element: &WaylandSurfaceRenderElement<GlesRenderer>,
     sigma_px: f64,
     scale: f64,
+    visible: Rectangle<i32, Physical>,
 ) -> Option<(GlesTexture, Rectangle<i32, Physical>, u64)> {
     let material = material?;
     if !matches!(element.texture(), WaylandSurfaceTexture::Texture(_))
@@ -126,7 +205,7 @@ pub fn blurred(
         return None;
     }
     let reach = reach_px(sigma_px);
-    let drawn = spread(geometry, reach);
+    let drawn = copy_rect(geometry, reach, visible).filter(|r| fits(*r))?;
     let commit = element
         .current_commit()
         .distance(Some(CommitCounter::default()))
@@ -141,6 +220,10 @@ pub fn blurred(
         .f(element.src().size.h)
         .u(geometry.size.w as u64)
         .u(geometry.size.h as u64)
+        .u((geometry.loc.x - drawn.loc.x) as u64)
+        .u((geometry.loc.y - drawn.loc.y) as u64)
+        .u(drawn.size.w as u64)
+        .u(drawn.size.h as u64)
         .finish();
     if let Some(texture) = blurs.kept(element.id(), sig) {
         return Some((texture, drawn, sig));
@@ -156,7 +239,11 @@ pub fn blurred(
         frame
             .clear(Color32F::TRANSPARENT, &[Rectangle::from_size(out)])
             .ok()?;
-        let dst = Rectangle::new(Point::from((reach, reach)), geometry.size);
+        // the content where it lies in the copy, cut by the copy's edges where the copy is cropped
+        let dst = Rectangle::new(
+            Point::from((geometry.loc.x - drawn.loc.x, geometry.loc.y - drawn.loc.y)),
+            geometry.size,
+        );
         // the damage is the element's own, relative to where it is drawn
         element
             .draw(
@@ -183,6 +270,7 @@ pub fn blurred(
     if !done {
         return None;
     }
+    LARGEST_COPY.fetch_max(i64::from(size.0) * i64::from(size.1), Ordering::Relaxed);
     blurs.keep(element.id().clone(), sig, out.clone());
     Some((out, drawn, sig))
 }
@@ -218,11 +306,14 @@ pub fn lower(
         exact: false,
         ..shape
     };
+    // what can show of the content before its rescale: the output's part the mask lets through
+    let visible = before_rescale(viewport, pivot, (place.scale_x, place.scale_y))
+        .and_then(|v| v.intersection(shape.rect));
     let sigma = sigma_px(blur, ctx.scale);
     // copies are drawn at full opacity: the layer's fades with its drawing
     let full = surface_elements(ctx, surface, only, origin, scale, 1.0, Kind::Unspecified);
     for e in full {
-        let made = sigma.and_then(|sigma| {
+        let made = sigma.zip(visible).and_then(|(sigma, visible)| {
             blurred(
                 ctx.renderer,
                 ctx.material.as_ref(),
@@ -230,6 +321,7 @@ pub fn lower(
                 &e,
                 sigma,
                 ctx.scale,
+                visible,
             )
         });
         let Some((texture, rect, sig)) = made else {
@@ -377,5 +469,48 @@ mod tests {
             spread(at, 6),
             Rectangle::new((94, 44).into(), (52, 32).into())
         );
+    }
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_copy_holds_what_shows_with_the_reach_around_it_and_is_capped() {
+        let output = rect(0, 0, 1200, 900);
+        // content inside the output: all of where its blur is drawn, as ever
+        let inside = rect(100, 50, 40, 20);
+        assert_eq!(copy_rect(inside, 6, output), Some(spread(inside, 6)));
+        // content far larger than the output: the output and the reach around it
+        let huge = rect(0, 0, 30_000, 30_000);
+        assert_eq!(
+            copy_rect(huge, 288, output),
+            Some(rect(-288, -288, 1776, 1476))
+        );
+        assert!(fits(copy_rect(huge, 288, output).unwrap()));
+        // content off the output makes no copy
+        assert_eq!(copy_rect(rect(5000, 5000, 40, 20), 6, output), None);
+        // a whole 4K output drawn at a scale of 2 with the widest blur's reach around it fits; past the cap no copy is made
+        let reach = reach_px(64.0 * 2.0);
+        assert!(fits(rect(0, 0, 5120 + 2 * reach, 2880 + 2 * reach)));
+        assert!(fits(rect(0, 0, 6144, 4096)));
+        assert!(!fits(rect(0, 0, 6145, 4096)));
+        assert!(!fits(rect(0, 0, MAX_COPY_SIDE + 1, 10)));
+        // the output seen through a rescale: about the origin by a half, twice as much of the content shows
+        assert_eq!(
+            before_rescale((1200, 900), Point::from((0, 0)), (0.5, 0.5)),
+            Some(rect(0, 0, 2400, 1800))
+        );
+        assert_eq!(
+            before_rescale((1200, 900), Point::from((600, 450)), (2.0, 2.0)),
+            Some(rect(300, 225, 600, 450))
+        );
+        assert_eq!(
+            before_rescale((1200, 900), Point::from((0, 0)), (0.0, 1.0)),
+            None
+        );
+        // a tenth of a 30000-pixel layer through a rescale of a twentieth needs a copy past the cap: drawn sharp
+        let seen = before_rescale((1200, 900), Point::from((0, 0)), (0.05, 0.05)).unwrap();
+        assert!(!fits(copy_rect(huge, 288, seen).unwrap()));
     }
 }

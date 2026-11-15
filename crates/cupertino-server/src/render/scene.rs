@@ -1195,7 +1195,19 @@ fn window_elements(
     // glass in a window reads the window: inside its corners, where nothing of what is around it shows
     let corner = if styled { radius } else { 0.0 };
     let within = inset_rect(visual_local, corner * CORNER_CLEARANCE + 1.0);
-    let window_backdrops = |p: &mut SceneParams<'_>, areas: Vec<BackdropArea>| {
+    // the window's outline its layers are always drawn inside, glass included: its rounded clip, or its rectangle when
+    // its content is not clipped by its corners (a window drawing its own decorations at rest), as a mask of no radius,
+    // since a square clip leaves a surface tree as it is
+    let layer_clip = match clip {
+        Clip::Rounded { .. } => clip,
+        Clip::None | Clip::Rect(_) => Clip::Rounded {
+            rect: output_rect(visual_local),
+            radius: 0.0,
+            style: corner_style(false),
+            exact: plan.exact,
+        },
+    };
+    let backdrops_in = |p: &mut SceneParams<'_>, areas: Vec<BackdropArea>, clip: Clip| {
         let areas = rescaled_backdrops(areas, visual_local.loc, plan);
         let areas = if plan.exact {
             areas
@@ -1215,7 +1227,12 @@ fn window_elements(
                 radius_pt: radius,
                 continuous: !style.is_circular(),
             }),
-            _ => None,
+            Clip::Rect(rect) => Some(MaterialMask {
+                rect: logical_rect(rect),
+                radius_pt: 0.0,
+                continuous: true,
+            }),
+            Clip::None => None,
         };
         for piece in &mut pieces {
             match piece {
@@ -1232,6 +1249,11 @@ fn window_elements(
         }
         pieces
     };
+    // the window's own backdrops keep the clip of its content
+    let window_backdrops = |p: &mut SceneParams<'_>, areas: Vec<BackdropArea>| match clip {
+        Clip::Rect(_) => backdrops_in(p, areas, Clip::None),
+        c => backdrops_in(p, areas, c),
+    };
     let tree = Tree {
         surface: surface.clone(),
         kind: SceneKind::WindowContent,
@@ -1243,20 +1265,20 @@ fn window_elements(
         clip,
         only: None,
     };
-    // its layers over it (cupertino_layers_v1), inside the window
+    // its layers over it (cupertino_layers_v1), inside the window wherever they are placed, their glass too
     let place = super::layers::LayerPlace {
         origin: origin_local,
         pivot: visual_local.loc,
         scale: (plan.scale_x, plan.scale_y),
         opacity: alpha,
-        clip,
+        clip: layer_clip,
         kind: SceneKind::WindowContent,
     };
     out.extend(super::layers::layer_pieces(
         p,
         &surface,
         &place,
-        |p, areas| window_backdrops(p, areas),
+        |p, areas| backdrops_in(p, areas, layer_clip),
     ));
     // the backdrops of its subsurfaces lie between the slices of the content, each reading the window below it
     out.extend(tree_pieces(p, tree, origin_local, |p, areas, bound| {

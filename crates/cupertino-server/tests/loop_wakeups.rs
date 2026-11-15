@@ -46,7 +46,7 @@ fn an_idle_desktop_has_nothing_due_within_a_second() {
 /// What `Cupertino::tick` calls, each audited for how the loop wakes for it: an event, a frame (`animating`), or a
 /// deadline in `next_tick_deadline` ([`DEADLINES`] holds every deadline of the tick's clock and where it is read). A call added to the tick fails this test until
 /// it is audited the same way and listed here; otherwise its time-driven work would run up to a minute late (the loop's backstop).
-const AUDITED: [&str; 30] = [
+const AUDITED: [&str; 31] = [
     "crate::acquire_waits::sweep(",
     "self.apply_effects(",
     // a held observation waits for layers that animate, which draw frames, and at the latest for its end of wait, a
@@ -61,6 +61,8 @@ const AUDITED: [&str; 30] = [
     "self.fx.tick(",
     "self.idle.refresh_inhibition(",
     "self.now(",
+    // a dismissed popup's limit wakes the loop at popup_linger's next_deadline
+    "self.popup_linger.tick(",
     // the cursor, a drag icon and an input method's popup move with events (pointer motion, a new cursor, a drag, the
     // text cursor, an output change), and the cursor's shake growth animates, which draws frames
     // grant lifetime, roles and geometry follow events/frames; pending native replies wake at control_deadline
@@ -125,7 +127,7 @@ fn every_call_of_the_tick_is_audited_for_how_the_loop_wakes_for_it() {
 /// the source holding `read`, the call that reads it. A read in `next_tick_deadline` (`file` is `WAIT`) or in the
 /// touchpad's timer feeds the loop; any other read is itself a deadline listed here. A deadline added to a component
 /// the tick drives fails this test until it is listed, and a listed one fails when nothing reads it any more.
-const DEADLINES: [(&str, &str, &str, &str); 15] = [
+const DEADLINES: [(&str, &str, &str, &str); 16] = [
     (
         "input/src/edge.rs",
         "next_deadline",
@@ -204,6 +206,12 @@ const DEADLINES: [(&str, &str, &str, &str); 15] = [
         "control_deadline",
         WAIT,
         "self.control_deadline()",
+    ),
+    (
+        "server/src/popup_linger.rs",
+        "next_deadline",
+        WAIT,
+        "self.popup_linger.next_deadline()",
     ),
     (
         "server/src/session_lock.rs",

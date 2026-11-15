@@ -5,13 +5,14 @@
 //! of one glass group is one container of their shapes as shown, drawn below the content of its first layer
 //! ([`glass_anchors`]), and the edge of that layer (`set_glass_edge`) runs along the outside of the container's outline at
 //! its width in points, whatever the layers' scale. A layer of the normal role whose content blurs is drawn blurred ([`SurfaceRole::Blurred`],
-//! `super::content_blur`).
+//! `super::content_blur`). A layer is drawn only inside its parent's window, its glass and placeholder too, wherever its
+//! values place it ([`masked_clip`], [`clear_of_edges`]).
 
 use cupertino_scene::{Clip, ContentBlur, SceneKind, SurfaceRole, VibrantBlend};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 
-use super::compose::{corner_style, output_rect, Piece, Tree};
+use super::compose::{corner_style, logical_rect, output_rect, Piece, Tree};
 use super::scene::{rrect_item, SceneParams};
 use super::shader_rect::Sig;
 use crate::app_effects_v1::{BackdropArea, GlassSpec};
@@ -73,6 +74,97 @@ fn centre(l: &LayerDraw, origin: Point<f64, Logical>) -> Point<f64, Logical> {
         origin.x + l.x + 0.5 * l.width,
         origin.y + l.y + 0.5 * l.height,
     ))
+}
+
+/// The window a parent's layers are drawn inside, from their place's clip: its rectangle (output-local points), its
+/// corner radius and corner style; `None` for a parent drawn without a clip.
+fn window_of(
+    clip: Clip,
+) -> Option<(
+    Rectangle<f64, Logical>,
+    f64,
+    cupertino_geometry::CornerStyle,
+)> {
+    match clip {
+        Clip::None => None,
+        Clip::Rect(r) => Some((logical_rect(r), 0.0, corner_style(false))),
+        Clip::Rounded {
+            rect,
+            radius,
+            style,
+            ..
+        } => Some((logical_rect(rect), radius, style)),
+    }
+}
+
+/// Whether `r` (output-local points) lies inside the window of `clip` and clear of its rounded corners, so the window's
+/// clip leaves all of it as it is. True for a parent drawn without a clip.
+pub fn clear_of_edges(r: Rectangle<f64, Logical>, clip: Clip) -> bool {
+    let Some((w, radius, style)) = window_of(clip) else {
+        return true;
+    };
+    let (right, bottom) = (r.loc.x + r.size.w, r.loc.y + r.size.h);
+    let (w_right, w_bottom) = (w.loc.x + w.size.w, w.loc.y + w.size.h);
+    let inside = r.loc.x >= w.loc.x && r.loc.y >= w.loc.y && right <= w_right && bottom <= w_bottom;
+    inside && !corners_in_rounding(r, w, radius * style.expansion())
+}
+
+/// Whether a corner of `r` lies where the corners of `w`, rounded over `reach` points, bend away from its edges.
+fn corners_in_rounding(r: Rectangle<f64, Logical>, w: Rectangle<f64, Logical>, reach: f64) -> bool {
+    if reach <= 0.0 {
+        return false;
+    }
+    let (right, bottom) = (r.loc.x + r.size.w, r.loc.y + r.size.h);
+    let (w_right, w_bottom) = (w.loc.x + w.size.w, w.loc.y + w.size.h);
+    let near_left = r.loc.x < w.loc.x + reach;
+    let near_right = right > w_right - reach;
+    let near_top = r.loc.y < w.loc.y + reach;
+    let near_bottom = bottom > w_bottom - reach;
+    (near_left || near_right) && (near_top || near_bottom)
+}
+
+/// The clip of a layer that masks its content to its rounded bounds `shown` (output-local points, `radius` points)
+/// inside the window of `clip`: its own bounds when the window leaves them as they are ([`clear_of_edges`]), else the
+/// part of them inside the window, rounded by the larger of the two radii where it reaches the window's rounded corners,
+/// which lies inside both outlines. `None` when no part of the bounds lies in the window: the layer draws nothing.
+pub fn masked_clip(shown: Rectangle<f64, Logical>, radius: f64, clip: Clip) -> Option<Clip> {
+    let own = Clip::Rounded {
+        rect: output_rect(shown),
+        radius,
+        style: corner_style(true),
+        exact: false,
+    };
+    if clear_of_edges(shown, clip) {
+        return Some(own);
+    }
+    let (w, w_radius, w_style) = window_of(clip)?;
+    let part = shown
+        .intersection(w)
+        .filter(|r| r.size.w > 0.0 && r.size.h > 0.0)?;
+    let (radius, style) =
+        if corners_in_rounding(part, w, w_radius * w_style.expansion()) && w_radius > radius {
+            (w_radius, w_style)
+        } else {
+            (radius, corner_style(true))
+        };
+    Some(Clip::Rounded {
+        rect: output_rect(part),
+        radius,
+        style,
+        exact: false,
+    })
+}
+
+/// Whether `r` (output-local points), grown by `margin` on every side, meets the window of `clip`: what lies farther out
+/// is not drawn. True for a parent drawn without a clip.
+fn meets_window(r: Rectangle<f64, Logical>, margin: f64, clip: Clip) -> bool {
+    let Some((w, ..)) = window_of(clip) else {
+        return true;
+    };
+    r.loc.x - margin < w.loc.x + w.size.w
+        && r.loc.y - margin < w.loc.y + w.size.h
+        && r.loc.x + r.size.w + margin > w.loc.x
+        && r.loc.y + r.size.h + margin > w.loc.y
 }
 
 /// The parts of a layer's bounds its content does not cover, in the layer's points: right of it and below it.
@@ -210,12 +302,11 @@ pub fn layer_pieces(
             place.origin.x + l.x - c.x + mc.x,
             place.origin.y + l.y - c.y + mc.y,
         ));
+        // inside the window always; masked, inside its own rounded bounds too, and nothing when they lie outside it
         let clip = if l.masks {
-            Clip::Rounded {
-                rect: output_rect(shown),
-                radius: radius * s_min,
-                style: corner_style(true),
-                exact: false,
+            match masked_clip(shown, radius * s_min, place.clip) {
+                Some(clip) => clip,
+                None => continue,
             }
         } else {
             place.clip
@@ -241,12 +332,23 @@ pub fn layer_pieces(
                     c.y + (place.origin.y + l.y + y - c.y) * l.scale,
                 ));
                 let r = place.map_rect(Rectangle::new(at, (w * l.scale, h * l.scale).into()));
+                // a fill is not clipped when drawn: it is cut to the window itself, rounded where it reaches the
+                // window's rounded corners
+                let Some(Clip::Rounded {
+                    rect: inside,
+                    radius: corner,
+                    style,
+                    ..
+                }) = masked_clip(r, 0.0, place.clip)
+                else {
+                    continue;
+                };
                 out.push(rrect_item(
                     place.kind,
                     l.serial,
-                    r,
-                    0.0,
-                    true,
+                    logical_rect(inside),
+                    corner,
+                    !style.is_circular(),
                     l.placeholder,
                     None,
                     opacity,
@@ -261,8 +363,9 @@ pub fn layer_pieces(
             container: l.group,
             spacing: if l.group == 0 { 0.0 } else { l.spacing },
         };
-        // a group's shapes as shown, front to back as backdrops are listed, each at its layer's opacity
-        let areas: Vec<BackdropArea> = if l.group == 0 {
+        // a group's shapes as shown, front to back as backdrops are listed, each at its layer's opacity; the glass is cut
+        // to the window, and a shape too far out of it to reach in is left out
+        let mut areas: Vec<BackdropArea> = if l.group == 0 {
             vec![BackdropArea {
                 key: l.serial | LAYER_GLASS_KEY,
                 material: String::new(),
@@ -285,6 +388,10 @@ pub fn layer_pieces(
                 })
                 .collect()
         };
+        areas.retain(|a| meets_window(place.map_rect(a.area), spec.spacing, place.clip));
+        if areas.is_empty() {
+            continue;
+        }
         let light = (l.pointer_lit && pointer_here)
             .then(|| pointer_light(mc, pointer))
             .flatten();
@@ -348,6 +455,61 @@ mod tests {
             uncovered((0.0, 0.0), 40.0, 30.0),
             vec![[0.0, 0.0, 40.0, 30.0]]
         );
+    }
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn a_masked_layer_is_clipped_to_its_bounds_inside_its_window() {
+        let window = Clip::Rounded {
+            rect: output_rect(rect(100.0, 100.0, 400.0, 300.0)),
+            radius: 10.0,
+            style: corner_style(false),
+            exact: false,
+        };
+        let own = |r: Rectangle<f64, Logical>, radius: f64| Clip::Rounded {
+            rect: output_rect(r),
+            radius,
+            style: corner_style(true),
+            exact: false,
+        };
+        // inside the window and clear of its corners: its own bounds, as they were
+        let inside = rect(150.0, 150.0, 100.0, 50.0);
+        assert!(clear_of_edges(inside, window));
+        assert_eq!(masked_clip(inside, 6.0, window), Some(own(inside, 6.0)));
+        // far outside it: nothing
+        assert_eq!(
+            masked_clip(rect(5000.0, -3000.0, 100.0, 50.0), 6.0, window),
+            None
+        );
+        // across its right edge: the part inside, with its own radius
+        let across = rect(450.0, 200.0, 100.0, 50.0);
+        assert!(!clear_of_edges(across, window));
+        assert_eq!(
+            masked_clip(across, 6.0, window),
+            Some(own(rect(450.0, 200.0, 50.0, 50.0), 6.0))
+        );
+        // over its top-left corner: the part inside, rounded as the window's corner is
+        assert_eq!(
+            masked_clip(rect(50.0, 50.0, 100.0, 100.0), 2.0, window),
+            Some(Clip::Rounded {
+                rect: output_rect(rect(100.0, 100.0, 50.0, 50.0)),
+                radius: 10.0,
+                style: corner_style(false),
+                exact: false,
+            })
+        );
+        // a window drawn without a clip leaves a layer as it is
+        let far = rect(5000.0, -3000.0, 100.0, 50.0);
+        assert!(clear_of_edges(far, Clip::None));
+        assert_eq!(masked_clip(far, 6.0, Clip::None), Some(own(far, 6.0)));
+        // a square window: only its rectangle counts
+        let square = Clip::Rect(output_rect(rect(100.0, 100.0, 400.0, 300.0)));
+        assert!(clear_of_edges(rect(100.0, 100.0, 400.0, 300.0), square));
+        assert!(meets_window(rect(95.0, 95.0, 4.0, 4.0), 2.0, square));
+        assert!(!meets_window(rect(90.0, 90.0, 4.0, 4.0), 2.0, square));
     }
 
     #[test]

@@ -128,10 +128,13 @@
       layer's content are its target values; settled tells desktop control when they are what is
       shown.
 
-      Clipping: a layer is drawn only inside its parent's window, its rounded corners included,
-      wherever its place and scale take it, and with masks_to_bounds inside both its own rounded
-      bounds and the window; its glass is cut to the window too. A window that draws its own
-      decorations is clipped to its window geometry.
+      Clipping: a layer of a window is drawn only inside that window, its rounded corners
+      included, wherever its place and scale take it, and with masks_to_bounds
+      inside both its own rounded bounds and the window; its glass and placeholder are cut to the
+      window too. A window that draws its own decorations is clipped to its window geometry.
+      Where masked bounds cross the window's rounded corners, the part inside is rounded by the
+      larger of the two radii. The layers of a layer shell surface are clipped only by
+      masks_to_bounds.
 
       Ranges: values the server shows are held in a range far past any output, so no request
       takes the scene past what it can draw: an origin within a million points either way of
@@ -151,8 +154,12 @@
       blurred as a whole picture, transparent beyond its edges, and scales, moves, fades and is
       clipped with the layer as its sharp content is. It applies to a layer of the normal blend
       role; a vibrant layer draws its content sharp. 0, the initial value, draws the content as it
-      is; a client's blurred layers count towards its limits as its other layers do. On a layer
-      object below version 4, content_blur is an invalid_property.
+      is; a client's blurred layers count towards its limits as its other layers do. The server
+      blurs only the part of the content that can show, on the output and inside the layer's
+      mask, with the blur's reach around it; content whose visible part would still need more
+      than the server's limit for one blurred copy (content far larger than the output, scaled far
+      down) is drawn sharp. On a layer object below version 4, content_blur is an
+      invalid_property.
 
       Late content: the parent's commit never waits for a layer's content. When a commit shows a
       part of the layer's bounds its content does not cover (a scroll that outruns the drawing),
@@ -313,8 +320,9 @@
 
     <request name="set_masks_to_bounds">
       <description summary="clip the content to the rounded bounds">
-        1 clips the layer's content to its rounded bounds, 0 (the initial state) only to the
-        parent's window.
+        1 clips the layer's content to its rounded bounds within the parent's window, 0 (the
+        initial state) only to the window. A masked layer whose bounds lie outside the window
+        draws nothing.
       </description>
       <arg name="masks" type="uint"/>
     </request>

@@ -87,7 +87,7 @@ pub(crate) fn split_element<M: 'static>(view: SplitView<M>, look: DividerLook) -
         None => Element::new(Panes {
             spec: SplitSpec {
                 axis: view.axis,
-                leading: view.layout.position.max(0.0),
+                leading: view.layout.position.min(view.max_leading).max(0.0),
                 gap: DIVIDER - under,
                 min_leading: view.min_leading,
                 min_trailing: view.min_trailing + under,
@@ -105,6 +105,7 @@ pub(crate) fn split_element<M: 'static>(view: SplitView<M>, look: DividerLook) -
                 axis: view.axis,
                 layout: view.layout,
                 min_leading: view.min_leading,
+                max_leading: view.max_leading,
                 min_trailing: view.min_trailing,
                 on_change: view.on_change,
                 look,
@@ -270,6 +271,7 @@ struct Divider<M> {
     axis: Axis,
     layout: SplitLayout,
     min_leading: f64,
+    max_leading: f64,
     min_trailing: f64,
     on_change: Option<Handler<SplitLayout, M>>,
     look: DividerLook,
@@ -278,6 +280,8 @@ struct Divider<M> {
 #[derive(Debug, Default)]
 pub struct DividerState {
     dragging: bool,
+    /// The leading pane's extent when the drag began, which a collapse in the drag keeps for restoring.
+    drag_from: f64,
     /// The size and direction it last painted with, for hit testing, which has neither.
     painted: Cell<Option<(Size, bool)>>,
 }
@@ -299,9 +303,13 @@ impl<M> Divider<M> {
         self.axis == Axis::Horizontal && direction == LayoutDirection::Rtl
     }
 
-    /// The farthest the leading pane can reach in `extent` and leave the trailing pane its minimum.
+    /// The farthest the leading pane can reach in `extent`: its maximum, or less where that would leave the trailing
+    /// pane under its minimum. The trailing pane's minimum wins over the leading pane's maximum and minimum alike; where
+    /// both minimums do not fit, the leading pane hides ([`SplitSpec::shown`]).
     fn max(&self, extent: f64) -> f64 {
-        (extent - DIVIDER - self.min_trailing).max(self.min_leading)
+        (extent - DIVIDER - self.min_trailing)
+            .min(self.max_leading)
+            .max(self.min_leading)
     }
 
     /// Where the line starts, from the leading edge: after the leading pane as shown, or at the edge of a collapsed
@@ -317,7 +325,7 @@ impl<M> Divider<M> {
     fn spec(&self) -> SplitSpec {
         SplitSpec {
             axis: self.axis,
-            leading: self.layout.position.max(0.0),
+            leading: self.layout.position.min(self.max_leading).max(0.0),
             gap: DIVIDER,
             min_leading: self.min_leading,
             min_trailing: self.min_trailing,
@@ -354,21 +362,21 @@ impl<M> Divider<M> {
         }
     }
 
-    /// The layout a divider moved to `raw` (the leading pane's extent) in `extent` asks for.
-    fn moved(&self, raw: f64, extent: f64) -> SplitLayout {
-        let collapsed = if raw < self.min_leading / 2.0 {
-            Some(SplitPane::Leading)
-        } else if extent - DIVIDER - raw < self.min_trailing / 2.0 {
-            Some(SplitPane::Trailing)
+    /// The layout a divider moved to `raw` (the leading pane's extent) in `extent` asks for: the leading pane kept
+    /// between its minimum and [`Self::max`], so the trailing pane never goes under its minimum however far the drag
+    /// goes. Below half its minimum the leading pane collapses, keeping `kept` (its extent before the drag) to restore,
+    /// and coming back over that mark in the same drag restores it. A drag never collapses the trailing pane.
+    fn moved(&self, raw: f64, extent: f64, kept: f64) -> SplitLayout {
+        if raw < self.min_leading / 2.0 {
+            SplitLayout {
+                position: kept,
+                collapsed: Some(SplitPane::Leading),
+            }
         } else {
-            None
-        };
-        SplitLayout {
-            position: match collapsed {
-                Some(_) => self.layout.position,
-                None => raw.clamp(self.min_leading, self.max(extent)),
-            },
-            collapsed,
+            SplitLayout {
+                position: raw.clamp(self.min_leading, self.max(extent)),
+                collapsed: None,
+            }
         }
     }
 
@@ -443,6 +451,7 @@ impl<M: 'static> Widget<M> for Divider<M> {
         if self.axis != old.axis
             || self.layout != old.layout
             || self.min_leading != old.min_leading
+            || self.max_leading != old.max_leading
             || self.min_trailing != old.min_trailing
             || self.look != old.look
         {
@@ -498,13 +507,17 @@ impl<M: 'static> Widget<M> for Divider<M> {
                 _,
             ) if cx.node() == cx.target() => {
                 state.dragging = true;
+                state.drag_from = self.layout.position;
                 cx.capture_pointer();
                 cx.request_focus();
                 cx.request_paint();
                 Propagation::Stop
             }
             Event::Pointer(PointerEvent::Motion { position }, _) if state.dragging => {
-                self.set(self.moved(leading_distance(position), extent), cx);
+                self.set(
+                    self.moved(leading_distance(position), extent, state.drag_from),
+                    cx,
+                );
                 Propagation::Stop
             }
             Event::Pointer(PointerEvent::Button { pressed: false, .. }, _) if state.dragging => {
@@ -531,7 +544,7 @@ impl<M: 'static> Widget<M> for Divider<M> {
                     (Action::Increment, _) => self.place(position + KEY_STEP, extent, cx),
                     (Action::Decrement, _) => self.place(position - KEY_STEP, extent, cx),
                     (Action::SetValue, Some(ActionData::Number(value))) => {
-                        self.set(self.moved(*value, extent), cx)
+                        self.set(self.moved(*value, extent, self.layout.position), cx)
                     }
                     (Action::Focus, _) => cx.request_focus(),
                     _ => return Propagation::Continue,
@@ -614,11 +627,13 @@ impl<M: 'static> Widget<M> for Divider<M> {
         }
         cx.role(Role::Splitter);
         cx.name(self.label.clone());
-        // the whole span the line can stand on, collapsed ends included, so the value never leaves it
+        // the whole span the line can stand on: from the leading edge, where a collapsed leading pane puts it, to the
+        // farthest a drag reaches, or the far edge when the application collapsed the trailing pane
+        let line = self.line(extent);
         cx.value(AccessibleValue::Number {
-            value: self.line(extent),
+            value: line,
             min: 0.0,
-            max: (extent - DIVIDER).max(0.0),
+            max: self.max(extent).max(line),
             step: Some(KEY_STEP),
         });
         cx.states(AccessibleStates::default());

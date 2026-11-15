@@ -15,6 +15,8 @@ pub mod metrics {
     pub const SEPARATOR: f64 = 1.0;
     /// Smallest sidebar: its minimum thickness; overlay scrollers add nothing.
     pub const SIDEBAR_MIN: f64 = sidebar::MIN_WIDTH_BASE;
+    /// Widest sidebar a drag reaches.
+    pub const SIDEBAR_MAX: f64 = sidebar::MAX_WIDTH;
     /// Smallest browser area.
     pub const BROWSER_MIN: (f64, f64) = (316.0, 100.0);
     /// Smallest window content: the minimum sidebar, the divider, the minimum browser and the toolbar.

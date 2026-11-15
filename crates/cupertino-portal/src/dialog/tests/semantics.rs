@@ -89,7 +89,7 @@ fn the_file_chooser_reads_its_places_folder_rows_and_buttons_and_enables_open_on
             "        StaticText \"Work\"".to_owned(),
             "      ListItem".to_owned(),
             "        StaticText \"a.txt\"".to_owned(),
-            "  Splitter \"Sidebar\" = 180 of 0..719 focusable".to_owned(),
+            "  Splitter \"Sidebar\" = 180 of 0..399 focusable".to_owned(),
             "  Button \"Cancel\" focusable".to_owned(),
             opened.to_owned(),
         ]
@@ -152,7 +152,7 @@ fn the_file_chooser_reads_its_places_folder_rows_and_buttons_and_enables_open_on
             "        StaticText \"Work\"",
             "      ListItem",
             "        StaticText \"a.txt\"",
-            "  Splitter \"Sidebar\" = 180 of 0..719 focusable",
+            "  Splitter \"Sidebar\" = 180 of 0..399 focusable",
             "  Button \"Cancel\" focusable",
             "  Button \"Save\" focusable",
         ]),

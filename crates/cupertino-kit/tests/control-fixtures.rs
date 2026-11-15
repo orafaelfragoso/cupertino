@@ -924,6 +924,7 @@ fixtures! {
         trailing: body("Inbox"),
         layout: SplitLayout { position: 72.0, collapsed: None },
         min_leading: 48.0,
+        max_leading: f64::INFINITY,
         min_trailing: 48.0,
         on_change: Some(Box::new(|_| Message::Nothing)),
     }.into();

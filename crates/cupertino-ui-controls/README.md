@@ -202,7 +202,10 @@ from the application's model and reports changes as messages.
   tint (no separator line and no fill of its own), the content
   pane's window background reaches the window's top edge, so the window paints none; the compositor draws it
   (`Surface::WindowBackground`) where the desktop can, so the toolbar's glass over it reads the window, and the pane
-  paints it where the desktop cannot. The panel meets the
+  paints it where the desktop cannot. A drag on the divider keeps the sidebar between `min_sidebar` and `max_sidebar`
+  and never leaves the content under `min_content`, which wins over the sidebar's maximum in a narrow window; dragged
+  below half its minimum the sidebar collapses, and a drag back out from the edge or Return on the divider restores
+  it. The panel meets the
   window's edges (`SIDEBAR_PANEL_INSET` 0); an inset panel would take the window's 16 pt corner less the inset. The
   floating toolbar controls are 36 pt tall in the middle of the 52 pt row, 8 pt from its edges and 8 pt apart:
   `ToolbarGroup` is a capsule of segments 36.5 pt wide (40 pt for a choice, whose chosen segment shows a pill 4 pt
@@ -211,7 +214,8 @@ from the application's model and reports changes as messages.
   buttons, a segment with a menu as a pop-up button that opens on the press; a group with an empty label adds no
   group to the tree. `ToolbarMenuButton` is a 47 pt capsule of a symbol and a chevron, `ToolbarButton` a 36 pt circle,
   `ToolbarSearch` a search field that rests as such a circle and passes the press to the field under it, and
-  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave. Each control's glass gets an
+  `ToolbarTitle` the 15 pt bold title that takes the room the controls leave, on one line that ends in an ellipsis
+  when it does not fit (nothing at all when not even the ellipsis does), so the row keeps its height. Each control's glass gets an
   outline from the toolkit: a grey rim on its outermost device pixel (26 % black at the sides, 7 % at the top and bottom)
   and a faint shade below it in the light appearance, a dark rim along its sides (60 % black) in the dark one. `NavigationStack` puts its back and
   forward buttons in such a group. With `under_toolbar` its page fills the whole pane and the row lies over it (the

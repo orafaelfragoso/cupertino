@@ -35,6 +35,8 @@ pub enum MenuAction {
     SortBy(SortKey, bool),
     TogglePathBar,
     ToggleStatusBar,
+    /// Hide the sidebar, or show it again.
+    ToggleSidebar,
     FullScreen,
     Back,
     Forward,
@@ -70,6 +72,8 @@ pub struct MenuState {
     pub in_trash: bool,
     pub path_bar: bool,
     pub status_bar: bool,
+    /// The sidebar is shown, not collapsed.
+    pub sidebar: bool,
     pub full_screen: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -137,6 +141,7 @@ impl MenuAction {
             SortBy(key, _) => (Scope::Win, sort_name(key)),
             TogglePathBar => (Scope::Win, "toggle-path-bar"),
             ToggleStatusBar => (Scope::Win, "toggle-status-bar"),
+            ToggleSidebar => (Scope::Win, "toggle-sidebar"),
             FullScreen => (Scope::Win, "fullscreen"),
             Back => (Scope::Win, "go-back"),
             Forward => (Scope::Win, "go-forward"),
@@ -181,6 +186,7 @@ impl MenuAction {
             View(ViewMode::Gallery),
             TogglePathBar,
             ToggleStatusBar,
+            ToggleSidebar,
             FullScreen,
             Back,
             Forward,
@@ -242,6 +248,7 @@ impl MenuAction {
             View(ViewMode::Gallery) => chord(&[Primary], "4"),
             TogglePathBar => chord(&[Alt, Primary], "p"),
             ToggleStatusBar => chord(&[Primary], "slash"),
+            ToggleSidebar => chord(&[Alt, Primary], "s"),
             Back => chord(&[Primary], "bracketleft"),
             Forward => chord(&[Primary], "bracketright"),
             EnclosingFolder => chord(&[Primary], "Up"),
@@ -387,6 +394,14 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
                     "Show Tab Bar"
                 },
                 ToggleTabBar,
+            )],
+            vec![item(
+                if state.sidebar {
+                    "Hide Sidebar"
+                } else {
+                    "Show Sidebar"
+                },
+                ToggleSidebar,
             )],
             vec![
                 item(
@@ -627,6 +642,8 @@ mod tests {
                 "  ---",
                 "  Show Tab Bar win.toggle-tab-bar",
                 "  ---",
+                "  Show Sidebar win.toggle-sidebar",
+                "  ---",
                 "  Show Path Bar win.toggle-path-bar",
                 "  Show Status Bar win.toggle-status-bar",
                 "  ---",
@@ -659,12 +676,14 @@ mod tests {
             in_trash: true,
             path_bar: true,
             status_bar: true,
+            sidebar: true,
             full_screen: true,
             ..MenuState::default()
         };
         let lines = outline(&menu_bar(&state).exported());
         for line in [
             "  Put Back win.put-back",
+            "  Hide Sidebar win.toggle-sidebar",
             "  Hide Path Bar win.toggle-path-bar",
             "  Hide Status Bar win.toggle-status-bar",
             "  Exit Full Screen win.fullscreen",

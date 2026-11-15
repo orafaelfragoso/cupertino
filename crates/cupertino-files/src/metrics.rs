@@ -57,9 +57,9 @@ pub mod sidebar {
     pub const MIN_WIDTH_BASE: f64 = 128.0;
     /// Width of a legacy scroller (the overlay style adds nothing)..
     pub const LEGACY_SCROLLER_WIDTH: f64 = 15.0;
-    /// No maximum is set by the application. (absence of a
-    /// call in the sidebar setup).
-    pub const MAX_WIDTH: Option<f64> = None;
+    /// The widest a drag on the divider makes the sidebar: room for long place names while the folder keeps most of
+    /// a window. The browser's minimum wins over it in a narrow window.
+    pub const MAX_WIDTH: f64 = 400.0;
     /// Row size styles of the outline view: small / medium / large. data table.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum RowSize {

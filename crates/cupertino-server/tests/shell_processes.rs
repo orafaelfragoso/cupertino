@@ -2523,19 +2523,20 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
         launcher_surfaces(&server.state, BROWSER).unwrap()
     };
     let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
-    // the first open, the renderer's warm-up in it, then the close
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
+    // the close
     toggle(&mut server);
-    let (panel, layers) = first_frame(&mut server);
-    let all: Vec<_> = std::iter::once(panel).chain(layers).collect();
-    let mut last = commits(&all);
-    let mut quiet = Instant::now();
-    server.wait_until("the browser to stop drawing", |_| {
-        let now = commits(&all);
-        if now != last {
-            last = now;
-            quiet = Instant::now();
-        }
-        quiet.elapsed() > Duration::from_millis(500)
+    first_frame(&mut server);
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the launcher runs");
+    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join("cupertino/renderers")
+        .join(pid.to_string());
+    server.wait_until("the launcher to draw on the GPU", |_| {
+        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
     });
     toggle(&mut server);
     server.wait_until("the browser to close", |s| !launcher_panel(s, BROWSER));

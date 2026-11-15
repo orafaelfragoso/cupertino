@@ -997,16 +997,24 @@ Gate:
                 the glass is the panel's at every moment, the first and last frames within 1, and apart from the caret
                 every frame within 17 of 255 in the dark and 7 in the light (where the bud's strokes cross, 117 to
                 250 ms; within 1 from 383 ms), bounded by an eighth of the line's opacity.
-          - [ ] On in the process (`Model::hand_field_opens`, off; the in-memory tests turn it on). Against the server
-                the real process (`--no-files`, one button, the field opened and closed once first) committed 4
-                buffers of its window and layers over 186 server steps part way, in the one run taken; which commits
-                they are (the redraw at rest racing the samples' last steps, or frames part way) is not found yet. Then
-                the count as the scope's open has it
-                (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over `ToggleLauncher`, the window 760 points wide with 4 layers).
+          - [x] On in the process (`Model::hand_field_opens`). The stray buffers were one commit of the content's layer
+                about 700 ms in: a message part way (an earlier open's end timer, here) rebuilt the view, and the held
+                caret was painted where its fade had come to. A held caret now paints as it was last drawn
+                (`BareField::hold_caret`), the open ends when the compositor tells the window its layers came to rest
+                (`WindowEvent::LayersSettled`, `FrameClock::on_layers_settled`) instead of on the panel's own clock,
+                with a timer a second past the open's end that carries the open's number. Against the server, in a
+                variant not kept in the suite (`shell_processes::the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer` over
+                `ToggleLauncher`, the window 760 points wide with 4 layers, `--no-files`, one button, the renderer
+                warmed to `gpu` first): 0 buffers of the window and its layers in each of 8 opens over two runs, over
+                186 to 188 server steps part way; the scope's open 0 in 3 runs over 92 to 95.
           - [ ] The caret's blink through the field's open. The field holds its caret while the compositor runs the
                 open (about a second, the buttons' spring), where the panel's own drawing fades it out from 550 ms and
                 back by 1000 ms (255 of 255 at the caret). A blink on the compositor's clock needs the caret as a
                 layer of its own whose opacity the panel animates, or a frame of the content's layer at each blink.
+                The layer needs the field's help: its caret is drawn in its overlay at a place only its paint knows,
+                and its blink starts when the keyboard focus comes, after the window maps and later than the open's
+                samples go out, so the field would draw its caret into a layer of its own and tell when its blink
+                started.
       - [ ] The test that the open and the close make no new application buffer, and the look at several points of
             each within the goldens' tolerance of the launcher's drawing. Split:
         - [x] The close: no buffer of the window or its layers from Escape until the panel goes, 0 in 3 runs over

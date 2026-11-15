@@ -636,18 +636,26 @@ impl Metered {
         self.finish_handed_open();
     }
 
-    /// An open the compositor runs ends at the timer the test host never sets: past its end, the timer's message, and
-    /// the panel at rest.
+    /// An open the compositor runs ends when the compositor tells the panel's layers came to rest, which this window
+    /// system never does by itself: past its end, the layers at rest, and the panel at rest.
     fn finish_handed_open(&mut self) {
         for _ in 0..400 {
             if !self.model().open_handed() {
                 return;
             }
             self.step(|_, _| {});
-            send(Message::OpenOver);
-            self.step(|_, _| {});
+            self.layers_settle();
         }
         self.until_quiet(4, 200);
+    }
+
+    /// The compositor tells the panel's window that its layers came to rest.
+    fn layers_settle(&mut self) {
+        self.step(|system, panel| {
+            system
+                .enqueue_window(panel, WindowEvent::LayersSettled)
+                .unwrap();
+        });
     }
 }
 

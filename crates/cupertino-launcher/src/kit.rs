@@ -54,6 +54,10 @@ pub const BROWSE_BOTTOM_ROOM: f64 = 96.0;
 pub const STATUS_SETTLE: f64 = crate::providers::DEADLINE;
 /// How many queries the panel remembers having said a status of.
 const MAX_SAID: usize = 32;
+/// How long past the end of its own motion the panel waits for the compositor to tell that an open it runs came to
+/// rest ([`Message::OpenSettled`]) before it takes the open back, in seconds: well past the frame or two the compositor
+/// starts it late.
+pub const OPEN_REST_FALLBACK: f64 = 1.0;
 /// The most application icons the browser has being loaded at once, off the loop: those nearest the view are asked
 /// first, and each one that arrives makes room for the next.
 pub const MAX_APP_ICON_LOADS: usize = 14;
@@ -240,8 +244,12 @@ pub enum Message {
     ReduceMotion(bool),
     /// The close the compositor runs ([`Model::compositor_layers`]) is over by now.
     CloseOver,
-    /// The open the compositor runs is over by now.
-    OpenOver,
+    /// The compositor did not tell that the open it runs came to rest ([`Message::OpenSettled`]) well past the open's
+    /// end: the panel takes it back. For the open of this number (the count of opens handed over): a timer of an earlier open,
+    /// still to come as the next one runs, ends nothing.
+    OpenOver(u64),
+    /// The panel's layers came to rest in the compositor: the open it runs is over, its last values shown.
+    OpenSettled,
 }
 
 impl From<Input> for Message {
@@ -365,8 +373,8 @@ pub struct Model {
     /// and the edge drawn by the compositor along it. On in the process; a test turns it off to compare the panel's own
     /// open.
     pub hand_opens: bool,
-    /// The search field's open with its mode buttons is handed over too ([`view::layers::field_open_changes`]). Off in
-    /// the process: against the server its window and layers still commit a few buffers part way; a test turns it on.
+    /// The search field's open with its mode buttons is handed over too ([`view::layers::field_open_changes`]). On in
+    /// the process; a test turns it off to compare the panel's own open.
     pub hand_field_opens: bool,
     /// The search field opens from hidden: its open is handed to the compositor once its mode buttons are placed.
     hand_field: bool,
@@ -375,9 +383,13 @@ pub struct Model {
     handed: Option<Frame>,
     layer_changes: Vec<(u64, Vec<cupertino_kit::platform::LayerChange>)>,
     /// The open the compositor runs: the panel at rest, which its layers show from the open's first frame while the
-    /// compositor moves them from where the open starts, and whether the timer for its end is asked for.
+    /// compositor moves them from where the open starts, until the compositor tells that they came to rest
+    /// ([`Message::OpenSettled`]); and whether the timer that ends it all the same ([`OPEN_REST_FALLBACK`]) is asked
+    /// for.
     open_rest: Option<Frame>,
     open_timer: bool,
+    /// How many opens were handed to the compositor: the number of the one that runs.
+    pub(crate) open_number: u64,
 }
 
 impl Model {
@@ -436,12 +448,13 @@ impl Model {
             primary_held: false,
             compositor_layers: false,
             hand_opens: true,
-            hand_field_opens: false,
+            hand_field_opens: true,
             hand_field: false,
             handed: None,
             layer_changes: Vec::new(),
             open_rest: None,
             open_timer: false,
+            open_number: 0,
         }
     }
 
@@ -872,6 +885,7 @@ impl Model {
         };
         self.open_rest = Some(rest);
         self.open_timer = false;
+        self.open_number += 1;
     }
 
     fn animate(&mut self) -> Vec<Command<Message>> {
@@ -2037,12 +2051,28 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             model.motion.set_reduce_motion(on);
             Vec::new()
         }
-        Message::OpenOver => {
+        Message::OpenOver(number) if number == model.open_number => {
             model.open_timer = false;
             if !model.motion.animating(now.mono) {
                 model.open_rest = None;
             }
             model.animate()
+        }
+        Message::OpenOver(_) => Vec::new(),
+        Message::OpenSettled => {
+            // the compositor shows the open's last values: whatever the panel draws from now on comes after them. Where
+            // it came to rest before the panel's own motion (it skipped to the end), the panel's motion ends first.
+            let mut commands = Vec::new();
+            if model.open_rest.is_some() {
+                if model.motion.animating(now.mono) {
+                    let left = model.motion.moving_left(now.mono);
+                    commands.extend(model.host.after(left, Message::OpenOver(model.open_number)));
+                } else {
+                    model.open_rest = None;
+                }
+            }
+            commands.extend(model.animate());
+            commands
         }
         Message::CloseOver => {
             // a timer a little early waits for the rest of the close
@@ -2071,17 +2101,19 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             commands.extend(model.host.after(left, Message::CloseOver));
         }
     }
-    // an open the compositor runs ends when the motion it carries does; a timer comes back for it then. What changes
-    // where the panel comes to rest (a query that brings results, a scope's height) takes the open back: the panel
-    // draws the rest of it itself.
+    // an open the compositor runs ends when the compositor tells its layers came to rest, which it does in the frame
+    // that shows their last values: the compositor starts the open when it first shows its commit, a frame or more
+    // after the panel's own motion started, so the panel's clock would end it early. A timer well past the open's end
+    // ends it all the same. What changes where the panel comes to rest (a query that brings results, a scope's height)
+    // takes the open back: the panel draws the rest of it itself.
     if let Some(rest) = model.open_rest {
         let now = model.now().mono;
-        if !model.motion.animating(now) || !model.nav.is_visible() || model.resting(now) != rest {
+        if !model.nav.is_visible() || model.resting(now) != rest {
             model.open_rest = None;
         } else if !model.open_timer {
             model.open_timer = true;
-            let left = model.motion.moving_left(now);
-            commands.extend(model.host.after(left, Message::OpenOver));
+            let left = model.motion.moving_left(now) + OPEN_REST_FALLBACK;
+            commands.extend(model.host.after(left, Message::OpenOver(model.open_number)));
         }
     }
     if model.handed.is_some() && model.motion.gone(model.now().mono) {
@@ -2159,6 +2191,8 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
     window.content = Element::from(FrameClock {
         content: window.content,
         on_frame: model.frame_waiting.then_some(Message::Frame(model.frame)),
+        // the end of an open the compositor runs, told by the compositor
+        on_layers_settled: model.open_rest.is_some().then_some(Message::OpenSettled),
     });
     let mut windows = vec![window];
     if model.nav.is_visible() && !model.dragging {

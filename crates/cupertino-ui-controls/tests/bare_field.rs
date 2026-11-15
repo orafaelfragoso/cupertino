@@ -149,6 +149,20 @@ fn a_bare_field_s_caret_is_its_text_s_colour() {
     assert_eq!(bars, vec![text], "one caret, in the text's colour");
 }
 
+/// The opacity of each caret the field drew last.
+fn caret(h: &Harness<Query>) -> Vec<f32> {
+    h.ops("query")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(r),
+                paint: Paint::Solid(c),
+            } if r.width() <= 2.0 && r.height() > 4.0 => Some(c.a),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A held caret's blink draws nothing: through a fade out, the hidden stretch and a fade in the field draws no frame,
 /// so it shows what it showed when the hold began; let go, the caret blinks again.
 #[test]
@@ -181,4 +195,52 @@ fn a_held_caret_draws_no_frame_until_it_is_let_go() {
         h.rt.window_system().frames(h.window).unwrap().len() > frames,
         "let go, the caret blinks"
     );
+}
+
+/// A held caret the field paints again for another reason part way through its fade (the window drawn anew) is drawn as
+/// it was when the hold began, not where its cycle has come to, so what the compositor shows of a surface it moves does
+/// not change.
+#[test]
+fn a_held_caret_painted_again_part_way_through_its_fade_is_drawn_as_the_hold_began() {
+    use cupertino_ui_controls::caret_opacity;
+    use cupertino_ui_core::Clock;
+    use cupertino_ui_platform::{Timestamp, WindowEvent};
+    const MS: u64 = 1_000_000;
+    let mut h = harness();
+    HOLD.set(true);
+    // the edit restarts the blink, the caret shown
+    let since = h.clock().now();
+    h.type_text("dock");
+    let env = h.env();
+    let text = color(ColorRole::Text, InteractionVariant::Normal, false).a;
+    assert_eq!(caret(&h), vec![text], "shown");
+    // a moment part way through the fade out, on the field's own curve
+    let fading = (0..2000)
+        .map(|ms| Timestamp(since.0 + ms * MS))
+        .find(|&t| (0.25..0.75).contains(&caret_opacity(&env, since, t)))
+        .expect("the caret fades");
+    let frames = h.rt.window_system().frames(h.window).unwrap().len();
+    let mut t = since.0;
+    while t < fading.0 {
+        t = (t + 16 * MS).min(fading.0);
+        h.clock().advance_to(Timestamp(t)).unwrap();
+        h.settle();
+    }
+    assert_eq!(
+        h.rt.window_system().frames(h.window).unwrap().len(),
+        frames,
+        "the held caret drew no frame"
+    );
+    h.send(WindowEvent::Scale(2.0));
+    h.settle();
+    assert!(
+        h.rt.window_system().frames(h.window).unwrap().len() > frames,
+        "the window drew again"
+    );
+    assert_eq!(caret(&h), vec![text], "held as the hold began");
+    assert!(
+        caret_opacity(&env, since, fading) < 0.75,
+        "where its cycle has come to"
+    );
+    HOLD.set(false);
 }

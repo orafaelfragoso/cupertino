@@ -1546,6 +1546,11 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.drop_event(i, event);
                 return Ok(());
             }
+            WindowEvent::LayersSettled => {
+                if let Some(root) = w.root {
+                    route(&mut self.tree, w, now, &mut effects).notify(root, &Event::LayersSettled);
+                }
+            }
         }
         self.apply(i, effects);
         Ok(())

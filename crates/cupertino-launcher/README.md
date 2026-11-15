@@ -79,8 +79,12 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
   between device pixels, within two fifths of the line's opacity of the panel's own;
   the search field's open with its mode buttons can be too (`view::layers::field_open_changes`, every value through
   the panel's own, the field's glass carrying the edge the compositor draws round each shape cut by the others while
-  the shapes join, each button's symbol fading in and sharpening through its face layer's opacity and content blur),
-  off in the process until its count against the server holds (`Model::hand_field_opens`);
+  the shapes join, each button's symbol fading in and sharpening through its face layer's opacity and content blur;
+  `Model::hand_field_opens`). An open handed over ends when the compositor tells the panel's layers came to rest
+  (`WindowEvent::LayersSettled`, heard through `FrameClock::on_layers_settled`), in the frame that shows their last
+  values, not on the panel's own clock, which starts a frame or more before the compositor first shows the open; a
+  timer a second past the open's end takes it back if no word comes, and a timer of an earlier open ends nothing. The
+  field holds its caret through it, and a paint for any other reason draws the caret as it was shown;
 * the catcher: top layer, over the whole output, below the panel; a press on it closes the panel. It is
   `WindowBackground::INPUT_ONLY`: a transparent single pixel the compositor stretches over the output, so it costs no
   drawing or upload at any output size or scale (a compositor without one-pixel buffers gets a drawn transparent frame);

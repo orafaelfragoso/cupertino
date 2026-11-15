@@ -713,6 +713,10 @@ pub enum WindowEvent {
         region: Option<usize>,
         tone: GlassTone,
     },
+    /// The last running animation of the window's surface layers ([`WindowRequest::Layer`]) ended in the compositor:
+    /// every layer shows the values it was last given. Sent once each time they come to rest, in the compositor's
+    /// frame that shows them so; a window system without surface layers never sends it.
+    LayersSettled,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -115,7 +115,7 @@ impl Marks {
             cx.fill_pixels(rect, color);
         }
         if let Some((bar, color)) = self.caret.get() {
-            let opacity = blink.opacity(cx.env(), cx.now());
+            let opacity = blink.drawn_opacity(cx.env(), cx.now());
             if opacity > 0.0 {
                 cx.fill_pixels(
                     bar,
@@ -523,21 +523,35 @@ const BLINK_FRAME_NS: f64 = 16_000_000.0;
 
 /// The caret's blink: shown for the first stretch after each edit, move, click or focus gain, then fading out and in
 /// in a cycle just under a second long, steady with Reduce Motion and after [`BLINK_LIMIT_NS`].
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Blink {
     since: Timestamp,
+    /// The caret holds what it shows ([`BareField::hold_caret`]): a paint for any other reason draws it at the opacity
+    /// it was last drawn with, not where its cycle has come to.
+    holding: Cell<bool>,
+    /// The opacity the caret was last drawn with; none since the blink restarted.
+    drawn: Cell<Option<f32>>,
 }
 
 /// The opacity of a caret whose blink restarted at `since`, at `now`: shown for the first stretch, then fading out and
 /// in, steady with Reduce Motion and once it has blinked a while. For a caret a view draws itself.
 pub fn caret_opacity(env: &Environment, since: Timestamp, now: Timestamp) -> f32 {
-    Blink { since }.opacity(env, now)
+    Blink {
+        since,
+        ..Blink::default()
+    }
+    .opacity(env, now)
 }
 
 /// Whether a caret whose blink restarted at `since` may still change its opacity after `now`, so its view keeps
 /// drawing frames.
 pub fn caret_blinking(env: &Environment, since: Timestamp, now: Timestamp) -> bool {
-    Blink { since }.next_edge(env, now).is_some()
+    Blink {
+        since,
+        ..Blink::default()
+    }
+    .next_edge(env, now)
+    .is_some()
 }
 
 /// Where `elapsed` nanoseconds after a restart lies in the blink cycle of a phase of `phase` nanoseconds.
@@ -592,6 +606,18 @@ impl Blink {
         }
     }
 
+    /// The opacity to draw the caret with at `now`: while it holds, the one it was last drawn with.
+    fn drawn_opacity(&self, env: &Environment, now: Timestamp) -> f32 {
+        match self.drawn.get() {
+            Some(held) if self.holding.get() => held,
+            _ => {
+                let opacity = self.opacity(env, now);
+                self.drawn.set(Some(opacity));
+                opacity
+            }
+        }
+    }
+
     /// The next time the caret's opacity needs drawing, or `None` once it is steady: a frame later while it fades,
     /// else when the next fade starts.
     fn next_edge(&self, env: &Environment, now: Timestamp) -> Option<Timestamp> {
@@ -639,6 +665,8 @@ impl Blink {
     pub(crate) fn follow<M>(&mut self, event: &Event, selecting: bool, cx: &mut EventCx<'_, M>) {
         if Self::restarts(event) {
             self.since = cx.now();
+            // shown again, even while it holds
+            self.drawn.set(None);
             self.arm(selecting, cx);
             cx.request_paint();
         } else if let Event::Wake(_) = event {
@@ -1865,6 +1893,7 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     }
 
     fn overlay(&self, state: &FieldState, cx: &mut OverlayCx<'_>) {
+        state.blink.holding.set(self.hold_caret);
         self.field.overlay(state, cx)
     }
 

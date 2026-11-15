@@ -790,6 +790,7 @@ impl Application for Panel {
         panel.content = Element::from(FrameClock {
             content: panel.content,
             on_frame: model.animating.then_some(Message::Frame),
+            on_layers_settled: None,
         });
         match model.controller.phase(now) {
             Phase::Hidden => Vec::new(),

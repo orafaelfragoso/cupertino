@@ -290,6 +290,9 @@ pub enum Event {
     Dismiss,
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
+    /// The last running animation of the window's surface layers ended in the compositor
+    /// ([`WindowEvent::LayersSettled`](cupertino_ui_platform::WindowEvent)); only the window's root hears it.
+    LayersSettled,
 }
 
 /// The state every interactive control resolves its look from.

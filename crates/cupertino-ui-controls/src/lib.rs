@@ -663,10 +663,13 @@ pub struct WindowDragArea<M> {
 /// Wraps `content` (the size of the content) and, while `on_frame` holds a message, sends it once at each frame the
 /// compositor gives the window: what the application moves by itself steps with the display's frames, never ahead of
 /// them and never waiting on a timer between them. A window the compositor does not show gets no frames, so nothing
-/// is sent. Build its element with `Element::from`.
+/// is sent. While `on_layers_settled` holds a message, it is sent each time the window's surface layers come to rest
+/// in the compositor ([`Event::LayersSettled`](cupertino_ui_core::Event)), which only the window's root hears: the
+/// clock is then the window's content. Build its element with `Element::from`.
 pub struct FrameClock<M> {
     pub content: Element<M>,
     pub on_frame: Option<M>,
+    pub on_layers_settled: Option<M>,
 }
 
 /// One of a split view's two panes: the leading one is at the top, or at the reading direction's start.
@@ -1351,9 +1354,10 @@ pub struct SearchField<M> {
 pub struct BareField<M> {
     pub field: TextField<M>,
     pub size: f64,
-    /// The caret holds what it shows: its blink draws nothing, so the field draws no frame of its own, and once the
-    /// hold ends the blink goes on where its cycle has come to. For a field whose surface the compositor is moving
-    /// (a panel's close it runs on its own clock).
+    /// The caret holds what it shows: its blink draws nothing, so the field draws no frame of its own, a paint for
+    /// any other reason draws it as it was last drawn, and once the hold ends the blink goes on where its cycle has
+    /// come to. An edit that restarts the blink shows it again. For a field whose surface the compositor is moving (a
+    /// panel's open or close it runs on its own clock).
     pub hold_caret: bool,
 }
 

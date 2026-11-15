@@ -1740,7 +1740,8 @@ Taken on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.0
   `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino-diagnose` (`gpu.client_renderers`). The frame
   statistics carry `renderer` on every line and `scripts/dev/bench` lists each program's renderers.
 - `cupertino-ui-wayland::gpu_path`: the warm-up thread (device on the feedback's render node, saved programs, the blit
-  program; the context released and taken over by the main thread), the switch (`PlatformEvent::RendererChanged`,
+  program, one draw with each of the renderers' programs so the driver finishes them before the first frame,
+  `GpuPrograms::prime`; the context released and taken over by the main thread), the switch (`PlatformEvent::RendererChanged`,
   on which the runtime drops each window's renderer and draws whole frames with a new one), losses (every surface's
   buffers freed, a new warm-up, the CPU for good after three resets within a minute; purges never counted), the
   per-surface fallback to shared memory and `buffers_lost`.

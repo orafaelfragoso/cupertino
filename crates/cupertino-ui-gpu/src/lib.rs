@@ -34,9 +34,10 @@ use std::rc::Rc;
 use cupertino_gpu::atlas::{Atlas, AtlasKind};
 use cupertino_gpu::pool::{Pooled, TargetPool, TARGET_POOL_CAP};
 use cupertino_gpu::{
-    shaders, BindGroupLayout, BindingKind, BindingLayout, Blend, Buffer, BufferDesc, BufferUsage,
-    Device, Error as GpuError, Pipeline, PipelineDesc, Region, StepMode, Texture, TextureDesc,
-    TextureFormat, TextureUsage, Topology, VertexAttribute, VertexFormat, VertexLayout,
+    shaders, BindGroupEntry, BindGroupLayout, BindingKind, BindingLayout, BindingResource, Blend,
+    Buffer, BufferDesc, BufferUsage, Device, DeviceInfo, Error as GpuError, LoadOp, Pipeline,
+    PipelineDesc, Region, StepMode, Texture, TextureDesc, TextureFormat, TextureUsage, Topology,
+    VertexAttribute, VertexFormat, VertexLayout,
 };
 use cupertino_ui_render::{
     damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, Layer, PaintNodeId,
@@ -102,6 +103,18 @@ const UNIFORM_ALIGN: usize = 256;
 
 /// Bytes of one quad instance: its rectangle and its atlas texel, two `vec4`.
 const INSTANCE_BYTES: u32 = 32;
+
+/// The format of the blur's levels on a device with `info`: floats where it renders to them (the blur's sums kept as
+/// exact as the CPU keeps them), then half floats, then bytes.
+pub(crate) fn level_format(info: &DeviceInfo) -> TextureFormat {
+    if info.float_targets {
+        TextureFormat::Rgba32Float
+    } else if info.half_float_targets {
+        TextureFormat::Rgba16Float
+    } else {
+        TextureFormat::Rgba8
+    }
+}
 
 /// The programs and fixed resources of a renderer.
 pub(crate) struct Programs {
@@ -192,6 +205,80 @@ impl Programs {
             resolve_layout,
             empty,
         })
+    }
+
+    /// Draws once with each program into small targets of each format frames draw into (the window's and layers'
+    /// bytes, the blur's levels), then waits for the device. A driver finishes making a program at its first draw
+    /// with it, some 10 to 20 ms a program, which would otherwise fall on the first frame that uses it.
+    fn prime(&self, device: &Device) -> Result<(), GpuError> {
+        let size = 64 << 10;
+        let zeros = vec![0u8; size];
+        let uniforms = device.create_buffer(&BufferDesc {
+            size: size as u64,
+            usage: BufferUsage::Uniform,
+        })?;
+        let instances = device.create_buffer(&BufferDesc {
+            size: size as u64,
+            usage: BufferUsage::Vertex,
+        })?;
+        let mut targets = Vec::new();
+        let primed = (|| {
+            device.write_buffer(&uniforms, 0, &zeros)?;
+            device.write_buffer(&instances, 0, &zeros)?;
+            for format in [TextureFormat::Rgba8, level_format(device.info())] {
+                targets.push(device.create_texture(&TextureDesc {
+                    size: (4, 4),
+                    format,
+                    usage: TextureUsage::TARGET,
+                })?);
+            }
+            let quads = [
+                (&self.fill, &self.fill_layout, 2),
+                (&self.clear, &self.fill_layout, 2),
+                (&self.texture, &self.texture_layout, 3),
+            ];
+            let whole = [
+                (&self.halve, &self.level_layout, 1),
+                (&self.gauss, &self.level_layout, 1),
+                (&self.resolve, &self.resolve_layout, 2),
+            ];
+            for target in &targets {
+                let mut pass = device.begin_pass(target, LoadOp::Clear([0.0; 4]))?;
+                for (i, (pipeline, layout, textures)) in quads.iter().chain(&whole).enumerate() {
+                    let mut entries = vec![BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: &uniforms,
+                            offset: 0,
+                            size: UNIFORM_ALIGN as u64 * 16,
+                        },
+                    }];
+                    entries.extend((1..=*textures).map(|binding| BindGroupEntry {
+                        binding,
+                        resource: BindingResource::Texture(&self.empty),
+                    }));
+                    let group = device.create_bind_group(layout, &entries)?;
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &group)?;
+                    if i < quads.len() {
+                        pass.set_vertex_buffer(0, &instances, 0)?;
+                        pass.set_scissor(Some(Region::new(0, 0, 4, 4)));
+                        pass.draw(0..4, 1)?;
+                    } else {
+                        pass.set_scissor(None);
+                        pass.draw(0..3, 1)?;
+                    }
+                }
+                pass.end();
+            }
+            device.finish()
+        })();
+        for t in targets {
+            device.destroy_texture(t);
+        }
+        device.destroy_buffer(uniforms);
+        device.destroy_buffer(instances);
+        primed
     }
 
     fn destroy(self, device: &Device) {
@@ -318,6 +405,14 @@ impl GpuPrograms {
     pub fn new(device: &Device) -> Result<GpuPrograms, GpuError> {
         let _programs = tracing::trace_span!("gpu.programs").entered();
         Programs::new(device).map(|inner| GpuPrograms { inner })
+    }
+
+    /// Draws once with each program on `device`, which they were made on, and waits for it: the driver finishes
+    /// making a program at its first draw, so this takes that from the first frame that draws with it. For a thread
+    /// that makes the programs ahead of the frames.
+    pub fn prime(&self, device: &Device) -> Result<(), GpuError> {
+        let _prime = tracing::trace_span!("gpu.programs.prime").entered();
+        self.inner.prime(device)
     }
 
     /// Frees the programs on `device`, which they were made on.

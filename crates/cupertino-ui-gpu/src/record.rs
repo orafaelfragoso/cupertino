@@ -1120,14 +1120,7 @@ impl<R: GlyphRasterizer> Painter<'_, '_, R> {
     /// The format of the blur's levels: floats where the device renders to them (the blur's sums kept as exact as
     /// the CPU keeps them), then half floats, then bytes.
     fn level_format(&self) -> TextureFormat {
-        let info = self.device().info();
-        if info.float_targets {
-            TextureFormat::Rgba32Float
-        } else if info.half_float_targets {
-            TextureFormat::Rgba16Float
-        } else {
-            TextureFormat::Rgba8
-        }
+        crate::level_format(self.device().info())
     }
 
     /// Applies `effect` to the layer `layer` covering `area`: the layer that holds the result.

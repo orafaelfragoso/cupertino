@@ -42,3 +42,16 @@ fn the_renderers_programs_made_ahead_are_all_loaded_and_none_compiled() {
     programs.destroy(&device);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn the_programs_drawn_once_ahead_leave_the_device_working() {
+    let Some(device) = common::device() else {
+        return;
+    };
+    let programs = GpuPrograms::new(&device).expect("the renderer's programs");
+    programs
+        .prime(&device)
+        .expect("each program drawn once into each target format");
+    device.status().expect("the device after the draws");
+    programs.destroy(&device);
+}

@@ -124,6 +124,12 @@ pub fn warm(
     let programs = tracing::trace_span!("wl.gpu_programs")
         .in_scope(|| Programs::new(&device))
         .map_err(|e| e.to_string())?;
+    if signals.stopped() {
+        return Err(STOPPED.into());
+    }
+    // the driver finishes each program at its first draw: drawn once here, in the turn, so the process's first
+    // frames do not wait on its compiler
+    programs.ui.prime(&device).map_err(|e| e.to_string())?;
     drop(turn);
     let timing = WarmTiming {
         context,

@@ -502,8 +502,11 @@ fn resizing_a_tiled_window_makes_it_normal_again() {
 
 /// Window "a" at (100, 100, 600, 400) next to "b" at (1000, 100, 400, 400), grabbed at `grab`
 /// and dragged right at 280 pt/s for 1 s: its right edge stops 19 pt before b's facing edge.
-fn approach(grab: Point) -> (H, WindowId) {
-    let mut h = H::new();
+/// With `to_windows` a moved window sticks to other windows' edges (`magnet.move_to_windows`).
+fn approach_with(grab: Point, to_windows: bool) -> (H, WindowId) {
+    let mut cfg = WmConfig::default();
+    cfg.magnet.move_to_windows = to_windows;
+    let mut h = H::with_config(cfg);
     let a = h.map_at("a", Rect::new(100.0, 100.0, 600.0, 400.0));
     h.map_at("b", Rect::new(1000.0, 100.0, 400.0, 400.0));
     titlebar_grab(&mut h, a, grab.x, grab.y);
@@ -513,8 +516,75 @@ fn approach(grab: Point) -> (H, WindowId) {
     (h, a)
 }
 
+/// [`approach_with`] with moved windows sticking to other windows.
+fn approach(grab: Point) -> (H, WindowId) {
+    approach_with(grab, true)
+}
+
+/// Drag the moving window by `(dx, dy)` from the pointer at `from` in steps of at most 0.25 pt
+/// every 10 ms (25 pt/s, well under the snapping speed), checking at every step that it is where
+/// the drag started plus the pointer's travel. Returns where the pointer ends.
+fn slow_drag_one_to_one(h: &mut H, a: WindowId, from: Point, dx: f64, dy: f64) -> Point {
+    let start = h.frame(a);
+    let steps = (dx.abs().max(dy.abs()) / 0.25).round() as usize;
+    let mut p = from;
+    for i in 1..=steps {
+        let t = i as f64 / steps as f64;
+        p = Point::new(from.x + dx * t, from.y + dy * t);
+        h.now += 0.01;
+        let fx = h.cmd(motion(p.x, p.y));
+        let want = start.translate(p.x - from.x, p.y - from.y);
+        assert!(
+            rect_eq(h.frame(a), want),
+            "step {i} at {p:?}: {:?}, the pointer asks for {want:?}",
+            h.frame(a)
+        );
+        assert!(has(
+            &fx,
+            |e| matches!(e, Effect::Place { window, rect } if *window == a && rect_eq(*rect, want))
+        ));
+    }
+    p
+}
+
 #[test]
-fn slow_drag_snaps_one_point_short_of_the_next_window() {
+fn a_slow_drag_passes_other_windows_edges_one_to_one() {
+    let (mut h, a) = approach_with(Point::new(300.0, 110.0), false);
+    // the right edge goes over b's facing left edge (999 with the gap) and on across b's right
+    // edge at 1400
+    let p = slow_drag_one_to_one(&mut h, a, Point::new(580.0, 110.0), 440.0, 0.0);
+    // the top and bottom edges, level with b's, go down, back up across them and on up
+    let p = slow_drag_one_to_one(&mut h, a, p, 0.0, 10.0);
+    let p = slow_drag_one_to_one(&mut h, a, p, 0.0, -30.0);
+    // and back left at a slant across b's edges again
+    slow_drag_one_to_one(&mut h, a, p, -440.0, 40.0);
+    h.cmd(Command::PointerRelease);
+    assert!(rect_eq(
+        h.wm.window(a).unwrap().lifecycle.normal_frame(),
+        Rect::new(380.0, 120.0, 600.0, 400.0)
+    ));
+}
+
+#[test]
+fn a_slow_drag_still_sticks_to_the_screen_edge() {
+    let mut h = H::new();
+    let a = h.map_at("a", Rect::new(100.0, 100.0, 600.0, 400.0));
+    titlebar_grab(&mut h, a, 300.0, 110.0);
+    h.now += 1.0;
+    h.cmd(motion(220.0, 110.0));
+    assert!(rect_eq(h.frame(a), Rect::new(20.0, 100.0, 600.0, 400.0)));
+    let p = slow_drag_one_to_one(&mut h, a, Point::new(220.0, 110.0), -19.75, 0.0);
+    h.now += 0.01;
+    h.cmd(motion(p.x - 0.5, 110.0));
+    assert!(
+        rect_eq(h.frame(a), Rect::new(0.0, 100.0, 600.0, 400.0)),
+        "the left edge crossing the usable left edge stays on it: {:?}",
+        h.frame(a)
+    );
+}
+
+#[test]
+fn moving_to_windows_a_slow_drag_snaps_one_point_short_of_the_next_window() {
     let (mut h, a) = approach(Point::new(300.0, 110.0));
     h.now += 0.25;
     let fx = h.cmd(motion(610.0, 110.0));
@@ -532,7 +602,7 @@ fn slow_drag_snaps_one_point_short_of_the_next_window() {
 }
 
 #[test]
-fn fast_drag_and_alt_drag_do_not_snap() {
+fn moving_to_windows_a_fast_or_alt_drag_does_not_snap() {
     let (mut h, a) = approach(Point::new(300.0, 110.0));
     h.now += 0.02;
     h.cmd(motion(610.0, 110.0));
@@ -550,7 +620,7 @@ fn fast_drag_and_alt_drag_do_not_snap() {
 }
 
 #[test]
-fn window_catches_up_when_the_jump_leaves_the_pointer_outside() {
+fn moving_to_windows_the_window_catches_up_when_the_jump_leaves_the_pointer_outside() {
     // grabbed 5 pt from its right edge, the pointer ends up beside the window it was dragged from
     let (mut h, a) = approach(Point::new(695.0, 110.0));
     h.now += 0.25;

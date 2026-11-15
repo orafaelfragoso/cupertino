@@ -1817,6 +1817,64 @@ mod window_system {
         );
     }
 
+    /// A window whose size changed after it was made (a preview that learns its picture's size) and whose compositor
+    /// leaves the size to it shows its first frame at the new size, acknowledging its configure: its buffers follow
+    /// the size the runtime draws at, where they kept the old one and no frame was ever shown.
+    #[test]
+    fn a_size_asked_before_a_sizeless_configure_is_the_size_the_first_frame_shows_at() {
+        let (mut kit, _control, committed, _seen) = created();
+        let w = kit.window;
+        kit.ws
+            .request(w, WindowRequest::SetSize(Size::new(60.0, 40.0)))
+            .unwrap();
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(configure.size, None, "the compositor leaves the size");
+        kit.window_event(|e| matches!(e, WindowEvent::Scale(_)).then_some(()));
+        assert_eq!(
+            kit.ws
+                .present(w, &frame_sized(1, (120, 80), [9, 8, 7, 6], &[]), None)
+                .unwrap(),
+            PresentOutcome::Presented
+        );
+        kit.pump();
+        let shown = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(shown.buffer_size, (120, 80));
+    }
+
+    /// A frame the window asks for while it draws on a frame callback, before it commits, is folded into that commit's
+    /// own callback: the window draws once for each frame the compositor shows, where it drew a second frame at once.
+    #[test]
+    fn a_frame_asked_before_a_commit_waits_for_the_commits_callback() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+        kit.ws
+            .present(w, &frame(1, [1, 2, 3, 4], &[]), None)
+            .unwrap();
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        kit.ws.request_frame(w);
+        control.send(Control::FrameDone).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        for n in 2..6 {
+            // an animation asks for its next frame as it handles this one, then the frame is drawn and committed
+            kit.ws.request_frame(w);
+            kit.ws
+                .present(w, &frame(n, [n as u8, 0, 0, 255], &[]), None)
+                .unwrap();
+            kit.pump();
+            committed.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                !kit.took_frame(),
+                "frame {n}: no second frame before the compositor shows this one"
+            );
+            control.send(Control::FrameDone).unwrap();
+            kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        }
+    }
+
     fn frame(id: u64, first: [u8; 4], damage: &[PixelRect]) -> CpuFrame {
         frame_sized(id, (200, 100), first, damage)
     }

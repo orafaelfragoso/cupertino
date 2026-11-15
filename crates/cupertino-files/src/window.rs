@@ -49,6 +49,9 @@ pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
     if dir == crate::recents::location() {
         return vec![(dir.to_path_buf(), recents_place().name)];
     }
+    if dir == crate::applications::location() {
+        return vec![(dir.to_path_buf(), crate::places::APPLICATIONS_NAME.into())];
+    }
     for folder in dir.ancestors() {
         if let Some(place) = places.iter().find(|p| {
             p.path == folder

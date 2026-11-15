@@ -238,12 +238,14 @@ fn segment(folders: &[Option<Destination>], key: &Key) -> Option<Destination> {
     folders.get(usize::try_from(*i).ok()?)?.clone()
 }
 
-/// Where a drop on the folder shown at `dir` goes: the trash's own folder trashes, Recents takes nothing.
+/// Where a drop on the folder shown at `dir` goes: the trash's own folder trashes, Recents and Applications take
+/// nothing.
 fn shown(session: &Session, dir: &Path) -> Option<Destination> {
     if dir == session.trash.home_trash().join("files") {
         return Some(Destination::Trash);
     }
-    (dir != crate::recents::location()).then(|| Destination::Folder(dir.to_path_buf()))
+    (dir != crate::recents::location() && dir != crate::applications::location())
+        .then(|| Destination::Folder(dir.to_path_buf()))
 }
 
 /// The place a drag over `to` lands on, and the action it shows: none on one of this application's dragged folders,

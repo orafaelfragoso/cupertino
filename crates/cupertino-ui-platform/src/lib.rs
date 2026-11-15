@@ -187,6 +187,9 @@ pub enum WindowRequest {
     SetTitle(String),
     SetMinSize(Option<Size>),
     SetMaxSize(Option<Size>),
+    /// The size a toplevel takes where the compositor leaves its size to it (a configure without one, the first
+    /// included): its [`WindowSpec::size`] changed since it was made. A window the compositor gave a size keeps it.
+    SetSize(Size),
     /// Interactive move, started by the pointer press being handled.
     Move,
     Resize(ResizeEdge),

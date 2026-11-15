@@ -28,6 +28,9 @@ const OUTPUT: (i32, i32) = (1400, 900);
 const SUPER: u32 = 125 + 8;
 const UP: u32 = 103 + 8;
 const W: u32 = 17 + 8;
+const SPACE: u32 = 57 + 8;
+/// The centre of the icon view's first item, in window points: right of the sidebar, below the toolbar.
+const FIRST_ICON: (f64, f64) = (289.0, 97.0);
 /// Evdev code of the left button (`linux/input-event-codes.h`).
 const BTN_LEFT: u32 = 0x110;
 
@@ -329,4 +332,86 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
         "the file manager was started again or waits to be: it did not exit with success"
     );
     assert!(server.state.windows.is_empty());
+}
+
+/// The size of the buffer of the mapped window titled `title`; `None` until it has committed one.
+fn mapped_titled(state: &Cupertino, title: &str) -> Option<(i32, i32)> {
+    state.windows.iter().filter(|w| w.mapped).find_map(|entry| {
+        let surface = entry.surface();
+        let named = with_states(surface, |s| {
+            s.data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .title
+                .clone()
+        });
+        if named.as_deref() != Some(title) {
+            return None;
+        }
+        let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
+        with_buffer_contents(&buffer, |_, _, data| (data.width, data.height)).ok()
+    })
+}
+
+/// Space on a selected picture opens its quick preview, which acknowledges its configure and commits its first frame
+/// over the browser window: made at the preview's default size and taking the picture's once it was read, the window
+/// never mapped while its buffers kept the first size.
+#[test]
+fn the_quick_preview_of_a_picture_maps_over_its_window() {
+    let scratch = TempDir::new("preview");
+    let home = scratch.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // a picture of 920 x 436 pixels, which the preview shows at half its pixels below its toolbar
+    let picture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../cupertino-files/tests/goldens/icon-view.png");
+    std::fs::copy(picture, home.join("sample.png")).unwrap();
+    let data_dirs = scratch.0.join("share");
+    std::fs::create_dir_all(&data_dirs).unwrap();
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs, &bus)]) else {
+        return;
+    };
+    server.wait_until("the window to map", |s| window(s).is_some());
+    server.settle();
+
+    // a click selects the folder's only item, the first cell of the icon view right of the sidebar; Space previews it
+    let id = server.state.windows[0].id;
+    let f = server.state.wm.window(id).unwrap().geometry();
+    let (_, _, origin) = server
+        .state
+        .window_surface_under((f.x + f.w / 2.0, f.y + f.h / 2.0).into())
+        .expect("the window's content is under its centre");
+    server.state.pointer_moved_to(
+        (origin.x + FIRST_ICON.0, origin.y + FIRST_ICON.1).into(),
+        0,
+        None,
+    );
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    server.step();
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    server.settle();
+    server.key(SPACE, true);
+    server.key(SPACE, false);
+    server.wait_until("the preview to map", |s| {
+        mapped_titled(s, "sample.png").is_some()
+    });
+    // the preview's own size, or the picture's at half its pixels below its toolbar when it was read before the window
+    // was first configured
+    let size = mapped_titled(&server.state, "sample.png").unwrap();
+    assert!(
+        matches!(size, (640, 680) | (460, 254)),
+        "{size:?}: the preview's size or the picture's"
+    );
+    assert!(
+        window(&server.state).is_some_and(|w| w.title == "home"),
+        "the browser window stays"
+    );
 }

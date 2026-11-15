@@ -30,6 +30,9 @@ pub struct Entry {
     pub tags: Vec<String>,
     pub mime: Option<String>,
     pub name_key: NameKey,
+    /// The icon the item names itself, drawn in place of its type's: an application's `Icon` in the Applications
+    /// folder ([`crate::applications`]), empty for one that names none, which draws the generic application icon.
+    pub icon: Option<String>,
 }
 
 impl Entry {
@@ -49,6 +52,7 @@ impl Entry {
             hidden: name.starts_with('.'),
             tags: Vec::new(),
             mime: None,
+            icon: None,
             name_key: NameKey::new(name),
         }
     }
@@ -88,6 +92,7 @@ impl Entry {
             inode: lmeta.ino(),
             tags: Vec::new(),
             mime: None,
+            icon: None,
             path,
         })
     }

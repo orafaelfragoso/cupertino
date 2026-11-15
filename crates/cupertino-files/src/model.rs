@@ -265,6 +265,61 @@ impl DirectoryModel {
         Ok(model)
     }
 
+    /// The Applications folder ([`crate::applications`]) of the application folders `dirs`, most important first:
+    /// listed in one batch, and listed again whenever an entry in one of them changes when `opts.watch` is set. Its
+    /// [`DirectoryModel::dir`] is [`crate::applications::APPLICATIONS`].
+    pub fn open_applications(
+        dirs: Vec<PathBuf>,
+        opts: ModelOptions,
+        notify: Notify,
+    ) -> io::Result<Self> {
+        let (tx, rx) = channel();
+        let mut model = DirectoryModel {
+            dir: crate::applications::location().to_path_buf(),
+            opts: opts.clone(),
+            entries: Vec::new(),
+            rx,
+            tx: tx.clone(),
+            worker: None,
+            watcher: None,
+            loading: true,
+        };
+        let sink = Sink {
+            tx,
+            on_message: Some(notify),
+        };
+        if opts.watch {
+            let (wsink, listed, spec) = (sink.clone(), dirs.clone(), opts.sort);
+            let mut w =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                    Ok(ev) if !matches!(ev.kind, EventKind::Access(_)) => {
+                        let mut entries = crate::applications::session_entries(&listed);
+                        sort_entries(&mut entries, &spec);
+                        wsink.send(Msg::Replace(entries));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        wsink.send(Msg::FsError(e.to_string()));
+                    }
+                })
+                .map_err(io::Error::other)?;
+            // a folder made later (the user's own, at a first install) is not watched until the place is shown again
+            for dir in dirs.iter().filter(|d| d.is_dir()) {
+                w.watch(dir, RecursiveMode::Recursive)
+                    .map_err(io::Error::other)?;
+            }
+            model.watcher = Some(w);
+        }
+        let spec = opts.sort;
+        model.worker = Some(std::thread::spawn(move || {
+            let mut entries = crate::applications::session_entries(&dirs);
+            sort_entries(&mut entries, &spec);
+            sink.send(Msg::Batch(entries));
+            sink.send(Msg::Done);
+        }));
+        Ok(model)
+    }
+
     fn start(dir: PathBuf, opts: ModelOptions, on_message: Option<Notify>) -> io::Result<Self> {
         let md = std::fs::metadata(&dir)?;
         if !md.is_dir() {
@@ -624,6 +679,38 @@ mod tests {
             woken <= 3,
             "20 reads and one new file woke the application {woken} times"
         );
+    }
+
+    /// The Applications folder lists the applications of every folder by name, sorted, without the folders' other
+    /// files, and lists them again when one is installed; it is not a folder of the file system.
+    #[test]
+    fn the_applications_folder_lists_the_installed_applications_live() {
+        let d = tempfile::tempdir().unwrap();
+        let (user, system) = (d.path().join("user"), d.path().join("system"));
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        let app = |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec=sh\n");
+        std::fs::write(system.join("zeta.desktop"), app("Zeta")).unwrap();
+        std::fs::write(system.join("mail.desktop"), app("mail")).unwrap();
+        std::fs::write(user.join("mail.desktop"), app("My Mail")).unwrap();
+        std::fs::write(
+            system.join("cupertino-mimeapps.list"),
+            "[Default Applications]\n",
+        )
+        .unwrap();
+        let mut m = DirectoryModel::open_applications(
+            vec![user.clone(), system.clone()],
+            ModelOptions::default(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        m.wait_loaded();
+        assert_eq!(m.dir(), crate::applications::location());
+        assert_eq!(names(&m), ["My Mail", "Zeta"]);
+        assert_eq!(m.entries()[0].path, user.join("mail.desktop"));
+        std::fs::write(system.join("alpha.desktop"), app("Alpha")).unwrap();
+        pump_until(&mut m, |m| names(m).contains(&"Alpha".to_string()));
+        assert_eq!(names(&m), ["Alpha", "My Mail", "Zeta"]);
     }
 
     #[test]

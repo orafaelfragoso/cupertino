@@ -34,6 +34,8 @@ struct Model {
     drags: Vec<String>,
     /// The windows heard to have presented a frame, in the order heard.
     presented: Vec<String>,
+    /// The window asks to be wider.
+    wide: bool,
 }
 
 impl Application for Counter {
@@ -86,6 +88,7 @@ impl Application for Counter {
             "catcher" => model.background = WindowBackground::Solid(Color::new(0.0, 0.0, 0.0, 0.0)),
             "scrim" => model.background = WindowBackground::Solid(SCRIM),
             "close" => return vec![Command::CloseWindow(WindowKey("main".into()))],
+            "widen" => model.wide = !model.wide,
             "wait" => return vec![Command::Perform(Box::pin(async { "done 7".to_string() }))],
             "launch" | "launch from gone" => {
                 let window = match message.as_str() {
@@ -149,20 +152,28 @@ impl Application for Counter {
             spec: WindowSpec {
                 title: format!("Count {}", model.count),
                 app_id: "test.counter".into(),
-                size: Size::new(200.0, 100.0),
+                size: Size::new(if model.wide { 300.0 } else { 200.0 }, 100.0),
                 min_size: None,
                 max_size: None,
                 decorations: DecorationMode::Preferred,
                 foreign_parent: None,
                 input_region: None,
             },
-            shortcuts: CommandRegistry::new().with(
-                Shortcut {
-                    mods: Mods::PRIMARY,
-                    keysym: Keysym(0x3d),
-                },
-                "plus".to_string(),
-            ),
+            shortcuts: CommandRegistry::new()
+                .with(
+                    Shortcut {
+                        mods: Mods::PRIMARY,
+                        keysym: Keysym(0x3d),
+                    },
+                    "plus".to_string(),
+                )
+                .with(
+                    Shortcut {
+                        mods: Mods::PRIMARY,
+                        keysym: Keysym(0x77),
+                    },
+                    "widen".to_string(),
+                ),
             on_close: None,
             popup: None,
             background: model.background,
@@ -1033,6 +1044,68 @@ fn a_focus_move_repaints_only_what_the_focus_changed() {
     assert_eq!(
         damage.borrow().last(),
         Some(&DamageRegion::Rects(vec![plus, plus, minus, minus]))
+    );
+}
+
+/// A window whose compositor leaves its size to it takes its spec's new size at once and tells the window system,
+/// which leases its buffers at that size (a frame of another size than those would never be shown); a window the
+/// compositor gave a size keeps it, the window system told all the same.
+#[test]
+fn a_window_whose_size_is_its_own_takes_its_new_spec_size_and_says_so() {
+    let (mut rt, window, _) = start();
+    rt.window_system_mut().keep_pixels = true;
+    let shown = |rt: &Rt| rt.window_system().shown_pixels.last().map(Vec::len);
+    let size_requests = |rt: &Rt| -> Vec<Size> {
+        rt.window_system()
+            .requests
+            .iter()
+            .filter_map(|(_, r)| match r {
+                WindowRequest::SetSize(size) => Some(*size),
+                _ => None,
+            })
+            .collect()
+    };
+    rt.window_system_mut().send(
+        window,
+        WindowEvent::Configure(Configure {
+            id: ConfigureId(1),
+            size: None,
+            states: WindowStates::default(),
+            bounds: None,
+            server_decorations: true,
+            wm_capabilities: WmCapabilities {
+                window_menu: true,
+                maximize: true,
+                fullscreen: true,
+                minimize: true,
+            },
+        }),
+    );
+    rt.step(steps()).unwrap();
+    assert_eq!(shown(&rt), Some(200 * 100 * 4));
+    assert!(size_requests(&rt).is_empty());
+
+    key(&mut rt, window, 0x77, Mods::PRIMARY);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+    assert_eq!(size_requests(&rt), [Size::new(300.0, 100.0)]);
+    assert_eq!(shown(&rt), Some(300 * 100 * 4), "drawn at the new size");
+
+    configure_at(&mut rt, window, 2, Size::new(250.0, 100.0));
+    rt.step(steps()).unwrap();
+    key(&mut rt, window, 0x77, Mods::PRIMARY);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(2)));
+    rt.step(steps()).unwrap();
+    assert_eq!(
+        size_requests(&rt),
+        [Size::new(300.0, 100.0), Size::new(200.0, 100.0)]
+    );
+    assert_eq!(
+        shown(&rt),
+        Some(250 * 100 * 4),
+        "the compositor's size stays"
     );
 }
 

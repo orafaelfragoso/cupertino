@@ -53,14 +53,43 @@ pub fn command_with(
     }
 }
 
-/// The command that opens `path` with the default application of its type; `terminal` as for
-/// [`command_with`].
+/// The installed application whose desktop entry is the file at `path`: the entry the session uses for its id (its
+/// path below an `applications` folder, subfolders joined with `-`), and that file itself, not a copy elsewhere or one a
+/// more important folder shadows. Opening such an item starts the application ([`open_command`]).
+pub fn application_at<'a>(apps: &'a MimeApps, path: &Path) -> Option<&'a DesktopEntry> {
+    let names: Vec<&str> = path
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<_>>()?;
+    let folder = names.iter().rposition(|part| *part == "applications")?;
+    let id = names[folder + 1..].join("-");
+    if !id.ends_with(".desktop") {
+        return None;
+    }
+    apps.entry(&id)
+        .filter(|entry| entry.source.as_deref() == Some(path))
+}
+
+/// The command that opens `path` with the default application of its type, or that starts the application whose
+/// entry it is ([`application_at`]); `terminal` as for [`command_with`].
 pub fn open_command(
     apps: &MimeApps,
     path: &Path,
     is_dir: bool,
     terminal: Option<&[String]>,
 ) -> Result<CommandSpec, OpenError> {
+    if let Some(entry) = application_at(apps, path) {
+        let spec = command_for_entry(entry, &[]).ok_or_else(|| OpenError::BadExec {
+            id: entry.id.clone(),
+        })?;
+        return match (spec.terminal, terminal) {
+            (false, _) => Ok(spec),
+            (true, Some(terminal)) => Ok(spec.in_terminal(terminal)),
+            (true, None) => Err(OpenError::NeedsTerminal {
+                id: entry.id.clone(),
+            }),
+        };
+    }
     let mime = apps.database().file_type(path, is_dir);
     let entry = apps
         .default_for(mime)
@@ -70,8 +99,12 @@ pub fn open_command(
     command_with(entry, path, terminal)
 }
 
-/// The desktop entry id of the default application of `path`, if its type has one.
+/// The desktop entry id of the application that opens `path`: the one it is the entry of, else the default
+/// application of its type, if it has one.
 pub fn default_app_id(apps: &MimeApps, path: &Path, is_dir: bool) -> Option<String> {
+    if let Some(entry) = application_at(apps, path) {
+        return Some(entry.id.clone());
+    }
     apps.default_for(apps.database().file_type(path, is_dir))
         .map(|entry| entry.id.clone())
 }
@@ -129,6 +162,34 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn an_installed_applications_entry_starts_the_application() {
+        let dir = tempfile::tempdir().unwrap();
+        let apps = apps(dir.path());
+        let entry = dir.path().join("usr/applications/editor.desktop");
+        let c = open_command(&apps, &entry, false, None).unwrap();
+        assert_eq!(c.argv(), ["editor", "--open"], "started without files");
+        assert_eq!(c.desktop_id.as_deref(), Some("editor.desktop"));
+        assert_eq!(
+            default_app_id(&apps, &entry, false).as_deref(),
+            Some("editor.desktop")
+        );
+        // a command-line program runs in the terminal
+        let vi = dir.path().join("usr/applications/vi.desktop");
+        assert_eq!(
+            open_command(&apps, &vi, false, None).unwrap_err(),
+            OpenError::NeedsTerminal {
+                id: "vi.desktop".into()
+            }
+        );
+        // a copy of the entry elsewhere is a file like any other, not the application
+        let copy = dir.path().join("Downloads/editor.desktop");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::copy(&entry, &copy).unwrap();
+        assert!(application_at(&apps, &copy).is_none());
+        assert!(open_command(&apps, &copy, false, None).is_err());
     }
 
     #[test]

@@ -183,6 +183,9 @@ struct WindowState<M> {
     env: Environment,
     size: Size,
     configured: bool,
+    /// The compositor leaves the window's size to it: no configure yet, or the last one carried no size. The window
+    /// then takes its spec's size, and the window system is told when that changes.
+    free_size: bool,
     ack: Option<ConfigureId>,
     active: bool,
     /// A popup opened from this window has the keyboard, or had it as it closed and the window has not heard since
@@ -897,6 +900,16 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                             WindowRequest::SetInputRegion(spec.input_region.clone()),
                         );
                     }
+                    // the window system leases its buffers at the size it knows: told of the new one, both agree, and
+                    // a window whose size is its own takes it at once
+                    if w.spec.size != spec.size {
+                        let _ = self.system.request(w.id, WindowRequest::SetSize(spec.size));
+                        if w.free_size && w.size != spec.size {
+                            w.size = spec.size;
+                            w.invalidate();
+                            w.invalidate_damage();
+                        }
+                    }
                     w.spec = spec;
                     w
                 }
@@ -1042,6 +1055,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 scale: 1.0,
             },
             configured: false,
+            free_size: true,
             ack: None,
             active: false,
             keyboard_in_popup: false,
@@ -1353,6 +1367,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 w.size = size;
                 w.ack = Some(c.id);
                 w.configured = true;
+                w.free_size = c.size.is_none();
                 w.maximized = c.states.maximized;
                 w.fullscreen = c.states.fullscreen;
                 // no longer the window in use, whatever its popups last had

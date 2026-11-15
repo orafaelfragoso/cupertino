@@ -168,6 +168,7 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs()).map_err(other)?);
     let icons = FileIcons::discover((*types).clone(), folder_icons.into_iter().collect());
     let notices = Notices::start(zbus::blocking::Connection::session().ok());
+    let assets = cupertino_assets::Assets::discover();
     let system = zbus::blocking::Connection::system()
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
@@ -184,6 +185,10 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
     .map(|start| {
         let start = start
             .with_file_icons(icons)
+            .with_app_icons(
+                cupertino_icons::ThemeIcons::new(&assets),
+                cupertino_icons::SystemIcons::new(&assets),
+            )
             .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
             .with_places_source(source, watched)
             .with_instance(service)

@@ -4,11 +4,8 @@
 //! The other user directories are not in the sidebar but keep their folder icons ([`SessionPlaces`]). Recents, the
 //! virtual folder of [`crate::recents`], is not a row: the Go menu reaches it ([`recents_place`]).
 //!
-//! * Applications is the first `applications` folder of `$XDG_DATA_DIRS` (XDG Base
-//!   Directory and Desktop Entry standards: where the system's desktop entries are installed),
-//!   a real folder rather than a merged virtual one (approximate: the design lists application
-//!   bundles of one folder; the desktop entries of the other data folders, the user's own included,
-//!   are not shown there).
+//! * Applications is the virtual folder of [`crate::applications`]: the installed applications under their names and
+//!   icons, merged from the `applications` folders of every data folder, shown while the session has one.
 //! * The computer's name is the pretty host name of `/etc/machine-info` (machine-info(5),
 //!   the name the design shows is the user-facing computer name), else the host name.
 //!
@@ -182,10 +179,14 @@ impl Place {
     }
 }
 
-/// What a window showing `dir` is titled: the place's name for the trash and Recents, else the folder's name.
+/// What a window showing `dir` is titled: the place's name for the trash, Recents and Applications, else the folder's
+/// name.
 pub fn window_title(dir: &Path, places: &[Place]) -> String {
     if dir == crate::recents::location() {
         return recents_place().name;
+    }
+    if dir == crate::applications::location() {
+        return APPLICATIONS_NAME.into();
     }
     if let Some(place) = places.iter().find(|p| {
         matches!(
@@ -245,6 +246,9 @@ pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<(String, PathBuf)> {
         })
         .collect()
 }
+
+/// The name of the Applications place, and the title of a window showing it.
+pub const APPLICATIONS_NAME: &str = "Applications";
 
 /// The first `applications` folder of the system data folders `data_dirs`, most important first.
 pub fn applications_folder(data_dirs: &[PathBuf]) -> Option<PathBuf> {
@@ -357,7 +361,7 @@ pub fn standard_places(
     }];
     if let Some(path) = applications {
         places.push(Place {
-            name: "Applications".into(),
+            name: APPLICATIONS_NAME.into(),
             path: path.to_path_buf(),
             group: PlaceGroup::Favorites,
             kind: PlaceKind::Applications,
@@ -489,12 +493,15 @@ pub fn session_places(home: &Path, data_dirs: &[PathBuf]) -> io::Result<SessionP
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
-    let applications = applications_folder(data_dirs);
+    // the place lists the applications of every data folder, the user's own included
+    let applications = (applications_folder(data_dirs).is_some()
+        || crate::applications::any_installed(&crate::applications::application_dirs()))
+    .then(crate::applications::location);
     let places = standard_places(
         home,
         &user_dirs,
         &crate::trash::Trash::new().home_trash().join("files"),
-        applications.as_deref(),
+        applications,
         &computer_name()?,
     );
     let folder_icons = folder_icons(home, &user_dirs, &places);

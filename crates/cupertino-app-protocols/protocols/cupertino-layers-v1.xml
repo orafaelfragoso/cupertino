@@ -145,8 +145,7 @@
 
       Queued requests: a value set again, or a look request made again, before the parent's
       commit replaces the earlier one, so repeated requests never pile up; the animations
-      queued count towards the client's 512 wherever they wait, a synchronized parent's cached
-      state included.
+      queued and not yet applied count towards the client's 512 as running and waiting ones do.
 
       Content blur (version 4): content_blur blurs the layer's own content, not its glass nor what
       lies behind it, by a Gaussian whose standard deviation is in the layer's points, so a panel's

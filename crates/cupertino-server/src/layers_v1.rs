@@ -14,7 +14,7 @@
 //! ([`LayerDraw::content_blur`], drawn by `render::content_blur`).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cupertino_animation::{CubicBezier, LayerCurve, LayerProperty};
@@ -68,6 +68,16 @@ pub const MAX_CONTENT_BLUR: f64 = 64.0;
 pub const GLASS_EDGE_VERSION: u32 = 5;
 /// The widest edge along a layer's glass, in logical points.
 pub const MAX_GLASS_EDGE: f64 = 4.0;
+/// Layers of one parent in one glass group: as many shapes as one joined glass holds.
+pub const MAX_PER_GROUP: usize = cupertino_glass::glass::MAX_SHAPES;
+/// The farthest a layer's origin, size or corner radius goes, in logical points either way. A value asked or reached
+/// past it is held at it, so what the scene works out from a layer stays far inside its integer pixel range.
+pub const MAX_EXTENT: f64 = 1_000_000.0;
+/// The largest scale a layer or a presentation is shown at; a larger one is held at it.
+pub const MAX_SCALE: f64 = 64.0;
+/// The range of a timed curve's Bézier y control points; one outside is held at its end, which still lets a curve
+/// overshoot its target ten times over.
+pub const BEZIER_Y: (f64, f64) = (-10.0, 11.0);
 
 /// The number of animatable properties ([`Property`]).
 pub const PROPERTIES: usize = 8;
@@ -105,6 +115,21 @@ fn presented(prop: usize) -> bool {
 /// Properties that move, reshape or blur the layer, which reduced motion does not animate.
 fn spatial(prop: usize) -> bool {
     prop != 4
+}
+
+/// `v` held inside the range property `prop` is shown in: its protocol range, with origins and sizes held within
+/// [`MAX_EXTENT`] and the scale within [`MAX_SCALE`]; not a number is 0.
+pub fn held(prop: usize, v: f64) -> f64 {
+    if v.is_nan() {
+        return 0.0;
+    }
+    match prop {
+        0 | 1 => v.clamp(-MAX_EXTENT, MAX_EXTENT),
+        4 => v.clamp(0.0, 1.0),
+        5 => v.clamp(0.0, MAX_SCALE),
+        CONTENT_BLUR => v.clamp(0.0, MAX_CONTENT_BLUR),
+        _ => v.clamp(0.0, MAX_EXTENT),
+    }
 }
 
 /// Whether `v` lies in the range of property `prop`.
@@ -151,6 +176,8 @@ enum Op {
         /// An animation through samples (`animate_samples`): the values at even steps of `curve`'s duration, the
         /// last of them `to`.
         samples: Option<Arc<[f32]>>,
+        /// Counts it against its client's limit while it is queued.
+        _queued: Queued,
     },
     Cancel(usize),
     Glass(Option<(GlassStyle, f64)>),
@@ -162,6 +189,24 @@ enum Op {
     Placeholder([f32; 4]),
     Group(u32, f64),
     Edge(GlassEdge),
+}
+
+/// An animation queued in a parent's state and not yet applied, wherever that state is (pending, or cached by a
+/// commit not yet applied): it counts against its client's [`MAX_ANIMATIONS`] until it is applied or dropped with
+/// the state.
+struct Queued(Arc<AtomicUsize>);
+
+impl Queued {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count.clone())
+    }
+}
+
+impl Drop for Queued {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// The line along the outside of a layer's glass (`set_glass_edge`): its width in logical points, constant whatever
@@ -179,11 +224,42 @@ pub struct LayerOps {
 }
 
 impl LayerOps {
-    fn animations(&self) -> usize {
-        self.ops
-            .iter()
-            .filter(|(_, o)| matches!(o, Op::Animate { .. }))
-            .count()
+    /// Queue `op` of the layer `serial`, dropping what it makes moot: an earlier value of the same property or an
+    /// earlier look of the same kind, and a cancel that repeats one with no animation of the property between. So
+    /// requests repeated without a commit do not pile up.
+    fn push(&mut self, serial: u64, op: Op) {
+        use std::mem::discriminant;
+        let of = |o: &Op| match o {
+            Op::Set(p, _) | Op::Cancel(p) | Op::Animate { prop: p, .. } => Some(*p),
+            _ => None,
+        };
+        match &op {
+            Op::Set(prop, _) => self
+                .ops
+                .retain(|(s, o)| *s != serial || !matches!(o, Op::Set(p, _) if p == prop)),
+            Op::Cancel(prop) => {
+                let last = self
+                    .ops
+                    .iter()
+                    .rev()
+                    .find(|(s, o)| {
+                        *s == serial
+                            && matches!(o, Op::Cancel(_) | Op::Animate { .. })
+                            && of(o) == Some(*prop)
+                    })
+                    .map(|(_, o)| matches!(o, Op::Cancel(_)));
+                if last == Some(true) {
+                    return;
+                }
+            }
+            Op::Create { .. } | Op::Destroy | Op::Animate { .. } => {}
+            look => {
+                let kind = discriminant(look);
+                self.ops
+                    .retain(|(s, o)| *s != serial || discriminant(o) != kind);
+            }
+        }
+        self.ops.push((serial, op));
     }
 }
 
@@ -303,28 +379,35 @@ impl LayerModel {
         }
     }
 
-    /// The value of `prop` shown at `now`.
+    /// The value of `prop` shown at `now`, [`held`] in its range: an animation that overshoots does not take the layer
+    /// past it.
     pub fn value(&self, prop: usize, now: f64) -> f64 {
-        match prop {
-            2 | 3 if !self.sized[prop - 2] => {
-                let (w, h) = self.content_size();
-                if prop == 2 {
-                    w
-                } else {
-                    h
+        held(
+            prop,
+            match prop {
+                2 | 3 if !self.sized[prop - 2] => {
+                    let (w, h) = self.content_size();
+                    if prop == 2 {
+                        w
+                    } else {
+                        h
+                    }
                 }
-            }
-            _ => self.props[prop].value(now),
-        }
+                _ => self.props[prop].value(now),
+            },
+        )
     }
 
     /// The value `prop` rests at once its animation ends: what the client hit-tests against.
     pub fn target(&self, prop: usize) -> f64 {
-        self.waiting
-            .iter()
-            .rev()
-            .find(|w| w.prop == prop)
-            .map_or_else(|| self.props[prop].target(), |w| w.to)
+        held(
+            prop,
+            self.waiting
+                .iter()
+                .rev()
+                .find(|w| w.prop == prop)
+                .map_or_else(|| self.props[prop].target(), |w| w.to),
+        )
     }
 
     /// Whether an animation of the layer runs or waits at `now`.
@@ -365,6 +448,7 @@ impl LayerModel {
                 curve,
                 velocity,
                 samples,
+                ..
             } => self.waiting.push(Waiting {
                 serial,
                 prop,
@@ -405,6 +489,8 @@ pub struct LayerSurfaceData {
 /// Per-object data of a layer: its parent and serial; `None` for an inert layer.
 pub struct LayerData {
     parent: Option<WlSurface>,
+    /// The layer's own surface, which may become a layer again once this object is destroyed.
+    surface: Option<WlSurface>,
     serial: u64,
     client: ClientId,
     /// A presentation: only x, y, opacity and scale, and none of the look requests.
@@ -414,6 +500,10 @@ pub struct LayerData {
 /// In a layer shell surface's data map: whether it holds a presentation that is not destroyed.
 #[derive(Default)]
 struct HasPresentation(Mutex<bool>);
+
+/// In a layer surface's data map: whether its layer object is not destroyed, so it may not become a layer again yet.
+#[derive(Default)]
+struct HasLayer(Mutex<bool>);
 
 impl LayerData {
     fn queue(&self, op: Op) {
@@ -425,9 +515,36 @@ impl LayerData {
                 .cached_state
                 .get::<LayerOps>()
                 .pending()
-                .ops
-                .push((self.serial, op));
+                .push(self.serial, op);
         });
+    }
+
+    /// The layers of the parent in glass group `group` once its pending requests apply, this layer left out.
+    fn in_group(&self, group: u32) -> usize {
+        let Some(parent) = self.parent.as_ref().filter(|p| p.is_alive()) else {
+            return 0;
+        };
+        let mut groups: Vec<(u64, u32)> = with_parent(parent, |layers| {
+            layers.iter().map(|l| (l.serial, l.group)).collect()
+        });
+        with_states(parent, |states| {
+            for (serial, op) in &states.cached_state.get::<LayerOps>().pending().ops {
+                match op {
+                    Op::Create { .. } => groups.push((*serial, 0)),
+                    Op::Destroy => groups.retain(|(s, _)| s != serial),
+                    Op::Group(g, _) => {
+                        for (_, was) in groups.iter_mut().filter(|(s, _)| s == serial) {
+                            *was = *g;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        groups
+            .iter()
+            .filter(|&&(s, g)| s != self.serial && g == group)
+            .count()
     }
 }
 
@@ -437,6 +554,8 @@ pub struct Layers {
     parents: Vec<WlSurface>,
     /// Layers each client holds, destroyed ones not counted.
     held: HashMap<ClientId, usize>,
+    /// Animations each client has queued and not yet applied ([`Queued`]).
+    queued: HashMap<ClientId, Arc<AtomicUsize>>,
 }
 
 impl Layers {
@@ -445,6 +564,7 @@ impl Layers {
             _global: dh.create_global::<Cupertino, CupertinoLayersV1, ()>(VERSION, ()),
             parents: Vec::new(),
             held: HashMap::new(),
+            queued: HashMap::new(),
         }
     }
 
@@ -466,24 +586,31 @@ impl Layers {
             .all(|p| !p.is_alive() || settled(p, now))
     }
 
-    /// Animations the client has running or waiting, those queued on its parents included.
+    /// Animations the client has running or waiting, those queued and not yet applied included, wherever they wait.
     fn animations(&self, client: &ClientId) -> usize {
-        self.parents
-            .iter()
-            .filter(|p| p.is_alive() && p.client().is_some_and(|c| c.id() == *client))
-            .map(|p| {
-                let queued = with_states(p, |s| {
-                    s.cached_state.get::<LayerOps>().pending().animations()
-                });
-                queued
-                    + with_parent(p, |layers| {
+        let queued = self
+            .queued
+            .get(client)
+            .map_or(0, |n| n.load(Ordering::Relaxed));
+        queued
+            + self
+                .parents
+                .iter()
+                .filter(|p| p.is_alive() && p.client().is_some_and(|c| c.id() == *client))
+                .map(|p| {
+                    with_parent(p, |layers| {
                         layers
                             .iter()
                             .map(|l| l.waiting.len() + l.running.iter().flatten().count())
                             .sum::<usize>()
                     })
-            })
-            .sum()
+                })
+                .sum::<usize>()
+    }
+
+    /// A count of `client`'s animation, held while it is queued.
+    fn queue_animation(&mut self, client: &ClientId) -> Queued {
+        Queued::new(self.queued.entry(client.clone()).or_default())
     }
 }
 
@@ -608,6 +735,13 @@ pub fn target(parent: &WlSurface, serial: u64, prop: usize) -> Option<f64> {
     })
 }
 
+/// The layer requests queued on `parent` for its next commit.
+pub fn queued(parent: &WlSurface) -> usize {
+    with_states(parent, |s| {
+        s.cached_state.get::<LayerOps>().pending().ops.len()
+    })
+}
+
 impl Cupertino {
     /// Apply the layer requests the commit of `surface` carries, and redraw a layer surface's parent.
     pub fn layers_committed(&mut self, surface: &WlSurface) {
@@ -719,6 +853,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
             } => {
                 let inert = LayerData {
                     parent: None,
+                    surface: None,
                     serial: 0,
                     client: client.id(),
                     whole: false,
@@ -731,20 +866,46 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     init.init(id, inert);
                     return;
                 }
-                let parent_is_layer = get_role(&parent) == Some(LAYER_ROLE);
-                if surface == parent || parent_is_layer || give_role(&surface, LAYER_ROLE).is_err()
-                {
-                    // a surface that already is a layer of this parent may become one again
-                    let again = get_role(&surface) == Some(LAYER_ROLE)
-                        && Cupertino::layer_parent(&surface).as_ref() == Some(&parent);
-                    if !again || surface == parent || parent_is_layer {
-                        global.post_error(
-                            LayersError::Role,
-                            "the surface has a role, is the parent, or the parent is a layer",
-                        );
-                        init.init(id, inert);
-                        return;
+                // the parent is a window's, a popup's or a layer shell surface's main surface: those are drawn
+                // with their layers, and none of them is a layer, a subsurface or without a role
+                let parent_role = get_role(&parent);
+                let parent_drawn = [
+                    smithay::wayland::shell::xdg::XDG_TOPLEVEL_ROLE,
+                    smithay::wayland::shell::xdg::XDG_POPUP_ROLE,
+                    smithay::wayland::shell::wlr_layer::LAYER_SURFACE_ROLE,
+                ]
+                .into_iter()
+                .any(|r| parent_role == Some(r));
+                let live = |s: &WlSurface| {
+                    with_states(s, |states| {
+                        states
+                            .data_map
+                            .get::<HasLayer>()
+                            .is_some_and(|h| *h.0.lock().unwrap())
+                    })
+                };
+                // a surface that already is a layer of this parent may become one again, once its layer object was
+                // destroyed; it is never the layer of another parent
+                let surface_free = match get_role(&surface) {
+                    None => true,
+                    Some(LAYER_ROLE) => {
+                        Cupertino::layer_parent(&surface).as_ref() == Some(&parent)
+                            && !live(&surface)
                     }
+                    Some(_) => false,
+                };
+                if surface == parent
+                    || !parent_drawn
+                    || !surface_free
+                    || give_role(&surface, LAYER_ROLE).is_err()
+                {
+                    global.post_error(
+                        LayersError::Role,
+                        "the surface has a role or a layer object, is the parent, or the parent is not a \
+                         window's, a popup's or a layer shell surface's main surface",
+                    );
+                    init.init(id, inert);
+                    return;
                 }
                 let on_parent = with_parent(&parent, |l| l.len())
                     + with_states(&parent, |s| {
@@ -772,25 +933,31 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                     s.data_map
                         .insert_if_missing_threadsafe(|| LayerSurfaceData {
                             parent: parent.clone(),
-                        })
+                        });
+                    *s.data_map
+                        .get_or_insert_threadsafe(HasLayer::default)
+                        .0
+                        .lock()
+                        .unwrap() = true;
                 });
                 let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
                 let data = LayerData {
                     parent: Some(parent.clone()),
+                    surface: Some(surface.clone()),
                     serial,
                     client: client.id(),
                     whole: false,
                 };
                 let resource = init.init(id, data);
                 with_states(&parent, |s| {
-                    s.cached_state.get::<LayerOps>().pending().ops.push((
+                    s.cached_state.get::<LayerOps>().pending().push(
                         serial,
                         Op::Create {
                             surface: surface.clone(),
                             resource,
                             whole: false,
                         },
-                    ))
+                    )
                 });
                 if !state.layers.parents.contains(&parent) {
                     state.layers.parents.push(parent);
@@ -799,6 +966,7 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
             cupertino_layers_v1::Request::GetPresentation { id, surface } => {
                 let inert = LayerData {
                     parent: None,
+                    surface: None,
                     serial: 0,
                     client: client.id(),
                     whole: true,
@@ -840,20 +1008,21 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
                 let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
                 let data = LayerData {
                     parent: Some(surface.clone()),
+                    surface: Some(surface.clone()),
                     serial,
                     client: client.id(),
                     whole: true,
                 };
                 let resource = init.init(id, data);
                 with_states(&surface, |s| {
-                    s.cached_state.get::<LayerOps>().pending().ops.push((
+                    s.cached_state.get::<LayerOps>().pending().push(
                         serial,
                         Op::Create {
                             surface: surface.clone(),
                             resource,
                             whole: true,
                         },
-                    ))
+                    )
                 });
                 if !state.layers.parents.contains(&surface) {
                     state.layers.parents.push(surface);
@@ -865,13 +1034,14 @@ impl Dispatch<CupertinoLayersV1, ()> for Cupertino {
     }
 }
 
-/// The curve of `animate_timed`, or the reason it is refused.
+/// The curve of `animate_timed`, or the reason it is refused; y is held in [`BEZIER_Y`].
 fn timed(duration: u32, x1: f64, y1: f64, x2: f64, y2: f64) -> Option<LayerCurve> {
     let unit = 0.0..=1.0;
+    let y = |v: f64| v.clamp(BEZIER_Y.0, BEZIER_Y.1);
     (duration <= MAX_DURATION_MS && unit.contains(&x1) && unit.contains(&x2)).then(|| {
         LayerCurve::Timed {
             duration: f64::from(duration) / 1000.0,
-            bezier: CubicBezier::new(x1, y1, x2, y2),
+            bezier: CubicBezier::new(x1, y(y1), x2, y(y2)),
         }
     })
 }
@@ -943,13 +1113,15 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     format!("a client has at most {MAX_ANIMATIONS} animations"),
                 );
             }
+            let queued = state.layers.queue_animation(&data.client);
             data.queue(Op::Animate {
                 serial,
                 prop,
-                to,
+                to: held(prop, to),
                 curve,
-                velocity,
+                velocity: velocity.clamp(-MAX_EXTENT, MAX_EXTENT),
                 samples: None,
+                _queued: queued,
             });
         };
         match request {
@@ -962,7 +1134,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     Some(prop) if !in_range(prop, value) => {
                         bad_value("the value is outside the property's range")
                     }
-                    Some(prop) => data.queue(Op::Set(prop, value)),
+                    Some(prop) => data.queue(Op::Set(prop, held(prop, value))),
                 }
             }
             R::AnimateTimed {
@@ -1023,7 +1195,12 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                         format!("a client has at most {MAX_ANIMATIONS} animations"),
                     );
                 }
+                let values: Arc<[f32]> = values
+                    .iter()
+                    .map(|&v| held(prop, f64::from(v)) as f32)
+                    .collect();
                 let to = f64::from(*values.last().expect("two samples at least"));
+                let queued = state.layers.queue_animation(&data.client);
                 data.queue(Op::Animate {
                     serial,
                     prop,
@@ -1034,6 +1211,7 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                     },
                     velocity: 0.0,
                     samples: Some(values),
+                    _queued: queued,
                 });
             }
             R::Cancel { property } => {
@@ -1104,6 +1282,12 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
                 if !(0.0..=MAX_GROUP_SPACING).contains(&spacing) {
                     return bad_value("a glass group spacing outside 0 to 64");
                 }
+                if group != 0 && data.in_group(group) >= MAX_PER_GROUP {
+                    return layer.post_error(
+                        Error::GroupFull,
+                        format!("a glass group holds at most {MAX_PER_GROUP} layers of a parent"),
+                    );
+                }
                 data.queue(Op::Group(group, spacing));
             }
             R::SetGlassEdge {
@@ -1130,6 +1314,17 @@ impl Dispatch<CupertinoLayerV1, LayerData> for Cupertino {
     }
 
     fn destroyed(state: &mut Self, client: ClientId, _: &CupertinoLayerV1, data: &LayerData) {
+        if let Some(surface) = data
+            .surface
+            .as_ref()
+            .filter(|s| !data.whole && s.is_alive())
+        {
+            with_states(surface, |s| {
+                if let Some(live) = s.data_map.get::<HasLayer>() {
+                    *live.0.lock().unwrap() = false;
+                }
+            });
+        }
         if let Some(surface) = data.parent.as_ref().filter(|s| data.whole && s.is_alive()) {
             with_states(surface, |s| {
                 if let Some(held) = s.data_map.get::<HasPresentation>() {
@@ -1152,6 +1347,7 @@ pub fn surface_destroyed(state: &mut Cupertino, surface: &WlSurface) {
         with_parent(&parent, |layers| layers.retain(|l| l.surface != *surface));
     }
     state.layers.held.retain(|_, n| *n > 0);
+    state.layers.queued.retain(|_, n| Arc::strong_count(n) > 1);
 }
 
 #[cfg(test)]
@@ -1171,6 +1367,27 @@ mod tests {
         assert!(!spatial(4) && spatial(0) && spatial(5));
         assert!(presented(0) && presented(1) && presented(4) && presented(5));
         assert!(!presented(2) && !presented(3) && !presented(6));
+    }
+
+    #[test]
+    fn values_are_held_in_the_range_the_scene_draws() {
+        assert_eq!(held(0, -1e30), -MAX_EXTENT);
+        assert_eq!(held(1, f64::from(f32::MAX)), MAX_EXTENT);
+        assert_eq!(held(2, 2e6), MAX_EXTENT);
+        assert_eq!(held(3, -5.0), 0.0);
+        assert_eq!(held(5, 1e9), MAX_SCALE);
+        assert_eq!(held(6, 3e6), MAX_EXTENT);
+        assert_eq!(held(4, 1.5), 1.0);
+        assert_eq!(held(CONTENT_BLUR, 100.0), MAX_CONTENT_BLUR);
+        assert_eq!(held(0, f64::NAN), 0.0);
+        // values inside the range are what was asked
+        assert_eq!(held(0, -40.5), -40.5);
+        assert_eq!(held(5, 1.25), 1.25);
+        // a Bézier y control point is held at its range's ends
+        let LayerCurve::Timed { bezier, .. } = timed(300, 0.2, 8e6, 0.8, -8e6).unwrap() else {
+            panic!("a timed curve");
+        };
+        assert_eq!(bezier, CubicBezier::new(0.2, BEZIER_Y.1, 0.8, BEZIER_Y.0));
     }
 
     #[test]

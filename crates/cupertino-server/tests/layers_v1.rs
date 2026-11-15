@@ -29,7 +29,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as Serve
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
@@ -169,6 +170,7 @@ type Cmd = Box<dyn FnOnce(&mut Client, &QueueHandle<Client>) + Send>;
 
 struct Client {
     compositor: wl_compositor::WlCompositor,
+    subcompositor: wl_subcompositor::WlSubcompositor,
     shm: wl_shm::WlShm,
     layers: CupertinoLayersV1,
     parent: wl_surface::WlSurface,
@@ -275,6 +277,8 @@ ignore_events!(
     xdg_positioner::XdgPositioner,
     xdg_popup::XdgPopup,
     wl_compositor::WlCompositor,
+    wl_subcompositor::WlSubcompositor,
+    wl_subsurface::WlSubsurface,
     wl_shm::WlShm,
     wl_shm_pool::WlShmPool,
     wl_buffer::WlBuffer,
@@ -381,6 +385,8 @@ impl TestClient {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
+            let subcompositor: wl_subcompositor::WlSubcompositor =
+                globals.bind(&qh, 1..=1, ()).unwrap();
             let shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
             let layers: CupertinoLayersV1 = globals.bind(&qh, 1..=5, ()).unwrap();
@@ -401,6 +407,7 @@ impl TestClient {
             parent.commit();
             let mut client = Client {
                 compositor,
+                subcompositor,
                 shm,
                 layers,
                 parent,
@@ -1430,6 +1437,212 @@ fn too_many_animations_is_a_protocol_error() {
         client.heard(|e| e.error.clone()).unwrap().1,
         cupertino_layer_v1::Error::TooManyAnimations as u32
     );
+}
+
+/// The code of the protocol error `client` was sent, once it comes.
+fn error_of(h: &mut Harness, client: &TestClient) -> (String, u32) {
+    h.wait_until("the error", |_| client.heard(|e| e.error.is_some()));
+    client.heard(|e| e.error.clone()).unwrap()
+}
+
+#[test]
+fn a_layer_s_parent_is_a_window_a_popup_or_a_layer_shell_surface_and_a_live_layer_is_not_made_again(
+) {
+    use cupertino_protocols::client::layers::cupertino_layers_v1::Error as LayersError;
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let role = ("cupertino_layers_v1".to_string(), LayersError::Role as u32);
+    // a subsurface: a synchronized one would cache its layers' requests out of the parent's reach
+    let client = one_layer(&mut h);
+    client.send(|c, qh| {
+        let sub = c.compositor.create_surface(qh, ());
+        let _ = c.subcompositor.get_subsurface(&sub, &c.parent, qh, ());
+        let surface = c.compositor.create_surface(qh, ());
+        let _ = c.layers.get_layer(&surface, &sub, qh, ());
+    });
+    assert_eq!(error_of(&mut h, &client), role, "a subsurface parent");
+    // a surface without a role
+    let client = one_layer(&mut h);
+    client.send(|c, qh| {
+        let bare = c.compositor.create_surface(qh, ());
+        let surface = c.compositor.create_surface(qh, ());
+        let _ = c.layers.get_layer(&surface, &bare, qh, ());
+    });
+    assert_eq!(error_of(&mut h, &client), role, "a parent without a role");
+    // a layer whose layer object lives
+    let client = one_layer(&mut h);
+    client.send(|c, qh| {
+        let surface = c.made[0].0.clone();
+        let _ = c.layers.get_layer(&surface, &c.parent, qh, ());
+    });
+    assert_eq!(error_of(&mut h, &client), role, "a layer made again");
+    // once that object is destroyed, the surface becomes a layer of the parent again
+    let client = one_layer(&mut h);
+    client.send(|c, qh| {
+        let (surface, layer) = c.made.remove(0);
+        layer.destroy();
+        c.parent.commit();
+        let again = c.layers.get_layer(&surface, &c.parent, qh, ());
+        again.set_value(Property::X, 30.0);
+        c.parent.commit();
+        c.made.push((surface, again));
+    });
+    h.wait_until("the layer made again", |h| {
+        h.layers().len() == 1 && h.layers()[0].x == 30.0
+    });
+    assert!(client.heard(|e| e.error.is_none()));
+}
+
+#[test]
+fn a_glass_group_holds_at_most_as_many_layers_as_its_joined_glass_has_shapes() {
+    use cupertino_server::layers_v1::MAX_PER_GROUP;
+    let Some(mut h) = Harness::new(1.0, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    // the group fills to its limit, a layer that leaves it makes room, and other groups are apart
+    client.send(|c, qh| {
+        for _ in 1..MAX_PER_GROUP {
+            c.layer(qh, (0, 0), &red);
+        }
+        for i in 0..MAX_PER_GROUP {
+            c.l(i).set_glass_group(1, 0.0);
+        }
+        c.parent.commit();
+        c.l(0).set_glass_group(2, 0.0);
+        let extra = c.layer(qh, (0, 0), &red);
+        c.l(extra).set_glass_group(1, 0.0);
+        c.l(extra).set_glass_group(1, 0.0);
+        c.parent.commit();
+    });
+    h.wait_until("the full group", |h| {
+        let layers = h.layers();
+        layers.len() == MAX_PER_GROUP + 1
+            && layers.iter().filter(|l| l.group == 1).count() == MAX_PER_GROUP
+    });
+    assert!(client.heard(|e| e.error.is_none()));
+    // one more is refused, not silently drawn without its glass
+    client.send(|c, qh| {
+        let more = c.layer(qh, (0, 0), &red);
+        c.l(more).set_glass_group(1, 0.0);
+    });
+    assert_eq!(
+        error_of(&mut h, &client),
+        (
+            "cupertino_layer_v1".into(),
+            cupertino_layer_v1::Error::GroupFull as u32
+        )
+    );
+}
+
+#[test]
+fn values_past_the_scene_s_range_are_held_and_repeated_requests_do_not_pile_up() {
+    use cupertino_server::layers_v1::{queued, MAX_EXTENT, MAX_SCALE};
+    let Some(mut h) = Harness::new(1.5, false) else {
+        return;
+    };
+    let client = one_layer(&mut h);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::X, -8_000_000.0);
+        c.l(0).set_value(Property::Width, 8_000_000.0);
+        c.l(0).set_value(Property::Scale, 1000.0);
+        c.parent.commit();
+    });
+    h.wait_until("the held values", |h| h.layers()[0].x == -MAX_EXTENT);
+    let l = &h.layers()[0];
+    assert_eq!((l.width, l.scale), (MAX_EXTENT, MAX_SCALE));
+    let p = h.parent().unwrap();
+    assert_eq!(
+        cupertino_server::layers_v1::target(&p, l.serial, 0),
+        Some(-MAX_EXTENT),
+        "the target is held too"
+    );
+    // samples as large as a float goes, and a curve whose control point flies off, stay in the range shown
+    h.state.fixed_time = Some(100.0);
+    client.send(|c, _| {
+        c.l(0).set_value(Property::Scale, 1.0);
+        c.l(0).animate_samples(
+            3,
+            Property::Y,
+            100,
+            sample_bytes(&[0.0, f32::MAX, f32::MAX]),
+        );
+        c.l(0).animate_timed(
+            4,
+            Property::Height,
+            100.0,
+            1000,
+            0.0,
+            8_000_000.0,
+            1.0,
+            8_000_000.0,
+        );
+        c.parent.commit();
+    });
+    h.wait_until("the animations", |h| {
+        h.parent()
+            .is_some_and(|p| !cupertino_server::layers_v1::settled(&p, 100.0))
+    });
+    for t in [100.03, 100.5, 100.9] {
+        h.state.fixed_time = Some(t);
+        let l = &h.layers()[0];
+        assert!(
+            l.y.abs() <= MAX_EXTENT && (0.0..=MAX_EXTENT).contains(&l.height),
+            "{t}: y {} height {}",
+            l.y,
+            l.height
+        );
+    }
+    // a frame of it draws
+    let _ = h.screenshot("held");
+    // a popup's presentation moved and scaled through such samples draws too
+    client.send(|c, qh| c.popup(qh));
+    h.wait_until("the popup", |h| h.popup().is_some());
+    h.state.fixed_time = Some(200.0);
+    client.send(|c, qh| {
+        let surface = c.popup.as_ref().unwrap().0.clone();
+        let p = c.layers.get_presentation(&surface, qh, ());
+        let far = sample_bytes(&[f32::MAX, -f32::MAX]);
+        p.animate_samples(5, Property::X, 100, far.clone());
+        p.animate_samples(6, Property::Scale, 100, sample_bytes(&[f32::MAX, 0.5]));
+        surface.commit();
+        c.made.push((surface, p));
+    });
+    h.wait_until("the popup's presentation", |h| {
+        h.popup()
+            .is_some_and(|s| !cupertino_server::layers_v1::settled(&s, 200.0))
+    });
+    let shown = popup_presented(&h).unwrap();
+    assert!(shown.x.abs() <= MAX_EXTENT && shown.scale <= MAX_SCALE);
+    h.state.fixed_time = Some(200.05);
+    let _ = h.screenshot("held-popup");
+    assert!(client.heard(|e| e.error.is_none()));
+
+    // a value set again before the commit replaces the one queued
+    let parent = h.parent().unwrap();
+    for _ in 0..10 {
+        client.send(|c, _| {
+            for i in 0..200 {
+                c.l(0).set_value(Property::X, f64::from(i % 100));
+                c.l(0).set_glass_group(0, 0.0);
+                c.l(0).cancel(Property::Y);
+            }
+        });
+        for _ in 0..5 {
+            h.step();
+        }
+    }
+    assert!(client.heard(|e| e.error.is_none()));
+    assert_eq!(
+        queued(&parent),
+        3,
+        "one value of x, one glass group and one cancel of y are queued"
+    );
+    client.send(|c, _| c.parent.commit());
+    h.wait_until("the last value", |h| {
+        h.layers()[0].x == 99.0 && queued(&parent) == 0
+    });
 }
 
 // ---- the material effects, by eye ----------------------------------------------------------

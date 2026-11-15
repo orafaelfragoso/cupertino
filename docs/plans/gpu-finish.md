@@ -58,8 +58,8 @@ The boxes here are ticked together with their items in the GPU plan.
       sharp. Test: a 1x1 buffer with a 20000 x 20000 destination allocates within the cap.
 - [ ] A layer is always clipped to its window, with or without `set_masks_to_bounds`, and with client-side
       decorations too. Test: a layer placed outside its window draws nothing there.
-- [ ] Layer requests validated: the gaps the review found, each rejected with a protocol error and tested.
-- [ ] A dismissed popup's linger ends on a timer of its own, so the frame that removes it comes without other damage.
+- [x] Layer requests validated: the gaps the review found, each rejected with a protocol error and tested.
+- [x] A dismissed popup's linger ends on a timer of its own, so the frame that removes it comes without other damage.
 - [ ] The late frame start counts the GPU's time: the latch is fed the time the render fence signals (or a kept
       estimate from lateness), and backs off for longer after repeated misses. Test: a frame cheap on the CPU but
       heavy on the GPU gets no late start.

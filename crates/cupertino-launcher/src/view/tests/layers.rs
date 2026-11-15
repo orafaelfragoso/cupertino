@@ -2971,6 +2971,59 @@ fn the_unfold_the_compositor_runs_is_the_panel_s_own_drawing_at_the_same_moments
     }
 }
 
+/// Where the session keeps text carets steady, the launcher knows it before the query field tells its own blink: the
+/// search field's very first open, handed to the compositor, leaves the caret in the query row's layer, whose opacity
+/// only fades in with the content, so no sample of the open hides the caret; the field's theme is steady too.
+#[test]
+fn with_a_steady_caret_the_first_open_never_hides_the_caret() {
+    STEADY_CARET.set(true);
+    let mut m = drawn(1.5, true, true);
+    STEADY_CARET.set(false);
+    send(Message::Toggle);
+    m.step(|_, _| {});
+    assert!(
+        m.model().field_open_handed(),
+        "the open is the compositor's"
+    );
+    for _ in 0..4 {
+        if m.presents().0 > 0 {
+            break;
+        }
+        m.step(|_, _| {});
+    }
+    let keys: Vec<u64> = m.shown_layers().iter().map(|l| l.key).collect();
+    assert!(keys.contains(&ROW_LAYER), "{keys:?}");
+    assert!(
+        !keys.contains(&CARET_LAYER),
+        "the caret stays in the row's layer: {keys:?}"
+    );
+    let open = m.layer_requests();
+    assert!(
+        open.iter().all(|(key, _)| *key != CARET_LAYER),
+        "no change of a caret layer"
+    );
+    // the row, which draws the caret, only fades in: never back down, so never hiding it
+    let row: Vec<f32> = open
+        .iter()
+        .filter(|(key, _)| *key == ROW_LAYER)
+        .flat_map(|(_, changes)| {
+            changes
+                .iter()
+                .filter(|c| c.property == LayerProperty::Opacity)
+        })
+        .flat_map(|c| {
+            c.samples
+                .clone()
+                .map_or_else(|| vec![c.to as f32], |s| s.to_vec())
+        })
+        .collect();
+    assert!(!row.is_empty(), "the row fades in");
+    assert!(
+        row.windows(2).all(|w| w[1] >= w[0]) && *row.last().unwrap() == 1.0,
+        "{row:?}"
+    );
+}
+
 /// A key while the compositor runs the search field's open shows the caret at once, as the field's own: the field tells
 /// its blink started over, and the caret leaves its layer for the query row's, which draws it; the open runs on.
 #[test]

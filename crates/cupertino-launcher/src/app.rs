@@ -143,6 +143,8 @@ enum Signal {
     Output(Size),
     /// The session's Reduce Motion option.
     ReduceMotion(bool),
+    /// The session's steady caret option.
+    SteadyCaret(bool),
     /// The server's answer for the application opened as this launch.
     Opened(u64, Running),
 }
@@ -249,6 +251,11 @@ impl SurfaceRoles for LauncherRoles {
                 let _ = self
                     .signals
                     .try_send(Signal::ReduceMotion(options.reduce_motion));
+                return None;
+            }
+            Some(&AppEvent::SteadyCaret { on }) => {
+                // sent once as the observer is made and at each change, the theme's caret following it too
+                let _ = self.signals.try_send(Signal::SteadyCaret(on));
                 return None;
             }
             _ => {}
@@ -910,6 +917,7 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
                 Signal::Locked => Message::Locked,
                 Signal::Output(size) => Message::Output(size),
                 Signal::ReduceMotion(on) => Message::ReduceMotion(on),
+                Signal::SteadyCaret(on) => Message::SteadyCaret(on),
                 Signal::Opened(launch, running) => Message::Opened(launch, running),
             })
     }))
@@ -935,6 +943,7 @@ impl Application for App {
                 | Message::Locked
                 | Message::Output(_)
                 | Message::ReduceMotion(_)
+                | Message::SteadyCaret(_)
                 | Message::Opened(..)
         );
         let mut commands = kit::update(&mut app.model, message);

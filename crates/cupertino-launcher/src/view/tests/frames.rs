@@ -135,6 +135,9 @@ thread_local! {
     /// The next [`Metered`] launcher's window keeps the largest size the panel takes ([`Model::window_held`]) on a
     /// window system without layers too, so the panel's own drawing lies where its layers do.
     static HOLD_WINDOW: Cell<bool> = const { Cell::new(false) };
+    /// The next [`Metered`] session keeps text carets steady: its theme's caret does not blink, and the launcher is
+    /// told so as it starts.
+    static STEADY_CARET: Cell<bool> = const { Cell::new(false) };
 }
 
 /// What loading and decoding one application icon costs the metered host's icon thread: about what a large theme icon
@@ -310,11 +313,15 @@ impl Metered {
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
-        let theme = if DARK.get() {
+        let mut theme = if DARK.get() {
             theme_in(Appearance::Dark)
         } else {
             theme()
         };
+        let steady = STEADY_CARET.get();
+        if steady {
+            theme.motion.caret_phase_ms = 0;
+        }
         let options = RuntimeOptions {
             theme: Arc::new(theme),
             text,
@@ -353,6 +360,10 @@ impl Metered {
         };
         metered.driver.window_system_mut().set_keep_pixels(false);
         metered.driver.run_until_idle(budget()).unwrap();
+        if steady {
+            send(Message::SteadyCaret(true));
+            metered.driver.run_until_idle(budget()).unwrap();
+        }
         if let Some(size) = output_override() {
             send(Message::Output(size));
             metered.driver.run_until_idle(budget()).unwrap();

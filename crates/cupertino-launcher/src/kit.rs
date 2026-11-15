@@ -244,6 +244,8 @@ pub enum Message {
     Output(Size),
     /// The session's Reduce Motion option.
     ReduceMotion(bool),
+    /// The session's option that keeps text carets steady instead of blinking.
+    SteadyCaret(bool),
     /// The close the compositor runs ([`Model::compositor_layers`]) is over by now.
     CloseOver,
     /// The compositor did not tell that the open it runs came to rest ([`Message::OpenSettled`]) well past the open's
@@ -533,6 +535,19 @@ impl Model {
     /// Whether the compositor runs a fold or unfold now ([`Model::hand_folds`]).
     pub fn fold_handed(&self) -> bool {
         self.fold_shown.is_some()
+    }
+
+    /// Follow the session's steady caret option, which the query field's theme follows too: the caret's blink the
+    /// compositor is handed through an open is steady from then on, before the field tells its own, so the first open
+    /// keeps the caret in the query row's layer; a blinking one again is the theme's until the field tells. A caret
+    /// that blinks in its own layer goes back into the row's at once.
+    fn follow_steady_caret(&mut self, on: bool) {
+        if on {
+            self.caret_blink.phase_ms = 0;
+            self.caret_layered = None;
+        } else if self.caret_blink.phase_ms == 0 {
+            self.caret_blink.phase_ms = cupertino_kit::theme::CARET_PHASE_MS;
+        }
     }
 
     /// The open or fold the compositor runs is over, or taken back: the panel draws what it presents itself again.
@@ -2341,6 +2356,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         }
         Message::ReduceMotion(on) => {
             model.motion.set_reduce_motion(on);
+            Vec::new()
+        }
+        Message::SteadyCaret(on) => {
+            model.follow_steady_caret(on);
             Vec::new()
         }
         Message::OpenOver(number) if number == model.open_number => {

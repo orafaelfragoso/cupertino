@@ -3886,6 +3886,99 @@ fn the_name_over_a_launching_tile_rides_its_bounce() {
     );
 }
 
+/// Where the name of the tile under the pointer stands by a bar at `position`, magnifying or not: the place its popup
+/// asks for as the window system resolves it, the tile as it is drawn under the pointer, the tile at rest, and the
+/// bar's edge away from the screen.
+fn label_place(position: Position, magnification: bool) -> (Rect, Rect, Rect, f64) {
+    let mut run = Run::start();
+    run.record.borrow_mut().conf = Some(DockSettings {
+        position: Some(position),
+        magnification: Some(magnification),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    run.advance(1.0);
+    let bar = run.bar();
+    let rest = run.bounds(bar, Role::Button, "Editor");
+    let (edge, output) = bar_edge_and_output(position, rest);
+    run.pointer(
+        bar,
+        PointerEvent::Enter {
+            position: centre(rest),
+        },
+    );
+    run.advance(1.0);
+    run.advance(1.0);
+    let tile = run.bounds(bar, Role::Button, "Editor");
+    let (window, name) = label(&run).expect("the name shows");
+    assert_eq!(name, "Editor");
+    let (place, ..) = resolved(&asked_place(&mut run, window), output);
+    (place, tile, rest, edge)
+}
+
+/// Over a bar at the bottom the pointer of a tile's name ends 3 points above the bar's top edge, and over a magnified
+/// tile, which stands higher than the bar, 3 points above the tile: the name never lies on the tile it names.
+#[test]
+fn the_name_stands_3_points_above_the_bar_and_above_a_magnified_tile() {
+    use cupertino_dock::view::label::GAP;
+    let (place, tile, rest, edge) = label_place(Position::Bottom, false);
+    assert_eq!(tile, rest, "the tile rests");
+    assert!(tile.min_y() > edge, "a resting tile lies inside the bar");
+    assert!(
+        (place.max_y() - (edge - GAP)).abs() < 1e-6,
+        "the tip 3 points above the bar: {place:?}, bar {edge}"
+    );
+    assert!(
+        (place.center().x - tile.center().x).abs() <= 0.5,
+        "centred on the tile: {place:?} {tile:?}"
+    );
+    let (magnified, tile, rest, edge) = label_place(Position::Bottom, true);
+    assert!(
+        tile.width() > rest.width() + 30.0 && tile.min_y() < edge - 10.0,
+        "the magnified tile stands over the bar: {tile:?}, bar {edge}"
+    );
+    assert!(
+        (magnified.max_y() - (tile.min_y() - GAP)).abs() < 1e-6,
+        "the tip 3 points above the tile: {magnified:?} {tile:?}"
+    );
+    assert!(
+        (magnified.center().x - tile.center().x).abs() <= 0.5,
+        "centred on the tile: {magnified:?} {tile:?}"
+    );
+    assert!(
+        edge - magnified.max_y() > GAP + 10.0,
+        "higher over the bar than over a resting tile: {magnified:?}, bar {edge}"
+    );
+}
+
+/// Beside a bar at a side the name stands off its tile, on the side away from the screen's edge, its top level
+/// with the tile's, and off a magnified tile as far.
+#[test]
+fn beside_a_bar_at_a_side_the_name_stands_off_its_tile_magnified_or_not() {
+    // how far the name's near edge is from its tile's at the right, where the window system mirrors the popup
+    let mut at_right = Vec::new();
+    for magnification in [false, true] {
+        let (place, tile, rest, _) = label_place(Position::Left, magnification);
+        let what = format!("left, magnification {magnification}: {place:?} {tile:?}");
+        assert_eq!(tile.width() > rest.width() + 30.0, magnification, "{what}");
+        assert!(
+            (place.min_x() - (tile.max_x() + 3.0)).abs() < 1e-6,
+            "{what}"
+        );
+        assert!((place.min_y() - tile.min_y()).abs() < 1e-6, "{what}");
+        let (place, tile, rest, _) = label_place(Position::Right, magnification);
+        let what = format!("right, magnification {magnification}: {place:?} {tile:?}");
+        assert_eq!(tile.width() > rest.width() + 30.0, magnification, "{what}");
+        assert!(place.max_x() < tile.center().x, "{what}");
+        assert!((place.min_y() - tile.min_y()).abs() < 1e-6, "{what}");
+        at_right.push(place.max_x() - tile.min_x());
+    }
+    assert!(
+        (at_right[0] - at_right[1]).abs() < 1e-6,
+        "as far from a magnified tile as from a resting one: {at_right:?}"
+    );
+}
+
 /// With auto-hide, the name that showed as the pointer left stays over its tile while the bar goes down, riding it and
 /// fading with it, and goes once the bar is hidden.
 #[test]

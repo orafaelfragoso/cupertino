@@ -150,8 +150,9 @@ The bar follows Reduce Motion too:
   click is never dropped.
 - **Name label.** The tile under the pointer shows its name over it at once (`src/view/label.rs`): a popup of the bar
   that takes neither the pointer nor the keyboard, a 25 pt capsule with the name at 13 pt and 13 pt either side, and a
-  16 pt wide, 6.5 pt deep pointer under its middle whose tip stands 3 pt off the tile (beside the tile, without the
-  pointer, when the dock is on a side). It is a translucent fill with a 0.5 pt outline, light or dark with the
+  16 pt wide, 6.5 pt deep pointer under its middle whose tip stands 3 pt above the bar's top edge, or 3 pt above its
+  tile where that stands higher than the bar (a magnified one), coming down as the tile does (`view::label::stands_on`);
+  when the dock is on a side it stands beside the tile, without the pointer. It is a translucent fill with a 0.5 pt outline, light or dark with the
   appearance, and follows the pointer from tile to tile. It does not show over a separator, with a menu or a stack
   open, during a press or a drag, or while the session is locked. For assistive technology it is a tooltip.
 - **Recents.** With `recents` on (off by default), the bar has a section of up to three recent applications

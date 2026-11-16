@@ -109,7 +109,7 @@ is glass of that style (`cupertino-theme`'s `GlassParams`); a `Surface::…` is 
 | Menu bar strip | `crates/cupertino-menubar/src/app.rs` | `set_material("MenuBar")` | kept | kept |
 | Menu bar menus and prompt | `crates/cupertino-menubar/src/view.rs` | `Surface::Menu` | kept | kept |
 | Dock bar | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockBar` | kept | kept |
-| Dock stack panel | `crates/cupertino-dock/src/view/stack.rs` | `cx.material(BAR_SURFACE` | kept | kept |
+| Dock stack panel (the grid and its pointer, dense glass) | `crates/cupertino-dock/src/view/stack.rs` | `cx.glass(panel_glass(` | kept | kept |
 | Dock tile name and menu | `crates/cupertino-dock/src/view/label.rs` | `Surface::Tooltip` | opaque | kept |
 | Dock running indicator | `crates/cupertino-dock/src/view/bar.rs` | `Surface::DockIndicator` | kept in dark | opaque |
 | Application switcher | `crates/cupertino-dock/src/switcher_kit.rs` | `Surface::Switcher` | opaque | kept |

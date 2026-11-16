@@ -20,6 +20,7 @@ impl Cupertino {
         use smithay::reexports::wayland_server::Resource;
         protected_surface(surface)
             || crate::authorization::is_prompt(surface)
+            || self.is_portal_prompt(surface)
             || surface.client().is_some_and(|client| {
                 crate::authorization::authorized(
                     &client,

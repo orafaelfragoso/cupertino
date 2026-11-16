@@ -501,6 +501,7 @@ impl Cupertino {
             sym: 0,
             text: None,
             mods: Mods::NONE,
+            alt_gr: false,
         };
         // a key that went to the client rewritten is released the same way, whatever the router says about the release
         let rewritten_release = !pressed && self.is_rewritten(code);
@@ -517,6 +518,7 @@ impl Cupertino {
                 sym,
                 text: handle.modified_sym().key_char(),
                 mods,
+                alt_gr: st.config.keyboard.alt_gr(modifiers),
             };
             // Super+Alt+S goes to the screen reader (the worker's at the login screen) before anything else sees it, while the
             // session is locked too: it is the one shortcut that acts at the lock screen, so the reader can be turned on to
@@ -601,6 +603,7 @@ impl Cupertino {
                 mods: key.mods,
                 repeat,
                 shifted: None,
+                alt_gr: key.alt_gr,
             })
         {
             self.key_router.swallow(sym);
@@ -652,6 +655,7 @@ impl Cupertino {
                     .text
                     .filter(|_| key.mods.shift)
                     .map(|c| smithay::input::keyboard::xkb::utf32_to_keysym(c as u32).raw()),
+                alt_gr: key.alt_gr,
             },
             ctx,
         ) {
@@ -733,6 +737,7 @@ impl Cupertino {
             sym: ch.sym,
             text: text.filter(|_| !command),
             mods: ch.mods,
+            alt_gr: false,
         });
         Ok(())
     }
@@ -771,6 +776,7 @@ impl Cupertino {
                 sym: crate::input::normalize_sym(sym),
                 text: Some(c),
                 mods: Mods::NONE,
+                alt_gr: false,
             });
         }
     }
@@ -793,6 +799,7 @@ impl Cupertino {
                 mods: key.mods,
                 repeat: false,
                 shifted: None,
+                alt_gr: false,
             },
             &ctx,
         ) {
@@ -807,6 +814,7 @@ impl Cupertino {
                         mods: key.mods,
                         repeat: false,
                         shifted: None,
+                        alt_gr: false,
                     },
                     &ctx,
                 ) {

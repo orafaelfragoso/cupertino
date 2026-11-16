@@ -175,6 +175,7 @@ impl Cupertino {
     ) -> Option<(wire::Window, [f64; 2])> {
         if protected_surface(surface)
             || crate::authorization::is_prompt(surface)
+            || self.is_portal_prompt(surface)
             || surface
                 .client()
                 .is_some_and(|c| authorized(&c, ShellRole::SessionLock))

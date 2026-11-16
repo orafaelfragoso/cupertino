@@ -1359,6 +1359,7 @@ mod tests {
             sym,
             text,
             mods: Mods::NONE,
+            alt_gr: false,
         }
     }
 

@@ -10,9 +10,12 @@ use cupertino_protocols::server::global_shortcuts::cupertino_global_shortcuts_v1
 };
 use smithay::input::keyboard::keysyms;
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
+use smithay::wayland::compositor::with_states;
+use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 use crate::authorization::{authorized, ShellRole};
 use crate::input::{normalize_sym, Chord, GlobalKey, KeyBindings, Mods};
@@ -20,6 +23,10 @@ use crate::state::Cupertino;
 
 /// Version of the global.
 const VERSION: u32 = 1;
+
+/// The app id of the portal's windows that ask the person to allow something ([`Cupertino::is_portal_prompt`]); the
+/// portal's file and app choosers have another.
+pub const PORTAL_PROMPT_APP_ID: &str = "org.cupertino.Portal.Prompt"; // a window's app_id
 
 /// The global and the objects bound to it.
 pub struct GlobalShortcuts {
@@ -64,6 +71,18 @@ pub fn modifiers_of(bits: u32) -> Mods {
         alt: bits.contains(Modifier::Alt),
         logo: bits.contains(Modifier::Logo),
     }
+}
+
+/// Whether `sym` is a modifier or lock key (Shift to Hyper, Caps Lock and Shift Lock among them; the ISO level, latch
+/// and group keys; `Mode_switch` and `Num_Lock`): no shortcut of the portal takes it, so the focused client always sees
+/// its modifiers.
+pub fn is_modifier_key(sym: u32) -> bool {
+    matches!(
+        sym,
+        keysyms::KEY_ISO_Lock..=keysyms::KEY_ISO_Level5_Lock
+            | keysyms::KEY_Mode_switch..=keysyms::KEY_Num_Lock
+            | keysyms::KEY_Shift_L..=keysyms::KEY_Hyper_R
+    )
 }
 
 /// The chords the server keeps for itself: its bindings, the console switches, the screen reader's chord and the
@@ -125,6 +144,34 @@ impl Cupertino {
         } else {
             resource.released(key.id, time);
         }
+    }
+
+    /// Whether `root` is a window in which the portal asks the person to allow something (keyboard shortcuts, screen
+    /// sharing, a screenshot): a toplevel with [`PORTAL_PROMPT_APP_ID`] drawn by the process behind the connection that
+    /// holds [`ShellRole::GlobalShortcuts`], which the server gives the portal alone. Desktop control's input and
+    /// actions do not reach it, so a controlled run cannot answer it. The portal draws its windows on a connection of
+    /// its own, so the process is what names them; an app id another process sets names nothing.
+    pub fn is_portal_prompt(&self, root: &WlSurface) -> bool {
+        let app_id = with_states(root, |s| {
+            s.data_map
+                .get::<XdgToplevelSurfaceData>()
+                .and_then(|d| d.lock().ok().and_then(|d| d.app_id.clone()))
+        });
+        if app_id.as_deref() != Some(PORTAL_PROMPT_APP_ID) {
+            return false;
+        }
+        let Some(process) = root
+            .client()
+            .and_then(|c| (self.process_of)(&self.display_handle, &c))
+        else {
+            return false;
+        };
+        self.global_shortcuts
+            .bound
+            .iter()
+            .filter_map(|(resource, _)| resource.client())
+            .filter(|client| authorized(client, ShellRole::GlobalShortcuts))
+            .any(|client| (self.process_of)(&self.display_handle, &client) == Some(process))
     }
 
     /// Send the chords the server keeps to every bound object again, after its bindings changed.

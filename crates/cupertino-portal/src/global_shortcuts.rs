@@ -4,13 +4,15 @@
 //! such as a push-to-talk key.
 //!
 //! The first `BindShortcuts` of an app becomes an [`Ask`] for the dialog, which lists the shortcuts with their keys and
-//! answers through its [`Reply`]; the answer is remembered for the app (`global-shortcuts.conf`,
-//! [`cupertino_defaults::global_shortcuts`]) and every later call of the app follows it without asking. What is allowed
+//! answers through its [`Reply`]; the answer is remembered for the app with the keys it allowed (`global-shortcuts.conf`,
+//! [`cupertino_defaults::global_shortcuts`]). A later call of the app for keys it was allowed binds them without asking;
+//! a call for a key it was not allowed asks again, listing the new shortcuts; a denied app is refused. What is allowed
 //! goes to the server as [`Keys`] requests (`cupertino_global_shortcuts_v1`), and the server's presses and releases come
-//! back through [`Handle::fired`] as `Activated` and `Deactivated`.
+//! back through [`Handle::fired`] as `Activated` and `Deactivated`, sent to the frontend that made the session alone.
 //!
-//! The clash rule ([`Registry::offer`]): a shortcut gets its key only when the key is readable, holds Control, Option
-//! (Alt) or Command (Super) or is a function or media key, is none the system keeps for itself, and no other session holds it;
+//! The clash rule ([`Registry::offer`]): a shortcut gets its key only when the key is readable and no modifier or lock
+//! key, holds Control, Option (Alt) or Command (Super) or is a function or media key, is none the system keeps for
+//! itself, and no other session holds it;
 //! the first shortcut of a call that names a key keeps it. Any other shortcut is not bound: it is shown in the dialog
 //! with the reason and left out of the answer, so the app learns which shortcuts it has.
 
@@ -42,6 +44,8 @@ pub const MAX_SESSIONS_PER_APP: usize = 4;
 pub const MAX_SHORTCUTS: usize = 64;
 /// Bytes of an app id, a shortcut id, a description, a trigger or a parent window.
 pub const MAX_TEXT: usize = 1024;
+/// Shortcut keys held down at once that are remembered until their release.
+const MAX_HELD: usize = 64;
 
 /// The modifier bits of a [`Trigger`], as `cupertino_global_shortcuts_v1` carries them.
 pub mod modifier {
@@ -133,6 +137,12 @@ impl Trigger {
         text
     }
 
+    /// Whether the key is itself a modifier or a lock (Shift, Control, Alt, Super, the level and group keys, Caps Lock,
+    /// Num Lock): its own press is part of every chord it is held for, so it cannot be a shortcut's key.
+    pub fn is_modifier_key(&self) -> bool {
+        is_modifier_keysym(self.keysym)
+    }
+
     /// Whether the chord holds a modifier that makes it a command rather than typing: Control, Option or Command; a
     /// function key or a media key needs none.
     fn commands(&self) -> bool {
@@ -140,6 +150,16 @@ impl Trigger {
             || (F1..=F35).contains(&self.keysym)
             || MEDIA.contains(&self.keysym)
     }
+}
+
+/// Whether `keysym` is a modifier or lock key: the ISO level, latch and group keys, `Mode_switch` and `Num_Lock`, and
+/// `Shift_L` to `Hyper_R` (Caps Lock and Shift Lock among them).
+fn is_modifier_keysym(keysym: u32) -> bool {
+    use xkb::keysyms::*;
+    matches!(
+        keysym,
+        KEY_ISO_Lock..=KEY_ISO_Level5_Lock | KEY_Mode_switch..=KEY_Num_Lock | KEY_Shift_L..=KEY_Hyper_R
+    )
 }
 
 /// The xkb name of a key some programs name otherwise (web key names, Electron's accelerators).
@@ -198,6 +218,8 @@ fn lower(keysym: u32) -> u32 {
 pub enum Refusal {
     /// The app named no key, or one that is not a key.
     NoKey,
+    /// The key is a modifier (Shift, Control, Alt, Super) or a lock key, which the focused app must always see.
+    Modifier,
     /// The key holds no Control, Option or Command and is no function key: it would take typing away.
     Typing,
     /// The system keeps the key for itself.
@@ -227,7 +249,10 @@ pub struct Ask {
     pub app_icon: Option<String>,
     /// `wayland:<handle>`, `x11:<xid>` or empty.
     pub parent_window: String,
+    /// The shortcuts the person is asked about: the call's, but those on keys the app was allowed before.
     pub shortcuts: Vec<Offered>,
+    /// How many of the call's shortcuts are on keys the app was allowed before, and not listed.
+    pub allowed: usize,
     /// The names of the apps holding the keys refused as [`Refusal::Taken`], by app id.
     pub holders: HashMap<String, String>,
 }
@@ -282,10 +307,18 @@ struct Bound {
 
 struct Entry {
     app_id: String,
+    /// The unique bus name of the frontend that made the session: the session's signals go to it alone.
+    frontend: String,
     bound: Vec<Bound>,
     /// Ends a `BindShortcuts` waiting on the dialog when the session closes.
     closed: async_channel::Receiver<()>,
 }
+
+/// Where a shortcut's `Activated` and `Deactivated` go: its session, its id and the frontend's unique bus name.
+pub type Fired = (OwnedObjectPath, String, String);
+
+/// A session whose shortcuts changed: its path, its frontend's unique bus name and the shortcuts it keeps.
+pub type Changed = (OwnedObjectPath, String, Vec<Shortcut>);
 
 /// The sessions and their shortcuts, and the keys the system keeps.
 #[derive(Default)]
@@ -293,6 +326,9 @@ pub struct Registry {
     sessions: HashMap<OwnedObjectPath, Entry>,
     reserved: HashSet<Trigger>,
     next_key: u32,
+    /// The server's keys that went down and not up yet, with the shortcut each stood for at its press: a shortcut
+    /// bound again or on another key while held still ends with `Deactivated`.
+    held: HashMap<u32, Fired>,
 }
 
 /// A shortcut as the bus carries it: its id and `description` and `trigger_description`.
@@ -313,11 +349,11 @@ fn shortcut(bound: &Bound) -> Shortcut {
 
 impl Registry {
     /// The keys the system keeps; a shortcut bound on one of them loses it (the server would never route it). The
-    /// sessions whose shortcuts changed, each with what it keeps, and what the server is asked.
+    /// sessions whose shortcuts changed, each with its frontend and what it keeps, and what the server is asked.
     pub fn set_reserved(
         &mut self,
         reserved: impl IntoIterator<Item = Trigger>,
-    ) -> (Vec<(OwnedObjectPath, Vec<Shortcut>)>, Vec<Keys>) {
+    ) -> (Vec<Changed>, Vec<Keys>) {
         self.reserved = reserved.into_iter().collect();
         let (mut changed, mut keys) = (Vec::new(), Vec::new());
         for (path, entry) in &mut self.sessions {
@@ -330,7 +366,11 @@ impl Registry {
                 keep
             });
             if entry.bound.len() != before {
-                changed.push((path.clone(), entry.bound.iter().map(shortcut).collect()));
+                changed.push((
+                    path.clone(),
+                    entry.frontend.clone(),
+                    entry.bound.iter().map(shortcut).collect(),
+                ));
             }
         }
         (changed, keys)
@@ -349,6 +389,7 @@ impl Registry {
                 let trigger = preferred.as_deref().and_then(Trigger::parse);
                 let refusal = match trigger {
                     None => Some(Refusal::NoKey),
+                    Some(t) if t.is_modifier_key() => Some(Refusal::Modifier),
                     Some(t) if !t.commands() => Some(Refusal::Typing),
                     Some(t) if self.reserved.contains(&t) => Some(Refusal::System),
                     Some(t) => match self.holder(session, t) {
@@ -428,8 +469,9 @@ impl Registry {
             .map(|e| e.bound.iter().map(shortcut).collect())
     }
 
-    /// End `session`: what the server is asked to give back.
+    /// End `session`: what the server is asked to give back. Its held keys end with it, unheard.
     pub fn close(&mut self, session: &OwnedObjectPath) -> Vec<Keys> {
+        self.held.retain(|_, (path, _, _)| path != session);
         self.sessions
             .remove(session)
             .map(|e| {
@@ -441,14 +483,28 @@ impl Registry {
             .unwrap_or_default()
     }
 
-    /// The session and the shortcut id the server's `key` stands for.
-    pub fn fired(&self, key: u32) -> Option<(OwnedObjectPath, String)> {
-        self.sessions.iter().find_map(|(path, e)| {
+    /// The server's `key` went down (`pressed`) or up: the session, the shortcut id and the frontend it stands for. A
+    /// release stands for what its press stood for, though the shortcut was bound again or given another key since.
+    pub fn fired(&mut self, key: u32, pressed: bool) -> Option<Fired> {
+        if !pressed {
+            if let Some(fired) = self.held.remove(&key) {
+                return Some(fired);
+            }
+        }
+        let fired = self.sessions.iter().find_map(|(path, e)| {
             e.bound
                 .iter()
                 .find(|b| b.key == key)
-                .map(|b| (path.clone(), b.id.clone()))
-        })
+                .map(|b| (path.clone(), b.id.clone(), e.frontend.clone()))
+        })?;
+        if pressed {
+            // presses whose releases never came (the server's object went meanwhile) are not kept for good
+            if self.held.len() >= MAX_HELD {
+                self.held.clear();
+            }
+            self.held.insert(key, fired.clone());
+        }
+        Some(fired)
     }
 }
 
@@ -490,15 +546,15 @@ pub struct Handle {
 
 impl Handle {
     /// The server's shortcut `key` went down (`pressed`) or up at `time` (milliseconds): `Activated` or `Deactivated`
-    /// for its session. A key no session holds any more sends nothing.
+    /// for its session, sent to the frontend that made it alone. A key no session holds any more sends nothing.
     pub fn fired(&self, bus: &zbus::blocking::Connection, key: u32, pressed: bool, time: u32) {
-        let Some((session, id)) = lock(&self.registry).fired(key) else {
+        let Some((session, id, frontend)) = lock(&self.registry).fired(key, pressed) else {
             return;
         };
         let signal = if pressed { "Activated" } else { "Deactivated" };
         let options: HashMap<&str, Value<'_>> = HashMap::new();
         if let Err(e) = bus.emit_signal(
-            None::<&str>,
+            Some(frontend.as_str()),
             PORTAL_PATH,
             INTERFACE,
             signal,
@@ -515,9 +571,9 @@ impl Handle {
         for k in keys {
             (self.keys)(k);
         }
-        for (session, shortcuts) in changed {
+        for (session, frontend, shortcuts) in changed {
             if let Err(e) = bus.emit_signal(
-                None::<&str>,
+                Some(frontend.as_str()),
                 PORTAL_PATH,
                 INTERFACE,
                 "ShortcutsChanged",
@@ -633,25 +689,44 @@ impl GlobalShortcuts {
         })
     }
 
-    fn remembered(&self, app_id: &str) -> Option<Decision> {
-        let path = self.answers.as_ref()?;
-        match GlobalShortcutsConf::load(path) {
-            Ok((conf, _)) => conf.decision(app_id),
+    /// The answer remembered for `app_id`: its decision and, for Allow, the keys it was allowed.
+    async fn remembered(&self, app_id: &str) -> Option<(Decision, HashSet<Trigger>)> {
+        let path = self.answers.clone()?;
+        let app_id = app_id.to_owned();
+        off_executor(move || match GlobalShortcutsConf::load(&path) {
+            Ok((conf, _)) => conf.answer(&app_id).map(|a| {
+                let keys = a.triggers.iter().filter_map(|t| Trigger::parse(t));
+                (a.decision, keys.collect())
+            }),
             Err(e) => {
                 eprintln!("cupertino-portal: {} cannot be read: {e}", path.display());
                 None
             }
-        }
+        })
+        .await
+        .flatten()
     }
 
-    fn remember(&self, app_id: &str, decision: Decision) {
-        let Some(path) = &self.answers else { return };
+    /// Remember `decision` for `app_id`, with the keys `allowed` for Allow. The file's lock can be held by another
+    /// writer for a while, so the change is made on a thread of its own and the bus is served meanwhile.
+    async fn remember(&self, app_id: &str, decision: Decision, allowed: Vec<Trigger>) {
+        let Some(path) = self.answers.clone() else {
+            return;
+        };
         if !is_rememberable(app_id) {
             return;
         }
-        if let Err(e) = GlobalShortcutsConf::update(path, |c| c.set(app_id, decision)) {
-            eprintln!("cupertino-portal: the answer for {app_id} was not remembered: {e}");
-        }
+        let app_id = app_id.to_owned();
+        off_executor(move || {
+            let changed = GlobalShortcutsConf::update(&path, |c| match decision {
+                Decision::Allow => c.allow(&app_id, allowed.iter().map(|t| Raw(*t).to_string())),
+                Decision::Deny => c.set(&app_id, decision),
+            });
+            if let Err(e) = changed {
+                eprintln!("cupertino-portal: the answer for {app_id} was not remembered: {e}");
+            }
+        })
+        .await;
     }
 
     /// Bind what `offered` allows for `session`; the answer the call returns.
@@ -670,6 +745,22 @@ impl GlobalShortcuts {
         }
         (Response::Success as u32, results(shortcuts))
     }
+}
+
+/// What `work` returns, run on a thread of its own so the bus's executor serves other calls while it blocks; `None`
+/// when no thread could be started or it panicked.
+async fn off_executor<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (sender, done) = async_channel::bounded(1);
+    let started = std::thread::Builder::new()
+        .name("shortcuts-answers".to_owned())
+        .spawn(move || {
+            let _ = sender.try_send(work());
+        });
+    if let Err(e) = started {
+        eprintln!("cupertino-portal: the answers file cannot be reached: {e}");
+        return None;
+    }
+    done.recv().await.ok()
 }
 
 fn results(shortcuts: Vec<Shortcut>) -> HashMap<String, OwnedValue> {
@@ -720,6 +811,11 @@ impl GlobalShortcuts {
         let result = async {
             from_frontend(&header, connection).await?;
             text("app_id", &app_id)?;
+            // the caller is the frontend's unique name (checked above)
+            let frontend = header
+                .sender()
+                .map(ToString::to_string)
+                .ok_or_else(|| invalid("the call names no sender"))?;
             let (closed, closed_receiver) = async_channel::bounded(1);
             {
                 let mut registry = lock(&self.registry);
@@ -740,6 +836,7 @@ impl GlobalShortcuts {
                     session_handle.clone(),
                     Entry {
                         app_id,
+                        frontend,
                         bound: Vec::new(),
                         closed: closed_receiver,
                     },
@@ -815,11 +912,26 @@ impl GlobalShortcuts {
             if offered.iter().all(|o| o.refusal.is_some()) {
                 return Ok(self.bind(&session_handle, &offered));
             }
-            match self.remembered(&app_id) {
-                Some(Decision::Allow) => return Ok(self.bind(&session_handle, &offered)),
-                Some(Decision::Deny) => return Ok((Response::Cancelled as u32, HashMap::new())),
-                None => {}
-            }
+            // the keys the call would bind; an app allowed before is asked again only for keys it was not allowed
+            let wanted: Vec<Trigger> = offered
+                .iter()
+                .filter(|o| o.refusal.is_none())
+                .filter_map(|o| o.trigger)
+                .collect();
+            let known = match self.remembered(&app_id).await {
+                Some((Decision::Deny, _)) => {
+                    return Ok((Response::Cancelled as u32, HashMap::new()))
+                }
+                Some((Decision::Allow, known)) if wanted.iter().all(|t| known.contains(t)) => {
+                    return Ok(self.bind(&session_handle, &offered))
+                }
+                Some((Decision::Allow, known)) => known,
+                None => HashSet::new(),
+            };
+            let (shown, allowed): (Vec<Offered>, Vec<Offered>) =
+                offered.iter().cloned().partition(|o| {
+                    o.refusal.is_some() || !o.trigger.is_some_and(|t| known.contains(&t))
+                });
             let request = Exported::at(connection, handle.as_ref()).await?;
             let identity = identify(&self.applications, &app_id);
             let holders = offered
@@ -843,7 +955,8 @@ impl GlobalShortcuts {
                     app_icon: identity.icon,
                     app_id: app_id.clone(),
                     parent_window,
-                    shortcuts: offered.clone(),
+                    shortcuts: shown,
+                    allowed: allowed.len(),
                     holders,
                 }),
                 reply: Reply(reply),
@@ -859,11 +972,11 @@ impl GlobalShortcuts {
                 .await;
             let answered = match answer {
                 Some(Some(Answer::Allowed)) => {
-                    self.remember(&app_id, Decision::Allow);
+                    self.remember(&app_id, Decision::Allow, wanted).await;
                     self.bind(&session_handle, &offered)
                 }
                 Some(Some(Answer::Denied)) => {
-                    self.remember(&app_id, Decision::Deny);
+                    self.remember(&app_id, Decision::Deny, Vec::new()).await;
                     (Response::Cancelled as u32, HashMap::new())
                 }
                 Some(Some(Answer::Dismissed)) => (Response::Cancelled as u32, HashMap::new()),
@@ -1001,10 +1114,15 @@ mod tests {
             path(n),
             Entry {
                 app_id: app.to_owned(),
+                frontend: ":1.7".to_owned(),
                 bound: Vec::new(),
                 closed,
             },
         );
+    }
+
+    fn fired(n: u32, id: &str) -> Option<Fired> {
+        Some((path(n), id.to_owned(), ":1.7".to_owned()))
     }
 
     fn asked(id: &str, trigger: Option<&str>) -> (String, String, Option<String>) {
@@ -1089,11 +1207,59 @@ mod tests {
         let (changed, keys) = registry.set_reserved([t(6, 0x74)]);
         assert_eq!(keys, [Keys::Unbind { key: 0 }]);
         assert_eq!(changed.len(), 1);
-        assert_eq!(changed[0].1.len(), 1);
-        assert_eq!(changed[0].1[0].0, "mute");
-        assert_eq!(registry.fired(1), Some((path(1), "mute".to_owned())));
-        assert_eq!(registry.fired(0), None);
+        assert_eq!(changed[0].1, ":1.7");
+        assert_eq!(changed[0].2.len(), 1);
+        assert_eq!(changed[0].2[0].0, "mute");
+        assert_eq!(registry.fired(1, true), fired(1, "mute"));
+        assert_eq!(registry.fired(1, false), fired(1, "mute"));
+        assert_eq!(registry.fired(0, true), None);
         assert_eq!(registry.close(&path(1)), [Keys::Unbind { key: 1 }]);
-        assert_eq!(registry.fired(1), None);
+        assert_eq!(registry.fired(1, true), None);
+    }
+
+    #[test]
+    fn a_modifier_or_lock_key_is_no_shortcuts_key() {
+        let mut registry = Registry::default();
+        open(&mut registry, 1, "org.example.Meeting");
+        let offered = registry.offer(
+            &path(1),
+            vec![
+                asked("shift", Some("CTRL+Shift_L")),
+                asked("alt", Some("<Control>Alt_R")),
+                asked("super", Some("LOGO+Super_L")),
+                asked("altgr", Some("CTRL+ISO_Level3_Shift")),
+                asked("caps", Some("CTRL+CapsLock")),
+                asked("num", Some("ALT+Num_Lock")),
+                asked("control", Some("ALT+Control_L")),
+                asked("k", Some("CTRL+ALT+k")),
+            ],
+        );
+        let refusals: Vec<Option<Refusal>> = offered.iter().map(|o| o.refusal.clone()).collect();
+        let mut expected = vec![Some(Refusal::Modifier); 7];
+        expected.push(None);
+        assert_eq!(refusals, expected);
+    }
+
+    #[test]
+    fn a_shortcut_bound_again_while_held_still_ends_with_its_release() {
+        let mut registry = Registry::default();
+        open(&mut registry, 1, "org.example.Meeting");
+        let talk = registry.offer(&path(1), vec![asked("talk", Some("CTRL+ALT+t"))]);
+        registry.bind(&path(1), &talk).unwrap();
+        assert_eq!(registry.fired(0, true), fired(1, "talk"));
+        // bound again while held: the shortcut gets key 1, and key 0 is given back
+        let (keys, _) = registry.bind(&path(1), &talk).unwrap();
+        assert_eq!(keys[0], Keys::Unbind { key: 0 });
+        assert_eq!(registry.fired(0, false), fired(1, "talk"));
+        // given another key while held
+        assert_eq!(registry.fired(1, true), fired(1, "talk"));
+        let other = registry.offer(&path(1), vec![asked("talk", Some("CTRL+ALT+y"))]);
+        registry.bind(&path(1), &other).unwrap();
+        assert_eq!(registry.fired(1, false), fired(1, "talk"));
+        assert_eq!(registry.fired(1, false), None, "a release ends it once");
+        // a session closed while its key is held hears nothing more
+        assert_eq!(registry.fired(2, true), fired(1, "talk"));
+        registry.close(&path(1));
+        assert_eq!(registry.fired(2, false), None);
     }
 }

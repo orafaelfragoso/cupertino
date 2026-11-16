@@ -33,6 +33,22 @@ pub const MAX_USERS: usize = 1024;
 
 /// The most bytes of a user's text fields (login and display name) the manager sends (approximate, ours).
 pub const MAX_NAME_BYTES: usize = 256;
+
+/// Where, under a user's home directory, the user's session keeps the copy of its wallpaper the login screen shows: a
+/// baseline JPEG of at most [`MAX_WALLPAPER_SIDE`] pixels a side and [`MAX_WALLPAPER_BYTES`]. The manager reads it as the
+/// user, checks it and keeps its own copy in [`WALLPAPER_DIR`].
+pub const LOGIN_WALLPAPER_FILE: &str = ".local/state/cupertino/login-wallpaper.jpg";
+
+/// The longest side of a login screen wallpaper in pixels: a 4K display's width.
+pub const MAX_WALLPAPER_SIDE: u32 = 3840;
+
+/// The largest login screen wallpaper file (approximate, ours: a photograph at [`MAX_WALLPAPER_SIDE`] is a few MiB).
+pub const MAX_WALLPAPER_BYTES: usize = 16 * 1024 * 1024;
+
+/// The manager's copies of the users' login screen wallpapers, `<uid>.jpg`, which the login screen may read and nobody may
+/// change but root. [`UserRow::wallpaper`] names them.
+pub const WALLPAPER_DIR: &str = "/var/lib/cupertino-login/wallpapers";
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Picture(Vec<u8>);
 
@@ -167,6 +183,11 @@ pub struct UserRow {
     /// The account has a session the manager started: choosing it and authenticating returns to that session instead of
     /// starting a new one.
     pub logged_in: bool,
+    /// The absolute path of the account's wallpaper for the login screen (a JPEG in [`WALLPAPER_DIR`], replaced whole when
+    /// it changes), when its session left one; else the login screen's own. Absent from the message when `None`, and
+    /// `None` when absent, so a row without it reads the same on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper: Option<String>,
 }
 
 /// Which items of the power menu show; the screen hides the whole item when none does.

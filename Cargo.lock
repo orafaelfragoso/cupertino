@@ -1514,6 +1514,7 @@ dependencies = [
  "cupertino-ui-test",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
+ "image",
  "libc",
  "pam-client2",
  "tempfile",

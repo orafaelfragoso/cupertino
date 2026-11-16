@@ -43,6 +43,7 @@ cupertino-seat = { path = "../cupertino-seat", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
 pam-client2 = { version = "0.5.5", optional = true }
 tiny-skia = "0.12"

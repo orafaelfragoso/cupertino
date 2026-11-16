@@ -13,6 +13,8 @@ LimitCORE=0
 RuntimeDirectory=cupertino-login
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=restart
+StateDirectory=cupertino-login
+StateDirectoryMode=0755
 
 [Install]
 Alias=display-manager.service

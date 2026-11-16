@@ -268,6 +268,19 @@ happens. The properties stay readable by every caller.
 | `UserName` (`s`, read only) | The account's full name, else its login: the menu's "Log Out <name>…". Cleaned as untrusted text: control and bidirectional-override characters dropped, at most 64 characters. |
 | `Capabilities` (`a{sb}`, read only, `PropertiesChanged`) | `sleep`, `restart`, `shut-down` (logind's `CanSuspend`, `CanReboot`, `CanPowerOff` answer yes or challenge), `log-out` and `lock` (always), `switch-user` (the session manager is on the system bus). Read at start, when the manager's name gets an owner and on every `RefreshCapabilities`, on a thread of its own (`probe`: the questions to logind never hold the agent's loop; requests in a burst are one read); what is off is logged with the reason when it changes (`cupertino-login: menu item off: …`). A manager that goes away is noticed at the next refresh. |
 
+### The login screen's wallpaper
+
+The login screen shows each user's wallpaper behind that user, and the login screen's account cannot read the homes, so the
+agent leaves a copy (`login_wallpaper`): at the start of the session, and again whenever the compositor's settings file
+changes (`cupertino-defaults::watch`), on a thread of its own, it writes the wallpaper the session shows (a solid colour when
+`wallpaper_color` is set, else `wallpaper_dark` in a dark appearance when it is set, else `wallpaper`) as a JPEG to
+`~/.local/state/cupertino/login-wallpaper.jpg` (always under `$HOME`, where the session manager looks): a PNG or JPEG decoded
+(at most 8192 pixels a side), scaled down to at most 3840 pixels on its longer side with its proportions, a colour as a
+16 x 16 picture, quality 90 (75, then 60, when that is over 16 MiB), mode 0600, written beside the file and renamed over it.
+Without a wallpaper of the user's own, or with one that does not decode, the file is removed and the login screen shows its
+own. The manager copies the file for the login screen when it lists the users (see `cupertino-sessiond`'s README,
+"Wallpapers").
+
 ### Confirmation panel
 
 A layer-shell surface on the overlay layer of the first output, without anchors so the server centres it, with exclusive
@@ -586,6 +599,7 @@ network users).
 | `capabilities` | `Capabilities`, `Inputs`, `Answer`: which menu actions work, from logind's answers and the manager's presence |
 | `logind` (feature `dbus`) | the session's `Lock` and `PrepareForSleep` signals, the sleep and power key inhibitors, `TerminateSession` |
 | `login_manager` (feature `dbus`) | the manager's `org.cupertino.LoginManager1`: `request_power`, `session_ready`, `switch_to_login_window`, `watch_unlock` (the manager's unicast `Unlock`; `Error::refusal` names the expected refusals) |
+| `login_wallpaper` | `choose` (the wallpaper the settings show), `render` (the JPEG for the login screen), `store`, `keep_current` (the writing thread) |
 | `lock_notices` | `Notice`, `from_rows`, `cap`, the cards' column and heights, `shown`, `more_text`; with feature `dbus`, `fetch` and `watch`: the notifications the daemon lists for the lock screen |
 | `upower` (feature `dbus`) | `watch` (the display device's `WarningLevel` and `Percentage`), `post` and `close` (the notification calls) |
 | `session` (feature `dbus`) | `quit_next_application`, `force_quit_application`, `watch_quit`: the server's `org.cupertino.Session1` |
@@ -611,6 +625,7 @@ cargo test -p cupertino-login --features app
 | Saved state (`restore`) | The file round-trips with IDs only, mode 0600; a missing file is the choice on; malformed lines, other versions, invalid IDs, duplicates and the 64 cap; identities resolve by ID then `StartupWMClass`; shell programs, terminal entries and bad `Exec` lines are refused; the list is emptied on disk before it is handed out and only once, dropped when saved in the same boot and session or with the choice off, and not handed out when it cannot be emptied; launching skips removed entries, duplicates, login items and failed starts. |
 | `tests/restore.rs` | A stand-in `org.cupertino.Session1` on a private `dbus-daemon` names the applications as they quit; the saved list in a fixture home holds only their desktop file IDs, and the next login starts the one still installed once through its `Exec`; a failed start leaves the rest going. |
 | Options | The session options, and that the greeter takes none. |
+| Login screen wallpaper (`login_wallpaper`) | The appearance picks its picture and a colour beats both; a picture wider than 3840 pixels is scaled down with its proportions and a small one keeps its size, a colour is a 16 x 16 JPEG, the default writes nothing; a missing file, one that is no picture and a directory are errors; the copy is the user's alone (0600) and leaves nothing beside it; a settings file with a wallpaper makes the copy and one without takes it away. |
 | `tests/harden.rs` | The running greeter (waiting on a compositor that never answers, under the test PAM shim) has core file size 0 and refuses its owner the read of `/proc/<pid>/environ`; each of the two calls removed fails it. The check of the environment is skipped as root. |
 | `tests/pam.rs` | The authenticator's attempts against a private PAM policy (`cupertino-test-pam`), run in a copy of the test binary that loads the test shim, so no attempt reaches `/etc/pam.d`, the machine's accounts or the journal: the right password is a success after the account check; a wrong one is denied and the next attempt is a transaction of its own; too many tries is denied; an unknown account, a stack that fails to run and a prompt the lock screen does not answer (echo on, yes/no) are errors; an expired, password-expired or refused account is an error with the right password; the stack's messages (a lock-out said before the prompt, a message after it and after the account check) reach the screen in order before the outcome. The lock and unlock cycle with the real process under the compositor is `cupertino-server`'s `tests/lock_screen.rs`. |
 | `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name (`serve` fails with `NameTaken`; `serve_unnamed` serves the object on the unique name), `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |

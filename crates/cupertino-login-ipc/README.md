@@ -13,7 +13,8 @@ only, never on D-Bus.
 | `Account` | `Listed { uid }` (a row of the last list) or `Typed { name }` (the "Other…" name); `is_login_name` is the rule for typed names: 1 to 32 bytes, no whitespace or control character, none of `:` `/` `\`, not starting with `- |
 | `Event` | manager to screen: `Hello { version }`, `Welcome { users, show_other, power, will_prompt, retries_until_hint }`, `Users { users, will_prompt }` (`will_prompt`: a user session is open, so Restart and Shut Down ask for an administrator and show an ellipsis), `Prompt { conversation, echo, text }`, `Notice { error, text }`, `Result { outcome }`, `SessionStarting { uid }`, `Reset`, `Refused { reason }`, `PowerRefused { reason } |
 | `Outcome` | `Accepted`, `Denied` (a wrong password and an unknown account alike), `Locked`, `Expired`, `Refused`, `Busy`, `Internal` |
-| `UserRow`, `Picture`, `PowerMenu`, `ProtocolRefusal` | the rows of the picker (uid, login, full name, optional picture, `logged_in`: the account has a session, so choosing it returns to that session), which power items show, why a connection is refused |
+| `UserRow`, `Picture`, `PowerMenu`, `ProtocolRefusal` | the rows of the picker (uid, login, full name, optional picture, `logged_in`: the account has a session, so choosing it returns to that session, optional `wallpaper`: the absolute path of the account's login screen wallpaper, a JPEG in `WALLPAPER_DIR` the login screen may read), which power items show, why a connection is refused |
+| `LOGIN_WALLPAPER_FILE`, `MAX_WALLPAPER_SIDE`, `MAX_WALLPAPER_BYTES`, `WALLPAPER_DIR` | the login screen wallpapers: where under a home the session leaves its copy (`.local/state/cupertino/login-wallpaper.jpg`), at most 3840 pixels a side and 16 MiB, and the directory of the manager's copies (`/var/lib/cupertino-login/wallpapers`, `<uid>.jpg`) |
 | `PowerAction`, `PowerRefusal` | `Restart`, `ShutDown`, `Sleep`; why the manager did not do one: `OtherUsersLoggedIn`, `Inhibited`, `Disabled` (the settings hide the item), `Failed` (the cause is in the journal) |
 | `Decoder` | reads a stream of unknown chunking in exact amounts: `wanted` bytes at most, `push(bytes) returns a frame body when one completes |
 | `encode`, `encode_secret`, `decode` | a message to a frame (length prefix, JSON) and back; `encode_secret` allocates its buffer at the full cap so it never moves |
@@ -35,7 +36,7 @@ only, never on D-Bus.
   log line may print more.
 - **Hex for secrets and pictures:** a hex string holds no character JSON escapes, so the parser never copies it into its scratch
   buffer, which is not zeroed. `Secret` is zeroed on drop; the decoder's body buffers and `encode`'s output are `Zeroizing`.
-- **Version:** `VERSION` is 5 (2 added `Power` and `PowerRefused`, 3 `UserRow::logged_in`, 4 `AuthenticatePower` and `will_prompt`, 5 the `conversation` of `Prompt` and `Answer`), the first message each way carries it. A change that adds or removes a message increments it; the
+- **Version:** `VERSION` is 5 (2 added `Power` and `PowerRefused`, 3 `UserRow::logged_in`, 4 `AuthenticatePower` and `will_prompt`, 5 the `conversation` of `Prompt` and `Answer`), the first message each way carries it. A change that adds or removes a message increments it; an optional field that is left out of the message when it is empty and read as empty when it is missing (`UserRow::wallpaper`) does not; the
   screen and the manager ship in one package, so there is no negotiation.
 
 ## Tests
@@ -43,5 +44,5 @@ only, never on D-Bus.
 `cargo test -p cupertino-login-ipc`: `ZeroOnFree` hands the allocator below it a zeroed block, also the one a block grew out of; a secret round-trips, is hex on the wire, never shows in `Debug` and a malformed one is a decode
 error that does not echo it; the state machine follows an attempt and refuses every pair it must; typed account names; a frame survives every chunking; a length over the cap is refused before its body is read,
 a zero length and an overrun are refused; a message over the cap is not encoded; unknown types, unknown fields and wrong field
-types are errors; a decode error names its class and never the value; the first message must be `Hello` with this version; a power request has one wire form and no other action decodes; the
+types are errors; a decode error names its class and never the value; the first message must be `Hello` with this version; a power request has one wire form and no other action decodes; a row without a wallpaper has no `wallpaper` field and one without the field reads as having none, one with a wallpaper carries its path; the
 hex codec round-trips and refuses malformed text.

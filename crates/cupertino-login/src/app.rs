@@ -343,6 +343,8 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let login_items = start_login_items(&logind);
     let restore_path = restore::state_path_from_env();
     reopen_applications(restore_path.as_deref(), &logind, &login_items);
+    // the login screen shows this session's wallpaper after it
+    cupertino_login::login_wallpaper::keep_current();
     // a session the manager did not start (one on a getty, for the tests) is not known to it; that is reported, not fatal
     match manager.session_ready() {
         Ok(()) => eprintln!("cupertino-login: session announced to the session manager"),

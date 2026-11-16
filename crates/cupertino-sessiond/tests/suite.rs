@@ -6,6 +6,8 @@ mod diag;
 
 #[path = "diag_events.rs"]
 mod diag_events;
+#[path = "own_image.rs"]
+mod own_image;
 #[path = "secret_service.rs"]
 mod secret_service;
 #[path = "service.rs"]

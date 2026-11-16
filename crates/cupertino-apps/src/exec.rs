@@ -197,8 +197,9 @@ fn spec_from(argv: Vec<String>, entry: &DesktopEntry) -> CommandSpec {
     let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    if crate::chromium::is_chromium(&program, &path_dirs) {
-        crate::chromium::with_overlay_scroll_bars(&mut args);
+    if let Some(chromium) = crate::chromium::launcher(&program, &path_dirs) {
+        let flags = chromium.flags_switches(crate::chromium::config_home().as_deref());
+        crate::chromium::with_overlay_scroll_bars(&mut args, &flags);
     }
     CommandSpec {
         program,

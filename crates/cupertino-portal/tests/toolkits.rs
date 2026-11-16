@@ -1,4 +1,4 @@
-//! The toolkit settings reach GTK's own places: GSettings (through the real `gsettings`, with its key-file backend in a
+//! The toolkit settings (overlay scroll bars, the title bar buttons) reach GTK's own places: GSettings (through the real `gsettings`, with its key-file backend in a
 //! scratch folder) and the GTK settings files, a linked one included.
 
 use std::path::Path;
@@ -26,16 +26,16 @@ fn schema_installed() -> bool {
         })
 }
 
-fn read(config: &Path, key: &str) -> String {
+fn read(config: &Path, schema: &str, key: &str) -> String {
     let output = gsettings(config)
-        .args(["get", "org.gnome.desktop.interface", key])
+        .args(["get", schema, key])
         .output()
         .unwrap();
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
 #[test]
-fn gsettings_takes_whether_scroll_bars_overlay_the_content_and_each_change() {
+fn gsettings_takes_whether_scroll_bars_overlay_the_content_each_change_and_where_the_buttons_go() {
     if !schema_installed() {
         return missing_tool("gsettings with the org.gnome.desktop.interface schema");
     }
@@ -50,8 +50,20 @@ fn gsettings_takes_whether_scroll_bars_overlay_the_content_and_each_change() {
         )
         .unwrap();
         assert_eq!(
-            read(config.path(), "overlay-scrolling"),
+            read(
+                config.path(),
+                "org.gnome.desktop.interface",
+                "overlay-scrolling"
+            ),
             overlay.to_string()
+        );
+        assert_eq!(
+            read(
+                config.path(),
+                "org.gnome.desktop.wm.preferences",
+                "button-layout"
+            ),
+            "'close,minimize,maximize:'"
         );
     }
 }
@@ -71,7 +83,7 @@ fn the_gtk_settings_files_take_the_value_and_keep_the_person_s_own_lines() {
     write_settings_ini(config.path(), overlay(false)).unwrap();
     assert_eq!(
         std::fs::read_to_string(&mine).unwrap(),
-        "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=false\n"
+        "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=false\ngtk-decoration-layout=close,minimize,maximize:\n"
     );
     assert!(
         config
@@ -85,12 +97,12 @@ fn the_gtk_settings_files_take_the_value_and_keep_the_person_s_own_lines() {
     );
     assert_eq!(
         std::fs::read_to_string(config.path().join("gtk-4.0/settings.ini")).unwrap(),
-        "[Settings]\ngtk-overlay-scrolling=false\n",
+        "[Settings]\ngtk-overlay-scrolling=false\ngtk-decoration-layout=close,minimize,maximize:\n",
         "a missing file is made"
     );
     write_settings_ini(config.path(), overlay(true)).unwrap();
     assert_eq!(
         std::fs::read_to_string(&mine).unwrap(),
-        "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=true\n"
+        "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=true\ngtk-decoration-layout=close,minimize,maximize:\n"
     );
 }

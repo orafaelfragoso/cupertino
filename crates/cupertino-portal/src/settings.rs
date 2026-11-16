@@ -1,6 +1,6 @@
 //! `org.freedesktop.impl.portal.Settings`: the session's appearance in the `org.freedesktop.appearance` namespace and
-//! the keys GTK reads from the GNOME namespace of interface settings (overlay scroll bars), which xdg-desktop-portal hands
-//! to applications, and `SettingChanged` whenever one changes.
+//! the keys GTK reads from the GNOME namespaces of interface and window settings (overlay scroll bars, the order of the
+//! title bar buttons), which xdg-desktop-portal hands to applications, and `SettingChanged` whenever one changes.
 
 use std::collections::HashMap;
 
@@ -13,6 +13,11 @@ use crate::PORTAL_PATH;
 pub const NAMESPACE: &str = "org.freedesktop.appearance";
 /// The namespace of the desktop's interface settings that GTK reads through the portal.
 pub const INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
+/// The namespace of the desktop's window settings that GTK reads through the portal.
+pub const WINDOW_NAMESPACE: &str = "org.gnome.desktop.wm.preferences";
+/// Where a title bar an application draws puts its buttons, in GTK's notation: the buttons before the colon go at the
+/// leading end, the ones after it at the trailing end. Close, minimise and zoom, in that order, at the leading end.
+pub const BUTTON_LAYOUT: &str = "close,minimize,maximize:";
 
 /// What the session tells its clients about how to look.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,7 +77,8 @@ impl Appearance {
 
     /// Every key with its namespace and value. In `org.freedesktop.appearance`, `color-scheme` 1 prefers dark and 2
     /// light, and `contrast` and `reduced-motion` are 1 when asked for. In `org.gnome.desktop.interface`,
-    /// `overlay-scrolling` is whether scroll bars show over the content only while it scrolls.
+    /// `overlay-scrolling` is whether scroll bars show over the content only while it scrolls. In
+    /// `org.gnome.desktop.wm.preferences`, `button-layout` is [`BUTTON_LAYOUT`] at all times.
     pub fn values(self) -> Vec<(&'static str, &'static str, Setting)> {
         vec![
             (
@@ -94,6 +100,11 @@ impl Appearance {
                 INTERFACE_NAMESPACE,
                 "overlay-scrolling",
                 Setting::Flag(self.overlay_scroll_bars()),
+            ),
+            (
+                WINDOW_NAMESPACE,
+                "button-layout",
+                Setting::Text(BUTTON_LAYOUT),
             ),
         ]
     }
@@ -276,6 +287,27 @@ mod tests {
                 (NAMESPACE, "reduced-motion", Setting::Number(1))
             ]
         );
+    }
+
+    #[test]
+    fn title_bar_buttons_go_at_the_leading_end_whatever_the_appearance() {
+        let buttons = (
+            WINDOW_NAMESPACE,
+            "button-layout",
+            Setting::Text("close,minimize,maximize:"),
+        );
+        let changed = Appearance {
+            dark: true,
+            increase_contrast: true,
+            reduce_motion: true,
+            always_show_scroll_bars: true,
+        };
+        assert!(Appearance::default().values().contains(&buttons));
+        assert!(changed.values().contains(&buttons));
+        assert!(Appearance::default()
+            .changes(changed)
+            .iter()
+            .all(|(namespace, _, _)| *namespace != WINDOW_NAMESPACE));
     }
 
     #[test]

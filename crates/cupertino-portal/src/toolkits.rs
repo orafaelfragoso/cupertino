@@ -1,7 +1,8 @@
 //! The session's settings for toolkits that read them elsewhere than from the portal:
 //!
-//! - GSettings, in the `org.gnome.desktop.interface` schema: GTK 3 reads it on Wayland, GTK 4 when no portal answers,
-//!   and the GTK backend of the portal serves it too, so both backends give the same value. Set with `gsettings`.
+//! - GSettings, in the `org.gnome.desktop.interface` and `org.gnome.desktop.wm.preferences` schemas: GTK 3 reads them
+//!   on Wayland, GTK 4 when no portal answers, and the GTK backend of the portal serves them too, so both backends give
+//!   the same values. Set with `gsettings`.
 //! - `gtk-3.0/settings.ini` and `gtk-4.0/settings.ini` in the configuration directory, the `[Settings]` group: GTK reads
 //!   them when it starts under X11, where the X display publishes none of these settings. Only the keys below are
 //!   written; every other line stays as it was.
@@ -13,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
 
-use crate::settings::Appearance;
+use crate::settings::{Appearance, BUTTON_LAYOUT};
 
-/// What the toolkits are told.
+/// What the toolkits are told; the title bar buttons always go where [`BUTTON_LAYOUT`] says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ToolkitSettings {
     /// Scroll bars are thin bars over the content, shown while it scrolls.
@@ -32,6 +33,8 @@ impl From<Appearance> for ToolkitSettings {
 
 /// The GSettings schema of the desktop's interface settings.
 pub const INTERFACE_SCHEMA: &str = "org.gnome.desktop.interface";
+/// The GSettings schema of the desktop's window settings.
+pub const WINDOW_SCHEMA: &str = "org.gnome.desktop.wm.preferences";
 /// The GTK settings files under the configuration directory.
 pub const SETTINGS_FILES: [&str; 2] = ["gtk-3.0/settings.ini", "gtk-4.0/settings.ini"];
 /// The group of a GTK settings file that holds its settings.
@@ -40,20 +43,31 @@ const GROUP: &str = "[Settings]";
 impl ToolkitSettings {
     /// The `gsettings` argument lists that set these values (each as `set SCHEMA KEY VALUE`).
     pub fn gsettings(self) -> Vec<[String; 4]> {
-        vec![[
-            "set".into(),
-            INTERFACE_SCHEMA.into(),
-            "overlay-scrolling".into(),
-            self.overlay_scroll_bars.to_string(),
-        ]]
+        vec![
+            [
+                "set".into(),
+                INTERFACE_SCHEMA.into(),
+                "overlay-scrolling".into(),
+                self.overlay_scroll_bars.to_string(),
+            ],
+            [
+                "set".into(),
+                WINDOW_SCHEMA.into(),
+                "button-layout".into(),
+                format!("'{BUTTON_LAYOUT}'"),
+            ],
+        ]
     }
 
     /// The keys of a GTK settings file and their values.
     pub fn settings_ini(self) -> Vec<(&'static str, String)> {
-        vec![(
-            "gtk-overlay-scrolling",
-            self.overlay_scroll_bars.to_string(),
-        )]
+        vec![
+            (
+                "gtk-overlay-scrolling",
+                self.overlay_scroll_bars.to_string(),
+            ),
+            ("gtk-decoration-layout", BUTTON_LAYOUT.to_owned()),
+        ]
     }
 }
 
@@ -166,12 +180,12 @@ impl Writer {
                         settings = newer;
                     }
                     if let Err(e) = write_gsettings(settings, &gsettings) {
-                        eprintln!("cupertino-portal: GTK applications on Wayland keep their scroll bars: {e}");
+                        eprintln!("cupertino-portal: GTK applications on Wayland keep their own scroll bars and title bar buttons: {e}");
                     }
                     if let Some(home) = &config_home {
                         if let Err(e) = write_settings_ini(home, settings) {
                             eprintln!(
-                                "cupertino-portal: GTK applications under X11 keep their scroll bars: {e}"
+                                "cupertino-portal: GTK applications under X11 keep their own scroll bars and title bar buttons: {e}"
                             );
                         }
                     }
@@ -201,16 +215,16 @@ mod tests {
     fn an_empty_file_gets_the_group_and_the_keys() {
         assert_eq!(
             edit_settings_ini("", &keys(false)),
-            "[Settings]\ngtk-overlay-scrolling=false\n"
+            "[Settings]\ngtk-overlay-scrolling=false\ngtk-decoration-layout=close,minimize,maximize:\n"
         );
     }
 
     #[test]
     fn a_key_already_set_changes_in_place_and_every_other_line_stays() {
-        let text = "# mine\n[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling = true\ngtk-font-name=Inter 10\n";
+        let text = "# mine\n[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling = true\ngtk-decoration-layout=menu:close\ngtk-font-name=Inter 10\n";
         assert_eq!(
             edit_settings_ini(text, &keys(false)),
-            "# mine\n[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=false\ngtk-font-name=Inter 10\n"
+            "# mine\n[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=false\ngtk-decoration-layout=close,minimize,maximize:\ngtk-font-name=Inter 10\n"
         );
     }
 
@@ -219,7 +233,7 @@ mod tests {
         let text = "[Settings]\ngtk-theme-name=Mine\n\n[Other]\ngtk-overlay-scrolling=true\n";
         assert_eq!(
             edit_settings_ini(text, &keys(true)),
-            "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=true\n\n[Other]\ngtk-overlay-scrolling=true\n"
+            "[Settings]\ngtk-theme-name=Mine\ngtk-overlay-scrolling=true\ngtk-decoration-layout=close,minimize,maximize:\n\n[Other]\ngtk-overlay-scrolling=true\n"
         );
     }
 
@@ -227,7 +241,7 @@ mod tests {
     fn a_file_without_the_group_keeps_its_lines_and_gets_the_group_after_them() {
         assert_eq!(
             edit_settings_ini("[Other]\na=b", &keys(true)),
-            "[Other]\na=b\n\n[Settings]\ngtk-overlay-scrolling=true\n"
+            "[Other]\na=b\n\n[Settings]\ngtk-overlay-scrolling=true\ngtk-decoration-layout=close,minimize,maximize:\n"
         );
     }
 
@@ -238,19 +252,28 @@ mod tests {
     }
 
     #[test]
-    fn gsettings_is_told_whether_scroll_bars_overlay_the_content() {
+    fn gsettings_is_told_whether_scroll_bars_overlay_the_content_and_where_the_buttons_go() {
         let args = ToolkitSettings {
             overlay_scroll_bars: false,
         }
         .gsettings();
+        let words = |list: [&str; 4]| list.map(str::to_owned);
         assert_eq!(
             args,
-            [[
-                "set".to_owned(),
-                "org.gnome.desktop.interface".to_owned(),
-                "overlay-scrolling".to_owned(),
-                "false".to_owned()
-            ]]
+            [
+                words([
+                    "set",
+                    "org.gnome.desktop.interface",
+                    "overlay-scrolling",
+                    "false"
+                ]),
+                words([
+                    "set",
+                    "org.gnome.desktop.wm.preferences",
+                    "button-layout",
+                    "'close,minimize,maximize:'"
+                ])
+            ]
         );
     }
 }

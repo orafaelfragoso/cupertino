@@ -86,6 +86,33 @@ fn read_all_gives_the_appearance_to_patterns_that_match_its_namespace() {
     assert!(read_all(&r.caller, &["org.kde.*"]).is_empty());
 }
 
+#[test]
+fn gtk_reads_the_title_bar_buttons_at_the_leading_end_by_pattern_and_by_key() {
+    let Some(r) = start(Appearance::default()) else {
+        return missing_tool("dbus-daemon");
+    };
+    let layout = |value: &OwnedValue| String::try_from(value.try_clone().unwrap()).unwrap();
+    let all = read_all(&r.caller, &["org.gnome.*"]);
+    assert_eq!(
+        layout(&all["org.gnome.desktop.wm.preferences"]["button-layout"]),
+        "close,minimize,maximize:"
+    );
+    let read: OwnedValue = r
+        .caller
+        .call_method(
+            Some(BUS_NAME),
+            PORTAL_PATH,
+            Some(INTERFACE),
+            "Read",
+            &("org.gnome.desktop.wm.preferences", "button-layout"),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert_eq!(layout(&read), "close,minimize,maximize:");
+}
+
 fn overlay_scrolling(all: &All) -> bool {
     bool::try_from(&all["org.gnome.desktop.interface"]["overlay-scrolling"]).unwrap()
 }

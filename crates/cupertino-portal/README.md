@@ -29,15 +29,17 @@ appearance, as `cupertino_app_effects_v1` sends it:
 | `contrast`       | `1` (higher) with Increase Contrast, else `0`     |
 | `reduced-motion` | `1` (reduced) with Reduce Motion, else `0`        |
 
-It also serves the GTK key of the `org.gnome.desktop.interface` namespace that follows the session:
+It also serves the GTK keys of two GNOME namespaces:
 
-| Key                 | Value                                                                 |
-| ------------------- | --------------------------------------------------------------------- |
-| `overlay-scrolling` | `false` when scroll bars are shown at all times (the setting, or Automatic with a mouse), else `true` |
+| Namespace                          | Key                 | Value                                                     |
+| ---------------------------------- | ------------------- | --------------------------------------------------------- |
+| `org.gnome.desktop.interface`      | `overlay-scrolling` | `false` when scroll bars are shown at all times (the setting, or Automatic with a mouse), else `true` |
+| `org.gnome.desktop.wm.preferences` | `button-layout`     | `close,minimize,maximize:` at all times: the buttons of a title bar an application draws (GTK header bars, Chromium, Electron's title bar overlay) go at the leading end |
 
 The same values go to GSettings, through `gsettings`, for GTK 3 on Wayland and the GTK backend of the portal, and to
-the `[Settings]` group of `gtk-3.0/settings.ini` and `gtk-4.0/settings.ini` in the configuration directory, which GTK
-reads under X11 (`src/toolkits.rs`); each on a thread of its own, after every change.
+the `[Settings]` group of `gtk-3.0/settings.ini` and `gtk-4.0/settings.ini` in the configuration directory
+(`gtk-overlay-scrolling`, `gtk-decoration-layout`), which GTK reads under X11 (`src/toolkits.rs`); each on a thread of
+its own, at the start and after every change.
 
 `ReadAll` matches a namespace exactly or by a trailing `*`; an empty list or an empty pattern matches every namespace.
 `Read` of any other key fails, so xdg-desktop-portal asks the next backend. A change of appearance emits

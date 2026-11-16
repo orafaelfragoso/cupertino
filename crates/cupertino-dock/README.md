@@ -397,7 +397,7 @@ Minimising into the application's tile, the launch bounce and the running indica
 
 ## Protocols / D-Bus it speaks
 
-The process speaks the server's dock protocol (version 23) and `cupertino_session_v1`. On the session bus it only calls
+The process speaks the server's dock protocol (version 26) and `cupertino_session_v1`. On the session bus it only calls
 `org.freedesktop.Application.Activate` to ask a resident D-Bus-activatable application for a window (see *Residency*). It listens for the launcher entry signal (`com.canonical.Unity.LauncherEntry.Update`): an application names its
 desktop file as `application://ID.desktop` and sets `count` and `count-visible`, and a running application's tile shows
 a visible count above zero on its badge (`badge.rs`). The messages are named

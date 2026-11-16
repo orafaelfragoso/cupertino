@@ -280,6 +280,15 @@ impl Session {
         self.windows.values().any(|w| w.key == key)
     }
 
+    /// The windows of the application of tile `key`, minimized ones too, with their ids, in the order they opened.
+    pub fn windows_of(&self, key: &str) -> Vec<(u32, &Window)> {
+        self.windows
+            .iter()
+            .filter(|(_, w)| w.key == key)
+            .map(|(id, w)| (*id, w))
+            .collect()
+    }
+
     /// The ids of the windows the server reported, in order.
     pub fn window_ids(&self) -> Vec<u32> {
         self.windows.keys().copied().collect()

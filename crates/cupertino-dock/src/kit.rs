@@ -35,7 +35,7 @@ use crate::config::Orientation;
 use crate::desktop::DesktopIndex;
 use crate::fan::{self, FanLayout};
 use crate::force_quit::{self, Button, Dialog, Entry, Extend};
-use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
+use crate::menu::{self, MenuCommand, MenuItem, TileFacts, TileWindow};
 use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
 use crate::overview_ui::{Mode, WindowEntry, Workspace};
 use crate::session::{Activation, Session};
@@ -183,6 +183,12 @@ impl DockEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     ActivateApp(String),
+    /// Show one window of the application `app_id`: raised and given the keyboard. A server that cannot show one
+    /// window brings the application forward.
+    ActivateWindow {
+        id: u32,
+        app_id: String,
+    },
     /// Restore the minimized window out of its tile, at `tile` in the bar's window.
     RestoreWindow {
         id: u32,
@@ -332,6 +338,10 @@ pub trait Host {
     /// folder); none by default.
     fn folders(&mut self) -> Vec<(String, String)> {
         Vec::new()
+    }
+    /// The folder a new file manager window opens on: the person's home folder; none by default.
+    fn home(&mut self) -> Option<String> {
+        None
     }
     /// List `folder` away from the model: what ends in the entries its stack shows, the newest first, at most
     /// [`stack::MAX_ENTRIES`] ([`stack::newest_first`]). A large or slow folder holds up nothing else.
@@ -1579,6 +1589,15 @@ impl Model {
                 .find(&tile.key)
                 .map(|e| e.path.as_path());
             let running_app_id = self.session.running_app_id(id);
+            let windows = self
+                .session
+                .windows_of(&tile.key)
+                .into_iter()
+                .map(|(id, w)| TileWindow {
+                    id,
+                    title: w.title.clone(),
+                })
+                .collect();
             menu::tile_menu(&TileFacts {
                 kind: tile.kind,
                 key: &tile.key,
@@ -1588,6 +1607,7 @@ impl Model {
                 unresponsive: running_app_id.is_some_and(|app| self.unresponsive.contains(app)),
                 entry_path,
                 trash_full: self.trash_full,
+                windows,
             })
         };
         if items.is_empty() {
@@ -1603,6 +1623,43 @@ impl Model {
             dark,
         });
         self.menu_takes_keyboard = self.engaged;
+    }
+
+    /// Bring one window forward, as its row in a tile's menu asks: a minimized one flies out of its own tile, any other
+    /// is raised and given the keyboard. A window that closed meanwhile is left alone.
+    fn show_window(&mut self, id: u32) {
+        let Some(window) = self.session.window_info(id) else {
+            return;
+        };
+        let app_id = window.app_id.clone();
+        let tile = window
+            .minimized
+            .then(|| {
+                self.session
+                    .dock
+                    .tiles()
+                    .into_iter()
+                    .find(|t| {
+                        t.kind == TileKind::MinimizedWindow
+                            && t.window.is_some_and(|w| w.0 == u64::from(id))
+                    })
+                    .map(|t| t.id)
+            })
+            .flatten()
+            .and_then(|tile| self.tile_rect(tile));
+        match tile {
+            Some(tile) => self.bar_request(Request::RestoreWindow { id, tile }),
+            None => self.bar_request(Request::ActivateWindow { id, app_id }),
+        }
+    }
+
+    /// Another window of the file manager, the tile with `key`: on the person's home folder, or as a click on a tile
+    /// of an application without windows asks where the host names no folder.
+    fn new_window(&mut self, key: String) -> Vec<Command<Message>> {
+        match self.host.home() {
+            Some(home) => self.open_in_file_manager(&home),
+            None => self.reopen(key),
+        }
     }
 
     fn run_menu_command(&mut self, command: MenuCommand) -> Vec<Command<Message>> {
@@ -1623,6 +1680,8 @@ impl Model {
             MenuCommand::ShowAllWindows(app) => {
                 self.bar_request(Request::App(app, AppAction::ShowWindows))
             }
+            MenuCommand::ShowWindow(id) => self.show_window(id),
+            MenuCommand::NewWindow(key) => return self.new_window(key),
             MenuCommand::Hide(app) => self.bar_request(Request::App(app, AppAction::Hide)),
             MenuCommand::Quit(app) => self.bar_request(Request::App(app, AppAction::Quit)),
             MenuCommand::ForceQuit(app) => self.open_force_quit(Some(&app)),

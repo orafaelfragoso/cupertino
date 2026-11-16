@@ -6,7 +6,8 @@
 //! submenus here), "Open at Login" is absent (there is no login-items store), "Show Recents",
 //! "Dock Settings" and "Minimize Using" are absent (the recents are `dock.conf`'s `recents`, there
 //! is no settings application to open, and the minimize effect is the server's setting), and the Option-key alternates (Hide Others, Force
-//! Quit) are not offered. The metrics and colours are the menu bar's (approximate).
+//! Quit) are not offered. A running application's menu starts with its windows, each of which the item brings
+//! forward. The rows, separators and material are the toolkit's menu's ([`crate::view::menu::style`]).
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,10 @@ pub enum MenuCommand {
     ShowInFileManager(PathBuf),
     /// The application overview of this application id (`app_command`).
     ShowAllWindows(String),
+    /// Bring the window with this id forward: restored when it is minimized, raised and given the keyboard.
+    ShowWindow(u32),
+    /// Ask the file manager, the tile with this key, for another window.
+    NewWindow(String),
     Hide(String),
     Quit(String),
     /// Open the Force Quit dialog on the confirmation of this application id.
@@ -92,6 +97,17 @@ impl MenuItem {
     }
 }
 
+/// A window of a tile's application as its menu lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileWindow {
+    /// The server's id of the window.
+    pub id: u32,
+    pub title: String,
+}
+
+/// What a window without a title is listed as.
+pub const UNTITLED: &str = "Untitled";
+
 /// What the menu of a tile depends on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TileFacts<'a> {
@@ -109,6 +125,27 @@ pub struct TileFacts<'a> {
     pub entry_path: Option<&'a Path>,
     /// The trash holds something: its menu can empty it.
     pub trash_full: bool,
+    /// The windows of its application, in the order they opened.
+    pub windows: Vec<TileWindow>,
+}
+
+/// The application's windows, each bringing its window forward, and a separator after them; nothing without windows.
+fn window_items(f: &TileFacts<'_>) -> Vec<MenuItem> {
+    let mut items: Vec<MenuItem> = f
+        .windows
+        .iter()
+        .map(|w| {
+            let title = w.title.trim();
+            MenuItem::item(
+                if title.is_empty() { UNTITLED } else { title },
+                MenuCommand::ShowWindow(w.id),
+            )
+        })
+        .collect();
+    if !items.is_empty() {
+        items.push(MenuItem::separator());
+    }
+    items
 }
 
 /// The disabled status row that heads the menu of an application that stopped answering.
@@ -148,16 +185,25 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
             &format!("Open \u{201c}{}\u{201d}", crate::stack::folder_name(f.key)),
             MenuCommand::ShowInFileManager(PathBuf::from(f.key)),
         )],
-        // the file manager's menus have an empty Options submenu and no Quit:
-        // running, Show All Windows and Hide; not running, Open. Its Relaunch is not offered
-        // (approximate: the dock has no relaunch path)
+        // the file manager's menus have an empty Options submenu and no Quit: running, its windows, New Window, Show
+        // All Windows (while it shows a window) and Hide; not running, Open. Its Relaunch is not offered (approximate:
+        // the dock has no relaunch path)
         TileKind::App if f.built_in => match f.running_app_id {
             Some(app) => {
                 let mut items = not_responding(f, app);
+                items.extend(window_items(f));
                 items.push(MenuItem::item(
-                    "Show All Windows",
-                    MenuCommand::ShowAllWindows(app.to_string()),
+                    "New Window",
+                    MenuCommand::NewWindow(f.key.to_string()),
                 ));
+                items.push(MenuItem::separator());
+                items.push(MenuItem {
+                    enabled: !f.windows.is_empty(),
+                    ..MenuItem::item(
+                        "Show All Windows",
+                        MenuCommand::ShowAllWindows(app.to_string()),
+                    )
+                });
                 items.push(MenuItem::item("Hide", MenuCommand::Hide(app.to_string())));
                 items.extend(force_quit(f, app));
                 items
@@ -168,6 +214,9 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
             let mut items = f
                 .running_app_id
                 .map_or_else(Vec::new, |app| not_responding(f, app));
+            if f.running_app_id.is_some() {
+                items.extend(window_items(f));
+            }
             items.push(if f.pinned {
                 MenuItem::item(
                     "Remove from Dock",
@@ -260,6 +309,14 @@ mod tests {
             unresponsive: false,
             entry_path: path,
             trash_full: false,
+            windows: Vec::new(),
+        }
+    }
+
+    fn window(id: u32, title: &str) -> TileWindow {
+        TileWindow {
+            id,
+            title: title.to_owned(),
         }
     }
 
@@ -305,11 +362,16 @@ mod tests {
             unresponsive: true,
             entry_path: None,
             trash_full: false,
+            windows: vec![window(4, "Documents")],
         });
         assert_eq!(
             labels(&items),
             [
                 "Application Not Responding",
+                "-",
+                "Documents",
+                "-",
+                "New Window",
                 "-",
                 "Show All Windows",
                 "Hide",
@@ -369,9 +431,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_file_manager_tile_can_be_neither_kept_nor_removed_nor_quit() {
-        let file_manager = |running| TileFacts {
+    fn file_manager(running: Option<&str>, windows: Vec<TileWindow>) -> TileFacts<'_> {
+        TileFacts {
             kind: TileKind::App,
             key: "cupertino-files",
             pinned: true,
@@ -380,18 +441,110 @@ mod tests {
             unresponsive: false,
             entry_path: None,
             trash_full: false,
-        };
-        let running = tile_menu(&file_manager(Some("cupertino-files")));
-        assert_eq!(labels(&running), ["Show All Windows", "Hide"]);
-        assert_eq!(
-            running[1].command,
-            Some(MenuCommand::Hide("cupertino-files".into()))
-        );
-        let idle = tile_menu(&file_manager(None));
+            windows,
+        }
+    }
+
+    #[test]
+    fn the_file_manager_tile_can_be_neither_kept_nor_removed_nor_quit() {
+        let two = vec![window(3, "Documents"), window(9, "Downloads")];
+        for facts in [
+            file_manager(None, Vec::new()),
+            file_manager(Some("cupertino-files"), Vec::new()),
+            file_manager(Some("cupertino-files"), two),
+        ] {
+            let items = tile_menu(&facts);
+            assert!(
+                items.iter().all(|i| !matches!(
+                    i.command,
+                    Some(
+                        MenuCommand::KeepInDock(_)
+                            | MenuCommand::RemoveFromDock(_)
+                            | MenuCommand::Quit(_)
+                            | MenuCommand::ShowInFileManager(_)
+                    )
+                )),
+                "{:?}",
+                labels(&items)
+            );
+        }
+        let idle = tile_menu(&file_manager(None, Vec::new()));
         assert_eq!(labels(&idle), ["Open"]);
         assert_eq!(
             idle[0].command,
             Some(MenuCommand::Open("cupertino-files".into()))
+        );
+    }
+
+    #[test]
+    fn the_running_file_manager_lists_its_windows_then_new_window_and_the_window_actions() {
+        let items = tile_menu(&file_manager(
+            Some("cupertino-files"),
+            vec![window(3, "Documents"), window(9, "  ")],
+        ));
+        assert_eq!(
+            labels(&items),
+            [
+                "Documents",
+                UNTITLED,
+                "-",
+                "New Window",
+                "-",
+                "Show All Windows",
+                "Hide"
+            ]
+        );
+        assert_eq!(items[0].command, Some(MenuCommand::ShowWindow(3)));
+        assert_eq!(items[1].command, Some(MenuCommand::ShowWindow(9)));
+        assert_eq!(
+            items[3].command,
+            Some(MenuCommand::NewWindow("cupertino-files".into()))
+        );
+        assert_eq!(
+            items[5].command,
+            Some(MenuCommand::ShowAllWindows("cupertino-files".into()))
+        );
+        assert_eq!(
+            items[6].command,
+            Some(MenuCommand::Hide("cupertino-files".into()))
+        );
+        assert!(items.iter().filter(|i| !i.separator).all(|i| i.enabled));
+    }
+
+    #[test]
+    fn the_file_manager_running_without_a_window_offers_a_new_one_and_cannot_show_all() {
+        let items = tile_menu(&file_manager(Some("cupertino-files"), Vec::new()));
+        assert_eq!(
+            labels(&items),
+            ["New Window", "-", "Show All Windows", "Hide"]
+        );
+        assert!(items[0].enabled && !items[2].enabled && items[3].enabled);
+    }
+
+    #[test]
+    fn a_running_application_lists_its_windows_first_and_an_idle_one_lists_none() {
+        let mut f = facts(TileKind::App, true, Some("org.example.editor"), None);
+        f.windows = vec![window(5, "notes.txt"), window(6, "todo.txt")];
+        let items = tile_menu(&f);
+        assert_eq!(
+            labels(&items),
+            [
+                "notes.txt",
+                "todo.txt",
+                "-",
+                "Remove from Dock",
+                "-",
+                "Show All Windows",
+                "Hide",
+                "Quit"
+            ]
+        );
+        assert_eq!(items[1].command, Some(MenuCommand::ShowWindow(6)));
+        let mut idle = facts(TileKind::App, true, None, None);
+        idle.windows = vec![window(5, "stale")];
+        assert_eq!(
+            labels(&tile_menu(&idle)),
+            ["Remove from Dock", "-", "Show All Windows", "Open"]
         );
     }
 

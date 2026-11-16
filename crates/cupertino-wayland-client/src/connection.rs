@@ -33,7 +33,8 @@ use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{
-    delegate_noop, Connection as WlConnection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+    delegate_noop, Connection as WlConnection, Dispatch, DispatchError, EventQueue, Proxy,
+    QueueHandle, WEnum,
 };
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
     self, WpCursorShapeDeviceV1,
@@ -1561,6 +1562,10 @@ impl Connection {
     /// the connection for a queue of its own could take the answer in between and leave this one waiting on a socket
     /// that stays quiet.
     pub fn roundtrip(&mut self) -> Result<(), Error> {
+        self.roundtrip_once().map_err(|e| self.explained(e))
+    }
+
+    fn roundtrip_once(&mut self) -> Result<(), Error> {
         let done = Synced::default();
         self.conn.display().sync(&self.queue.handle(), done.clone());
         let mut woken = false;
@@ -1739,6 +1744,10 @@ impl Connection {
     /// after each read from the compositor, maybe with no event, once everything read is dispatched, so extensions
     /// find what their objects received.
     pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
+        self.wait_once(timeout).map_err(|e| self.explained(e))
+    }
+
+    fn wait_once(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
         // read what arrived while the caller was busy first: a key released meanwhile ends its repeat before the
         // repeats due since are counted
         let (read, woken) = self.block(Some(Duration::ZERO))?;
@@ -1797,7 +1806,30 @@ impl Connection {
             Ok(()) => Ok(()),
             // the socket is full; the next call flushes again
             Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => Ok(()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(self.explained(e.into())),
+        }
+    }
+
+    /// `error`, or the protocol error the compositor ended the connection with, when the socket failed before the
+    /// client library read that error: a write into a socket the compositor reset fails before the error is read
+    /// ([`crate::last_word`]).
+    fn explained(&self, error: Error) -> Error {
+        let socket_failed = match &error {
+            Error::Disconnected(
+                Disconnect::Backend(WaylandError::Io(e))
+                | Disconnect::Dispatch(DispatchError::Backend(WaylandError::Io(e))),
+            ) => e.kind() != ErrorKind::WouldBlock,
+            _ => false,
+        };
+        // only a dead connection's bytes are read here: the client library reads nothing more from it
+        if !socket_failed || self.conn.backend().last_error().is_none() {
+            return error;
+        }
+        match crate::last_word::unread_error(self.conn.backend().poll_fd()) {
+            Some(protocol) => {
+                Error::Disconnected(Disconnect::Backend(WaylandError::Protocol(protocol)))
+            }
+            None => error,
         }
     }
 

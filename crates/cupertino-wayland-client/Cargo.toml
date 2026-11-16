@@ -12,7 +12,7 @@ layer = "transport"
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
 memmap2 = "0.9"
-rustix = { version = "1", features = ["event", "fs"] }
+rustix = { version = "1", features = ["event", "fs", "net"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 xkbcommon = "0.8"

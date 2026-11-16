@@ -210,12 +210,12 @@ impl smithay::wayland::security_context::SecurityContextHandler for Cupertino {
         _context: smithay::wayland::security_context::SecurityContext,
     ) {
         let inserted = self.loop_handle.insert_source(source, |stream, _, state| {
-            let data = std::sync::Arc::new(crate::state::ClientState {
+            let data = crate::state::ClientState {
                 sandboxed: true,
                 peer: crate::state::client_process(&stream),
                 ..crate::state::ClientState::default()
-            });
-            if let Err(e) = state.display_handle.insert_client(stream, data) {
+            };
+            if let Err(e) = crate::state::insert_client(&state.display_handle, stream, data) {
                 tracing::warn!(error = %e, "adding a sandboxed wayland client failed");
             }
         });

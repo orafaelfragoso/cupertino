@@ -315,7 +315,7 @@ impl Cupertino {
 
     /// Whether the session has a lock screen that takes a covered session over: a shell process with the session lock
     /// role (the login process, restarted by its supervisor should it crash); never the login screen's server.
-    fn has_lock_screen(&self) -> bool {
+    pub(crate) fn has_lock_screen(&self) -> bool {
         !self.login_screen
             && self
                 .config

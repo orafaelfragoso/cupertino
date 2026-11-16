@@ -72,6 +72,8 @@ mod gpu_reset;
 mod gpu_resize;
 #[path = "gpu_slice.rs"]
 mod gpu_slice;
+#[path = "greeter.rs"]
+mod greeter;
 #[path = "headless.rs"]
 mod headless;
 #[path = "hung_apps.rs"]

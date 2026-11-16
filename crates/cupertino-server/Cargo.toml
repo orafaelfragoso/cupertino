@@ -71,7 +71,8 @@ wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-plasma = { version = "0.3", features = ["server"] }
 wayland-scanner = "0.31"
-wayland-server = "0.31"
+# the per-client event buffer's size ([`state::CLIENT_EVENT_BUFFER`])
+wayland-server = { version = "0.31", features = ["libwayland_1_23"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 accesskit = "0.25"
 accesskit_unix = "0.24"
@@ -79,7 +80,7 @@ anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-rustix = { version = "1", features = ["fs", "process", "rand"] }
+rustix = { version = "1", features = ["fs", "net", "process", "rand"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -96,6 +97,8 @@ features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backen
 cupertino-screencast = { path = "../cupertino-screencast", features = ["fake"] }
 cupertino-test-bus = { path = "../cupertino-test-bus" }
 cupertino-test-pam = { path = "../cupertino-test-pam" }
+# the greeter test's stand-in session manager speaks the login screen's protocol
+cupertino-login-ipc = { path = "../cupertino-login-ipc" }
 tempfile = "3"
 async-io = "2"
 wayland-client = "0.31"

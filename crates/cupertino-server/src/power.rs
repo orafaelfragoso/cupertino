@@ -138,6 +138,7 @@ impl Cupertino {
             on_battery: self.power.on_battery.unwrap_or(false),
             inhibited: self.idle.inhibited() || self.power.idle_blocked,
             locked: self.session_lock.is_active(),
+            can_lock: self.has_lock_screen(),
         }
     }
 
@@ -157,9 +158,18 @@ impl Cupertino {
         }
     }
 
-    /// logind made this session the active one (the console returned to it): the screen fades in from black.
+    /// logind took the seat and the display from this session (another console is shown): the idle policy stands still
+    /// until the session is the active one again, so nothing here dims, sleeps or locks a display it does not have.
+    pub fn session_deactivated(&mut self) {
+        self.power.policy.pause();
+    }
+
+    /// logind made this session the active one (the console returned to it): the display is on with fresh idle
+    /// countdowns, and the screen fades in from black.
     pub fn session_activated(&mut self) {
         let now = self.now();
+        let effects = self.power.policy.resume(now);
+        self.apply_power_effects(effects);
         tracing::info!("fading in from black");
         self.power.fade.begin(now);
         self.request_redraw();

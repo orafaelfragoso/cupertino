@@ -1934,6 +1934,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-input",
  "cupertino-keyboard",
+ "cupertino-login-ipc",
  "cupertino-modifiers",
  "cupertino-overview",
  "cupertino-peer",

@@ -804,6 +804,18 @@ pub enum ShellOp {
     PowerKey {
         pressed: bool,
     },
+    /// Tell the portal the chord of one of its shortcuts went down (`true`) or its key up.
+    GlobalShortcut {
+        key: GlobalKey,
+        pressed: bool,
+    },
+}
+
+/// A shortcut the portal bound ([`crate::global_shortcuts`]): the binding object it came from and the id it named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GlobalKey {
+    pub owner: u32,
+    pub id: u32,
 }
 
 /// Result of translating one action.
@@ -1106,6 +1118,8 @@ pub struct KeyRouter {
     switcher_hold: Option<Mods>,
     /// Keys the compositor consumed and has not seen released, each with the operation its release runs.
     suppressed: HashMap<u32, Option<ShellOp>>,
+    /// The chords the portal bound for applications. They act only where no binding of [`KeyRouter::bindings`] does.
+    pub global: HashMap<Chord, GlobalKey>,
 }
 
 impl KeyRouter {
@@ -1114,6 +1128,7 @@ impl KeyRouter {
             bindings,
             switcher_hold: None,
             suppressed: HashMap::new(),
+            global: HashMap::new(),
         }
     }
 
@@ -1211,7 +1226,22 @@ impl KeyRouter {
                 self.suppressed.insert(sym, release);
                 KeyOutcome::Consumed(translate_action(action, ctx))
             }
-            None => KeyOutcome::Forward,
+            // a shortcut an application bound through the portal: the focused client sees neither the press nor the
+            // release, and the release tells the portal the shortcut ended
+            None => match self.global.get(&Chord { mods: ev.mods, sym }).copied() {
+                Some(key) => {
+                    let release = ShellOp::GlobalShortcut {
+                        key,
+                        pressed: false,
+                    };
+                    self.suppressed.insert(sym, Some(release));
+                    KeyOutcome::Consumed(ActionPlan {
+                        ops: vec![ShellOp::GlobalShortcut { key, pressed: true }],
+                        ..Default::default()
+                    })
+                }
+                None => KeyOutcome::Forward,
+            },
         }
     }
 
@@ -2172,6 +2202,89 @@ mod tests {
         // the plain power key is still the power key
         let power = parse_chord("XF86PowerOff").unwrap();
         assert_eq!(b.lookup(power.sym, power.mods), Some(Action::PowerKey));
+    }
+
+    #[test]
+    fn a_portal_shortcut_takes_its_chord_where_no_binding_does_and_its_release_ends_it() {
+        let mut r = KeyRouter::new(Config::default().keybindings);
+        let key = GlobalKey { owner: 2, id: 7 };
+        let ctrl_alt = Mods {
+            ctrl: true,
+            alt: true,
+            ..Mods::NONE
+        };
+        r.global.insert(
+            Chord {
+                mods: ctrl_alt,
+                sym: keysyms::KEY_k,
+            },
+            key,
+        );
+        // a chord the server binds stays the server's even if the portal bound it
+        let tab = parse_chord("Super+Tab").unwrap();
+        r.global.insert(tab, GlobalKey { owner: 2, id: 8 });
+        let ops = |outcome: KeyOutcome| match outcome {
+            KeyOutcome::Consumed(plan) => dbg(&plan.ops),
+            KeyOutcome::Forward => "forward".into(),
+        };
+        let event = |sym, mods, pressed| KeyEvent {
+            sym,
+            pressed,
+            mods,
+            repeat: false,
+            shifted: None,
+        };
+        let c = ctx();
+        // Shift held with the chord is another chord
+        let shifted = Mods {
+            shift: true,
+            ..ctrl_alt
+        };
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_K, shifted, true), &c)),
+            "forward"
+        );
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_K, shifted, false), &c)),
+            "forward"
+        );
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_k, ctrl_alt, true), &c)),
+            dbg(&vec![ShellOp::GlobalShortcut { key, pressed: true }])
+        );
+        // the client never repeats a key it did not get, and a press while held sends nothing
+        assert_eq!(ops(r.key(event(keysyms::KEY_k, ctrl_alt, true), &c)), "[]");
+        // the modifiers may go up first: the key's release ends the shortcut all the same
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_k, Mods::NONE, false), &c)),
+            dbg(&vec![ShellOp::GlobalShortcut {
+                key,
+                pressed: false
+            }])
+        );
+        let switcher = r.key(event(tab.sym, tab.mods, true), &c);
+        assert!(!ops(switcher).contains("GlobalShortcut"));
+        // while the session is locked or an application holds the shortcuts the chord is the focused client's
+        let locked = ActionContext {
+            locked: true,
+            ..ctx()
+        };
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_k, ctrl_alt, true), &locked)),
+            "forward"
+        );
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_k, ctrl_alt, false), &locked)),
+            "forward"
+        );
+        let held = ActionContext {
+            input_held: true,
+            ..ctx()
+        };
+        assert_eq!(
+            ops(r.key(event(keysyms::KEY_k, ctrl_alt, true), &held)),
+            "forward"
+        );
     }
 
     #[test]

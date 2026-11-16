@@ -1,7 +1,7 @@
 # cupertino-portal
 
 The session's xdg-desktop-portal backend. Applications ask xdg-desktop-portal, and xdg-desktop-portal asks this
-backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast, AppChooser and Screenshot. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
+backend for the interfaces `data/cupertino.portal` lists: Settings, FileChooser, ScreenCast, AppChooser, Screenshot and GlobalShortcuts. The server sets `XDG_CURRENT_DESKTOP=Cupertino`, so
 xdg-desktop-portal reads `cupertino-portals.conf` to pick the backend for each interface.
 
 ## Running
@@ -212,6 +212,46 @@ captured unless the person agrees.
 Known limitations: no window or area target and no pointer in the image. A picked colour is the copied pixel's value,
 without the display's colour profile, and the picker has no keyboard movement of the pointer.
 
+## Global shortcuts
+
+`org.freedesktop.impl.portal.GlobalShortcuts` version 1 lets an application bind keyboard shortcuts that work while
+another application has the keyboard (Electron's `globalShortcut`, push-to-talk keys). It is served only when the
+server offers `cupertino_global_shortcuts_v1` to the process (`src/shortcut_keys.rs`); the server routes a bound chord
+to the portal before the focused client sees it, so that client gets neither the press nor the release.
+
+- `CreateSession` adds an `org.freedesktop.impl.portal.Session` object at the session handle; at most 32 sessions and
+  4 for one app id. `Session.Close`, and the frontend leaving the bus, end the session and give its keys back to the
+  server; a `BindShortcuts` waiting on its window then answers `2` and the window goes.
+- `BindShortcuts` reads each shortcut's `description` and `preferred_trigger`, written as the shortcuts specification
+  writes it (`CTRL+ALT+k`, `LOGO+Return`, modifier names without regard to case) or as a GTK accelerator
+  (`<Control><Alt>k`); the key is an xkb keysym name, the character it types, or one of the web and Electron key
+  names (`Enter`, `ArrowUp`, `PageUp`, `MediaPlayPause`, `VolumeUp` …); `Command`, `CommandOrControl` and `Option` are
+  Control and Alt. At most 64 shortcuts, each id given
+  once and every string at most 1024 bytes; else `InvalidArgs` or `LimitsExceeded`.
+- The clash rule, applied when the call comes and again when it is answered: a shortcut gets its key only when the
+  key holds Control, Alt or Super or is F1 to F35 or a media key (`XF86…`), is none of the chords the server keeps (its bindings, Ctrl+Alt+F1
+  to F12, Super+Alt+S, Ctrl+Alt+Escape: the `reserved` group), and no other session holds it; within one call the
+  first shortcut naming a key keeps it. A shortcut without its key is not bound and is left out of the answer.
+- The first call of an app shows a window, "Keyboard Shortcuts": "“<app>” wants to use these keyboard shortcuts, also
+  while you work in other apps.", then one row per shortcut, its keys as symbols (`⌃⌥T  Push to talk`) or, for one
+  without a key, the reason (`it needs ⌃, ⌥ or ⌘`, `the system uses it`, `“<app>” uses it`, `it names no key`,
+  `another shortcut here uses it`). Don't Allow has the focus; Allow is enabled only 500 ms after the first frame is on
+  screen, as in the screenshot window. Allow answers `0` with `shortcuts` (each with `description` and
+  `trigger_description`) and Don't Allow `1`, both remembered for the app id in `global-shortcuts.conf`
+  (`cupertino-defaults::global_shortcuts`, mode `0600`, `allow = <app id>` or `deny = <app id>`, changed under an
+  advisory lock); Escape and closing the window answer `1` and remember nothing. A remembered answer is followed
+  without a window; an empty app id or one a line cannot hold is asked every time. A call where no shortcut can have
+  its key answers `0` with an empty list and shows nothing. A second `BindShortcuts` on a session replaces its
+  shortcuts.
+- `ListShortcuts` answers the session's bound shortcuts.
+- The server's `pressed` and `released` become `Activated` and `Deactivated` (session, shortcut id, the key event's
+  time in milliseconds) for the session that holds the key; repeats send nothing. A key the server keeps later (a
+  changed `shortcuts.conf`) is taken from the shortcut holding it, which leaves the session's list, and
+  `ShortcutsChanged` carries the session's shortcuts now.
+
+Known limitations: `ConfigureShortcuts` (version 2) is not served, so a shortcut without a free key cannot be given
+another one; the person takes a line out of `global-shortcuts.conf` to be asked again.
+
 ## Diagnostic events
 
 The process records versioned diagnostic events to the user's event store (`$XDG_STATE_HOME/cupertino/events`), each
@@ -220,7 +260,7 @@ D-Bus error names are recorded as they are; a path in an error's text is recorde
 
 | Event | Severity | Fields | Where |
 |---|---|---|---|
-| `portal.request.failed` | warn | `interface`, `method`, `app_id` (when the call has one), `error` (the D-Bus error name) | a call of FileChooser, AppChooser, ScreenCast, Session, Screenshot or Request is refused (a caller other than the frontend, bad arguments, a limit) |
+| `portal.request.failed` | warn | `interface`, `method`, `app_id` (when the call has one), `error` (the D-Bus error name) | a call of FileChooser, AppChooser, ScreenCast, GlobalShortcuts, Session, Screenshot or Request is refused (a caller other than the frontend, bad arguments, a limit) |
 | `portal.screencast.failed` | error | `stage` (`start`: the stream never reached the app; `running`: a share failed after), `app_id` (for `start`), `error` | a share does not start or ends on a failure |
 | `portal.permission.store_failed` | warn | `operation` (`save`, `load`), `app_id`, `error` | `screen-sharing.conf` cannot be written (the share is kept only while the app runs) or read (nothing is restored) |
 | `portal.screenshot.failed` | error | `method` (`Screenshot`, `PickColor`), `app_id` (when known), `error` | a granted screenshot or colour pick cannot copy, write or pick |
@@ -234,8 +274,8 @@ D-Bus error names are recorded as they are; a path in an error's text is recorde
 - `bin/cupertino-portal`
 - `data/cupertino.portal` to `/usr/share/xdg-desktop-portal/portals/`
 - `data/cupertino-portals.conf` to `/usr/share/xdg-desktop-portal/`: Settings and FileChooser from this backend
-  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser and Screenshot (which carries
-  `PickColor`) from this backend only; Secret from gnome-keyring; every other interface from the GTK backend
+  first, then the GTK backend for what it does not serve; ScreenCast, AppChooser, Screenshot (which carries
+  `PickColor`) and GlobalShortcuts from this backend only; Secret from gnome-keyring; every other interface from the GTK backend
 
 The packages ship the binary, `cupertino.portal` and the same routing file as
 `packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`. `tests/portals_conf.rs` reads the packaged file

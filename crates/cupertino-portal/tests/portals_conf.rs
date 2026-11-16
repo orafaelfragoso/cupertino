@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::file_chooser::FileChooser;
+use cupertino_portal::global_shortcuts::GlobalShortcuts;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::Screenshot;
 use cupertino_portal::settings::Settings;
@@ -29,6 +30,7 @@ fn served() -> BTreeSet<String> {
         ScreenCast::name(),
         AppChooser::name(),
         Screenshot::name(),
+        GlobalShortcuts::name(),
     ]
     .into_iter()
     .map(|name| name.to_string())

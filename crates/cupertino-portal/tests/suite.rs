@@ -7,6 +7,8 @@ mod app_chooser;
 mod diag_events;
 #[path = "file_chooser.rs"]
 mod file_chooser;
+#[path = "global_shortcuts.rs"]
+mod global_shortcuts;
 #[path = "portals_conf.rs"]
 mod portals_conf;
 #[path = "screen_cast.rs"]

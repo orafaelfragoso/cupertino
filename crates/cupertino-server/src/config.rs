@@ -87,7 +87,8 @@ impl BuiltIn {
         }
     }
 
-    /// The only role of the process's connection.
+    /// The role of the process's connection; the portal holds [`ShellRole::GlobalShortcuts`] besides
+    /// ([`BuiltIn::process`]).
     pub const fn role(self) -> ShellRole {
         match self {
             BuiltIn::Portal => ShellRole::Capture,
@@ -121,7 +122,11 @@ impl BuiltIn {
             } else {
                 vec![program.display().to_string()]
             },
-            roles: vec![self.role()],
+            roles: match self {
+                // the portal also binds the shortcuts the person allows applications
+                BuiltIn::Portal => vec![self.role(), ShellRole::GlobalShortcuts],
+                _ => vec![self.role()],
+            },
         }
     }
 
@@ -1772,6 +1777,7 @@ mod tests {
             ShellRole::Prompt,
             ShellRole::DataControl,
             ShellRole::DesktopControl,
+            ShellRole::GlobalShortcuts,
         ] {
             assert!(
                 !may_start_from_dev_folder(&[ShellRole::Session, role]),

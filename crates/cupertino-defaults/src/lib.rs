@@ -11,6 +11,7 @@ pub mod data_control;
 pub mod desktop_control;
 pub mod displays;
 pub mod dock;
+pub mod global_shortcuts;
 pub mod keyboard;
 pub mod lock;
 

@@ -60,6 +60,8 @@ mod focus_on_map;
 mod force_quit;
 #[path = "frame_pacing.rs"]
 mod frame_pacing;
+#[path = "global_shortcuts.rs"]
+mod global_shortcuts;
 #[path = "goldens.rs"]
 mod goldens;
 #[path = "gpu_presenter.rs"]

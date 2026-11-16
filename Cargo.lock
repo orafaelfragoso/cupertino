@@ -1736,6 +1736,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-kit",
  "cupertino-protocol-app",
+ "cupertino-protocols",
  "cupertino-screencast",
  "cupertino-shell-client",
  "cupertino-test-bus",
@@ -1752,6 +1753,7 @@ dependencies = [
  "tiny-skia",
  "wayland-client",
  "wayland-protocols",
+ "xkbcommon",
  "zbus",
 ]
 

@@ -32,6 +32,7 @@ use crate::app_chooser;
 use crate::chooser::{Accept, Chooser};
 use crate::consent::Arming;
 use crate::file_chooser::{self, Answer, Kind, Reply};
+use crate::global_shortcuts::{self, Refusal};
 use crate::screen_cast::{self, Source};
 use crate::screenshot;
 
@@ -54,6 +55,9 @@ const SIZE: Size = Size::new(720.0, 460.0);
 const PICKER_SIZE: Size = Size::new(480.0, 360.0 + SIDEBAR_TOP);
 const PICKER_MIN_SIZE: Size = Size::new(360.0, 240.0 + SIDEBAR_TOP);
 const CONSENT_SIZE: Size = Size::new(420.0, 180.0 + SIDEBAR_TOP);
+/// The shortcut window grows by one row of this height for each shortcut it lists, up to [`SHORTCUT_ROWS`] of them.
+const SHORTCUT_ROW: f64 = 20.0;
+const SHORTCUT_ROWS: usize = 8;
 /// A prompt window's title bar is only its control buttons, over the top of its glass panel.
 const PROMPT_DECORATIONS: DecorationMode = DecorationMode::Unified;
 /// Side of the requesting app's icon in the screen-sharing and screenshot windows.
@@ -71,6 +75,13 @@ pub enum Event {
     ScreenCast(screen_cast::Event),
     AppChooser(app_chooser::Event),
     Screenshot(screenshot::Event),
+    GlobalShortcuts(global_shortcuts::Event),
+}
+
+impl From<global_shortcuts::Event> for Event {
+    fn from(event: global_shortcuts::Event) -> Self {
+        Event::GlobalShortcuts(event)
+    }
 }
 
 impl From<file_chooser::Event> for Event {
@@ -188,6 +199,7 @@ pub struct Model {
     /// The icons of the file chooser's rows, by the items' types.
     file_icons: RefCell<FileIcons>,
     consents: Vec<Consent>,
+    shortcut_consents: Vec<ShortcutConsent>,
 }
 
 /// The apps' own icons by the name of their `Icon=`, each name loaded once.
@@ -279,6 +291,17 @@ struct Consent {
     arming: Option<Arming>,
 }
 
+/// The question whether an app may use keyboard shortcuts while another app has the keyboard.
+struct ShortcutConsent {
+    id: u64,
+    handle: OwnedObjectPath,
+    reply: global_shortcuts::Reply,
+    ask: global_shortcuts::Ask,
+    /// The arming delay has passed: Allow can be pressed.
+    armed: bool,
+    arming: Option<Arming>,
+}
+
 /// Whether a window armed by its message, whose delay started at `arming`, takes an answer now: the delay has passed
 /// by the clock too.
 fn ready(armed: bool, arming: Option<Arming>) -> bool {
@@ -350,6 +373,10 @@ pub enum Message {
     /// The activation token the server made for app chooser `0`'s choice `1`.
     Opened(u64, String, Option<String>),
     TakeScreenshot(u64),
+    /// Allow shortcut window `0`'s shortcuts, remembered for its app.
+    AllowShortcuts(u64),
+    /// Don't Allow them, remembered for its app.
+    DenyShortcuts(u64),
     /// Consent window `0` has presented its first frame: its arming delay starts.
     Shown(u64),
     /// The arming delay of consent window `0` has passed.
@@ -487,6 +514,23 @@ impl Model {
                 Event::Screenshot(screenshot::Event::Close { handle }) => {
                     self.consents.retain(|c| c.handle != handle)
                 }
+                Event::GlobalShortcuts(global_shortcuts::Event::Ask { handle, ask, reply }) => {
+                    let id = self.next;
+                    self.next += 1;
+                    self.app_icons.load_names(ask.app_icon.as_deref());
+                    commands.push(arm_when_shown(id, shortcuts_window_key(id)));
+                    self.shortcut_consents.push(ShortcutConsent {
+                        id,
+                        handle,
+                        reply,
+                        ask: *ask,
+                        armed: false,
+                        arming: None,
+                    });
+                }
+                Event::GlobalShortcuts(global_shortcuts::Event::Close { handle }) => {
+                    self.shortcut_consents.retain(|c| c.handle != handle)
+                }
             }
         }
         commands
@@ -517,6 +561,13 @@ impl Model {
     fn finish_consent(&mut self, id: u64, answer: screenshot::Answer) {
         if let Some(i) = self.consents.iter().position(|c| c.id == id) {
             self.consents.remove(i).reply.send(answer);
+        }
+    }
+
+    /// End shortcut window `id` with `answer`.
+    fn finish_shortcuts(&mut self, id: u64, answer: global_shortcuts::Answer) {
+        if let Some(i) = self.shortcut_consents.iter().position(|c| c.id == id) {
+            self.shortcut_consents.remove(i).reply.send(answer);
         }
     }
 }
@@ -560,6 +611,7 @@ impl Application for Dialogs {
             },
             file_icons: RefCell::new(FileIcons::discover(types(), HashMap::new())),
             consents: Vec::new(),
+            shortcut_consents: Vec::new(),
         };
         let mut commands = model.take(inbox().take());
         commands.push(woken());
@@ -683,6 +735,19 @@ impl Application for Dialogs {
                 model.finish_picker(id, screen_cast::Answer::Cancelled);
                 model.finish_app(id, app_chooser::Answer::Cancelled);
                 model.finish_consent(id, screenshot::Answer::Cancelled);
+                model.finish_shortcuts(id, global_shortcuts::Answer::Dismissed);
+            }
+            Message::DenyShortcuts(id) => {
+                model.finish_shortcuts(id, global_shortcuts::Answer::Denied)
+            }
+            Message::AllowShortcuts(id) => {
+                if model
+                    .shortcut_consents
+                    .iter()
+                    .any(|c| c.id == id && ready(c.armed, c.arming))
+                {
+                    model.finish_shortcuts(id, global_shortcuts::Answer::Allowed)
+                }
             }
             Message::PickerScroll(id, scroll) => {
                 if let Some(p) = model.picker(id) {
@@ -722,6 +787,13 @@ impl Application for Dialogs {
                         .iter_mut()
                         .find(|c| c.id == id && c.arming.is_none())
                         .map(|c| c.arming = Some(arming))
+                        .or_else(|| {
+                            model
+                                .shortcut_consents
+                                .iter_mut()
+                                .find(|c| c.id == id && c.arming.is_none())
+                                .map(|c| c.arming = Some(arming))
+                        })
                         .is_some(),
                 };
                 if shown {
@@ -733,6 +805,9 @@ impl Application for Dialogs {
                     p.armed = true;
                 }
                 if let Some(c) = model.consents.iter_mut().find(|c| c.id == id) {
+                    c.armed = true;
+                }
+                if let Some(c) = model.shortcut_consents.iter_mut().find(|c| c.id == id) {
                     c.armed = true;
                 }
             }
@@ -811,6 +886,12 @@ impl Application for Dialogs {
                     .iter()
                     .map(|c| consent_window(c, &model.app_icons)),
             )
+            .chain(
+                model
+                    .shortcut_consents
+                    .iter()
+                    .map(|c| shortcuts_window(c, &model.app_icons)),
+            )
             .collect()
     }
 }
@@ -882,15 +963,14 @@ fn button(label: String, role: ButtonRole, enabled: bool, on_press: Message) -> 
 /// before they reach it, so a key typed for the app does nothing at all; Tab and Escape still work, and a click on
 /// Cancel denies at once.
 fn deny_button(id: u64, armed: bool) -> Element<Message> {
+    labelled_deny_button("Cancel", Message::Cancel(id), armed)
+}
+
+/// [`deny_button`] with its own label and message.
+fn labelled_deny_button(label: &str, on_press: Message, armed: bool) -> Element<Message> {
     Element::new(Deny {
         armed,
-        children: vec![button(
-            "Cancel".to_owned(),
-            ButtonRole::Normal,
-            true,
-            Message::Cancel(id),
-        )
-        .key("cancel")],
+        children: vec![button(label.to_owned(), ButtonRole::Normal, true, on_press).key("cancel")],
     })
 }
 
@@ -1514,6 +1594,10 @@ fn consent_window_key(id: u64) -> WindowKey {
     WindowKey(Key::Str(format!("consent-{id}").into()))
 }
 
+fn shortcuts_window_key(id: u64) -> WindowKey {
+    WindowKey(Key::Str(format!("shortcuts-{id}").into()))
+}
+
 fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
     let id = a.id;
     let names: Vec<String> = a.ask.choices.iter().map(|c| c.name.clone()).collect();
@@ -1693,6 +1777,131 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
             bar,
         ]),
     }
+}
+
+/// What the shortcut window asks: the app by its name, else an unnamed app.
+fn shortcuts_prompt(ask: &global_shortcuts::Ask) -> String {
+    let app = match &ask.app_name {
+        Some(name) => format!("“{name}”"),
+        None => "An application".to_owned(),
+    };
+    format!("{app} wants to use these keyboard shortcuts, also while you work in other apps.")
+}
+
+/// One row of the shortcut window: the keys, what the shortcut does, and why it gets no key when it does not.
+fn shortcut_row(offered: &global_shortcuts::Offered, holders: &HashMap<String, String>) -> String {
+    let keys = offered
+        .trigger
+        .map_or_else(|| "No key".to_owned(), |t| t.describe());
+    let what = if offered.description.is_empty() {
+        offered.id.clone()
+    } else {
+        offered.description.clone()
+    };
+    let why = match &offered.refusal {
+        None => return format!("{keys}  {what}"),
+        Some(Refusal::NoKey) => "it names no key".to_owned(),
+        Some(Refusal::Typing) => "it needs ⌃, ⌥ or ⌘".to_owned(),
+        Some(Refusal::System) => "the system uses it".to_owned(),
+        Some(Refusal::Taken(app)) => {
+            let name = holders.get(app).map_or(app.as_str(), String::as_str);
+            format!("“{name}” uses it")
+        }
+        Some(Refusal::Twice) => "another shortcut here uses it".to_owned(),
+    };
+    format!("{keys}  {what} (not available: {why})")
+}
+
+fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message> {
+    let id = c.id;
+    let prompt = app_header(
+        c.ask.app_icon.as_deref(),
+        app_icons,
+        shortcuts_prompt(&c.ask),
+    );
+    let rows: Vec<Element<Message>> = c
+        .ask
+        .shortcuts
+        .iter()
+        .enumerate()
+        .map(|(i, offered)| {
+            Element::new(Text {
+                content: AttributedText::plain(
+                    plain_row(&shortcut_row(offered, &c.ask.holders)),
+                    TextStyle::new(13.0),
+                ),
+                role: TextRole::Body,
+                wrap: true,
+                secondary: offered.refusal.is_some(),
+                selected: false,
+            })
+            .key(Key::Str(format!("shortcut-{i}").into()))
+        })
+        .collect();
+    let list = Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: BAR_INSETS,
+        spacing: 4.0,
+        align: Align::Stretch,
+        children: rows,
+    });
+    let bar = bar_row(
+        Vec::new(),
+        vec![
+            labelled_deny_button("Don’t Allow", Message::DenyShortcuts(id), c.armed),
+            button(
+                "Allow".to_owned(),
+                ButtonRole::Normal,
+                c.armed,
+                Message::AllowShortcuts(id),
+            )
+            .key("allow"),
+        ],
+    );
+    let size = Size::new(
+        CONSENT_SIZE.width,
+        CONSENT_SIZE.height + SHORTCUT_ROW * c.ask.shortcuts.len().min(SHORTCUT_ROWS) as f64,
+    );
+    Window {
+        key: shortcuts_window_key(id),
+        spec: WindowSpec {
+            title: "Keyboard Shortcuts".to_owned(),
+            app_id: "org.cupertino.Portal".into(),
+            size,
+            min_size: Some(size),
+            max_size: None,
+            decorations: PROMPT_DECORATIONS,
+            foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+            input_region: None,
+        },
+        // Escape and closing the window answer nothing that is remembered; Return presses only the focused button,
+        // Don't Allow when the window opens
+        shortcuts: CommandRegistry::new().with(
+            Shortcut {
+                mods: Mods::NONE,
+                keysym: ESCAPE,
+            },
+            Message::Cancel(id),
+        ),
+        on_close: Some(Message::Cancel(id)),
+        background: PANEL_WINDOW_BACKGROUND,
+        popup: None,
+        menus: None,
+        content: prompt_content(vec![
+            prompt,
+            list,
+            Element::new(Spacer { min: 0.0 }),
+            Element::new(Separator {
+                axis: Axis::Horizontal,
+            }),
+            bar,
+        ]),
+    }
+}
+
+/// A row's text without control or bidirectional-override characters.
+fn plain_row(text: &str) -> String {
+    crate::file_chooser::plain(text)
 }
 
 #[cfg(test)]
@@ -2341,6 +2550,91 @@ mod tests {
         );
         type_key(&mut driver, window, ESCAPE, None);
         assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Cancelled);
+        assert!(!driver.runtime().exited());
+    }
+
+    #[test]
+    fn a_shortcut_request_lists_its_keys_and_answers_allow_dont_allow_or_nothing() {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let mut driver = driver();
+        let shortcuts = |n: u32| {
+            let (sender, answer) = async_channel::bounded(1);
+            let ctrl_alt_t = global_shortcuts::Trigger {
+                modifiers: global_shortcuts::modifier::CTRL | global_shortcuts::modifier::ALT,
+                keysym: 0x74,
+            };
+            let offered =
+                |id: &str, description: &str, trigger, refusal| global_shortcuts::Offered {
+                    id: id.to_owned(),
+                    description: description.to_owned(),
+                    trigger: Some(trigger),
+                    refusal,
+                };
+            inbox().push(global_shortcuts::Event::Ask {
+                handle: handle(n),
+                ask: Box::new(global_shortcuts::Ask {
+                    app_id: "org.example.Meeting".to_owned(),
+                    app_name: Some("Meeting".to_owned()),
+                    app_icon: None,
+                    parent_window: String::new(),
+                    shortcuts: vec![
+                        offered("talk", "Push to talk", ctrl_alt_t, None),
+                        offered(
+                            "mute",
+                            "Mute",
+                            global_shortcuts::Trigger {
+                                modifiers: global_shortcuts::modifier::LOGO,
+                                keysym: 0xff09,
+                            },
+                            Some(Refusal::Taken("org.example.Chat".to_owned())),
+                        ),
+                    ],
+                    holders: HashMap::from([("org.example.Chat".to_owned(), "Chat".to_owned())]),
+                }),
+                reply: global_shortcuts::Reply(sender),
+            });
+            answer
+        };
+        let answer = shortcuts(9);
+        let window = show(&mut driver);
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.title, "Keyboard Shortcuts");
+        let names = shown(&driver, window);
+        for text in [
+            "“Meeting” wants to use these keyboard shortcuts, also while you work in other apps.",
+            "⌃⌥T  Push to talk",
+            "⌘Tab  Mute (not available: “Chat” uses it)",
+            "Don’t Allow",
+            "Allow",
+        ] {
+            assert!(names.iter().any(|n| n == text), "{text:?} in {names:?}");
+        }
+        click(&mut driver, window, "allow");
+        type_key(&mut driver, window, RETURN, None);
+        assert!(
+            answer.try_recv().is_err(),
+            "neither a click nor Return answers before the window is armed"
+        );
+        armed(&mut driver, window);
+        click(&mut driver, window, "allow");
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            global_shortcuts::Answer::Allowed
+        );
+        assert!(driver.runtime().windows().is_empty());
+
+        let answer = shortcuts(10);
+        let window = show(&mut driver);
+        click(&mut driver, window, "cancel");
+        assert_eq!(answer.try_recv().unwrap(), global_shortcuts::Answer::Denied);
+        let answer = shortcuts(11);
+        let window = show(&mut driver);
+        type_key(&mut driver, window, ESCAPE, None);
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            global_shortcuts::Answer::Dismissed
+        );
+        assert!(driver.runtime().windows().is_empty());
         assert!(!driver.runtime().exited());
     }
 }

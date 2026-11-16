@@ -572,7 +572,7 @@
   note: The native session agent registers its own consent surface. Allow and a remembered Don't Allow require a fresh physical serial delivered to that surface after the request; synthetic input cannot approve. Version 2 names the requesting app and its services before each request and remembers the person's answer in desktop-control.conf; its loss revokes only runs awaiting an answer. It is asked one request at a time.
 - name: cupertino_shell_v1
   kind: wayland-global
-  version: 23
+  version: 24
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
@@ -636,6 +636,17 @@
   test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/capture/mod.rs
   source_match: Cupertino, CupertinoScreenshotV1
+- name: cupertino_global_shortcuts_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: shell-private
+  role: GlobalShortcuts
+  advertised: always
+  test_owner: crates/cupertino-server/tests/global_shortcuts.rs
+  source: crates/cupertino-server/src/global_shortcuts.rs
+  source_match: Cupertino, CupertinoGlobalShortcutsV1
 - name: zwp_text_input_manager_v3
   kind: wayland-global
   version: 1
@@ -1010,9 +1021,9 @@
   owner_area: services
   scope: shell-private
   test_owner: crates/cupertino-portal/tests/screen_cast.rs
-  source: crates/cupertino-portal/src/screen_cast.rs
+  source: crates/cupertino-portal/src/session.rs
   source_match: "org.freedesktop.impl.portal.Session"
-  note: one object for each screen cast session; only the frontend calls
+  note: one object for each screen cast or global shortcuts session; only the frontend calls
 - name: org.freedesktop.impl.portal.AppChooser
   kind: dbus-interface
   version: n/a
@@ -1037,6 +1048,18 @@
   source: crates/cupertino-portal/src/screenshot.rs
   source_match: "org.freedesktop.impl.portal.Screenshot"
   note: only the xdg-desktop-portal frontend calls; nothing is captured before the person agrees
+- name: org.freedesktop.impl.portal.GlobalShortcuts
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: org.freedesktop.impl.portal.desktop.cupertino
+  owner_crate: cupertino-portal
+  owner_area: services
+  scope: shell-private
+  test_owner: crates/cupertino-portal/tests/global_shortcuts.rs
+  source: crates/cupertino-portal/src/global_shortcuts.rs
+  source_match: "org.freedesktop.impl.portal.GlobalShortcuts"
+  note: only the xdg-desktop-portal frontend calls; nothing is bound before the person allows the app
 - name: org.kde.StatusNotifierItem
   kind: dbus-interface
   version: n/a

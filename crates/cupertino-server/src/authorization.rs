@@ -42,6 +42,9 @@ pub enum ShellRole {
     DataControl,
     /// Discover desktop-control sessions. This does not grant observation, capture or input authority.
     DesktopControl,
+    /// Bind the shortcuts the person allowed applications through the desktop portal ([`crate::global_shortcuts`]):
+    /// their chords go to this connection instead of the focused client.
+    GlobalShortcuts,
 }
 
 impl ShellRole {
@@ -300,6 +303,7 @@ mod tests {
             ShellRole::Prompt,
             ShellRole::DataControl,
             ShellRole::DesktopControl,
+            ShellRole::GlobalShortcuts,
         ];
         for role in roles {
             let only = ClientCapabilitySet::of([role]);

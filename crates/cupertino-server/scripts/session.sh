@@ -50,7 +50,11 @@ else
 fi
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/cupertino-capture.XXXXXX")
-trap 'fusermount3 -u "$RUNTIME/doc" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
+# the session's applications can still be writing their settings into the home as they exit after the server: the
+# scratch folder is removed again until they are gone, and a folder that outlives them all never fails the run
+trap 'fusermount3 -u "$RUNTIME/doc" 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do rm -rf "$SCRATCH" 2>/dev/null && break; sleep 0.2; done
+true' EXIT
 if [ -n "${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:-}" ]; then
     # a dock that marks the listed application ids unresponsive, built apart so no packaged binary can contain it
     (cd "$ROOT" && RUSTFLAGS="--cfg cupertino_capture_fixtures" cargo build -q --release -p cupertino-dock --features app \

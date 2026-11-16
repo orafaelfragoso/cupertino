@@ -37,7 +37,7 @@ fn is_letter(sym: u32) -> bool {
 /// What kind of client has the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientClass {
-    /// A `cupertino-*` client: its toolkit reads the raw modifiers and uses the resolver itself.
+    /// A client of the desktop's toolkit: the toolkit reads the raw modifiers and uses the resolver itself.
     FirstParty,
     /// A terminal emulator: Ctrl chords are control characters there, so copy and paste take Ctrl+Shift.
     Terminal,

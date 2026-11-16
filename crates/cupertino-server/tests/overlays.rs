@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::keyboard::ComposeKey;
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::input::Mods;
@@ -124,6 +125,8 @@ struct Shared {
     keys: Vec<(u32, bool)>,
     /// `wl_keyboard` key and modifiers events in the order they arrived.
     key_log: Vec<KeyLog>,
+    /// The compositor asked the window to close.
+    closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -168,7 +171,8 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     wl_seat::WlSeat,
-    zwp_text_input_manager_v3::ZwpTextInputManagerV3
+    zwp_text_input_manager_v3::ZwpTextInputManagerV3,
+    CupertinoAppEffectsV1
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Client {
@@ -188,13 +192,16 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Client {
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Client {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
-        _: xdg_toplevel::Event,
+        event: xdg_toplevel::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let xdg_toplevel::Event::Close = event {
+            state.shared.lock().unwrap().closed = true;
+        }
     }
 }
 
@@ -328,6 +335,17 @@ impl TestClient {
         with_text_input: bool,
         with_keyboard: bool,
     ) -> TestClient {
+        Self::spawn_with(socket, app_id, with_text_input, with_keyboard, false)
+    }
+
+    /// With `kit`, the client binds `cupertino_app_effects_v1` first, as every window of the desktop's toolkit does.
+    fn spawn_with(
+        socket: PathBuf,
+        app_id: &'static str,
+        with_text_input: bool,
+        with_keyboard: bool,
+        kit: bool,
+    ) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Mutex::new(Shared::default()));
         let (s2, sh2) = (stop.clone(), shared.clone());
@@ -340,6 +358,11 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
             let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let _effects = kit.then(|| {
+                globals
+                    .bind::<CupertinoAppEffectsV1, _, _>(&qh, 1..=1, ())
+                    .unwrap()
+            });
             let _keyboard = with_keyboard.then(|| seat.get_keyboard(&qh, ()));
             let surface = compositor.create_surface(&qh, ());
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
@@ -1248,7 +1271,22 @@ const MOD_SUPER: u32 = 1 << 6;
 
 /// A focused client with this application id; its key log is empty once it has the keyboard.
 fn client_as(h: &mut Harness, app_id: &'static str) -> TestClient {
-    let client = TestClient::spawn_as(h.socket_path(), app_id, false, true);
+    focused(
+        h,
+        TestClient::spawn_as(h.socket_path(), app_id, false, true),
+    )
+}
+
+/// A focused client of the desktop's toolkit (it binds the toolkit's protocol) with this application id.
+fn kit_client_as(h: &mut Harness, app_id: &'static str) -> TestClient {
+    focused(
+        h,
+        TestClient::spawn_with(h.socket_path(), app_id, false, true, true),
+    )
+}
+
+/// `client` once its window is mapped and has the keyboard, its key log empty.
+fn focused(h: &mut Harness, client: TestClient) -> TestClient {
     let shared = client.shared.clone();
     h.wait_until("the client window", move |st| {
         shared.lock().unwrap().mapped
@@ -1362,7 +1400,7 @@ fn terminals_get_ctrl_shift_c_and_first_party_clients_the_real_chord() {
     );
     drop(term);
     let Some(mut h) = Harness::new() else { return };
-    let own = client_as(&mut h, "cupertino-files");
+    let own = kit_client_as(&mut h, "org.example.kit");
     chord(&mut h, &[SUPER, KEY_C]);
     assert_eq!(
         key_log(&mut h, &own, 6),
@@ -1427,4 +1465,92 @@ fn a_chord_the_router_claims_is_never_forwarded() {
             .any(|e| matches!(e, KeyLog::Key(KEY_H, _) | KeyLog::Mods(MOD_CTRL, _))),
         "{log:?}"
     );
+}
+
+// ---- Super+W: the front tab or document ----------------------------------------------------------
+
+const KEY_W: u32 = 17;
+
+/// What a client got for Super+W once `count` events arrived, and whether the compositor asked its window to close.
+fn super_w(h: &mut Harness, client: &TestClient, count: usize) -> (Vec<KeyLog>, bool) {
+    chord(h, &[SUPER, KEY_W]);
+    let log = key_log(h, client, count);
+    (log, client.shared.lock().unwrap().closed)
+}
+
+/// Super+W as the Ctrl chord `mods` of W: told, pressed, released, and the real modifiers back.
+fn as_chord(mods: u32) -> [KeyLog; 8] {
+    use KeyLog::{Key, Mods};
+    [
+        Key(SUPER, true),
+        Mods(MOD_SUPER, 0),
+        Mods(mods, 0),
+        Key(KEY_W, true),
+        Key(KEY_W, false),
+        Mods(MOD_SUPER, 0),
+        Key(SUPER, false),
+        Mods(0, 0),
+    ]
+}
+
+#[test]
+fn super_w_asks_a_toolkit_window_to_close_and_never_reaches_it_as_a_key() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = kit_client_as(&mut h, "org.example.kit");
+    let (log, closed) = super_w(&mut h, &client, 4);
+    assert!(closed, "the compositor asks the window to close: {log:?}");
+    assert!(
+        !log.iter().any(|e| matches!(e, KeyLog::Key(KEY_W, _))),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn super_w_reaches_a_third_party_wayland_application_as_its_ctrl_w_and_closes_nothing_itself() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = client_as(&mut h, "org.example.browser");
+    let (log, closed) = super_w(&mut h, &client, 8);
+    assert_eq!(log, as_chord(MOD_CTRL));
+    assert!(!closed, "the application closes its tab, the window stays");
+}
+
+/// An X11 program's window comes from the satellite, a client that never binds the toolkit's protocol, with the
+/// program's class as its application id: Super+W reaches the program as Ctrl+W, as for any Wayland application.
+#[test]
+fn super_w_reaches_an_x11_program_through_the_satellite_as_its_ctrl_w() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = client_as(&mut h, "Google-chrome");
+    let (log, closed) = super_w(&mut h, &client, 8);
+    assert_eq!(log, as_chord(MOD_CTRL));
+    assert!(!closed);
+}
+
+#[test]
+fn super_w_closes_a_terminal_s_tab_with_ctrl_shift_w_and_the_window_of_one_without_tabs() {
+    let Some(mut h) = Harness::new() else { return };
+    let tabs = client_as(&mut h, "kitty");
+    let (log, closed) = super_w(&mut h, &tabs, 8);
+    assert_eq!(log, as_chord(MOD_CTRL | MOD_SHIFT));
+    assert!(!closed);
+    drop(tabs);
+    let Some(mut h) = Harness::new() else { return };
+    let tabless = client_as(&mut h, "foot");
+    let (log, closed) = super_w(&mut h, &tabless, 4);
+    assert!(closed, "{log:?}");
+    assert!(
+        !log.iter().any(|e| matches!(e, KeyLog::Key(KEY_W, _))),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn super_w_closes_the_window_of_an_application_whose_chords_are_sent_as_pressed() {
+    let Some(mut h) =
+        Harness::with_config(|c| c.keyboard.rewrite_off = vec!["org.example.browser".into()])
+    else {
+        return;
+    };
+    let client = client_as(&mut h, "org.example.browser");
+    let (log, closed) = super_w(&mut h, &client, 4);
+    assert!(closed, "{log:?}");
 }

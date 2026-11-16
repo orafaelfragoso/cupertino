@@ -23,7 +23,7 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 | `Super+Tab`, `Super+Shift+Tab` | application switcher (release `Super` to pick) |
 | `Ctrl+Up`, `F3`, the overview key | overview (the same key closes it) |
 | `Ctrl+Left`, `Ctrl+Right`, `Ctrl+1` to `Ctrl+9` | workspaces |
-| `Super+Q`, `Super+W`, `Super+M`, `Super+H` | quit application, close window, minimize, hide application |
+| `Super+Q`, `Super+W`, `Super+M`, `Super+H` | quit application, close tab or window (see below), minimize, hide application |
 | `Super+Ctrl+F`, `Super+Ctrl+Left`, `Super+Ctrl+Right` | full screen, tile left, tile right |
 | `Super+Alt+Escape` | Force Quit |
 | `Super+Alt+S` | screen reader on or off, at the login screen and the lock screen too, the one shortcut that works on the lock screen besides switching consoles (the first of the installed readers, `/usr/bin/orca`; the same as **Settings > Accessibility > Screen reader**; no shortcuts file can take it while a reader is installed) |
@@ -31,7 +31,9 @@ Not verified: how GDM treats the session on a real machine (the virtual console,
 
 To change a shortcut, add a `chord = action` line to `~/.config/cupertino/shortcuts.conf`, for example `Super+x = exec:foot`, or `Super+Tab = none` to free a chord. The file is applied on top of the defaults. `modifier_profile = classic-pc` in `~/.config/cupertino/keyboard.conf` switches to common PC keyboard habits (`Alt+Tab` switches, `Alt+F4` closes, `Ctrl` is the command key in Settings and text fields, and a tap of `Super` alone opens the launcher).
 
-Under the default profile `Super` is the command key in every application. Other applications get `Super` chords as the `Ctrl` chords they bind, and a `Ctrl` chord on a letter, digit, punctuation key or `Return` reaches them with `Super` instead, so `Ctrl` copies, pastes and closes nothing. In a text field the line-editing chords `Ctrl+A`, `E`, `B`, `F`, `P`, `N`, `D` and `H` move and delete as their keys do. Terminals keep `Ctrl`. `client_rewrite = off` in `keyboard.conf`, or the application's id in `rewrite_off`, sends every chord as it is pressed.
+Under the default profile `Super` is the command key in every application. Other applications get `Super` chords as the `Ctrl` chords they bind, and a `Ctrl` chord on a letter, digit, punctuation key or `Return` reaches them with `Super` instead, so `Ctrl` copies, pastes and closes nothing. In a text field the line-editing chords `Ctrl+A`, `E`, `B`, `F`, `P`, `N`, `D` and `H` move and delete as their keys do. Terminals keep `Ctrl`: they get `Super` and a letter as `Ctrl+Shift` and the letter, the chord terminals copy, paste and open tabs with. `client_rewrite = off` in `keyboard.conf`, or the application's id in `rewrite_off`, sends every chord as it is pressed.
+
+`Super+W` closes the front tab or document. Cupertino's own applications decide what that is themselves: the compositor asks the window to close, and the application closes what is in front. Every other application, X11 ones included, gets `Super+W` as its own close chord, like any other `Super` chord: `Ctrl+W` (a browser closes the tab, an editor the document), or `Ctrl+Shift+W` in a terminal with tabs. A terminal without tabs (`foot`, Alacritty, `xterm`) has no such chord, so `Super+W` closes its window. An application whose chords are sent as they are pressed (`client_rewrite = off`, `rewrite_off`) gets the compositor's close-window instead. Under `classic-pc` the application gets `Ctrl+W` as it is pressed. Application-wide and window chords stay the compositor's in every application: `Super+Q` quits (it asks every window of the application to close), `Super+M` minimizes, `Super+H` hides, and the title bar's close button and the menu bar's **Close Window** close the window. An application with no `Ctrl+W` of its own does nothing on `Super+W`; close it with its close button or `Super+Q`.
 
 ## Layouts, Compose and dead keys
 

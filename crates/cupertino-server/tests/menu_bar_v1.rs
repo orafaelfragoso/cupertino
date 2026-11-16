@@ -1117,7 +1117,16 @@ impl AppClient {
 
     /// An application on a connected stream (a shell process's comes from the server).
     fn spawn_on(stream: UnixStream, app_id: &'static str) -> AppClient {
+        Self::spawn_with(stream, app_id, false)
+    }
+
+    /// [`Self::spawn_on`]; with `kit` it binds `cupertino_app_effects_v1` first, as every window of the desktop's
+    /// toolkit does.
+    fn spawn_with(stream: UnixStream, app_id: &'static str, kit: bool) -> AppClient {
         AppClient(run_client(stream, move |globals, qh, status| {
+            if kit {
+                let _: CupertinoAppEffectsV1 = globals.bind(qh, 1..=1, ()).unwrap();
+            }
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
@@ -4225,7 +4234,15 @@ fn a_terminal_gets_only_copy_and_paste_as_ctrl_shift() {
 fn a_first_party_client_gets_the_primary_modifier_of_the_profile() {
     let Some(mut h) = Harness::new() else { return };
     let bar = bar_v11(&mut h);
-    let (app, _) = key_app(&mut h, "cupertino-test-editor");
+    let stream = UnixStream::connect(h.socket_path()).expect("connecting to the compositor");
+    let before = h.state.wm.windows().count();
+    let app = AppClient::spawn_with(stream, "org.example.kit-editor", true);
+    h.mapped_window(before + 1);
+    let window = h.state.wm.windows().last().unwrap().id;
+    h.state.command(Command::FocusWindow { window });
+    h.wait_until("the application to have the keyboard", |_| {
+        app.has_keyboard()
+    });
     open_menu(&mut h, &bar, &app);
     assert_eq!(
         choose_edit(&mut h, &bar, &app, EditAction::Copy),

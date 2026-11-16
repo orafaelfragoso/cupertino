@@ -471,11 +471,14 @@ impl GlobalDispatch<CupertinoAppEffectsV1, ()> for Cupertino {
     fn bind(
         _: &mut Self,
         _: &DisplayHandle,
-        _: &Client,
+        client: &Client,
         resource: New<CupertinoAppEffectsV1>,
         _: &(),
         init: &mut DataInit<'_, Self>,
     ) {
+        if let Some(data) = client.get_data::<ClientState>() {
+            data.kit.store(true, Ordering::Relaxed);
+        }
         init.init(resource, ());
     }
 }

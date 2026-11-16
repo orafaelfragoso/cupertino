@@ -1571,7 +1571,7 @@ impl Cupertino {
         let app = self.key_app_id();
         if let Some((mods, sym)) = edit_chord(
             edit.action,
-            kb.client_class(&app),
+            self.key_client_class(),
             kb.rewrite_opted_out(&app),
             &kb.modifier_profile(),
         ) {

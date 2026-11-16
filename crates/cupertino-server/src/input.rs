@@ -54,6 +54,16 @@ pub struct Chord {
 }
 
 /// Normalise a keysym for matching: letters lower-case, the shifted tab symbol becomes tab.
+/// Whether `ev` is the command key and W, without another modifier.
+fn is_command_w(ev: &KeyEvent) -> bool {
+    normalize_sym(ev.sym) == keysyms::KEY_w
+        && ev.mods
+            == (Mods {
+                logo: true,
+                ..Mods::NONE
+            })
+}
+
 pub fn normalize_sym(sym: u32) -> u32 {
     if sym == keysyms::KEY_ISO_Left_Tab {
         return keysyms::KEY_Tab;
@@ -853,6 +863,10 @@ pub struct ActionContext {
     pub pointer_held: bool,
     /// The key window is in full screen: the full-screen toggle leaves it.
     pub key_window_fullscreen: bool,
+    /// The command key's W goes to the key window's application, which has the keyboard, as the chord it closes its
+    /// front tab or document with ([`crate::kbd::KeyboardSettings::close_goes_to_app`]): the close-window binding on that
+    /// chord leaves the key to the application.
+    pub close_goes_to_app: bool,
 }
 
 /// Translate an action into commands and operations.
@@ -1180,6 +1194,11 @@ impl KeyRouter {
             .lookup(&ev)
             .filter(|action| ctx.pointer_held || *action != Action::ReleaseShortcuts)
         {
+            // a third-party application closes its front tab or document with its own chord, which the rewrite gives it
+            // for the command key's W; any other chord bound to close-window still closes the window
+            Some(Action::CloseWindow) if ctx.close_goes_to_app && is_command_w(&ev) => {
+                KeyOutcome::Forward
+            }
             Some(action) => {
                 if matches!(action, Action::SwitcherNext | Action::SwitcherPrev) {
                     self.switcher_hold = Some(Mods {
@@ -1904,6 +1923,50 @@ mod tests {
             ),
             "modifiers pass"
         );
+    }
+
+    /// The command key's W closes the window of an application that reads the command key itself, and goes to any other
+    /// application, which gets it as its own close chord; another chord bound to close-window closes the window there
+    /// too.
+    #[test]
+    fn the_command_key_s_w_is_left_to_an_application_that_closes_its_tabs_itself() {
+        let mut r = KeyRouter::default();
+        let close = format!("{:?}", translate_action(Action::CloseWindow, &ctx()));
+        assert_eq!(
+            commands_of(&mut r, "Super+w", &ctx()),
+            close,
+            "the compositor's close"
+        );
+        let third_party = ActionContext {
+            close_goes_to_app: true,
+            ..ctx()
+        };
+        assert!(matches!(
+            press(&mut r, "Super+w", &third_party),
+            KeyOutcome::Forward
+        ));
+        assert!(matches!(
+            press(&mut r, "Super+W", &third_party),
+            KeyOutcome::Forward
+        ));
+        r.bindings
+            .bind_str("Super+Shift+w", Action::CloseWindow)
+            .unwrap();
+        assert_eq!(commands_of(&mut r, "Super+Shift+w", &third_party), close);
+        // the other window and application chords stay the compositor's
+        for chord in ["Super+q", "Super+m", "Super+h"] {
+            assert!(
+                matches!(press(&mut r, chord, &third_party), KeyOutcome::Consumed(_)),
+                "{chord}"
+            );
+        }
+    }
+
+    fn commands_of(r: &mut KeyRouter, chord: &str, c: &ActionContext) -> String {
+        match press(r, chord, c) {
+            KeyOutcome::Consumed(plan) => format!("{plan:?}"),
+            KeyOutcome::Forward => "forwarded".into(),
+        }
     }
 
     #[test]

@@ -278,6 +278,38 @@ impl KeyFilters {
 }
 
 impl Cupertino {
+    /// Whether the key window's client uses the desktop's toolkit: it bound `cupertino_app_effects_v1`, as every window of
+    /// the toolkit does, whatever its application id. An X11 program's windows come from the satellite, which never does.
+    pub(crate) fn key_client_kit(&self) -> bool {
+        self.wm
+            .key_window()
+            .and_then(|w| self.entry(w))
+            .and_then(|e| smithay::reexports::wayland_server::Resource::client(e.surface()))
+            .and_then(|c| {
+                c.get_data::<crate::state::ClientState>()
+                    .map(|d| d.kit.load(std::sync::atomic::Ordering::Relaxed))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether the keyboard is on the key window (one of its surfaces), not on a layer surface or the lock screen.
+    pub(crate) fn key_window_has_keyboard(&self) -> bool {
+        let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else {
+            return false;
+        };
+        self.wm
+            .key_window()
+            .and_then(|w| self.entry(w))
+            .is_some_and(|e| e.has_surface(&focus))
+    }
+
+    /// The class of the key window's client for the chord rewrite ([`crate::kbd::KeyboardSettings::client_class`]).
+    pub(crate) fn key_client_class(&self) -> cupertino_keyboard::rewrite::ClientClass {
+        self.config
+            .keyboard
+            .client_class(&self.key_app_id(), self.key_client_kit())
+    }
+
     /// The rewrite for a key press nothing in the compositor claimed (§10): the
     /// decision of `cupertino-keyboard` for the client that has the keyboard. `Pass` when that client is not the key
     /// window (a layer surface, the lock screen) or nothing has the keyboard.
@@ -288,21 +320,13 @@ impl Cupertino {
         ch: Option<char>,
         mods: &ModifiersState,
     ) -> Rewrite {
-        let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else {
-            return Rewrite::Pass;
-        };
-        if !self
-            .wm
-            .key_window()
-            .and_then(|w| self.entry(w))
-            .is_some_and(|e| e.has_surface(&focus))
-        {
+        if !self.key_window_has_keyboard() {
             return Rewrite::Pass;
         }
         let kb = &self.config.keyboard;
         let app = self.key_app_id();
         let target = ClientTarget {
-            class: kb.client_class(&app),
+            class: self.key_client_class(),
             text_input_active: self.overlays.accent.bridge,
             opted_out: kb.rewrite_opted_out(&app),
         };

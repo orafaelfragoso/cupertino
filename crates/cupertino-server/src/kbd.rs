@@ -70,7 +70,7 @@ use cupertino_keyboard::shortcuts::{ShortcutSet, SystemAction};
 use cupertino_keyboard::switcher::{self, Step, SwitchEvent, Switcher};
 use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
 use cupertino_keyboard::{mouse_keys, slow_keys};
-use cupertino_modifiers::{Profile, RawMods};
+use cupertino_modifiers::{Physical, Profile, RawMods};
 use smithay::input::keyboard::{keysyms, xkb, ModifiersState};
 
 use crate::input::Mods;
@@ -168,7 +168,7 @@ pub struct KeyboardSettings {
 }
 
 /// Application ids of the terminal emulators the rewrite knows (approximate, §10.5).
-/// `cupertino-terminal` is not listed: a `cupertino- client is first-party and never rewritten.
+/// `cupertino-terminal` is not listed: a client of the desktop's toolkit is first-party and never rewritten.
 const DEFAULT_REWRITE_TERMINALS: [&str; 8] = [
     "foot",
     "kitty",
@@ -179,6 +179,10 @@ const DEFAULT_REWRITE_TERMINALS: [&str; 8] = [
     "org.kde.konsole",
     "xterm",
 ];
+
+/// Application ids of the known terminals with no tabs and no chord that closes one, matched like the terminals: the
+/// command key's W closes their window ([`KeyboardSettings::close_goes_to_app`]).
+const TABLESS_TERMINALS: [&str; 3] = ["foot", "Alacritty", "xterm"];
 
 impl Default for KeyboardSettings {
     fn default() -> Self {
@@ -361,16 +365,37 @@ impl KeyboardSettings {
             .unwrap_or_else(|| FnUsage::default_for(self.sources.len()))
     }
 
-    /// The class of the client with application id `app` for the chord rewrite (first-party `cupertino-` ids, the
-    /// configured terminals, everything else).
-    pub fn client_class(&self, app: &str) -> ClientClass {
-        if app.starts_with("cupertino-") {
+    /// The class of the client with application id `app` for the chord rewrite: first-party when it uses the
+    /// desktop's toolkit (`kit`, it bound the toolkit's protocol, whatever its id), else one of the configured terminals
+    /// or everything else.
+    pub fn client_class(&self, app: &str, kit: bool) -> ClientClass {
+        if kit {
             ClientClass::FirstParty
         } else if self.lists(&self.rewrite_terminals, app) {
             ClientClass::Terminal
         } else {
             ClientClass::Other
         }
+    }
+
+    /// Whether the command key's W reaches application `app` of class `class` as the chord it closes its front tab or
+    /// document with, instead of closing its window: the rewrite gives a third-party application the Ctrl chord (a
+    /// terminal the Ctrl+Shift one) of every command-key letter, and that of W closes a tab in a browser, a document in
+    /// an editor and a tab in a terminal that has them. Not for a first-party application, which reads the command key
+    /// itself and closes what is in front when asked to close, nor where the rewrite is off (the application would get
+    /// a Super chord it ignores), nor for a terminal without tabs, whose Ctrl+Shift+W is a control character for the
+    /// shell: the compositor closes those windows.
+    pub fn close_goes_to_app(&self, app: &str, class: ClientClass) -> bool {
+        let rewritten =
+            self.modifier_profile().primary() == Physical::Super && !self.rewrite_opted_out(app);
+        rewritten
+            && match class {
+                ClientClass::FirstParty => false,
+                ClientClass::Terminal => !TABLESS_TERMINALS
+                    .iter()
+                    .any(|id| id.eq_ignore_ascii_case(app)),
+                ClientClass::Other => true,
+            }
     }
 
     /// True when the chord rewrite is off for the whole compositor or for application id `app`.
@@ -1037,7 +1062,7 @@ mod tests {
         use cupertino_keyboard::rewrite::{decide, ClientTarget, KeyPress, Rewrite};
         let s = KeyboardSettings::default();
         let target = |app: &str| ClientTarget {
-            class: s.client_class(app),
+            class: s.client_class(app, app.starts_with("cupertino-")),
             text_input_active: false,
             opted_out: s.rewrite_opted_out(app),
         };
@@ -1071,19 +1096,56 @@ mod tests {
     }
 
     #[test]
-    fn client_rewrite_settings_classify_clients_by_application_id() {
+    fn the_command_key_s_w_goes_to_a_third_party_application_that_has_a_close_chord() {
         let mut s = KeyboardSettings::default();
-        assert_eq!(s.client_class("cupertino-files"), ClientClass::FirstParty);
-        assert_eq!(s.client_class("Alacritty"), ClientClass::Terminal);
-        assert_eq!(s.client_class("ALACRITTY"), ClientClass::Terminal);
-        assert_eq!(s.client_class("firefox"), ClientClass::Other);
+        let goes = |s: &KeyboardSettings, app: &str, kit: bool| {
+            s.close_goes_to_app(app, s.client_class(app, kit))
+        };
+        // a browser or an editor, native or X11, and a terminal with tabs close their front tab or document
+        assert!(goes(&s, "google-chrome", false));
+        assert!(goes(&s, "org.gnome.TextEditor", false));
+        assert!(goes(&s, "kitty", false));
+        assert!(goes(&s, "org.gnome.Terminal", false));
+        // the toolkit's applications are asked to close; terminals without tabs close their window
+        assert!(!goes(&s, "org.example.kit", true));
+        assert!(!goes(&s, "foot", true));
+        for tabless in ["foot", "Alacritty", "XTerm"] {
+            assert!(!goes(&s, tabless, false), "{tabless}");
+        }
+        // where chords reach the application as pressed, it would get a Super+W it ignores
+        assert!(apply(&mut s, "rewrite_off = google-chrome").is_empty());
+        assert!(!goes(&s, "google-chrome", false));
+        assert!(goes(&s, "firefox", false));
+        assert!(apply(&mut s, "client_rewrite = off").is_empty());
+        assert!(!goes(&s, "firefox", false));
+        let mut pc = KeyboardSettings::default();
+        assert!(apply(&mut pc, "modifier_profile = classic-pc").is_empty());
+        assert!(!goes(&pc, "firefox", false));
+    }
+
+    #[test]
+    fn client_rewrite_settings_classify_clients_by_toolkit_and_application_id() {
+        let mut s = KeyboardSettings::default();
+        // the toolkit, not the name, makes a client first-party
+        assert_eq!(
+            s.client_class("org.example.kit", true),
+            ClientClass::FirstParty
+        );
+        assert_eq!(s.client_class("foot", true), ClientClass::FirstParty);
+        assert_eq!(s.client_class("cupertino-files", false), ClientClass::Other);
+        assert_eq!(s.client_class("Alacritty", false), ClientClass::Terminal);
+        assert_eq!(s.client_class("ALACRITTY", false), ClientClass::Terminal);
+        assert_eq!(s.client_class("firefox", false), ClientClass::Other);
         assert!(apply(
             &mut s,
             "rewrite_terminals = firefox, st\nrewrite_off = Code\n"
         )
         .is_empty());
         assert_eq!(
-            (s.client_class("firefox"), s.client_class("foot")),
+            (
+                s.client_class("firefox", false),
+                s.client_class("foot", false)
+            ),
             (ClientClass::Terminal, ClientClass::Other)
         );
         assert!(s.rewrite_opted_out("code") && !s.rewrite_opted_out("firefox"));

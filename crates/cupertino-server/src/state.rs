@@ -112,6 +112,10 @@ pub struct ClientState {
     pub acquire_waits: std::sync::Arc<crate::acquire_waits::AcquireWaits>,
     /// Where the client's id goes when it disconnects, set once it mapped a toplevel ([`Cupertino::forget_gone_processes`]).
     pub gone: std::sync::OnceLock<GoneClients>,
+    /// The client bound `cupertino_app_effects_v1`, which every window of the desktop's toolkit binds: it reads the
+    /// command key itself, so its chords reach it as pressed and the command key's W stays the compositor's close
+    /// (`Cupertino::key_client_class`).
+    pub kit: std::sync::atomic::AtomicBool,
 }
 
 /// The clients that mapped a toplevel and have disconnected since the last tick.
@@ -132,6 +136,7 @@ impl Default for ClientState {
             owner_identifying: std::sync::Arc::default(),
             acquire_waits: std::sync::Arc::default(),
             gone: std::sync::OnceLock::new(),
+            kit: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -2548,6 +2553,11 @@ impl Cupertino {
                 .key_window()
                 .and_then(|w| self.wm.window(w))
                 .is_some_and(|w| w.state().is_fullscreen()),
+            close_goes_to_app: self.key_window_has_keyboard()
+                && self
+                    .config
+                    .keyboard
+                    .close_goes_to_app(&self.key_app_id(), self.key_client_class()),
         }
     }
 

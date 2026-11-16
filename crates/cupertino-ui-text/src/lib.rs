@@ -55,7 +55,7 @@ pub use keymap::{KeyInput, Keymap};
 pub use keys::{Response, TextEditorKeys, TextFieldKeys};
 pub use paragraph::{Line, LineRun, Paragraph, ParagraphLayout, CARET_WIDTH};
 pub use raster::{GlyphRaster, SharedRasterStats, SHARED_RASTER_BYTES};
-pub use secure::SecureBuffer;
+pub use secure::{wipe_bytes, wipe_text, SecureBuffer};
 pub use shape::{ShapeRequest, ShapedGlyph, ShapedRun};
 pub use system::TextSystem;
 

@@ -265,9 +265,12 @@ A control reads the clipboard's text itself: `EventCx::clipboard_has_text()` say
 (the runtime follows `PlatformEvent::ClipboardOffered` and what the application itself copied), and
 `EventCx::request_paste()` reads it, as UTF-8 text in the first kind offered of `text/plain;charset=utf-8`,
 `UTF8_STRING`, `text/plain`, `TEXT` and `STRING`; the control hears `Event::Paste` with the text, and nothing when
-there is none or it or its window went meanwhile. The text's debug output is its length only.
-`Runtime::paste_protected(token)` tells a test driver whether a clipboard read is such a paste and whether the control
-it is for protects its input.
+there is none or it or its window went meanwhile. What a paste reads may be a password on its way into its field, so
+every paste is handled as one: the text's debug output is its length only, the bytes read are zeroed once they are
+text, and the text is zeroed when the event drops; the runtime logs and keeps neither. A password field adds its own
+part (no history, nothing read to assistive technology). `Runtime::paste_protected(token)` is for what records the
+events it hands the runtime, as a test driver's trace does: it tells whether a clipboard read is such a paste and
+whether the control it is for protects its input, so the record leaves the secret out.
 
 A control opens a popup of its own with `EventCx::open_popup(build)`: `build` returns its windows (`OwnedWindow`: key,
 spec, background, content, anchor and whether it grabs) now and at each view while it is open. The runtime declares

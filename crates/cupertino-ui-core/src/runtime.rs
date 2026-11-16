@@ -1246,7 +1246,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Whether `read` is a clipboard read the runtime started for a paste, and then whether the control it is for
-    /// protects its input, as a password field does: what is read is then a secret.
+    /// protects its input, as a password field does: what is read is then a secret. This is for what keeps a record
+    /// of the events it hands the runtime, as a test driver's trace does, to leave the secret out of it; the runtime
+    /// itself keeps no record, and treats what every paste read as it would a secret
+    /// ([`PlatformEvent::Clipboard`] in `platform_event`).
     pub fn paste_protected(&self, read: ClipboardToken) -> Option<bool> {
         self.pastes
             .get(&read)
@@ -1254,25 +1257,28 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// The text of a paste arrived, or `None` when it could not be read: the control that asked hears it, unless it
-    /// or its window went meanwhile. Whether `read` was a paste's.
-    fn paste_data(&mut self, read: ClipboardToken, data: Option<&ClipboardData>) -> bool {
+    /// or its window went meanwhile. What was read may be a password on its way into its field, so the bytes are
+    /// zeroed here, where they end, and the text when the event drops ([`crate::Pasted`]): neither stays in freed
+    /// memory. `read` is a paste's ([`Runtime::pastes`]).
+    fn paste_data(&mut self, read: ClipboardToken, data: Option<ClipboardData>) {
         let Some((key, node)) = self.pastes.remove(&read) else {
-            return false;
+            return;
         };
-        let text = data
-            .map(|d| clipboard_text(&d.bytes))
-            .filter(|t| !t.is_empty());
+        let pasted = data.map(|mut data| {
+            let pasted = crate::Pasted(clipboard_text(&data.bytes));
+            cupertino_ui_text::wipe_bytes(&mut data.bytes);
+            pasted
+        });
         let window = self.windows.iter().position(|w| w.key == key);
-        if let (Some(text), Some(i)) = (text, window) {
+        if let (Some(pasted), Some(i)) = (pasted.filter(|p| !p.0.is_empty()), window) {
             if self.tree.contains(node) {
                 let now = self.options.clock.now();
                 let mut effects = Effects::default();
                 route(&mut self.tree, &self.windows[i], now, &mut effects)
-                    .notify(node, &Event::Paste(crate::Pasted(text)));
+                    .notify(node, &Event::Paste(pasted));
                 self.apply(i, effects);
             }
         }
-        true
     }
 
     /// What a control asked of the clipboard and of a popup of its own, in window `i`.
@@ -1533,7 +1539,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             PlatformEvent::Clipboard { token, data } => {
-                if !self.paste_data(token, data.as_ref()) {
+                if self.pastes.contains_key(&token) {
+                    self.paste_data(token, data);
+                } else {
                     self.drop_data(token, data);
                 }
                 return Ok(());

@@ -14,7 +14,7 @@ beyond the typed messages of [`cupertino-login-ipc`](../cupertino-login-ipc/READ
 | | |
 |---|---|
 | Runs as | root (the main process and the workers until they drop privileges) |
-| Binary | `cupertino-sessiond` (feature `app`): the manager, or with the argument `worker` one worker, started with `exec` from `/proc/self/exe` |
+| Binary | `cupertino-sessiond` (feature `app`): the manager, or with the argument `worker` one worker, started with `exec` from `/proc/self/exe` (the manager's own image, also after a package upgrade replaced or removed the file it was started from: see "Upgrades") |
 | Configuration | [`/etc/cupertino/login.conf`](../cupertino-defaults/src/login.rs) (`CUPERTINO_LOGIN_CONF` overrides the path); a bad or missing file ends the manager |
 | Socket | `/run/cupertino-login/greeter.sock`, mode 0600, owned by `greeter-user`; one connection at a time; `SO_PEERCRED` uid must be the greeter's |
 | Bus | `org.cupertino.LoginManager1` on the system bus, root-owned (policy: `org.cupertino.conf`); see "The bus interface" |
@@ -102,6 +102,12 @@ reference; they were options of `cupertino-login --greeter`.
 | Administrator's authentication | `will_prompt` in `Welcome` and `Users` is true while logind has a user session (the same rule as the refusal above): the screen titles Restart and Shut Down with an ellipsis and, instead of sending `Power`, sends `AuthenticatePower { name, action }`. The manager answers a name that is no administrator (see "Administrators"), an invalid name, an `action` of `Sleep` or a hidden item like a wrong password (`Denied` after 2 s; `Refused` for the last two); otherwise it runs a `Mode::Verify` worker for the typed account (PAM service `cupertino-session`, so `pam_faillock` counts the failures). On `Accepted` it answers `Result`, then carries the action out as `Requester::Administrator` (the open sessions no longer refuse it; the settings and block inhibitors still do) and, when logind refuses, sends `PowerRefused` and `Reset`. The in-session agent has no such dialog (the manager takes no secret on the bus): a non-administrator's agent is still refused with `OtherUsersLoggedIn`, and the person can switch to the login window and use the dialog there. The password and the name are never logged |
 | Greeter ends | its worker exits and the login screen's session is started again after 1 s; five exits within 30 s stop that (logged, the manager stays up, the other terminals keep their getty) |
 | logind | the manager ends with failure when logind's signal stream ends (logind restarted); systemd restarts the unit. The design's single in-process reconnect is not built |
+
+## Upgrades
+
+A package upgrade replaces `/usr/bin/cupertino-sessiond` while the manager runs. The manager goes on with its own image:
+workers start from `/proc/self/exe`, not from the path, so they are the manager's code even when that path names a new program
+or nothing (before this, a removed path ended every login with `starting a worker: No such file or directory`).
 
 ## Auto login
 
@@ -410,3 +416,6 @@ that fails to run and insufficient credentials each with its outcome; a lock-out
 `Locked`; the account check's message relayed; a cancelled prompt and a yes/no question denied, a prompt with echo relayed; a
 manager gone during the prompt; credentials or a session the stack refuses, or no login session registered, ending the worker
 with nothing left established; and a session that fails to close reported.
+
+`tests/own_image.rs` stands in for a manager whose file a package upgrade removed or replaced (a link to the test program, its
+file removed, or renamed over by a script): the worker it starts the way the manager does is still its own image.

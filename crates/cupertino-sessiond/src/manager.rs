@@ -1265,7 +1265,7 @@ impl Manager {
         terminal: Option<File>,
     ) -> Result<u64> {
         let (ours, theirs) = UnixStream::pair()?;
-        let child = worker_command(std::env::current_exe()?, |k| std::env::var_os(k))
+        let child = worker_command(|k| std::env::var_os(k))
             .stdin(Stdio::from(OwnedFd::from(theirs)))
             .spawn()
             .map_err(|e| format!("starting a worker: {e}"))?;
@@ -1978,10 +1978,25 @@ fn greeter_exited(status: Option<ExitStatus>, ended: usize, giving_up: bool) {
         .emit();
 }
 
-/// `cupertino-sessiond worker` (`exe`) with an empty environment, but for the journal socket the manager's events go
-/// to when it names one (`CUPERTINO_DIAG_JOURNAL_SOCKET`, set only by tests): the worker's events go to the same journal.
-fn worker_command(exe: PathBuf, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Command {
-    let mut command = Command::new(exe);
+/// The running program image, whatever became of its file since.
+const OWN_IMAGE: &str = "/proc/self/exe";
+
+/// The program image of this process ([`OWN_IMAGE`], which the kernel resolves in the child to the image it was forked
+/// from), so a worker runs the manager's own code even after a package upgrade replaced or removed the file it was started
+/// from: that path would then name the new program, or nothing. The first argument is the one this process was started
+/// with.
+pub fn own_program() -> Command {
+    let mut command = Command::new(OWN_IMAGE);
+    if let Some(name) = std::env::args_os().next() {
+        std::os::unix::process::CommandExt::arg0(&mut command, name);
+    }
+    command
+}
+
+/// `cupertino-sessiond worker` ([`own_program`]) with an empty environment, but for the journal socket the manager's events
+/// go to when it names one (`CUPERTINO_DIAG_JOURNAL_SOCKET`, set only by tests): the worker's events go to the same journal.
+fn worker_command(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Command {
+    let mut command = own_program();
     command.arg("worker").env_clear();
     if let Some(socket) = var(diag::journal::SOCKET_ENV).filter(|s| !s.is_empty()) {
         command.env(diag::journal::SOCKET_ENV, socket);
@@ -2283,12 +2298,11 @@ mod tests {
                 })
                 .collect()
         };
-        let exe = PathBuf::from("/usr/lib/cupertino/cupertino-sessiond");
-        let plain = worker_command(exe.clone(), |_| None);
-        assert_eq!(plain.get_program(), exe.as_os_str());
+        let plain = worker_command(|_| None);
+        assert_eq!(plain.get_program(), OWN_IMAGE);
         assert_eq!(plain.get_args().collect::<Vec<_>>(), ["worker"]);
         assert!(envs(&plain).is_empty());
-        let test = worker_command(exe, |k| {
+        let test = worker_command(|k| {
             (k == diag::journal::SOCKET_ENV || k == "HOME").then(|| "/tmp/journal".into())
         });
         assert_eq!(

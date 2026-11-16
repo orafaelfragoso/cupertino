@@ -1,8 +1,9 @@
 //! Typed wrapper of `cupertino_menu_bar_v1`: the menu-bar role of a layer surface.
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, Command, CupertinoMenuBarV1,
-    EditAction as WireEditAction, ModifierKey, SessionAction as WireSessionAction, WindowControl,
+    self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, ClientKind, Command,
+    CupertinoMenuBarV1, EditAction as WireEditAction, ModifierKey,
+    SessionAction as WireSessionAction, WindowControl,
 };
 use std::collections::BTreeMap;
 use wayland_client::{Proxy, WEnum};
@@ -59,6 +60,15 @@ pub struct WindowState {
     pub workspace: u32,
     /// Number of workspaces of the output.
     pub workspaces: u32,
+}
+
+/// The process that shows the active window (version 24), for a window that registers its menus on the session bus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveClient {
+    /// The window's own process; `0` when no window is active or the process is not known.
+    Wayland(u32),
+    /// The X11 bridge, which shows the windows of every X11 program; its process id.
+    X11(u32),
 }
 
 /// A window of the active application, for the window list.
@@ -164,6 +174,8 @@ pub struct MenuBarUpdate {
     pub windows: Option<Vec<AppWindow>>,
     /// The chords of the server's actions, from version 10.
     pub shortcuts: Option<Shortcuts>,
+    /// The process that shows the active window, from version 24 in every group with `window_state`.
+    pub active_client: Option<ActiveClient>,
 }
 
 /// The most bands of [`MenuBarUpdate::backdrop_bands`] a bar reads; the rest of a longer array is dropped.
@@ -505,6 +517,12 @@ impl GroupBuilder {
                 })
             }
             Event::WindowFullScreen { full_screen } => self.full_screen = Some(full_screen != 0),
+            Event::ActiveClient { pid, kind } => {
+                self.update.active_client = Some(match kind {
+                    WEnum::Value(ClientKind::X11) => ActiveClient::X11(pid),
+                    WEnum::Value(_) | WEnum::Unknown(_) => ActiveClient::Wayland(pid),
+                })
+            }
             Event::Done => {
                 if self.lists_windows && self.update.window_state.is_some() {
                     self.update.windows.get_or_insert_with(Vec::new);
@@ -581,6 +599,7 @@ mod tests {
                 session_agent: None,
                 backdrop_lightness: None,
                 backdrop_bands: None,
+                active_client: None,
                 windows: None,
                 shortcuts: None,
             }]
@@ -812,10 +831,12 @@ mod tests {
             [
                 MenuBarUpdate {
                     backdrop_bands: Some(vec![[0, 1, 2], [65_535, 300, 45]]),
+                    active_client: None,
                     ..MenuBarUpdate::default()
                 },
                 MenuBarUpdate {
                     backdrop_bands: Some(vec![[7, 8, 9]; MAX_BACKDROP_BANDS]),
+                    active_client: None,
                     ..MenuBarUpdate::default()
                 }
             ]
@@ -842,6 +863,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             [Some(true), Some(false), Some(false)],
             "in either order; not in full screen without the event"
+        );
+    }
+
+    #[test]
+    fn the_process_behind_the_active_window_comes_in_its_group() {
+        let client = |pid, kind| Event::ActiveClient {
+            pid,
+            kind: WEnum::Value(kind),
+        };
+        let updates = feed(vec![
+            client(41, ClientKind::Wayland),
+            Event::Done,
+            client(7, ClientKind::X11),
+            Event::Done,
+            Event::ActiveClient {
+                pid: 9,
+                kind: WEnum::Unknown(5),
+            },
+            Event::Done,
+            window_state(),
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates.iter().map(|u| u.active_client).collect::<Vec<_>>(),
+            [
+                Some(ActiveClient::Wayland(41)),
+                Some(ActiveClient::X11(7)),
+                Some(ActiveClient::Wayland(9)),
+                None
+            ],
+            "a kind this bar does not know is the window's own process"
         );
     }
 

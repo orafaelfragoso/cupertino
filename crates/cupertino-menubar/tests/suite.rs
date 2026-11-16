@@ -15,5 +15,7 @@ mod extras_bus;
 mod gtk_changes;
 #[path = "kit_export.rs"]
 mod kit_export;
+#[path = "registrar.rs"]
+mod registrar;
 #[path = "worker.rs"]
 mod worker;

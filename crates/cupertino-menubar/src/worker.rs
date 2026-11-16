@@ -10,6 +10,7 @@ use crate::dbus::gtk::{GtkChange, GtkMenuClient};
 use crate::dbus::registrar;
 use crate::dbus::sni::{self, StatusItem, WatcherEvent, WatcherService};
 use crate::item::{ItemId, MenuItem};
+use crate::registered::Registration;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource};
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
@@ -73,6 +74,8 @@ pub enum Request {
     TogglePanel,
     /// Own `com.canonical.AppMenu.Registrar` while a bar exists, so toolkits keep their own menu bar otherwise.
     AppMenuRegistrar(bool),
+    /// Forget registered menus, by connection and window: their X11 windows are gone.
+    ForgetRegistrations(Vec<(String, u32)>),
 }
 
 /// What the worker reports.
@@ -94,6 +97,8 @@ pub enum Event {
     LayoutFailed {
         source: MenuSource,
     },
+    /// The menus registered with `com.canonical.AppMenu.Registrar` changed: all of them now.
+    Registrations(Vec<Registration>),
 }
 
 /// Why the worker did not start.
@@ -240,15 +245,19 @@ async fn run(
     out: Out,
     started: mpsc::SyncSender<Result<(), StartError>>,
 ) {
-    let services = serve(&conn, &tx).await;
-    let failed = services.is_err();
     // the caller holds the receiver until this is read
-    started
-        .send(services)
-        .expect("the starting thread waits for the report");
-    if failed {
-        return;
-    }
+    let report_start = |result| {
+        started
+            .send(result)
+            .expect("the starting thread waits for the report")
+    };
+    let registrar = match serve(&conn, &tx, &out).await {
+        Ok(registrar) => {
+            report_start(Ok(()));
+            registrar
+        }
+        Err(e) => return report_start(Err(e)),
+    };
     let mut gtk: HashMap<GtkMenuProps, GtkMenuClient> = HashMap::new();
     // the task that forwards each exporter's changes; replacing or dropping it ends the subscription
     let mut follows: HashMap<GtkMenuProps, zbus::Task<()>> = HashMap::new();
@@ -340,6 +349,11 @@ async fn run(
             Work::Request(Request::AppMenuRegistrar(owned)) => {
                 app_menu_registrar(&conn, owned).await
             }
+            Work::Request(Request::ForgetRegistrations(gone)) => {
+                if let Some(registrar) = &registrar {
+                    registrar.forget(&gone);
+                }
+            }
             Work::Request(request) => handle(&conn, &out, &tx, &mut gtk, request),
         }
     }
@@ -399,16 +413,25 @@ fn follow_gtk(
     )
 }
 
-/// Claim the watcher and forward its events, then serve the registrar.
-async fn serve(conn: &Connection, tx: &async_channel::Sender<Work>) -> Result<(), StartError> {
+/// Claim the watcher and forward its events, then serve the registrar (`None` when it cannot be served).
+async fn serve(
+    conn: &Connection,
+    tx: &async_channel::Sender<Work>,
+    out: &Out,
+) -> Result<Option<registrar::Registrar>, StartError> {
     let (_service, events) = WatcherService::start(conn)
         .await
         .map_err(StartError::Watcher)?;
     forward(events, tx.clone(), Work::Watcher);
-    if let Err(e) = registrar::serve(conn).await {
-        report(&format!("cannot serve {}", registrar::REGISTRAR_NAME), e);
+    let out = out.clone();
+    let changed: registrar::Changed = Arc::new(move |list| out.emit(Event::Registrations(list)));
+    match registrar::serve(conn, changed).await {
+        Ok(registrar) => Ok(Some(registrar)),
+        Err(e) => {
+            report(&format!("cannot serve {}", registrar::REGISTRAR_NAME), e);
+            Ok(None)
+        }
     }
-    Ok(())
 }
 
 async fn app_menu_registrar(conn: &Connection, owned: bool) {
@@ -644,7 +667,9 @@ fn handle(
             },
             "cupertino-toggle-centre",
         ),
-        Request::AppMenuRegistrar(_) => unreachable!("the worker's loop handles the registrar"),
+        Request::AppMenuRegistrar(_) | Request::ForgetRegistrations(_) => {
+            unreachable!("the worker's loop handles the registrar")
+        }
         Request::TogglePanel => executor.spawn(
             async move {
                 if let Err(e) = conn

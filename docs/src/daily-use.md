@@ -59,6 +59,14 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 
 The first time an app asks to see your windows and their controls and use the pointer and keyboard, or to take pictures of the screen, you are asked, and your answer is remembered for that app in `~/.config/cupertino/desktop-control.conf`. **Settings > Privacy > Desktop Control** and **Settings > Privacy > Screen Capture** list the apps that asked, each by the name of its app or, for a program that runs without a window of its own, by its file name and full path. Turning an app's switch off stops it at once, even in the middle of what it is doing; turning it on allows it again. Forget removes the app, which then asks again the next time. The two pages are separate: an app can be allowed to take pictures of the screen and not to control the desktop. The file must be yours and writable by no one else; otherwise the pages say why and change nothing.
 
+## Menus of Electron apps
+
+Electron apps (VS Code, Slack, Discord, Obsidian and others) show their own menus in the menu bar, on Wayland and through X11 alike, and keep no menu bar in their window. Clicks, shortcuts shown beside items, check and radio items and submenus the app fills only when they open all work as in any other app. Such an app hands its menus to the menu bar under a number of its own window instead of naming them for the window it shows, so the menu bar matches them to the window: on Wayland by the app's process, through X11 by the window's title as the X server holds it. A menu leaves the bar when the app removes it, quits or closes the window. An app that names its menus for its window, as later Electron releases are expected to, is shown those menus with no matching.
+
+The in-window menu bar of all Electron apps comes back with `ELECTRON_FORCE_WINDOW_MENU_BAR=1` in the environment they start with, for example a line `ELECTRON_FORCE_WINDOW_MENU_BAR=1` in a file under `~/.config/environment.d/` before you log in; their menus then leave the menu bar, which shows its own File, Edit, View, Window and Help for them. Remove the line to return to menus in the menu bar.
+
+Known gap: an Electron app on Wayland with several windows in one process gets each window's menus by the order the windows were opened, which holds while every window has a menu; otherwise the menus of the window registered last show for all of its windows. Electron's menus are usually the same for every window.
+
 ## Saved passwords
 
 Apps keep saved passwords and tokens in the keyring: gnome-keyring, which the packages install. Logging in with your password unlocks it, and logging out locks it again. After an automatic login, or after your password was changed with `passwd`, it stays locked: the first app that needs it opens a window that asks for the keyring's password, and Cancel there refuses the app. Unlocking the lock screen with your password also unlocks the keyring.

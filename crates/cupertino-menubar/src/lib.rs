@@ -12,6 +12,7 @@
 //! * [`extras`]: the bar's own status items (Wi-Fi, battery, Bluetooth, Focus) and their menus, and the system menu.
 //! * [`recent`]: what Recent Items of the system menu lists (the launcher's applications, the recently-used documents)
 //!   and its Clear Menu time.
+//! * [`registered`]: the menus registered on the session bus and which belongs to the active window.
 //! * [`source`]: window / app identity → menu source (KDE appmenu service + path, GTK bus name and
 //!   object paths).
 //! * [`tone`]: the colours of the bar and its menus, and the tone and scrim of the bar's text over the wallpaper.
@@ -21,7 +22,8 @@
 //!   of the server): [`feed`] (what the bars show, from the server's groups and the bus),
 //!   [`routing`] (keys and controller effects to actions), [`popups`] (placement of the menus'
 //!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`desktop`] (application names),
-//!   [`worker`] (the session bus thread) and [`extras_bus`] (the system services behind the extras).
+//!   [`worker`] (the session bus thread), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
+//!   server of the X11 bridge, for menus X11 programs register).
 //!
 //! the bar structure and the interaction model are as designed behaviour of the
 //! design; the selection highlight corner radius (4 pt,
@@ -40,6 +42,7 @@ pub mod item;
 pub mod layout;
 pub mod merge;
 pub mod recent;
+pub mod registered;
 pub mod search;
 pub mod source;
 pub mod tone;
@@ -59,3 +62,5 @@ pub mod routing;
 pub mod view;
 #[cfg(feature = "app")]
 pub mod worker;
+#[cfg(feature = "app")]
+pub mod x11;

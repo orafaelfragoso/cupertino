@@ -341,6 +341,7 @@ mod tests {
                 session_agent: None,
                 backdrop_lightness: None,
                 backdrop_bands: None,
+                active_client: None,
                 windows: None,
                 shortcuts: None,
             };
@@ -941,6 +942,7 @@ mod tests {
                 session_agent: None,
                 backdrop_lightness: None,
                 backdrop_bands: None,
+                active_client: None,
                 windows: None,
                 shortcuts: None,
             },

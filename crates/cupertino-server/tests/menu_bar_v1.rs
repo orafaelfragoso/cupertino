@@ -261,6 +261,8 @@ enum BarEvent {
     WindowControls(u32),
     /// Version 16: whether the active window is in full screen.
     WindowFullScreen(u32),
+    /// Version 24: the process behind the active window and its kind.
+    ActiveClient(u32, u32),
     Engage,
     EngageHelp,
     ScreenCapture(u32),
@@ -484,6 +486,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             },
             E::WindowControls { enabled } => BarEvent::WindowControls(raw(enabled)),
             E::WindowFullScreen { full_screen } => BarEvent::WindowFullScreen(full_screen),
+            E::ActiveClient { pid, kind } => BarEvent::ActiveClient(pid, raw(kind)),
             E::Engage => BarEvent::Engage,
             E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
@@ -1381,6 +1384,42 @@ fn a_version_16_bar_is_told_when_the_active_window_enters_and_leaves_full_screen
         window_full_screen(&bar) == Some(0)
     });
     assert_eq!(bar.error(), None);
+}
+
+/// The `active_client` of the latest group that has one.
+fn active_client(bar: &BarClient) -> Option<(u32, u32)> {
+    bar.groups().iter().rev().flatten().find_map(|e| match e {
+        BarEvent::ActiveClient(pid, kind) => Some((*pid, *kind)),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_version_24_bar_is_told_the_process_behind_the_active_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 24);
+    h.wait_until("the first group", |_| active_client(&bar) == Some((0, 0)));
+    // the application runs in this process
+    let _app = AppClient::spawn(h.socket_path(), "org.example.notes");
+    h.mapped_window(1);
+    h.wait_until("the window's process", |_| {
+        active_client(&bar) == Some((std::process::id(), 0))
+    });
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_23_bar_is_not_told_the_process_behind_the_active_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 23);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.notes");
+    h.mapped_window(1);
+    h.wait_until("the window's group", |_| {
+        bar.groups().iter().flatten().any(
+            |e| matches!(e, BarEvent::ActiveApp { app_id, .. } if app_id == "org.example.notes"),
+        )
+    });
+    assert_eq!(active_client(&bar), None);
 }
 
 /// The `window_controls` of the latest group that has one.

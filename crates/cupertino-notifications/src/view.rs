@@ -131,6 +131,18 @@ const CARD_RIM_DARK: f32 = 0.37;
 const CARD_RIM_LIGHT: f32 = 1.0;
 const CARD_RIM_WIDTH_LIGHT: f64 = 1.0;
 const CARD_RIM_SIDE: f32 = 0.1;
+
+/// The width in points of a line of a card's Increase Contrast edge on a display of `scale`: `width`, and never less
+/// than one device pixel, so the line is drawn at its full strength where a point is one pixel instead of covering half
+/// of one at half its contrast.
+pub(crate) fn edge_line_width(width: f64, scale: f64) -> f64 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    width.max(1.0 / scale)
+}
 /// The centre's header row (title and Clear All), the gap under it and the title's inset from the cards' leading edge.
 pub const HEADER_HEIGHT: f64 = 33.0;
 pub const HEADER_GAP: f64 = 5.0;
@@ -3115,6 +3127,7 @@ impl<M: 'static> Widget<M> for Card<M> {
             // the compositor's glass marks its own edge at rest; with Increase Contrast the card adds its rim
             if theme.preferences.appearance.is_high_contrast() {
                 let dark = theme.preferences.appearance.is_dark();
+                let scale = cx.env().scale;
                 paint_glass_edge(
                     cx,
                     rect,
@@ -3125,15 +3138,18 @@ impl<M: 'static> Widget<M> for Card<M> {
                         } else {
                             CARD_OUTLINE_LIGHT
                         },
-                        outline_width: OUTLINE_WIDTH,
+                        outline_width: edge_line_width(OUTLINE_WIDTH, scale),
                         rim: if dark { CARD_RIM_DARK } else { CARD_RIM_LIGHT },
                         rim_bottom: 1.0,
                         rim_side: CARD_RIM_SIDE,
-                        rim_width: if dark {
-                            OUTLINE_WIDTH
-                        } else {
-                            CARD_RIM_WIDTH_LIGHT
-                        },
+                        rim_width: edge_line_width(
+                            if dark {
+                                OUTLINE_WIDTH
+                            } else {
+                                CARD_RIM_WIDTH_LIGHT
+                            },
+                            scale,
+                        ),
                     },
                 );
             }

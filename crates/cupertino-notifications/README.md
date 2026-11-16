@@ -45,7 +45,8 @@ surface, ends the process with a failure status so the server restarts it.
 - **Display options.** Reduce Motion sets `Motion::reduce_motion`: banners fade in place and a group expands and collapses at
   once; unfolding a body and scrolling have no animation of their own beyond the scroll view's. Kit follows the appearance,
   Reduce Transparency and Increase Contrast itself: under either the cards keep their glass, drawn with the compositor's recipe
-  for it; without the compositor's effects every card paints the popover surface's opaque fill.
+  for it, and with Increase Contrast a card lays an outline and a rim over it, no line of which is thinner than a device
+  pixel; without the compositor's effects every card paints the popover surface's opaque fill.
 - **Input.** Hover pauses the timeout. A click runs the default action, a button its action, a link `xdg-open`. The close button
   dismisses, and a drag to the right swipes the banner away. Every action first fetches an `xdg_activation_v1` token, which goes
   out as `ActivationToken` before `ActionInvoked`. While the list is open the surface takes the keyboard and Escape, or a press

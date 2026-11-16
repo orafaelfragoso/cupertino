@@ -4,9 +4,9 @@
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_controlcenter::backend::{
-    AlsaVolume, DockHiding, MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch,
-    MemoryVolume, MemoryWifi, PipewireMicrophone, RecordingLauncher, RecordingLock,
-    RecordingOverlay, SessionVolume, SettingsLauncher,
+    AlsaVolume, DockHiding, MemoryBluetooth, MemoryBrightness, MemoryLayout, MemoryMedia,
+    MemorySwitch, MemoryVolume, MemoryWifi, PipewireMicrophone, RecordingLauncher, RecordingLock,
+    RecordingOverlay, SessionVolume, SettingsLauncher, StoredLayout,
 };
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
@@ -20,7 +20,8 @@ use cupertino_controlcenter::system::{
     UpowerKeyboard,
 };
 use cupertino_controlcenter::view::{
-    self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
+    self, edit_key, focus_key, Editing, Held, Input, Opened, Presentation, Via, APP_ID,
+    CATCHER_APP_ID, DETAIL_FOCUS, EDIT_FOCUS,
 };
 use cupertino_kit::controls::FrameClock;
 use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
@@ -140,6 +141,7 @@ fn backends(options: &Options, radios: &Radios) -> Backends {
             lock: Box::new(RecordingLock::default()),
             launcher: Box::new(RecordingLauncher::default()),
             overlay: Box::new(RecordingOverlay::default()),
+            layout: Box::new(MemoryLayout::default()),
         };
     }
     Backends {
@@ -161,6 +163,7 @@ fn backends(options: &Options, radios: &Radios) -> Backends {
         lock: Box::new(LogindLock::new()),
         launcher: Box::new(SettingsLauncher::default()),
         overlay: Box::new(SessionOverlay::new()),
+        layout: Box::new(StoredLayout::default()),
     }
 }
 
@@ -494,6 +497,8 @@ pub struct Panel {
     reduce_motion: bool,
     /// The detail view opening, open or closing.
     expansion: Option<Expansion>,
+    /// The tile the pointer holds while the controls are edited.
+    held: Option<Held>,
     /// The detail view is moving: its end has not been seen yet.
     moving: bool,
     /// The keyboard or assistive technology started the motion, so the focus follows the view when it ends.
@@ -571,8 +576,47 @@ impl Panel {
             Input::Settings(detail) => {
                 self.controller.open_settings(now, detail.settings_pane());
             }
+            // the controls are edited on the grid: an open view goes at once
             Input::EditControls => {
-                self.controller.edit_controls(now);
+                if self.controller.edit_controls() {
+                    self.reset();
+                }
+            }
+            Input::Remove(module, via) => {
+                let place = self.controller.arrangement().position(module);
+                if self.controller.edit_remove(module) && via == Via::Keyboard {
+                    // the focus goes to the tile that took the place, else the one before, else Done
+                    let shown = self.controller.arrangement().shown();
+                    let next = place
+                        .and_then(|place| shown.get(place).or(shown.last()))
+                        .map_or_else(|| EDIT_FOCUS.to_owned(), |module| edit_key(*module));
+                    return vec![Command::Focus(Key::from(next))];
+                }
+            }
+            Input::Add(module, via) => {
+                if self.controller.edit_add(module) && via == Via::Keyboard {
+                    // the tile is there to take the focus once the view that follows has built it
+                    let focus = Message::Input(Input::Focus(edit_key(module)));
+                    return vec![Command::Perform(Box::pin(async move { focus }))];
+                }
+            }
+            Input::Step(module, forward) => {
+                self.controller.edit_step(module, forward);
+            }
+            Input::DragTo(module, origin) => {
+                if self.controller.editing() && self.controller.arrangement().contains(module) {
+                    self.held = Some(Held { module, origin });
+                    self.controller.edit_move_near(module, origin);
+                }
+            }
+            Input::Drop => self.held = None,
+            Input::Done => {
+                self.held = None;
+                self.controller.finish_edit();
+            }
+            Input::Cancel => {
+                self.held = None;
+                self.controller.cancel_edit();
             }
             Input::Focus(key) => return vec![Command::Focus(Key::from(key))],
             Input::Slide(slider, fraction) => {
@@ -609,10 +653,11 @@ impl Panel {
         self.follow_focus.then_some(key)
     }
 
-    /// Forget the detail view: the panel opened again or went.
+    /// Forget the detail view and a held tile: the panel opened again or went, or its controls are to be edited.
     fn reset(&mut self) {
         self.expansion = None;
         self.moving = false;
+        self.held = None;
     }
 
     /// How the panel is shown at `now`.
@@ -627,11 +672,19 @@ impl Panel {
             },
             light: self.light,
             input: self.controller.phase(now) == Phase::Shown,
-            detail: self.expansion.map(|e| Opened {
-                detail: e.detail,
-                progress: e.progress(now),
-                morph: !e.reduce_motion,
-            }),
+            // a view whose module a changed layout no longer shows has no tile to grow from
+            detail: self
+                .expansion
+                .filter(|e| self.controller.arrangement().contains(e.detail.module()))
+                .map(|e| Opened {
+                    detail: e.detail,
+                    progress: e.progress(now),
+                    morph: !e.reduce_motion,
+                }),
+            edit: self
+                .controller
+                .editing()
+                .then_some(Editing { held: self.held }),
         }
     }
 }
@@ -728,6 +781,7 @@ fn start(
         light: !appearance.dark,
         reduce_motion: appearance.reduce_motion,
         expansion: None,
+        held: None,
         moving: false,
         follow_focus: false,
         animating: false,
@@ -809,7 +863,12 @@ impl Application for Panel {
     fn view(model: &Panel) -> Vec<Window<Message>> {
         let now = model.now();
         let controls = model.controller.controls();
-        let mut panel = view::panel(controls, model.presentation(now), input);
+        let mut panel = view::arranged(
+            controls,
+            model.controller.arrangement(),
+            model.presentation(now),
+            input,
+        );
         // what moves steps once per frame the compositor gives the panel's window, never on a timer of its own
         panel.content = Element::from(FrameClock {
             content: panel.content,
@@ -886,6 +945,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 mod tests {
     use super::*;
     use cupertino_controlcenter::model::{Detail, Module};
+    use cupertino_kit::geometry::Point;
 
     /// The panel draws two frames an opening and none while it fades: the GPU would cost its memory for nothing.
     #[test]
@@ -1365,6 +1425,212 @@ mod tests {
             KeyboardInteractivity::Exclusive,
             "a toggle during the fade takes the keyboard again"
         );
+    }
+
+    /// A shown panel on the in-memory backends that keeps its choice of controls in the returned store.
+    fn panel_with_layout() -> (Panel, MemoryLayout) {
+        let options = Options {
+            fake_backends: true,
+            alsa_card: None,
+        };
+        let layout = MemoryLayout::default();
+        let mut backends = backends(&options, &Radios::new());
+        backends.layout = Box::new(layout.clone());
+        let mut model = start(
+            Controller::new(backends),
+            async_channel::unbounded().1,
+            SystemAppearance::default(),
+            false,
+        )
+        .0;
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        (model, layout)
+    }
+
+    fn act(model: &mut Panel, input: Input) -> Vec<Command<Message>> {
+        Panel::update(model, Message::Input(input))
+    }
+
+    fn editing(model: &Panel) -> Option<Editing> {
+        model.presentation(model.now()).edit
+    }
+
+    fn shown_ids(model: &Panel) -> Vec<&'static str> {
+        model.controller.arrangement().ids()
+    }
+
+    #[test]
+    fn edit_controls_edits_the_panel_where_it_is() {
+        let (mut model, layout) = panel_with_layout();
+        act(&mut model, Input::Expand(Detail::WiFi, Via::Pointer));
+        assert_eq!(editing(&model), None);
+        act(&mut model, Input::EditControls);
+        assert_eq!(editing(&model), Some(Editing { held: None }));
+        assert_eq!(
+            app_ids(&model),
+            [CATCHER_APP_ID, APP_ID],
+            "the panel stays shown, over its catcher"
+        );
+        assert_eq!(detail(&model), None, "on its grid");
+        assert_eq!(layout.stored(), None);
+        // the periodic reading does not end the edit
+        after(&mut model, 2.5);
+        assert_eq!(editing(&model), Some(Editing { held: None }));
+    }
+
+    #[test]
+    fn each_edit_shows_at_once_and_done_keeps_them() {
+        let (mut model, layout) = panel_with_layout();
+        act(&mut model, Input::EditControls);
+        act(&mut model, Input::Remove(Module::Bluetooth, Via::Pointer));
+        assert!(!shown_ids(&model).contains(&"bluetooth"));
+        act(&mut model, Input::Remove(Module::Mute, Via::Pointer));
+        act(&mut model, Input::Add(Module::Bluetooth, Via::Pointer));
+        assert_eq!(shown_ids(&model).last(), Some(&"bluetooth"));
+        act(&mut model, Input::Step(Module::Sound, false));
+        let before = shown_ids(&model);
+        assert_eq!(before[7..], ["sound", "display", "bluetooth"]);
+        // the pointer holds the lock circle where the dock hiding circle lies: it takes that place
+        let to = model
+            .controller
+            .arrangement()
+            .frame(Module::DockHiding)
+            .unwrap()
+            .origin;
+        act(&mut model, Input::DragTo(Module::LockScreen, to));
+        assert_eq!(
+            editing(&model),
+            Some(Editing {
+                held: Some(Held {
+                    module: Module::LockScreen,
+                    origin: to
+                })
+            })
+        );
+        assert_eq!(
+            model
+                .controller
+                .arrangement()
+                .frame(Module::LockScreen)
+                .unwrap()
+                .origin,
+            to
+        );
+        act(&mut model, Input::Drop);
+        assert_eq!(editing(&model), Some(Editing { held: None }));
+        let edited = shown_ids(&model);
+        assert_ne!(edited, before);
+        assert_eq!(layout.stored(), None, "nothing is written until Done");
+        act(&mut model, Input::Done);
+        assert_eq!(editing(&model), None);
+        assert_eq!(shown_ids(&model), edited);
+        assert_eq!(layout.stored().unwrap(), edited);
+        // closed and opened again, the panel shows the edit
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        after(&mut model, 1.0);
+        Panel::update(&mut model, Message::Request(Request::Toggle));
+        assert_eq!(shown_ids(&model), edited);
+        assert_eq!(editing(&model), None);
+    }
+
+    #[test]
+    fn cancel_escape_and_the_panel_going_drop_the_edit() {
+        let ways: [(&str, Message); 5] = [
+            ("Cancel or Escape", Message::Input(Input::Cancel)),
+            ("a press outside", Message::Input(Input::Dismiss)),
+            ("a toggle", Message::Request(Request::Toggle)),
+            ("the lock", Message::Request(Request::Dismiss)),
+            ("the output going", Message::Request(Request::OutputGone)),
+        ];
+        for (way, message) in ways {
+            let (mut model, layout) = panel_with_layout();
+            let all = shown_ids(&model);
+            act(&mut model, Input::EditControls);
+            act(&mut model, Input::Remove(Module::Display, Via::Pointer));
+            act(
+                &mut model,
+                Input::DragTo(Module::Sound, Point::new(0.0, 0.0)),
+            );
+            assert_ne!(shown_ids(&model), all);
+            Panel::update(&mut model, message);
+            assert_eq!(editing(&model), None, "{way}");
+            assert_eq!(shown_ids(&model), all, "{way}");
+            assert_eq!(layout.stored(), None, "{way}: nothing was written");
+            // the next edit starts from what is shown, with no tile held
+            if model.controller.phase(model.now()) != Phase::Shown {
+                after(&mut model, 1.0);
+                Panel::update(&mut model, Message::Request(Request::Toggle));
+            }
+            act(&mut model, Input::EditControls);
+            assert_eq!(editing(&model), Some(Editing { held: None }), "{way}");
+            assert_eq!(shown_ids(&model), all, "{way}");
+        }
+    }
+
+    #[test]
+    fn the_keyboard_s_edits_take_the_focus_along() {
+        let (mut model, _) = panel_with_layout();
+        act(&mut model, Input::EditControls);
+        let focus = |commands: &[Command<Message>]| {
+            commands.iter().find_map(|c| match c {
+                Command::Focus(Key::Str(key)) => Some(key.to_string()),
+                _ => None,
+            })
+        };
+        // a tile removed with the pointer leaves the focus alone
+        let commands = act(&mut model, Input::Remove(Module::Mute, Via::Pointer));
+        assert_eq!(focus(&commands), None);
+        // removed from the keyboard, the tile that took its place has the focus
+        let commands = act(&mut model, Input::Remove(Module::WiFi, Via::Keyboard));
+        assert_eq!(focus(&commands), Some(edit_key(Module::NowPlaying)));
+        // the last tile gone, the one before it
+        let commands = act(&mut model, Input::Remove(Module::Sound, Via::Keyboard));
+        assert_eq!(focus(&commands), Some(edit_key(Module::Display)));
+        // a control added from the keyboard is asked the focus once its tile is built
+        let commands = act(&mut model, Input::Add(Module::WiFi, Via::Keyboard));
+        assert!(matches!(commands[0], Command::Perform(_)));
+        let commands = act(&mut model, Input::Focus(edit_key(Module::WiFi)));
+        assert_eq!(focus(&commands), Some(edit_key(Module::WiFi)));
+        // with no tile left the focus goes to Done
+        for module in model.controller.arrangement().shown().to_vec() {
+            let commands = act(&mut model, Input::Remove(module, Via::Keyboard));
+            if model.controller.arrangement().shown().is_empty() {
+                assert_eq!(focus(&commands), Some(EDIT_FOCUS.to_owned()));
+            }
+        }
+        assert!(shown_ids(&model).is_empty());
+    }
+
+    #[test]
+    fn a_layout_stored_while_the_panel_is_open_shows_at_the_next_reading() {
+        let (mut model, layout) = panel_with_layout();
+        act(&mut model, Input::Expand(Detail::WiFi, Via::Pointer));
+        layout.set(&["sound", "no-such-control", "display"]);
+        after(&mut model, 1.5);
+        assert_eq!(shown_ids(&model), ["sound", "display"]);
+        assert_eq!(
+            detail(&model),
+            None,
+            "the view of a module no longer shown is gone"
+        );
+        let windows = Panel::view(&model);
+        assert_eq!(windows.len(), 2);
+    }
+
+    #[test]
+    fn edits_are_ignored_while_the_controls_are_not_edited() {
+        let (mut model, layout) = panel_with_layout();
+        let all = shown_ids(&model);
+        act(&mut model, Input::Remove(Module::WiFi, Via::Pointer));
+        act(&mut model, Input::Step(Module::Sound, false));
+        act(
+            &mut model,
+            Input::DragTo(Module::Sound, Point::new(0.0, 0.0)),
+        );
+        act(&mut model, Input::Done);
+        assert_eq!(shown_ids(&model), all);
+        assert_eq!(editing(&model), None);
+        assert_eq!(layout.stored(), None);
     }
 
     #[test]

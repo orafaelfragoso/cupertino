@@ -7,17 +7,17 @@
 
 use std::collections::HashMap;
 
+use cupertino_geometry::Point;
+
+use crate::arrangement::Arrangement;
 use crate::backend::{
-    BackendError, Bluetooth, Brightness, Launcher, MediaPlayer, OverlayKind, OverlayNotifier,
-    SessionLock, Switch, Volume, Wifi,
+    BackendError, Bluetooth, Brightness, Launcher, LayoutStore, MediaPlayer, OverlayKind,
+    OverlayNotifier, SessionLock, Switch, Volume, Wifi,
 };
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::model::{
     Controls, Detail, MediaCommand, Module, Reading, Slider, TileState, MUTE_BELOW,
 };
-
-/// The settings page the "Edit Controls" button opens.
-pub const SETTINGS_PANE: &str = "control-panel";
 
 /// Shortest time between two backend writes while a slider is dragged; the latest value wins
 /// (write throttle 0.0167 s for the volume; applied to the brightness as well, approximate).
@@ -41,6 +41,8 @@ pub struct Backends {
     pub lock: Box<dyn SessionLock>,
     pub launcher: Box<dyn Launcher>,
     pub overlay: Box<dyn OverlayNotifier>,
+    /// Where the choice of controls is kept.
+    pub layout: Box<dyn LayoutStore>,
 }
 
 /// A slider value waiting for the write throttle.
@@ -82,6 +84,10 @@ pub struct Controller {
     last_refresh: Option<f64>,
     /// The detail view open, whose list each reading takes too.
     detail: Option<Detail>,
+    /// The controls shown and their order, as stored.
+    arrangement: Arrangement,
+    /// The controls are being edited: the arrangement as changed so far, which nothing has stored yet.
+    draft: Option<Arrangement>,
 }
 
 /// The last failure of each backend, to log a failure only when it changes.
@@ -146,6 +152,8 @@ impl Controller {
             last_write: None,
             last_refresh: None,
             detail: None,
+            arrangement: Arrangement::default(),
+            draft: None,
         }
     }
 
@@ -176,11 +184,13 @@ impl Controller {
         let was_shown = self.lifecycle.phase(now) == Phase::Shown;
         self.lifecycle.toggle(now);
         if !was_shown {
-            // the panel opens on its modules, never on the detail it closed with
+            // the panel opens on its modules, never on the detail or the editing it closed with
             self.detail = None;
+            self.draft = None;
             self.refresh(now);
         } else {
             self.stop_dragging();
+            self.draft = None;
         }
     }
 
@@ -188,6 +198,7 @@ impl Controller {
     pub fn dismiss(&mut self, now: f64) {
         self.lifecycle.dismiss(now);
         self.stop_dragging();
+        self.draft = None;
     }
 
     /// The panel's surfaces are gone with their output: it is hidden at once, without the fade, and a drag in progress
@@ -195,6 +206,7 @@ impl Controller {
     pub fn vanish(&mut self) {
         self.lifecycle.hide();
         self.stop_dragging();
+        self.draft = None;
     }
 
     fn stop_dragging(&mut self) {
@@ -219,7 +231,101 @@ impl Controller {
                 failures.reading("display brightness", backends.brightness.read());
             controls.volume = failures.reading("volume", backends.volume.read());
         }
+        self.read_layout();
         self.read_detail();
+    }
+
+    /// Read the stored choice of controls, so one changed while the panel runs is followed. Nothing stored is every
+    /// control in reading order. A reading that fails keeps the controls shown and is logged. While the controls are
+    /// edited the panel shows the edit, and the store is read again when it ends.
+    fn read_layout(&mut self) {
+        if self.draft.is_some() {
+            return;
+        }
+        let stored = self.backends.layout.load();
+        self.failures
+            .log("controls shown", stored.as_ref().map(|_| ()));
+        if let Ok(stored) = stored {
+            self.arrangement =
+                stored.map_or_else(Arrangement::default, |ids| Arrangement::from_ids(&ids));
+            // a view whose module is no longer shown has no tile to close into
+            if self
+                .detail
+                .is_some_and(|detail| !self.arrangement.contains(detail.module()))
+            {
+                self.detail = None;
+            }
+        }
+    }
+
+    /// The controls the panel shows and their order: the stored ones, or while they are edited the edit so far.
+    pub fn arrangement(&self) -> &Arrangement {
+        self.draft.as_ref().unwrap_or(&self.arrangement)
+    }
+
+    /// Whether the controls are being edited.
+    pub fn editing(&self) -> bool {
+        self.draft.is_some()
+    }
+
+    /// Start editing the controls ("Edit Controls"): the panel stays open on its grid, and nothing is stored until
+    /// [`finish_edit`](Self::finish_edit). Returns false when they are edited already.
+    pub fn edit_controls(&mut self) -> bool {
+        if self.draft.is_some() {
+            return false;
+        }
+        self.stop_dragging();
+        self.detail = None;
+        self.draft = Some(self.arrangement.clone());
+        true
+    }
+
+    /// Change the edit; false when the controls are not being edited or nothing changed.
+    fn edit(&mut self, change: impl FnOnce(&mut Arrangement) -> bool) -> bool {
+        self.draft.as_mut().is_some_and(change)
+    }
+
+    /// While editing: stop showing `module`.
+    pub fn edit_remove(&mut self, module: Module) -> bool {
+        self.edit(|draft| draft.remove(module))
+    }
+
+    /// While editing: show `module`, after the others.
+    pub fn edit_add(&mut self, module: Module) -> bool {
+        self.edit(|draft| draft.add(module))
+    }
+
+    /// While editing: move `module` one place later (`forward`) or earlier.
+    pub fn edit_step(&mut self, module: Module, forward: bool) -> bool {
+        self.edit(|draft| draft.step(module, forward))
+    }
+
+    /// While editing: move `module` to the place nearest to `origin`, the corner of its tile as the pointer holds
+    /// it, from the grid's corner.
+    pub fn edit_move_near(&mut self, module: Module, origin: Point) -> bool {
+        self.edit(|draft| draft.move_near(module, origin))
+    }
+
+    /// End editing and keep the edit ("Done"): it is stored and shown from now on. A store that fails is logged and
+    /// the edit is dropped, so the panel never shows controls the next opening would not. Returns whether an edit
+    /// was kept.
+    pub fn finish_edit(&mut self) -> bool {
+        let Some(draft) = self.draft.take() else {
+            return false;
+        };
+        let stored = self.backends.layout.store(&draft.ids());
+        self.failures
+            .log("controls shown", stored.as_ref().map(|_| ()));
+        if stored.is_ok() {
+            self.arrangement = draft;
+        }
+        stored.is_ok()
+    }
+
+    /// End editing and drop the edit ("Cancel", Escape): the panel shows the stored controls again. Returns whether
+    /// the controls were being edited.
+    pub fn cancel_edit(&mut self) -> bool {
+        self.draft.take().is_some()
     }
 
     /// A backend said its state changed: a shown panel reads again at once, without waiting for
@@ -409,11 +515,6 @@ impl Controller {
         true
     }
 
-    /// Open the settings page of the panel ("Edit Controls"); the panel closes so the window it opens is in front.
-    pub fn edit_controls(&mut self, now: f64) -> bool {
-        self.open_settings(now, SETTINGS_PANE)
-    }
-
     /// Opens the settings application at `pane` and, when it starts, dismisses the panel.
     pub fn open_settings(&mut self, now: f64, pane: &str) -> bool {
         let opened = self.backends.launcher.open_settings(pane);
@@ -584,6 +685,30 @@ mod tests {
             lock: Box::new(RecordingLock::default()),
             launcher: Box::new(RecordingLauncher::default()),
             overlay: Box::new(overlay),
+            layout: Box::new(MemoryLayout::default()),
+        }
+    }
+
+    /// An open panel whose choice of controls is kept in the returned store.
+    fn opened_with_layout() -> (Controller, MemoryLayout) {
+        let layout = MemoryLayout::default();
+        let mut backends = backends(RecordingOverlay::default());
+        backends.layout = Box::new(layout.clone());
+        let mut controller = Controller::new(backends);
+        controller.toggle(0.0);
+        (controller, layout)
+    }
+
+    /// A store that reads and refuses every write.
+    struct ReadOnlyLayout;
+
+    impl LayoutStore for ReadOnlyLayout {
+        fn load(&mut self) -> Result<Option<Vec<String>>, BackendError> {
+            Ok(None)
+        }
+
+        fn store(&mut self, _: &[&str]) -> Result<(), BackendError> {
+            Err("the settings directory cannot be written".into())
         }
     }
 
@@ -754,23 +879,147 @@ mod tests {
     }
 
     #[test]
-    fn lock_screen_asks_the_session_and_edit_controls_opens_the_settings_page() {
+    fn lock_screen_asks_the_session() {
         let overlay = RecordingOverlay::default();
-        let (lock, launcher) = (RecordingLock::default(), RecordingLauncher::default());
+        let lock = RecordingLock::default();
         let mut backends = backends(overlay);
         backends.lock = Box::new(lock.clone());
-        backends.launcher = Box::new(launcher.clone());
         let mut controller = Controller::new(backends);
         controller.toggle(0.0);
         assert!(controller.press(Module::LockScreen));
         assert_eq!(lock.calls().len(), 1);
-        assert!(controller.edit_controls(1.0));
-        assert_eq!(launcher.calls(), [SETTINGS_PANE]);
+    }
+
+    #[test]
+    fn edit_controls_edits_in_the_panel_and_opens_no_settings_page() {
+        let launcher = RecordingLauncher::default();
+        let mut backends = backends(RecordingOverlay::default());
+        backends.launcher = Box::new(launcher.clone());
+        let mut controller = Controller::new(backends);
+        controller.toggle(0.0);
+        controller.show_detail(Some(Detail::WiFi));
+        assert!(!controller.editing());
+        assert!(controller.edit_controls());
+        assert!(controller.editing());
+        assert!(!controller.edit_controls(), "they are edited already");
+        assert_eq!(controller.phase(1.0), Phase::Shown, "the panel stays");
+        assert_eq!(controller.detail(), None, "on its grid");
+        assert!(launcher.calls().is_empty());
+        assert_eq!(controller.arrangement(), &Arrangement::default());
+    }
+
+    #[test]
+    fn nothing_is_stored_until_done_which_keeps_the_edit() {
+        let (mut controller, layout) = opened_with_layout();
+        assert!(!controller.edit_remove(Module::Mute), "not editing yet");
+        controller.edit_controls();
+        assert!(controller.edit_remove(Module::Mute));
+        assert!(controller.edit_remove(Module::Bluetooth));
+        assert!(controller.edit_add(Module::Bluetooth));
+        assert!(controller.edit_step(Module::Sound, false));
+        assert!(!controller.edit_step(Module::WiFi, false), "it is first");
+        let display = controller.arrangement().frame(Module::WiFi).unwrap().origin;
+        assert!(controller.edit_move_near(Module::FocusMode, display));
+        // the panel shows the edit as it goes, and the periodic reading leaves it alone
+        controller.tick(5.0);
+        let edited = controller.arrangement().clone();
         assert_eq!(
-            controller.phase(1.0),
-            Phase::Hiding,
-            "the panel steps aside"
+            edited.ids(),
+            [
+                "focus",
+                "wifi",
+                "now-playing",
+                "microphone",
+                "dock-hiding",
+                "lock-screen",
+                "keyboard-brightness",
+                "sound",
+                "display",
+                "bluetooth"
+            ]
         );
+        assert_eq!(layout.stored(), None, "nothing is written until Done");
+        assert!(controller.finish_edit());
+        assert!(!controller.editing());
+        assert_eq!(controller.arrangement(), &edited);
+        let stored = layout.stored().expect("Done stores the edit");
+        assert_eq!(stored, edited.ids());
+        assert!(!controller.finish_edit(), "there is no edit to keep");
+        // closed and opened again, and in a panel started anew on the same store, the edit is kept
+        controller.toggle(6.0);
+        controller.toggle(7.0);
+        assert_eq!(controller.arrangement(), &edited);
+        let mut backends = backends(RecordingOverlay::default());
+        backends.layout = Box::new(layout.clone());
+        let mut again = Controller::new(backends);
+        again.toggle(0.0);
+        assert_eq!(again.arrangement(), &edited);
+    }
+
+    #[test]
+    fn cancel_and_every_way_the_panel_goes_drop_the_edit() {
+        type Way = fn(&mut Controller);
+        let ways: [(&str, Way); 4] = [
+            ("cancel", |c| {
+                assert!(c.cancel_edit());
+            }),
+            ("dismissal", |c| c.dismiss(1.0)),
+            ("toggle", |c| c.toggle(1.0)),
+            ("the output going", |c| c.vanish()),
+        ];
+        for (way, leave) in ways {
+            let (mut controller, layout) = opened_with_layout();
+            layout.set(&["wifi", "sound"]);
+            controller.refresh(0.5);
+            controller.edit_controls();
+            assert!(controller.edit_remove(Module::WiFi));
+            assert!(controller.edit_add(Module::Display));
+            leave(&mut controller);
+            assert!(!controller.editing(), "{way}");
+            assert_eq!(controller.arrangement().ids(), ["wifi", "sound"], "{way}");
+            assert_eq!(
+                layout.stored(),
+                Some(vec!["wifi".to_owned(), "sound".to_owned()]),
+                "{way}"
+            );
+            assert!(!controller.cancel_edit(), "{way}: there is no edit left");
+        }
+    }
+
+    #[test]
+    fn a_layout_changed_while_the_panel_is_open_is_followed() {
+        let (mut controller, layout) = opened_with_layout();
+        assert_eq!(controller.arrangement(), &Arrangement::default());
+        controller.show_detail(Some(Detail::WiFi));
+        // a name the panel does not know is skipped; the modules not named are not shown
+        layout.set(&["sound", "later-control", "mute"]);
+        controller.tick(REFRESH_INTERVAL);
+        assert_eq!(controller.arrangement().ids(), ["sound", "mute"]);
+        assert_eq!(
+            controller.arrangement().available().len(),
+            Module::ALL.len() - 2
+        );
+        assert_eq!(
+            controller.detail(),
+            None,
+            "the open view of a module no longer shown closes"
+        );
+        layout.set(&[]);
+        controller.refresh(3.0);
+        assert!(controller.arrangement().shown().is_empty());
+    }
+
+    #[test]
+    fn a_store_that_refuses_the_edit_drops_it() {
+        let mut backends = backends(RecordingOverlay::default());
+        backends.layout = Box::new(ReadOnlyLayout);
+        let mut controller = Controller::new(backends);
+        controller.toggle(0.0);
+        controller.edit_controls();
+        assert!(controller.edit_remove(Module::Sound));
+        assert!(!controller.finish_edit());
+        assert!(!controller.editing());
+        assert_eq!(controller.arrangement(), &Arrangement::default());
     }
 
     #[test]

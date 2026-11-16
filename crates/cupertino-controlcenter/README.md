@@ -2,11 +2,11 @@
 
 The control panel of the Cupertino desktop. It opens at the top right, below the menu bar: separate glass tiles for Wi-Fi,
 Bluetooth, the microphone, now playing, dock hiding, the screen lock, mute, the keyboard backlight and focus mode, wide
-display and sound tiles with their levels, and an Edit Controls capsule under them. A press or a level drag acts on the
-system services. Wi-Fi, Bluetooth, display and sound open a detail view with their networks, devices, keyboard backlight
+display and sound tiles with their levels, and an Edit Controls capsule under them, which lets the person choose which
+of these controls show and in which order. A press or a level drag acts on the system services. Wi-Fi, Bluetooth, display and sound open a detail view with their networks, devices, keyboard backlight
 or outputs. A click outside the tiles closes the panel.
 
-The crate has no Smithay dependency. The model (`model`, `layout`, `lifecycle`, `motion`, `controller`), the backends
+The crate has no Smithay dependency. The model (`model`, `arrangement`, `layout`, `lifecycle`, `motion`, `controller`), the backends
 (`backend`, `system`), the bus interface (`control`) and the CupertinoKit view (`view`) are separate, so a host can drive
 the panel without the process. The `cupertino-controlcenter` process is that host for the desktop.
 
@@ -97,11 +97,47 @@ outside the view closes it; a second Escape dismisses the panel, also while the 
 view, the focus moves into it once it is open; when they closed it, the focus goes back to the module's control once it has
 closed. A click leaves the focus where it was, so no focus ring appears (`view::Via`).
 
+**Editing the controls.** Edit Controls puts the panel itself into an editing state; no other window opens. Every tile
+keeps its place and look, its content drawn at 0.55 and no longer acting (it is left out of the Tab order and of what
+assistive technology reads), and carries a remove mark, an 18 pt disc with a bar 4 pt in from its leading top corner
+(on the display and sound tiles, whose title starts there, from the trailing one). Cancel (62 x 24) and Done (49 x 24)
+take the place of Edit Controls, 12 pt apart and centred on the grid, Done under Edit Controls' key so the focus stays
+on it. The controls not shown are offered under them: round 36 pt chips with the control's symbol and a small disc with
+a cross, 12 pt apart in centred rows of six, 16 pt below the capsules, in the margin under the window that its shadow
+takes (the window's input region grows to hold them). A press on a mark removes its tile and the others close up; a
+press on a chip adds its control after the others; a drag of a tile (3 pt of movement holds it) carries it under the
+pointer, drawn over the others, while they make room: the order puts the held tile in the place nearest to where it is
+held, and letting go drops it there. Nothing moves on its own: a tile is where the order puts it at once, so there is
+no motion for Reduce Motion to take away. Done stores the edit and shows it; Cancel, Escape, a press outside the panel
+and every other way the panel goes (a toggle, the lock, its output going) drop it, and nothing is written before Done.
+A press between the tiles does nothing while editing, so a press that misses loses no edit. The marks are white with a
+dark sign on the dark tiles and dark with a white sign on the light tiles of Reduce Transparency in a light session;
+the chips and capsules are tiles like the others, glass in the one container, opaque with Reduce Transparency and
+rimmed with Increase Contrast.
+
+**The order.** `arrangement::Arrangement` is the list of the shown modules. The tiles are laid on the grid in that
+order, each in the first free place that holds it, reading the grid row by row in steps of one circle (four across),
+so a small tile fills a place a larger one before it left open; every module in reading order gives the grid as it
+always was. Edit Controls follows 16 pt under the last row. A move that would need a seventh row is refused: a drag
+then leaves the tile's place as it was, and an arrow key passes on to the next place that fits. The layout is stored per
+person as the modules' names in order (`controls` in `control-panel.conf`, `cupertino-defaults`); nothing stored is
+every module in reading order. Reading is tolerant: a name no module has and a repeated name are skipped, a module not
+named is not shown, an empty value shows none, and an order that does not fit the grid (written by hand) is shown in
+reading order. The panel reads the file as it opens and with every reading of the backends while open, so a layout
+changed by another process shows within a second; while its controls are edited it shows the edit.
+
 **Keyboard and assistive technology.** Every enabled control is a Tab stop and names itself: badges and circles are
 switches with their state (Lock Screen is a button), the openers are buttons that say whether their view is open, levels
 are sliders (0 to 1, a sixteenth per step), list rows are list items with their place and the current one selected. Space
 and Return press; the arrow keys move the focus to the nearest control in their direction (Left and Right step a level
 instead); Home and End take a level to its ends. Each tile is a group named for its module.
+
+While the controls are edited, each tile is one control named for its module whose value is its place in the order (a
+slider from 1 to the number of tiles, described as "Place 2 of 11. The arrow keys move it, Delete removes it."): Left
+and Up move it a place earlier, Right and Down a place later (the Decrement and Increment actions), Delete or Backspace
+removes it. The focus stays on a moved tile, goes to the tile that took a removed one's place (else the one before,
+else Done) and to an added tile. Each remove mark ("Remove Wi-Fi") and each chip ("Add Wi-Fi") is a button of its own,
+and Cancel and Done are buttons.
 
 **Session.** A hidden panel has no window. A toggle opens the panel and the catcher, with no detail view open. A dismissal
 closes the catcher at once and fades the panel, whose window closes when the fade ends. When the compositor presents
@@ -126,8 +162,9 @@ keep running: a toggle with no output at all opens surfaces the server closes ag
 open panel to the remaining output was not chosen: it would need new surfaces placed while the person's attention is on
 the display change, and a dismissal is what any other loss of the panel's place does (a lock, another exclusive panel).
 
-**Dismissal.** A left or right press outside the tiles, losing the keyboard focus and Escape. Edit Controls and a
-detail view's settings row open the settings application and dismiss the panel.
+**Dismissal.** A left or right press outside the tiles, losing the keyboard focus and Escape (while the controls are
+edited Escape cancels the edit and the panel stays). A detail view's settings row opens the settings application and
+dismisses the panel.
 
 **Menu bar.** A click on the control panel slot calls `Toggle`. The panel anchors to the top right and does not take the
 slot's position.
@@ -174,7 +211,8 @@ failure. Properties are read from the service every time, never from a cache.
 | Focus mode | `org.cupertino.NotificationCenter1` on the session bus (`cupertino-notifications`): the `DoNotDisturb` property and `SetDoNotDisturb(b)`; on, the capsule reads "Do Not Disturb" | `MemorySwitch` |
 | Display brightness | `system::PowerdBrightness`: `org.cupertino.Power1` (`GetBrightness`, `GetMaxBrightness`, `SetBrightness`), raw value mapped linearly onto 0 to 1, never below raw 1 | `MemoryBrightness` |
 | Volume | `backend::SessionVolume`: the default PipeWire sink through `cupertino-pipewire` (`wpctl`), the level `wpctl get-volume` reports, the sinks as outputs and `set-default` to choose one; when no PipeWire daemon answers a read, `backend::AlsaVolume`: `cupertino-alsa` master selection (`Master::open_default`, the same as the overlay), level and mute switch, with the card's master as the only output; opened on first use and again after a failure | `MemoryVolume` |
-| Edit Controls, settings rows | `backend::SettingsLauncher`: starts `cupertino-settings --pane <page>` (`control-panel`, `wifi`, `bluetooth`, `displays`, `sound`) | `RecordingLauncher` |
+| Settings rows | `backend::SettingsLauncher`: starts `cupertino-settings --pane <page>` (`wifi`, `bluetooth`, `displays`, `sound`) | `RecordingLauncher` |
+| Controls shown | `backend::StoredLayout`: the `controls` key of `control-panel.conf` (`cupertino_defaults::control_panel`, `$CUPERTINO_CONTROL_PANEL_CONF`), read at every reading and written by Done; a file that cannot be read keeps the controls shown and is logged, one that cannot be written drops the edit and is logged | `MemoryLayout` |
 | Overlay | `system::SessionOverlay`: `org.cupertino.Osd1.Show(kind, level)` on the session bus, after a slider drag ends (`volume`, `mute` for a muted output, `brightness`) | `RecordingOverlay` |
 
 The modules are the ones a service backs. Sharing and screen mirroring have no service, and the session refuses an
@@ -199,7 +237,8 @@ the menu bar.
 | Item | Value |
 |---|---|
 | Grid | two columns of 140 pt and six rows of 64 pt, 12 pt apart: 292 x 444 pt (`layout`) |
-| Tiles | Wi-Fi, Bluetooth and the microphone capsules down the left column; now playing (140 x 140) beside the first two; dock hiding and lock screen circles beside the microphone; mute and keyboard brightness circles, then the focus capsule; display, then sound across both columns (`layout::frame`) |
+| Tiles | with every control shown: Wi-Fi, Bluetooth and the microphone capsules down the left column; now playing (140 x 140) beside the first two; dock hiding and lock screen circles beside the microphone; mute and keyboard brightness circles, then the focus capsule; display, then sound across both columns (`layout::frame`); otherwise the shown ones in their order, each in the first free place (`arrangement`) |
+| Editing | content at 0.55; remove mark 18 pt, 4 pt in; Cancel 62 x 24 and Done 49 x 24, 12 pt apart; chips 36 pt, 12 pt apart, six in a row, 16 pt below the capsules, their mark 14 pt; a drag holds a tile after 3 pt (`layout::editing`) |
 | Corners | capsules and circles round, now playing and an open view 32 pt, display and sound 24 pt |
 | Window | 308 x 500 pt: the grid 8 pt in, Edit Controls (94 x 24) centred 16 pt below it; 6 pt from the right edge and 12 pt below the bar (the tiles 44 pt from the top); the surface adds the shadow's margin (`layout::SURFACE`) |
 | Capsule content | 36 pt badge 14 pt in; text from 56 pt; 13 pt semibold title, 11 pt state |
@@ -233,15 +272,16 @@ the menu bar.
 | Module | Content |
 |---|---|
 | `model` | `Module` (reading order), `Detail`, `Slider`, `Reading` (value or reason), `Controls`, `TileState`, `VolumeState`, `Media`, `MediaCommand`, `Network`, `Device`, `Output`, `speaker_icon` |
-| `layout` | the grid in points (`ROW`, `COLUMN`, `GAP`, `WINDOW`, `INSET`), each module's `frame` and `outline`, the Edit Controls frame, and the detail view's parts, `detail_frame` and `morph` |
+| `arrangement` | `Arrangement`: the shown modules in order (`from_ids`, `ids`, `shown`, `available`), `add`, `remove`, `move_to`, `step`, `move_near`, and where the order puts each tile (`places`, `frame`, `rows`, `height`) |
+| `layout` | the grid in points (`ROW`, `COLUMN`, `GAP`, `WINDOW`, `INSET`), each module's `frame` (with every module shown) and `outline`, the Edit Controls frame under the tiles, the parts of the editing state (`editing`), and the detail view's parts, `detail_frame` and `morph` |
 | `lifecycle` | `Lifecycle`, `Phase`, `FADE_SECONDS` with injected time |
 | `motion` | `spring`, `Expansion` (a detail view opening or closing, reversible, with Reduce Motion) and `visibility` with injected time |
-| `backend` | the traits (`Wifi`, `Bluetooth`, `Switch`, `Brightness`, `Volume`, `MediaPlayer`, `SessionLock`, `Launcher`, `OverlayNotifier`), `SessionVolume`, `AlsaVolume`, `PipewireMicrophone`, `DockHiding`, `SettingsLauncher`, `Unavailable`, the `Memory*` stand-ins and `Recording` |
+| `backend` | the traits (`Wifi`, `Bluetooth`, `Switch`, `Brightness`, `Volume`, `MediaPlayer`, `SessionLock`, `Launcher`, `OverlayNotifier`, `LayoutStore`), `SessionVolume`, `AlsaVolume`, `PipewireMicrophone`, `DockHiding`, `StoredLayout`, `SettingsLauncher`, `Unavailable`, the `Memory*` stand-ins and `Recording` |
 | `radios` (feature `dbus`) | `Radios` (the system bus the radios are read on, `on_change`), `RadioWifi`, `RadioBluetooth` |
 | `system` (feature `dbus`) | `NotificationFocusMode`, `PowerdBrightness`, `UpowerKeyboard`, `LogindLock`, `MprisPlayer`, `SessionOverlay` |
-| `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, throttled level writes, refresh timer; `Backends` |
+| `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, the controls shown and their editing (`edit_controls`, `edit_remove`, `edit_add`, `edit_step`, `edit_move_near`, `finish_edit`, `cancel_edit`), throttled level writes, refresh timer; `Backends` |
 | `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |
-| `view` (feature `app`) | the CupertinoKit windows: `panel` (the tiles at a `Presentation`), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
+| `view` (feature `app`) | the CupertinoKit windows: `arranged` (the tiles of an `Arrangement` at a `Presentation`; `panel` with every module), `Editing` and `Held` (the editing state and the tile the pointer holds), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `edit_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
 
 The Wi-Fi and Bluetooth backends share one connection to the system bus (`radios::Radios`) and follow the services'
 change signals on it (`cupertino_radios::watch`): a signal, or a service starting or stopping, has a shown panel read
@@ -256,13 +296,14 @@ cargo test -p cupertino-controlcenter --features app
 
 | Test | Proves |
 |---|---|
-| Model, layout and motion unit tests | The readings behind the tiles, every tile's cell and outline with no two tiles touching, the detail view's size and morph, the spring without overshoot, a reversal from where the motion was, the Reduce Motion fade and the content hand-over. |
+| Model, layout and motion unit tests | The readings behind the tiles, every tile's cell and outline with no two tiles touching, the detail view's size and morph, the spring without overshoot, a reversal from where the motion was, the Reduce Motion fade and the content hand-over. The parts of the editing state: Edit Controls following the tiles, Cancel and Done in its place, the chips' rows, and the surface holding the controls offered whatever is left out. |
+| Arrangement unit tests | Every module in reading order lies where the grid has it; a stored layout comes back as written; reading skips unknown and repeated names, shows no module not named and none for an empty list; the controls offered; remove closing the tiles up and add putting the tile last; a move to a place, a step at the ends, a tile held over another place; a move that would not fit the grid refused and a step passing over it; a stored order too tall shown in reading order; every one of the 2048 choices of modules fitting the grid in reading order with no two tiles touching. |
 | Lifecycle unit tests | Full opacity, the fade, reopening while hiding, hiding at once from any phase, at literal instants. |
-| Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
-| Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
+| Backend unit tests | The stored layout as the `controls` key of the panel's settings file, written, read again and read after another process wrote it; the layout kept in memory. The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
+| Controller unit tests | Editing: Edit Controls edits in the panel and opens no settings page; nothing stored until Done, which keeps the edit through a closing and in a panel started anew on the same store; Cancel, a dismissal, a toggle and the output going drop it; a layout changed while the panel is open followed at the next reading, an unknown name skipped and the open view of a module no longer shown closed; a store that refuses the edit drops it. Switches, mute, lock, settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
 | `tests/radios.rs` (feature `dbus`) | The Wi-Fi and Bluetooth backends against stand-ins for NetworkManager and BlueZ on a private bus: no service, no Wi-Fi device and no adapter each disable the tile with the reason; the radio on, off, joined and not; the networks listed and joined; the paired devices connected and disconnected without holding the panel, and a refused connection; a shown panel reading again when a service starts, changes or stops, the tiles switching the radio and the adapter, and a hidden panel reading nothing. |
-| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; every tile keeping its glass and container through a view's motion; the shadow following that motion without a jump and fading out before the menu bar; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
-| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. |
+| `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media and output presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; every tile keeping its glass and container through a view's motion; the shadow following that motion without a jump and fading out before the menu bar; Edit Controls glass as the tiles are, in a dark and a light session. Editing (`editing`, `editing-reduce-transparency` in the light appearance and `editing-increase-contrast` goldens, with three controls offered): Edit Controls starting it, with Cancel and Done in its place, every tile one control with its place, description and actions and a remove mark on its corner, and the tiles' own controls out of the tree and the Tab order; the keyboard starting it with the focus staying where Done is; a mark removing a tile and its chip adding it again; the window taking presses on the chips under it; a drag carrying a tile while the others make room, and a small move holding nothing; the arrow keys, Delete and a chip from the keyboard with the focus following; a screen reader stepping, removing and adding; Done, Cancel and Escape ending it and a press between the tiles not; the panel showing the arrangement it is given with Edit Controls under its last row; the editing panel one container of module glass; the marks standing out from opaque tiles in either appearance. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
+| Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. Editing: Edit Controls edits the panel where it is, on its grid, through the periodic reading; each edit shows at once, a held tile is where the pointer holds it, and Done stores the edit and shows it after a closing; Cancel or Escape, a press outside, a toggle, the lock and the output going drop it with nothing written; the keyboard's edits take the focus along; a layout stored while the panel is open shows at the next reading; edits are ignored while the controls are not edited. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. `Shown` and `Output` say what the panel published, hidden until then, and each change is announced once with `PropertiesChanged`. |
 
 `cupertino-server`'s `tests/shell_processes.rs` runs the process with `--fake-backends` through output removal: open on an

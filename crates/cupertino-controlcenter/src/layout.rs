@@ -123,14 +123,100 @@ pub fn outline(module: Module) -> Outline {
     }
 }
 
-/// Where the Edit Controls capsule lies, from the grid's top-left corner.
+/// Where the Edit Controls capsule lies under every tile, from the grid's top-left corner.
 pub fn edit_frame() -> Rect {
+    edit_frame_under(GRID_HEIGHT)
+}
+
+/// The top of the row under tiles `height` high that holds Edit Controls: [`EDIT_GAP`] below them, or at the
+/// grid's top when no tile shows.
+fn edit_row(height: f64) -> f64 {
+    if height > 0.0 {
+        height + EDIT_GAP
+    } else {
+        0.0
+    }
+}
+
+/// Where the Edit Controls capsule lies under tiles `height` high, centred on the grid.
+pub fn edit_frame_under(height: f64) -> Rect {
     Rect::new(
         (GRID_WIDTH - EDIT_SIZE.width) / 2.0,
-        GRID_HEIGHT + EDIT_GAP,
+        edit_row(height),
         EDIT_SIZE.width,
         EDIT_SIZE.height,
     )
+}
+
+/// The parts the panel shows while its controls are edited.
+pub mod editing {
+    use super::{edit_row, Module, Rect, Size, EDIT_SIZE, GRID_WIDTH};
+
+    /// The Cancel and Done capsules that take the place of Edit Controls, and the space between them.
+    pub const CANCEL_SIZE: Size = Size::new(62.0, EDIT_SIZE.height);
+    pub const DONE_SIZE: Size = Size::new(49.0, EDIT_SIZE.height);
+    pub const BUTTON_GAP: f64 = super::GAP;
+    /// The mark on a tile's corner that removes it: its diameter and its inset from the tile's edges.
+    pub const MARK: f64 = 18.0;
+    pub const MARK_INSET: f64 = 4.0;
+    /// A control offered to add: a round chip of this diameter, [`CHIP_GAP`] from the next as the tiles are, at most
+    /// [`CHIP_COLUMNS`] in a row, the first row [`CHIPS_GAP`] below the capsules.
+    pub const CHIP: f64 = 36.0;
+    pub const CHIP_GAP: f64 = super::GAP;
+    pub const CHIP_COLUMNS: usize = 6;
+    pub const CHIPS_GAP: f64 = 16.0;
+    /// The mark on a chip that says it adds: its diameter.
+    pub const CHIP_MARK: f64 = 14.0;
+    /// How far the pointer moves with the button down before it holds a tile.
+    pub const DRAG_SLOP: f64 = 3.0;
+
+    /// Where the remove mark lies on `module`'s tile of `size`: on its leading top corner, over the corner of its
+    /// badge or artwork; on the display and sound tiles, whose title starts there, on the trailing one.
+    pub fn mark(module: Module, size: Size) -> Rect {
+        let x = match module {
+            Module::Display | Module::Sound => size.width - MARK_INSET - MARK,
+            _ => MARK_INSET,
+        };
+        Rect::new(x, MARK_INSET, MARK, MARK)
+    }
+
+    /// Where the Cancel and the Done capsule lie under tiles `height` high, the pair centred on the grid.
+    pub fn buttons(height: f64) -> (Rect, Rect) {
+        let width = CANCEL_SIZE.width + BUTTON_GAP + DONE_SIZE.width;
+        let (x, y) = ((GRID_WIDTH - width) / 2.0, edit_row(height));
+        (
+            Rect::new(x, y, CANCEL_SIZE.width, CANCEL_SIZE.height),
+            Rect::new(
+                x + CANCEL_SIZE.width + BUTTON_GAP,
+                y,
+                DONE_SIZE.width,
+                DONE_SIZE.height,
+            ),
+        )
+    }
+
+    /// Where chip `index` of `count` lies under tiles `height` high: rows of [`CHIP_COLUMNS`], each centred on the
+    /// grid.
+    pub fn chip(index: usize, count: usize, height: f64) -> Rect {
+        let (row, column) = (index / CHIP_COLUMNS, index % CHIP_COLUMNS);
+        let in_row = (count - row * CHIP_COLUMNS).min(CHIP_COLUMNS) as f64;
+        let width = in_row * CHIP + (in_row - 1.0) * CHIP_GAP;
+        Rect::new(
+            (GRID_WIDTH - width) / 2.0 + column as f64 * (CHIP + CHIP_GAP),
+            edit_row(height) + EDIT_SIZE.height + CHIPS_GAP + row as f64 * (CHIP + CHIP_GAP),
+            CHIP,
+            CHIP,
+        )
+    }
+
+    /// The bottom of what shows while editing, from the grid's top: the capsules under tiles `height` high, or
+    /// the last row of `count` chips.
+    pub fn bottom(count: usize, height: f64) -> f64 {
+        match count {
+            0 => edit_row(height) + EDIT_SIZE.height,
+            count => chip(count - 1, count, height).max_y(),
+        }
+    }
 }
 
 /// The parts of an open detail view, top to bottom.
@@ -173,7 +259,12 @@ pub fn detail_frame(rows: usize) -> Rect {
 /// The frame of `detail`'s tile at `progress` of its opening, 0 (the tile in the grid) to 1 (the open view of
 /// `rows` rows): each edge moves straight from one to the other.
 pub fn morph(detail: Detail, rows: usize, progress: f64) -> Rect {
-    let (from, to) = (frame(detail.module()), detail_frame(rows));
+    morph_from(frame(detail.module()), rows, progress)
+}
+
+/// [`morph`] for a tile that lies at `from`.
+pub fn morph_from(from: Rect, rows: usize, progress: f64) -> Rect {
+    let to = detail_frame(rows);
     let t = progress.clamp(0.0, 1.0);
     let lerp = |a: f64, b: f64| a + (b - a) * t;
     Rect::new(
@@ -255,6 +346,64 @@ mod tests {
         );
         assert_eq!(detail_frame(50).height(), detail_frame(9).height());
         assert!(detail_frame(9).height() <= GRID_HEIGHT);
+    }
+
+    #[test]
+    fn edit_controls_follows_the_tiles_up_as_they_get_fewer() {
+        assert_eq!(edit_frame_under(GRID_HEIGHT), edit_frame());
+        assert_eq!(edges(edit_frame_under(140.0)), (99.0, 156.0, 94.0, 24.0));
+        assert_eq!(
+            edit_frame_under(0.0).y(),
+            0.0,
+            "with no tile it lies where the first would"
+        );
+    }
+
+    #[test]
+    fn cancel_and_done_take_the_place_of_edit_controls() {
+        let (cancel, done) = editing::buttons(GRID_HEIGHT);
+        assert_eq!(edges(cancel), (84.5, 460.0, 62.0, 24.0));
+        assert_eq!(edges(done), (158.5, 460.0, 49.0, 24.0));
+        let middle = (cancel.x() + done.max_x()) / 2.0;
+        assert_eq!(middle, edit_frame().center().x);
+    }
+
+    #[test]
+    fn the_controls_offered_lie_in_centred_rows_of_six_under_the_capsules() {
+        assert_eq!(
+            edges(editing::chip(0, 1, GRID_HEIGHT)),
+            (128.0, 500.0, 36.0, 36.0)
+        );
+        // eleven: a full row, then five centred under it
+        assert_eq!(edges(editing::chip(0, 11, 0.0)), (8.0, 40.0, 36.0, 36.0));
+        assert_eq!(edges(editing::chip(5, 11, 0.0)), (248.0, 40.0, 36.0, 36.0));
+        assert_eq!(edges(editing::chip(6, 11, 0.0)), (32.0, 88.0, 36.0, 36.0));
+        assert_eq!(edges(editing::chip(10, 11, 0.0)), (224.0, 88.0, 36.0, 36.0));
+        assert_eq!(editing::bottom(11, 0.0), 124.0);
+        assert_eq!(editing::bottom(0, GRID_HEIGHT), edit_frame().max_y());
+    }
+
+    #[test]
+    fn whatever_is_edited_out_the_surface_holds_the_controls_offered() {
+        use crate::arrangement::Arrangement;
+        let room = SURFACE.height - GRID_ORIGIN.y;
+        for mask in 0u32..1 << Module::ALL.len() {
+            let ids: Vec<&str> = Module::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, module)| module.id())
+                .collect();
+            let arrangement = Arrangement::from_ids(&ids);
+            let offered = arrangement.available().len();
+            let bottom = editing::bottom(offered, arrangement.height());
+            assert!(bottom + INSET <= room, "{ids:?}: {bottom}");
+        }
+        // in any order: one row of chips fits under six rows of tiles, and a second row of chips means at most
+        // four tiles, which take four rows at most (the media tile and the two wide ones)
+        assert!(editing::bottom(6, GRID_HEIGHT) + INSET <= room);
+        let four_rows = 4.0 * ROW + 3.0 * GAP;
+        assert!(editing::bottom(11, four_rows) + INSET <= room);
     }
 
     #[test]

@@ -38,9 +38,10 @@ use cupertino_kit::text::{
 };
 use cupertino_kit::theme::{Appearance, Color, ColorRole, StateVariant};
 
+use crate::arrangement::Arrangement;
 use crate::layout::{
-    self, detail as rows, Outline, BAR_MARGIN, GRID_ORIGIN, GRID_WIDTH, INSET, LARGE_RADIUS,
-    SHADOW_REACH, SHADOW_TOP, SURFACE, WINDOW, WINDOW_ORIGIN,
+    self, detail as rows, editing, Outline, BAR_MARGIN, GRID_ORIGIN, GRID_WIDTH, INSET,
+    LARGE_RADIUS, SHADOW_REACH, SHADOW_TOP, SURFACE, WINDOW, WINDOW_ORIGIN,
 };
 use crate::model::{Controls, Detail, MediaCommand, Module, Reading, Slider, TileState};
 use crate::motion::{visibility, Visibility};
@@ -64,6 +65,8 @@ const RIGHT: Keysym = Keysym(0xff53);
 const DOWN: Keysym = Keysym(0xff54);
 const HOME: Keysym = Keysym(0xff50);
 const END: Keysym = Keysym(0xff57);
+const BACKSPACE: Keysym = Keysym(0xff08);
+const DELETE: Keysym = Keysym(0xffff);
 
 /// The glass container the tiles join, and how close two of them come before their outlines blend: less than the gap
 /// between tiles, so tiles at rest stay apart.
@@ -145,6 +148,19 @@ const MEDIA_BUTTONS_X: [f64; 3] = [30.0, 70.0, 110.0];
 const MEDIA_BUTTON: f64 = 32.0;
 /// Corner radius of a detail view's row highlight.
 const ROW_RADIUS: f64 = 8.0;
+/// While the controls are edited a tile's content is drawn at this opacity: it shows what the tile is and does not
+/// act.
+const EDITED_CONTENT: f64 = 0.55;
+/// The marks that remove a tile and say a chip adds: a disc, white where the tiles are dark and dark where they are
+/// light, with a bar or a cross of the other tone, this long and this thick.
+const MARK_DISC: Color = Color::new(1.0, 1.0, 1.0, 1.0);
+const MARK_DISC_LIGHT: Color = Color::new(0.2, 0.2, 0.2, 1.0);
+const MARK_SIGN: Color = Color::new(0.1, 0.1, 0.1, 1.0);
+const MARK_SIGN_LIGHT: Color = Color::new(1.0, 1.0, 1.0, 1.0);
+const MARK_SIGN_LENGTH: f64 = 8.0;
+const MARK_SIGN_WIDTH: f64 = 1.5;
+/// Symbol size on a chip that adds a control.
+const CHIP_SYMBOL: f64 = 18.0;
 
 /// What the user did on the panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -165,8 +181,22 @@ pub enum Input {
     Output(u32),
     /// The settings row of a detail view.
     Settings(Detail),
-    /// The Edit Controls capsule.
+    /// The Edit Controls capsule: the controls are to be edited.
     EditControls,
+    /// While editing: a tile's remove mark, or Delete on the tile.
+    Remove(Module, Via),
+    /// While editing: a control offered to add.
+    Add(Module, Via),
+    /// While editing: an arrow key on a tile moves it one place later (`true`) or earlier.
+    Step(Module, bool),
+    /// While editing: the pointer holds a tile with its corner at this point, from the grid's corner.
+    DragTo(Module, Point),
+    /// While editing: the pointer let the tile go.
+    Drop,
+    /// While editing: Done, which keeps the edit.
+    Done,
+    /// While editing: Cancel or Escape, which drops it.
+    Cancel,
     /// An arrow key on a control: the focus goes to the control of this key.
     Focus(String),
     /// A slider moved to a fraction, 0 to 1.
@@ -193,6 +223,8 @@ impl Input {
         match self {
             Input::Expand(detail, _) => Input::Expand(detail, Via::Keyboard),
             Input::Collapse(_) => Input::Collapse(Via::Keyboard),
+            Input::Remove(module, _) => Input::Remove(module, Via::Keyboard),
+            Input::Add(module, _) => Input::Add(module, Via::Keyboard),
             input => input,
         }
     }
@@ -209,6 +241,8 @@ pub struct Presentation {
     pub input: bool,
     /// A detail view opening, open or closing.
     pub detail: Option<Opened>,
+    /// The controls are being edited.
+    pub edit: Option<Editing>,
 }
 
 impl Presentation {
@@ -218,7 +252,24 @@ impl Presentation {
         light: false,
         input: true,
         detail: None,
+        edit: None,
     };
+}
+
+/// The panel while its controls are edited: every tile carries a remove mark and can be moved, the controls not
+/// shown are offered under them, and Cancel and Done take the place of Edit Controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Editing {
+    /// The tile the pointer holds.
+    pub held: Option<Held>,
+}
+
+/// A tile the pointer holds while the controls are edited.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Held {
+    pub module: Module,
+    /// The tile's corner as the pointer holds it, from the grid's corner.
+    pub origin: Point,
 }
 
 /// A detail view and how far it has opened.
@@ -239,20 +290,17 @@ pub fn focus_key(module: Module) -> String {
 /// The key of the first control of an open detail view.
 pub const DETAIL_FOCUS: &str = "detail.header";
 
+/// The key of the Edit Controls capsule, and of Done while the controls are edited, so the focus stays on it through
+/// both.
+pub const EDIT_FOCUS: &str = "edit-controls";
+
+/// The key of the control that moves `module`'s tile while the controls are edited.
+pub fn edit_key(module: Module) -> String {
+    format!("edit.tile.{}", slug(module))
+}
+
 fn slug(module: Module) -> &'static str {
-    match module {
-        Module::WiFi => "wifi",
-        Module::NowPlaying => "now-playing",
-        Module::Bluetooth => "bluetooth",
-        Module::Microphone => "microphone",
-        Module::DockHiding => "dock-hiding",
-        Module::LockScreen => "lock-screen",
-        Module::Mute => "mute",
-        Module::KeyboardBrightness => "keyboard-brightness",
-        Module::FocusMode => "focus",
-        Module::Display => "display",
-        Module::Sound => "sound",
-    }
+    module.id()
 }
 
 /// The symbol of a module.
@@ -973,7 +1021,7 @@ impl<M: 'static> Widget<M> for Place<M> {
 
 /// The whole window: the tiles at their places. With Reduce Transparency it draws the one opaque panel under the
 /// tiles. A left or right press on it, between or around the tiles, collapses the open detail view or dismisses the
-/// panel.
+/// panel; while the controls are edited it does nothing, so a press that misses a tile loses no edit.
 struct Board<M> {
     alpha: f64,
     /// Height of the tiles the opaque panel of Reduce Transparency goes around: the grid and Edit Controls, or an open
@@ -985,7 +1033,7 @@ struct Board<M> {
     resting: bool,
     /// The tiles' outlines, relative to the grid's corner, that the shadow is cut away over by their opacity.
     cutouts: Vec<Cutout>,
-    on_outside: M,
+    on_outside: Option<M>,
     children: Vec<Element<M>>,
 }
 
@@ -1038,7 +1086,9 @@ impl<M: Clone + 'static> Widget<M> for Board<M> {
                 },
                 _,
             ) if cx.phase() != Phase::Capture => {
-                cx.emit(self.on_outside.clone());
+                if let Some(outside) = &self.on_outside {
+                    cx.emit(outside.clone());
+                }
                 Propagation::Stop
             }
             _ => Propagation::Continue,
@@ -1214,6 +1264,10 @@ enum Face {
     Circle { on: bool },
     /// Nothing at rest; a highlight under the pointer when `hover` is set, a veil while pressed.
     Plain { radius: f64, hover: bool },
+    /// The mark that removes a tile: a disc with a bar.
+    Remove,
+    /// A round chip that adds a control: the glass alone, with a small disc with a cross on its corner.
+    Add,
 }
 
 impl Face {
@@ -1273,7 +1327,9 @@ struct Pressable<M> {
 impl<M: 'static> Pressable<M> {
     fn radius(&self, size: Size) -> f64 {
         match self.face {
-            Face::Badge { .. } | Face::Circle { .. } => size.width.min(size.height) / 2.0,
+            Face::Badge { .. } | Face::Circle { .. } | Face::Remove | Face::Add => {
+                size.width.min(size.height) / 2.0
+            }
             Face::Plain { radius, .. } => radius,
         }
     }
@@ -1294,6 +1350,32 @@ impl<M: 'static> Pressable<M> {
             cx.emit((self.to)(Input::Focus(key)));
         }
         true
+    }
+}
+
+/// A mark in `disc`: a disc with a bar across it, and with `cross` a second bar down it. White with a dark sign where
+/// the tiles are dark, dark with a white sign where they are light.
+fn mark(cx: &mut PaintCx<'_>, disc: Rect, cross: bool) {
+    let color = by_appearance(cx, MARK_DISC, MARK_DISC_LIGHT);
+    let sign = by_appearance(cx, MARK_SIGN, MARK_SIGN_LIGHT);
+    fill(cx, disc, disc.width().min(disc.height()) / 2.0, color);
+    let centre = disc.center();
+    let (length, width) = (MARK_SIGN_LENGTH.min(disc.width() - 6.0), MARK_SIGN_WIDTH);
+    let bar = Rect::new(
+        centre.x - length / 2.0,
+        centre.y - width / 2.0,
+        length,
+        width,
+    );
+    fill(cx, bar, width / 2.0, sign);
+    if cross {
+        let bar = Rect::new(
+            centre.x - width / 2.0,
+            centre.y - length / 2.0,
+            width,
+            length,
+        );
+        fill(cx, bar, width / 2.0, sign);
     }
 }
 
@@ -1496,11 +1578,19 @@ impl<M: 'static> Widget<M> for Pressable<M> {
             Face::Plain { hover: true, .. } if state.hovered && self.enabled => {
                 fill(cx, rect, radius, veil(cx, HOVER_ROW))
             }
+            Face::Remove => mark(cx, rect, false),
+            Face::Add => {
+                let corner = Rect::new(0.0, 0.0, editing::CHIP_MARK, editing::CHIP_MARK);
+                mark(cx, corner, true)
+            }
             _ => {}
         }
         if state.pressed() {
             let shade = if self.face.on() {
                 PRESSED_ON
+            } else if self.face == Face::Remove {
+                // the mark's disc is of the tone a veil would have: it is shaded the other way
+                by_appearance(cx, PRESSED_ON, Color::new(1.0, 1.0, 1.0, 0.2))
             } else {
                 veil(cx, PRESSED_OFF)
             };
@@ -1581,6 +1671,8 @@ struct Level<M> {
     value: Option<f64>,
     /// The panel's opacity: it reaches the track's glass.
     panel: f64,
+    /// The level shows and does not act: the controls are being edited.
+    inert: bool,
     map: Map,
     to: fn(Input) -> M,
 }
@@ -1612,7 +1704,11 @@ impl<M: 'static> Widget<M> for Level<M> {
     fn update(&self, old: &Self, _: &mut Drag) -> Change {
         if self.frame != old.frame {
             Change::Layout
-        } else if self.value != old.value || self.label != old.label || self.panel != old.panel {
+        } else if self.value != old.value
+            || self.label != old.label
+            || self.panel != old.panel
+            || self.inert != old.inert
+        {
             Change::Paint
         } else {
             Change::None
@@ -1627,7 +1723,7 @@ impl<M: 'static> Widget<M> for Level<M> {
     }
 
     fn event(&self, state: &mut Drag, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        if cx.phase() == Phase::Capture {
+        if cx.phase() == Phase::Capture || self.inert {
             return Propagation::Continue;
         }
         let Some(value) = self.value else {
@@ -1772,7 +1868,7 @@ impl<M: 'static> Widget<M> for Level<M> {
             disabled: self.value.is_none(),
             ..AccessibleStates::default()
         });
-        if self.value.is_some() {
+        if self.value.is_some() && !self.inert {
             cx.focusable();
             cx.action(Action::Increment);
             cx.action(Action::Decrement);
@@ -1781,15 +1877,231 @@ impl<M: 'static> Widget<M> for Level<M> {
     }
 }
 
+/// The pointer on a tile while the controls are edited.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Hold {
+    /// Where the button went down, and how far that is from the tile's corner.
+    pressed: Option<(Point, Point)>,
+    /// The pointer moved far enough to hold the tile.
+    dragging: bool,
+}
+
+/// What moves a tile while the controls are edited, over the whole tile and its content: a drag holds the tile and
+/// carries it; the arrow keys move it one place earlier or later, and Delete or Backspace removes it. To assistive
+/// technology it is the tile's place in the order, stepped down and up.
+struct Handle<M> {
+    module: Module,
+    label: String,
+    /// The tile's place in the order, from 1, and how many tiles there are.
+    place: usize,
+    count: usize,
+    frame: Rect,
+    radius: f64,
+    to: fn(Input) -> M,
+}
+
+impl<M: 'static> Handle<M> {
+    fn let_go(&self, state: &mut Hold, cx: &mut EventCx<'_, M>) {
+        if std::mem::take(state).dragging {
+            cx.emit((self.to)(Input::Drop));
+        }
+    }
+}
+
+impl<M: 'static> Widget<M> for Handle<M> {
+    type State = Hold;
+
+    fn layout(&self) -> LayoutSpec {
+        spec(ContainerKind::Leaf, self.frame)
+    }
+
+    fn state(&self) -> Hold {
+        Hold::default()
+    }
+
+    fn update(&self, old: &Self, _: &mut Hold) -> Change {
+        if self.frame != old.frame {
+            Change::Layout
+        } else if self.place != old.place
+            || self.count != old.count
+            || self.label != old.label
+            || self.radius != old.radius
+        {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &Hold, _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: self.frame.size,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, state: &mut Hold, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
+        if cx.phase() == Phase::Capture {
+            return Propagation::Continue;
+        }
+        match *event {
+            Event::Pointer(
+                PointerEvent::Button {
+                    position,
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                },
+                _,
+            ) => {
+                if let (None, Some(bounds)) = (state.pressed, cx.bounds()) {
+                    let grab = Point::new(position.x - bounds.x(), position.y - bounds.y());
+                    state.pressed = Some((position, grab));
+                    cx.capture_pointer();
+                }
+                Propagation::Stop
+            }
+            Event::Pointer(PointerEvent::Motion { position }, _) => {
+                let Some((start, grab)) = state.pressed else {
+                    return Propagation::Continue;
+                };
+                let moved = (position.x - start.x).hypot(position.y - start.y);
+                if state.dragging || moved >= editing::DRAG_SLOP {
+                    state.dragging = true;
+                    let origin = Point::new(
+                        position.x - grab.x - GRID_ORIGIN.x,
+                        position.y - grab.y - GRID_ORIGIN.y,
+                    );
+                    cx.emit((self.to)(Input::DragTo(self.module, origin)));
+                }
+                Propagation::Stop
+            }
+            Event::Pointer(
+                PointerEvent::Button {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                },
+                _,
+            ) if state.pressed.is_some() => {
+                cx.release_pointer();
+                self.let_go(state, cx);
+                Propagation::Stop
+            }
+            Event::Cancel => {
+                self.let_go(state, cx);
+                Propagation::Continue
+            }
+            Event::Key(ref key, _) if key.pressed && cx.node() == cx.target() => {
+                let input = match key.keysym {
+                    LEFT | UP => Input::Step(self.module, false),
+                    RIGHT | DOWN => Input::Step(self.module, true),
+                    DELETE | BACKSPACE if !key.repeat => Input::Remove(self.module, Via::Keyboard),
+                    _ => return Propagation::Continue,
+                };
+                cx.emit((self.to)(input));
+                Propagation::Stop
+            }
+            Event::Action(ref request) => {
+                let forward = match request.action {
+                    Action::Increment => true,
+                    Action::Decrement => false,
+                    Action::Focus => {
+                        cx.request_focus();
+                        return Propagation::Stop;
+                    }
+                    _ => return Propagation::Continue,
+                };
+                cx.emit((self.to)(Input::Step(self.module, forward)));
+                Propagation::Stop
+            }
+            _ => Propagation::Continue,
+        }
+    }
+
+    fn paint(&self, _: &Hold, cx: &mut PaintCx<'_>) {
+        if cx.focus_visible() && cx.window_active() {
+            let theme = cx.env().theme.clone();
+            let ring = &theme.focus;
+            let color = theme
+                .colors
+                .get(ColorRole::KeyboardFocusIndicator, StateVariant::NORMAL);
+            if let Some(color) = color {
+                // inside the tile's edge: the tile clips what it holds
+                let inset = ring.width / 2.0;
+                let rect = Rect::from_origin_size(Point::ZERO, cx.size());
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::RoundedRect {
+                        rect: rect.outset(-inset),
+                        radius: (self.radius - inset).max(0.0),
+                    },
+                    width: ring.width,
+                    paint: Paint::Solid(color),
+                });
+            }
+        }
+    }
+
+    fn semantics(&self, _: &Hold, cx: &mut SemanticsCx<'_>) {
+        cx.role(Role::Slider);
+        cx.name(self.label.clone());
+        cx.description(format!(
+            "Place {} of {}. The arrow keys move it, Delete removes it.",
+            self.place, self.count
+        ));
+        cx.value(AccessibleValue::Number {
+            value: self.place as f64,
+            min: 1.0,
+            max: self.count as f64,
+            step: Some(1.0),
+        });
+        cx.focusable();
+        if self.place > 1 {
+            cx.action(Action::Decrement);
+        }
+        if self.place < self.count {
+            cx.action(Action::Increment);
+        }
+    }
+}
+
 /// Builds the panel's elements and records where each control lies, for the arrow keys.
 struct Builder<'a, M> {
     controls: &'a Controls,
+    arrangement: &'a Arrangement,
     presentation: Presentation,
     to: fn(Input) -> M,
     map: Map,
+    /// The controls it builds show and do not act: a tile's own content while the controls are edited.
+    inert: bool,
 }
 
 impl<M: Clone + 'static> Builder<'_, M> {
+    /// Where `module`'s tile lies, from the grid's corner: where the arrangement puts it. A module it does not show
+    /// has no tile; its place with every module shown stands in.
+    fn frame(&self, module: Module) -> Rect {
+        self.arrangement
+            .frame(module)
+            .unwrap_or_else(|| layout::frame(module))
+    }
+
+    /// Height of the tiles' rows.
+    fn tiles(&self) -> f64 {
+        self.arrangement.height()
+    }
+
+    /// A builder of controls that show and do not act, and lead no arrow key to them.
+    fn still(&self) -> Self {
+        Builder {
+            controls: self.controls,
+            arrangement: self.arrangement,
+            presentation: self.presentation,
+            to: self.to,
+            map: Rc::new(RefCell::new(Vec::new())),
+            inert: true,
+        }
+    }
+
     /// Records a control of `key` at `frame` within a tile at `origin` in the window.
     fn record(&self, key: &str, origin: Point, frame: Rect) {
         self.map
@@ -1810,6 +2122,8 @@ impl<M: Clone + 'static> Builder<'_, M> {
         on_press: Option<Input>,
         children: Vec<Element<M>>,
     ) -> Element<M> {
+        // while the controls are edited a tile's own controls show and do not act
+        let on_press = on_press.filter(|_| !self.inert);
         let interactive = enabled && on_press.is_some();
         if interactive {
             self.record(key, origin, frame);
@@ -1832,7 +2146,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
 
     fn level(&self, origin: Point, key: &str, slider: Slider, frame: Rect) -> Element<M> {
         let value = self.controls.fraction(slider);
-        if value.is_some() {
+        if value.is_some() && !self.inert {
             self.record(key, origin, frame);
         }
         Element::new(Level {
@@ -1842,6 +2156,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
             frame,
             value,
             panel: self.presentation.alpha,
+            inert: self.inert,
             map: Rc::clone(&self.map),
             to: self.to,
         })
@@ -2439,21 +2754,28 @@ impl<M: Clone + 'static> Builder<'_, M> {
         )
     }
 
-    /// The Edit Controls capsule under the grid.
-    fn edit(&self, alpha: f64) -> Element<M> {
-        let frame = layout::edit_frame();
+    /// A glass capsule at `frame` in the grid that is one button: Edit Controls, or Cancel and Done while editing.
+    fn capsule_button(
+        &self,
+        frame: Rect,
+        key: &str,
+        label: &str,
+        weight: u16,
+        alpha: f64,
+        on_press: Input,
+    ) -> Element<M> {
         let origin = frame.origin;
         let origin = Point::new(origin.x + GRID_ORIGIN.x, origin.y + GRID_ORIGIN.y);
         let size = frame.size;
         self.tile(
-            "Edit Controls",
+            label,
             frame,
             Outline::Capsule,
             alpha,
             vec![self.pressable(
                 origin,
-                "edit-controls",
-                "Edit Controls",
+                key,
+                label,
                 Kind::Button,
                 Face::Plain {
                     radius: size.height / 2.0,
@@ -2461,21 +2783,139 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 },
                 Rect::from_origin_size(Point::ZERO, size),
                 true,
-                Some(Input::EditControls),
-                vec![text(
-                    "Edit Controls",
-                    TypeSize::Body,
-                    EDIT_WEIGHT,
-                    Tone::Primary,
-                )],
+                Some(on_press),
+                vec![text(label, TypeSize::Body, weight, Tone::Primary)],
             )],
         )
     }
 
-    /// Height of what the tiles cover: the grid with the Edit Controls capsule under it, going to the open detail
-    /// view's height as it opens.
+    /// The Edit Controls capsule under the tiles.
+    fn edit(&self, alpha: f64) -> Element<M> {
+        self.capsule_button(
+            layout::edit_frame_under(self.tiles()),
+            EDIT_FOCUS,
+            "Edit Controls",
+            EDIT_WEIGHT,
+            alpha,
+            Input::EditControls,
+        )
+    }
+
+    /// The panel while its controls are edited. Every shown tile lies where the edit puts it, the held one where
+    /// the pointer holds it and over the others; its content shows and does not act, under one control that moves
+    /// the tile (a drag; the arrow keys; Delete removes it) and a mark that removes it. Cancel and Done take the
+    /// place of Edit Controls, Done under its key so the focus stays, and the controls not shown are chips under
+    /// them that add.
+    fn edit_board(&self, edit: Editing) -> Vec<Element<M>> {
+        let still = self.still();
+        let places = self.arrangement.places();
+        let count = places.len();
+        let mut children = Vec::new();
+        let mut held = None;
+        for (index, (module, slot)) in places.into_iter().enumerate() {
+            let holding = edit.held.filter(|held| held.module == module);
+            let frame = holding.map_or(slot, |h| Rect::from_origin_size(h.origin, slot.size));
+            let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
+            let whole = Rect::from_origin_size(Point::ZERO, frame.size);
+            let outline = layout::outline(module);
+            let key = edit_key(module);
+            self.record(&key, origin, whole);
+            let content = Element::new(Fade {
+                frame: whole,
+                alpha: EDITED_CONTENT,
+                hidden: true,
+                children: still.content(module, origin),
+            });
+            let handle = Element::new(Handle {
+                module,
+                label: module.title().to_owned(),
+                place: index + 1,
+                count,
+                frame: whole,
+                radius: outline.radius(frame.size),
+                to: self.to,
+            })
+            .key(key);
+            let remove = self.pressable(
+                origin,
+                &format!("edit.remove.{}", slug(module)),
+                &format!("Remove {}", module.title()),
+                Kind::Button,
+                Face::Remove,
+                editing::mark(module, frame.size),
+                true,
+                Some(Input::Remove(module, Via::Pointer)),
+                Vec::new(),
+            );
+            let tile = self
+                .tile(
+                    module.title(),
+                    frame,
+                    outline,
+                    1.0,
+                    vec![content, handle, remove],
+                )
+                .key(format!("tile.{}", slug(module)));
+            if holding.is_some() {
+                held = Some(tile);
+            } else {
+                children.push(tile);
+            }
+        }
+        let (cancel, done) = editing::buttons(self.tiles());
+        children.push(
+            self.capsule_button(
+                cancel,
+                "edit-cancel",
+                "Cancel",
+                EDIT_WEIGHT,
+                1.0,
+                Input::Cancel,
+            )
+            .key("tile.cancel"),
+        );
+        children.push(
+            self.capsule_button(done, EDIT_FOCUS, "Done", TITLE_WEIGHT, 1.0, Input::Done)
+                .key("tile.edit"),
+        );
+        let offered = self.arrangement.available();
+        for (index, module) in offered.iter().copied().enumerate() {
+            let frame = editing::chip(index, offered.len(), self.tiles());
+            let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
+            let add = self.pressable(
+                origin,
+                &format!("edit.add.{}", slug(module)),
+                &format!("Add {}", module.title()),
+                Kind::Button,
+                Face::Add,
+                Rect::from_origin_size(Point::ZERO, frame.size),
+                true,
+                Some(Input::Add(module, Via::Pointer)),
+                vec![icon(symbol(self.controls, module), CHIP_SYMBOL, None)],
+            );
+            children.push(
+                self.tile(
+                    &format!("Add {}", module.title()),
+                    frame,
+                    Outline::Capsule,
+                    1.0,
+                    vec![add],
+                )
+                .key(format!("chip.{}", slug(module))),
+            );
+        }
+        // last, so it is drawn over what it passes
+        children.extend(held);
+        children
+    }
+
+    /// Height of what the tiles cover: the tiles with the Edit Controls capsule under them, going to the open detail
+    /// view's height as it opens; while the controls are edited, down to the controls offered.
     fn height(&self) -> f64 {
-        let grid = layout::edit_frame().max_y();
+        if self.presentation.edit.is_some() {
+            return editing::bottom(self.arrangement.available().len(), self.tiles());
+        }
+        let grid = layout::edit_frame_under(self.tiles()).max_y();
         self.presentation.detail.map_or(grid, |o| {
             let open = layout::detail_frame(self.row_count(o.detail)).height();
             grid + (open - grid) * o.progress.clamp(0.0, 1.0)
@@ -2495,19 +2935,40 @@ impl<M: Clone + 'static> Builder<'_, M> {
             alpha,
         };
         let mut cutouts = Vec::new();
+        if let Some(edit) = self.presentation.edit {
+            for (module, slot) in self.arrangement.places() {
+                let frame = edit
+                    .held
+                    .filter(|held| held.module == module)
+                    .map_or(slot, |held| Rect::from_origin_size(held.origin, slot.size));
+                cutouts.push(cutout(
+                    frame,
+                    layout::outline(module).radius(frame.size),
+                    1.0,
+                ));
+            }
+            let (cancel, done) = editing::buttons(self.tiles());
+            cutouts.push(cutout(cancel, cancel.height() / 2.0, 1.0));
+            cutouts.push(cutout(done, done.height() / 2.0, 1.0));
+            let offered = self.arrangement.available().len();
+            for index in 0..offered {
+                let chip = editing::chip(index, offered, self.tiles());
+                cutouts.push(cutout(chip, chip.height() / 2.0, 1.0));
+            }
+            return cutouts;
+        }
         if others > 0.0 {
-            for module in Module::ALL {
+            for (module, frame) in self.arrangement.places() {
                 if Some(module) == source {
                     continue;
                 }
-                let frame = layout::frame(module);
                 cutouts.push(cutout(
                     frame,
                     layout::outline(module).radius(frame.size),
                     others,
                 ));
             }
-            let edit = layout::edit_frame();
+            let edit = layout::edit_frame_under(self.tiles());
             cutouts.push(cutout(edit, edit.height() / 2.0, others));
         }
         if let Some(opened) = opened {
@@ -2517,7 +2978,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                 let (frame, radius) = self.morph(opened);
                 cutouts.push(cutout(frame, radius, 1.0));
             } else {
-                let tile = layout::frame(module);
+                let tile = self.frame(module);
                 if p < 1.0 {
                     cutouts.push(cutout(
                         tile,
@@ -2537,12 +2998,8 @@ impl<M: Clone + 'static> Builder<'_, M> {
     /// The frame and corner radius of the tile growing into the open view, from the grid's corner.
     fn morph(&self, opened: Opened) -> (Rect, f64) {
         let module = opened.detail.module();
-        let frame = layout::morph(
-            opened.detail,
-            self.row_count(opened.detail),
-            opened.progress,
-        );
-        let tile = layout::frame(module);
+        let tile = self.frame(module);
+        let frame = layout::morph_from(tile, self.row_count(opened.detail), opened.progress);
         let from = layout::outline(module).radius(tile.size);
         let p = opened.progress.clamp(0.0, 1.0);
         (frame, from + (LARGE_RADIUS - from) * p)
@@ -2558,6 +3015,9 @@ impl<M: Clone + 'static> Builder<'_, M> {
     /// container through the motion, only its opacity changing, so nothing changes look the moment a motion starts,
     /// turns or ends.
     fn board(&self) -> Vec<Element<M>> {
+        if let Some(edit) = self.presentation.edit {
+            return self.edit_board(edit);
+        }
         let opened = self.presentation.detail;
         let shown = opened.map_or(
             Visibility {
@@ -2569,14 +3029,13 @@ impl<M: Clone + 'static> Builder<'_, M> {
         );
         let source = opened.map(|o| o.detail.module());
         let mut children = Vec::new();
-        for module in Module::ALL {
+        for (module, frame) in self.arrangement.places() {
             if Some(module) == source {
                 continue;
             }
             if shown.others <= 0.0 {
                 continue;
             }
-            let frame = layout::frame(module);
             let origin = Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
             let content = self.content(module, origin);
             children.push(
@@ -2606,7 +3065,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
         let module = detail.module();
         let rows = self.row_count(detail);
         let open = layout::detail_frame(rows);
-        let tile_frame = layout::frame(module);
+        let tile_frame = self.frame(module);
         let at = |frame: Rect| Point::new(frame.x() + GRID_ORIGIN.x, frame.y() + GRID_ORIGIN.y);
         let faded = |alpha: f64, children: Vec<Element<M>>| {
             if alpha >= 1.0 {
@@ -2618,6 +3077,7 @@ impl<M: Clone + 'static> Builder<'_, M> {
                         Size::new(open.width(), open.height()),
                     ),
                     alpha,
+                    hidden: false,
                     children,
                 })]
             }
@@ -2754,6 +3214,8 @@ shape_widget!(Line, SEPARATOR, 0.0);
 struct Fade<M> {
     frame: Rect,
     alpha: f64,
+    /// The content only shows: assistive technology and the Tab order leave it out.
+    hidden: bool,
     children: Vec<Element<M>>,
 }
 
@@ -2773,7 +3235,7 @@ impl<M: 'static> Widget<M> for Fade<M> {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.frame != old.frame {
             Change::Layout
-        } else if self.alpha != old.alpha {
+        } else if self.alpha != old.alpha || self.hidden != old.hidden {
             Change::Paint
         } else {
             Change::None
@@ -2795,20 +3257,43 @@ impl<M: 'static> Widget<M> for Fade<M> {
         cx.set_group(finite_alpha(self.alpha) as f32, Vec::new());
     }
 
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        if self.hidden {
+            cx.hidden();
+        }
+    }
 }
 
-/// The panel's window: the tiles at `presentation`. Escape collapses an open detail view, else dismisses the panel.
+/// The panel's window with every module shown in reading order: [`arranged`] with the arrangement nothing stored
+/// gives.
 pub fn panel<M: Clone + 'static>(
     controls: &Controls,
     presentation: Presentation,
     to: fn(Input) -> M,
 ) -> Window<M> {
+    arranged(controls, &Arrangement::default(), presentation, to)
+}
+
+/// The panel's window: the tiles of `arrangement` at `presentation`. Escape collapses an open detail view, else
+/// dismisses the panel; while the controls are edited it cancels the edit.
+pub fn arranged<M: Clone + 'static>(
+    controls: &Controls,
+    arrangement: &Arrangement,
+    presentation: Presentation,
+    to: fn(Input) -> M,
+) -> Window<M> {
+    // the controls are edited on the grid: no view is open then
+    let presentation = Presentation {
+        detail: presentation.detail.filter(|_| presentation.edit.is_none()),
+        ..presentation
+    };
     let builder = Builder {
         controls,
+        arrangement,
         presentation,
         to,
         map: Rc::new(RefCell::new(Vec::new())),
+        inert: false,
     };
     // Escape and a press outside the open view close it; with no view open they close the panel.
     let away = |via| {
@@ -2818,6 +3303,18 @@ pub fn panel<M: Clone + 'static>(
             Input::Dismiss
         }
     };
+    let editing = presentation.edit.is_some();
+    // while editing the controls offered lie under the window, in the margin its shadow takes
+    let mut reach = Rect::from_origin_size(WINDOW_ORIGIN, WINDOW);
+    if editing {
+        let bottom = GRID_ORIGIN.y + builder.height() + INSET;
+        reach = Rect::new(
+            reach.x(),
+            reach.y(),
+            reach.width(),
+            reach.height().max(bottom - reach.y()),
+        );
+    }
     Window {
         key: WindowKey(Key::from(PANEL_KEY)),
         spec: WindowSpec {
@@ -2830,7 +3327,7 @@ pub fn panel<M: Clone + 'static>(
             foreign_parent: None,
             // only the modules take input: not the shadow's margin, and nothing while the panel fades out
             input_region: Some(if presentation.input {
-                vec![Rect::from_origin_size(WINDOW_ORIGIN, WINDOW)]
+                vec![reach]
             } else {
                 Vec::new()
             }),
@@ -2840,7 +3337,11 @@ pub fn panel<M: Clone + 'static>(
                 mods: Mods::NONE,
                 keysym: ESCAPE,
             },
-            to(away(Via::Keyboard)),
+            to(if editing {
+                Input::Cancel
+            } else {
+                away(Via::Keyboard)
+            }),
         ),
         on_close: Some(to(Input::Closed)),
         background: WindowBackground::None,
@@ -2852,7 +3353,7 @@ pub fn panel<M: Clone + 'static>(
                 .detail
                 .is_none_or(|o| o.progress <= 0.0 || o.progress >= 1.0),
             cutouts: builder.cutouts(),
-            on_outside: to(away(Via::Pointer)),
+            on_outside: (!editing).then(|| to(away(Via::Pointer))),
             children: builder.board(),
         }),
         popup: None,

@@ -14,6 +14,7 @@ use cupertino_portal::pick_overlay::PickOverlay;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
+use cupertino_portal::toolkits::{self, ToolkitSettings};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_protocol_app::{AppEffects, AppEvent};
 use cupertino_wayland_client::{Connection, Event};
@@ -81,6 +82,10 @@ fn run() -> Result<()> {
     }
     let bus = zbus::blocking::Connection::session()?;
     let settings = Service::serve(&bus, appearance)?;
+    let toolkits = toolkits::Writer::start(cupertino_defaults::config_home(), || {
+        std::process::Command::new("gsettings")
+    })?;
+    toolkits.apply(ToolkitSettings::from(appearance));
     bus.object_server()
         .at(PORTAL_PATH, FileChooser::new(|event| inbox().push(event)))?;
     bus.object_server().at(
@@ -137,6 +142,9 @@ fn run() -> Result<()> {
         let next = fold(appearance, &events);
         if next != appearance {
             settings.set(next)?;
+            if ToolkitSettings::from(next) != ToolkitSettings::from(appearance) {
+                toolkits.apply(ToolkitSettings::from(next));
+            }
             appearance = next;
         }
     }

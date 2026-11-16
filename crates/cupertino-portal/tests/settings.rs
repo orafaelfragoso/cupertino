@@ -1,5 +1,6 @@
 //! The Settings backend on a private bus, called as xdg-desktop-portal calls it: `ReadAll` and `Read` give the session's
-//! appearance, and a change of appearance emits `SettingChanged` for each key it changes.
+//! appearance and the GTK keys of the GNOME namespaces, and a change of appearance emits `SettingChanged` for each key it
+//! changes.
 
 use std::collections::HashMap;
 
@@ -65,6 +66,7 @@ fn read_all_gives_the_appearance_to_patterns_that_match_its_namespace() {
         dark: true,
         increase_contrast: true,
         reduce_motion: false,
+        always_show_scroll_bars: false,
     }) else {
         return missing_tool("dbus-daemon");
     };
@@ -78,7 +80,35 @@ fn read_all_gives_the_appearance_to_patterns_that_match_its_namespace() {
         values(&read_all(&r.caller, &["org.freedesktop.*"])),
         expected
     );
-    assert!(read_all(&r.caller, &["org.gnome.desktop.interface"]).is_empty());
+    assert!(
+        !read_all(&r.caller, &["org.freedesktop.*"]).contains_key("org.gnome.desktop.interface")
+    );
+    assert!(read_all(&r.caller, &["org.kde.*"]).is_empty());
+}
+
+fn overlay_scrolling(all: &All) -> bool {
+    bool::try_from(&all["org.gnome.desktop.interface"]["overlay-scrolling"]).unwrap()
+}
+
+#[test]
+fn read_all_gives_gtk_whether_scroll_bars_overlay_the_content() {
+    let Some(r) = start(Appearance::default()) else {
+        return missing_tool("dbus-daemon");
+    };
+    // GTK asks for the GNOME namespaces by pattern
+    let all = read_all(&r.caller, &["org.gnome.*"]);
+    assert!(overlay_scrolling(&all), "thin bars while scrolling");
+    assert!(!all.contains_key("org.freedesktop.appearance"));
+    r.portal
+        .set(Appearance {
+            always_show_scroll_bars: true,
+            ..Appearance::default()
+        })
+        .unwrap();
+    assert!(
+        !overlay_scrolling(&read_all(&r.caller, &[])),
+        "tracks shown at all times"
+    );
 }
 
 #[test]
@@ -103,6 +133,12 @@ fn read_gives_one_key_and_refuses_an_unknown_one() {
     assert_eq!(u32::try_from(light).unwrap(), 2, "prefer light");
     assert!(read("org.freedesktop.appearance", "accent-color").is_err());
     assert!(read("org.gnome.desktop.interface", "color-scheme").is_err());
+    let overlay: OwnedValue = read("org.gnome.desktop.interface", "overlay-scrolling")
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(bool::try_from(overlay).unwrap());
 }
 
 #[test]
@@ -130,16 +166,25 @@ fn a_change_of_appearance_emits_setting_changed_for_each_key_it_changes() {
             ..dark
         })
         .unwrap();
+    r.portal
+        .set(Appearance {
+            reduce_motion: true,
+            always_show_scroll_bars: true,
+            ..dark
+        })
+        .unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for message in signals.by_ref().take(2) {
+        for message in signals.by_ref().take(3) {
             let (namespace, key, value): (String, String, OwnedValue) =
                 message.unwrap().body().deserialize().unwrap();
-            tx.send((namespace, key, u32::try_from(value).unwrap()))
+            let value = u32::try_from(&value)
+                .or_else(|_| bool::try_from(&value).map(u32::from))
                 .unwrap();
+            tx.send((namespace, key, value)).unwrap();
         }
     });
-    let changed: Vec<_> = (0..2).map(|_| rx.recv_timeout(WAIT).unwrap()).collect();
+    let changed: Vec<_> = (0..3).map(|_| rx.recv_timeout(WAIT).unwrap()).collect();
     assert_eq!(
         changed,
         [
@@ -152,6 +197,11 @@ fn a_change_of_appearance_emits_setting_changed_for_each_key_it_changes() {
                 "org.freedesktop.appearance".to_owned(),
                 "reduced-motion".to_owned(),
                 1
+            ),
+            (
+                "org.gnome.desktop.interface".to_owned(),
+                "overlay-scrolling".to_owned(),
+                0
             ),
         ],
         "the same appearance again changes nothing"

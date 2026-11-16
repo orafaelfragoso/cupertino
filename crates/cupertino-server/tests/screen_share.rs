@@ -152,6 +152,14 @@ fn the_portal_shares_the_chosen_display_as_a_stream_of_its_frames() {
         command: [
             vec!["env".into(), "CUPERTINO_ASSET_SEARCH_PATH=".into()],
             common::events::isolated().to_vec(),
+            // the GTK settings the portal hands on stay in the test's own folder and memory
+            vec![
+                format!(
+                    "XDG_CONFIG_HOME={}",
+                    common::spawn::diagnostic_state().join("config").display()
+                ),
+                "GSETTINGS_BACKEND=memory".into(),
+            ],
             vec![
                 format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
                 format!("PIPEWIRE_REMOTE={}", pipewire.remote().display()),

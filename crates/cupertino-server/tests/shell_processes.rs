@@ -578,6 +578,8 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
         format!("CUPERTINO_SPEC_DIR={}", common::spawn::spec_dir().display()),
         format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
         "CUPERTINO_ASSET_SEARCH_PATH=".into(),
+        // settings a process hands to GTK stay in memory, not in the user's database the bus could start a writer for
+        "GSETTINGS_BACKEND=memory".into(),
     ];
     command.extend(common::events::isolated());
     command.extend(cupertino_test_pam::shared().env_words());

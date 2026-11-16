@@ -17,6 +17,7 @@ pub mod screen_cast;
 pub mod screenshot;
 pub mod settings;
 pub mod sharing;
+pub mod toolkits;
 
 /// The name xdg-desktop-portal reaches the backend at, as `data/cupertino.portal` declares it.
 pub const BUS_NAME: &str = "org.freedesktop.impl.portal.desktop.cupertino";

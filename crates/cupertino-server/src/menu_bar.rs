@@ -18,8 +18,8 @@ use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
-    self, AgentTrust, AppWindowFlags, BoundAction, Command as BarCommand, CupertinoMenuBarV1,
-    EditAction, Error as BarError, ModifierKey, SessionAction, WindowControl,
+    self, AgentTrust, AppWindowFlags, BoundAction, ClientKind, Command as BarCommand,
+    CupertinoMenuBarV1, EditAction, Error as BarError, ModifierKey, SessionAction, WindowControl,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -179,6 +179,8 @@ struct Feed {
     workspaces: u32,
     /// The window list (version 10), top of the stack first.
     windows: Vec<AppWindow>,
+    /// The process behind the window's connection, 0 when unknown, and whether it is the X11 bridge (version 24).
+    client: (u32, bool),
 }
 
 /// One row of the window list.
@@ -224,6 +226,17 @@ impl Feed {
         }
         if bar.version() >= 16 {
             bar.window_full_screen(u32::from(self.full_screen));
+        }
+        if bar.version() >= 24 {
+            let (pid, x11) = self.client;
+            bar.active_client(
+                pid,
+                if x11 {
+                    ClientKind::X11
+                } else {
+                    ClientKind::Wayland
+                },
+            );
         }
         for w in &self.windows {
             bar.app_window(w.id, w.title.clone(), w.flags);
@@ -976,6 +989,7 @@ impl Cupertino {
                 workspace: 0,
                 workspaces: 0,
                 windows: Vec::new(),
+                client: (0, false),
             };
         };
         let workspaces = self.wm.workspaces(window.output);
@@ -1010,7 +1024,28 @@ impl Cupertino {
                 .map_or(0, |i| i as u32 + 1),
             workspaces: workspaces.len() as u32,
             windows,
+            client: self.window_process(window.id),
         }
+    }
+
+    /// The process behind the connection of window `id` (0 when unknown) and whether it is the X11 bridge, which shows
+    /// the windows of every X11 program: the one the server started, or one started apart, known by its program.
+    fn window_process(&self, id: WindowId) -> (u32, bool) {
+        let Some(client) = self.entry(id).and_then(|e| e.surface().client()) else {
+            return (0, false);
+        };
+        let Some((pid, _)) = (self.process_of)(&self.display_handle, &client) else {
+            return (0, false);
+        };
+        let started = self
+            .xwayland
+            .as_ref()
+            .and_then(crate::xwayland::XWayland::pid);
+        let bridge = started == Some(pid)
+            || std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| {
+                exe.file_name() == Some(std::ffi::OsStr::new(crate::xwayland::SATELLITE))
+            });
+        (pid, bridge)
     }
 
     /// The windows of `app` the window list names, top of the stack first: the ones the dock lists.

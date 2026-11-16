@@ -139,8 +139,11 @@ fn the_worker_owns_the_app_menu_registrar_only_while_asked_and_unless_another_pr
     .unwrap();
     assert_eq!(
         menu,
-        (String::new(), OwnedObjectPath::try_from("/").unwrap()),
-        "registrations are not kept"
+        (
+            other.unique_name().unwrap().to_string(),
+            OwnedObjectPath::try_from("/MenuBar/1").unwrap()
+        ),
+        "the registration is kept, read from the connection that made it"
     );
 
     worker.send(Request::AppMenuRegistrar(false)).unwrap();

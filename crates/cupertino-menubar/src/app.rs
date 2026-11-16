@@ -623,6 +623,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             shared: {
                 let mut shared = Shared::default();
                 shared.conf = conf.clone();
+                shared.x11 = Some(Box::new(cupertino_menubar::x11::XServer::default()));
                 shared
             },
             dark: observed.dark,
@@ -1261,6 +1262,12 @@ impl App {
                     });
                 }
                 worker::Event::StatusRemoved { id } => self.shared.remove_status(&id),
+                worker::Event::Registrations(list) => {
+                    self.shared.registrations = list;
+                    for bar in &self.bars {
+                        bar.feed.match_registered(&mut self.shared);
+                    }
+                }
             }
         }
         self.refresh()
@@ -1321,6 +1328,16 @@ impl App {
                 if let Err(e) = self.services.worker.send(request) {
                     return fail(e);
                 }
+            }
+        }
+        let gone = self.shared.take_gone();
+        if !gone.is_empty() {
+            if let Err(e) = self
+                .services
+                .worker
+                .send(worker::Request::ForgetRegistrations(gone))
+            {
+                return fail(e);
             }
         }
         let in_use: Vec<_> = self

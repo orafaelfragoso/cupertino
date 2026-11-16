@@ -13,14 +13,15 @@ use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::merge::{self, Export, Exporter};
 use crate::recent::RecentItems;
+use crate::registered::{self, ActiveWindow, Client, NoX11, Registration, X11Windows};
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_icons::from_argb;
 use cupertino_kit::core::IconImage;
 use cupertino_shell_client::{
-    AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts, WindowMenu,
-    WindowState,
+    ActiveClient, AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts,
+    WindowMenu, WindowState,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -92,6 +93,12 @@ pub struct Shared {
     /// Sources whose load failed: their empty tree stays, so they are not asked for again until the server announces
     /// them again ([`Shared::layout_failed`]).
     failed: HashSet<MenuSource>,
+    /// The menus registered on the session bus, for windows the server announces none for.
+    pub registrations: Vec<Registration>,
+    /// The X server of the X11 bridge, asked about registered X11 windows; `None` asks nothing.
+    pub x11: Option<Box<dyn X11Windows>>,
+    /// Registrations whose X11 window is gone, for the registrar to forget ([`Shared::take_gone`]).
+    gone: Vec<(String, u32)>,
 }
 
 impl Shared {
@@ -157,6 +164,11 @@ impl Shared {
         }
     }
 
+    /// The registrations found gone since the last call.
+    pub fn take_gone(&mut self) -> Vec<(String, u32)> {
+        std::mem::take(&mut self.gone)
+    }
+
     /// A group announced `source`: a load of it that failed is made again.
     fn announced(&mut self, source: &MenuSource) {
         if self.failed.remove(source) {
@@ -200,6 +212,12 @@ pub struct BarFeed {
     window: WindowState,
     /// The active application's windows, for the window list.
     windows: Vec<AppWindow>,
+    /// The active window's title.
+    title: String,
+    /// The process that shows the active window, when the server says.
+    client: Option<ActiveClient>,
+    /// The server announced the active window's menus: no registered menu is looked for.
+    announced: bool,
     /// The bar's server sends the chords of the Edit items (`MenuBar::can_edit`).
     edits: bool,
     /// The bar's server force-quits the active application (`MenuBar::can_force_quit_app`).
@@ -222,6 +240,9 @@ impl BarFeed {
                 workspaces: 1,
             },
             windows: Vec::new(),
+            title: String::new(),
+            client: None,
+            announced: false,
         }
     }
 
@@ -235,6 +256,10 @@ impl BarFeed {
         if let Some(active) = &update.active_app {
             self.app = (!active.app_id.is_empty()).then(|| names(&active.app_id));
             self.app_id.clone_from(&active.app_id);
+            self.title.clone_from(&active.title);
+        }
+        if let Some(client) = update.active_client {
+            self.client = Some(client);
         }
         if let Some(menu) = &update.menu {
             let source = match menu {
@@ -245,6 +270,7 @@ impl BarFeed {
                 })),
                 WindowMenu::Gtk(gtk) => Some(MenuSource::Gtk(gtk_props(gtk))),
             };
+            self.announced = source.is_some();
             match source {
                 None => shared.sources.clear_window(self.key),
                 Some(source) => {
@@ -265,6 +291,47 @@ impl BarFeed {
         }
         if let Some(shortcuts) = &update.shortcuts {
             shared.chords = chords(shortcuts);
+        }
+        self.match_registered(shared);
+    }
+
+    /// Give the active window the menu it registered on the session bus, when the server announced none for it. Call
+    /// after the registrations changed.
+    pub fn match_registered(&self, shared: &mut Shared) {
+        if self.announced {
+            return;
+        }
+        let client = match self.client {
+            Some(_) if self.app.is_none() => None,
+            Some(ActiveClient::Wayland(pid)) => Some(Client::Wayland(pid)),
+            Some(ActiveClient::X11(pid)) => Some(Client::X11(pid)),
+            None => None,
+        };
+        let Some(client) = client else {
+            return;
+        };
+        let windows: Vec<(u32, bool)> = self.windows.iter().map(|w| (w.id, w.active)).collect();
+        let active = ActiveWindow {
+            client,
+            title: &self.title,
+            windows: &windows,
+        };
+        let mut no_x11 = NoX11;
+        let x11: &mut dyn X11Windows = match shared.x11.as_deref_mut() {
+            Some(x11) => x11,
+            None => &mut no_x11,
+        };
+        let matched = registered::resolve(&shared.registrations, &active, x11);
+        shared.gone.extend(matched.gone);
+        match matched.menu {
+            Some(menu) => {
+                let source = MenuSource::Kde(menu);
+                if shared.sources.resolve(self.key) != source {
+                    shared.announced(&source);
+                    shared.sources.set_window_source(self.key, source);
+                }
+            }
+            None => shared.sources.clear_window(self.key),
         }
     }
 
@@ -525,6 +592,7 @@ mod tests {
             session_agent: None,
             backdrop_lightness: None,
             backdrop_bands: None,
+            active_client: None,
             windows: None,
             shortcuts: None,
         }

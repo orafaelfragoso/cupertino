@@ -1571,6 +1571,7 @@ dependencies = [
  "swash",
  "tempfile",
  "tiny-skia",
+ "x11rb",
  "zbus",
  "zeroize",
 ]

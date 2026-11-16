@@ -1316,6 +1316,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             session_agent: None,
             backdrop_lightness: None,
             backdrop_bands: None,
+            active_client: None,
             windows: None,
             shortcuts: None,
         }

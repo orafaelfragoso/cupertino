@@ -22,6 +22,7 @@ use cupertino_login::user::User;
 use cupertino_login::view::{
     self, Clock, Field, Input, Metrics, PickerScreen, Screen, GREETER_APP_ID, GREETER_TITLE,
 };
+use cupertino_login::wallpaper::{self, Pictures, Source, Stamp, Want};
 use cupertino_login_ipc::{
     Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret,
     UserRow, VERSION,
@@ -30,7 +31,9 @@ use cupertino_modifiers::Profile;
 use cupertino_shell_client::LayerShell;
 use cupertino_ui_wayland::WaylandWindowSystem;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,6 +60,12 @@ enum Stage {
 #[derive(Clone, Debug)]
 pub enum Message {
     Manager(Arc<ManagerEvent>),
+    /// A user's wallpaper was read.
+    Wallpaper(
+        PathBuf,
+        Stamp,
+        Arc<std::result::Result<wallpaper::Picture, String>>,
+    ),
     /// The connection to the manager broke.
     Broken(String),
     Heard(Heard),
@@ -95,6 +104,25 @@ pub struct GreeterApp {
     failed: FailedAttempts,
     /// `RetriesUntilHint`, see [`FailedAttempts::help_shown`].
     retries_until_hint: u32,
+    /// The password help is open.
+    help_open: bool,
+    /// The users' wallpapers by user id, as the manager names them, those read so far, and what the screens show.
+    wallpapers: HashMap<u32, PathBuf>,
+    pictures: Pictures,
+    wallpaper: Source,
+    /// For the threads that read a wallpaper.
+    sender: async_channel::Sender<Message>,
+    /// When the screens first showed (their dimming comes in), and when the picker and the password screen last
+    /// switched; `None`: at once, for a fixed test clock.
+    shown: Option<f64>,
+    switched: Option<f64>,
+}
+
+/// The users' wallpapers by user id in `rows`.
+fn wallpapers(rows: &[UserRow]) -> HashMap<u32, PathBuf> {
+    rows.iter()
+        .filter_map(|row| Some((row.uid, PathBuf::from(row.wallpaper.as_ref()?))))
+        .collect()
 }
 
 /// What the manager's `Welcome` tells the screen.
@@ -274,6 +302,7 @@ pub fn run() -> Result<std::convert::Infallible> {
     let layer_shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let outputs = roles::outputs(conn);
     let (sender, messages) = async_channel::unbounded();
+    let wallpaper_sender = sender.clone();
     let connection = Connection::spawn(stream, move |message| {
         let message = match message {
             ManagerMessage::Event(event) => Message::Manager(Arc::new(event)),
@@ -333,6 +362,13 @@ pub fn run() -> Result<std::convert::Infallible> {
             announced: Cell::new(false),
             failed: FailedAttempts::default(),
             retries_until_hint: welcome.retries_until_hint,
+            help_open: false,
+            wallpapers: wallpapers(&welcome.users),
+            pictures: Pictures::default(),
+            wallpaper: Source::Plain,
+            sender: wallpaper_sender,
+            shown: (!cupertino_shell_client::test_clock::motion_settled()).then_some(0.0),
+            switched: None,
         };
         let commands = vec![
             listen(
@@ -377,6 +413,14 @@ impl Application for GreeterApp {
                 ));
                 app.manager_event(now, &event)
             }
+            Message::Wallpaper(path, stamp, picture) => {
+                let picture = Arc::try_unwrap(picture).unwrap_or_else(|shared| match &*shared {
+                    Ok(_) => Err("the picture was shared".into()),
+                    Err(e) => Err(e.clone()),
+                });
+                app.pictures.read(path, stamp, picture);
+                Ok(())
+            }
             Message::Broken(e) => Err(e.into()),
             Message::Heard(heard) => {
                 commands.push(listen(
@@ -404,6 +448,7 @@ impl Application for GreeterApp {
                 screen.tick(now);
             }
             app.clock = screen::clock()?;
+            app.follow_wallpaper();
             Ok(())
         });
         match result {
@@ -422,6 +467,8 @@ impl Application for GreeterApp {
     fn view(app: &GreeterApp) -> Vec<Window<Message>> {
         let now = app.now();
         let mut windows = Vec::new();
+        let dim = app.shown.map_or(1.0, |at| wallpaper::dimming_at(now - at));
+        let block = app.switched.map_or(1.0, |at| picker::switched(now - at));
         for &(output, size) in &app.outputs {
             let key = WindowKey(Key::from(format!("greeter-{output}")));
             let content = match &app.stage {
@@ -433,6 +480,10 @@ impl Application for GreeterApp {
                         picker: &app.picker,
                         max_per_page: app.max_per_page(),
                         power: app.power.as_ref(),
+                        opacity: 1.0,
+                        block,
+                        wallpaper: &app.wallpaper,
+                        dim,
                     },
                     Message::Input,
                 ),
@@ -446,16 +497,22 @@ impl Application for GreeterApp {
                             text: entry.text().to_owned(),
                             revision: entry.revision(),
                         },
+                        typed: false,
                         caps_lock: false,
                         spinner: None,
                         denied: false,
+                        denied_said: false,
                         notice: app.authorising.map(authorisation_notice),
                         help: false,
+                        help_open: false,
                         opacity: 1.0,
+                        block,
                         shake: 0.0,
                         hidden: false,
                         power: app.power.as_ref(),
                         notices: &[],
+                        wallpaper: &app.wallpaper,
+                        dim,
                     },
                     GREETER_TITLE,
                     Message::Input,
@@ -471,16 +528,23 @@ impl Application for GreeterApp {
                             enabled: !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked),
                             busy: screen.checking(),
                         },
+                        typed: screen.typed(),
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),
                         denied: screen.failure_outline(),
+                        denied_said: screen.denied_said(),
                         notice: screen.notice(),
                         help: app.failed.help_shown(&user.login, app.retries_until_hint),
+                        help_open: app.help_open
+                            && app.failed.help_shown(&user.login, app.retries_until_hint),
                         opacity: screen.opacity(now),
+                        block,
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
                         power: app.power.as_ref(),
                         notices: &[],
+                        wallpaper: &app.wallpaper,
+                        dim,
                     },
                     GREETER_TITLE,
                     Message::Input,
@@ -514,6 +578,16 @@ impl GreeterApp {
     /// next change, or the clock's minute.
     fn next_wakeup(&self, now: f64) -> Option<f64> {
         let minute = screen::to_next_minute().unwrap_or(60.0);
+        // the dimming coming in and the switch between the screens draw a frame per refresh
+        let dimming = self.shown.is_some_and(|at| now - at < wallpaper::DIM_FADE);
+        let switching = self
+            .switched
+            .is_some_and(|at| now - at < picker::SWITCH_DURATION);
+        let minute = if dimming || switching {
+            minute.min(FRAME)
+        } else {
+            minute
+        };
         let Stage::Password { screen, .. } = &self.stage else {
             return Some(minute);
         };
@@ -527,6 +601,57 @@ impl GreeterApp {
         } else {
             by_screen
         })
+    }
+
+    /// Show the selected user's wallpaper: read it on a thread of its own when it is not read yet, and keep showing the
+    /// last one until it is in.
+    fn follow_wallpaper(&mut self) {
+        let uid = match &self.stage {
+            Stage::Picking => match self.picker.selected() {
+                Tile::Account(user) => user.uid,
+                Tile::Other => None,
+            },
+            Stage::Naming(_) => None,
+            Stage::Password { user, .. } => user.uid,
+        };
+        let path = uid.and_then(|uid| self.wallpapers.get(&uid));
+        match self.pictures.want(path.map(PathBuf::as_path)) {
+            Want::Ready(source) => self.wallpaper = source,
+            Want::Reading => {}
+            Want::Read(path, stamp) => {
+                let sender = self.sender.clone();
+                let asked = path.clone();
+                let spawned = std::thread::Builder::new()
+                    .name("login wallpaper".into())
+                    .spawn(move || {
+                        let picture = wallpaper::decode(
+                            &path,
+                            cupertino_login_ipc::message::MAX_WALLPAPER_BYTES as u64,
+                        );
+                        // the receiver lives as long as the application
+                        let _ = sender.send_blocking(Message::Wallpaper(
+                            path,
+                            stamp,
+                            Arc::new(picture),
+                        ));
+                    });
+                if let Err(e) = spawned {
+                    eprintln!("cupertino-login: reading a wallpaper: {e}");
+                    // the read is over: the screen keeps its fallback, and a later change of the file reads it again
+                    self.pictures.read(asked, stamp, Err(e.to_string()));
+                }
+            }
+        }
+    }
+
+    /// The screens switch between the picker and the password screen at `now`.
+    fn switch(&mut self, now: f64, to: Stage) {
+        let between = matches!(self.stage, Stage::Picking) != matches!(to, Stage::Picking);
+        if between && !cupertino_shell_client::test_clock::motion_settled() {
+            self.switched = Some(now);
+        }
+        self.help_open = false;
+        self.stage = to;
     }
 
     /// The tiles per page, from the first output the server has described.
@@ -585,15 +710,18 @@ impl GreeterApp {
                     if let Some(action) = self.authorising {
                         screen.notify(authorisation_notice(action).to_owned());
                     }
-                    self.stage = Stage::Password {
-                        user: User::typed(name),
-                        screen,
-                    };
+                    self.switch(
+                        now,
+                        Stage::Password {
+                            user: User::typed(name),
+                            screen,
+                        },
+                    );
                 }
             }
             (Stage::Naming(_), Input::Escape) => {
                 self.authorising = None;
-                self.stage = Stage::Picking;
+                self.switch(now, Stage::Picking);
             }
             (Stage::Password { screen, .. }, Input::Escape) => {
                 // Escape goes back to the tiles unless an attempt is on its way to a decision
@@ -605,11 +733,12 @@ impl GreeterApp {
                     screen.escape(now);
                 } else {
                     self.authorising = None;
-                    self.stage = Stage::Picking;
+                    self.switch(now, Stage::Picking);
                 }
             }
             (Stage::Password { screen, .. }, Input::Activity) => screen.activity(now),
-            (Stage::Password { screen, .. }, Input::Edited) => screen.edit(now),
+            (Stage::Password { screen, .. }, Input::Edited(typed)) => screen.edit_to(now, typed),
+            (Stage::Password { .. }, Input::Help) => self.help_open = !self.help_open,
             (Stage::Password { user, screen }, Input::Submit(typed)) => {
                 if let Some(password) = screen.submit(now, typed.secret()) {
                     let request = match self.authorising {
@@ -661,13 +790,20 @@ impl GreeterApp {
 
     /// Act on the selected tile: the password screen of its account, or the name screen of "Other…".
     fn choose(&mut self, now: f64) {
-        self.stage = match self.picker.selected() {
-            Tile::Account(user) => Stage::Password {
-                user: user.clone(),
-                screen: LockScreen::new(now, HIDE_AFTER),
-            },
+        let to = match self.picker.selected() {
+            Tile::Account(user) => {
+                let mut screen = LockScreen::new(now, HIDE_AFTER);
+                if cupertino_shell_client::test_clock::motion_settled() {
+                    screen.settle_interface();
+                }
+                Stage::Password {
+                    user: user.clone(),
+                    screen,
+                }
+            }
             Tile::Other => Stage::Naming(NameEntry::default()),
         };
+        self.switch(now, to);
     }
 
     /// The authentication hand-off: answer the manager's prompt with the password of the open attempt. The password is
@@ -693,12 +829,13 @@ impl GreeterApp {
                 eprintln!("cupertino-login: reset");
                 self.pending = None;
                 self.authorising = None;
-                self.stage = Stage::Picking;
+                self.switch(now, Stage::Picking);
                 return Ok(());
             }
             ManagerEvent::Users { users, will_prompt } => {
                 // the list changed (a session started or ended): the tiles are built again; a screen being typed on stays
                 self.picker = Picker::new(users.iter().map(user_of).collect(), self.show_other)?;
+                self.wallpapers = wallpapers(users);
                 if let Some(menu) = &mut self.power {
                     menu.set_will_prompt(*will_prompt);
                 }

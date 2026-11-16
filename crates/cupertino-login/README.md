@@ -522,12 +522,18 @@ network users).
 | Failure outline | 2 pt red around the password pill after a wrong password, until the person's next edit, with or without Reduce Motion (approximate) |
 | Fade of the interface | linear, `\|to - from\| * 0.25 s` |
 | Interface hides after | 30 s without input, 5 s after a lock the person asked for (the lock shortcut: server `LockNow`, lock request type 8); the greeter always 30 s |
-| Date | size 0.028 S, first baseline 0.09 H, `EEEEMMMMd` as `%A, %B %-d` |
-| Time | size 0.12 S, first baseline 4 date sizes below the date's, `Jmm` as `%H:%M` |
-| User view | 20 pt below the time's bottom; avatar 70 pt with 7 pt above and below; name baseline 23 pt below the view, 15 pt, at most 150 pt wide |
+| Date | size 0.028 S, first baseline 0.09 H, Medium, as `%a %b %-d` ("Mon Nov 16") |
+| Time | size 0.14 S, first baseline 4.3 date sizes below the date's, weight 640, solid white, as `%H:%M` |
+| User view | 20 pt below the time's bottom; avatar floor(0.05 S) with 7 pt above and below; name baseline 23 pt below the view, 15 pt, at most 150 pt wide, with a black shadow of opacity 0.5 and radius 6 |
 | Avatar halo and ring | shadow radius 15 opacity 0.25 (a radial fade), ring 1 pt white 0.1 |
-| Password field | 160 x 28 pt, fully rounded, system 13 Medium, placeholder white 0.5; a capsule of white 0.18 with no blurred backdrop (nothing under a lock surface may show) |
-| Wallpaper treatment | black 0.25, then black 0.3, then a radial black 0.2 to 0 from the middle to the corner with the darken blend |
+| Password field | max(160, ceil(placeholder width) + 28) x 28 pt, continuous corners of radius 14, its top 18 pt below the name's baseline; text 13 Medium, centred, white; placeholder "Enter Password" white 0.5. It stands on a dark frosted material made from the screen's own picture (blur 30 pt, saturation 1.6, grey 0.157 laid over at 0.4, lightened to at least 0.08), never from what lies under the window (`wallpaper::frosted`) |
+| Submit button | 28 pt at the field's trailing end inside it, 2 pt in; a 22 pt ring with an arrow into it, white 0.5; only while the field holds text. A press there submits, as Return does |
+| Help button | 28 pt circle of the field's material with a "?" in white 0.5, 6 pt after the field, once the password help shows (3 failures); a press shows or hides the help line and leaves the keyboard in the field |
+| Messages | an attempt's message shows 15 s; the lock screen's message 13 pt regular, white, at most 400 pt wide |
+| Password field cleared | when the display goes to sleep or wakes, and when a lock is asked for while locked |
+| Wallpaper treatment | black 0.25 over it; then black 0.3 blended to keep the lighter, which changes no pixel and is not drawn; then a radial black 0.20 at the middle to none at the edge of a 1200 pt square centred on the screen. It comes in linearly over 0.25 s when a screen first shows (`wallpaper::DIM_FADE`) |
+| Picker and password screen | the switch between them moves the content over 0.5 s, ease-in-out (`picker::SWITCH_DURATION`); content fades linearly over 0.25 s |
+| Status items | in a row, 14 pt apart |
 | Idle lock | after the display sleep plus the password delay, timed by the server |
 | Quit sequence | one application at a time, 45 s each, the next 0.1 s after one quits; interrupt panel 413 x 128 |
 | Login items | global items before the user's, one after the other |
@@ -542,11 +548,11 @@ network users).
 
 | Item | Value | Where |
 |---|---|---|
-| Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `view::widgets::WALLPAPER_*` |
-| Password and name fields | Kit's chromeless `BareSecureField` and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret in the text colour, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
+| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the session agent writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on a thread of its own, PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s. The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
+| Password and name fields | Kit's chromeless `BareSecureField` (its text centred) and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret white, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
 | Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
 | Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
-| Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
+| Initials, text | Grey fill, initials 0.4 of the avatar; white text of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
 | Confirmation panels | An alert like the consent panel without an icon: 260 pt wide on regular glass with 26 pt corners, padding 22 pt above and 16 pt around, the text 6 pt further in, 28 pt capsule buttons 8 pt apart. | `panel`, `view::panel`, `view::widgets::AlertBody` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
@@ -559,7 +565,7 @@ network users).
 | Notification cards | 344 pt wide at the top right (16 pt margin, 44 pt from the top), 8 pt apart, 16 pt corners, 12 pt padding, white 0.18 fill, application 12 pt, title and body 13 pt, two body lines. | `lock_notices`, `view::widgets::NOTICE_FILL_ALPHA` |
 | Password help | One line 32 pt above the bottom edge (offset, section 2), our words. No hint text: a threshold above 0 only moves the failure count at which the help shows. | `view::PASSWORD_HELP` |
 | Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session; the tile's description says "Logged in". approximate: the design marks such users in its picker, the shape and place are not read. | `view::widgets::LOGGED_IN_FILL` |
-| Picker tiles | 186 x 112 pt cells (150 pt name plus 18 pt borders, avatar, name line), grid centred from the password screen's user view. Selected tile: white 0.2 rounded square of 86 pt (the register's selection size), 20 pt corners. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::TILE_HEIGHT`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
+| Picker tiles | Cells 186 pt wide (150 pt name plus 18 pt borders) and 56 pt taller than the avatar (its 7 pt borders, the name line and room under it), grid centred from the password screen's user view. Selected tile: a white 0.1 fill (approximate) with continuous corners of radius 12 and a 1 pt white 0.1 border. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::Layout::tile_height`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
 | Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
 | Interrupt panel buttons, words | Cancel 83 pt at x 204, Force Quit 100 pt at x 295, capsules 28 pt high and 8 pt apart, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
 | Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
@@ -572,9 +578,9 @@ network users).
 
 ## Open issues
 
-- **Not implemented.** The name shadow, the rest of the status bar, the grace period, auto log-out, display sleep after the hide, the picker's
-  page indicator and the animation between the picker and the password screen ('s 0.5 s layout change, peekaboo and the
-  cooldown), 's status bar, and the sessions the manager does not know (a hidden account's) in the power menu's ellipsis.
+- **Not implemented.** The rest of the status bar, the grace period, auto log-out, display sleep after the hide, the picker's
+  page indicator, peekaboo and the cooldown of the switch between the picker and the password screen, and the sessions the
+  manager does not know (a hidden account's) in the power menu's ellipsis.
 ## Modules
 
 | Module | Content |

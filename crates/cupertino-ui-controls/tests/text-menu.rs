@@ -162,6 +162,8 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                 size: 20.0,
                 weight: None,
                 placeholder_color: None,
+                centered: false,
+                submit_width: 0.0,
             })
             .key("lock"),
         ]);

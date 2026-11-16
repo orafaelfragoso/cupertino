@@ -238,9 +238,17 @@ pub(crate) enum FieldLook {
     Plain,
     /// A capsule with a magnifying glass before the text: a [`SearchField`], at its own control size or the window's.
     Search(Option<ControlSize>),
-    /// No chrome, the text at this many points and in this weight (the body type's when `None`): a [`BareField`] or a
-    /// [`BareSecureField`].
-    Bare(u16, Option<u16>),
+    /// No chrome, the text at this many points and in this weight (the body type's when `None`), set as the third
+    /// says: a [`BareField`] or a [`BareSecureField`].
+    Bare(u16, Option<u16>, BareSetting),
+}
+
+/// Where a field without chrome sets its text: centred in it while it fits, and clear of a strip this many points
+/// wide at its trailing end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BareSetting {
+    pub(crate) centered: bool,
+    pub(crate) trailing: u16,
 }
 
 /// A bare field's height as a share of its text size: one line with room for its ascenders and descenders.
@@ -259,7 +267,7 @@ impl FieldLook {
                 )
                 .height
             }
-            FieldLook::Bare(size, _) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
+            FieldLook::Bare(size, ..) => (f64::from(size) * BARE_LINE_SHARE).ceil(),
         }
     }
 
@@ -267,14 +275,14 @@ impl FieldLook {
     fn text_size(self, theme: &ThemeTokens) -> f32 {
         match self {
             FieldLook::Plain | FieldLook::Search(_) => theme.type_scale.body.size,
-            FieldLook::Bare(size, _) => f32::from(size),
+            FieldLook::Bare(size, ..) => f32::from(size),
         }
     }
 
     /// The weight of the field's text: the body type's, or a bare field's own.
     fn text_weight(self, theme: &ThemeTokens) -> u16 {
         match self {
-            FieldLook::Bare(_, Some(weight)) => weight,
+            FieldLook::Bare(_, Some(weight), _) => weight,
             _ => theme.type_scale.body.weight,
         }
     }
@@ -324,7 +332,7 @@ fn interior(size: Size, theme: &ThemeTokens, look: FieldLook, direction: LayoutD
     let (start, end) = match look {
         FieldLook::Plain => (inset, inset),
         FieldLook::Search(_) => (SEARCH_TEXT_X, inset),
-        FieldLook::Bare(..) => (0.0, 0.0),
+        FieldLook::Bare(_, _, setting) => (0.0, f64::from(setting.trailing)),
     };
     let (left, right) = match direction {
         LayoutDirection::Ltr => (start, end),
@@ -354,8 +362,12 @@ fn follow(scroll: f64, caret_x: f64, caret_width: f64, text_width: f64, width: f
 }
 
 /// The left edge of text `width` wide before it scrolls: the interior's start, or in right-to-left as far right as
-/// leaves the caret room after it.
-fn leading_x(env: &Environment, area: Rect, width: f64) -> f64 {
+/// leaves the caret room after it; in a field that centres its text, centred while it fits (the caret's room
+/// counted).
+fn leading_x(env: &Environment, area: Rect, width: f64, field: FieldLook) -> f64 {
+    if let FieldLook::Bare(_, _, BareSetting { centered: true, .. }) = field {
+        return area.min_x() + ((area.width() - CARET_WIDTH - width) / 2.0).max(0.0);
+    }
     match env.direction {
         LayoutDirection::Ltr => area.min_x(),
         LayoutDirection::Rtl => area.min_x() + (area.width() - CARET_WIDTH - width).max(0.0),
@@ -374,7 +386,7 @@ fn placed(
     let chrome = chrome(size, &env.theme, field);
     let area = interior(size, &env.theme, field, env.direction);
     let origin = Point::new(
-        leading_x(env, area, layout.size().width) - scroll,
+        leading_x(env, area, layout.size().width, field) - scroll,
         field_top(&layout, chrome, env, field),
     );
     Some((layout, origin))
@@ -446,7 +458,7 @@ fn paint_text(
     );
     scroll.set(offset);
     let origin = Point::new(
-        leading_x(&env, area, layout.size().width) - offset,
+        leading_x(&env, area, layout.size().width, field) - offset,
         field_top(&layout, chrome, &env, field),
     );
     let color = |role| look::color(&env.theme, role, look);
@@ -461,7 +473,7 @@ fn paint_text(
     if shown.text.is_empty() {
         if let Some(placeholder) = field_label(&env, placeholder, field) {
             let at = Point::new(
-                leading_x(&env, area, placeholder.size().width),
+                leading_x(&env, area, placeholder.size().width, field),
                 field_top(&placeholder, chrome, &env, field),
             );
             // a search field's placeholder, and a bare field's, read as its label, so they are stronger than a plain
@@ -2024,7 +2036,7 @@ impl<M: Clone + 'static> Widget<M> for BareSecureField<M> {
 
     fn state(&self) -> SecureState {
         SecureState {
-            look: bare_secure_look(self.size, self.weight),
+            look: bare_secure_look(self),
             placeholder_color: self.placeholder_color,
             pastes: false,
             ..self.field.state()
@@ -2039,8 +2051,9 @@ impl<M: Clone + 'static> Widget<M> for BareSecureField<M> {
                 return Change::Paint;
             }
         }
-        if self.size != old.size || self.weight != old.weight {
-            state.look = bare_secure_look(self.size, self.weight);
+        let look = bare_secure_look(self);
+        if look != state.look {
+            state.look = look;
             return Change::Layout;
         }
         change
@@ -2065,6 +2078,26 @@ impl<M: Clone + 'static> Widget<M> for BareSecureField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        if let Event::Pointer(
+            PointerEvent::Button {
+                position,
+                button: MouseButton::Left,
+                pressed: true,
+                ..
+            },
+            _,
+        ) = event
+        {
+            if self.field.enabled
+                && cx.phase() != cupertino_ui_core::Phase::Capture
+                && self.in_submit_strip(*position, cx)
+            {
+                if let Some(on_submit) = &self.field.on_submit {
+                    cx.emit(on_submit(&state.buffer));
+                }
+                return Propagation::Stop;
+            }
+        }
         self.field.event(state, event, cx)
     }
 
@@ -2081,10 +2114,38 @@ impl<M: Clone + 'static> Widget<M> for BareSecureField<M> {
     }
 }
 
-/// The look of a bare secure field of text `size` points large (whole points from 1 to 200) in `weight`.
-fn bare_secure_look(size: f64, weight: Option<u16>) -> FieldLook {
-    match bare_look(size) {
-        FieldLook::Bare(size, _) => FieldLook::Bare(size, weight),
+impl<M> BareSecureField<M> {
+    /// Whether `point` (window coordinates) lies in the strip at the field's trailing end where a press submits.
+    fn in_submit_strip(&self, point: Point, cx: &EventCx<'_, M>) -> bool {
+        let width = self.submit_width;
+        let Some(bounds) = cx.bounds().filter(|_| width.is_finite() && width > 0.0) else {
+            return false;
+        };
+        let x = point.x - bounds.min_x();
+        let inside = (0.0..=bounds.width()).contains(&x)
+            && (bounds.min_y()..=bounds.max_y()).contains(&point.y);
+        inside
+            && match cx.env().direction {
+                LayoutDirection::Ltr => x >= bounds.width() - width,
+                LayoutDirection::Rtl => x <= width,
+            }
+    }
+}
+
+/// The look of a bare secure field: its text `size` points large (whole points from 1 to 200) in `weight`, set as
+/// `centered` and `submit_width` say.
+fn bare_secure_look<M>(field: &BareSecureField<M>) -> FieldLook {
+    let width = field.submit_width;
+    let trailing = if width.is_finite() { width } else { 0.0 };
+    match bare_look(field.size) {
+        FieldLook::Bare(size, ..) => FieldLook::Bare(
+            size,
+            field.weight,
+            BareSetting {
+                centered: field.centered,
+                trailing: trailing.ceil().clamp(0.0, f64::from(u16::MAX)) as u16,
+            },
+        ),
         look => look,
     }
 }
@@ -2245,5 +2306,9 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
 /// The look of a bare field of text `size` points large, in whole points from 1 to 200.
 fn bare_look(size: f64) -> FieldLook {
     let size = if size.is_finite() { size } else { 0.0 };
-    FieldLook::Bare(size.round().clamp(1.0, 200.0) as u16, None)
+    FieldLook::Bare(
+        size.round().clamp(1.0, 200.0) as u16,
+        None,
+        BareSetting::default(),
+    )
 }

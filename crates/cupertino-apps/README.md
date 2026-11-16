@@ -7,12 +7,14 @@ Rust over the freedesktop text formats and JSON, with no C library. Layer: `foun
 `cupertino-launcher` re-exports its `desktop` and `exec` modules and keeps its usage store in the `frecency` format,
 `cupertino-icons` uses it for document icons, `cupertino-files` to open files and to list Recents, the dock to launch,
 and the menu bar to launch and to list Recent Items. The dock and the launcher ask a resident application for a window
-with `activate` (feature `dbus`, which adds `zbus`; without it the crate has no D-Bus code).
+with `activate` (feature `dbus`, which adds `zbus`; without it the crate has no D-Bus code). The launcher follows the
+application folders with `catalogue::ApplicationWatch` (feature `watch`, which adds `notify`).
 
 ## Public API
 
 | Module | Contents |
 |---|---|
+| `catalogue` | `Catalogue`: the applications of a list of folders as last read (`new`, `from_env`, `entries`), and `reread`, which reads them all again and says whether they changed, so visibility and the folders' precedence hold after every change. `Burst` and `Timing` time a burst of file events: read once quiet for 250 ms, at the latest 2 s after the first event. Feature `watch`: `ApplicationWatch::start` follows the folders on a thread (each with its subfolders, and the nearest existing folder above each, so a folder made later or made again is followed) and reports `Change::Applications` with all of them after each burst that changed them |
 | `activate` (feature `dbus`) | `org.freedesktop.Application.Activate` on the bus name of a desktop file ID (`object_path`, `platform_data` with the activation token as `activation-token` and `desktop-startup-id`, `activate`), and `activate_in_thread`, the call on the session bus on a thread of its own, bounded by `ACTIVATE_TIMEOUT` (3 s), ending in whether it was answered |
 | `entry` | Desktop Entry Specification: `dbus_activatable` / `dbus_activatable_file` (`DBusActivatable=true` in the main group), `parse_desktop_entry` (listings: `NoDisplay`, `Hidden`, `OnlyShowIn` / `NotShowIn` against `XDG_CURRENT_DESKTOP`, `TryExec`), `parse_handler` (MIME handlers: only `Hidden` and `TryExec` remove an entry, the `MimeType` list is kept), localised keys with the `lang_COUNTRY@MODIFIER` fallback, `index_dirs` with desktop file ID shadowing |
 | `exec` | `Exec` quoting, field codes (`%f %F %u %U %i %c %k`), `CommandSpec` (`from_argv`) with the activation token variables and terminal wrapping; a program built on Chromium gets `--enable-features=OverlayScrollbar` |

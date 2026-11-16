@@ -211,6 +211,9 @@ pub enum Message {
     FileThumb(PathBuf, Vec<ImageSource>),
     /// The file index finished building.
     Indexed(Arc<FileIndex>),
+    /// The applications changed (entries installed, changed or removed while the launcher runs): all of them, as
+    /// they are now.
+    Installed(Vec<crate::DesktopEntry>),
     /// The activation token of the launch waiting as `launch` arrived (`None` when there is none).
     Launch(u64, Option<String>),
     /// The server's answer for the application opened as `launch` ([`Host::bring_forward`]).
@@ -765,6 +768,40 @@ impl Model {
             }
         }
         self.launcher_settings = settings;
+    }
+
+    /// The applications are now `entries`. What is on screen follows in place: the results of the query keep the
+    /// query, the selected result and what the file search found; the browser keeps its filter, its selection and
+    /// its scroll. The icon and the preview of an application that changed or went are asked for again.
+    fn set_applications(&mut self, entries: Vec<crate::DesktopEntry>) {
+        let changed: Vec<String> = self
+            .launcher
+            .entries()
+            .iter()
+            .filter(|old| !entries.contains(old))
+            .map(|old| old.id.clone())
+            .collect();
+        self.launcher.set_entries(entries);
+        for id in &changed {
+            self.app_icons.remove(id);
+            // the application's result and those of its actions
+            let (app, actions) = (format!("app:{id}"), format!("app:{id}#"));
+            let of_app = |key: &str| key == app || key.starts_with(&actions);
+            self.icons.retain(|key, _| !of_app(key));
+            if self.previewed.as_deref().is_some_and(of_app) {
+                self.previewed = None;
+            }
+        }
+        if let Some(browser) = self.browser.as_mut() {
+            browser.set_apps(self.launcher.entries().iter().map(App::of).collect());
+        }
+        // only a query that was searched has results; a kept one shows none until it is edited
+        if self.nav.view == View::Search && self.searched.as_deref() == Some(self.panel.query()) {
+            let results =
+                self.launcher
+                    .compose(self.panel.query(), self.now().unix, self.tracker.sections());
+            self.panel.set_results(results);
+        }
     }
 
     /// Open the browser (afresh) with the launcher's applications and recents, in the remembered arrangement.
@@ -2286,6 +2323,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             // the open query is asked again, now with the files
             model.searched = None;
             model.scope_asked = None;
+            Vec::new()
+        }
+        Message::Installed(entries) => {
+            model.set_applications(entries);
             Vec::new()
         }
         Message::Launch(launch, token) => {

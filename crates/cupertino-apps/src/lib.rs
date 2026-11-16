@@ -2,6 +2,8 @@
 //!
 //! * [`activate`] (feature `dbus`): asking a running D-Bus activatable application for a window
 //!   (`org.freedesktop.Application.Activate`);
+//! * [`catalogue`]: the applications as they are now, read again when the application folders change (feature
+//!   `watch`: on a thread that follows the folders);
 //! * [`entry`]: desktop entries (freedesktop Desktop Entry Specification): parsing, visibility, indexing;
 //! * [`exec`]: `Exec` quoting and field codes, the command a launch turns into;
 //! * [`launch`]: what a shell process starts (a program, an application, a file with its default application),
@@ -14,6 +16,7 @@
 
 #[cfg(feature = "dbus")]
 pub mod activate;
+pub mod catalogue;
 pub mod chromium;
 pub mod entry;
 pub mod exec;

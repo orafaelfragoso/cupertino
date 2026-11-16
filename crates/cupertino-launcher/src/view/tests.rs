@@ -6,6 +6,7 @@
 use super::*;
 
 mod frames;
+mod installed;
 use crate::browse::Zone;
 use crate::engine::tests_support::test_launcher;
 use crate::exec::CommandSpec;

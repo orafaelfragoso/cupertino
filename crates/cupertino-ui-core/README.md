@@ -259,6 +259,26 @@ all on one thread.
   application hand the runtime a function that reads them again; the runtime calls it, and rebuilds its theme, when the
   application wakes it after `appearance.conf` changed.
 
+## The clipboard and a control's own popup
+
+A control reads the clipboard's text itself: `EventCx::clipboard_has_text()` says whether the clipboard offers text
+(the runtime follows `PlatformEvent::ClipboardOffered` and what the application itself copied), and
+`EventCx::request_paste()` reads it, as UTF-8 text in the first kind offered of `text/plain;charset=utf-8`,
+`UTF8_STRING`, `text/plain`, `TEXT` and `STRING`; the control hears `Event::Paste` with the text, and nothing when
+there is none or it or its window went meanwhile. The text's debug output is its length only.
+`Runtime::paste_protected(token)` tells a test driver whether a clipboard read is such a paste and whether the control
+it is for protects its input.
+
+A control opens a popup of its own with `EventCx::open_popup(build)`: `build` returns its windows (`OwnedWindow`: key,
+spec, background, content, anchor and whether it grabs) now and at each view while it is open. The runtime declares
+them after the application's windows, in the control's window, with the grab, placement, fade and dismissal of a
+declared popup; the application declares nothing and hears nothing. Inside it `EventCx::answer_popup(n)` reaches the
+control as `Event::PopupAnswer(n)` and `EventCx::close_popup()` ends it; it also ends when the compositor dismisses
+it, when the window system refuses it, and with its control or the control's window. One is open at a time: another
+control's replaces it. A text field's menu is one. `EventCx::holds_popup()` says whether a control of the window has
+one open, so a window that closes when it loses the keyboard can tell that the keyboard went to that popup.
+
 ## Not yet
 
-An application cannot read the clipboard (a paste): the runtime reads offered data only for a drop.
+An application's `update` cannot read the clipboard: a paste goes to the control that asks for it, and the runtime
+reads other offered data only for a drop.

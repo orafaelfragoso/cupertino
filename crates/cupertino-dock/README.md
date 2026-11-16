@@ -371,11 +371,15 @@ of the bar surface with a grab (`Menu` material).
 - **The file manager tile.** The session file manager (`cupertino-files` when installed, else the first installed of
   Nautilus, Dolphin, Thunar; the list is approximate) is built into the dock as its first tile, as the design's is: that
   tile is not one of the default pins. It is always present, also while the file manager does not run, never written to
-  `dock-pins` and never removed: its menus have an empty Options submenu and no Quit, so it offers Show
-  All Windows and Hide while it runs and Open while it does not; the design's Relaunch is not offered (approximate). It
+  `dock-pins` and never removed: its menus have an empty Options submenu and no Quit, so while it runs it lists its
+  windows by title ("Untitled" for one without), then New Window (the home folder in another window, with an
+  activation token), then Show All Windows (disabled while it shows no window) and Hide, and while it does not run it
+  offers Open; the design's Relaunch is not offered (approximate). It
   does not drag, and nothing drops ahead of it (first place and the fixed position ). A pin of the same application
   in an older `dock-pins` (or `dock.conf`) is skipped, and drops out of `dock-pins` the next time the dock writes it.
-- **Tiles.** Keep in Dock / Remove from Dock (pin and unpin for the session; `dock.conf` is not rewritten), Show in
+- **Tiles.** A running application's windows by title first, then a separator: choosing one brings that window
+  forward (`activate_window` from shell version 26, the whole application on an older server; a minimized one flies
+  out of its own tile as a click on that tile does). Then Keep in Dock / Remove from Dock (pin and unpin for the session; `dock.conf` is not rewritten), Show in
   File Manager (the desktop entry's directory, in `cupertino-files` like the trash, else `xdg-open`), then Show All Windows (`app_command show_windows`, disabled while
   the application does not run), Hide and Quit (`app_command`), or Open (launch). The trash offers Open. Separators and
   minimized-window tiles have no menu.
@@ -445,7 +449,7 @@ The name label (`src/view/label.rs`) is a translucent 26 pt pill with a tail 3 p
 and hides on a drag, a menu or leaving the tile. An application that runs without windows adds a dimmed second line and
 a dimmed running indicator. A pressed tile shows its icon darkened until release. The running indicator fades in over
 0.28 s. In the light appearance the bar keeps the dark clear material (`Surface::DockBar`), the indicator is near black
-and the separator darker. The context menu at the bottom has a tail and a 14.5 pt corner. The trash's menu has "Empty
+and the separator darker. The context menu at the bottom has a tail and a 14.5 pt corner (the toolkit's `MenuStyle::pointed`; beside a dock on a side edge it is the plain menu, without a tail). The trash's menu has "Empty
 Trash", enabled while the trash holds something, which asks first and then empties it through `cupertino-trash`: the
 home trash and the trash folders of the mounted volumes. The question is the toolkit's alert with the words and the
 picture of `cupertino-trash`, as the file manager's is, in a window centred on the dock's output that holds the keyboard

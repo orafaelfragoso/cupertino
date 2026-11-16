@@ -82,9 +82,22 @@ from the application's model and reports changes as messages.
   draws only the overlay again, no node, and the caret stays on with Reduce Motion or a phase of 0 (a
   session that asks for a steady caret). Shift-click and shift-drag extend the selection; a drag held past the field's
   edge (an editor's top or bottom) keeps scrolling and selecting every 50 ms by the distance past the edge until the
-  text ends; the caret scrolls into view after every edit and move.
-- **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord, no
-  surrounding text for the input method, a protected accessible value, and the secret reaches the application only
+  text ends; the caret scrolls into view after every edit and move. The paste chord inserts the clipboard's text in
+  place of the selection (`EventCx::request_paste`), line breaks as spaces in a single-line field.
+- **A field's menu.** Every `TextField`, `SearchField`, `BareField`, `TextEditor` and `SecureField` opens a menu of its
+  own (`src/text_menu.rs`, through `EventCx::open_popup`; the application declares nothing): Cut, Copy, Paste, a
+  separator and Select All, at the pointer on a secondary click, under the caret on the Menu key or Shift+F10, and
+  where a finger rests 0.5 s within 8 pt. It is a `Menu` like any other: the same panel, rows, keys and roles, named
+  "Edit". A row is enabled only when it can act: Cut and Copy with a selection, Paste with text on the clipboard,
+  Select All with text in the field. A secondary click inside the selection keeps it, one outside puts the caret there
+  first; the field takes the keyboard as on any press, a composition stays as typed, and the selection outlives the
+  menu. The rows run the field's editing commands, so a cut or a paste reports one edit and is one step to undo. A
+  disabled field is read only: neither Cut, Paste nor Select All, and Copy copies all its text. A `SecureField`'s menu
+  never enables Cut or Copy, and a `BareSecureField`, which stands on the surfaces that ask for the session's
+  password, has no menu and takes no paste; a `BareField` has both unless its `menu` is off, as the login screen's
+  name field's is (`tests/text-menu.rs`).
+- **Passwords.** `SecureField` keeps its text in a `SecureBuffer` only: no undo, copy, cut or other command chord but
+  select all and paste, no surrounding text for the input method, a protected accessible value, and the secret reaches the application only
   borrowed, in the submit handler. A composition is never held; only committed text goes in. The input method is
   asked for hidden, sensitive text with completion and spell checking off and is given the field's rectangle, never
   the caret's. A click puts the caret between bullets, shift-click and dragging select, and a double click selects all. `busy` and `invalid`
@@ -325,6 +338,6 @@ from the application's model and reports changes as messages.
 ## Not yet
 
 Text shaping and glyph rasterization are not in `cupertino-ui-text` yet, so `Text`, `Icon`, the label of a button
-or switch, a field's text, placeholder, caret and selection, pointer caret placement and paste are not drawn or
+or switch, a field's text, placeholder, caret and selection and pointer caret placement are not drawn or
 wired. A button's width holds only its insets until its label can be measured. A default button's Return comes from
 the window's shortcuts for now.

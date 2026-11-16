@@ -7,8 +7,9 @@ use crate::common;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::power::{PowerSettings, SourceTimers, Timer};
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
-use cupertino_server::config::Config;
+use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::display_power::{DisplayState, RAMP_S};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
@@ -168,4 +169,77 @@ fn input_while_dimmed_ramps_back_to_full_brightness() {
         (back - lit).abs() < 0.5,
         "and ends at full brightness: {back} against {lit}"
     );
+}
+
+/// While another console has the seat nothing dims or sleeps, however long; back in front the display is on, with
+/// fresh countdowns, and fades in from black. A display that slept before the switch is on again at the return.
+#[test]
+fn a_session_in_the_background_never_dims_or_sleeps_and_comes_back_awake() {
+    let Some(mut h) = Harness::new(short_timers()) else {
+        return;
+    };
+    h.at(T0 + 1.0);
+    let lit = h.brightness("before-pause");
+    h.state.session_deactivated();
+    assert_eq!(h.state.display_power_deadline(), None);
+    h.at(T0 + SLEEP_S);
+    h.at(T0 + 3600.0);
+    assert_eq!(h.state.power.policy().state(), DisplayState::On);
+
+    let back = T0 + 3600.0;
+    h.state.session_activated();
+    assert_eq!(
+        h.state.display_power_deadline(),
+        Some(back + SLEEP_S - 15.0),
+        "the countdown starts at the return"
+    );
+    h.at(back + 1.0);
+    let shown = h.brightness("after-resume");
+    assert!(
+        (shown - lit).abs() < 0.5,
+        "faded in to full brightness: {shown} against {lit}"
+    );
+
+    // asleep when the console went elsewhere: on again at the return, without input
+    h.at(back + 1.0 + SLEEP_S);
+    assert_eq!(h.state.power.policy().state(), DisplayState::Asleep);
+    h.state.session_deactivated();
+    h.at(back + 7200.0);
+    h.state.session_activated();
+    assert_eq!(h.state.power.policy().state(), DisplayState::On);
+    h.at(back + 7201.0);
+    let woken = h.brightness("after-resume-asleep");
+    assert!((woken - lit).abs() < 0.5, "{woken} against {lit}");
+}
+
+/// A session with a lock screen counts down to the lock after display sleep; the login screen's own server, with the
+/// same process configured, has no lock screen to ask, and a display asleep past the password delay asks for no lock.
+#[test]
+fn the_login_screens_server_never_counts_down_to_a_lock() {
+    let mut power = short_timers();
+    power.require_password_after = Timer::After(Duration::from_secs(5));
+    let Some(mut h) = Harness::new(power) else {
+        return;
+    };
+    // configured, never started: the server only reads its roles here
+    h.state.config.shell_processes = vec![ShellProcess {
+        name: "lock screen".into(),
+        command: vec!["/usr/bin/true".into()],
+        roles: vec![ShellRole::Session, ShellRole::SessionLock],
+    }];
+    h.at(T0 + SLEEP_S);
+    assert_eq!(h.state.power.policy().state(), DisplayState::Asleep);
+    assert_eq!(
+        h.state.display_power_deadline(),
+        Some(T0 + SLEEP_S + 5.0),
+        "a session counts down to its lock"
+    );
+    h.state.login_screen = true;
+    assert_eq!(
+        h.state.display_power_deadline(),
+        None,
+        "the login screen's server has nothing left to count down to"
+    );
+    h.at(T0 + SLEEP_S + 10.0);
+    assert_eq!(h.state.power.policy().state(), DisplayState::Asleep);
 }

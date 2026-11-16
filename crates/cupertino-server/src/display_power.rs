@@ -48,6 +48,9 @@ pub struct Facts {
     /// A client or the login manager holds back idle actions (`zwp_idle_inhibitor_v1`, a logind `idle` block).
     pub inhibited: bool,
     pub locked: bool,
+    /// A lock screen can be asked to lock the session; without one (the login screen's own server) display sleep
+    /// never asks for a lock.
+    pub can_lock: bool,
 }
 
 /// A ramp of the display factor.
@@ -136,6 +139,8 @@ pub struct IdlePolicy {
     ramp: Option<Ramp>,
     lock_sent: bool,
     sleep_sent: bool,
+    /// The session is in the background (another console has the seat): nothing counts down.
+    paused: bool,
 }
 
 impl IdlePolicy {
@@ -149,6 +154,7 @@ impl IdlePolicy {
             ramp: None,
             lock_sent: false,
             sleep_sent: false,
+            paused: false,
         }
     }
 
@@ -165,9 +171,41 @@ impl IdlePolicy {
         self.state
     }
 
-    /// Input arrived: wake or undim the display and start the countdowns again.
+    /// Input arrived: wake or undim the display and start the countdowns again. While paused it changes nothing:
+    /// the countdowns start afresh at [`IdlePolicy::resume`].
     pub fn input(&mut self, now: f64) -> Vec<Effect> {
+        if self.paused {
+            return Vec::new();
+        }
         self.restart(now, true)
+    }
+
+    /// The session went to the background (another session has the seat and the display): until
+    /// [`IdlePolicy::resume`] nothing counts down, and the display is never dimmed or put to sleep, the session never
+    /// locked and the system never put to sleep for idleness here. The display keeps the state it had.
+    pub fn pause(&mut self) {
+        self.paused = true;
+        self.ramp = None;
+    }
+
+    /// Whether the session is in the background ([`IdlePolicy::pause`]).
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// The session is the active one again at `now`: the display is on at once, whatever it was when the session
+    /// went to the background, and every countdown starts afresh, the lengthened one too.
+    pub fn resume(&mut self, now: f64) -> Vec<Effect> {
+        self.paused = false;
+        self.last_input = now;
+        self.lock_sent = false;
+        self.sleep_sent = false;
+        self.lengthened = false;
+        self.ramp = None;
+        match self.state {
+            DisplayState::On => Vec::new(),
+            DisplayState::Dimmed | DisplayState::Asleep => self.enter(DisplayState::On, now),
+        }
     }
 
     /// Start the countdowns at `now` and bring the display back on. Only user input counts towards the lengthened
@@ -200,6 +238,9 @@ impl IdlePolicy {
     pub fn tick(&mut self, now: f64, facts: Facts) -> Vec<Effect> {
         if self.ramp.is_some_and(|r| r.done(now)) {
             self.ramp = None;
+        }
+        if self.paused {
+            return Vec::new();
         }
         // an inhibitor holds every countdown at its start, as continuous input would
         if facts.inhibited {
@@ -239,11 +280,12 @@ impl IdlePolicy {
                 effects.extend(self.enter(DisplayState::Asleep, now));
             }
         }
-        if let (DisplayState::Asleep, Timer::After(delay), false, false) = (
+        if let (DisplayState::Asleep, Timer::After(delay), false, false, true) = (
             self.state,
             self.settings.require_password_after,
             facts.locked,
             self.lock_sent,
+            facts.can_lock,
         ) {
             if now >= self.since + delay.as_secs_f64() {
                 self.lock_sent = true;
@@ -275,9 +317,10 @@ impl IdlePolicy {
     }
 
     /// When [`IdlePolicy::tick`] next has something to do under `facts`: dimming, display sleep, the lock after sleep
-    /// or system sleep. `None` while an inhibitor holds every countdown, or when nothing is left to count down.
+    /// or system sleep. `None` while an inhibitor holds every countdown, while the session is paused, or when nothing is
+    /// left to count down.
     pub fn next_deadline(&self, facts: Facts) -> Option<f64> {
-        if facts.inhibited {
+        if facts.inhibited || self.paused {
             return None;
         }
         let timers = self.settings.timers(facts.on_battery);
@@ -302,11 +345,12 @@ impl IdlePolicy {
                 at(self.last_input + t);
             }
         }
-        if let (DisplayState::Asleep, Timer::After(delay), false, false) = (
+        if let (DisplayState::Asleep, Timer::After(delay), false, false, true) = (
             self.state,
             self.settings.require_password_after,
             facts.locked,
             self.lock_sent,
+            facts.can_lock,
         ) {
             at(self.since + delay.as_secs_f64());
         }
@@ -332,6 +376,7 @@ mod tests {
         on_battery: false,
         inhibited: false,
         locked: false,
+        can_lock: true,
     };
     const BATTERY: Facts = Facts {
         on_battery: true,
@@ -596,6 +641,77 @@ mod tests {
                 (15.0, Effect::Display(DisplayState::Dimmed)),
                 (30.0, Effect::Display(DisplayState::Asleep))
             ]
+        );
+    }
+
+    #[test]
+    fn a_paused_session_never_dims_sleeps_locks_or_suspends_and_resumes_awake_with_fresh_countdowns(
+    ) {
+        let locking = PowerSettings {
+            require_password_after: Timer::After(Duration::from_secs(5)),
+            ..settings()
+        };
+        // paused while on: a whole day in the background changes nothing, and input there counts for nothing
+        let mut p = IdlePolicy::new(locking, 0.0);
+        p.pause();
+        assert!(p.paused());
+        assert_eq!(p.next_deadline(BATTERY), None);
+        assert!(run(&mut p, 0.0, 300.0, BATTERY).is_empty());
+        assert!(p.input(300.0).is_empty());
+        assert!(run(&mut p, 300.0, 86_400.0, BATTERY).is_empty());
+        assert_eq!(p.state(), DisplayState::On);
+        // back in front: nothing to wake, and the countdowns start at the resume
+        assert!(p.resume(86_400.0).is_empty());
+        assert!(!p.paused());
+        assert_eq!(
+            p.next_deadline(BATTERY),
+            Some(86_400.0 + 120.0 - DIM_WINDOW_S)
+        );
+        let effects = run(&mut p, 86_400.0, 86_400.0 + 126.0, BATTERY);
+        assert_eq!(
+            effects.first(),
+            Some(&(86_505.0, Effect::Display(DisplayState::Dimmed)))
+        );
+        assert_eq!(effects.last(), Some(&(86_525.0, Effect::Lock)));
+
+        // paused while dimmed or asleep: the display comes back on at once at the resume, with no ramp
+        for (at, state) in [(106.0, DisplayState::Dimmed), (121.0, DisplayState::Asleep)] {
+            let mut p = IdlePolicy::new(locking, 0.0);
+            run(&mut p, 0.0, at, BATTERY);
+            assert_eq!(p.state(), state);
+            p.pause();
+            assert!(run(&mut p, at, 4000.0, BATTERY).is_empty(), "{state:?}");
+            assert_eq!(p.resume(4000.0), vec![Effect::Display(DisplayState::On)]);
+            assert_eq!(p.factor(4000.0), 1.0);
+            assert!(!p.animating(4000.0));
+            assert_eq!(p.next_deadline(BATTERY), Some(4000.0 + 105.0));
+        }
+    }
+
+    #[test]
+    fn without_a_lock_screen_display_sleep_never_asks_for_a_lock() {
+        let s = PowerSettings {
+            require_password_after: Timer::After(Duration::ZERO),
+            ..settings()
+        };
+        let no_lock_screen = Facts {
+            can_lock: false,
+            ..BATTERY
+        };
+        let mut p = IdlePolicy::new(s, 0.0);
+        let effects = run(&mut p, 0.0, 700.0, no_lock_screen);
+        assert!(effects.contains(&(120.0, Effect::Display(DisplayState::Asleep))));
+        assert!(effects.contains(&(600.0, Effect::SystemSleep)));
+        assert!(
+            !effects.iter().any(|(_, e)| *e == Effect::Lock),
+            "{effects:?}"
+        );
+        let mut p = IdlePolicy::new(s, 0.0);
+        run(&mut p, 0.0, 120.0, no_lock_screen);
+        assert_eq!(
+            p.next_deadline(no_lock_screen),
+            Some(600.0),
+            "no deadline for a lock"
         );
     }
 

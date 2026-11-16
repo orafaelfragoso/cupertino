@@ -722,6 +722,7 @@ pub fn run(
             SessionEvent::PauseSession => {
                 state.revoke_controls(cupertino_control_model::Revocation::SessionDeactivated);
                 tracing::info!("session paused");
+                state.session_deactivated();
                 input::close_all(&session_inputs, state);
                 if let Some(u) = udev(state) {
                     u.paused = true;

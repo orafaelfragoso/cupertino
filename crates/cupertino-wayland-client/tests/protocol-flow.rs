@@ -46,6 +46,8 @@ use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1:
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::{
     self, Mode, ZxdgToplevelDecorationV1,
 };
+use wayland_protocols::xdg::foreign::zv2::server::zxdg_imported_v2::{self, ZxdgImportedV2};
+use wayland_protocols::xdg::foreign::zv2::server::zxdg_importer_v2::{self, ZxdgImporterV2};
 use wayland_protocols::xdg::shell::server::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
@@ -121,6 +123,8 @@ struct Globals {
     subcompositor: bool,
     /// `wl_shm` lists `abgr8888` besides the two formats it must take.
     abgr: bool,
+    /// `zxdg_importer_v2`, and the compositor reports each window it sees destroyed.
+    importer: bool,
 }
 
 impl Globals {
@@ -276,6 +280,12 @@ enum Seen {
     /// The one-pixel buffer of this colour was destroyed.
     SolidDestroyed([u32; 4]),
     DecorationMode(Mode),
+    /// A window of another client was imported by this handle.
+    Imported(String),
+    /// The imported window was made the parent of a surface.
+    ParentOf,
+    ImportedDestroyed,
+    ToplevelDestroyed,
     Positioner(PositionerState),
     Receive(String),
     LayerAck(u32),
@@ -473,7 +483,8 @@ plain_global!(
     ZxdgOutputManagerV1,
     ZwpTextInputManagerV3,
     WpSinglePixelBufferManagerV1,
-    WlSubcompositor
+    WlSubcompositor,
+    ZxdgImporterV2
 );
 
 /// Requests the compositor ignores.
@@ -982,6 +993,43 @@ impl Dispatch<XdgToplevel, ()> for Mock {
                 edges: wayland_server::WEnum::Value(edge),
                 ..
             } => Seen::Resize { serial, edge },
+            xdg_toplevel::Request::Destroy if state.globals.importer => Seen::ToplevelDestroyed,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
+    }
+}
+
+impl Dispatch<ZxdgImporterV2, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgImporterV2,
+        request: zxdg_importer_v2::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let zxdg_importer_v2::Request::ImportToplevel { id, handle } = request {
+            init.init(id, ());
+            state.seen.send(Seen::Imported(handle)).unwrap();
+        }
+    }
+}
+
+impl Dispatch<ZxdgImportedV2, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgImportedV2,
+        request: zxdg_imported_v2::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            zxdg_imported_v2::Request::SetParentOf { .. } => Seen::ParentOf,
+            zxdg_imported_v2::Request::Destroy => Seen::ImportedDestroyed,
             _ => return,
         };
         state.seen.send(seen).unwrap();
@@ -1562,6 +1610,9 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.decoration.is_some() {
             dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
         }
+        if globals.importer {
+            dh.create_global::<Mock, ZxdgImporterV2, _>(1, ());
+        }
         if globals.fractional_scale {
             dh.create_global::<Mock, WpFractionalScaleManagerV1, _>(1, ());
         }
@@ -2002,6 +2053,42 @@ fn present(conn: &mut Connection, surface: SurfaceId, preferred: (u32, u32)) {
         .unwrap()
         .present()
         .unwrap();
+}
+
+#[test]
+fn a_window_with_a_parent_in_another_client_keeps_that_parent_until_it_is_gone() {
+    let (mut conn, _control, seen) = connect(Globals {
+        importer: true,
+        ..Globals::core()
+    });
+    let w = conn
+        .toplevel(&ToplevelConfig {
+            app_id: "test".into(),
+            title: "Test".into(),
+            min_size: None,
+            max_size: None,
+            decorations: Decorations::Client,
+            foreign_parent: Some("handle-of-the-parent".into()),
+        })
+        .unwrap();
+    conn.flush().unwrap();
+    let parent = |s: &Seen| {
+        matches!(
+            s,
+            Seen::Imported(_) | Seen::ParentOf | Seen::ImportedDestroyed | Seen::ToplevelDestroyed
+        )
+    };
+    assert_eq!(
+        seen_matching(&seen, parent),
+        Seen::Imported("handle-of-the-parent".into())
+    );
+    assert_eq!(seen_matching(&seen, parent), Seen::ParentOf);
+    conn.destroy(w.surface()).unwrap();
+    conn.flush().unwrap();
+    // the window goes first: a compositor hands the keyboard to the parent of a window as it closes, and giving the
+    // imported handle up ends that parent
+    assert_eq!(seen_matching(&seen, parent), Seen::ToplevelDestroyed);
+    assert_eq!(seen_matching(&seen, parent), Seen::ImportedDestroyed);
 }
 
 #[test]

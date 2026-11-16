@@ -894,11 +894,13 @@ impl Connection {
                 if let Some(d) = decoration {
                     d.destroy();
                 }
+                toplevel.destroy();
+                xdg.destroy();
+                // after the window: giving the handle up first would end the parent while the window is still open,
+                // and the compositor could not hand the keyboard back to the parent as the window closes
                 if let Some(i) = imported {
                     i.destroy();
                 }
-                toplevel.destroy();
-                xdg.destroy();
             }
             Role::Popup { xdg, popup, .. } => {
                 popup.destroy();

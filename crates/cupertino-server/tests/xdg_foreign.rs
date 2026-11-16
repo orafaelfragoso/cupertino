@@ -509,3 +509,54 @@ fn the_portal_opens_its_file_chooser_as_a_child_of_the_window_that_asked_and_alo
         "the first chooser keeps its parent"
     );
 }
+
+#[test]
+fn the_window_that_asked_takes_the_keyboard_back_when_the_portals_file_chooser_closes() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+        eprintln!("skipped: dbus-daemon is not available");
+        return;
+    };
+    let (_app, app, handle) = exporter(&mut h, "org.example.App");
+    let frontend = bus.connect();
+    frontend
+        .request_name("org.freedesktop.portal.Desktop")
+        .unwrap();
+    let _portal = Portal::start(&h, &bus);
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&frontend).unwrap();
+    let name: zbus::names::BusName<'_> = "org.freedesktop.impl.portal.desktop.cupertino"
+        .try_into()
+        .unwrap();
+    h.wait_until("the portal on the bus", |_| {
+        dbus.name_has_owner(name.clone()).unwrap()
+    });
+    h.wait_until("the application's window to have the keyboard", |s| {
+        s.wm.key_window() == Some(app)
+    });
+
+    open_file(&frontend, "Open Attachment", format!("wayland:{handle}"));
+    let dialog = h.window("Open Attachment");
+    h.wait_until("the chooser to have the keyboard", |s| {
+        s.wm.key_window() == Some(dialog)
+    });
+
+    // the frontend closes the request, as it does when the application gives the dialog up; the chooser's window goes
+    let closing = frontend.clone();
+    std::thread::spawn(move || {
+        let _ = closing.call_method(
+            Some("org.freedesktop.impl.portal.desktop.cupertino"),
+            "/org/freedesktop/portal/desktop/request/1_9/open_attachment",
+            Some("org.freedesktop.impl.portal.Request"),
+            "Close",
+            &(),
+        );
+    });
+    h.wait_until("the chooser's window to go", |s| {
+        s.wm.windows().all(|w| w.id != dialog)
+    });
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(app),
+        "the keyboard is back at the window the chooser was opened for"
+    );
+}

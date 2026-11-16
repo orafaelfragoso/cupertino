@@ -801,8 +801,7 @@ impl XdgShellHandler for Cupertino {
             },
             fullscreen: false,
             shrink: Default::default(),
-            opaque_frame: true,
-            margined_frame: false,
+            frame: crate::frame_fill::Frame::UNSEEN,
         });
     }
 

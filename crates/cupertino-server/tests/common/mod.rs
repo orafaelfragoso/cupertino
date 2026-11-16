@@ -224,7 +224,14 @@ pub enum OwnFrame {
     Opaque,
     /// A transparent window holding a pill, as round at its ends as it is tall, declared opaque only between its ends.
     Pill,
+    /// An opaque square frame inside a clear margin of [`SHADOW_MARGIN`] points (a toolkit's shadow), its window
+    /// geometry at the frame, and no opaque region; maximised, tiled or full screen it drops the margin and fills its
+    /// surface at the configured size.
+    Shadowed,
 }
+
+/// The clear margin around an [`OwnFrame::Shadowed`] frame while it floats, in points.
+pub const SHADOW_MARGIN: i32 = 24;
 
 impl OwnFrame {
     /// The radius of the frame's own corners, in points.
@@ -232,6 +239,7 @@ impl OwnFrame {
         match self {
             OwnFrame::Opaque => 8,
             OwnFrame::Pill => w.min(h) / 2,
+            OwnFrame::Shadowed => 0,
         }
     }
 
@@ -261,7 +269,30 @@ impl OwnFrame {
                 (r, h - r, w - 2 * r, r),
             ],
             OwnFrame::Pill => vec![(r, 0, w - 2 * r, h)],
+            OwnFrame::Shadowed => Vec::new(),
         }
+    }
+
+    /// The margin the frame draws around itself: [`SHADOW_MARGIN`] for a floating [`OwnFrame::Shadowed`] one.
+    fn margin(self, filling: bool) -> i32 {
+        if self == OwnFrame::Shadowed && !filling {
+            SHADOW_MARGIN
+        } else {
+            0
+        }
+    }
+
+    /// The frame's pixels at `size` inside a clear `margin` on every side.
+    fn pixels_in_margin(self, (w, h): (i32, i32), margin: i32) -> Vec<u8> {
+        let frame = self.pixels((w, h));
+        let (sw, sh) = (w + 2 * margin, h + 2 * margin);
+        let mut out = vec![0; (sw * sh * 4) as usize];
+        for y in 0..h {
+            let from = (y * w * 4) as usize;
+            let to = (((y + margin) * sw + margin) * 4) as usize;
+            out[to..to + (w * 4) as usize].copy_from_slice(&frame[from..from + (w * 4) as usize]);
+        }
+        out
     }
 }
 
@@ -318,6 +349,8 @@ struct ClientState {
     rounds: Rounds,
     /// The frame the client draws itself on every configure, with its opaque region, instead of a solid buffer.
     own_frame: Option<(OwnFrame, wl_compositor::WlCompositor)>,
+    /// The last toplevel configure: whether it maximised, tiled or made the window full screen, and its size if any.
+    configured: (bool, Option<(i32, i32)>),
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
@@ -394,13 +427,31 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Configure { states, .. } = event {
-            let activated = states
+        if let xdg_toplevel::Event::Configure {
+            width,
+            height,
+            states,
+        } = event
+        {
+            let states: Vec<u32> = states
                 .as_chunks::<4>()
                 .0
                 .iter()
                 .map(|c| u32::from_ne_bytes(*c))
-                .any(|s| s == xdg_toplevel::State::Activated as u32);
+                .collect();
+            let activated = states.contains(&(xdg_toplevel::State::Activated as u32));
+            let filling = [
+                xdg_toplevel::State::Maximized,
+                xdg_toplevel::State::Fullscreen,
+                xdg_toplevel::State::TiledLeft,
+                xdg_toplevel::State::TiledRight,
+                xdg_toplevel::State::TiledTop,
+                xdg_toplevel::State::TiledBottom,
+            ]
+            .into_iter()
+            .any(|s| states.contains(&(s as u32)));
+            let size = (width > 0 && height > 0).then_some((width, height));
+            state.configured = (filling, size);
             state
                 .lock_status
                 .lock()
@@ -444,6 +495,24 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for ClientState {
             xdg.ack_configure(serial);
             let size = state.toplevel_size;
             let buffer = match &state.own_frame {
+                Some((frame @ OwnFrame::Shadowed, _)) => {
+                    let (filling, configured) = state.configured;
+                    let size = if filling {
+                        configured.unwrap_or(size)
+                    } else {
+                        size
+                    };
+                    let m = frame.margin(filling);
+                    xdg.set_window_geometry(m, m, size.0, size.1);
+                    surface.set_opaque_region(None);
+                    let surface_size = (size.0 + 2 * m, size.1 + 2 * m);
+                    let pixels = frame.pixels_in_margin(size, m);
+                    let buffer = pixel_buffer(&state.shm, surface_size, &pixels, qh);
+                    surface.attach(Some(&buffer), 0, 0);
+                    surface.damage_buffer(0, 0, surface_size.0, surface_size.1);
+                    surface.commit();
+                    return;
+                }
                 Some((frame, compositor)) => {
                     let region = compositor.create_region(qh, ());
                     for (x, y, w, h) in frame.opaque(size) {
@@ -834,6 +903,7 @@ impl Client {
                 lock_status: status2,
                 toplevel_size: (400, 300),
                 own_frame: None,
+                configured: (false, None),
                 silent: silent2.clone(),
                 held_ping: None,
                 rounds: rounds2.clone(),

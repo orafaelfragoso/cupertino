@@ -170,7 +170,7 @@ struct Framed {
     titlebar: bool,
     rim: bool,
     /// The light rim just inside the frame of a window its client decorates, in front of the window's content.
-    window_rim: bool,
+    client_rim: bool,
 }
 
 fn framed(d: &mut Desktop) -> Framed {
@@ -190,7 +190,7 @@ fn framed(d: &mut Desktop) -> Framed {
     d.state.backend = Some(backend);
     let has = |kind: SceneKind| items.iter().any(|(k, _)| *k == kind);
     let at = |kind: SceneKind| items.iter().position(|(k, _)| *k == kind);
-    if let (Some(rim), Some(content)) = (at(SceneKind::WindowRim), at(SceneKind::WindowContent)) {
+    if let (Some(rim), Some(content)) = (at(SceneKind::ClientRim), at(SceneKind::WindowContent)) {
         assert!(rim < content, "the rim lies over the content: {items:?}");
     }
     Framed {
@@ -203,7 +203,7 @@ fn framed(d: &mut Desktop) -> Framed {
         outline: has(SceneKind::Outline),
         titlebar: has(SceneKind::TitleBar),
         rim: has(SceneKind::Rim),
-        window_rim: has(SceneKind::WindowRim),
+        client_rim: has(SceneKind::ClientRim),
     }
 }
 
@@ -304,7 +304,7 @@ fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_scr
                         || frame.outline
                         || frame.titlebar
                         || frame.rim
-                        || frame.window_rim),
+                        || frame.client_rim),
                     "{mode:?} {state}: {frame:?}"
                 );
             } else {
@@ -312,7 +312,7 @@ fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_scr
                 assert!(frame.shadow && frame.outline, "{mode:?} {state}: {frame:?}");
                 // one light rim inside the frame: the decorations' own, or the scene's for a client's frame
                 assert_eq!(
-                    (frame.titlebar, frame.rim, frame.window_rim),
+                    (frame.titlebar, frame.rim, frame.client_rim),
                     (decorated, decorated, !decorated),
                     "{mode:?} {state}"
                 );
@@ -468,10 +468,95 @@ fn an_opaque_client_drawn_frame_is_rounded_and_a_transparent_shaped_one_is_left_
         let shown = framed(&mut d);
         assert_eq!(rounded(&shown.clip), styled, "{frame:?}: {shown:?}");
         assert_eq!(
-            (shown.shadow, shown.outline, shown.window_rim),
+            (shown.shadow, shown.outline, shown.client_rim),
             (styled, styled, styled),
             "{frame:?}: {shown:?}"
         );
         assert!(!shown.titlebar, "{frame:?}: {shown:?}");
     }
+}
+
+/// A client that draws its frame inside a clear margin of its own (a toolkit's shadow), its window geometry at the
+/// frame and no opaque region, is seen with that margin while it floats; zoomed, it drops the margin and fills its
+/// surface, and is seen filling its area; floating again, with its margin. Styled throughout, at a fractional scale.
+/// A frameless client whose geometry is its whole surface has no margin.
+#[test]
+fn a_client_frame_s_own_margin_and_its_zoom_are_seen_from_its_commits() {
+    use common::OwnFrame;
+    let mut d = Desktop::new(1.5);
+    let client = common::Client::drawing_own_frame(d.socket(), OwnFrame::Shadowed);
+    d.clients.push(client);
+    let deadline = std::time::Instant::now() + common::HANG_GUARD;
+    while d.state.wm.windows().count() != 1 {
+        d.pump();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the client did not map"
+        );
+    }
+    d.at(3000);
+    let id = d.state.wm.key_window().expect("the window is key");
+    let frame = |d: &Desktop| d.state.entry(id).unwrap().frame;
+    let wait = |d: &mut Desktop, filling: bool| {
+        let deadline = std::time::Instant::now() + common::HANG_GUARD;
+        while frame(d).filling != filling {
+            d.pump();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the client did not draw {}",
+                if filling { "zoomed" } else { "floating" }
+            );
+        }
+    };
+    let floating = frame(&d);
+    assert!(
+        floating.margin && !floating.filling && floating.opaque,
+        "floating: {floating:?}"
+    );
+    assert!(rounded(&framed(&mut d).clip));
+
+    d.state
+        .command(cupertino_wm::Command::ToggleZoom { window: id });
+    wait(&mut d, true);
+    d.at(6000);
+    let zoomed = frame(&d);
+    assert!(
+        !zoomed.margin && zoomed.filling && zoomed.opaque,
+        "zoomed: {zoomed:?}"
+    );
+    let shown = framed(&mut d);
+    assert!(
+        rounded(&shown.clip) && shown.client_rim,
+        "zoomed: {shown:?}"
+    );
+
+    d.state
+        .command(cupertino_wm::Command::ToggleZoom { window: id });
+    wait(&mut d, false);
+    d.at(9000);
+    let restored = frame(&d);
+    assert!(
+        restored.margin && !restored.filling && restored.opaque,
+        "restored: {restored:?}"
+    );
+
+    // a frameless client: its geometry is its surface
+    let mut d = Desktop::new(1.5);
+    let client = common::Client::drawing_own_frame(d.socket(), OwnFrame::Opaque);
+    d.clients.push(client);
+    let deadline = std::time::Instant::now() + common::HANG_GUARD;
+    while d.state.wm.windows().count() != 1 {
+        d.pump();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the client did not map"
+        );
+    }
+    d.at(3000);
+    let id = d.state.wm.key_window().expect("the window is key");
+    let frameless = d.state.entry(id).unwrap().frame;
+    assert!(
+        !frameless.margin && !frameless.filling,
+        "frameless: {frameless:?}"
+    );
 }

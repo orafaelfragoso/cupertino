@@ -242,12 +242,9 @@ pub struct WindowEntry {
     /// Configured full screen: the decorations are hidden and the client gets the whole frame.
     pub fullscreen: bool,
     pub shrink: Shrink,
-    /// The client's own frame is an opaque rectangle up to corners no rounder than the window's
-    /// ([`crate::frame_fill`]), as of its last commit; a transparent or shaped window is not.
-    pub opaque_frame: bool,
-    /// The client has drawn a margin of its own around its frame (a shadow) since its frame was last seen transparent
-    /// ([`crate::frame_fill::Frame::margined`]): the frame stays opaque when the margin goes (maximised or tiled).
-    pub margined_frame: bool,
+    /// What the client's own frame is as of its last commit ([`crate::frame_fill`]): an opaque rectangle up to corners
+    /// no rounder than the window's, or a transparent or shaped window.
+    pub frame: crate::frame_fill::Frame,
 }
 
 impl WindowEntry {
@@ -267,12 +264,12 @@ impl WindowEntry {
 
     /// Whether the compositor masks the window's corners and draws its outline and shadow: a window it decorates, and,
     /// with `style_client_decorated`, one whose client draws its own decorations, whether it said so or not, as long as
-    /// that frame is an opaque rectangle ([`Self::opaque_frame`]). Such a client's own frame (square corners, tighter
+    /// that frame is an opaque rectangle ([`Self::frame`]). Such a client's own frame (square corners, tighter
     /// ones, its own shadow) is cut to the window's outline, so every window has the same corners, outline and shadow as
     /// a native one; a transparent or shaped window (an overlay, a floating widget, a pill-shaped bar) is left as it
     /// draws itself.
     pub fn styled(&self, style_client_decorated: bool) -> bool {
-        self.server_side || (style_client_decorated && self.opaque_frame)
+        self.server_side || (style_client_decorated && self.frame.opaque)
     }
 
     /// The space the decorations take now: none while the window is full screen.
@@ -1456,14 +1453,25 @@ impl Cupertino {
             .unwrap_or(false);
         let entry = &mut self.windows[idx];
         if has_buffer && !entry.server_side && entry.toplevel.wl_surface() == surface {
-            let frame = crate::frame_fill::opaque_frame(
+            use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+            // the states the client drew this commit in: the last configure it acknowledged
+            let states = entry.toplevel.current_state().states;
+            let filling = [
+                State::Maximized,
+                State::Fullscreen,
+                State::TiledLeft,
+                State::TiledRight,
+                State::TiledTop,
+                State::TiledBottom,
+            ]
+            .into_iter()
+            .any(|s| states.contains(s));
+            entry.frame = crate::frame_fill::opaque_frame(
                 surface,
                 entry.window.geometry(),
                 self.config.window.corner_radius,
-                entry.margined_frame,
+                filling,
             );
-            entry.opaque_frame = frame.opaque;
-            entry.margined_frame = frame.margined;
         }
         let (mapped, id) = (self.windows[idx].mapped, self.windows[idx].id);
         match (mapped, has_buffer) {
@@ -1471,6 +1479,8 @@ impl Cupertino {
             (true, false) => {
                 self.windows[idx].mapped = false;
                 self.windows[idx].shrink = Shrink::None;
+                // a window mapped again is judged from its new frames alone
+                self.windows[idx].frame = crate::frame_fill::Frame::UNSEEN;
                 let now = self.now();
                 let fx = self.wm.handle(Command::Destroy { window: id }, now);
                 self.apply_effects(fx);

@@ -46,7 +46,7 @@ pub enum SceneKind {
     TitleBar,
     Rim,
     /// The light rim just inside a window whose client draws its own frame, over its content.
-    WindowRim,
+    ClientRim,
     Outline,
     CursorImage,
     InputHud,
@@ -89,7 +89,7 @@ impl SceneKind {
             Self::CursorContent => "cursor-content",
             Self::TitleBar => "title-bar",
             Self::Rim => "rim",
-            Self::WindowRim => "window-rim",
+            Self::ClientRim => "client-rim",
             Self::Outline => "outline",
             Self::CursorImage => "cursor-image",
             Self::InputHud => "input-hud",

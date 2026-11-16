@@ -234,6 +234,39 @@ fn stopping_or_leaving_makes_the_next_caller_active_and_a_waiting_one_just_goes(
 }
 
 #[test]
+fn a_question_that_cannot_be_shown_is_cancelled_its_prompt_ends_and_the_next_caller_is_active() {
+    let (mut prompter, _theirs) = asking(Kind::Confirm, Vec::new());
+    assert_eq!(prompter.begin(caller(2)), Ok(Vec::new()));
+    let effects = prompter.dismiss();
+    let [Effect::Ready {
+        caller: cancelled,
+        reply: Reply::No,
+        ..
+    }, Effect::Done { caller: ended }, Effect::Ready {
+        caller: next,
+        reply: Reply::Ready,
+        ..
+    }] = &effects[..]
+    else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(
+        (cancelled, ended, next),
+        (&caller(1), &caller(1), &caller(2))
+    );
+    assert_eq!(prompter.prompt().map(|p| &p.caller), Some(&caller(2)));
+    // the person's own cancel ends no prompt: the caller stops it
+    let (mut prompter, _theirs) = asking(Kind::Confirm, Vec::new());
+    assert!(matches!(
+        &prompter.cancel()[..],
+        [Effect::Ready {
+            reply: Reply::No,
+            ..
+        }]
+    ));
+}
+
+#[test]
 fn too_many_waiting_callers_are_refused() {
     let mut prompter = Prompter::new();
     for n in 0..=MAX_WAITING as u32 {

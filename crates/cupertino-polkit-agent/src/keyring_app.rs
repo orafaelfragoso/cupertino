@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use cupertino_assets::Assets;
 use cupertino_geometry::Rect;
 use cupertino_polkit_agent::keyring::access::{keyring_tree, requested};
+use cupertino_polkit_agent::keyring::asking::{self, Setup};
 use cupertino_polkit_agent::keyring::model::{Caller, Phase};
+use cupertino_polkit_agent::keyring::offer::Outcome;
 use cupertino_polkit_agent::keyring::panel::{Command, Control, Frames, Panel, PanelKey};
 use cupertino_polkit_agent::keyring::prompter::{self, Host, Owned, Request};
 use cupertino_polkit_agent::keyring::render::Layout;
@@ -147,7 +149,7 @@ pub fn run() -> Result<()> {
     let access = AtspiAdapter::new(Waker::from(Arc::new(WakeLoop(conn.waker()))));
 
     // logind tells whether the session is the active one; without it (a nested session) it counts as active
-    let active = match zbus::blocking::Connection::system()
+    let (active, login) = match zbus::blocking::Connection::system()
         .and_then(|system| Session::find(&system))
     {
         Ok(session) => {
@@ -157,11 +159,11 @@ pub fn run() -> Result<()> {
                 "cupertino-keyring-prompter: shown only while logind session {} is active",
                 session.id
             );
-            session.active()?
+            (session.active()?, session.id.clone())
         }
         Err(error) => {
             eprintln!("cupertino-keyring-prompter: no logind session ({error}); the session counts as active");
-            true
+            (true, String::new())
         }
     };
     let bus = zbus::blocking::Connection::session()?;
@@ -172,6 +174,10 @@ pub fn run() -> Result<()> {
         Owned::Queued => eprintln!(
             "cupertino-keyring-prompter: another prompter holds the names; serving once it leaves"
         ),
+    }
+    // only the prompter that shows the prompts asks, so the question is never drawn by another program
+    if owned == Owned::Now {
+        start_offer(&bus, login);
     }
     let mut app = App {
         conn,
@@ -205,6 +211,31 @@ pub fn run() -> Result<()> {
         }
         app.follow_access()?;
         app.sync()?;
+    }
+}
+
+/// Start the offer about a default keyring that login does not unlock, on a thread and a bus connection of its own:
+/// neither the loop nor login waits for the Secret Service. `login` names this login among the account's.
+fn start_offer(prompter: &zbus::blocking::Connection, login: String) {
+    let Some(setup) = prompter
+        .unique_name()
+        .and_then(|name| Setup::of_session(name.to_string(), login))
+    else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("keyring-offer".into())
+        .spawn(move || match zbus::blocking::Connection::session() {
+            Ok(bus) => match asking::run(&bus, &setup) {
+                Outcome::Quiet => {}
+                outcome => eprintln!(
+                    "cupertino-keyring-prompter: the offer about the default keyring ended: {outcome:?}"
+                ),
+            },
+            Err(error) => eprintln!("cupertino-keyring-prompter: the offer's bus: {error}"),
+        });
+    if let Err(error) = spawned {
+        eprintln!("cupertino-keyring-prompter: the offer's thread: {error}");
     }
 }
 
@@ -341,10 +372,10 @@ impl App {
                     presenter.configured(layer.configured(size)?);
                 }
             }
-            // the server closes the panel only when it can't show it: the question is cancelled
+            // the server closes the panel only when it can't show it: the question is cancelled and its prompt ends
             ShellEvent::Closed(surface) if shown.layer.surface() == surface => {
                 eprintln!("cupertino-keyring-prompter: the server closed the prompt");
-                let effects = self.host.model.cancel();
+                let effects = self.host.model.dismiss();
                 self.host.apply(effects);
             }
             ShellEvent::Closed(surface) => {

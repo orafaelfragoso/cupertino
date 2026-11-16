@@ -21,7 +21,6 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
 
 use smithay::reexports::calloop::channel::Sender as LoopSender;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -289,11 +288,11 @@ impl Cupertino {
     /// export the input-method global (created in `Cupertino::new` when the picker is configured).
     pub fn start_input_method(&mut self, events: LoopSender<ImEvent>) -> Option<ImBridge> {
         let (server_end, client_end) = UnixStream::pair().ok()?;
-        let data = Arc::new(ClientState {
+        let data = ClientState {
             internal: true,
             ..Default::default()
-        });
-        if let Err(e) = self.display_handle.insert_client(server_end, data) {
+        };
+        if let Err(e) = crate::state::insert_client(&self.display_handle, server_end, data) {
             tracing::warn!(error = %e, "input method bridge: cannot add the client");
             return None;
         }

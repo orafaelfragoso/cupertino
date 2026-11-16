@@ -29,8 +29,7 @@ pub fn connect_bound_client(
     state: ClientState,
 ) -> std::io::Result<BoundConnection> {
     let (server, client) = UnixStream::pair()?;
-    let state = Arc::new(state);
-    display.clone().insert_client(server, state.clone())?;
+    let state = crate::state::insert_client(display, server, state)?;
     Ok((client, state))
 }
 

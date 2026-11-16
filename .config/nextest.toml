@@ -35,7 +35,7 @@ path = "junit.xml"
 # The notifications process with no output passes a second of real time around a display unplugged and plugged in:
 # about 1.5 s alone.
 # The login screen of the greeter session runs as a real process under a mouse moving for a second of real time, is
-# kept busy for that second, and waits out a display sleep and a password refused: 3.5 to 9 s.
+# kept busy for that second, waits out a display sleep and a password refused, or is started a second time: 3 to 9 s.
 # The notification list closing at a press on either output, at Escape and at the control panel opening starts two
 # real shell processes and opens the list four times: about 2.2 s.
 # The full notification list drawn at 2x in four appearances on the CPU takes about 1.5 s alone, more beside the

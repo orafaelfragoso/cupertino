@@ -1,7 +1,7 @@
 //! The real login screen of the greeter session (`cupertino-login --greeter`) under a headless server, beside a stand-in
 //! session manager on its socket: a fast mouse over a screen that is busy drawing, the person's clicks and keys, a
-//! password refused, a return from another console and a display sleep never end its connection. Tests skip (pass)
-//! when no EGL device is available.
+//! password refused, a return from another console and a display sleep never end its connection, and one the server
+//! gives up on is closed at once and started again. Tests skip (pass) when no EGL device is available.
 
 use crate::common;
 
@@ -27,6 +27,7 @@ use cupertino_server::Cupertino;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::{Display, Resource};
 
 /// The output in pixels and its scale: a fractional scale, whose buffers the screen draws at the next whole scale.
@@ -135,6 +136,8 @@ struct Greeter {
     time: u32,
     log: PathBuf,
     heard: Shared,
+    /// The greeter is meant to stop: [`Greeter::step`] does not take it for a failure.
+    may_stop: bool,
     _dir: tempfile::TempDir,
     _bus: cupertino_test_bus::PrivateBus,
 }
@@ -229,6 +232,7 @@ impl Greeter {
             time: 0,
             log,
             heard,
+            may_stop: false,
             _dir: dir,
             _bus: bus,
         };
@@ -242,7 +246,7 @@ impl Greeter {
         Some(greeter)
     }
 
-    /// One turn of the server's loop; the greeter has not stopped.
+    /// One turn of the server's loop; the greeter has not stopped unless it may.
     fn step(&mut self) {
         headless::step(
             &mut self.state,
@@ -252,7 +256,7 @@ impl Greeter {
         .unwrap();
         let log = log_text(&self.log);
         assert!(
-            !log.contains("the application stopped"),
+            self.may_stop || !log.contains("the application stopped"),
             "the greeter stopped:\n{log}"
         );
     }
@@ -429,4 +433,42 @@ fn the_greeter_keeps_its_connection_through_the_persons_input() {
     assert!(greeter_up(&greeter.state));
     assert!(!greeter.state.session_lock.is_active());
     assert_eq!(greeter.heard("Hello"), 1, "the greeter was started again");
+}
+
+/// The server gives the greeter up outside its read loop, as when its events no longer fit, while the greeter sits
+/// waiting for its next frame: the greeter sees its connection end at once and exits, and the supervisor starts a new
+/// one that the person can sign in with.
+#[test]
+fn a_greeter_the_server_gives_up_is_disconnected_and_started_again() {
+    let Some(mut greeter) = Greeter::start(PowerSettings::default()) else {
+        return;
+    };
+    // drawn and idle, with a frame asked for and nothing else to read
+    greeter.run_for(Duration::from_millis(300));
+    let client = greeter
+        .state
+        .seat
+        .get_keyboard()
+        .unwrap()
+        .current_focus()
+        .and_then(|surface| surface.client())
+        .expect("the greeter's connection");
+    greeter.may_stop = true;
+    greeter
+        .state
+        .display_handle
+        .backend_handle()
+        .kill_client(client.id(), DisconnectReason::ConnectionClosed);
+    greeter.wait_until("the greeter to see its connection end", |_, log| {
+        log.contains("the application stopped")
+    });
+    greeter.wait_until("a new greeter", |s, _| greeter_up(s));
+    assert_eq!(greeter.heard("Hello"), 2, "the greeter was started again");
+    greeter.wait_until("the new greeter to take the pointer", |s, _| {
+        s.surface_under(tile().into()).map(|(surface, _)| surface)
+            == s.seat.get_keyboard().unwrap().current_focus()
+    });
+    greeter.click(tile());
+    greeter.type_wrong_password();
+    assert!(greeter_up(&greeter.state));
 }

@@ -116,6 +116,11 @@ pub struct ClientState {
     /// command key itself, so its chords reach it as pressed and the command key's W stays the compositor's close
     /// (`Cupertino::key_client_class`).
     pub kit: std::sync::atomic::AtomicBool,
+    /// The server's own handle of its end of the connection ([`insert_client`]), shut down when the connection ends
+    /// ([`ClientState::disconnected`]): a client the server gives up on outside its read loop (its events no longer fit,
+    /// [`CLIENT_EVENT_BUFFER`]) is otherwise left with an open socket that never speaks again until it writes, and one
+    /// waiting for a frame callback waits for good.
+    pub socket: std::sync::Mutex<Option<std::os::fd::OwnedFd>>,
 }
 
 /// The clients that mapped a toplevel and have disconnected since the last tick.
@@ -137,6 +142,7 @@ impl Default for ClientState {
             acquire_waits: std::sync::Arc::default(),
             gone: std::sync::OnceLock::new(),
             kit: std::sync::atomic::AtomicBool::new(false),
+            socket: std::sync::Mutex::new(None),
         }
     }
 }
@@ -156,6 +162,19 @@ impl ClientState {
     }
 }
 
+/// Add the client on `stream` with `state`, which keeps a handle of the server's end of the socket
+/// ([`ClientState::socket`]) to shut it down when the connection ends.
+pub fn insert_client(
+    display: &DisplayHandle,
+    stream: std::os::unix::net::UnixStream,
+    mut state: ClientState,
+) -> std::io::Result<Arc<ClientState>> {
+    state.socket = std::sync::Mutex::new(Some(stream.try_clone()?.into()));
+    let state = Arc::new(state);
+    display.clone().insert_client(stream, state.clone())?;
+    Ok(state)
+}
+
 /// The process that connected `stream`, held by the pidfd the kernel names for the socket.
 pub fn client_process(
     stream: &std::os::unix::net::UnixStream,
@@ -171,6 +190,16 @@ impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
     fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
         log_disconnect(self, &client_id, &reason);
+        // the client sees the end at once, after what was already sent to it (a protocol error), whether or not the
+        // server's read loop closes the connection soon; the read loop then finds it closed too
+        let socket = self
+            .socket
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(socket) = socket {
+            let _ = rustix::net::shutdown(&socket, rustix::net::Shutdown::Both);
+        }
         self.acquire_waits.close();
         if let Some(gone) = self.gone.get() {
             gone.lock()
@@ -814,7 +843,7 @@ impl Cupertino {
                         peer: client_process(&stream),
                         ..ClientState::default()
                     };
-                    if let Err(e) = state.display_handle.insert_client(stream, Arc::new(data)) {
+                    if let Err(e) = insert_client(&state.display_handle, stream, data) {
                         tracing::warn!(error = %e, "adding wayland client failed");
                     }
                 })

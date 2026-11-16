@@ -351,3 +351,48 @@ fn only_the_portals_connection_sees_the_global_and_its_chords_end_with_it() {
     holder.end();
     h.wait_until("the chords to go", |s| s.key_router.global.is_empty());
 }
+
+#[test]
+fn the_portals_prompt_windows_are_out_of_desktop_controls_reach() {
+    let Some(mut h) = Harness::new() else { return };
+    let prompt = Client::listening(
+        h.socket_path(),
+        cupertino_server::global_shortcuts::PORTAL_PROMPT_APP_ID,
+    );
+    h.clients.push(prompt.rounds());
+    let chooser = Client::listening(h.socket_path(), "org.cupertino.Portal");
+    h.clients.push(chooser.rounds());
+    h.wait_until("the windows to map", |s| s.wm.windows().count() == 2);
+    h.advance(1.0);
+    let by_app = |s: &Cupertino, app_id: &str| {
+        s.windows
+            .iter()
+            .find(|w| {
+                smithay::wayland::compositor::with_states(w.surface(), |states| {
+                    states
+                        .data_map
+                        .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                        .and_then(|d| d.lock().unwrap().app_id.clone())
+                })
+                .as_deref()
+                    == Some(app_id)
+            })
+            .unwrap()
+            .surface()
+            .clone()
+    };
+    let (prompt_surface, chooser_surface) = (
+        by_app(
+            &h.state,
+            cupertino_server::global_shortcuts::PORTAL_PROMPT_APP_ID,
+        ),
+        by_app(&h.state, "org.cupertino.Portal"),
+    );
+    // the app id alone names no prompt: no connection of this process holds the portal's role yet
+    assert!(!h.state.is_portal_prompt(&prompt_surface));
+    let (portal, _holder) = h.portal(&[ShellRole::Capture, ShellRole::GlobalShortcuts]);
+    assert_eq!(*portal.bound.lock().unwrap(), Some(true));
+    assert!(h.state.is_portal_prompt(&prompt_surface));
+    // the portal's choosers stay within reach
+    assert!(!h.state.is_portal_prompt(&chooser_surface));
+}

@@ -1063,6 +1063,9 @@ pub struct KeyEvent {
     /// With Shift down, the symbol the key types at its shift level, which a chord matches when the key's own symbol
     /// matches none: Shift+7 types `/` on a German layout, so it is Shift+slash there.
     pub shifted: Option<u32>,
+    /// The Alt of `mods` is AltGr alone, not the Option key ([`crate::kbd::KeyboardSettings::alt_gr`]): the server's
+    /// bindings take it for Alt, the applications' shortcuts do not.
+    pub alt_gr: bool,
 }
 
 /// What a key does while the application switcher is open (key table), or `None`
@@ -1141,6 +1144,32 @@ impl KeyRouter {
         self.bindings.lookup(ev.sym, ev.mods).or_else(|| {
             ev.shifted
                 .and_then(|sym| self.bindings.lookup(sym, ev.mods))
+        })
+    }
+
+    /// The portal's shortcut `ev` (its symbol normalised as `sym`) stands for: the chord, else with Shift down the
+    /// symbol the key types at its shift level, with Shift and without it, as the Shift typed the symbol (Ctrl+Shift+=
+    /// is Ctrl+plus on a US layout). A modifier or lock key is none, so the focused client always sees its modifiers,
+    /// and nothing is while AltGr is held, so AltGr and a key types its symbol in the focused client.
+    fn global_key(&self, ev: &KeyEvent, sym: u32) -> Option<GlobalKey> {
+        if ev.alt_gr || crate::global_shortcuts::is_modifier_key(sym) {
+            return None;
+        }
+        let get = |mods: Mods, sym: u32| self.global.get(&Chord { mods, sym }).copied();
+        get(ev.mods, sym).or_else(|| {
+            let shifted = normalize_sym(ev.shifted?);
+            if shifted == sym {
+                return None;
+            }
+            get(ev.mods, shifted).or_else(|| {
+                get(
+                    Mods {
+                        shift: false,
+                        ..ev.mods
+                    },
+                    shifted,
+                )
+            })
         })
     }
 
@@ -1228,7 +1257,7 @@ impl KeyRouter {
             }
             // a shortcut an application bound through the portal: the focused client sees neither the press nor the
             // release, and the release tells the portal the shortcut ended
-            None => match self.global.get(&Chord { mods: ev.mods, sym }).copied() {
+            None => match self.global_key(&ev, sym) {
                 Some(key) => {
                     let release = ShellOp::GlobalShortcut {
                         key,
@@ -1307,6 +1336,7 @@ mod tests {
                 mods: ch.mods,
                 repeat: false,
                 shifted: None,
+                alt_gr: false,
             },
             c,
         )
@@ -1339,6 +1369,7 @@ mod tests {
                     mods: parse_chord("Super+Shift+7").unwrap().mods,
                     repeat: false,
                     shifted: Some(keysyms::KEY_slash),
+                    alt_gr: false,
                 },
                 &ctx(),
             )
@@ -1578,6 +1609,7 @@ mod tests {
             mods: alt,
             repeat: false,
             shifted: None,
+            alt_gr: false,
         };
         assert!(matches!(r.key(release, &c), KeyOutcome::Consumed(_)));
     }
@@ -1647,6 +1679,7 @@ mod tests {
                         mods: chord.mods,
                         repeat: false,
                         shifted: None,
+                        alt_gr: false,
                     },
                     &locked,
                 );
@@ -1672,6 +1705,7 @@ mod tests {
                 mods,
                 repeat: false,
                 shifted: None,
+                alt_gr: false,
             };
             assert!(
                 router.lookup(&reader).is_none(),
@@ -1693,6 +1727,7 @@ mod tests {
             mods,
             repeat: false,
             shifted: None,
+            alt_gr: false,
         };
         let super_ = Mods {
             logo: true,
@@ -1879,6 +1914,7 @@ mod tests {
                     mods,
                     repeat,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &c,
             ) {
@@ -1946,6 +1982,7 @@ mod tests {
                         mods: held,
                         repeat: false,
                         shifted: None,
+                        alt_gr: false,
                     },
                     &c
                 ),
@@ -2012,6 +2049,7 @@ mod tests {
                     mods: ch.mods,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &c
             ),
@@ -2025,6 +2063,7 @@ mod tests {
                     mods: Mods::NONE,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &c
             ),
@@ -2038,6 +2077,7 @@ mod tests {
                     mods: Mods::NONE,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &c
             )),
@@ -2052,6 +2092,7 @@ mod tests {
                     mods: Mods::NONE,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &c
             )),
@@ -2233,6 +2274,7 @@ mod tests {
             mods,
             repeat: false,
             shifted: None,
+            alt_gr: false,
         };
         let c = ctx();
         // Shift held with the chord is another chord
@@ -2288,6 +2330,102 @@ mod tests {
     }
 
     #[test]
+    fn a_portal_shortcut_never_takes_a_modifier_or_altgr_and_matches_a_shifted_symbol() {
+        let mut r = KeyRouter::new(KeyBindings::empty());
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::NONE
+        };
+        let ctrl_shift = Mods {
+            shift: true,
+            ..ctrl
+        };
+        let ctrl_alt = Mods { alt: true, ..ctrl };
+        let (plus, alt_k, shift_key) = (
+            GlobalKey { owner: 1, id: 1 },
+            GlobalKey { owner: 1, id: 2 },
+            GlobalKey { owner: 1, id: 3 },
+        );
+        r.global.insert(
+            Chord {
+                mods: ctrl,
+                sym: keysyms::KEY_plus,
+            },
+            plus,
+        );
+        r.global.insert(
+            Chord {
+                mods: ctrl_alt,
+                sym: keysyms::KEY_k,
+            },
+            alt_k,
+        );
+        r.global.insert(
+            Chord {
+                mods: ctrl,
+                sym: keysyms::KEY_Shift_L,
+            },
+            shift_key,
+        );
+        let ops = |outcome: KeyOutcome| match outcome {
+            KeyOutcome::Consumed(plan) => dbg(&plan.ops),
+            KeyOutcome::Forward => "forward".into(),
+        };
+        let pressed = |key| dbg(&vec![ShellOp::GlobalShortcut { key, pressed: true }]);
+        let released = |key| {
+            dbg(&vec![ShellOp::GlobalShortcut {
+                key,
+                pressed: false,
+            }])
+        };
+        let c = ctx();
+        let event = |sym, mods, pressed, shifted, alt_gr| KeyEvent {
+            sym,
+            pressed,
+            mods,
+            repeat: false,
+            shifted,
+            alt_gr,
+        };
+        // a modifier key bound as a shortcut's key still reaches the focused client
+        let shift = event(keysyms::KEY_Shift_L, ctrl, true, None, false);
+        assert_eq!(ops(r.key(shift, &c)), "forward");
+        // Ctrl+Shift+= types plus on a US layout: Ctrl+plus, the release ends it
+        let equal = |pressed| {
+            event(
+                keysyms::KEY_equal,
+                ctrl_shift,
+                pressed,
+                Some(keysyms::KEY_plus),
+                false,
+            )
+        };
+        assert_eq!(ops(r.key(equal(true), &c)), pressed(plus));
+        assert_eq!(ops(r.key(equal(false), &c)), released(plus));
+        // where plus is a key of its own
+        let own = event(keysyms::KEY_plus, ctrl, true, None, false);
+        assert_eq!(ops(r.key(own, &c)), pressed(plus));
+        r.key(event(keysyms::KEY_plus, ctrl, false, None, false), &c);
+        // Shift and a letter is another chord
+        let shift_k = event(
+            keysyms::KEY_k,
+            Mods {
+                shift: true,
+                ..ctrl_alt
+            },
+            true,
+            Some(keysyms::KEY_K),
+            false,
+        );
+        assert_eq!(ops(r.key(shift_k, &c)), "forward");
+        // AltGr is not Alt: Ctrl+AltGr+K reaches the focused client, Ctrl+Alt+K is the shortcut
+        let alt_gr_k = event(keysyms::KEY_k, ctrl_alt, true, None, true);
+        assert_eq!(ops(r.key(alt_gr_k, &c)), "forward");
+        let alt_k_press = event(keysyms::KEY_k, ctrl_alt, true, None, false);
+        assert_eq!(ops(r.key(alt_k_press, &c)), pressed(alt_k));
+    }
+
+    #[test]
     fn the_power_key_release_reaches_the_login_process_and_repeats_do_not() {
         let mut r = KeyRouter::new(Config::default().keybindings);
         let c = ctx();
@@ -2302,6 +2440,7 @@ mod tests {
             mods: Mods::NONE,
             repeat: false,
             shifted: None,
+            alt_gr: false,
         };
         assert_eq!(
             ops(r.key(event(true), &c)),
@@ -2338,6 +2477,7 @@ mod tests {
                     mods: Mods::NONE,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &locked
             )),
@@ -2351,6 +2491,7 @@ mod tests {
                     mods: Mods::NONE,
                     repeat: false,
                     shifted: None,
+                    alt_gr: false,
                 },
                 &locked
             )),

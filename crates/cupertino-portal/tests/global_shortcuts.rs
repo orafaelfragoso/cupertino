@@ -314,7 +314,7 @@ fn a_client_is_asked_binds_lists_and_hears_its_key_go_down_and_up() {
 fn a_remembered_answer_is_followed_without_asking() {
     let Some(r) = start() else { return };
     GlobalShortcutsConf::update(&r.answers(), |c| {
-        c.set(APP, Decision::Allow);
+        c.allow(APP, ["CTRL+ALT+t".to_owned()]);
         c.set(OTHER, Decision::Deny);
     })
     .unwrap();
@@ -341,10 +341,182 @@ fn a_remembered_answer_is_followed_without_asking() {
     assert_eq!(r.keys().len(), 1);
 }
 
+/// Write the answers file as the person may have left it.
+fn write_answers(r: &Running, text: &str) {
+    std::fs::write(r.answers(), text).unwrap();
+    std::fs::set_permissions(r.answers(), std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn an_app_allowed_some_keys_is_asked_again_for_a_new_one() {
+    let Some(r) = start() else { return };
+    write_answers(
+        &r,
+        "# answered last week\nallow = org.example.Meeting CTRL+ALT+t # talk\nnot understood\n",
+    );
+    create(&r.frontend, SESSION, APP).unwrap();
+    let talk = shortcut("talk", "Push to talk", Some("CTRL+ALT+t"));
+    let mute = shortcut("mute", "Mute", Some("CTRL+ALT+m"));
+    let done = bind(&r.frontend, 1, SESSION, vec![talk.clone(), mute.clone()]);
+    // the window lists the new shortcut alone
+    let (_, asked, reply) = ask(&r);
+    let ids: Vec<&str> = asked.shortcuts.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["mute"]);
+    assert_eq!(asked.allowed, 1);
+    assert!(r.keys().is_empty(), "nothing is bound before the answer");
+    reply.send(Answer::Allowed);
+    let (response, results) = done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(response, 0);
+    assert_eq!(named(&results).len(), 2);
+    // both keys are remembered, and the person's lines are kept
+    assert_eq!(
+        std::fs::read_to_string(r.answers()).unwrap(),
+        "# answered last week\nallow = org.example.Meeting CTRL+ALT+t CTRL+ALT+m # talk\nnot understood\n"
+    );
+    let done = bind(&r.frontend, 2, SESSION, vec![mute, talk]);
+    assert_eq!(done.recv_timeout(WAIT).unwrap().unwrap().0, 0);
+    assert!(r.events.try_recv().is_err(), "nobody was asked");
+}
+
+#[test]
+fn an_allow_line_of_an_older_file_asks_once_more() {
+    let Some(r) = start() else { return };
+    write_answers(&r, "allow = org.example.Meeting\n");
+    create(&r.frontend, SESSION, APP).unwrap();
+    let talk = vec![shortcut("talk", "Push to talk", Some("CTRL+ALT+t"))];
+    let done = bind(&r.frontend, 1, SESSION, talk.clone());
+    let (_, asked, reply) = ask(&r);
+    assert_eq!(asked.shortcuts.len(), 1);
+    assert_eq!(asked.allowed, 0);
+    reply.send(Answer::Allowed);
+    assert_eq!(done.recv_timeout(WAIT).unwrap().unwrap().0, 0);
+    let (conf, _) = GlobalShortcutsConf::load(&r.answers()).unwrap();
+    assert_eq!(conf.answer(APP).unwrap().triggers, ["CTRL+ALT+t"]);
+    let done = bind(&r.frontend, 2, SESSION, talk);
+    assert_eq!(done.recv_timeout(WAIT).unwrap().unwrap().0, 0);
+    assert!(r.events.try_recv().is_err(), "asked once");
+}
+
+#[test]
+fn the_shortcut_signals_reach_the_frontend_alone() {
+    let Some(r) = start() else { return };
+    GlobalShortcutsConf::update(&r.answers(), |c| c.allow(APP, ["CTRL+ALT+t".to_owned()])).unwrap();
+    create(&r.frontend, SESSION, APP).unwrap();
+    bind(
+        &r.frontend,
+        1,
+        SESSION,
+        vec![shortcut("talk", "Push to talk", Some("CTRL+ALT+t"))],
+    )
+    .recv_timeout(WAIT)
+    .unwrap()
+    .unwrap();
+    let [Keys::Bind { key, .. }] = r.keys()[..] else {
+        panic!()
+    };
+    // another connection on the bus listens for the interface's signals
+    let other = r.bus.connect();
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface(INTERFACE)
+        .unwrap()
+        .build();
+    let overheard =
+        zbus::blocking::MessageIterator::for_match_rule(rule, &other, Some(64)).unwrap();
+    let (sender, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        for message in overheard.flatten() {
+            let member = message.header().member().map(|m| m.to_string());
+            if sender.send(member).is_err() {
+                break;
+            }
+        }
+    });
+    let signals = signals(&r);
+    r.handle.fired(&r.served, key, true, 1000);
+    r.handle.fired(&r.served, key, false, 1040);
+    r.handle.reserved(&r.served, vec![CTRL_ALT_T]);
+    for member in ["Activated", "Deactivated", "ShortcutsChanged"] {
+        assert_eq!(next_signal(&signals).0, member);
+    }
+    // a signal to everyone arrives after any the other connection could have been sent
+    r.served
+        .emit_signal(None::<&str>, PORTAL_PATH, INTERFACE, "Marker", &())
+        .unwrap();
+    assert_eq!(
+        heard.recv_timeout(WAIT).unwrap().as_deref(),
+        Some("Marker"),
+        "the other connection heard a shortcut's signal"
+    );
+}
+
+#[test]
+fn a_shortcut_bound_again_while_held_still_sends_deactivated() {
+    let Some(r) = start() else { return };
+    GlobalShortcutsConf::update(&r.answers(), |c| {
+        c.allow(APP, ["CTRL+ALT+t".to_owned(), "CTRL+ALT+y".to_owned()])
+    })
+    .unwrap();
+    create(&r.frontend, SESSION, APP).unwrap();
+    let talk = |t: &str| vec![shortcut("talk", "Push to talk", Some(t))];
+    bind(&r.frontend, 1, SESSION, talk("CTRL+ALT+t"))
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap();
+    let [Keys::Bind { key, .. }] = r.keys()[..] else {
+        panic!()
+    };
+    let signals = signals(&r);
+    r.handle.fired(&r.served, key, true, 1000);
+    assert_eq!(next_signal(&signals).0, "Activated");
+    // the app moves the shortcut to another key while the person holds it
+    bind(&r.frontend, 2, SESSION, talk("CTRL+ALT+y"))
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap();
+    r.handle.fired(&r.served, key, false, 1040);
+    let session = OwnedObjectPath::try_from(SESSION).unwrap();
+    assert_eq!(
+        next_signal(&signals),
+        ("Deactivated".into(), session, "talk".into())
+    );
+}
+
+#[test]
+fn the_bus_is_served_while_an_answer_waits_for_the_files_lock() {
+    let Some(r) = start() else { return };
+    create(&r.frontend, SESSION, APP).unwrap();
+    let lock = cupertino_defaults::lock::FileLock::acquire(&r.answers()).unwrap();
+    let done = bind(
+        &r.frontend,
+        1,
+        SESSION,
+        vec![shortcut("talk", "Push to talk", Some("CTRL+ALT+t"))],
+    );
+    ask(&r).2.send(Answer::Allowed);
+    // the answer is being remembered, behind the lock another writer holds
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let start = std::time::Instant::now();
+    assert_eq!(list(&r.frontend, SESSION).unwrap().0, 0);
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "ListShortcuts waited {:?} for the file's lock",
+        start.elapsed()
+    );
+    assert!(
+        done.try_recv().is_err(),
+        "the bind waits for its answer to be kept"
+    );
+    drop(lock);
+    assert_eq!(done.recv_timeout(WAIT).unwrap().unwrap().0, 0);
+    let (conf, _) = GlobalShortcutsConf::load(&r.answers()).unwrap();
+    assert_eq!(conf.decision(APP), Some(Decision::Allow));
+}
+
 #[test]
 fn a_key_another_app_holds_is_refused_and_left_out() {
     let Some(r) = start() else { return };
-    GlobalShortcutsConf::update(&r.answers(), |c| c.set(APP, Decision::Allow)).unwrap();
+    GlobalShortcutsConf::update(&r.answers(), |c| c.allow(APP, ["CTRL+ALT+t".to_owned()])).unwrap();
     create(&r.frontend, SESSION, APP).unwrap();
     bind(
         &r.frontend,
@@ -438,7 +610,7 @@ fn dont_allow_is_remembered_and_escape_is_not() {
 #[test]
 fn a_closed_session_gives_its_keys_back_and_ends_its_question() {
     let Some(r) = start() else { return };
-    GlobalShortcutsConf::update(&r.answers(), |c| c.set(APP, Decision::Allow)).unwrap();
+    GlobalShortcutsConf::update(&r.answers(), |c| c.allow(APP, ["CTRL+ALT+t".to_owned()])).unwrap();
     create(&r.frontend, SESSION, APP).unwrap();
     bind(
         &r.frontend,
@@ -511,7 +683,7 @@ fn the_frontend_leaving_ends_every_session_and_only_it_may_call() {
     let app = r.bus.connect();
     let refused = create(&app, SESSION, APP).unwrap_err();
     assert!(refused.to_string().contains("AccessDenied"), "{refused}");
-    GlobalShortcutsConf::update(&r.answers(), |c| c.set(APP, Decision::Allow)).unwrap();
+    GlobalShortcutsConf::update(&r.answers(), |c| c.allow(APP, ["CTRL+ALT+t".to_owned()])).unwrap();
     create(&r.frontend, SESSION, APP).unwrap();
     bind(
         &r.frontend,

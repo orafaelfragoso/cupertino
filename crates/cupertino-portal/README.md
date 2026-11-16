@@ -229,28 +229,40 @@ to the portal before the focused client sees it, so that client gets neither the
   Control and Alt. At most 64 shortcuts, each id given
   once and every string at most 1024 bytes; else `InvalidArgs` or `LimitsExceeded`.
 - The clash rule, applied when the call comes and again when it is answered: a shortcut gets its key only when the
-  key holds Control, Alt or Super or is F1 to F35 or a media key (`XF86…`), is none of the chords the server keeps (its bindings, Ctrl+Alt+F1
+  key is no modifier or lock key (Shift, Control, Alt, Super, the level and group keys, Caps Lock, Num Lock), holds
+  Control, Alt or Super or is F1 to F35 or a media key (`XF86…`), is none of the chords the server keeps (its bindings, Ctrl+Alt+F1
   to F12, Super+Alt+S, Ctrl+Alt+Escape: the `reserved` group), and no other session holds it; within one call the
   first shortcut naming a key keeps it. A shortcut without its key is not bound and is left out of the answer.
 - The first call of an app shows a window, "Keyboard Shortcuts": "“<app>” wants to use these keyboard shortcuts, also
   while you work in other apps.", then one row per shortcut, its keys as symbols (`⌃⌥T  Push to talk`) or, for one
-  without a key, the reason (`it needs ⌃, ⌥ or ⌘`, `the system uses it`, `“<app>” uses it`, `it names no key`,
-  `another shortcut here uses it`). Don't Allow has the focus; Allow is enabled only 500 ms after the first frame is on
-  screen, as in the screenshot window. Allow answers `0` with `shortcuts` (each with `description` and
-  `trigger_description`) and Don't Allow `1`, both remembered for the app id in `global-shortcuts.conf`
-  (`cupertino-defaults::global_shortcuts`, mode `0600`, `allow = <app id>` or `deny = <app id>`, changed under an
-  advisory lock); Escape and closing the window answer `1` and remember nothing. A remembered answer is followed
-  without a window; an empty app id or one a line cannot hold is asked every time. A call where no shortcut can have
+  without a key, the reason (`it needs ⌃, ⌥ or ⌘`, `its key is a modifier key`, `the system uses it`, `“<app>” uses it`,
+  `it names no key`, `another shortcut here uses it`); a description is cut to 80 characters. The window grows with
+  the first eight rows and the list scrolls past them, so every shortcut can be read before Allow. Its app id is
+  `org.cupertino.Portal.Prompt`, as the screen-sharing and screenshot windows' are: the server keeps desktop
+  control's input and actions off a window of this process with that id. Don't Allow has the focus; Allow is enabled
+  only 500 ms after the first frame is on screen, as in the screenshot window. Allow answers `0` with `shortcuts`
+  (each with `description` and `trigger_description`) and Don't Allow `1`, both remembered for the app id in
+  `global-shortcuts.conf` (`cupertino-defaults::global_shortcuts`, mode `0600`, `allow = <app id> <key>…` with the
+  keys allowed, or `deny = <app id>`, changed under an advisory lock on a thread of its own so the bus is served
+  meanwhile; comments and lines not understood are kept); Escape and closing the window answer `1` and remember
+  nothing. A denied app is refused without a window. An allowed app binds the keys it was allowed without a window;
+  a call naming a key it was not allowed shows the window again, which lists only the shortcuts not allowed yet
+  ("“<app>” wants to use more keyboard shortcuts …"), and Allow adds their keys to the line. An `allow` line without
+  keys (written before the keys were remembered) allows none, so the app is asked once more. An empty app id or one a
+  line cannot hold is asked every time. A call where no shortcut can have
   its key answers `0` with an empty list and shows nothing. A second `BindShortcuts` on a session replaces its
   shortcuts.
 - `ListShortcuts` answers the session's bound shortcuts.
 - The server's `pressed` and `released` become `Activated` and `Deactivated` (session, shortcut id, the key event's
-  time in milliseconds) for the session that holds the key; repeats send nothing. A key the server keeps later (a
+  time in milliseconds) for the session that holds the key, sent to the unique bus name of the frontend that made the
+  session, as `ShortcutsChanged` is; repeats send nothing. A release stands for the shortcut its press did, so a
+  shortcut bound again or given another key while held still ends with `Deactivated`. A key the server keeps later (a
   changed `shortcuts.conf`) is taken from the shortcut holding it, which leaves the session's list, and
   `ShortcutsChanged` carries the session's shortcuts now.
 
 Known limitations: `ConfigureShortcuts` (version 2) is not served, so a shortcut without a free key cannot be given
-another one; the person takes a line out of `global-shortcuts.conf` to be asked again.
+another one; the person takes a line out of `global-shortcuts.conf` to be asked again. When the portal process
+restarts, its sessions are gone: an application keeps no shortcut until it binds again.
 
 ## Diagnostic events
 

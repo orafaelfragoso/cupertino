@@ -12,8 +12,9 @@ use cupertino_filepicker::places::{session_places, Place};
 use cupertino_filepicker::{Listing, Request};
 use cupertino_icons::ThemeIcons;
 use cupertino_kit::controls::{
-    CheckBox, Image, ImageFit, ImageSource, ListView, SegmentedControl, Selection, SplitLayout,
-    SplitView, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND, SIDEBAR_TOP,
+    CheckBox, Image, ImageFit, ImageSource, ListView, ScrollView, Scroller, SegmentedControl,
+    Selection, SplitLayout, SplitView, TextRole, WindowDragArea, PANEL_WINDOW_BACKGROUND,
+    SIDEBAR_TOP,
 };
 use cupertino_kit::core::{
     next_resource_id, Change, Checked, CommandRegistry, Event as CoreEvent, EventCx, Key,
@@ -55,9 +56,14 @@ const SIZE: Size = Size::new(720.0, 460.0);
 const PICKER_SIZE: Size = Size::new(480.0, 360.0 + SIDEBAR_TOP);
 const PICKER_MIN_SIZE: Size = Size::new(360.0, 240.0 + SIDEBAR_TOP);
 const CONSENT_SIZE: Size = Size::new(420.0, 180.0 + SIDEBAR_TOP);
-/// The shortcut window grows by one row of this height for each shortcut it lists, up to [`SHORTCUT_ROWS`] of them.
+/// The shortcut window grows by one line of this height for each line of the first [`SHORTCUT_ROWS`] shortcuts it
+/// lists (two for a row that wraps); the rest scroll in the list.
 const SHORTCUT_ROW: f64 = 20.0;
 const SHORTCUT_ROWS: usize = 8;
+/// Characters of a shortcut's description its row shows before it ends it with an ellipsis: two lines of the window.
+const DESCRIPTION_CHARS: usize = 80;
+/// Characters of a shortcut's row that fit on one line of the window, an estimate the window's height is grown by.
+const SHORTCUT_LINE_CHARS: usize = 56;
 /// A prompt window's title bar is only its control buttons, over the top of its glass panel.
 const PROMPT_DECORATIONS: DecorationMode = DecorationMode::Unified;
 /// Side of the requesting app's icon in the screen-sharing and screenshot windows.
@@ -297,6 +303,8 @@ struct ShortcutConsent {
     handle: OwnedObjectPath,
     reply: global_shortcuts::Reply,
     ask: global_shortcuts::Ask,
+    /// The list of the shortcuts.
+    scroll: ScrollState,
     /// The arming delay has passed: Allow can be pressed.
     armed: bool,
     arming: Option<Arming>,
@@ -377,6 +385,8 @@ pub enum Message {
     AllowShortcuts(u64),
     /// Don't Allow them, remembered for its app.
     DenyShortcuts(u64),
+    /// The list of shortcut window `0` moved.
+    ShortcutsScroll(u64, ScrollState),
     /// Consent window `0` has presented its first frame: its arming delay starts.
     Shown(u64),
     /// The arming delay of consent window `0` has passed.
@@ -524,6 +534,7 @@ impl Model {
                         handle,
                         reply,
                         ask: *ask,
+                        scroll: NO_SCROLL,
                         armed: false,
                         arming: None,
                     });
@@ -739,6 +750,11 @@ impl Application for Dialogs {
             }
             Message::DenyShortcuts(id) => {
                 model.finish_shortcuts(id, global_shortcuts::Answer::Denied)
+            }
+            Message::ShortcutsScroll(id, scroll) => {
+                if let Some(c) = model.shortcut_consents.iter_mut().find(|c| c.id == id) {
+                    c.scroll = scroll;
+                }
             }
             Message::AllowShortcuts(id) => {
                 if model
@@ -1530,7 +1546,7 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
         key: picker_window_key(id),
         spec: WindowSpec {
             title: "Share Screen".to_owned(),
-            app_id: "org.cupertino.Portal".into(),
+            app_id: crate::PROMPT_APP_ID.into(),
             size: PICKER_SIZE,
             min_size: Some(PICKER_MIN_SIZE),
             max_size: None,
@@ -1746,7 +1762,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
         key: consent_window_key(id),
         spec: WindowSpec {
             title: "Screenshot".to_owned(),
-            app_id: "org.cupertino.Portal".into(),
+            app_id: crate::PROMPT_APP_ID.into(),
             size: CONSENT_SIZE,
             min_size: Some(CONSENT_SIZE),
             max_size: None,
@@ -1785,7 +1801,19 @@ fn shortcuts_prompt(ask: &global_shortcuts::Ask) -> String {
         Some(name) => format!("“{name}”"),
         None => "An application".to_owned(),
     };
-    format!("{app} wants to use these keyboard shortcuts, also while you work in other apps.")
+    if ask.allowed > 0 {
+        format!("{app} wants to use more keyboard shortcuts, also while you work in other apps.")
+    } else {
+        format!("{app} wants to use these keyboard shortcuts, also while you work in other apps.")
+    }
+}
+
+/// `text` as a shortcut's row shows it: at most [`DESCRIPTION_CHARS`] characters, the rest left out.
+fn description(text: &str) -> String {
+    match text.char_indices().nth(DESCRIPTION_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
 }
 
 /// One row of the shortcut window: the keys, what the shortcut does, and why it gets no key when it does not.
@@ -1793,14 +1821,15 @@ fn shortcut_row(offered: &global_shortcuts::Offered, holders: &HashMap<String, S
     let keys = offered
         .trigger
         .map_or_else(|| "No key".to_owned(), |t| t.describe());
-    let what = if offered.description.is_empty() {
-        offered.id.clone()
+    let what = description(if offered.description.is_empty() {
+        &offered.id
     } else {
-        offered.description.clone()
-    };
+        &offered.description
+    });
     let why = match &offered.refusal {
         None => return format!("{keys}  {what}"),
         Some(Refusal::NoKey) => "it names no key".to_owned(),
+        Some(Refusal::Modifier) => "its key is a modifier key".to_owned(),
         Some(Refusal::Typing) => "it needs ⌃, ⌥ or ⌘".to_owned(),
         Some(Refusal::System) => "the system uses it".to_owned(),
         Some(Refusal::Taken(app)) => {
@@ -1819,17 +1848,25 @@ fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message
         app_icons,
         shortcuts_prompt(&c.ask),
     );
-    let rows: Vec<Element<Message>> = c
+    let texts: Vec<String> = c
         .ask
         .shortcuts
         .iter()
+        .map(|offered| plain_row(&shortcut_row(offered, &c.ask.holders)))
+        .collect();
+    // the window grows by the lines of its first rows, a row that wraps by two
+    let lines: usize = texts
+        .iter()
+        .take(SHORTCUT_ROWS)
+        .map(|t| t.chars().count().div_ceil(SHORTCUT_LINE_CHARS).clamp(1, 2))
+        .sum();
+    let rows: Vec<Element<Message>> = texts
+        .into_iter()
+        .zip(&c.ask.shortcuts)
         .enumerate()
-        .map(|(i, offered)| {
+        .map(|(i, (text, offered))| {
             Element::new(Text {
-                content: AttributedText::plain(
-                    plain_row(&shortcut_row(offered, &c.ask.holders)),
-                    TextStyle::new(13.0),
-                ),
+                content: AttributedText::plain(text, TextStyle::new(13.0)),
                 role: TextRole::Body,
                 wrap: true,
                 secondary: offered.refusal.is_some(),
@@ -1838,13 +1875,23 @@ fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message
             .key(Key::Str(format!("shortcut-{i}").into()))
         })
         .collect();
-    let list = Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: BAR_INSETS,
-        spacing: 4.0,
-        align: Align::Stretch,
-        children: rows,
-    });
+    // every shortcut can be read before Allow: past the rows the window grows by, the list scrolls
+    let list = Element::from(ScrollView {
+        content: Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: BAR_INSETS,
+            spacing: 4.0,
+            align: Align::Stretch,
+            children: rows,
+        }),
+        state: c.scroll,
+        horizontal: false,
+        vertical: true,
+        scroller: Scroller::Overlay,
+        on_scroll: Box::new(move |s| Message::ShortcutsScroll(id, s)),
+    })
+    .key("shortcuts")
+    .fill();
     let bar = bar_row(
         Vec::new(),
         vec![
@@ -1860,13 +1907,13 @@ fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message
     );
     let size = Size::new(
         CONSENT_SIZE.width,
-        CONSENT_SIZE.height + SHORTCUT_ROW * c.ask.shortcuts.len().min(SHORTCUT_ROWS) as f64,
+        CONSENT_SIZE.height + SHORTCUT_ROW * lines as f64,
     );
     Window {
         key: shortcuts_window_key(id),
         spec: WindowSpec {
             title: "Keyboard Shortcuts".to_owned(),
-            app_id: "org.cupertino.Portal".into(),
+            app_id: crate::PROMPT_APP_ID.into(),
             size,
             min_size: Some(size),
             max_size: None,
@@ -1890,7 +1937,6 @@ fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message
         content: prompt_content(vec![
             prompt,
             list,
-            Element::new(Spacer { min: 0.0 }),
             Element::new(Separator {
                 axis: Axis::Horizontal,
             }),
@@ -2589,6 +2635,7 @@ mod tests {
                             Some(Refusal::Taken("org.example.Chat".to_owned())),
                         ),
                     ],
+                    allowed: 0,
                     holders: HashMap::from([("org.example.Chat".to_owned(), "Chat".to_owned())]),
                 }),
                 reply: global_shortcuts::Reply(sender),
@@ -2599,6 +2646,7 @@ mod tests {
         let window = show(&mut driver);
         let spec = driver.window_system_mut().spec(window).unwrap().clone();
         assert_eq!(spec.title, "Keyboard Shortcuts");
+        assert_eq!(spec.app_id, crate::PROMPT_APP_ID);
         let names = shown(&driver, window);
         for text in [
             "“Meeting” wants to use these keyboard shortcuts, also while you work in other apps.",
@@ -2636,5 +2684,93 @@ mod tests {
         );
         assert!(driver.runtime().windows().is_empty());
         assert!(!driver.runtime().exited());
+    }
+
+    /// The shortcut window of `count` shortcuts with long descriptions, at the handle `n`.
+    fn many_shortcuts(n: u32, count: u32) -> async_channel::Receiver<global_shortcuts::Answer> {
+        let (sender, answer) = async_channel::bounded(1);
+        let shortcuts = (0..count)
+            .map(|i| global_shortcuts::Offered {
+                id: format!("s{i}"),
+                description: format!("Shortcut {i} {}", "and what it does at length ".repeat(10)),
+                trigger: Some(global_shortcuts::Trigger {
+                    modifiers: global_shortcuts::modifier::CTRL | global_shortcuts::modifier::ALT,
+                    keysym: 0xffbe + i % 35,
+                }),
+                refusal: None,
+            })
+            .collect();
+        inbox().push(global_shortcuts::Event::Ask {
+            handle: handle(n),
+            ask: Box::new(global_shortcuts::Ask {
+                app_id: "org.example.Meeting".to_owned(),
+                app_name: Some("Meeting".to_owned()),
+                app_icon: None,
+                parent_window: String::new(),
+                shortcuts,
+                allowed: 0,
+                holders: HashMap::new(),
+            }),
+            reply: global_shortcuts::Reply(sender),
+        });
+        answer
+    }
+
+    #[test]
+    fn every_shortcut_of_a_long_request_can_be_read_before_allow() {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let mut driver = driver();
+        let _answer = many_shortcuts(20, 40);
+        let window = show(&mut driver);
+        let size = driver.window_system_mut().spec(window).unwrap().size;
+        let list = rect_of(&driver, window, &Key::from("shortcuts"));
+        let allow = rect_of(&driver, window, &Key::from("allow"));
+        // the window keeps its bounded size, the buttons stay in it, below the list
+        assert!(size.height <= CONSENT_SIZE.height + SHORTCUT_ROW * 2.0 * SHORTCUT_ROWS as f64);
+        assert!(allow.origin.y + allow.size.height <= size.height);
+        assert!(list.origin.y + list.size.height <= allow.origin.y);
+        let last = Key::Str("shortcut-39".into());
+        let bottom = |driver: &TestDriver<Dialogs>| {
+            let row = rect_of(driver, window, &last);
+            row.origin.y + row.size.height
+        };
+        assert!(bottom(&driver) > list.origin.y + list.size.height);
+        // a long description is cut short
+        let names = shown(&driver, window);
+        let row = names
+            .iter()
+            .find(|n| n.starts_with("⌃⌥F1  Shortcut 0 "))
+            .unwrap();
+        assert!(
+            row.ends_with('…') && row.chars().count() < DESCRIPTION_CHARS + 10,
+            "{row}"
+        );
+        // the list scrolls to its last shortcut
+        let position = Point::new(
+            list.origin.x + list.size.width / 2.0,
+            list.origin.y + list.size.height / 2.0,
+        );
+        for _ in 0..40 {
+            send(
+                &mut driver,
+                window,
+                WindowEvent::Pointer(
+                    PointerEvent::Scroll {
+                        position,
+                        delta: Point::new(0.0, 400.0),
+                        value120: None,
+                        source: cupertino_kit::platform::ScrollSource::Continuous,
+                        stop: false,
+                        inverted: (false, false),
+                    },
+                    Timestamp(0),
+                ),
+            );
+        }
+        let end = bottom(&driver);
+        assert!(
+            end <= list.origin.y + list.size.height + 1.0 && end > list.origin.y,
+            "the last row ends at {end}, the list at {list:?}"
+        );
     }
 }

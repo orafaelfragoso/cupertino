@@ -23,6 +23,8 @@ pub struct OverlayKey {
     pub sym: u32,
     pub text: Option<char>,
     pub mods: Mods,
+    /// The Alt of `mods` is AltGr alone ([`crate::kbd::KeyboardSettings::alt_gr`]).
+    pub alt_gr: bool,
 }
 
 /// Text drawing for the HUD and the accent popup (the `ui` font of the asset directory).

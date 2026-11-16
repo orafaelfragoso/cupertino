@@ -445,6 +445,14 @@ impl KeyboardSettings {
         }
     }
 
+    /// Whether the Alt of [`Self::physical`] comes from a level-3 key alone that is AltGr rather than the Option key:
+    /// the right Alt of `layout_level3 = right-alt`, or a layout's own level-3 key under `none` (and `classic-pc`'s
+    /// default). The applications' shortcuts do not take it for Alt, so AltGr and a key types its symbol in the focused
+    /// app. With `both-alt` both Alt keys are the Option key, and count as Alt.
+    pub fn alt_gr(&self, m: &ModifiersState) -> bool {
+        m.iso_level3_shift && !m.alt && self.decoded_level3() != Level3Keys::BothAlt
+    }
+
     /// Take the system's layouts as the input sources when there are none.
     pub fn use_system_layout(&mut self) {
         if self.sources.is_empty() {
@@ -1238,6 +1246,33 @@ mod tests {
         };
         let mods = KeyboardSettings::physical(&option);
         assert!(mods.alt && mods.ctrl);
+    }
+
+    #[test]
+    fn a_level3_key_is_altgr_only_where_it_is_not_the_option_key() {
+        let level3 = ModifiersState {
+            iso_level3_shift: true,
+            ctrl: true,
+            ..Default::default()
+        };
+        let both = ModifiersState {
+            alt: true,
+            ..level3
+        };
+        // both Alt keys are the Option key (the default)
+        let s = KeyboardSettings::default();
+        assert!(!s.alt_gr(&level3));
+        let mut right = KeyboardSettings::default();
+        assert!(apply(&mut right, "layout_level3 = right-alt").is_empty());
+        assert!(right.alt_gr(&level3));
+        assert!(!right.alt_gr(&both), "the left Alt held with it is Alt");
+        let mut own = KeyboardSettings::default();
+        assert!(apply(&mut own, "layout_level3 = none").is_empty());
+        assert!(own.alt_gr(&level3));
+        let mut pc = KeyboardSettings::default();
+        assert!(apply(&mut pc, "modifier_profile = classic-pc").is_empty());
+        assert!(pc.alt_gr(&level3));
+        assert!(!pc.alt_gr(&ModifiersState::default()));
     }
 
     #[test]

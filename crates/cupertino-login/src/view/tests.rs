@@ -1521,6 +1521,112 @@ fn body_fills(run: &Run, size: Size, radius: f64) -> Vec<Color> {
         .collect()
 }
 
+/// The outlines an alert of `size` strokes round itself: each one's rectangle, width and colour.
+fn body_rims(run: &Run, size: Size) -> Vec<(Rect, f64, Color)> {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter_map(|op| match op {
+            PaintOp::Stroke {
+                shape: Shape::RoundedRect { rect, .. },
+                width,
+                paint: Paint::Solid(color),
+            } if (rect.size.width - size.width).abs() <= 2.0
+                && (rect.size.height - size.height).abs() <= 2.0 =>
+            {
+                Some((*rect, *width, *color))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// With Increase Contrast the glass of a session panel takes the contrast face, which over a window of the same
+/// appearance has that window's tone, so the alert outlines itself: one line a point wide just inside its edge, in the
+/// colour of its buttons' outline, which stands 3:1 or more from the opaque window colour of the appearance. Without
+/// the option the glass marks its own edge and the alert strokes nothing.
+#[test]
+fn each_session_panel_on_glass_outlines_itself_with_increase_contrast_alone() {
+    let panel = |kind| Surface::Panel { kind, reopen: true };
+    for surface in [
+        panel(Kind::LogOut),
+        panel(Kind::Restart),
+        panel(Kind::ShutDown),
+        panel(Kind::PowerButton),
+        Surface::Interrupt,
+    ] {
+        let glassy = Capabilities {
+            app_effects: true,
+            ..Capabilities::default()
+        };
+        let mut run = Run::on(surface, glassy);
+        let size = run.driver.runtime().snapshot(run.window).unwrap().nodes[0]
+            .rect
+            .size;
+        for (appearance, reduce_transparency) in [
+            (Appearance::Light, false),
+            (Appearance::Dark, false),
+            (Appearance::Light, true),
+            (Appearance::Dark, true),
+        ] {
+            set_options(&mut run, appearance, reduce_transparency);
+            assert_eq!(
+                body_rims(&run, size),
+                [],
+                "{surface:?} {appearance:?} reduced {reduce_transparency}: the glass marks its own edge"
+            );
+        }
+        for appearance in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+            set_options(&mut run, appearance, false);
+            let theme = Arc::clone(run.driver.runtime().theme());
+            let border = theme
+                .colors
+                .get(
+                    cupertino_kit::theme::ColorRole::ControlBorder,
+                    cupertino_kit::theme::StateVariant::NORMAL,
+                )
+                .unwrap();
+            let rims = body_rims(&run, size);
+            let [(rect, width, color)] = rims.as_slice() else {
+                panic!("{surface:?} {appearance:?}: one outline, not {rims:?}");
+            };
+            assert_eq!(*width, 1.0, "{surface:?} {appearance:?}: a point wide");
+            assert_eq!(
+                (rect.origin, rect.size),
+                (
+                    Point::new(0.5, 0.5),
+                    Size::new(size.width - 1.0, size.height - 1.0)
+                ),
+                "{surface:?} {appearance:?}: just inside the alert's edge"
+            );
+            assert_eq!(*color, border, "{surface:?} {appearance:?}");
+            let window = theme
+                .surface(cupertino_kit::theme::Surface::Popover)
+                .fill
+                .unwrap();
+            let luminance = |c: Color| {
+                let lin = |v: f32| {
+                    if v <= 0.04045 {
+                        v / 12.92
+                    } else {
+                        ((v + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+            };
+            let (a, b) = (luminance(*color), luminance(window));
+            let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+            assert!(
+                color.a == 1.0 && ratio >= 3.0,
+                "{surface:?} {appearance:?}: the outline stands {ratio}:1 from the window colour"
+            );
+        }
+    }
+}
+
 /// Log out, restart, shut down, the power button's panel and the panel that interrupts a log out are each one alert on
 /// regular glass with the alert's corners, where the session draws glass: the window paints no body of its own under
 /// it, and keeps asking for the glass with Reduce Transparency and with Increase Contrast, whose recipes of that glass

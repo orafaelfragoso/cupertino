@@ -28,7 +28,7 @@ pub mod menu_bar;
 pub mod meter;
 pub mod netinfo;
 #[cfg(feature = "app")]
-pub mod nm;
+pub use cupertino_radios::nm;
 #[cfg(feature = "app")]
 pub mod output_config;
 pub mod pages;

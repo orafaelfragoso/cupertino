@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 93 crates, 464 internal dependencies
-// per layer: foundation 24, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
+// 94 crates, 470 internal dependencies
+// per layer: foundation 25, graphics 2, models 9, platform 9, protocol 4, transport 3, render 3, ui 14, core 1, shell 12, services 4, apps 2, tools 6
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-files (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden dev edge cupertino-menubar (shell) -> cupertino-settings (apps), permanent exception (apps): the menu bar's integration test opens and activates the menus the apps publish
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the default sink and the mixer itself until audio goes through a service
@@ -10,7 +10,7 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (24)";
+    label="foundation (25)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
@@ -27,6 +27,7 @@ digraph "layers" {
     "cupertino-menu-model";
     "cupertino-modifiers";
     "cupertino-profile";
+    "cupertino-radios";
     "cupertino-test-bus";
     "cupertino-test-pam";
     "cupertino-test-pam-shim";
@@ -171,6 +172,8 @@ digraph "layers" {
   "cupertino-controlcenter" -> "cupertino-pipewire";
   "cupertino-controlcenter" -> "cupertino-pipewire" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-protocol-app";
+  "cupertino-controlcenter" -> "cupertino-radios";
+  "cupertino-controlcenter" -> "cupertino-radios" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-shell-client";
   "cupertino-controlcenter" -> "cupertino-test-bus" [label="dev"];
   "cupertino-controlcenter" -> "cupertino-theme";
@@ -322,6 +325,8 @@ digraph "layers" {
   "cupertino-menubar" -> "cupertino-modifiers";
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
+  "cupertino-menubar" -> "cupertino-radios";
+  "cupertino-menubar" -> "cupertino-radios" [label="dev"];
   "cupertino-menubar" -> "cupertino-settings" [label="dev", color=orange, style=dashed];
   "cupertino-menubar" -> "cupertino-shell-client";
   "cupertino-menubar" -> "cupertino-test-bus" [label="dev"];
@@ -420,6 +425,7 @@ digraph "layers" {
   "cupertino-protocol-app" -> "cupertino-semantics";
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
+  "cupertino-radios" -> "cupertino-test-bus" [label="dev"];
   "cupertino-raster-math" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-geometry" [label="dev"];
   "cupertino-render-api" -> "cupertino-scene";
@@ -496,6 +502,7 @@ digraph "layers" {
   "cupertino-settings" -> "cupertino-modifiers";
   "cupertino-settings" -> "cupertino-pipewire" [color=orange, style=dashed];
   "cupertino-settings" -> "cupertino-pipewire" [label="dev", color=orange, style=dashed];
+  "cupertino-settings" -> "cupertino-radios";
   "cupertino-settings" -> "cupertino-test-bus" [label="dev"];
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";

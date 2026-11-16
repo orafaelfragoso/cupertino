@@ -1,14 +1,19 @@
-//! The services behind the bar's own status items: `org.cupertino.Network1` (`cupertino-netd`), the UPower display
-//! device and manager (`cupertino-powerd`), `org.cupertino.Bluetooth1` (`cupertino-btd`) on the system bus, and the
-//! do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on the session bus. It also
-//! reads whether the control panel (`org.cupertino.ControlPanel1`, `cupertino-controlcenter`) and the notification
-//! centre's list are open and on which output, so the bar highlights the item that opened them.
+//! The services behind the bar's own status items: the network and the Bluetooth adapter through whichever service
+//! owns them (`cupertino-radios`: `cupertino-netd` and `cupertino-btd`, else NetworkManager and BlueZ, the discovery
+//! and readings Settings and the control panel use), the UPower display device and manager (`cupertino-powerd`) on
+//! the system bus, and the do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on
+//! the session bus. It also reads whether the control panel (`org.cupertino.ControlPanel1`,
+//! `cupertino-controlcenter`) and the notification centre's list are open and on which output, so the bar highlights
+//! the item that opened them.
 //!
 //! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
 //! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
 //! service's bus name changes owner (a daemon that starts later is picked up), on [`ExtrasBus::refresh`], and after
 //! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
 //! hides its item; why is reported on stderr once per new reason.
+//!
+//! The radios are read and changed with calls that wait for their answers, each on a thread of its own
+//! ([`off_thread`]), so the task's executor, which also carries the session bus, never waits for the system bus.
 //!
 //! The task's queue is bounded ([`QUEUE`]). Any peer on a bus can send this process signals, so a refresh is queued
 //! only when none waits already: the read that a waiting refresh causes starts after the new signal arrived, so it
@@ -21,8 +26,9 @@ use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
     OpenPanels, Passphrase, SessionCaps, SessionState, WifiLink, WifiNetwork, WifiState,
 };
+use cupertino_radios::{BluetoothBackend, NetworkBackend};
 use futures_util::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -30,17 +36,12 @@ use std::sync::{Arc, Mutex};
 use zbus::message::Type;
 use zbus::names::UniqueName;
 use zbus::proxy::{Builder, CacheProperties};
-use zbus::zvariant::OwnedValue;
 use zbus::{Connection, MatchRule, MessageStream, Proxy};
 
 use crate::worker::WorkerGone;
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
 const LOGIN_PATH: &str = "/org/cupertino/Login1";
-const NETWORK_NAME: &str = "org.cupertino.Network1";
-const NETWORK_PATH: &str = "/org/cupertino/Network1";
-const BLUETOOTH_NAME: &str = "org.cupertino.Bluetooth1";
-const BLUETOOTH_PATH: &str = "/org/cupertino/Bluetooth1";
 const UPOWER_NAME: &str = "org.freedesktop.UPower";
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
 const UPOWER_DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
@@ -52,11 +53,6 @@ const PANEL_PATH: &str = "/org/cupertino/ControlPanel1";
 
 /// `org.freedesktop.UPower.Device.State` of a charging battery.
 const UPOWER_STATE_CHARGING: u32 = 1;
-
-/// A row of `Devices` of `org.cupertino.Network1`: index, name, kind, state, SSID, failure, address.
-type DeviceRecord = (u32, String, String, String, String, String, String);
-/// A row of `GetNetworks`: SSID, signal (dBm, `i32::MIN` when unknown), security, saved, connected.
-type NetworkRecord = (String, i32, String, bool, bool);
 
 /// How many commands may wait for the task: at most one refresh, the rest actions.
 pub const QUEUE: usize = 16;
@@ -277,14 +273,25 @@ async fn run(
     };
     if let Some(system) = &system {
         for (name, path) in [
-            (NETWORK_NAME, NETWORK_PATH),
-            (BLUETOOTH_NAME, BLUETOOTH_PATH),
             (UPOWER_NAME, UPOWER_PATH),
             (UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH),
         ] {
             follow(system, name, path, &queue).await;
         }
+        let radios = queue.clone();
+        let followed = cupertino_radios::watch::follow(
+            system,
+            Arc::new(move || {
+                let _ = radios.refresh();
+            }),
+        )
+        .await;
+        if let Err(e) = followed {
+            eprintln!("cupertino-menubar: cannot follow the network and Bluetooth services: {e}");
+        }
     }
+    // the radios' calls wait for their answers, so they run on threads of their own with this handle
+    let radios: Option<zbus::blocking::Connection> = system.clone().map(Into::into);
     follow(&session, CENTRE_NAME, CENTRE_PATH, &queue).await;
     follow(&session, PANEL_NAME, PANEL_PATH, &queue).await;
     follow(&session, LOGIN_NAME, LOGIN_PATH, &queue).await;
@@ -300,6 +307,7 @@ async fn run(
             .map(|s| s.caps);
         let extras = read_all(
             system.as_ref(),
+            radios.as_ref(),
             &session,
             queue.agent(),
             previous,
@@ -322,14 +330,14 @@ async fn run(
         for command in std::iter::once(command).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
             match command {
                 Command::Act(action) => {
-                    if let Err(e) = act(system.as_ref(), &session, &action).await {
+                    if let Err(e) = act(radios.as_ref(), &session, &action, &queue).await {
                         eprintln!("cupertino-menubar: {action:?} failed: {e}");
                     }
                 }
                 Command::Join { ssid, passphrase } => {
                     refused = (
                         refused.0 + 1,
-                        join(system.as_ref(), &ssid, &passphrase).await.err(),
+                        join(radios.as_ref(), ssid, passphrase).await.err(),
                     );
                 }
                 Command::Refresh => queue.took_refresh(),
@@ -411,6 +419,7 @@ fn absent_if_not_running<T>(result: zbus::Result<Option<T>>) -> zbus::Result<Opt
 
 async fn read_all(
     system: Option<&Connection>,
+    radios: Option<&zbus::blocking::Connection>,
     session: &Connection,
     agent: SessionAgent,
     previous: Option<SessionCaps>,
@@ -422,15 +431,22 @@ async fn read_all(
         ..Extras::default()
     };
     if let Some(system) = system {
-        extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read_wifi(system).await));
-        extras.wifi_link = read_link(system).await.unwrap_or_default();
+        extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
+    }
+    if let Some(radios) = radios {
+        let radios = radios.clone();
+        let read = off_thread(move || read_radios(&radios))
+            .await
+            .unwrap_or_else(|e| Radios {
+                wifi: Err(zbus::Error::Failure(e.clone())),
+                link: WifiLink::default(),
+                bluetooth: Err(zbus::Error::Failure(e)),
+            });
+        extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read.wifi));
+        extras.wifi_link = read.link;
         extras.wifi_link.refused = refused.1.clone();
         extras.wifi_link.joins = refused.0;
-        extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
-        extras.bluetooth = reasons.note(
-            "Bluetooth",
-            absent_if_not_running(read_bluetooth(system).await),
-        );
+        extras.bluetooth = reasons.note("Bluetooth", absent_if_not_running(read.bluetooth));
     }
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
     extras.panels = OpenPanels {
@@ -522,43 +538,100 @@ async fn read_session(
     }))
 }
 
-/// The Wi-Fi device's state, the network and the failure of the last attempt; empty when the service does not answer.
-async fn read_link(conn: &Connection) -> zbus::Result<WifiLink> {
-    let network = proxy(conn, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?;
-    let devices: Vec<DeviceRecord> = network.get_property("Devices").await?;
-    Ok(devices
-        .into_iter()
-        .find(|device| device.2 == "wifi")
-        .map(|(_, _, _, state, ssid, failure, _)| WifiLink {
-            state,
-            ssid,
-            failure,
-            refused: None,
-            joins: 0,
+/// Run `f`, which waits for the system bus, on a thread of its own, and wait for it without holding the executor.
+async fn off_thread<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (done, result) = async_channel::bounded(1);
+    std::thread::Builder::new()
+        .name("cupertino-extras-radios".into())
+        .spawn(move || {
+            let _ = done.send_blocking(f());
         })
-        .unwrap_or_default())
+        .map_err(|e| format!("cannot start a thread for the system bus: {e}"))?;
+    result
+        .recv()
+        .await
+        .map_err(|_| "the thread for the system bus ended without an answer".to_owned())
 }
 
-/// `None` without a Wi-Fi device.
-async fn read_wifi(conn: &Connection) -> zbus::Result<Option<WifiState>> {
-    let network = proxy(conn, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?;
-    let devices: Vec<DeviceRecord> = network.get_property("Devices").await?;
-    if !devices.iter().any(|device| device.2 == "wifi") {
-        return Ok(None);
+/// One reading of the radios.
+struct Radios {
+    /// `None` without a network service or a Wi-Fi device.
+    wifi: zbus::Result<Option<WifiState>>,
+    /// The Wi-Fi device's state, its network and the failure of its last attempt; empty when nothing answers.
+    link: WifiLink,
+    /// `None` without a Bluetooth service or an adapter.
+    bluetooth: zbus::Result<Option<BluetoothState>>,
+}
+
+/// Read the radios from the services that own them now.
+fn read_radios(system: &zbus::blocking::Connection) -> Radios {
+    let found = match cupertino_radios::detect(system) {
+        Ok(found) => found,
+        Err(e) => {
+            return Radios {
+                wifi: Err(zbus::Error::Failure(e.to_string())),
+                link: WifiLink::default(),
+                bluetooth: Err(e),
+            }
+        }
+    };
+    let mut link = WifiLink::default();
+    let wifi = match found.network.map(|backend| backend.wifi(system)) {
+        None => Ok(None),
+        Some(Err(e)) => Err(e),
+        Some(Ok(wifi)) => {
+            let device = wifi.devices.iter().find(|device| device.kind == "wifi");
+            if let Some(device) = device {
+                link.state = device.state.clone();
+                link.ssid = device.ssid.clone();
+                link.failure = device.failure.clone();
+            }
+            Ok(device.is_some().then(|| WifiState {
+                enabled: wifi.enabled,
+                networks: wifi
+                    .networks
+                    .into_iter()
+                    // a network whose name is not text has no label here; Settings lists it
+                    .filter(|network| !network.ssid.starts_with('\0'))
+                    .map(|network| WifiNetwork {
+                        ssid: network.ssid,
+                        signal_dbm: (network.signal != i32::MIN).then_some(network.signal),
+                        security: network.security,
+                        known: network.saved,
+                        connected: network.connected,
+                    })
+                    .collect(),
+            }))
+        }
+    };
+    let bluetooth = match found
+        .bluetooth
+        .map(|backend| backend.adapter(system, &HashSet::new()))
+    {
+        None => Ok(None),
+        Some(Err(e)) => Err(e),
+        Some(Ok(adapter)) => Ok(adapter.available.then(|| BluetoothState {
+            powered: adapter.powered,
+            devices: adapter
+                .devices
+                .into_iter()
+                .map(|device| BluetoothDevice {
+                    id: device.id,
+                    address: device.address,
+                    name: device.name,
+                    paired: device.paired,
+                    connected: device.connected,
+                })
+                .collect(),
+        })),
+    };
+    Radios {
+        wifi,
+        link,
+        bluetooth,
     }
-    let enabled: bool = network.get_property("WirelessEnabled").await?;
-    let records: Vec<NetworkRecord> = network.call("GetNetworks", &()).await?;
-    let networks = records
-        .into_iter()
-        .map(|(ssid, signal, security, known, connected)| WifiNetwork {
-            ssid,
-            signal_dbm: (signal != i32::MIN).then_some(signal),
-            security,
-            known,
-            connected,
-        })
-        .collect();
-    Ok(Some(WifiState { enabled, networks }))
 }
 
 /// `None` without a battery.
@@ -584,49 +657,6 @@ async fn read_battery(conn: &Connection) -> zbus::Result<Option<BatteryState>> {
         charging: state == UPOWER_STATE_CHARGING,
         on_battery,
     }))
-}
-
-fn field<T: TryFrom<OwnedValue>>(
-    device: &HashMap<String, OwnedValue>,
-    key: &str,
-) -> zbus::Result<Option<T>>
-where
-    T::Error: std::fmt::Display,
-{
-    device
-        .get(key)
-        .map(|value| {
-            T::try_from(value.try_clone()?)
-                .map_err(|e| zbus::Error::Failure(format!("device field {key}: {e}")))
-        })
-        .transpose()
-}
-
-fn required<T>(value: Option<T>, key: &str) -> zbus::Result<T> {
-    value.ok_or_else(|| zbus::Error::Failure(format!("a device has no {key}")))
-}
-
-/// `None` without an adapter.
-async fn read_bluetooth(conn: &Connection) -> zbus::Result<Option<BluetoothState>> {
-    let bluetooth = proxy(conn, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?;
-    if !bluetooth.get_property::<bool>("Available").await? {
-        return Ok(None);
-    }
-    let powered: bool = bluetooth.get_property("Powered").await?;
-    let views: Vec<HashMap<String, OwnedValue>> = bluetooth.get_property("Devices").await?;
-    let devices = views
-        .iter()
-        .map(|view| {
-            Ok(BluetoothDevice {
-                id: required(field(view, "Id")?, "Id")?,
-                address: required(field(view, "Address")?, "Address")?,
-                name: field(view, "Name")?,
-                paired: required(field(view, "Paired")?, "Paired")?,
-                connected: required(field(view, "Connected")?, "Connected")?,
-            })
-        })
-        .collect::<zbus::Result<_>>()?;
-    Ok(Some(BluetoothState { powered, devices }))
 }
 
 async fn read_focus(conn: &Connection) -> zbus::Result<Option<FocusState>> {
@@ -658,32 +688,99 @@ async fn read_panel(
     Ok(Some(panel.get_property::<String>(output).await?))
 }
 
+fn no_system_bus() -> zbus::Error {
+    zbus::Error::Failure("there is no system bus".to_owned())
+}
+
+fn no_service(what: &str) -> zbus::Error {
+    zbus::Error::Failure(format!("no {what} service is running"))
+}
+
+/// The network service of `system` now.
+fn network(system: &zbus::blocking::Connection) -> zbus::Result<NetworkBackend> {
+    cupertino_radios::detect(system)?
+        .network
+        .ok_or_else(|| no_service("network"))
+}
+
+/// The Bluetooth service of `system` now.
+fn bluetooth(system: &zbus::blocking::Connection) -> zbus::Result<BluetoothBackend> {
+    cupertino_radios::detect(system)?
+        .bluetooth
+        .ok_or_else(|| no_service("Bluetooth"))
+}
+
 /// Ask the service to join `ssid` with `passphrase`; the text of its refusal when it refuses.
 async fn join(
-    system: Option<&Connection>,
-    ssid: &str,
-    passphrase: &Passphrase,
+    system: Option<&zbus::blocking::Connection>,
+    ssid: String,
+    passphrase: Passphrase,
 ) -> Result<(), String> {
-    let system =
-        system.ok_or_else(|| "There is no connection to the network service.".to_owned())?;
-    let network = proxy(system, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+    let system = system
+        .ok_or_else(|| "There is no connection to the network service.".to_owned())?
+        .clone();
+    off_thread(move || {
+        network(&system)
+            .and_then(|backend| backend.join(&system, &ssid, passphrase.as_str()))
+            .map_err(|e| cupertino_radios::refusal(&e))
+    })
+    .await?
+}
+
+/// Carry out `call` on the radios' thread and wait for its answer.
+async fn on_radios(
+    system: Option<&zbus::blocking::Connection>,
+    call: impl FnOnce(&zbus::blocking::Connection) -> zbus::Result<()> + Send + 'static,
+) -> zbus::Result<()> {
+    let system = system.ok_or_else(no_system_bus)?.clone();
+    off_thread(move || call(&system))
         .await
-        .map_err(|e| e.to_string())?;
-    network
-        .call::<_, _, ()>("Connect", &(ssid, passphrase.as_str()))
-        .await
-        .map_err(|e| match e {
-            zbus::Error::MethodError(_, Some(text), _) => text,
-            other => other.to_string(),
+        .map_err(zbus::Error::Failure)?
+}
+
+/// Connect or disconnect the Bluetooth device `id` without waiting: a service may answer only once the link is up or
+/// has failed, which takes seconds, and the bar's other items are read meanwhile. The outcome is read when the
+/// device's change signal comes and again when the call ends; a failure is reported.
+fn link_device(
+    system: Option<&zbus::blocking::Connection>,
+    id: &str,
+    connect: bool,
+    queue: &Queue,
+) -> zbus::Result<()> {
+    let (system, id, queue) = (
+        system.ok_or_else(no_system_bus)?.clone(),
+        id.to_owned(),
+        queue.clone(),
+    );
+    std::thread::Builder::new()
+        .name("cupertino-extras-link".into())
+        .spawn(move || {
+            let done = bluetooth(&system).and_then(|backend| {
+                if connect {
+                    backend.connect(&system, &id)
+                } else {
+                    backend.disconnect(&system, &id)
+                }
+            });
+            if let Err(e) = done {
+                let action = if connect { "connect" } else { "disconnect" };
+                eprintln!(
+                    "cupertino-menubar: cannot {action} the Bluetooth device {id}: {}",
+                    cupertino_radios::refusal(&e)
+                );
+            }
+            let _ = queue.refresh();
         })
+        .map(drop)
+        .map_err(|e| zbus::Error::Failure(format!("cannot start the device's call: {e}")))
 }
 
 async fn act(
-    system: Option<&Connection>,
+    system: Option<&zbus::blocking::Connection>,
     session: &Connection,
     action: &ExtraAction,
+    queue: &Queue,
 ) -> zbus::Result<()> {
-    let system = || system.ok_or_else(|| zbus::Error::Failure("there is no system bus".to_owned()));
     match action {
         // the server asks the session agent for the menu bar (`SessionAction` over the shell protocol)
         ExtraAction::Session(_) => Err(zbus::Error::Failure(
@@ -705,50 +802,22 @@ async fn act(
                 .await
         }
         ExtraAction::SetWifiEnabled(on) => {
-            Ok(proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-                .await?
-                .set_property("WirelessEnabled", *on)
-                .await?)
+            let on = *on;
+            on_radios(system, move |c| network(c)?.set_wireless_enabled(c, on)).await
         }
         ExtraAction::ToggleWifiList | ExtraAction::PromptNetwork(_) => Ok(()),
-        ExtraAction::CancelJoin => {
-            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-                .await?
-                .call("Disconnect", &())
-                .await
-        }
-        ExtraAction::ScanWifi => {
-            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-                .await?
-                .call("Scan", &())
-                .await
-        }
+        ExtraAction::CancelJoin => on_radios(system, |c| network(c)?.disconnect(c)).await,
+        ExtraAction::ScanWifi => on_radios(system, |c| network(c)?.scan(c)).await,
         ExtraAction::JoinNetwork(ssid) => {
-            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-                .await?
-                .call("Connect", &(ssid, ""))
-                .await
+            let ssid = ssid.clone();
+            on_radios(system, move |c| network(c)?.join(c, &ssid, "")).await
         }
         ExtraAction::SetBluetoothPowered(on) => {
-            Ok(
-                proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-                    .await?
-                    .set_property("Powered", *on)
-                    .await?,
-            )
+            let on = *on;
+            on_radios(system, move |c| bluetooth(c)?.set_powered(c, on)).await
         }
-        ExtraAction::ConnectDevice(id) => {
-            proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-                .await?
-                .call("Connect", &(id,))
-                .await
-        }
-        ExtraAction::DisconnectDevice(id) => {
-            proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-                .await?
-                .call("Disconnect", &(id,))
-                .await
-        }
+        ExtraAction::ConnectDevice(id) => link_device(system, id, true, queue),
+        ExtraAction::DisconnectDevice(id) => link_device(system, id, false, queue),
     }
 }
 

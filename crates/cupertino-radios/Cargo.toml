@@ -1,0 +1,27 @@
+[package]
+name = "cupertino-radios"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+autotests = false
+description = "The Wi-Fi and Bluetooth radios through whichever service owns them: the Cupertino network and Bluetooth daemons, else NetworkManager and BlueZ, found, read, changed and followed the same way by Settings, the control panel and the menu bar"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[features]
+default = []
+# the services over the system bus; without it only the readings' types
+dbus = ["dep:zbus"]
+# `fake`: stand-ins for NetworkManager and BlueZ on a test bus, for the tests of the crates that use this one
+fake = ["dbus"]
+
+[dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

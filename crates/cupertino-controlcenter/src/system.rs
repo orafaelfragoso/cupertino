@@ -1,7 +1,7 @@
-//! The real backends over D-Bus: Wi-Fi through `cupertino-netd`, Bluetooth through `cupertino-btd`, the display and
-//! keyboard backlights through `cupertino-powerd`, and the session lock through logind (all on the system bus); the
-//! overlay, the focus mode (the do-not-disturb switch of `cupertino-notifications`) and the media players' standard
-//! player interface on the session bus.
+//! The real backends over D-Bus: the display and keyboard backlights through `cupertino-powerd` and the session lock
+//! through logind (on the system bus); the overlay, the focus mode (the do-not-disturb switch of
+//! `cupertino-notifications`) and the media players' standard player interface on the session bus. The Wi-Fi radio
+//! and the Bluetooth adapter are in `radios`.
 //! Each connection is made on the first use and again after a failure, so a daemon that starts later is picked up.
 //! Properties are read from the service every time, never from a cache.
 
@@ -14,15 +14,10 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use crate::backend::{
-    BackendError, Bluetooth, Brightness, MediaPlayer, OverlayKind, OverlayNotifier, SessionLock,
-    Switch, Wifi,
+    BackendError, Brightness, MediaPlayer, OverlayKind, OverlayNotifier, SessionLock, Switch,
 };
-use crate::model::{Device, Media, MediaCommand, Network, WifiStatus};
+use crate::model::{Media, MediaCommand};
 
-const NETWORK_NAME: &str = "org.cupertino.Network1";
-const NETWORK_PATH: &str = "/org/cupertino/Network1";
-const BLUETOOTH_NAME: &str = "org.cupertino.Bluetooth1";
-const BLUETOOTH_PATH: &str = "/org/cupertino/Bluetooth1";
 const POWER_NAME: &str = "org.cupertino.Power1";
 const POWER_PATH: &str = "/org/cupertino/Power1";
 const UPOWER_NAME: &str = "org.freedesktop.UPower";
@@ -130,197 +125,12 @@ impl Bus {
     }
 }
 
-/// The Wi-Fi radio of `org.cupertino.Network1`: the `WirelessEnabled` property and the first connected Wi-Fi device.
-pub struct NetdWifi {
-    bus: Bus,
-}
-
-impl NetdWifi {
-    /// A Wi-Fi backend; nothing is contacted until the first use.
-    pub fn new() -> Self {
-        Self { bus: Bus::system() }
-    }
-}
-
-impl Default for NetdWifi {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A row of the `Devices` property: index, name, kind, state, SSID, failure, address.
-type DeviceRecord = (u32, String, String, String, String, String, String);
-
-impl Wifi for NetdWifi {
-    fn read(&mut self) -> Result<WifiStatus, BackendError> {
-        let result = self
-            .bus
-            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-            .and_then(|proxy| {
-                let enabled: bool = proxy.get_property("WirelessEnabled")?;
-                let devices: Vec<DeviceRecord> = proxy.get_property("Devices")?;
-                let network = devices
-                    .into_iter()
-                    .find(|device| device.2 == "wifi" && device.3 == "connected")
-                    .map(|device| device.4)
-                    .filter(|ssid| !ssid.is_empty());
-                Ok(WifiStatus { enabled, network })
-            });
-        self.bus.failed(result)
-    }
-
-    fn set_enabled(&mut self, enabled: bool) -> Result<(), BackendError> {
-        let result = self
-            .bus
-            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-            .map(|proxy| proxy.set_property("WirelessEnabled", enabled));
-        // a refused write is the service's answer, not a bus failure, but reconnecting is harmless
-        match self.bus.failed(result) {
-            Ok(written) => Ok(written?),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// `GetNetworks`, after asking for a scan (`Scan`), whose list arrives with a later reading.
-    fn networks(&mut self) -> Result<Vec<Network>, BackendError> {
-        let result = self
-            .bus
-            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-            .and_then(|proxy| {
-                // a refused or busy scan still leaves the last list to show
-                let _ = proxy.call::<_, _, ()>("Scan", &());
-                proxy.call::<_, _, Vec<NetworkRecord>>("GetNetworks", &())
-            });
-        Ok(self
-            .bus
-            .failed(result)?
-            .into_iter()
-            .filter(|record| !record.0.is_empty())
-            .map(|(ssid, dbm, security, known, connected)| Network {
-                ssid,
-                bars: (dbm != i32::MIN).then(|| Network::bars_of(dbm)),
-                secured: security != "open",
-                known,
-                connected,
-            })
-            .collect())
-    }
-
-    /// `Connect` with no passphrase: an open network, or one whose credentials the service holds.
-    fn join(&mut self, ssid: &str) -> Result<(), BackendError> {
-        let result = self
-            .bus
-            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-            .map(|proxy| proxy.call::<_, _, ()>("Connect", &(ssid, "")));
-        match self.bus.failed(result) {
-            Ok(called) => Ok(called?),
-            Err(e) => Err(e),
-        }
-    }
-}
-
-/// A row of `GetNetworks`: SSID, signal in dBm (`i32::MIN` without one), security, saved, connected.
-type NetworkRecord = (String, i32, String, bool, bool);
-
-/// The Bluetooth adapter of `org.cupertino.Bluetooth1`: the `Available` and `Powered` properties.
-pub struct BtdBluetooth {
-    bus: Bus,
-}
-
-impl BtdBluetooth {
-    /// A Bluetooth backend; nothing is contacted until the first use.
-    pub fn new() -> Self {
-        Self { bus: Bus::system() }
-    }
-}
-
-impl Default for BtdBluetooth {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Bluetooth for BtdBluetooth {
-    fn read(&mut self) -> Result<bool, BackendError> {
-        let result = self
-            .bus
-            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-            .and_then(|proxy| {
-                let available: bool = proxy.get_property("Available")?;
-                if !available {
-                    return Ok(Err("the Bluetooth daemon has no adapter".into()));
-                }
-                Ok(Ok(proxy.get_property::<bool>("Powered")?))
-            });
-        self.bus.failed(result)?
-    }
-
-    fn set_powered(&mut self, powered: bool) -> Result<(), BackendError> {
-        let result = self
-            .bus
-            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-            .map(|proxy| proxy.set_property("Powered", powered));
-        match self.bus.failed(result) {
-            Ok(written) => Ok(written?),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// The paired devices of the `Devices` property, by name.
-    fn devices(&mut self) -> Result<Vec<Device>, BackendError> {
-        let result = self
-            .bus
-            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-            .and_then(|proxy| proxy.get_property::<Vec<HashMap<String, OwnedValue>>>("Devices"));
-        let mut devices: Vec<Device> = self
-            .bus
-            .failed(result)?
-            .into_iter()
-            .filter(|fields| flag(fields, "Paired"))
-            .filter_map(|fields| {
-                let id = text(&fields, "Id")?;
-                let name = text(&fields, "Name")
-                    .or_else(|| text(&fields, "Address"))
-                    .unwrap_or_else(|| id.clone());
-                Some(Device {
-                    connected: flag(&fields, "Connected"),
-                    id,
-                    name,
-                })
-            })
-            .collect();
-        devices.sort_by_key(|d| d.name.to_lowercase());
-        Ok(devices)
-    }
-
-    /// `Connect` or `Disconnect`.
-    fn set_connected(&mut self, id: &str, connected: bool) -> Result<(), BackendError> {
-        let method = if connected { "Connect" } else { "Disconnect" };
-        let result = self
-            .bus
-            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-            .map(|proxy| proxy.call::<_, _, ()>(method, &(id,)));
-        match self.bus.failed(result) {
-            Ok(called) => Ok(called?),
-            Err(e) => Err(e),
-        }
-    }
-}
-
 /// A string field of a bus dictionary.
 fn text(fields: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
     fields
         .get(key)
         .and_then(|value| String::try_from(value.try_clone().ok()?).ok())
         .filter(|s| !s.is_empty())
-}
-
-/// A boolean field of a bus dictionary; false when it is missing.
-fn flag(fields: &HashMap<String, OwnedValue>, key: &str) -> bool {
-    fields
-        .get(key)
-        .and_then(|value| bool::try_from(value).ok())
-        .unwrap_or(false)
 }
 
 /// The do-not-disturb switch of `org.cupertino.NotificationCenter1`: the `DoNotDisturb` property and `SetDoNotDisturb`.

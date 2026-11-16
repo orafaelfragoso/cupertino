@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod model;
 pub mod motion;
 #[cfg(feature = "dbus")]
+pub mod radios;
+#[cfg(feature = "dbus")]
 pub mod system;
 #[cfg(feature = "app")]
 pub mod view;

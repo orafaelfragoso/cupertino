@@ -242,6 +242,9 @@ pub struct WindowEntry {
     /// Configured full screen: the decorations are hidden and the client gets the whole frame.
     pub fullscreen: bool,
     pub shrink: Shrink,
+    /// The client's own frame is an opaque rectangle up to corners no rounder than the window's
+    /// ([`crate::frame_fill`]), as of its last commit; a transparent or shaped window is not.
+    pub opaque_frame: bool,
 }
 
 impl WindowEntry {
@@ -260,11 +263,13 @@ impl WindowEntry {
     }
 
     /// Whether the compositor masks the window's corners and draws its outline and shadow: a window it decorates, and,
-    /// with `style_client_decorated`, one whose client draws its own decorations, whether it said so or not. Such a
-    /// client's own frame (square corners, tighter ones, its own shadow) is cut to the window's outline, so every window
-    /// has the same corners, outline and shadow as a native one.
+    /// with `style_client_decorated`, one whose client draws its own decorations, whether it said so or not, as long as
+    /// that frame is an opaque rectangle ([`Self::opaque_frame`]). Such a client's own frame (square corners, tighter
+    /// ones, its own shadow) is cut to the window's outline, so every window has the same corners, outline and shadow as
+    /// a native one; a transparent or shaped window (an overlay, a floating widget, a pill-shaped bar) is left as it
+    /// draws itself.
     pub fn styled(&self, style_client_decorated: bool) -> bool {
-        self.server_side || style_client_decorated
+        self.server_side || (style_client_decorated && self.opaque_frame)
     }
 
     /// The space the decorations take now: none while the window is full screen.
@@ -1446,6 +1451,14 @@ impl Cupertino {
                 s.buffer().is_some()
             })
             .unwrap_or(false);
+        let entry = &mut self.windows[idx];
+        if has_buffer && !entry.server_side && entry.toplevel.wl_surface() == surface {
+            entry.opaque_frame = crate::frame_fill::opaque_frame(
+                surface,
+                entry.window.geometry(),
+                self.config.window.corner_radius,
+            );
+        }
         let (mapped, id) = (self.windows[idx].mapped, self.windows[idx].id);
         match (mapped, has_buffer) {
             (false, true) => self.map_window(idx),

@@ -430,3 +430,36 @@ fn the_outline_meets_the_device_pixels_of_the_window_s_content_at_a_fractional_s
         "some scale must put the frame off the device pixels for the test to mean anything"
     );
 }
+
+/// A window whose client draws its own frame keeps the native corners, outline and shadow when that frame is opaque but
+/// for corners tighter than the window's, as its opaque region says, and is left as it draws itself when it is
+/// transparent around a shape of its own (a pill, opaque only between its round ends): no mask, outline or shadow box
+/// it in.
+#[test]
+fn an_opaque_client_drawn_frame_is_rounded_and_a_transparent_shaped_one_is_left_alone() {
+    use common::OwnFrame;
+    for (frame, styled) in [(OwnFrame::Opaque, true), (OwnFrame::Pill, false)] {
+        let mut d = Desktop::new(1.0);
+        let client = common::Client::drawing_own_frame(d.socket(), frame);
+        d.clients.push(client);
+        let deadline = std::time::Instant::now() + common::HANG_GUARD;
+        while d.state.wm.windows().count() != 1 {
+            d.pump();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the client did not map"
+            );
+        }
+        d.at(3000);
+        let id = d.state.wm.key_window().expect("the window is key");
+        assert!(d.state.entry(id).unwrap().draws_own_frame());
+        let shown = framed(&mut d);
+        assert_eq!(rounded(&shown.clip), styled, "{frame:?}: {shown:?}");
+        assert_eq!(
+            (shown.shadow, shown.outline),
+            (styled, styled),
+            "{frame:?}: {shown:?}"
+        );
+        assert!(!shown.titlebar, "{frame:?}: {shown:?}");
+    }
+}

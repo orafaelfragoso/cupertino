@@ -385,6 +385,21 @@ impl Prompter {
         if !away {
             return self.activate_next();
         }
+        self.end_active()
+    }
+
+    /// The question on screen can't be shown any longer though the session is here: it is answered as cancelled and
+    /// its prompt ends, as when the session goes away, so the caller can tell it from the person's own cancel. The
+    /// next waiting caller becomes active.
+    pub fn dismiss(&mut self) -> Vec<Effect> {
+        let mut effects = self.end_active();
+        effects.extend(self.activate_next());
+        effects
+    }
+
+    /// End the active prompt from this side: a question on screen is answered as cancelled, then the caller is told
+    /// its prompt is done.
+    fn end_active(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self
             .active

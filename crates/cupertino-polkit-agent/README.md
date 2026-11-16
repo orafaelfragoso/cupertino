@@ -80,6 +80,9 @@ value is protected, so neither what is typed nor its length leaves the process; 
 | `keyring::model` | the keyring's callers and its prompt, as a pure model |
 | `keyring::prompter` | the prompter on the session bus |
 | `keyring::panel`, `keyring::render`, `keyring::access` | the keyring prompt's layout, drawing and accessible tree |
+| `keyring::offer` | the offer to move a default keyring that login does not unlock into the login keyring: its flow and the move, as a pure model |
+| `keyring::secrets` | the Secret Service the offer works on: the default and the login collection, an unlock, items read and stored over an encrypted session |
+| `keyring::asking` | the offer carried out: its questions asked through the prompter, its answer kept |
 
 The colours are the design tokens of the session's appearance; the scrim is `authentication-scrim`. Values marked
 approximate in `panel` and `render` are Cupertino's own.
@@ -103,7 +106,8 @@ The process hardens itself, zeroes what it frees and keeps its fields at their l
   another call is refused with `org.gnome.keyring.Prompter.InProgress`, a broken exchange with `…Failed`;
 - answers through the caller's `org.gnome.keyring.internal.Prompter.Callback`: `PromptReady("", {}, exchange)` once a
   caller is active, `PromptReady("yes" | "no", {choice-chosen, password-strength}, exchange)` for each question, and
-  `PromptDone()` when it ends a prompt itself (the session locks). The reply to a call is always sent before its
+  `PromptDone()` when it ends a prompt itself (the session locks, or the server closes the panel: a `no` followed by
+  `PromptDone` is the prompter's answer, not the person's). The reply to a call is always sent before its
   callback is called, even for an answer given at once: the loop sends the reply itself. A caller that leaves the bus (the bus daemon's `NameOwnerChanged`) loses its prompt;
 - returns the password only through the secret exchange (`sx-aes-1`): Diffie-Hellman in the 1536-bit MODP group of
   RFC 3526, HKDF with SHA256 of the shared value's bytes without leading zeros into a 16-byte key, 128-bit AES in CBC mode with PKCS#7
@@ -121,6 +125,41 @@ panel is modal over the active output whatever it names. While the session is lo
 nothing shows: a question is answered `no`, the active caller hears `PromptDone`, and waiting callers wait.
 
 Assistive technology sees a modal alert dialog; both fields are password inputs with a protected value.
+
+## The default keyring that login does not unlock
+
+Login unlocks the keyring named `login` and no other. When an application has made another keyring the default
+collection, that keyring stays locked after login and asks for its own password in every session. Cupertino never
+changes keyrings silently: the prompter asks once whether that keyring's items should move into the login keyring.
+
+- **When.** The prompter that owns the prompter's names starts the check on a thread and a bus connection of its own
+  once it serves, so neither its loop nor login waits for the Secret Service. It looks for `org.freedesktop.secrets`
+  for 20 seconds without starting it, then reads the `default` alias and the login collection's lock.
+- **Nothing is asked** when there is no Secret Service, when the default collection is the login one or there is
+  none, when the login collection does not exist or is locked, after a remembered answer, or a second time in one
+  login (`$XDG_RUNTIME_DIR/cupertino-keyring-offer` names the logind session that asked, so a prompter that starts
+  again does not ask again).
+- **The question** is asked as the keyring daemon asks its own: the check is a caller of the prompter (a `confirm`
+  prompt), so it is the same alert, on a connection the server protects from capture and control, behind any prompt
+  already waiting and never over a locked session. Its buttons are Move Items and Don't Move.
+- **Don't Move** is kept in `$XDG_STATE_HOME/cupertino/keyring-offer` (`declined`) and the question never comes back.
+  A question the session took away (it locked, or the alert could not be shown) is no answer: the next login asks.
+- **Move Items** unlocks the old keyring through the daemon's own unlock prompt, which asks for its password once.
+  Cancelling there is not a decline: the next login asks again. Then every item (label, attributes, secret, content
+  type) is copied into the login collection beside what it holds, every copy is read back and compared, and only then
+  the `default` alias is pointed at the login collection and read back. The old keyring keeps its items and is not
+  deleted. `moved` is kept in the answer's file.
+- **A failure** at any step deletes the copies this run made and leaves the alias as it was; the alert says that
+  nothing was moved and why (an item could not be read, saved or did not match, the default changed meanwhile or could
+  not be changed) and offers Try Again and Not Now. Nothing is remembered, so the next login asks again.
+- **A move that stopped halfway** (the process ended) can be repeated: an item the login keyring already holds
+  identical is not copied again. An item of the login keyring with the same attributes and another secret is never
+  replaced; the copy is stored beside it.
+- **Secrets** cross the bus under the Secret Service's session encryption (`dh-ietf1024-sha256-aes128-cbc-pkcs7`),
+  are held in buffers that are zeroed, and appear in no log line, error or `Debug` output: an error names the call
+  and the service's error name only.
+
+To be asked again after Don't Move, delete `~/.local/state/cupertino/keyring-offer` and log in again.
 
 ## Diagnostic events
 
@@ -145,6 +184,16 @@ its confirmation and the choice, a confirmation, a cancel, one caller at a time,
 names on one connection; `tests/keyring_daemon.rs` the installed gnome-keyring daemon on a private bus unlocking its
 login keyring with the password typed into the prompt, after a cancel and a wrong password (skipped when the daemon is
 not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
+
+The offer about the default keyring: `src/keyring/offer/tests.rs` the model without a bus: when the question is
+asked, accept, decline and its memory, a question taken away, a cancelled password, each failure of the move leaving
+the default and both keyrings as they were, a move repeated after it stopped halfway, and no secret in what is
+printed; `src/keyring/render/tests.rs` the alert shows the question's and each failure's whole text;
+`tests/keyring_offer.rs` the installed daemon on a private bus with a second, locked keyring as the default: nothing
+asked without a service, with the login keyring the default or locked; a cancelled password, a locked session and a
+decline leave everything as it was and only the decline is kept; accepting copies every item (read back over a
+session of the test's own), skips the one already copied, keeps a differing item, changes the alias and keeps the old
+keyring.
 
 The polkit agent:
 

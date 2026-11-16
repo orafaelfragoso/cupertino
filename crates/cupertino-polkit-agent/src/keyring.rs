@@ -8,10 +8,15 @@
 //! - [`panel`]: where the prompt's parts sit and what a key or a click does.
 //! - [`render`]: the panel drawn.
 //! - [`access`]: what the prompt tells assistive technology.
+//! - [`offer`]: the offer to move a default keyring that login does not unlock into the login keyring, as a pure
+//!   model; [`secrets`] is the Secret Service it works on and [`asking`] carries it out.
 
 pub mod access;
+pub mod asking;
 pub mod exchange;
 pub mod model;
+pub mod offer;
 pub mod panel;
 pub mod prompter;
 pub mod render;
+pub mod secrets;

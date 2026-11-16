@@ -11,5 +11,7 @@ mod flow;
 mod keyring;
 #[path = "keyring_daemon.rs"]
 mod keyring_daemon;
+#[path = "keyring_offer.rs"]
+mod keyring_offer;
 #[path = "zeroing.rs"]
 mod zeroing;

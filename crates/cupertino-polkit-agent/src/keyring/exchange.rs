@@ -89,7 +89,7 @@ impl fmt::Display for ExchangeError {
 impl std::error::Error for ExchangeError {}
 
 /// `buf` filled from the kernel's random source.
-fn random(buf: &mut [u8]) -> Result<(), ExchangeError> {
+pub(crate) fn random(buf: &mut [u8]) -> Result<(), ExchangeError> {
     let mut filled = 0;
     while filled < buf.len() {
         // Safety: the pointer and length name the unfilled rest of `buf`, which outlives the call.

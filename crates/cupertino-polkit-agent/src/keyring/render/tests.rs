@@ -232,3 +232,48 @@ fn the_daemons_long_choice_wraps_under_its_check_box_without_its_mnemonic() {
     assert!(layout.choice[0].starts_with("Automatically"));
     assert!(!layout.choice.concat().contains('…'), "{:?}", layout.choice);
 }
+
+#[test]
+fn the_offer_to_move_a_default_keyring_and_its_failures_show_their_whole_text() {
+    use crate::keyring::offer::{FailedStep, MoveError, Notice, Offer, KEEP, MOVE};
+    let offer = Offer {
+        collection: "/org/freedesktop/secrets/collection/other".into(),
+        // longer than the longest name the text takes
+        label: "Passwords and Keys".into(),
+    };
+    let mut texts = vec![(offer.heading(), offer.description())];
+    let unlock = Notice::unlock();
+    texts.push((unlock.heading, unlock.description));
+    for step in [
+        FailedStep::Changed,
+        FailedStep::Read,
+        FailedStep::Copy,
+        FailedStep::Verify,
+        FailedStep::Default,
+    ] {
+        for left in [0, 1] {
+            let notice = Notice::of(&MoveError {
+                step,
+                cause: None,
+                left,
+            });
+            texts.push((notice.heading, notice.description));
+        }
+    }
+    let mut painter = painter();
+    for (heading, description) in texts {
+        let prompter = asking(
+            Kind::Confirm,
+            vec![
+                ("message", Value::Str(heading.clone())),
+                ("description", Value::Str(description.clone())),
+                ("continue-label", Value::Str(MOVE.into())),
+                ("cancel-label", Value::Str(KEEP.into())),
+            ],
+        )
+        .0;
+        let layout = Layout::new(&mut painter, prompter.prompt().unwrap(), false);
+        assert_eq!(layout.heading.join(" "), heading);
+        assert_eq!(layout.description.join(" "), description);
+    }
+}

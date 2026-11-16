@@ -24,7 +24,7 @@ const SERVICE: &str = "org.freedesktop.Secret.Service";
 const COLLECTION: &str = "org.freedesktop.Secret.Collection";
 const PROMPT: &str = "org.freedesktop.Secret.Prompt";
 /// The login password of the test's account.
-const PASSWORD: &str = "correct horse 2c9e";
+pub(super) const PASSWORD: &str = "correct horse 2c9e";
 
 fn keyring_daemon() -> Option<PathBuf> {
     let found = std::env::var_os("PATH").and_then(|paths| {
@@ -42,7 +42,7 @@ fn keyring_daemon() -> Option<PathBuf> {
     found
 }
 
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+pub(super) fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + WAIT;
     while !done() {
         assert!(Instant::now() < deadline, "{what} within {WAIT:?}");
@@ -51,9 +51,9 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 /// The daemon of a login with [`PASSWORD`], its home and runtime directory, on a bus of the test's own.
-struct Session {
+pub(super) struct Session {
     _dir: tempfile::TempDir,
-    bus: PrivateBus,
+    pub(super) bus: PrivateBus,
     daemon: Child,
 }
 
@@ -65,7 +65,7 @@ impl Drop for Session {
 }
 
 impl Session {
-    fn start() -> Option<Session> {
+    pub(super) fn start() -> Option<Session> {
         let program = keyring_daemon()?;
         // under /tmp so that the daemon's control socket stays within the 108 bytes of a socket path
         let dir = tempfile::Builder::new()
@@ -149,7 +149,7 @@ impl Session {
     }
 }
 
-fn call<R: zbus::export::serde::de::DeserializeOwned + zbus::zvariant::Type>(
+pub(super) fn call<R: zbus::export::serde::de::DeserializeOwned + zbus::zvariant::Type>(
     conn: &Connection,
     path: &str,
     interface: &str,
@@ -163,7 +163,7 @@ fn call<R: zbus::export::serde::de::DeserializeOwned + zbus::zvariant::Type>(
         .unwrap()
 }
 
-fn locked(conn: &Connection, collection: &str) -> bool {
+pub(super) fn locked(conn: &Connection, collection: &str) -> bool {
     zbus::blocking::fdo::PropertiesProxy::builder(conn)
         .destination(SECRETS)
         .unwrap()
@@ -177,7 +177,7 @@ fn locked(conn: &Connection, collection: &str) -> bool {
 }
 
 /// Ask the daemon to unlock `collection` and run its prompt on a thread; the receiver gets whether it was dismissed.
-fn unlock(conn: &Connection, collection: &str) -> std::sync::mpsc::Receiver<bool> {
+pub(super) fn unlock(conn: &Connection, collection: &str) -> std::sync::mpsc::Receiver<bool> {
     let objects = vec![ObjectPath::try_from(collection).unwrap()];
     let (unlocked, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) =
         call(conn, SERVICE_PATH, SERVICE, "Unlock", &(objects,));
@@ -203,7 +203,7 @@ fn unlock(conn: &Connection, collection: &str) -> std::sync::mpsc::Receiver<bool
     completed
 }
 
-fn wait_for_question(host: &Arc<Mutex<Host>>) {
+pub(super) fn wait_for_question(host: &Arc<Mutex<Host>>) {
     wait_until("the daemon asks the prompter", || {
         host.lock()
             .unwrap()
@@ -213,7 +213,7 @@ fn wait_for_question(host: &Arc<Mutex<Host>>) {
     });
 }
 
-fn type_and(host: &Arc<Mutex<Host>>, password: &str, cancel: bool) {
+pub(super) fn type_and(host: &Arc<Mutex<Host>>, password: &str, cancel: bool) {
     let mut host = host.lock().unwrap();
     for c in password.chars() {
         host.model.key(Field::Password, Key::Char(c));

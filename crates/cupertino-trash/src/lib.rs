@@ -736,14 +736,17 @@ fn empty_dir(dir: &Path, emptied: &mut Emptied) {
     }
     let (old_files, old_info) = (expunged.join("files"), expunged.join("info"));
     // what stays goes back where the person can see it, under a free name when its own was taken meanwhile
+    let old_records = real_dir(&old_info);
     for (name, error) in delete_entries(&old_files, &old_info, emptied) {
         let back = free_name(&files, &name);
         let path = match fs::rename(old_files.join(&name), files.join(&back)) {
             Ok(()) => {
-                let _ = fs::rename(
-                    old_info.join(format!("{name}.trashinfo")),
-                    info.join(format!("{back}.trashinfo")),
-                );
+                if old_records {
+                    let _ = fs::rename(
+                        old_info.join(format!("{name}.trashinfo")),
+                        info.join(format!("{back}.trashinfo")),
+                    );
+                }
                 files.join(back)
             }
             Err(_) => old_files.join(&name),
@@ -764,11 +767,18 @@ fn empty_dir(dir: &Path, emptied: &mut Emptied) {
     }
 }
 
+/// Whether `path` is a real directory, no link to one: records are only read from, moved out of and deleted in an
+/// `info` that is one, so an `info` that is a link never leads a deletion into the folder it points at.
+fn real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+}
+
 /// Delete every entry of the folder `files` (itself taken away when it is no folder but a link or a file) and, with
-/// each entry that went, its `.trashinfo` in `info`; the count goes into `emptied`. Returns the names of the entries
-/// that stayed, each with why.
+/// each entry that went, its `.trashinfo` in `info` when `info` is a real folder; the count goes into `emptied`.
+/// Returns the names of the entries that stayed, each with why.
 fn delete_entries(files: &Path, info: &Path, emptied: &mut Emptied) -> Vec<(String, io::Error)> {
     let mut stayed = Vec::new();
+    let records = real_dir(info);
     let entries = match fs::symlink_metadata(files) {
         Ok(m) if m.file_type().is_dir() => fs::read_dir(files),
         // no folder: whatever it leads to is not the trash's to delete
@@ -786,7 +796,9 @@ fn delete_entries(files: &Path, info: &Path, emptied: &mut Emptied) -> Vec<(Stri
         match remove(&entry.path()) {
             Ok(()) => {
                 emptied.deleted += 1;
-                let _ = fs::remove_file(info.join(format!("{name}.trashinfo")));
+                if records {
+                    let _ = fs::remove_file(info.join(format!("{name}.trashinfo")));
+                }
             }
             Err(error) => stayed.push((name, error)),
         }
@@ -1257,6 +1269,45 @@ mod tests {
         assert!(precious.join("inner").exists());
         assert!(real.join(me.to_string()).join("files/a").exists());
         assert!(loose_item.exists());
+    }
+
+    #[test]
+    fn an_info_folder_that_is_a_link_is_taken_away_and_nothing_is_deleted_through_it() {
+        let d = tempfile::tempdir().unwrap();
+        // the records of another trash, under the names of this volume's entries
+        let outside = d.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        for name in ["gone", "kept"] {
+            fs::write(outside.join(format!("{name}.trashinfo")), b"1").unwrap();
+        }
+        let usb = d.path().join("usb");
+        let own = usb.join(format!(".Trash-{}", uid()));
+        fs::create_dir_all(own.join("files")).unwrap();
+        fs::write(own.join("files/gone"), b"1").unwrap();
+        // one entry that cannot be deleted, so the emptying also tries to move its record back
+        let kept = own.join("files/kept");
+        fs::create_dir_all(kept.join("locked")).unwrap();
+        fs::write(kept.join("locked/inner"), b"1").unwrap();
+        set_mode(&kept.join("locked"), 0o555);
+        std::os::unix::fs::symlink(&outside, own.join("info")).unwrap();
+
+        let t = Trash::with_home(d.path().join("share/Trash")).with_mounts(vec![usb]);
+        let emptied = t.empty();
+        set_mode(&own.join("files/kept/locked"), 0o755);
+        assert_eq!(
+            names(&outside),
+            ["gone.trashinfo", "kept.trashinfo"],
+            "the folder the link led to keeps every file"
+        );
+        assert!(
+            fs::symlink_metadata(own.join("info")).unwrap().is_dir(),
+            "the link is replaced by a folder"
+        );
+        assert!(!own.join("files/gone").exists());
+        if uid() != 0 {
+            assert_eq!(emptied.failures.len(), 1, "{:?}", emptied.failures);
+            assert!(names(&own.join("info")).is_empty());
+        }
     }
 
     #[test]

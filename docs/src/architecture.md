@@ -1,6 +1,6 @@
 # Architecture
 
-Cupertino is a Wayland desktop with separate compositor, shell, applications and services. The ISO and installer ship NetworkManager and BlueZ for network and Bluetooth service. Settings selects those backends when Cupertino's own daemons are absent. The in-tree daemons remain development implementations; replacing the shipped services requires feature parity, including enterprise Wi-Fi, VPN and captive-portal handling for networking.
+Cupertino is a Wayland desktop with separate compositor, shell, applications and services. The ISO and installer ship NetworkManager and BlueZ for network and Bluetooth service. Settings, the control panel and the menu bar select those backends when Cupertino's own daemons are absent. The in-tree daemons remain development implementations; replacing the shipped services requires feature parity, including enterprise Wi-Fi, VPN and captive-portal handling for networking.
 
 ## What we own, speak and keep
 
@@ -58,7 +58,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-test-bus`, `cupertino-test-pam`, `cupertino-test-pam-shim`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
+| `foundation` | `cupertino-animation`, `cupertino-apps`, `cupertino-assets`, `cupertino-build-info`, `cupertino-capture`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-filepicker`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-icons`, `cupertino-key-bindings`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-modifiers`, `cupertino-radios`, `cupertino-test-bus`, `cupertino-test-pam`, `cupertino-test-pam-shim`, `cupertino-theme`, `cupertino-thumbnails`, `cupertino-trash`, `cupertino-typeahead`, `xkbcommon` | `foundation` |
 | `graphics` (the one definition of the drawing maths, and the thin GPU layer) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (pure logic, no I/O) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
 | `platform` (kernel interfaces, and the PipeWire boundary) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-evdev`, `cupertino-netlink`, `cupertino-peer`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |

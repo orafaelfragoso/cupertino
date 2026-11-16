@@ -5,3 +5,5 @@
 mod control;
 #[path = "panel.rs"]
 mod panel;
+#[path = "radios.rs"]
+mod radios;

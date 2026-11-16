@@ -1,5 +1,5 @@
-//! The Wi-Fi and Network panes on NetworkManager, when `cupertino-netd` is not running: the same [`Wifi`] reading
-//! and calls as `org.cupertino.Network1`, worked out from NetworkManager's objects.
+//! The network on NetworkManager, when `cupertino-netd` is not running: the same [`Wifi`] reading and calls as
+//! `org.cupertino.Network1`, worked out from NetworkManager's objects.
 
 use std::collections::HashMap;
 
@@ -8,12 +8,12 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
-use crate::live::{display_name, Device, KnownNetwork, Network, Vpn, Wifi};
+use crate::types::{display_name, Device, KnownNetwork, Link, Network, Vpn, Wifi};
 
 pub const NAME: &str = "org.freedesktop.NetworkManager";
 pub const PATH: &str = "/org/freedesktop/NetworkManager";
 pub const SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
-const DEVICE: &str = "org.freedesktop.NetworkManager.Device";
+pub const DEVICE: &str = "org.freedesktop.NetworkManager.Device";
 const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 const ACCESS_POINT: &str = "org.freedesktop.NetworkManager.AccessPoint";
 const SETTINGS: &str = "org.freedesktop.NetworkManager.Settings";
@@ -31,7 +31,7 @@ const KEY_MGMT_802_1X: u32 = 0x200;
 const KEY_MGMT_SAE: u32 = 0x400;
 const KEY_MGMT_OWE: u32 = 0x800;
 
-/// The most access points and saved connections read, so a crowded air or a long history cannot stall the pane.
+/// The most access points and saved connections read, so a crowded air or a long history cannot stall a reading.
 const MAX_ACCESS_POINTS: usize = 256;
 const MAX_CONNECTIONS: usize = 256;
 
@@ -44,7 +44,7 @@ fn proxy<'a>(connection: &Connection, path: &str, interface: &'a str) -> zbus::R
         .build()
 }
 
-/// What the pane calls a device state, as `cupertino-netd` names them (`NMDeviceState`).
+/// A device's state, as `cupertino-netd` names them (`NMDeviceState`).
 fn device_state(state: u32) -> &'static str {
     match state {
         0..=20 => "unavailable",
@@ -186,15 +186,20 @@ fn devices(connection: &Connection) -> zbus::Result<(Vec<Device>, Vec<WifiDevice
             kind: if kind == WIFI { "wifi" } else { "ethernet" }.to_string(),
             state: device_state(state).to_string(),
             ssid,
-            failure: if state == 120 {
-                format!("failed (reason {reason})")
-            } else {
-                String::new()
-            },
+            failure: failure(state, reason),
             address: d.get_property("HwAddress")?,
         });
     }
     Ok((devices, wifi))
+}
+
+/// What a failed device (`NM_DEVICE_STATE_FAILED`) says of its last attempt; empty for any other state.
+fn failure(state: u32, reason: u32) -> String {
+    if state == 120 {
+        format!("failed (reason {reason})")
+    } else {
+        String::new()
+    }
 }
 
 /// The SSIDs of the saved Wi-Fi connections, with the connection of each.
@@ -284,7 +289,50 @@ pub fn set_auto_join(connection: &Connection, ssid: &str, on: bool) -> zbus::Res
     Ok(())
 }
 
-/// The reading the panes show.
+/// The radio and its first Wi-Fi device, without the access points: the device's network is read from its active
+/// access point alone.
+pub fn link(connection: &Connection) -> zbus::Result<Link> {
+    let nm = proxy(connection, PATH, NAME)?;
+    let enabled: bool = nm.get_property("WirelessEnabled")?;
+    let paths: Vec<OwnedObjectPath> = nm.call("GetDevices", &())?;
+    for (index, path) in paths.into_iter().enumerate() {
+        let d = proxy(connection, path.as_str(), DEVICE)?;
+        if d.get_property::<u32>("DeviceType")? != WIFI {
+            continue;
+        }
+        let state: u32 = d.get_property("State")?;
+        let (_, reason): (u32, u32) = d.get_property("StateReason")?;
+        let active: OwnedObjectPath =
+            proxy(connection, path.as_str(), WIRELESS)?.get_property("ActiveAccessPoint")?;
+        let ssid = if active.as_str() == "/" {
+            String::new()
+        } else {
+            // the access point may have gone between the two readings: the device then names no network
+            proxy(connection, active.as_str(), ACCESS_POINT)?
+                .get_property::<Vec<u8>>("Ssid")
+                .map(|ssid| display_name(&String::from_utf8_lossy(&ssid)))
+                .unwrap_or_default()
+        };
+        return Ok(Link {
+            enabled,
+            device: Some(Device {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                name: d.get_property("Interface")?,
+                kind: "wifi".to_string(),
+                state: device_state(state).to_string(),
+                ssid,
+                failure: failure(state, reason),
+                address: d.get_property("HwAddress")?,
+            }),
+        });
+    }
+    Ok(Link {
+        enabled,
+        device: None,
+    })
+}
+
+/// The whole reading: the radio, the devices, the networks in range and the saved ones.
 pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
     let nm = proxy(connection, PATH, NAME)?;
     let (devices, radios) = devices(connection)?;

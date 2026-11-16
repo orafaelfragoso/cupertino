@@ -16,6 +16,7 @@ app = [
     "dep:cupertino-kit",
     "dep:cupertino-wayland-client",
     "dep:zbus",
+    "cupertino-radios/dbus",
     "dep:cupertino-alsa",
     "dep:cupertino-pipewire",
     "dep:async-channel",
@@ -31,6 +32,7 @@ cupertino-assets = { path = "../cupertino-assets" }
 cupertino-build-info = { path = "../cupertino-build-info" }
 cupertino-apps = { path = "../cupertino-apps" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-radios = { path = "../cupertino-radios" }
 cupertino-displays = { path = "../cupertino-displays" }
 cupertino-filepicker = { path = "../cupertino-filepicker" }
 cupertino-thumbnails = { path = "../cupertino-thumbnails" }

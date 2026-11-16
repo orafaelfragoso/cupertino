@@ -150,8 +150,8 @@ takes as not shown.
 gdbus call --session --dest org.cupertino.ControlPanel1 --object-path /org/cupertino/ControlPanel1 --method org.cupertino.ControlPanel1.Toggle
 ```
 
-The backends below also speak `org.cupertino.Network1`, `org.cupertino.Bluetooth1`, `org.cupertino.Power1`,
-`org.freedesktop.UPower.KbdBacklight` and `org.freedesktop.login1` on the system bus, and
+The backends below also speak `org.cupertino.Network1` or NetworkManager, `org.cupertino.Bluetooth1` or BlueZ,
+`org.cupertino.Power1`, `org.freedesktop.UPower.KbdBacklight` and `org.freedesktop.login1` on the system bus, and
 `org.cupertino.NotificationCenter1`, `org.cupertino.Osd1` and `org.mpris.MediaPlayer2.*` on the session bus.
 
 ### Backends
@@ -163,8 +163,8 @@ failure. Properties are read from the service every time, never from a cache.
 
 | Module | Real backend | Fake (`--fake-backends`, tests) |
 |---|---|---|
-| Wi-Fi | `system::NetdWifi`: `org.cupertino.Network1` on the system bus, property `WirelessEnabled` (read, write) and `Devices` (the SSID of the first connected Wi-Fi device); the view runs `Scan`, lists `GetNetworks` and joins with `Connect(ssid, "")`, which only a network the service knows or an open one accepts (a new secured network needs the passphrase the Wi-Fi settings ask for, so its row is not pressable) | `MemoryWifi` |
-| Bluetooth | `system::BtdBluetooth`: `org.cupertino.Bluetooth1`, properties `Available` (false is a disabled tile) and `Powered` (read, write); the view lists the paired `Devices` by name and toggles one with `Connect` or `Disconnect` | `MemoryBluetooth` |
+| Wi-Fi | `radios::RadioWifi`: the network service found on the system bus at each reading (`cupertino-radios`: `org.cupertino.Network1`, else NetworkManager), its radio switch (read, write) and the network of the first Wi-Fi device while it is connected; no service or no Wi-Fi device is a disabled tile; the view asks for a scan, lists the networks in range and joins with no passphrase, which only a network the service knows or an open one accepts (a new secured network needs the passphrase the Wi-Fi settings ask for, so its row is not pressable) | `MemoryWifi` |
+| Bluetooth | `radios::RadioBluetooth`: the Bluetooth service found at each reading (`org.cupertino.Bluetooth1`, else BlueZ), its adapter (none is a disabled tile) and power switch (read, write); the view lists the paired devices by name and connects or disconnects one, on BlueZ from a thread of its own since the service answers only when the link is up | `MemoryBluetooth` |
 | Microphone | `backend::PipewireMicrophone`: the mute of the default PipeWire source (`cupertino-pipewire`); on means it records | `MemorySwitch` |
 | Now playing | `system::MprisPlayer`: the `org.mpris.MediaPlayer2.*` players on the session bus, the playing one first, else the first with a title; `Metadata` (`xesam:title`, `xesam:artist`), `PlaybackStatus`, `CanGoPrevious`, `CanGoNext`, `CanPlay`, `CanPause`; `Previous`, `PlayPause`, `Next`. Each call to a player waits at most 200 ms (`system::PLAYER_TIMEOUT`), so a player that hangs is passed over. No player is "Not Playing", not a failure | `MemoryMedia` |
 | Dock hiding | `backend::DockHiding`: the `autohide` key of the dock's settings file (`cupertino_defaults::dock`), which the dock follows | `MemorySwitch` |
@@ -237,10 +237,16 @@ the menu bar.
 | `lifecycle` | `Lifecycle`, `Phase`, `FADE_SECONDS` with injected time |
 | `motion` | `spring`, `Expansion` (a detail view opening or closing, reversible, with Reduce Motion) and `visibility` with injected time |
 | `backend` | the traits (`Wifi`, `Bluetooth`, `Switch`, `Brightness`, `Volume`, `MediaPlayer`, `SessionLock`, `Launcher`, `OverlayNotifier`), `SessionVolume`, `AlsaVolume`, `PipewireMicrophone`, `DockHiding`, `SettingsLauncher`, `Unavailable`, the `Memory*` stand-ins and `Recording` |
-| `system` (feature `dbus`) | `NetdWifi`, `BtdBluetooth`, `NotificationFocusMode`, `PowerdBrightness`, `UpowerKeyboard`, `LogindLock`, `MprisPlayer`, `SessionOverlay` |
+| `radios` (feature `dbus`) | `Radios` (the system bus the radios are read on, `on_change`), `RadioWifi`, `RadioBluetooth` |
+| `system` (feature `dbus`) | `NotificationFocusMode`, `PowerdBrightness`, `UpowerKeyboard`, `LogindLock`, `MprisPlayer`, `SessionOverlay` |
 | `controller` | `Controller`: lifecycle, readings, presses, the open detail view and its list, joins, connections, outputs, media commands, settings, throttled level writes, refresh timer; `Backends` |
 | `control` (feature `dbus`) | the `org.cupertino.ControlPanel1` interface (`serve`) |
 | `view` (feature `app`) | the CupertinoKit windows: `panel` (the tiles at a `Presentation`), `catcher`, `Input` (what the user did), `Via`, `focus_key`, `APP_ID`, `CATCHER_APP_ID`, `TITLE` |
+
+The Wi-Fi and Bluetooth backends share one connection to the system bus (`radios::Radios`) and follow the services'
+change signals on it (`cupertino_radios::watch`): a signal, or a service starting or stopping, has a shown panel read
+every backend again at once, so a radio switched in Settings or a device that connects shows without waiting for the
+periodic reading. A burst of signals asks for one reading.
 
 ## Tests
 
@@ -254,6 +260,7 @@ cargo test -p cupertino-controlcenter --features app
 | Lifecycle unit tests | Full opacity, the fade, reopening while hiding, hiding at once from any phase, at literal instants. |
 | Backend unit tests | The dock hiding file, the microphone and the session outputs against `cupertino-pipewire`'s fake `wpctl`, the ALSA and session volume, and the stand-ins. |
 | Controller unit tests | Switches, mute, lock, Edit Controls and settings, media commands, the detail lists, a refused join, the 16.7 ms write throttle, mute below 0.001, a tile disabled by a failing read or write with the reason, the overlay told after a drag, the refresh timer, a vanish that hides at once, drops a drag and reads again on reopening. |
+| `tests/radios.rs` (feature `dbus`) | The Wi-Fi and Bluetooth backends against stand-ins for NetworkManager and BlueZ on a private bus: no service, no Wi-Fi device and no adapter each disable the tile with the reason; the radio on, off, joined and not; the networks listed and joined; the paired devices connected and disconnected without holding the panel, and a refused connection; a shown panel reading again when a service starts, changes or stops, the tiles switching the radio and the adapter, and a hidden panel reading nothing. |
 | `tests/panel.rs` | The panel as the kit draws it against `tests/goldens` (`shown`, `reduce-transparency`, `increase-contrast`, `light-session`, `wifi-detail`: the 1x frame and the focus and accessibility tree of every control); every tile's frame; badge, opener, circle, media, output and Edit Controls presses; a disabled module; a level drag and release; Escape and a press between the tiles dismissing, or collapsing an open view; the Wi-Fi view's list, join and settings row; Tab, Space and the arrow keys across the tiles; the catcher dismissing on a left or right press only; the tiles staying one glass container too large for its text to follow the backdrop, at rest, in a light session, fading and with a view opening or open; every tile keeping its glass and container through a view's motion; the shadow following that motion without a jump and fading out before the menu bar; Edit Controls glass as the tiles are, in a dark and a light session. The `layout` unit tests hold the tiles 44 pt from the top of the output and 14 pt from its right edge. |
 | Process unit tests (`src/app.rs`) | The windows per phase (panel over catcher when shown, the panel alone while fading, none when hidden), the lock, input ignored during the fade, a toggle during the fade then Escape, the timer generations, the detail view opening, closing and reversing, a second Escape while it closes dismissing, with the focus moved at its ends only after the keyboard, Reduce Motion and the light session from the session, and the panel's keyboard: asked for whenever shown, given back for the fade, and losing it while shown dismisses. A window the server closes, or the output going, hides the panel at once, in the shown and the fading phase, and a toggle reopens a panel that acts; the panel hears when its output goes; a toggle during the fade opens the catcher on the card's output after the active output changed. |
 | `tests/control.rs` | `Toggle` against a private `dbus-daemon` with in-memory backends: it opens, then closes, the panel, and a second panel cannot take the name; another process (a `dbus-send` the test starts, as the menu bar is to the panel) may toggle, and a connection over anonymous TCP (no process the bus can name) is refused as `AnonymousCaller`. `Shown` and `Output` say what the panel published, hidden until then, and each change is announced once with `PropertiesChanged`. |

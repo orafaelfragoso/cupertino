@@ -14,10 +14,11 @@ use zbus::export::futures_core::Stream;
 use zbus::message::Type;
 use zbus::MessageStream;
 
+use cupertino_radios::watch::Radio;
+
 use crate::services::{
-    BLUETOOTH_NAME, BLUETOOTH_PATH, CENTRE_NAME, CENTRE_PATH, KEYBOARD_BACKLIGHT_PATH,
-    NETWORK_NAME, NETWORK_PATH, POWER_NAME, POWER_PATH, PROFILES_NAME, PROFILES_PATH, SESSION_NAME,
-    SESSION_PATH, UPOWER_DISPLAY_DEVICE, UPOWER_NAME,
+    CENTRE_NAME, CENTRE_PATH, KEYBOARD_BACKLIGHT_PATH, POWER_NAME, POWER_PATH, PROFILES_NAME,
+    PROFILES_PATH, SESSION_NAME, SESSION_PATH, UPOWER_DISPLAY_DEVICE, UPOWER_NAME,
 };
 
 /// The bus daemon's own name, which sends `NameOwnerChanged`.
@@ -25,9 +26,6 @@ const BUS_DAEMON: &str = "org.freedesktop.DBus";
 const BUS_DAEMON_PATH: &str = "/org/freedesktop/DBus";
 /// The power service's root object, which tells devices coming and going.
 const UPOWER_PATH: &str = "/org/freedesktop/UPower";
-/// Where the Bluetooth stack's objects live, and its object manager.
-const BLUEZ_PATHS: &str = "/org/bluez";
-const OBJECT_MANAGER: &str = "org.freedesktop.DBus.ObjectManager";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
 /// One of the two buses.
@@ -99,8 +97,9 @@ impl Interest {
 }
 
 /// The match rules of `bus`'s watch: a service of the panes starting or stopping, and its signals on the objects the
-/// panes read. An access point's strength, a device's statistics or any other object of these services sends nothing
-/// here.
+/// panes read; the network's and the Bluetooth adapter's are the ones the control panel and the menu bar follow
+/// (`cupertino_radios::watch`). An access point's strength, a device's statistics or any other object of these
+/// services sends nothing here.
 pub fn rules(bus: Which) -> Vec<String> {
     let owner = |name: &str| {
         format!(
@@ -121,29 +120,20 @@ pub fn rules(bus: Which) -> Vec<String> {
             properties(SESSION_NAME, SESSION_PATH),
             properties(CENTRE_NAME, CENTRE_PATH),
         ],
-        Which::System => vec![
-            owner(NETWORK_NAME),
-            object(NETWORK_NAME, NETWORK_PATH),
-            owner(crate::nm::NAME),
-            object(crate::nm::NAME, crate::nm::PATH),
-            object(crate::nm::NAME, crate::nm::SETTINGS_PATH),
-            owner(BLUETOOTH_NAME),
-            object(BLUETOOTH_NAME, BLUETOOTH_PATH),
-            owner(crate::bluez::NAME),
-            format!("type='signal',sender='{}',path='/',interface='{OBJECT_MANAGER}'", crate::bluez::NAME),
-            format!(
-                "type='signal',sender='{}',path_namespace='{BLUEZ_PATHS}',interface='{PROPERTIES}',member='PropertiesChanged'",
-                crate::bluez::NAME
-            ),
-            owner(UPOWER_NAME),
-            object(UPOWER_NAME, UPOWER_PATH),
-            properties(UPOWER_NAME, UPOWER_DISPLAY_DEVICE),
-            object(UPOWER_NAME, KEYBOARD_BACKLIGHT_PATH),
-            owner(POWER_NAME),
-            object(POWER_NAME, POWER_PATH),
-            owner(PROFILES_NAME),
-            properties(PROFILES_NAME, PROFILES_PATH),
-        ],
+        Which::System => {
+            let mut rules = cupertino_radios::watch::rules();
+            rules.extend([
+                owner(UPOWER_NAME),
+                object(UPOWER_NAME, UPOWER_PATH),
+                properties(UPOWER_NAME, UPOWER_DISPLAY_DEVICE),
+                object(UPOWER_NAME, KEYBOARD_BACKLIGHT_PATH),
+                owner(POWER_NAME),
+                object(POWER_NAME, POWER_PATH),
+                owner(PROFILES_NAME),
+                properties(PROFILES_NAME, PROFILES_PATH),
+            ]);
+            rules
+        }
     }
 }
 
@@ -167,10 +157,12 @@ pub fn classify(
             _ => None,
         },
         Which::System => match path {
-            NETWORK_PATH | crate::nm::PATH | crate::nm::SETTINGS_PATH => Some(Changed::Network),
-            BLUETOOTH_PATH => Some(Changed::Bluetooth),
-            "/" if interface == Some(OBJECT_MANAGER) => Some(Changed::Bluetooth),
-            p if p.starts_with(BLUEZ_PATHS) => Some(Changed::Bluetooth),
+            _ if cupertino_radios::watch::classify(path, interface) == Some(Radio::Network) => {
+                Some(Changed::Network)
+            }
+            _ if cupertino_radios::watch::classify(path, interface) == Some(Radio::Bluetooth) => {
+                Some(Changed::Bluetooth)
+            }
             UPOWER_PATH | UPOWER_DISPLAY_DEVICE | PROFILES_PATH => Some(Changed::Battery),
             POWER_PATH => Some(Changed::Brightness),
             KEYBOARD_BACKLIGHT_PATH => Some(Changed::KeyboardBacklight),
@@ -306,6 +298,9 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::{BLUETOOTH_NAME, BLUETOOTH_PATH, NETWORK_NAME, NETWORK_PATH};
+
+    const OBJECT_MANAGER: &str = "org.freedesktop.DBus.ObjectManager";
 
     #[test]
     fn every_rule_parses_names_its_sender_and_each_system_rule_one_object() {

@@ -14,7 +14,7 @@ use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::{ObjectPath, OwnedValue};
+use zbus::zvariant::ObjectPath;
 
 use crate::agent::{Agent, AGENT_PATH};
 use crate::bluez::{self, BluezAgent};
@@ -22,8 +22,8 @@ use crate::nm;
 use crate::pane::PaneId;
 
 use crate::live::{
-    display_name, Battery, BatteryExtras, BatteryState, Bluetooth, BtDevice, ChargePoint, Device,
-    Focus, KnownNetwork, Monitor, Mouse, Network, Output, Reading, Volume, Vpn, Wifi,
+    display_name, Battery, BatteryExtras, BatteryState, Bluetooth, ChargePoint, Focus, Monitor,
+    Mouse, Output, Reading, Volume, Vpn, Wifi,
 };
 use crate::panes::Call;
 use crate::watch::{Changed, Which};
@@ -283,19 +283,9 @@ fn reading<T>(result: zbus::Result<T>, missing: &str) -> Reading<T> {
     }
 }
 
-/// What serves the Wi-Fi and Network panes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NetworkBackend {
-    Cupertino,
-    NetworkManager,
-}
-
-/// What serves the Bluetooth pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BluetoothBackend {
-    Cupertino,
-    BlueZ,
-}
+/// What serves the Wi-Fi and Network panes and the Bluetooth pane: the discovery the control panel and the menu bar
+/// share.
+pub use cupertino_radios::{BluetoothBackend, NetworkBackend};
 
 /// The services on the system bus that the network and Bluetooth panes can use, and the hardware the Trackpad pane
 /// needs; a pane without them is hidden.
@@ -325,11 +315,6 @@ impl Backends {
         hidden
     }
 }
-
-/// A row of `Network1.Devices`.
-type DeviceRecord = (u32, String, String, String, String, String, String);
-/// A row of `Network1.GetNetworks`.
-type NetworkRecord = (String, i32, String, bool, bool);
 
 /// The live services and their connections.
 /// What the Displays pane says when no display server answers.
@@ -499,29 +484,15 @@ impl Services {
             .map(Hardware::read)
             .unwrap_or_default();
         let hardware = self.backends.hardware;
-        let result = self.system.connection().and_then(|c| {
-            let bus = zbus::blocking::fdo::DBusProxy::new(c)?;
-            let mut names = bus.list_names()?;
-            names.extend(bus.list_activatable_names()?);
-            let has = |name: &str| names.iter().any(|n| n.as_str() == name);
-            Ok(Backends {
-                network: if has(NETWORK_NAME) {
-                    Some(NetworkBackend::Cupertino)
-                } else if has(nm::NAME) {
-                    Some(NetworkBackend::NetworkManager)
-                } else {
-                    None
-                },
-                bluetooth: if has(BLUETOOTH_NAME) {
-                    Some(BluetoothBackend::Cupertino)
-                } else if has(bluez::NAME) {
-                    Some(BluetoothBackend::BlueZ)
-                } else {
-                    None
-                },
+        let result = self
+            .system
+            .connection()
+            .and_then(cupertino_radios::detect)
+            .map(|found| Backends {
+                network: found.network,
+                bluetooth: found.bluetooth,
                 hardware,
-            })
-        });
+            });
         match self.system.checked(result) {
             Ok(backends) => self.backends = backends,
             Err(e) => log_once(&format!("cannot list the services of the system bus: {e}")),
@@ -902,11 +873,9 @@ impl Services {
     }
 
     pub fn wifi(&mut self, keep: Option<&Wifi>) -> Reading<Wifi> {
-        let result = if self.network_manager() {
-            self.system.connection().and_then(nm::wifi)
-        } else {
-            self.wifi_daemon()
-        };
+        // before the first detection the Cupertino daemon is asked, as its calls are
+        let backend = self.backends.network.unwrap_or(NetworkBackend::Cupertino);
+        let result = self.system.connection().and_then(|c| backend.wifi(c));
         match reading(self.system.checked(result), "Wi-Fi is not available") {
             Reading::Ready(mut w) => {
                 // a Join in progress ends when its network is connected or a device reports a failure
@@ -928,104 +897,28 @@ impl Services {
         }
     }
 
-    fn wifi_daemon(&mut self) -> zbus::Result<Wifi> {
-        self.system
-            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
-            .and_then(|p| {
-                let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
-                let networks: Vec<NetworkRecord> = p.call("GetNetworks", &())?;
-                // a daemon that lists its saved networks (and can forget them) says so by answering
-                let listed: Option<Vec<(String, bool)>> = p.call("GetKnownNetworks", &()).ok();
-                let in_list = |ssid: &str| networks.iter().find(|n| n.0 == ssid);
-                let known: Vec<KnownNetwork> = match &listed {
-                    Some(listed) => listed
-                        .iter()
-                        .map(|(ssid, auto_join)| {
-                            let seen = in_list(ssid);
-                            KnownNetwork {
-                                ssid: ssid.clone(),
-                                name: display_name(ssid),
-                                auto_join: Some(*auto_join),
-                                in_range: seen.is_some(),
-                                connected: seen.is_some_and(|n| n.4),
-                                secured: seen.is_none_or(|n| n.2 != "open"),
-                            }
-                        })
-                        .collect(),
-                    None => networks
-                        .iter()
-                        .filter(|n| n.3)
-                        .map(|n| KnownNetwork {
-                            ssid: n.0.clone(),
-                            name: display_name(&n.0),
-                            auto_join: None,
-                            in_range: true,
-                            connected: n.4,
-                            secured: n.2 != "open",
-                        })
-                        .collect(),
-                };
-                Ok(Wifi {
-                    known,
-                    can_forget: listed.is_some(),
-                    enabled: p.get_property("WirelessEnabled")?,
-                    devices: devices
-                        .into_iter()
-                        .map(
-                            |(index, name, kind, state, ssid, failure, address)| Device {
-                                index,
-                                name,
-                                kind,
-                                state,
-                                ssid: display_name(&ssid),
-                                failure,
-                                address,
-                            },
-                        )
-                        .collect(),
-                    state: p.get_property("State")?,
-                    networks: networks
-                        .into_iter()
-                        .map(|(ssid, signal, security, saved, connected)| Network {
-                            name: display_name(&ssid),
-                            ssid,
-                            signal,
-                            security,
-                            saved,
-                            connected,
-                        })
-                        .collect(),
-                    joining: None,
-                    failure: None,
-                })
-            })
-    }
-
     pub fn bluetooth(&mut self, keep: Option<&Bluetooth>) -> Reading<Bluetooth> {
-        let result = if self.bluez() {
-            let pairing = self
-                .pairing
-                .lock()
-                .expect("no thread panics while pairing")
-                .clone();
-            self.system
-                .connection()
-                .and_then(|c| bluez::bluetooth(c, &pairing))
-        } else {
-            self.system
-                .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
-                .and_then(|p| {
-                    let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
-                    Ok(Bluetooth {
-                        available: p.get_property("Available")?,
-                        powered: p.get_property("Powered")?,
-                        discovering: p.get_property("Discovering")?,
-                        devices: devices.iter().filter_map(bt_device).collect(),
-                        ..Bluetooth::default()
-                    })
-                })
-        };
-        reading(self.system.checked(result), "Bluetooth is not available").map(|b| {
+        let backend = self
+            .backends
+            .bluetooth
+            .unwrap_or(BluetoothBackend::Cupertino);
+        let pairing = self
+            .pairing
+            .lock()
+            .expect("no thread panics while pairing")
+            .clone();
+        let result = self
+            .system
+            .connection()
+            .and_then(|c| backend.adapter(c, &pairing));
+        reading(self.system.checked(result), "Bluetooth is not available").map(|adapter| {
+            let b = Bluetooth {
+                available: adapter.available,
+                powered: adapter.powered,
+                discovering: adapter.discovering,
+                devices: adapter.devices,
+                ..Bluetooth::default()
+            };
             let mut b = Bluetooth {
                 agent_elsewhere: keep.is_some_and(|k| k.agent_elsewhere),
                 failure: keep.and_then(|k| k.failure.clone()),
@@ -1564,26 +1457,6 @@ impl Default for Services {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// A device of `Bluetooth1.Devices`; one without its always-present keys is skipped.
-fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
-    let text = |k: &str| {
-        d.get(k)
-            .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
-    };
-    let flag = |k: &str| d.get(k).and_then(|v| bool::try_from(v).ok());
-    Some(BtDevice {
-        id: text("Id")?,
-        address: text("Address")?,
-        name: text("Name").map(|n| display_name(&n)),
-        icon: text("Icon")?,
-        paired: flag("Paired")?,
-        connected: flag("Connected")?,
-        pairing: flag("Pairing")?,
-        // an older daemon does not say
-        connecting: flag("Connecting").unwrap_or(false),
-    })
 }
 
 /// The default sink's worker, its first reading (with the sinks) already asked for.

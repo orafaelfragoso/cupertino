@@ -14,9 +14,10 @@ use cupertino_controlcenter::layout::{BAR_MARGIN, SHADOW_TOP};
 use cupertino_controlcenter::lifecycle::{Phase, CLOSE_CURVE, OPEN_CURVE};
 use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
 use cupertino_controlcenter::motion::Expansion;
+use cupertino_controlcenter::radios::Radios;
 use cupertino_controlcenter::system::{
-    BtdBluetooth, LogindLock, MprisPlayer, NetdWifi, NotificationFocusMode, PowerdBrightness,
-    SessionOverlay, UpowerKeyboard,
+    LogindLock, MprisPlayer, NotificationFocusMode, PowerdBrightness, SessionOverlay,
+    UpowerKeyboard,
 };
 use cupertino_controlcenter::view::{
     self, focus_key, Input, Opened, Presentation, Via, APP_ID, CATCHER_APP_ID, DETAIL_FOCUS,
@@ -40,6 +41,7 @@ use cupertino_wayland_client::{
 };
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -86,7 +88,8 @@ impl Options {
     }
 }
 
-fn backends(options: &Options) -> Backends {
+/// The backends of `options`; the machine's Wi-Fi radio and Bluetooth adapter are read through `radios`.
+fn backends(options: &Options, radios: &Radios) -> Backends {
     if options.fake_backends {
         let network = |ssid: &str, connected: bool, secured: bool| Network {
             ssid: ssid.to_string(),
@@ -140,8 +143,8 @@ fn backends(options: &Options) -> Backends {
         };
     }
     Backends {
-        wifi: Box::new(NetdWifi::new()),
-        bluetooth: Box::new(BtdBluetooth::new()),
+        wifi: Box::new(radios.wifi()),
+        bluetooth: Box::new(radios.bluetooth()),
         microphone: Box::new(PipewireMicrophone::new(Wpctl::default())),
         dock_hiding: Box::new(DockHiding::default()),
         keyboard: Box::new(UpowerKeyboard::new()),
@@ -174,6 +177,22 @@ pub enum Request {
     Appearance { dark: bool },
     /// The session's Reduce Motion: a detail view then cross-fades in place instead of growing out of its tile.
     ReduceMotion(bool),
+    /// A signal of the network or Bluetooth services said a radio changed: a shown panel reads again at once.
+    RadiosChanged,
+}
+
+/// A [`Request::RadiosChanged`] waits in the queue: a burst of signals queues one.
+static RADIOS_CHANGE_WAITING: AtomicBool = AtomicBool::new(false);
+
+/// What [`Radios::on_change`] calls: queue one [`Request::RadiosChanged`] unless one waits already.
+fn radios_changed(requests: async_channel::Sender<Request>) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        if !RADIOS_CHANGE_WAITING.swap(true, Ordering::AcqRel)
+            && requests.try_send(Request::RadiosChanged).is_err()
+        {
+            RADIOS_CHANGE_WAITING.store(false, Ordering::Release);
+        }
+    }
 }
 
 /// Who holds the card's keyboard. The card takes the exclusive keyboard whenever the panel is shown (the catcher
@@ -733,7 +752,7 @@ impl Application for Panel {
     /// A panel on the machine's backends that no bus feeds; [`run`] starts the process's one.
     fn init() -> (Panel, Vec<Command<Message>>) {
         start(
-            Controller::new(backends(&Options::default())),
+            Controller::new(backends(&Options::default(), &Radios::new())),
             async_channel::unbounded().1,
             SystemAppearance::default(),
             false,
@@ -760,6 +779,11 @@ impl Application for Panel {
                     Request::ReduceMotion(on) => {
                         model.reduce_motion = on;
                         model.controller.set_reduce_motion(on);
+                    }
+                    Request::RadiosChanged => {
+                        // cleared before the reading, so a signal that comes during it asks for another
+                        RADIOS_CHANGE_WAITING.store(false, Ordering::Release);
+                        model.controller.backends_changed(now);
                     }
                 }
                 let mut commands = schedule(model);
@@ -824,6 +848,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let (sender, requests) = async_channel::unbounded();
     let bus = sender.clone();
+    let radios = Radios::new();
+    radios.on_change(radios_changed(sender.clone()));
     // the bus thread only queues; the application's loop carries the toggles out, so the effects never block the bus
     let control = control::serve(zbus::connection::Builder::session()?, move || {
         let _ = bus.send_blocking(Request::Toggle);
@@ -847,7 +873,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     cupertino_kit::app::run_on::<Panel>(
         system,
         start(
-            Controller::new(backends(options)),
+            Controller::new(backends(options, &radios)),
             requests,
             appearance,
             compositor_fades,
@@ -898,7 +924,7 @@ mod tests {
             alsa_card: None,
         };
         start(
-            Controller::new(backends(&options)),
+            Controller::new(backends(&options, &Radios::new())),
             async_channel::unbounded().1,
             SystemAppearance::default(),
             compositor_fades,

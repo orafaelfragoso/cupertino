@@ -1,10 +1,12 @@
 //! The extras task against stand-ins for the network, power, Bluetooth and notification services on a private bus
 //! (`dbus-daemon --session`, used as both the system and the session bus); skipped when the daemon is not available.
+//! The network and the Bluetooth adapter are served once as the Cupertino daemons serve them and once as
+//! NetworkManager and BlueZ do.
 #![cfg(feature = "app")]
 
 use cupertino_menubar::extras::{
-    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, OpenPanels, SessionAction,
-    WifiNetwork,
+    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, OpenPanels, Passphrase,
+    SessionAction, WifiNetwork,
 };
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use std::collections::HashMap;
@@ -14,6 +16,7 @@ use std::time::Duration;
 use zbus::block_on;
 use zbus::zvariant::{OwnedValue, Value};
 
+use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, HEADPHONES, KEYBOARD};
 use cupertino_test_bus::PrivateBus;
 
 /// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
@@ -95,6 +98,11 @@ impl FakeNetwork {
         )]
     }
 
+    #[zbus(property)]
+    fn state(&self) -> String {
+        "connected".into()
+    }
+
     fn get_networks(&self) -> Vec<NetworkRecord> {
         let connected = self.connected.lock().unwrap().clone();
         [
@@ -166,6 +174,11 @@ impl FakeBluetooth {
     }
 
     #[zbus(property)]
+    fn discovering(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
     fn devices(&self) -> Vec<HashMap<String, OwnedValue>> {
         let value = |v: Value<'_>| OwnedValue::try_from(v).unwrap();
         let mut device = HashMap::new();
@@ -178,7 +191,9 @@ impl FakeBluetooth {
             value(Value::from("AA:BB:CC:DD:EE:FF")),
         );
         device.insert("Name".to_owned(), value(Value::from("Headphones")));
+        device.insert("Icon".to_owned(), value(Value::from("headphones")));
         device.insert("Paired".to_owned(), value(Value::from(true)));
+        device.insert("Pairing".to_owned(), value(Value::from(false)));
         device.insert("Connected".to_owned(), value(Value::from(false)));
         vec![device]
     }
@@ -408,6 +423,186 @@ fn the_extras_follow_the_services_and_act_on_them() {
     let gone = next(&events);
     assert_eq!(gone.bluetooth, None);
     assert!(gone.wifi.is_some());
+}
+
+/// The first extras from now on that `wanted` accepts; the ones before it are states on the way there.
+fn until(events: &mpsc::Receiver<Extras>, what: &str, wanted: impl Fn(&Extras) -> bool) -> Extras {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut last = None;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match events.recv_timeout(left) {
+            Ok(extras) if wanted(&extras) => return extras,
+            Ok(extras) => last = Some(extras),
+            Err(_) => panic!("the extras never showed {what}; the last were {last:#?}"),
+        }
+    }
+}
+
+#[test]
+fn the_wifi_and_bluetooth_items_follow_networkmanager_and_bluez_and_act_on_them() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let nm = FakeNetworkManager::serve(bus.blocking_builder()).unwrap();
+    let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
+    let system = zbus::block_on(bus.connect_async());
+    let (extras, events) = ExtrasBus::with_system(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        || {},
+    );
+
+    let first = next(&events);
+    let wifi = first.wifi.as_ref().expect("a Wi-Fi device");
+    assert!(wifi.enabled);
+    assert_eq!(
+        wifi.networks,
+        [
+            WifiNetwork {
+                ssid: "Home".into(),
+                signal_dbm: Some(-60),
+                security: "wpa2".into(),
+                known: true,
+                connected: false
+            },
+            WifiNetwork {
+                ssid: "Cafe".into(),
+                signal_dbm: Some(-70),
+                security: "open".into(),
+                known: false,
+                connected: false
+            },
+            WifiNetwork {
+                ssid: "Office".into(),
+                signal_dbm: Some(-80),
+                security: "wpa2".into(),
+                known: false,
+                connected: false
+            },
+        ]
+    );
+    assert_eq!(first.wifi_link.state, "disconnected");
+    let bluetooth = first.bluetooth.as_ref().expect("an adapter");
+    assert!(bluetooth.powered);
+    assert_eq!(
+        bluetooth.devices,
+        [
+            BluetoothDevice {
+                id: HEADPHONES.into(),
+                address: "AA:00:00:00:00:01".into(),
+                name: Some("Headphones".into()),
+                paired: true,
+                connected: false
+            },
+            BluetoothDevice {
+                id: KEYBOARD.into(),
+                address: "AA:00:00:00:00:02".into(),
+                name: Some("Keyboard".into()),
+                paired: false,
+                connected: false
+            },
+        ]
+    );
+
+    let enabled = |e: &Extras| e.wifi.as_ref().is_some_and(|w| w.enabled);
+    let connected = |e: &Extras, ssid: &str| {
+        e.wifi
+            .as_ref()
+            .is_some_and(|w| w.networks.iter().any(|n| n.ssid == ssid && n.connected))
+    };
+    // the device joins a network by itself: the service's signal has the bar read again
+    nm.set_joined(Some("Home"));
+    let joined = until(&events, "the joined network", |e| connected(e, "Home"));
+    assert!(joined.wifi_link.joined("Home"));
+
+    // the switch, from the bar and from elsewhere
+    extras.act(ExtraAction::SetWifiEnabled(false)).unwrap();
+    let off = until(&events, "the radio off", |e| {
+        e.wifi.is_some() && !enabled(e)
+    });
+    assert!(!nm.enabled());
+    assert!(off.wifi.unwrap().networks.is_empty());
+    nm.set_enabled(true);
+    until(&events, "the radio on again", enabled);
+
+    // an open network joins as it is, a secured one with its passphrase, and a refusal is the service's own words
+    extras.act(ExtraAction::JoinNetwork("Cafe".into())).unwrap();
+    until(&events, "the open network joined", |e| connected(e, "Cafe"));
+    extras
+        .join("Office".into(), Passphrase::new("correct horse"))
+        .unwrap();
+    until(&events, "the secured network joined", |e| {
+        connected(e, "Office")
+    });
+    assert!(
+        nm.calls()
+            .iter()
+            .any(|c| c.starts_with("AddAndActivateConnection(Some(\"correct horse\"),")),
+        "{:?}",
+        nm.calls()
+    );
+    extras.join("Nowhere".into(), Passphrase::new("x")).unwrap();
+    let refused = until(&events, "the refusal", |e| e.wifi_link.refused.is_some());
+    assert_eq!(
+        refused.wifi_link.refused.as_deref(),
+        Some("“Nowhere” is out of range.")
+    );
+    extras.act(ExtraAction::CancelJoin).unwrap();
+    until(&events, "the network left", |e| {
+        e.wifi_link.state == "disconnected"
+    });
+    assert_eq!(nm.joined(), None);
+
+    // a device connects from the bar and goes by itself; the adapter is switched from the bar and from elsewhere
+    let linked = |e: &Extras| {
+        e.bluetooth
+            .as_ref()
+            .is_some_and(|b| b.devices.iter().any(|d| d.id == HEADPHONES && d.connected))
+    };
+    let powered = |e: &Extras| e.bluetooth.as_ref().is_some_and(|b| b.powered);
+    extras
+        .act(ExtraAction::ConnectDevice(HEADPHONES.into()))
+        .unwrap();
+    until(&events, "the device connected", linked);
+    assert!(bluez.connected(HEADPHONES));
+    bluez.set_connected(HEADPHONES, false);
+    until(&events, "the device gone", |e| {
+        e.bluetooth.is_some() && !linked(e)
+    });
+    extras.act(ExtraAction::SetBluetoothPowered(false)).unwrap();
+    until(&events, "the adapter off", |e| {
+        e.bluetooth.is_some() && !powered(e)
+    });
+    assert!(!bluez.powered());
+    bluez.set_powered(true);
+    until(&events, "the adapter on again", powered);
+
+    // a service that stops hides its item
+    drop(nm);
+    let gone = until(&events, "no Wi-Fi item", |e| e.wifi.is_none());
+    assert!(gone.bluetooth.is_some());
+}
+
+#[test]
+fn a_machine_without_a_wifi_device_or_an_adapter_has_neither_item() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let _nm = FakeNetworkManager::serve_wired(bus.blocking_builder()).unwrap();
+    let _bluez = FakeBluez::serve_without_adapter(bus.blocking_builder()).unwrap();
+    let system = zbus::block_on(bus.connect_async());
+    let (_extras, events) = ExtrasBus::with_system(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        || {},
+    );
+    let first = next(&events);
+    assert_eq!(first.wifi, None);
+    assert_eq!(first.wifi_link.state, "");
+    assert_eq!(first.bluetooth, None);
 }
 
 /// Stands in for the control panel's process (`Shown`, `Output`) or the notification centre's list (`CentreShown`,

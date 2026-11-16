@@ -222,6 +222,16 @@ impl Controller {
         self.read_detail();
     }
 
+    /// A backend said its state changed: a shown panel reads again at once, without waiting for
+    /// [`REFRESH_INTERVAL`]. Returns whether it read.
+    pub fn backends_changed(&mut self, now: f64) -> bool {
+        let shown = self.lifecycle.phase(now) == Phase::Shown;
+        if shown {
+            self.refresh(now);
+        }
+        shown
+    }
+
     /// Read the list of the open detail view.
     fn read_detail(&mut self) {
         let (backends, failures) = (&mut self.backends, &mut self.failures);

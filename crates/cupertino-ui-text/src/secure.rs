@@ -11,6 +11,17 @@ use crate::TextError;
 
 const MIN_CAPACITY: usize = 32;
 
+/// Zeroes the whole block `bytes` holds, what lies past its length included, and empties it: for bytes that may be a
+/// secret on its way into a [`SecureBuffer`], such as what a paste read, before their block is freed.
+pub fn wipe_bytes(bytes: &mut Vec<u8>) {
+    bytes.zeroize();
+}
+
+/// [`wipe_bytes`] for text.
+pub fn wipe_text(text: &mut String) {
+    text.zeroize();
+}
+
 /// The editable text of a password field: zeroed when dropped, never printed, copied or exposed to accessibility.
 #[derive(ZeroizeOnDrop)]
 pub struct SecureBuffer {
@@ -259,6 +270,36 @@ impl SecureBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a paste read is zeroed through its whole block, the part past its length too, and left empty.
+    #[test]
+    fn wiping_zeroes_the_whole_block_and_empties_it() {
+        let mut bytes = Vec::with_capacity(64);
+        bytes.extend_from_slice(b"hunter2");
+        // a longer secret was here before
+        bytes.extend_from_slice(b" and more");
+        bytes.truncate(7);
+        let (block, capacity) = (bytes.as_ptr(), bytes.capacity());
+        wipe_bytes(&mut bytes);
+        assert!(bytes.is_empty());
+        assert_eq!((bytes.as_ptr(), bytes.capacity()), (block, capacity));
+        // SAFETY: the block is still the vector's, `capacity` bytes long, and wiping wrote every byte of it
+        let left = unsafe { std::slice::from_raw_parts(block, capacity) };
+        assert!(
+            left.iter().all(|&b| b == 0),
+            "nothing is left, past the length either"
+        );
+        let mut text = String::with_capacity(64);
+        text.push_str("hunter2");
+        let capacity = text.capacity();
+        let block = text.as_ptr();
+        wipe_text(&mut text);
+        assert!(text.is_empty());
+        assert_eq!((text.as_ptr(), text.capacity()), (block, capacity));
+        // SAFETY: the block is still the text's, `capacity` bytes long, and wiping wrote every byte of it
+        let left = unsafe { std::slice::from_raw_parts(block, capacity) };
+        assert!(left.iter().all(|&b| b == 0), "nothing of the text is left");
+    }
 
     #[test]
     fn a_masked_selection_lands_on_whole_graphemes_and_clamps_to_the_end() {

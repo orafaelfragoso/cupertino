@@ -167,10 +167,16 @@ pub struct OwnedWindow<M> {
     pub grab: bool,
 }
 
-/// Text from the clipboard on its way into the control that asked for it. Its `Debug` shows only how long it is: it
-/// may be going into a password field.
+/// Text from the clipboard on its way into the control that asked for it. It may be going into a password field: its
+/// `Debug` shows only how long it is, and its block is zeroed when it drops, as is each copy's.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Pasted(pub String);
+
+impl Drop for Pasted {
+    fn drop(&mut self) {
+        cupertino_ui_text::wipe_text(&mut self.0);
+    }
+}
 
 impl std::fmt::Debug for Pasted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

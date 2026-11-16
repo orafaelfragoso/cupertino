@@ -384,7 +384,8 @@ impl<M> EventCx<'_, M> {
     }
 
     /// Whether a control of this window has a popup of its own open ([`open_popup`](Self::open_popup)), such as a text
-    /// field's menu: the keyboard a window loses meanwhile went to that popup.
+    /// field's menu: the keyboard a window loses meanwhile went to that popup. Should the compositor dismiss the popup
+    /// without the keyboard coming back, [`Event::FocusWithin`] tells the loss again, with this `false`.
     pub fn holds_popup(&self) -> bool {
         self.status.owned_popup
     }

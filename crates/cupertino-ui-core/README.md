@@ -265,9 +265,12 @@ A control reads the clipboard's text itself: `EventCx::clipboard_has_text()` say
 (the runtime follows `PlatformEvent::ClipboardOffered` and what the application itself copied), and
 `EventCx::request_paste()` reads it, as UTF-8 text in the first kind offered of `text/plain;charset=utf-8`,
 `UTF8_STRING`, `text/plain`, `TEXT` and `STRING`; the control hears `Event::Paste` with the text, and nothing when
-there is none or it or its window went meanwhile. The text's debug output is its length only.
-`Runtime::paste_protected(token)` tells a test driver whether a clipboard read is such a paste and whether the control
-it is for protects its input.
+there is none or it or its window went meanwhile. What a paste reads may be a password on its way into its field, so
+every paste is handled as one: the text's debug output is its length only, the bytes read are zeroed once they are
+text, and the text is zeroed when the event drops; the runtime logs and keeps neither. A password field adds its own
+part (no history, nothing read to assistive technology). `Runtime::paste_protected(token)` is for what records the
+events it hands the runtime, as a test driver's trace does: it tells whether a clipboard read is such a paste and
+whether the control it is for protects its input, so the record leaves the secret out.
 
 A control opens a popup of its own with `EventCx::open_popup(build)`: `build` returns its windows (`OwnedWindow`: key,
 spec, background, content, anchor and whether it grabs) now and at each view while it is open. The runtime declares
@@ -276,7 +279,10 @@ declared popup; the application declares nothing and hears nothing. Inside it `E
 control as `Event::PopupAnswer(n)` and `EventCx::close_popup()` ends it; it also ends when the compositor dismisses
 it, when the window system refuses it, and with its control or the control's window. One is open at a time: another
 control's replaces it. A text field's menu is one. `EventCx::holds_popup()` says whether a control of the window has
-one open, so a window that closes when it loses the keyboard can tell that the keyboard went to that popup.
+one open, so a window that closes when it loses the keyboard can tell that the keyboard went to that popup. When the
+compositor dismisses that popup and the keyboard does not come back with it (another surface took it), the ancestors
+of the window's focused node hear `Event::FocusWithin { gained: false, .. }` once more, now with no popup open: the
+loss they took for the popup's is the window's own.
 
 ## Not yet
 

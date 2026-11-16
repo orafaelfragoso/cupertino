@@ -10,6 +10,8 @@ buffer follow.
   no clipboard access and no accessor except `with_secret`; the mask shows one bullet per grapheme. `with_max_len` and
   `set_max_len` cap it in bytes: an insertion past the cap is cut at a grapheme boundary, and text already past a new,
   lower cap stays.
+- `wipe_bytes` and `wipe_text` zero the whole block of a vector or a string and empty it, for a secret on its way into
+  a `SecureBuffer` (what a paste read) before its block is freed.
 - `Preedit`, `ImeBatch` and `Surrounding` print lengths in `Debug`, never the text.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
   bounded window around the caret on grapheme boundaries. `TextInputSession::protected_hints` are a protected field's

@@ -2197,6 +2197,140 @@ fn the_panel_stays_open_while_the_query_fields_menu_holds_the_keyboard() {
     }
 }
 
+impl Run {
+    /// Opens the query field's menu with a secondary click, and moves the keyboard to it as the compositor does.
+    fn open_field_menu(&mut self) -> WindowId {
+        let panel = self.panel();
+        let position = self.centre("query");
+        for pressed in [true, false] {
+            self.send(
+                panel,
+                WindowEvent::Pointer(
+                    PointerEvent::Button {
+                        position,
+                        button: MouseButton::Right,
+                        pressed,
+                        serial: 1,
+                        mods: Mods::NONE,
+                    },
+                    Timestamp(0),
+                ),
+            );
+        }
+        let menu = field_menu(self).expect("the secondary click opened the field's menu");
+        self.send(panel, WindowEvent::Focus(false));
+        self.send(menu, WindowEvent::Focus(true));
+        assert!(self.model().panel.is_visible(), "the panel stayed open");
+        menu
+    }
+
+    /// Hands `events` over in one turn, as a display connection delivers what the compositor sent in one burst.
+    fn burst(&mut self, events: impl IntoIterator<Item = (WindowId, WindowEvent)>) {
+        let system = self.driver.window_system_mut();
+        system.set_dispatch_one(false);
+        for (window, event) in events {
+            system.enqueue_window(window, event).unwrap();
+        }
+        self.settle();
+        self.driver.window_system_mut().set_dispatch_one(true);
+    }
+}
+
+/// Another surface takes the keyboard while the query field's menu holds it (the control panel opens, a prompt
+/// shows): the compositor dismisses the menu and gives the keyboard to that surface, so the panel's window hears of
+/// no second leave. The panel closes all the same: it does not stay open without the keyboard.
+#[test]
+fn the_panel_closes_when_another_surface_takes_the_keyboard_from_the_query_fields_menu() {
+    let mut run = Run::on_layer_surfaces();
+    run.type_text("fire");
+    let menu = run.open_field_menu();
+    run.burst([
+        (menu, WindowEvent::PopupDone),
+        (menu, WindowEvent::Focus(false)),
+    ]);
+    assert!(field_menu(&run).is_none(), "the menu closed");
+    assert!(
+        !run.model().panel.is_visible(),
+        "the panel closed: the keyboard is another surface's"
+    );
+}
+
+/// A press outside the menu dismisses it too, and the compositor gives the keyboard back to the panel with that: the
+/// panel stays open.
+#[test]
+fn the_panel_stays_open_when_the_query_fields_menu_is_dismissed_and_the_keyboard_comes_back() {
+    let mut run = Run::on_layer_surfaces();
+    run.type_text("fire");
+    let panel = run.panel();
+    let menu = run.open_field_menu();
+    run.burst([
+        (menu, WindowEvent::PopupDone),
+        (menu, WindowEvent::Focus(false)),
+        (panel, WindowEvent::Focus(true)),
+    ]);
+    assert!(field_menu(&run).is_none(), "the menu closed");
+    assert!(run.model().panel.is_visible(), "the panel stayed open");
+    assert_eq!(run.model().panel.query(), "fire");
+}
+
+/// The query field's menu closed by Escape or by choosing a row gives the keyboard back to the panel, which stays
+/// open with its query and takes the keys again.
+#[test]
+fn the_panel_stays_open_with_the_keyboard_when_the_query_fields_menu_closes_itself() {
+    for by_row in [false, true] {
+        let mut run = Run::on_layer_surfaces();
+        run.type_text("fire");
+        let panel = run.panel();
+        let menu = run.open_field_menu();
+        if by_row {
+            let row = run
+                .driver
+                .runtime()
+                .snapshot(menu)
+                .expect("the menu has drawn")
+                .accessibility
+                .iter()
+                .find(|(_, n)| n.role == Role::MenuItem && n.name.as_deref() == Some("Select All"))
+                .map(|(_, n)| n.bounds)
+                .expect("the Select All row");
+            run.click(menu, Point::new(row.min_x() + 20.0, row.min_y() + 10.0));
+            run.wait(1000);
+        } else {
+            for pressed in [true, false] {
+                run.send(
+                    menu,
+                    WindowEvent::Key(
+                        KeyEvent {
+                            code: ESCAPE_CODE,
+                            keysym: Keysym(ESCAPE),
+                            text: None,
+                            pressed,
+                            repeat: false,
+                            mods: Mods::NONE,
+                        },
+                        Timestamp(0),
+                    ),
+                );
+            }
+        }
+        assert!(
+            field_menu(&run).is_none(),
+            "the menu closed (row: {by_row})"
+        );
+        // the compositor gives the keyboard back to the panel
+        run.send(panel, WindowEvent::Focus(true));
+        assert!(
+            run.model().panel.is_visible(),
+            "the panel stayed open (row: {by_row})"
+        );
+        assert_eq!(run.model().panel.query(), "fire");
+        // the keys are the panel's again: with every letter selected, one typed replaces them
+        run.type_text("x");
+        let expected = if by_row { "x" } else { "firex" };
+        assert_eq!(run.model().panel.query(), expected, "row: {by_row}");
+    }
+}
+
 /// A window system hands over every event it read at once, and the model hears what they emit in that order before
 /// the view is built again: the menu's close and then the panel's leave, while the panel's window still shows the
 /// menu's keys. The leave is judged after the close, so it closes the panel.

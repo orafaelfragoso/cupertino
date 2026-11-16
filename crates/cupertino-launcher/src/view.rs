@@ -1721,7 +1721,8 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
                 }
             }
             // another window took the keyboard: the model knows whether that was the view options menu; the menu of
-            // the query field, a popup the field opened for itself, takes it without the panel closing
+            // the query field, a popup the field opened for itself, takes it without the panel closing; when that menu is
+            // dismissed and the keyboard went to another surface, the loss is told again with no popup open
             Event::FocusWithin { gained: false, .. }
                 if !cx.window_active() && !cx.holds_popup() =>
             {

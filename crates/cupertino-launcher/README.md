@@ -204,7 +204,8 @@ Search for the web search. Tab and Shift+Tab move through them round and round; 
 through them and stop at the ends; Return carries out the chosen one. Moving the selection chooses the result's own action
 again. The panel also closes when its window loses the keyboard (another
 window took it; not its view options menu or the query field's own menu of Cut, Copy, Paste and Select All, popups of
-the panel that give the keyboard back), on a press outside the panel, after a launch, and when the session locks: `LauncherRoles` sees the server's
+the panel that give the keyboard back; when another surface takes the keyboard from the field's menu the panel closes
+with the menu), on a press outside the panel, after a launch, and when the session locks: `LauncherRoles` sees the server's
 `cupertino_app_effects_v1` session-lock event (which Kit passes only to the accessibility adapter) and sends the model
 `Message::Locked`. The launch history is written when the panel closes.
 

@@ -3565,6 +3565,8 @@ fn the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_r
         // the surfaces whose part of the first frame has come
         let mut first: Vec<WlSurface> = Vec::new();
         let (mut steps, mut row, mut resized) = (0, 0, 0);
+        // the tallest the glass was shown while the unfold ran: the compositor grows it from the field's capsule
+        let mut tallest = 0.0_f64;
         // each other buffer: when it came after the unfold started, in milliseconds, and its layer's content size (none
         // for the window's)
         let mut other = Vec::new();
@@ -3576,6 +3578,11 @@ fn the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_r
                 steps += 1;
                 resized += usize::from(window(s, &panel) != Some(size));
                 let shown = present(&panel, now, false);
+                tallest = shown
+                    .iter()
+                    .filter(|l| l.glass.is_some())
+                    .map(|l| l.height)
+                    .fold(tallest, f64::max);
                 for (surface, buffer) in &commit {
                     let before = last
                         .iter()
@@ -3610,6 +3617,10 @@ fn the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_r
             last.len() - 1
         );
         assert!(steps > 1, "the unfold ran on the server");
+        assert!(
+            tallest > 2.0 * ROW_HEIGHT,
+            "the glass grew while the unfold ran: at its tallest {tallest} points, the field's {ROW_HEIGHT}"
+        );
         assert_eq!(resized, 0, "the window kept its size through the unfold");
         assert!(
             row <= 1,

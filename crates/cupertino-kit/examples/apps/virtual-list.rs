@@ -154,6 +154,7 @@ impl<const COUNT: usize> Application for VirtualList<COUNT> {
             })),
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
+            double_click_activates: true,
             on_activate: Some(Box::new(Message::Open)),
         })
         .key("list");

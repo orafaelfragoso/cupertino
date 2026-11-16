@@ -469,6 +469,7 @@ fn active_column(session: &Session, id: u64, win: &BrowserWindow) -> Element<Mes
         on_select: Some(Box::new(move |s| {
             Message::Window(id, WindowEvent::Select(s))
         })),
+        double_click_activates: false,
         on_activate: Some(Box::new(move |i| Message::Window(id, WindowEvent::Open(i)))),
     };
     Element::new(ColumnKeys {
@@ -549,6 +550,7 @@ fn other_column(
                 },
             )
         })),
+        double_click_activates: false,
         on_activate: None,
     };
     list.rounded_element(SELECTION_INSET, HIGHLIGHT_RADIUS, under)

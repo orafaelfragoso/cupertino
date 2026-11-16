@@ -72,6 +72,7 @@ impl Application for Mailboxes {
             type_select: None,
             on_scroll: Box::new(|s| s),
             on_select: None,
+            double_click_activates: true,
             on_activate: None,
         }))
     }

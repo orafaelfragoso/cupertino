@@ -113,6 +113,7 @@ impl Application for Files {
                 type_select: None,
                 on_scroll: Box::new(Message::Scroll),
                 on_select: None,
+                double_click_activates: true,
                 on_activate: None,
                 on_row_key: None,
                 header_top: 0.0,

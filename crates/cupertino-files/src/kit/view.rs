@@ -1001,6 +1001,7 @@ fn list(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> {
         type_select: Some(Box::new(move |row| type_names[row].clone())),
         on_scroll: send(id, Event::Scroll),
         on_select: Some(send(id, Event::Select)),
+        double_click_activates: false,
         on_activate: Some(send(id, Event::Open)),
         on_row_key: Some(Box::new(list::tab(id, names, selected.cursor()))),
         header_top: under_row(win),

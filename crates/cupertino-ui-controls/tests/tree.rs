@@ -164,6 +164,7 @@ impl Application for Folders {
                     type_select: None,
                     on_scroll: Box::new(Message::Scroll),
                     on_select: Some(Box::new(Message::Select)),
+                    double_click_activates: true,
                     on_activate: None,
                     on_row_key: None,
                     header_top: 0.0,
@@ -185,6 +186,7 @@ impl Application for Folders {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
+            double_click_activates: true,
             on_activate: None,
             on_toggle: Some(Box::new(Message::Toggle)),
         }))

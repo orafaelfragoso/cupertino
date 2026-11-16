@@ -1106,6 +1106,9 @@ pub struct ListView<M> {
     pub on_select: Option<Handler<Selection, M>>,
     /// Return on the cursor row.
     pub on_activate: Option<Handler<usize, M>>,
+    /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
+    /// on a double click themselves.
+    pub double_click_activates: bool,
 }
 
 /// One shown row of a tree, as the application's outline describes it.
@@ -1150,6 +1153,9 @@ pub struct TreeView<M> {
     pub on_scroll: Handler<ScrollState, M>,
     pub on_select: Option<Handler<Selection, M>>,
     pub on_activate: Option<Handler<usize, M>>,
+    /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
+    /// on a double click themselves.
+    pub double_click_activates: bool,
     pub on_toggle: Option<Handler<TreeToggle, M>>,
 }
 
@@ -1186,6 +1192,9 @@ pub struct TableView<M> {
     pub on_scroll: Handler<ScrollState, M>,
     pub on_select: Option<Handler<Selection, M>>,
     pub on_activate: Option<Handler<usize, M>>,
+    /// A double click on a row reports `on_activate` too. Off for a list whose rows take their own presses and open
+    /// on a double click themselves.
+    pub double_click_activates: bool,
     /// A key that reached the rows and that the table does not take itself, given as `(row, key)` with the row the
     /// keyboard is on: a message takes the key, `None` lets it go on, so Tab moves the focus to the next control. A key
     /// on a column header never comes here.

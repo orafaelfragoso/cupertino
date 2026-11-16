@@ -7,6 +7,7 @@ use crate::disclosure;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::scroll;
+use crate::window_drag::DOUBLE_CLICK;
 use crate::{
     Column, ColumnWidth, Handler, Icon, IconDirection, ListView, OutlineTable, RowKeyHandler,
     Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
@@ -245,6 +246,7 @@ impl<M: 'static> ListView<M> {
             type_select: list.type_select,
             on_select: list.on_select.map(Rc::new),
             on_activate: list.on_activate,
+            double_click_activates: list.double_click_activates,
             on_row_key: None,
             outline: None,
             selection_inset,
@@ -279,6 +281,7 @@ impl<M: 'static> From<TreeView<M>> for Element<M> {
             type_select: tree.type_select,
             on_select: tree.on_select.map(Rc::new),
             on_activate: tree.on_activate,
+            double_click_activates: tree.double_click_activates,
             on_row_key: None,
             outline: Some(Rc::new(Outline {
                 item: tree.item,
@@ -379,6 +382,7 @@ fn table_element<M: 'static>(
         type_select: table.type_select,
         on_select: table.on_select.map(Rc::new),
         on_activate: table.on_activate,
+        double_click_activates: table.double_click_activates,
         on_row_key: table.on_row_key,
         outline,
         selection_inset: if striped {
@@ -480,6 +484,7 @@ struct Rows<M> {
     type_select: Option<Box<dyn Fn(usize) -> String>>,
     on_select: Option<Rc<Handler<Selection, M>>>,
     on_activate: Option<Handler<usize, M>>,
+    double_click_activates: bool,
     on_row_key: Option<RowKeyHandler<M>>,
     outline: Option<Rc<Outline<M>>>,
     /// From a row's sides to its selection.
@@ -504,6 +509,8 @@ pub struct ListState {
     /// What was typed to select, and when that search ends.
     typed: String,
     typed_until: Option<Timestamp>,
+    /// The row the last plain press landed on and when, for the double click that activates it.
+    pressed: Option<(usize, Timestamp)>,
 }
 
 impl<M: 'static> Rows<M> {
@@ -829,11 +836,20 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     mods,
                     ..
                 },
-                _,
+                time,
             ) => {
                 let Some(index) = self.index_at(position, cx) else {
+                    state.pressed = None;
                     return Propagation::Continue;
                 };
+                let plain = !mods.contains(Mods::SHIFT) && !mods.contains(Mods::PRIMARY);
+                // the second plain press on a row within the double click interval activates it, as Return does
+                let double = plain
+                    && self.double_click_activates
+                    && state.pressed.is_some_and(|(row, at)| {
+                        row == index && time.0.saturating_sub(at.0) <= DOUBLE_CLICK
+                    });
+                state.pressed = (plain && !double).then_some((index, time));
                 let mut next = self.selection.clone();
                 if self.multiple && mods.contains(Mods::SHIFT) {
                     next.extend_to(index);
@@ -843,6 +859,9 @@ impl<M: 'static> Widget<M> for Rows<M> {
                     next.select_only(index);
                 }
                 self.select(next, cx);
+                if let (true, Some(on_activate)) = (double, &self.on_activate) {
+                    cx.emit(on_activate(index));
+                }
                 Propagation::Stop
             }
             Event::Key(key, _) if key.pressed => match self.key(state, &key, cx) {

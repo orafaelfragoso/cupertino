@@ -997,6 +997,29 @@ fn in_the_list_ctrl_click_opens_the_menu_a_double_click_opens_and_a_pause_rename
     run.wait_until(|run| run.title() == "Notes");
 }
 
+#[test]
+fn in_the_list_a_late_second_press_on_a_folders_name_renames_it_and_opens_nothing() {
+    use cupertino_kit::platform::MouseButton;
+    let mut run = Run::new();
+    run.wait_until(|run| run.rows().len() == 3);
+    let title = run.title();
+    run.click_row("Notes");
+    run.frames(600, 100);
+    let name = run.bounds(Role::StaticText, "Notes");
+    // the double click interval has passed, so this press is no double click, whatever time the event carries
+    run.press_at(on_text(name), MouseButton::Left);
+    run.frames(600, 100);
+    assert!(
+        run.driver
+            .runtime()
+            .find(run.window, &Key::from("name-field/0"))
+            .is_some(),
+        "the name is edited"
+    );
+    assert_eq!(run.title(), title, "the folder was not opened");
+    assert_eq!(run.rows().len(), 3);
+}
+
 /// A left press at `at` in `run`'s window, without its release.
 fn press_down(run: &mut Run, at: cupertino_kit::geometry::Point) {
     use cupertino_kit::platform::{MouseButton, PointerEvent, Timestamp};

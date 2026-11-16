@@ -86,6 +86,7 @@ impl Application for Under {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: None,
+            double_click_activates: true,
             on_activate: None,
             on_row_key: None,
             header_top: unobscured_insets(DecorationMode::Unified).top,

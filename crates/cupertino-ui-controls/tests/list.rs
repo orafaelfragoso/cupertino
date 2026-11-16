@@ -8,7 +8,7 @@ use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
 };
 use cupertino_ui_layout::ScrollState;
-use cupertino_ui_platform::Mods;
+use cupertino_ui_platform::{Mods, MouseButton, PointerEvent, Timestamp, WindowEvent};
 use cupertino_ui_render::{Paint, PaintNodeId, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, TextStyle};
 use cupertino_ui_theme::{ColorRole, InteractionVariant};
@@ -143,6 +143,7 @@ impl Application for Listed {
                 type_select,
                 on_scroll: Box::new(Message::Scroll),
                 on_select: Some(Box::new(Message::Select)),
+                double_click_activates: true,
                 on_activate: Some(Box::new(Message::Activate)),
                 on_row_key: None,
                 header_top: 0.0,
@@ -161,6 +162,7 @@ impl Application for Listed {
             type_select,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
+            double_click_activates: true,
             on_activate: Some(Box::new(Message::Activate)),
         };
         window(match INSET.get() {
@@ -335,6 +337,66 @@ fn typing_selects_the_next_row_that_starts_with_it_and_return_activates_the_curs
         "a new search starts after the cursor and wraps"
     );
     h.tap(RETURN);
+    assert_eq!(h.model().activated, [1]);
+}
+
+/// A press and release on row `index` at `time`, in milliseconds.
+fn click_at(h: &mut Harness<Listed>, index: usize, time: u64, mods: Mods) {
+    let position = row_center(h, index);
+    let at = |ns| Timestamp(time * 1_000_000 + ns);
+    h.send(WindowEvent::Pointer(
+        PointerEvent::Motion { position },
+        at(0),
+    ));
+    for (pressed, ns) in [(true, 0), (false, 1)] {
+        h.send(WindowEvent::Pointer(
+            PointerEvent::Button {
+                position,
+                button: MouseButton::Left,
+                pressed,
+                serial: 7,
+                mods,
+            },
+            at(ns),
+        ));
+    }
+}
+
+#[test]
+fn a_double_click_activates_the_row_and_a_slow_or_modified_second_click_or_one_on_another_row_does_not(
+) {
+    let mut h = harness(6, true, false);
+    click_at(&mut h, 2, 0, Mods::NONE);
+    assert!(h.model().activated.is_empty(), "one click only selects");
+    click_at(&mut h, 2, 200, Mods::NONE);
+    assert_eq!(h.model().activated, [2]);
+    assert_eq!(selected(&h), [(2, 3)], "the activated row stays selected");
+
+    // the click after a double click starts over
+    click_at(&mut h, 2, 400, Mods::NONE);
+    assert_eq!(h.model().activated, [2]);
+
+    // too slow, on another row, or with a selection modifier held
+    click_at(&mut h, 2, 1000, Mods::NONE);
+    click_at(&mut h, 3, 1200, Mods::NONE);
+    click_at(&mut h, 3, 1400, Mods::PRIMARY);
+    click_at(&mut h, 3, 1600, Mods::SHIFT);
+    assert_eq!(h.model().activated, [2]);
+
+    click_at(&mut h, 4, 3000, Mods::NONE);
+    click_at(&mut h, 4, 3500, Mods::NONE);
+    assert_eq!(
+        h.model().activated,
+        [2, 4],
+        "half a second apart is still a double click"
+    );
+}
+
+#[test]
+fn a_double_click_on_a_table_row_activates_it() {
+    let mut h = harness(6, false, true);
+    click_at(&mut h, 1, 0, Mods::NONE);
+    click_at(&mut h, 1, 100, Mods::NONE);
     assert_eq!(h.model().activated, [1]);
 }
 
@@ -645,6 +707,7 @@ impl Application for Grocer {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(Message::Select)),
+            double_click_activates: true,
             on_activate: Some(Box::new(Message::Activate)),
         }))
     }

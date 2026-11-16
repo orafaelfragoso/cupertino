@@ -1092,6 +1092,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
             s.cursor()
                 .map_or(Message::Ignore, |i| Message::Place(id, i))
         })),
+        double_click_activates: true,
         on_activate: Some(Box::new(move |i| Message::Place(id, i))),
     })
     .key("places")
@@ -1141,6 +1142,7 @@ fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::Scroll(id, s)),
         on_select: Some(Box::new(move |s| Message::Select(id, s))),
+        double_click_activates: true,
         on_activate: Some(Box::new(move |i| Message::Open(id, i))),
     })
     .key("files");
@@ -1511,6 +1513,7 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
         on_scroll: Box::new(move |s| Message::PickerScroll(id, s)),
         on_select: Some(Box::new(move |s| Message::PickerSelect(id, s))),
         // Return reaches the window's shortcut, which a held key's repeats do not send
+        double_click_activates: true,
         on_activate: None,
     })
     .key("sources");
@@ -1645,6 +1648,7 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
         type_select: Some(Box::new(move |i| names[i].clone())),
         on_scroll: Box::new(move |s| Message::AppScroll(id, s)),
         on_select: Some(Box::new(move |s| Message::AppSelect(id, s))),
+        double_click_activates: true,
         on_activate: Some(Box::new(move |_| Message::OpenWith(id))),
     })
     .key("apps");
@@ -2237,6 +2241,57 @@ mod tests {
 
     /// The inbox is the process's, so the tests that post to it take turns.
     static INBOX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Runs until the chooser lists the row `name`.
+    fn listed(driver: &mut TestDriver<Dialogs>, window: WindowId, name: &str) {
+        for _ in 0..400 {
+            settle(driver, window);
+            if driver
+                .runtime()
+                .find(window, &Key::from(name.to_owned()))
+                .is_some()
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the chooser never listed {name}");
+    }
+
+    #[test]
+    fn a_double_click_on_a_folder_opens_it_in_the_folder_chooser_and_the_accept_button_takes_the_one_chosen_inside(
+    ) {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(folder.path().join("inner/deep")).unwrap();
+        let data = icon_theme("org.example.Viewer");
+        std::env::set_var("XDG_DATA_DIRS", data.path());
+
+        let mut ask = ask(Kind::Open, folder.path());
+        ask.directory = true;
+        ask.current_name = None;
+        let answer = post(1, ask);
+        let (mut driver, window) = start();
+        listed(&mut driver, window, "inner");
+        // two presses on the row, one after the other: the folder opens and lists what is in it
+        click_at(&mut driver, window, Key::from("inner"));
+        click_at(&mut driver, window, Key::from("inner"));
+        listed(&mut driver, window, "deep");
+        assert!(
+            answer.try_recv().is_err(),
+            "opening a folder answers nothing"
+        );
+        click_at(&mut driver, window, Key::from("deep"));
+        click(&mut driver, window, "accept");
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Answer::Chosen {
+                paths: vec![folder.path().join("inner/deep")],
+                filter: None,
+                choices: Vec::new(),
+            }
+        );
+    }
 
     /// A window the server shows late: the whole arming delay passes between the request and the window's first
     /// configure, and still nothing is taken until the delay has passed again from the first frame.

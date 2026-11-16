@@ -754,6 +754,7 @@ fixtures! {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
+            double_click_activates: true,
             on_activate: None,
         }
         .into()
@@ -791,6 +792,7 @@ fixtures! {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
+            double_click_activates: true,
             on_activate: None,
             on_toggle: Some(Box::new(|_| Message::Nothing)),
         }
@@ -886,6 +888,7 @@ fixtures! {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: Some(Box::new(|_| Message::Nothing)),
+            double_click_activates: true,
             on_activate: None,
             on_row_key: None,
             header_top: 0.0,

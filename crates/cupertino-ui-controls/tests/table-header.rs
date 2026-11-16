@@ -88,6 +88,7 @@ impl Application for Sorted {
             type_select: None,
             on_scroll: Box::new(Message::Scroll),
             on_select: None,
+            double_click_activates: true,
             on_activate: None,
             // the rows keep every key but Tab, which goes on to the next control
             on_row_key: Some(Box::new(|row, key| {

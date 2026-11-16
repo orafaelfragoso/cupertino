@@ -73,3 +73,11 @@ threads-required = "num-cpus"
 [[profile.default.overrides]]
 filter = 'package(cupertino-ui-gpu) & test(/^timing::/)'
 threads-required = "num-cpus"
+
+# The launcher's fold and unfold on the compositor's clock give the first frame's buffers a short window to reach the
+# server (six server steps for the fold, 50 ms for the unfold, where alone they take 2 to 6 ms), and the server holds
+# each commit until the launcher's drawing of it is done on the GPU; frames drawn and programs compiled on the same
+# device by tests beside them hold that drawing back by up to 50 ms, so they run with no other test beside them.
+[[profile.default.overrides]]
+filter = 'binary_id(cupertino-server::suite) & (test(=shell_processes::the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_once) | test(=shell_processes::the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_row_at_most_once))'
+threads-required = "num-cpus"

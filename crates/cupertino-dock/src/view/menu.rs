@@ -2,7 +2,7 @@
 //! material, whose enabled items are one roving group (the arrows, Home, End and typed characters move between them,
 //! Return or Space chooses, Escape or a press outside closes).
 
-use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, MenuStyle, MenuTail};
+use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, MenuStyle};
 use cupertino_kit::core::{Key, Window, WindowKey};
 use cupertino_kit::geometry::{Point, Rect};
 
@@ -11,16 +11,11 @@ use super::{menu_key, Input};
 use crate::config::Orientation;
 use crate::menu::{MenuItem, GAP};
 
-/// The corner radius of a tile menu's panel, and the least width it has.
-pub const RADIUS: f64 = 14.5;
-pub const MIN_WIDTH: f64 = 110.0;
 /// How far a panel without a pointer stands above the bar's top edge.
 pub const PANEL_GAP: f64 = 12.5;
-/// How far a tile menu's pointer tip stands above the bar's top edge, and the pointer's width and depth: the panel's
-/// bottom edge is 12.5 points above the bar.
+/// How far a tile menu's pointer tip stands above the bar's top edge: the panel's bottom edge is 12.5 points above the
+/// bar.
 pub const TIP_GAP: f64 = 3.0;
-const TAIL_WIDTH: f64 = 18.0;
-const TAIL_DEPTH: f64 = 10.0;
 /// How far the panel's leading edge is to the leading side of the tile's middle: the panel stands off to the trailing
 /// side of the icon.
 pub const TAIL_FROM_EDGE: f64 = 27.5;
@@ -79,16 +74,15 @@ pub fn windows<M: Clone + 'static>(view: MenuView<'_>, input: fn(Input) -> M) ->
         on_open: Box::new(move |_| input(Input::MenuClosed)),
         on_close: input(Input::MenuClosed),
     }
-    .windows_styled(
-        menu_key(),
-        MenuStyle {
-            radius: RADIUS,
-            min_width: MIN_WIDTH,
-            tail: (view.orientation == Orientation::Bottom).then_some(MenuTail {
-                from_leading: TAIL_FROM_EDGE,
-                width: TAIL_WIDTH,
-                depth: TAIL_DEPTH,
-            }),
-        },
-    )
+    .windows_styled(menu_key(), style(view.orientation))
+}
+
+/// The look of the menu: the toolkit's menu with a pointer towards the tile over a bottom dock, and its plain menu
+/// beside a side dock. The rows, the separators, the material and the panel's shape are the toolkit's; the dock only
+/// says where the pointer stands.
+pub fn style(orientation: Orientation) -> MenuStyle {
+    match orientation {
+        Orientation::Bottom => MenuStyle::pointed(TAIL_FROM_EDGE),
+        Orientation::Left | Orientation::Right => MenuStyle::default(),
+    }
 }

@@ -948,6 +948,77 @@ fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
 /// Longer than a chosen menu item flashes before it acts.
 const MENU_FLASH: f64 = 0.2;
 
+/// The rows of the open menu from the top down: their names and where they are.
+fn menu_rows_at(run: &Run, bar: WindowId) -> Vec<(String, Rect)> {
+    let menu = open_menu(run, bar).expect("the menu opened");
+    let mut rows: Vec<(String, Rect)> = run
+        .nodes(menu)
+        .into_iter()
+        .filter(|n| n.0 == Role::MenuItem)
+        .map(|n| (n.1, n.3))
+        .collect();
+    rows.sort_by(|a, b| a.1.min_y().total_cmp(&b.1.min_y()));
+    rows
+}
+
+fn secondary_click(run: &mut Run, bar: WindowId, tile: &str) {
+    let at = centre(run.bounds(bar, Role::Button, tile));
+    run.pointer(bar, PointerEvent::Enter { position: at });
+    run.button(bar, at, MouseButton::Right, true);
+    run.button(bar, at, MouseButton::Right, false);
+}
+
+/// The dock's menu is the toolkit's menu: its rows are as tall as a menu's of any application, its separators take as
+/// much room, the rows stand as far from the panel's top and bottom, and its panel has the toolkit's shape for a menu
+/// with a pointer.
+#[test]
+fn the_tile_menu_has_the_rows_and_separators_of_every_menu() {
+    use cupertino_dock::config::Orientation;
+    use cupertino_kit::controls::MenuStyle;
+    assert_eq!(
+        cupertino_dock::view::menu::style(Orientation::Bottom),
+        MenuStyle::pointed(cupertino_dock::view::menu::TAIL_FROM_EDGE),
+        "the pointer's place is the dock's, the panel's shape the toolkit's"
+    );
+    for side in [Orientation::Left, Orientation::Right] {
+        assert_eq!(
+            cupertino_dock::view::menu::style(side),
+            MenuStyle::default(),
+            "beside a side dock it is the plain menu"
+        );
+    }
+    let mut run = Run::start();
+    let bar = run.bar();
+    secondary_click(&mut run, bar, "Terminal");
+    run.settle();
+    let menu = open_menu(&run, bar).expect("the menu opened");
+    let rows: Vec<Rect> = menu_rows_at(&run, bar).into_iter().map(|r| r.1).collect();
+    assert!(rows.len() >= 4, "{rows:?}");
+    let panel = run
+        .nodes(menu)
+        .into_iter()
+        .find(|n| n.0 == Role::Menu)
+        .expect("the menu")
+        .3;
+    // a row is 24 points tall, the first 5 points under the panel's top and the last 5 over its bottom; rows follow
+    // one another at once, or after the 11 points a separator takes
+    assert!(
+        rows.iter().all(|r| (r.height() - 24.0).abs() < 1e-6),
+        "{rows:?}"
+    );
+    assert!(
+        (rows[0].min_y() - panel.min_y() - 5.0).abs() < 1e-6,
+        "{rows:?} in {panel:?}"
+    );
+    assert!((panel.max_y() - rows[rows.len() - 1].max_y() - 5.0).abs() < 1e-6);
+    let gaps: Vec<f64> = rows
+        .windows(2)
+        .map(|w| w[1].min_y() - w[0].max_y())
+        .collect();
+    assert!(gaps.iter().all(|g| *g == 0.0 || *g == 11.0), "{gaps:?}");
+    assert!(gaps.contains(&11.0), "a separator: {gaps:?}");
+}
+
 /// The dock read by an assistive technology, before anything gave it an input event.
 fn untouched() -> (Run, AssistiveTechnology) {
     let reader = AssistiveTechnology::new();

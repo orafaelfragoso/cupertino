@@ -939,6 +939,23 @@ impl Default for MenuStyle {
     }
 }
 
+impl MenuStyle {
+    /// The look of a menu that points at what it belongs to, such as a dock tile's: a rounder panel that may be
+    /// narrower, with a pointer under it whose middle is `from_leading` points from the panel's leading edge. Its rows,
+    /// separators and material are every menu's.
+    pub fn pointed(from_leading: f64) -> Self {
+        MenuStyle {
+            radius: menu::POINTED_RADIUS,
+            min_width: menu::POINTED_MIN_WIDTH,
+            tail: Some(MenuTail {
+                from_leading,
+                width: menu::TAIL_WIDTH,
+                depth: menu::TAIL_DEPTH,
+            }),
+        }
+    }
+}
+
 /// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,
 /// a typed character moves to the next item it starts, and Escape or the arrow toward the leading side closes a
 /// submenu. Escape in the menu itself, a chosen item and a press outside send `on_close`. Declare [`Menu::windows`]

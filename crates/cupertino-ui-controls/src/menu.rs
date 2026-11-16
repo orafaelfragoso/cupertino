@@ -89,6 +89,12 @@ const GLASS_SEPARATOR_LIGHT: Color = Color {
 /// The width of a submenu's chevron.
 const CHEVRON_WIDTH: f64 = 5.0;
 pub(crate) const MIN_WIDTH: f64 = 120.0;
+/// A menu with a pointer ([`MenuStyle::pointed`]): its panel's corner radius and least width, and its pointer's width
+/// where it leaves the panel and its depth below it.
+pub(crate) const POINTED_RADIUS: f64 = 14.5;
+pub(crate) const POINTED_MIN_WIDTH: f64 = 110.0;
+pub(crate) const TAIL_WIDTH: f64 = 18.0;
+pub(crate) const TAIL_DEPTH: f64 = 10.0;
 /// The least room between a row's label and the shortcuts and chevrons of a menu that has any.
 const SHORTCUT_GAP: f64 = 23.0;
 /// Between a highlight and the panel's sides.

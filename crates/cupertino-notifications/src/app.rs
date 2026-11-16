@@ -4,7 +4,7 @@
 
 use cupertino_defaults::notifications::NotificationSettings;
 use cupertino_defaults::watch::ConfigWatcher;
-use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window};
+use cupertino_kit::core::{Application, Command, Key, RuntimeOptions, Window, WindowKey};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
 use cupertino_notifications::dbus::{CentrePresence, CentrePublisher, Server, ServerOptions};
@@ -388,6 +388,12 @@ pub struct Notifications {
     was_open: bool,
     /// The compositor's outputs by their numbers: each has a window that hears presses outside the open list.
     outputs: Vec<u32>,
+    /// The compositor said it has no output. There is no window then, as it closes at once every surface it is given;
+    /// the notifications are taken and kept as ever, and the windows come back with an output.
+    no_output: bool,
+    /// The generation of the banners' and the list's windows: each one is a new window, so one whose surface the
+    /// compositor closed (its output went away) is not kept.
+    surfaces: u64,
     /// Follows `notifications.conf`; `None` when it cannot, and the file then applies at the next start.
     _policy_watch: Option<ConfigWatcher>,
 }
@@ -402,6 +408,17 @@ pub enum Message {
     Focus(Key),
     /// The bus thread and the roles are gone.
     Unheard,
+    /// The compositor closed the surface of a banner or of the list: its output went away.
+    SurfaceClosed,
+}
+
+/// The key of a banner's or the list's window in the generation `generation` of their surfaces: the view's own key
+/// in the first, and another in each later one.
+fn in_generation(key: WindowKey, generation: u64) -> WindowKey {
+    match key.0 {
+        Key::Str(name) if generation > 0 => WindowKey(Key::from(format!("{name}#{generation}"))),
+        key => WindowKey(key),
+    }
 }
 
 fn listen(notes: &async_channel::Receiver<Note>) -> Command<Message> {
@@ -485,6 +502,7 @@ impl Notifications {
                 self.metrics.as_ref()?.card(&n, width, Fold::Banner).height,
             )
         };
+        let window = in_generation(window, self.surfaces);
         Some(Command::ActivationToken {
             window,
             app_id: n.desktop_entry.clone(),
@@ -618,6 +636,8 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             openings: 0,
             was_open: false,
             outputs: Vec::new(),
+            no_output: false,
+            surfaces: 0,
             _policy_watch: policy_watch,
         },
         vec![first],
@@ -682,7 +702,10 @@ impl Application for Notifications {
                             model.ui.close_centre(now, reduce);
                         }
                     }
-                    Note::Outputs(outputs) => model.outputs = outputs,
+                    Note::Outputs(outputs) => {
+                        model.no_output = outputs.is_empty();
+                        model.outputs = outputs;
+                    }
                 }
                 vec![listen(&model.notes)]
             }
@@ -697,6 +720,11 @@ impl Application for Notifications {
                 eprintln!("cupertino-notifications: the bus thread stopped");
                 return vec![Command::Exit];
             }
+            Message::SurfaceClosed => {
+                // new windows, on an output the compositor still has; while it has none there is no window
+                model.surfaces += 1;
+                Vec::new()
+            }
         };
         commands.extend(model.housekeeping());
         commands
@@ -706,17 +734,23 @@ impl Application for Notifications {
         let Some(metrics) = &model.metrics else {
             return Vec::new();
         };
+        if model.no_output {
+            return Vec::new();
+        }
         let now = model.server.now();
         let mut center = model.server.center();
         // the windows that hear a press outside the open list come first: they lie under it
         let mut windows = view::catchers(&center, &model.ui, &model.outputs, Message::Input);
-        windows.extend(view::windows(
-            &mut center,
-            &model.ui,
-            metrics,
-            now,
-            Message::Input,
-        ));
+        windows.extend(
+            view::windows(&mut center, &model.ui, metrics, now, Message::Input)
+                .into_iter()
+                .map(|mut window| {
+                    window.key = in_generation(window.key, model.surfaces);
+                    // a surface the compositor closed is made again; without this the close would end the process
+                    window.on_close = Some(Message::SurfaceClosed);
+                    window
+                }),
+        );
         windows
     }
 }
@@ -824,6 +858,18 @@ mod tests {
         assert!(!keyboard.focus(true, 4), "and it holds the keyboard again");
         assert!(keyboard.focus(false, 4));
         assert!(!keyboard.wants(4));
+    }
+
+    /// The windows made after the compositor closed a surface are other windows than the ones before, whose keys the
+    /// first generation keeps as the view gives them.
+    #[test]
+    fn a_closed_surface_begins_a_generation_of_new_windows() {
+        let first = in_generation(centre_key(), 0);
+        assert_eq!(first, centre_key());
+        let second = in_generation(centre_key(), 1);
+        assert_ne!(second, first);
+        assert_ne!(in_generation(centre_key(), 2), second);
+        assert_eq!(in_generation(centre_key(), 1), second);
     }
 
     /// A window that hears presses outside the list goes on its own output while the compositor has it, and where the

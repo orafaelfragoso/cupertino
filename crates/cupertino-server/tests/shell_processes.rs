@@ -2531,6 +2531,102 @@ fn the_shell_processes_sit_idle_with_no_output_and_draw_again_when_one_comes_bac
     }
 }
 
+/// The notifications process keeps running when its banner loses the display (the only one asleep that reports itself
+/// unplugged) and when a notification arrives while there is none: a banner's surface on no output is closed at once,
+/// which ended the process, so it was started again at each notification of the night. The notification is kept, and
+/// the next display shows a banner again from the same process.
+#[test]
+fn the_notifications_process_keeps_running_when_a_banner_has_no_display_to_show_on() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process(NOTIFICATIONS, &bus)], true) else {
+        return;
+    };
+    let answer = ask_notification_server(&bus);
+    server.wait_until("the notification server to answer", |_| {
+        answer.try_recv().is_ok()
+    });
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let notify = |summary: &str| {
+        let hints: std::collections::HashMap<&str, zbus::zvariant::Value> =
+            std::collections::HashMap::new();
+        zbus::block_on(conn.call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &(
+                "no-display-test",
+                0u32,
+                "",
+                summary,
+                "",
+                Vec::<&str>::new(),
+                hints,
+                0i32,
+            ),
+        ))
+        .map(|_| ())
+    };
+    notify("Before").unwrap();
+    server.wait_until("the banner", |s| drawn(s, NOTIFICATIONS));
+    let pid = server.state.supervisor.pid_of(NOTIFICATIONS).unwrap();
+
+    let head = server.head_of(0);
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_until("no output", |s| s.outputs.is_empty());
+    let pass = |server: &mut Server, time: Duration| {
+        let end = Instant::now() + time;
+        while Instant::now() < end {
+            server.step();
+        }
+    };
+    // the banner's surface is closed with its output; a process that ends at that is gone within this
+    pass(&mut server, Duration::from_millis(300));
+    assert_eq!(
+        server.state.supervisor.pid_of(NOTIFICATIONS),
+        Some(pid),
+        "the process outlives the banner's display"
+    );
+    notify("With no display").expect("the notification is taken with no display");
+    pass(&mut server, Duration::from_millis(300));
+    assert_eq!(
+        server.state.supervisor.pid_of(NOTIFICATIONS),
+        Some(pid),
+        "a notification with no display to show on ends nothing"
+    );
+    assert!(connected(&server.state, pid));
+    // nor does the process open a window for it again and again, each closed at once
+    let (ticks, switches) = activity(pid);
+    pass(&mut server, Duration::from_millis(300));
+    let (ticks_now, switches_now) = activity(pid);
+    let (cpu, woken) = (ticks_now - ticks, switches_now - switches);
+    eprintln!("{cpu} clock ticks of CPU, {woken} context switches in 0.3 s");
+    assert!(
+        cpu <= 3 && woken <= 60,
+        "the process is busy with no display: {cpu} ticks, {woken} switches in 0.3 s"
+    );
+
+    let display = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: OUTPUT,
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut server.state, &display, None).unwrap();
+    notify("After").unwrap();
+    server.wait_until("a banner on the display plugged in", |s| {
+        drawn(s, NOTIFICATIONS)
+    });
+    assert_eq!(server.state.supervisor.pid_of(NOTIFICATIONS), Some(pid));
+}
+
 /// An application a shell process starts (the launcher or the dock opening an application) is an application, not a
 /// part of the shell: its process connects to the public socket and its window gets a dock tile. The stand-in launcher
 /// drops its own connection from the child's environment as a shell binary's Wayland client does on connecting.

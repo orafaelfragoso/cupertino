@@ -46,12 +46,15 @@ const PLAIN_GLOWS: [([f32; 2], f32, [f32; 3]); 2] = [
 const GLOW_STRENGTH: f32 = 0.85;
 
 /// The control material under the password field and its buttons: the blur's radius, points; how much it saturates
-/// what it blurs; the grey laid over it and that grey's alpha; and the grey it is lightened to at least.
+/// what it blurs; the grey laid over it and that grey's alpha; the grey it is lightened to at least; and the alpha of
+/// the white laid over last, which keeps it a little lighter than a dark picture so the field reads there too
+/// (approximate).
 pub const MATERIAL_BLUR: f64 = 30.0;
 pub const MATERIAL_SATURATION: f32 = 1.6;
 pub const MATERIAL_FILL: f32 = 0.1569;
 pub const MATERIAL_FILL_ALPHA: f32 = 0.4;
 pub const MATERIAL_TONE: f32 = 0.08;
+pub const MATERIAL_LIFT: f32 = 0.12;
 
 /// The most pixels a decoded picture may have a side, and in all.
 pub const MAX_SIDE: u32 = 8192;
@@ -660,8 +663,8 @@ pub fn box_radii(sigma: f64) -> [usize; 3] {
 
 /// The control material over `region` (device pixels `[x0, y0, x1, y1]`) of the fully dimmed picture of `source` on a
 /// screen of `width` x `height` device pixels at `scale`: the picture blurred by [`MATERIAL_BLUR`] points, saturated by
-/// [`MATERIAL_SATURATION`], [`MATERIAL_FILL`] grey laid over at [`MATERIAL_FILL_ALPHA`] and lightened to at least
-/// [`MATERIAL_TONE`]. Opaque premultiplied RGBA of the region, dithered; empty for an empty region.
+/// [`MATERIAL_SATURATION`], [`MATERIAL_FILL`] grey laid over at [`MATERIAL_FILL_ALPHA`], lightened to at least
+/// [`MATERIAL_TONE`] and white laid over at [`MATERIAL_LIFT`]. Opaque premultiplied RGBA of the region, dithered; empty for an empty region.
 pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u32; 4]) -> Vec<u8> {
     let [x0, y0, x1, y1] = [
         region[0].min(width),
@@ -726,14 +729,16 @@ pub fn frosted(source: &Source, width: u32, height: u32, scale: f64, region: [u3
     out
 }
 
-/// The control material's colour over the blurred colour `c` (0 to 1): saturated, the grey laid over, lightened.
+/// The control material's colour over the blurred colour `c` (0 to 1): saturated, the grey laid over, lightened, the
+/// white laid over: darker than a light picture, lighter than a dark one.
 pub fn material(c: [f32; 3]) -> [f32; 3] {
     // Rec. 709 luma keeps its brightness as the colour moves away from grey
     let luma = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     c.map(|v| {
         let saturated = (luma + (v - luma) * MATERIAL_SATURATION).clamp(0.0, 1.0);
         let filled = saturated + (MATERIAL_FILL - saturated) * MATERIAL_FILL_ALPHA;
-        filled.max(MATERIAL_TONE)
+        let toned = filled.max(MATERIAL_TONE);
+        toned + (1.0 - toned) * MATERIAL_LIFT
     })
 }
 
@@ -1222,19 +1227,33 @@ mod tests {
 
     #[test]
     fn the_material_saturates_greys_toward_its_fill_and_never_goes_below_its_tone() {
-        // black is lightened to the tone after the fill: 0.4 of the fill grey is 0.063, below the tone
+        let lift = |v: f32| f64::from(v + (1.0 - v) * MATERIAL_LIFT);
+        // black is lightened to the tone after the fill (0.4 of the fill grey is 0.063, below the tone), then lifted
         let black = material([0.0; 3]);
-        approx(f64::from(black[0]), f64::from(MATERIAL_TONE));
-        // a grey stays grey, pulled toward the fill
+        approx(f64::from(black[0]), lift(MATERIAL_TONE));
+        // a grey stays grey, pulled toward the fill and lifted
         let grey = material([0.5; 3]);
-        approx(
-            f64::from(grey[0]),
-            f64::from(0.5 + (MATERIAL_FILL - 0.5) * 0.4),
-        );
+        approx(f64::from(grey[0]), lift(0.5 + (MATERIAL_FILL - 0.5) * 0.4));
         approx(f64::from(grey[0]), f64::from(grey[2]));
         // a colour moves further from grey
         let red = material([0.6, 0.4, 0.4]);
-        assert!(red[0] - red[1] > (0.6 - 0.4) * (1.0 - MATERIAL_FILL_ALPHA));
+        assert!(
+            red[0] - red[1] > (0.6 - 0.4) * (1.0 - MATERIAL_FILL_ALPHA) * (1.0 - MATERIAL_LIFT)
+        );
+    }
+
+    #[test]
+    fn the_material_is_lighter_than_a_dark_picture_and_darker_than_a_light_one() {
+        // a dark picture: the field stands out from it by a clear step, not a level or two
+        for dark in [0.0, 0.03, 0.06, 0.1] {
+            let on = material([dark; 3])[0];
+            assert!(on - dark > 0.08, "{dark}: {on}");
+        }
+        // a light picture: the field is darker
+        for light in [0.6, 0.75, 0.9] {
+            let on = material([light; 3])[0];
+            assert!(light - on > 0.08, "{light}: {on}");
+        }
     }
 
     #[test]

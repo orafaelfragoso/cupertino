@@ -245,10 +245,7 @@ impl Secrets {
         Err(StoreError::new(WHAT, "no usable session key"))
     }
 
-    fn seal<'a>(
-        &'a self,
-        record: &'a Record,
-    ) -> Result<Sending<'a>, StoreError> {
+    fn seal<'a>(&'a self, record: &'a Record) -> Result<Sending<'a>, StoreError> {
         let mut iv = [0u8; IV_BYTES];
         random(&mut iv).map_err(|_| StoreError::new("saving an item", "no random bytes"))?;
         let cipher = cbc::Encryptor::<Aes128>::new(self.key.as_ref().into(), &iv.into())

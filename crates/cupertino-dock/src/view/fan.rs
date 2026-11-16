@@ -5,8 +5,9 @@
 //! arrows. Where the parts go is [`FanLayout`]'s.
 
 use cupertino_kit::core::{
-    Action, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Popup,
-    PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
+    Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Key, MeasureCx, PaintCx,
+    Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground,
+    WindowKey,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, LayoutSpec, Measured};
@@ -22,7 +23,9 @@ use crate::fan::{
 };
 use crate::stack::{StackEntry, OPEN_FOLDER};
 
-/// A pill's fill in the light and the dark appearance, and with the pointer or the keyboard on its row.
+/// A pill's fill in the light and the dark appearance, and with the pointer or the keyboard on its row: a veil over
+/// the desktop, white in the light appearance and dark in the dark one, dense enough that the name reads on it over a
+/// desktop of any tone.
 const PILL: [Color; 2] = [
     Color {
         r: 1.0,
@@ -31,10 +34,10 @@ const PILL: [Color; 2] = [
         a: 0.55,
     },
     Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 0.18,
+        r: 0.16,
+        g: 0.16,
+        b: 0.17,
+        a: 0.72,
     },
 ];
 const PILL_HIGHLIGHT: [Color; 2] = [
@@ -45,10 +48,39 @@ const PILL_HIGHLIGHT: [Color; 2] = [
         a: 0.85,
     },
     Color {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 0.34,
+        r: 0.26,
+        g: 0.26,
+        b: 0.28,
+        a: 0.85,
+    },
+];
+/// The same where the session shows nothing through (Reduce Transparency, Increase Contrast): opaque.
+const PILL_OPAQUE: [Color; 2] = [
+    Color {
+        r: 0.96,
+        g: 0.96,
+        b: 0.96,
+        a: 1.0,
+    },
+    Color {
+        r: 0.16,
+        g: 0.16,
+        b: 0.17,
+        a: 1.0,
+    },
+];
+const PILL_OPAQUE_HIGHLIGHT: [Color; 2] = [
+    Color {
+        r: 0.84,
+        g: 0.84,
+        b: 0.86,
+        a: 1.0,
+    },
+    Color {
+        r: 0.3,
+        g: 0.3,
+        b: 0.32,
+        a: 1.0,
     },
 ];
 /// A pill's fine rim, and its text, in the light and the dark appearance.
@@ -81,6 +113,41 @@ const TEXT: [Color; 2] = [
     },
 ];
 const RIM_WIDTH: f64 = 0.5;
+/// A pill's rim with Increase Contrast, in the light and the dark appearance, and its width.
+const CONTRAST_RIM: [Color; 2] = [
+    Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.6,
+    },
+    Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 0.7,
+    },
+];
+const CONTRAST_RIM_WIDTH: f64 = 1.0;
+
+/// A pill's fill, its rim and the rim's width as the session shows them: `highlighted` with the pointer or the keyboard
+/// on its row.
+fn pill_look(env: &Environment, highlighted: bool) -> (Color, Color, f64) {
+    let mode = usize::from(paint::is_dark(env));
+    let contrast = paint::is_high_contrast(env);
+    let opaque = contrast || env.theme.preferences.reduce_transparency;
+    let fill = match (opaque, highlighted) {
+        (false, false) => PILL[mode],
+        (false, true) => PILL_HIGHLIGHT[mode],
+        (true, false) => PILL_OPAQUE[mode],
+        (true, true) => PILL_OPAQUE_HIGHLIGHT[mode],
+    };
+    if contrast {
+        (fill, CONTRAST_RIM[mode], CONTRAST_RIM_WIDTH)
+    } else {
+        (fill, RIM[mode], RIM_WIDTH)
+    }
+}
 /// The button's arrow: how far its ends are from the button's middle, and its stroke.
 const ARROW_REACH: f64 = 8.0;
 const ARROW_STROKE: f64 = 3.0;
@@ -316,10 +383,13 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
             a: color.a * share as f32,
             ..color
         };
-        let veil = if self.highlighted {
-            PILL_HIGHLIGHT[mode]
+        let (veil, rim, rim_width) = pill_look(&env, self.highlighted);
+        // the button: the highlighted fill, a little thinner while it is a veil
+        let (button_fill, ..) = pill_look(&env, true);
+        let button_fill = if button_fill.a < 1.0 {
+            fade(button_fill, 0.8)
         } else {
-            PILL[mode]
+            button_fill
         };
         if self.button {
             cx.push(PaintOp::Fill {
@@ -327,7 +397,7 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                     rect: icon,
                     radius: ICON / 2.0,
                 },
-                paint: Paint::Solid(fade(PILL_HIGHLIGHT[mode], 0.8)),
+                paint: Paint::Solid(button_fill),
             });
             let reach = ARROW_REACH;
             let at = |dx: f64, dy: f64| Point::new(c.x + dx, c.y + dy);
@@ -374,8 +444,8 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         });
         cx.push(PaintOp::Stroke {
             shape,
-            width: RIM_WIDTH,
-            paint: Paint::Solid(fade(RIM[mode], appear)),
+            width: rim_width,
+            paint: Paint::Solid(fade(rim, appear)),
         });
         let text_alpha = ((p - 0.45) / 0.55).clamp(0.0, 1.0);
         if text_alpha > 0.0 {

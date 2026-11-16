@@ -42,7 +42,9 @@ pub use focus::{hidden_index, Switcher, SwitcherStep, CASCADE_STEP, SWITCHER_SHO
 pub use geometry::{Edges, Point, Rect, Size};
 pub use ids::{AppId, OutputId, WindowId, WorkspaceId};
 pub use interaction::PreviewPresentation;
-pub use kind::{child_frame, modal_panel_frame, sheet_frame, window_kind, MODAL_CASCADE};
+pub use kind::{
+    child_frame, kept_inside, modal_panel_frame, sheet_frame, window_kind, MODAL_CASCADE,
+};
 pub use lifecycle::{FrameShape, Lifecycle, LifecycleState, Presentation, Resting, ToplevelStates};
 pub use magnet::{unsnap_distance, Guide, Magnet, MagnetStep};
 pub use tiling::{hot_zone, hot_zone_hit, tile_rect, HotZoneHit, TileKind};

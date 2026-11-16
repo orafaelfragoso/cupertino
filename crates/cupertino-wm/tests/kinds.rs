@@ -58,6 +58,48 @@ fn a_modal_child_becomes_a_sheet_that_slides_down_from_the_title_bar() {
 }
 
 #[test]
+fn a_sheet_larger_than_its_parent_stays_on_the_output() {
+    let mut h = H::new();
+    // a small window at the left edge and one at the bottom right
+    let left = h.map_at("a", Rect::new(20.0, 100.0, 300.0, 300.0));
+    let sheet = map_with(
+        &mut h,
+        50,
+        "a",
+        (720.0, 460.0),
+        Some(left),
+        window_kind(true, false),
+        true,
+    );
+    assert_eq!(kind(&h, sheet), WindowKind::Sheet);
+    assert_eq!(
+        h.wm.window(sheet).unwrap().geometry(),
+        Rect::new(
+            USABLE.x,
+            100.0 + h.wm.config().snap.titlebar_height,
+            720.0,
+            460.0
+        ),
+        "centred on its parent it would start 190 pt left of the output"
+    );
+    let corner = h.map_at("b", Rect::new(1500.0, 700.0, 400.0, 300.0));
+    let sheet = map_with(
+        &mut h,
+        51,
+        "b",
+        (720.0, 460.0),
+        Some(corner),
+        window_kind(true, false),
+        true,
+    );
+    let frame = h.wm.window(sheet).unwrap().geometry();
+    assert_eq!(
+        (frame.right(), frame.bottom()),
+        (USABLE.right(), USABLE.bottom())
+    );
+}
+
+#[test]
 fn a_sheet_hangs_below_the_toolbar_row_its_parent_names() {
     let mut h = H::new();
     let mut p = MapParams::new(WindowId(7), "a", Rect::new(200.0, 100.0, 600.0, 400.0));

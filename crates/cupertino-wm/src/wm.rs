@@ -702,7 +702,13 @@ impl Wm {
             if p.modal && self.cfg.focus.place_modal_children_as_sheets {
                 kind = WindowKind::Sheet;
                 let top = pw.sheet_top.unwrap_or(self.cfg.snap.titlebar_height);
-                geometry = kind::sheet_frame(pf, geometry.size(), top);
+                let usable = self
+                    .output(output)
+                    .expect("a window's output exists while outputs do")
+                    .usable;
+                // a sheet wider or taller than what its parent leaves it (a file chooser on a small window) stays on
+                // the output
+                geometry = kind::kept_inside(kind::sheet_frame(pf, geometry.size(), top), usable);
             } else {
                 let usable = self
                     .output(output)

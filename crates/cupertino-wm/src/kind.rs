@@ -41,6 +41,17 @@ pub fn sheet_frame(parent: Rect, size: Size, titlebar: f64) -> Rect {
     )
 }
 
+/// `frame` moved the least that brings it inside `usable`, and to its top-left corner along an axis it is larger
+/// than: a sheet wider than its parent, on a parent near an edge of the output, stays where it can be reached.
+pub fn kept_inside(frame: Rect, usable: Rect) -> Rect {
+    Rect::new(
+        frame.x.min(usable.right() - frame.w).max(usable.x),
+        frame.y.min(usable.bottom() - frame.h).max(usable.y),
+        frame.w,
+        frame.h,
+    )
+}
+
 /// Frame of a modal panel of `size` without a parent, the design's window centring on the usable area:
 /// centred horizontally, its top a quarter of the free height below the usable top, snapped to whole
 /// points. With `previous` (the top-left corner of the application's modal panel
@@ -92,6 +103,25 @@ mod tests {
 
     const USABLE: Rect = Rect::new(0.0, 24.0, 1920.0, 1056.0);
     const SCREEN: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+
+    #[test]
+    fn a_frame_that_leaves_the_usable_area_moves_the_least_that_brings_it_back() {
+        let inside = Rect::new(400.0, 300.0, 720.0, 460.0);
+        assert_eq!(kept_inside(inside, USABLE), inside);
+        assert_eq!(
+            kept_inside(Rect::new(-190.0, 300.0, 720.0, 460.0), USABLE),
+            Rect::new(0.0, 300.0, 720.0, 460.0)
+        );
+        assert_eq!(
+            kept_inside(Rect::new(1500.0, 900.0, 720.0, 460.0), USABLE),
+            Rect::new(1200.0, 620.0, 720.0, 460.0)
+        );
+        // larger than the area: its top-left corner stays in
+        assert_eq!(
+            kept_inside(Rect::new(100.0, 100.0, 2000.0, 1200.0), USABLE),
+            Rect::new(0.0, 24.0, 2000.0, 1200.0)
+        );
+    }
 
     #[test]
     fn modality_wins_over_the_utility_role() {

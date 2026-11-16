@@ -646,6 +646,30 @@ impl PaintCx<'_> {
         }
     }
 
+    /// Draws the pixels `src` of `image` (its own pixels) into `dst` (node coordinates), as [`image`](Self::image)
+    /// draws all of them: for a large picture laid in pieces, each node drawing its own part.
+    pub fn image_part(
+        &mut self,
+        id: ResourceId,
+        image: &ImageResource,
+        src: Rect,
+        dst: Rect,
+        sampling: Sampling,
+    ) {
+        self.ops.push(PaintOp::Image {
+            image: ResourceRef {
+                id,
+                revision: image.revision,
+            },
+            src,
+            dst,
+            sampling,
+        });
+        if !self.images.iter().any(|(drawn, _)| *drawn == id) {
+            self.images.push((id, image.clone()));
+        }
+    }
+
     /// Paints this node and its whole subtree as one layer, with `opacity` applied once and `effects` (a fade, or a
     /// shadow or blur of the subtree) on the result.
     pub fn set_group(&mut self, opacity: f32, effects: Vec<Effect>) {

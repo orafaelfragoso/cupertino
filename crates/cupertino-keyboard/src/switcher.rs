@@ -25,8 +25,6 @@ pub const HUD_ROW_HEIGHT: f64 = 40.0;
 pub const HUD_MIN_WIDTH: f64 = 167.0;
 /// Content padding, points.
 pub const HUD_PADDING: f64 = 10.0;
-/// White level / alpha of the panel background tint (pattern image of a rounded rectangle filled with white at 0.35 alpha).
-pub const HUD_TINT_WHITE_ALPHA: (f64, f64) = (1.0, 0.35);
 /// Radius of the rounded rectangle of the background pattern image, points.
 pub const HUD_BACKGROUND_PATTERN_RADIUS: f64 = 10.0;
 

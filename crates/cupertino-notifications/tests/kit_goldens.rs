@@ -1525,6 +1525,84 @@ fn a_card_on_glass_paints_no_edge_at_rest_and_its_rim_with_increase_contrast() {
     );
 }
 
+/// The strokes a banner's card lays along its edge over its glass with Increase Contrast in `appearance` on a display
+/// of `scale`: each one's rectangle from the card's corner and its width, in points.
+fn contrast_edge(appearance: Appearance, scale: f64) -> Vec<(Rect, f64)> {
+    let mut run = Run::with(Setup {
+        effects: true,
+        increase_contrast: true,
+        ..Setup::default()
+    });
+    run.notify(mail("Lunch", "Are you free at noon?"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let data = Theme::from_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme")).unwrap();
+    let mut preferences = run.driver.runtime().theme().preferences;
+    preferences.appearance = appearance;
+    let tokens = ThemeTokens::cupertino(&data, preferences).unwrap();
+    run.driver.runtime_mut().set_theme(Arc::new(tokens));
+    run.driver
+        .window_system_mut()
+        .enqueue_window(window, WindowEvent::Scale(scale))
+        .unwrap();
+    run.settle_frames();
+    let snapshot = run.snapshot(window);
+    let card = rect(&snapshot, "card-1");
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter_map(|op| match op {
+            cupertino_kit::render::PaintOp::Stroke {
+                shape: cupertino_kit::render::Shape::RoundedRect { rect, .. },
+                width,
+                ..
+            } if (rect.size.width - card.size.width).abs() < 2.0
+                && (rect.size.height - card.size.height).abs() < 2.0 =>
+            {
+                Some((*rect, *width))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// With Increase Contrast no line of a card's edge is thinner than a device pixel: the outline and the dark rim are
+/// half a point where a point is two pixels and a whole point where it is one, where half a point would cover half of
+/// each pixel and draw the line at half its strength; the light rim is a point at both. Each line lies just inside the
+/// card, centred on whole pixels.
+#[test]
+fn a_card_s_contrast_edge_is_never_thinner_than_a_device_pixel_at_one_and_at_two_pixels_a_point() {
+    for (appearance, scale, outline, rim) in [
+        (Appearance::LightHighContrast, 1.0, 1.0, 1.0),
+        (Appearance::LightHighContrast, 2.0, 0.5, 1.0),
+        (Appearance::DarkHighContrast, 1.0, 1.0, 1.0),
+        (Appearance::DarkHighContrast, 2.0, 0.5, 0.5),
+    ] {
+        let edge = contrast_edge(appearance, scale);
+        let mut widths: Vec<f64> = edge.iter().map(|(_, width)| *width).collect();
+        widths.sort_by(f64::total_cmp);
+        let mut expected = vec![outline, rim];
+        expected.sort_by(f64::total_cmp);
+        assert_eq!(
+            widths, expected,
+            "{appearance:?} at {scale}x: the outline and the rim"
+        );
+        for (rect, width) in edge {
+            assert!(
+                width * scale >= 1.0,
+                "{appearance:?} at {scale}x: a line of {width} pt is under a device pixel"
+            );
+            assert_eq!(
+                (rect.min_x(), rect.min_y()),
+                (width / 2.0, width / 2.0),
+                "{appearance:?} at {scale}x: the line lies on the card's outermost pixels"
+            );
+        }
+    }
+}
+
 #[test]
 fn each_card_shows_the_compositor_s_material_where_the_desktop_draws_it_and_its_fill_elsewhere() {
     let mut run = Run::with(Setup {

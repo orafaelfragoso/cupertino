@@ -323,6 +323,10 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 }
 
+/// Width of the outline an alert on glass draws round itself with Increase Contrast, in points: a whole device pixel or
+/// more on every display.
+pub(crate) const ALERT_CONTRAST_RIM: f64 = 1.0;
+
 /// An alert's body on glass, `width` wide and `height` tall or, without one, as tall as its content, which it pads by
 /// `padding`: its corners rounded by `radius`, and the popover surface's fill where the window cannot show glass.
 pub(crate) struct AlertBody<M> {
@@ -375,10 +379,32 @@ impl<M: 'static> Widget<M> for AlertBody<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
         if cx.glass(Glass::regular().radius(self.radius)) {
+            // with Increase Contrast the glass takes the contrast face, which over a window of the same appearance is
+            // that window's tone: the alert marks its edge with the outline its buttons have
+            let theme = cx.env().theme.clone();
+            let rim = theme
+                .colors
+                .get(ColorRole::ControlBorder, StateVariant::NORMAL);
+            if let (true, Some(rim)) = (theme.preferences.appearance.is_high_contrast(), rim) {
+                let half = ALERT_CONTRAST_RIM / 2.0;
+                cx.push(PaintOp::Stroke {
+                    shape: Shape::RoundedRect {
+                        rect: Rect::new(
+                            half,
+                            half,
+                            size.width - ALERT_CONTRAST_RIM,
+                            size.height - ALERT_CONTRAST_RIM,
+                        ),
+                        radius: (self.radius - half).max(0.0),
+                    },
+                    width: ALERT_CONTRAST_RIM,
+                    paint: Paint::Solid(rim),
+                });
+            }
             return;
         }
-        let size = cx.size();
         if let Some(color) = cx.env().theme.surface(Surface::Popover).fill {
             fill(
                 cx,

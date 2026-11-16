@@ -310,8 +310,8 @@ bar reserve (exclusive zone -1) and lies on the compositor's switcher glass (`Sw
 the model above, the `Switcher` surface (the compositor's `SwitcherGlass`) as the window background, one list item per application and the label,
 with the delay, the fade and the pointer rules unchanged. The panel is a list named "Application Switcher". Each entry is a
 list item that a screen reader can press (`switcher_activate`), and the label is a polite live region, so the selection is
-read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency and Increase Contrast the
-material is opaque, and the selection and label get stronger colours. The dock's Kit model keeps one `SwitcherSurface`
+read as the keys step it (the panel never takes the keyboard). Under Reduce Transparency the material is opaque; with
+Increase Contrast the panel keeps its glass, drawn with the contrast face, and the selection and label get stronger colours. The dock's Kit model keeps one `SwitcherSurface`
 per output, opens the panel on the output the server names (window key and app id carry the output), and draws each
 application with the dock's icon for it, or the generic application icon.
 

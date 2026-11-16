@@ -279,6 +279,7 @@ mod tests {
             display_name: "Alice Liddell".into(),
             picture: None,
             logged_in: true,
+            wallpaper: None,
         };
         let user = User::from_row(&row).unwrap();
         assert_eq!(

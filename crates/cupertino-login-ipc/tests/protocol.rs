@@ -3,6 +3,7 @@ use cupertino_login_ipc::{
     PowerAction, PowerRefusal, ProtocolRefusal, Request, Secret, State, MAX_REQUEST_FRAME,
     MAX_SECRET_BYTES, SOCKET_PATH, VERSION,
 };
+use cupertino_login_ipc::{message::WALLPAPER_DIR, UserRow};
 use zeroize::Zeroizing;
 
 /// Push `frame` into `decoder` the way a socket reader does: never more than it asks for.
@@ -357,6 +358,33 @@ fn a_power_request_has_one_wire_form_and_no_other_action_decodes() {
         &refused[4..],
         br#"{"type":"PowerRefused","reason":"OtherUsersLoggedIn"}"#
     );
+}
+
+/// A row without a wallpaper has no `wallpaper` field on the wire and a row without the field reads as having none, so
+/// rows read the same either way; a row with one carries its path.
+#[test]
+fn a_users_wallpaper_is_optional_on_the_wire() {
+    let row = UserRow {
+        uid: 1000,
+        login: "ada".into(),
+        display_name: "Ada".into(),
+        picture: None,
+        logged_in: false,
+        wallpaper: None,
+    };
+    let plain = serde_json::to_string(&row).unwrap();
+    assert_eq!(
+        plain,
+        r#"{"uid":1000,"login":"ada","display_name":"Ada","picture":null,"logged_in":false}"#
+    );
+    assert_eq!(serde_json::from_str::<UserRow>(&plain).unwrap(), row);
+    let with = UserRow {
+        wallpaper: Some(format!("{WALLPAPER_DIR}/1000.jpg")),
+        ..row
+    };
+    let text = serde_json::to_string(&with).unwrap();
+    assert!(text.ends_with(r#","wallpaper":"/var/lib/cupertino-login/wallpapers/1000.jpg"}"#));
+    assert_eq!(serde_json::from_str::<UserRow>(&text).unwrap(), with);
 }
 
 #[test]

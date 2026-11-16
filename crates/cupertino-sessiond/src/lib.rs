@@ -3,7 +3,8 @@
 //! per authentication attempt and per session; and it owns the console (virtual terminals, the login screen's logind
 //! session). The design is.
 //!
-//! * [`filter`], [`users`], [`picture`], [`roster`]: which accounts the screen lists and with what (pure but for the files).
+//! * [`filter`], [`users`], [`picture`], [`wallpaper`], [`roster`]: which accounts the screen lists and with what (pure but
+//!   for the files).
 //! * [`upgrade`]: when the manager hands the console over to a new version of itself.
 //! * [`caller`]: who may call the manager's bus interface (pure); feature `app`: [`service`], the interface itself.
 //! * [`channel`], [`worker_protocol`]: frames over a socket, and the messages between the manager and a worker.
@@ -29,6 +30,7 @@ pub mod upgrade;
 pub mod users;
 #[cfg(feature = "app")]
 pub mod vt;
+pub mod wallpaper;
 #[cfg(feature = "app")]
 pub mod worker;
 pub mod worker_protocol;

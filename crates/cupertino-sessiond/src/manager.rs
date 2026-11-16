@@ -35,7 +35,7 @@ use crate::service::{self, Authorizer, Call, ReadyRefusal};
 use crate::system_accessibility;
 use crate::upgrade::{self, Decision};
 use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
-use crate::{picture, roster, users, vt};
+use crate::{picture, roster, users, vt, wallpaper};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -421,6 +421,8 @@ struct Manager {
     _held_terminals: Vec<File>,
     /// Users whose picture file was found unusable, so the journal says it once.
     reported_pictures: HashSet<u32>,
+    /// The manager's copies of the users' wallpapers, which the login screen shows.
+    wallpapers: wallpaper::Store,
     /// The file this program was started from, watched for a new version; `None` when it cannot be known.
     upgrade: Option<upgrade::Watch>,
     /// When the manager looks at its file next.
@@ -500,6 +502,7 @@ impl Manager {
         let upgrade = upgrade::Watch::this_process()
             .map_err(|e| eprintln!("cupertino-sessiond: the program's file is unknown ({e}); a new version starts only with the service"))
             .ok();
+        let wallpapers = wallpaper::Store::new(greeter.gid);
         let mut manager = Manager {
             session_path: users::session_path()?,
             _held_terminals: vec![vt::hold(config.vt)
@@ -532,6 +535,7 @@ impl Manager {
             listed: Vec::new(),
             denial_at: None,
             reported_pictures: HashSet::new(),
+            wallpapers,
             upgrade,
             upgrade_check_at: Instant::now() + upgrade::CHECK_INTERVAL,
             handed_over: false,
@@ -751,26 +755,27 @@ impl Manager {
             Vec::new()
         };
         let reported = &mut self.reported_pictures;
+        let wallpapers = &mut self.wallpapers;
         let logged_in: Vec<u32> = self.sessions.iter().map(|session| session.uid).collect();
-        let roster =
-            roster::build(
-                &self.config,
-                accounts,
-                &admins,
-                &logged_in,
-                |account| match picture::read(account.uid, Path::new(&account.home)) {
-                    Ok(bytes) => bytes,
-                    Err(problem) => {
-                        if reported.insert(account.uid) {
-                            eprintln!(
-                                "cupertino-sessiond: no picture for uid {}: {problem}",
-                                account.uid
-                            );
-                        }
-                        None
+        let roster = roster::build(
+            &self.config,
+            accounts,
+            &admins,
+            &logged_in,
+            |account| match picture::read(account.uid, Path::new(&account.home)) {
+                Ok(bytes) => bytes,
+                Err(problem) => {
+                    if reported.insert(account.uid) {
+                        eprintln!(
+                            "cupertino-sessiond: no picture for uid {}: {problem}",
+                            account.uid
+                        );
                     }
-                },
-            );
+                    None
+                }
+            },
+            |account| wallpapers.wallpaper(account.uid, Path::new(&account.home)),
+        );
         self.listed = roster
             .users
             .iter()

@@ -39,12 +39,14 @@ LimitCORE=0
 RuntimeDirectory=cupertino-login
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=restart
+StateDirectory=cupertino-login
+StateDirectoryMode=0755
 [Install]
 Alias=display-manager.service
 ```
 
 `KillMode=process`: workers and the sessions they supervise survive a crash of the manager (losing every user's session
-because the small daemon crashed is the worst outcome available); the new process adopts them (see "What the manager does"). `RuntimeDirectoryPreserve=restart` keeps `/run/cupertino-login` (the once-per-boot auto login flag) over a restart or a crash and removes it on a stop. There are no sandboxing options: the workers' children inherit
+because the small daemon crashed is the worst outcome available); the new process adopts them (see "What the manager does"). `RuntimeDirectoryPreserve=restart` keeps `/run/cupertino-login` (the once-per-boot auto login flag) over a restart or a crash and removes it on a stop. `StateDirectory=` makes `/var/lib/cupertino-login`, where the manager keeps the users' login screen wallpapers (see "Wallpapers"; the manager makes the directory itself when it is missing). There are no sandboxing options: the workers' children inherit
 the unit's restrictions and a session must be able to run `sudo`.
 
 **PAM services.** `cupertino-greeter`: `auth` and `account` `pam_permit.so`, `session` `pam_loginuid.so` and `pam_systemd.so`.
@@ -87,6 +89,7 @@ reference; they were options of `cupertino-login --greeter`.
 | Hello | the screen's first message must be `Hello` with this protocol version; the manager answers `Hello` and `Welcome` (roster, power items, `will_prompt`, hint setting). Anything else is refused and the connection closed |
 | Roster | (`logged_in` marks the accounts that have a session the manager started: see "Fast user switching") `/etc/passwd` rows with a uid in `UID_MIN..=UID_MAX` of `login.defs` (1000 and 60000 when unset) and a shell other than `nologin` or `false`; the filters of (`filter.rs`); at most 1024 rows and 1 MiB of pictures. Directory-service accounts are not listed; "Other…" reaches them |
 | Pictures | `~/.face` is read on a short-lived thread with `setfsuid(uid)`, `O_NOFOLLOW` and `O_NONBLOCK`, and `fstat` insisting on a regular file of that user of at most 256 KiB. Not decoded. A bad file means no picture, logged once per user per start |
+| Wallpapers | each row's `wallpaper` names the manager's copy of the copy the user's session left; see "Wallpapers" |
 | Attempt | (an account that has a session already is only checked, see "Fast user switching") `Authenticate` names a listed account (it must be a row of the last list) or a typed name (validated again by `is_login_name`); anything else is answered `Denied` after 2 s, the time `pam_unix` takes for a wrong password (`pam_faildelay`; approximate). Otherwise the manager holds the first free terminal above the login VT (`VT_OPENQRY`; none free is `Busy`) and starts a worker with the PAM service `cupertino-session` and `session-command` from `login.conf`. The screen's choices never reach the worker's command, environment or terminal |
 | Conversation | the worker's prompts become `Prompt` events, its info and error text `Notice` events; each `Prompt` carries a `conversation` id (unique over the manager's life) and the screen's `Answer` repeats it: only the answer to the prompt that is open goes back to the worker, once; an answer for a finished or cancelled attempt, a replay, or one that follows the screen's reconnect is dropped with a log line and its secret is zeroed. A prompt of any other style, or a prompt when no attempt is open, is answered with a cancel |
 | Outcome | `pam_authenticate` and `pam_acct_mgmt` map to `Denied` (`AUTH_ERR`, `USER_UNKNOWN`), `Locked` (`MAXTRIES`, and `AUTH_ERR` when a module printed a message before the first password prompt: `pam_faillock`'s `preauth` says "The account is locked due to 3 failed logins." and the stack goes on to ask and fail with `AUTH_ERR`, so the worker tells the lock-out from a wrong password by the conversation, not by the code; the text is not matched), `Expired` (`ACCT_EXPIRED`, `NEW_AUTHTOK_REQD`), `Refused` (`PERM_DENIED`), else `Internal` with the cause in the journal only |
@@ -103,6 +106,26 @@ reference; they were options of `cupertino-login --greeter`.
 | Greeter ends | its worker exits and the login screen's session is started again after 1 s; five exits within 30 s stop that (logged, the manager stays up, the other terminals keep their getty) |
 | logind | the manager ends with failure when logind's signal stream ends (logind restarted); systemd restarts the unit. The design's single in-process reconnect is not built |
 | Upgrade | the manager ends by itself, so systemd starts the new version, once a package upgrade replaced its file and no user session runs; see "Upgrades" |
+
+## Wallpapers
+
+The login screen shows each user's wallpaper behind that user, as the lock screen does. The login screen's account cannot read
+the homes, so the user's session agent (`cupertino-login`, see its README) leaves a JPEG of the session's wallpaper at
+`~/.local/state/cupertino/login-wallpaper.jpg` (`LOGIN_WALLPAPER_FILE`): at most 3840 pixels a side and 16 MiB, written when the
+session starts and when the compositor's settings change, removed when the user has no wallpaper of its own
+(`wallpaper.rs`):
+
+- At each user list (`Welcome`, `Users`) the manager opens that file as the user, by the rules of the pictures: a short-lived
+  thread with `setfsuid(uid)`, `O_NOFOLLOW | O_NONBLOCK`, and `fstat` insisting on a regular file of that user of at most
+  `MAX_WALLPAPER_BYTES`. A file whose device, inode, size and modification time are those of the last copy is not read again.
+- **Not decoded.** The manager reads the JPEG's markers only, to refuse what does not start and end as a JPEG or whose frame
+  header gives a side of 0 or over 3840 pixels; the login screen, an unprivileged process, decodes the copy.
+- It keeps a copy of its own, `/var/lib/cupertino-login/wallpapers/<uid>.jpg` (`WALLPAPER_DIR`): written beside it and renamed
+  over it, so a reader gets the old copy or the new one whole; root's, mode 0640, of the login screen's account's group, in a
+  directory of mode 0750 of the same group that must be root's and no link. The row's `wallpaper` is its path.
+- A refused file (a link, another account's file, too large, no JPEG) and a missing file take the copy away: the row has no
+  wallpaper and the login screen shows its own; the refusal is logged once per user per start. A home that is not there (not
+  mounted while its user is logged out) keeps the copy there is.
 
 ## Upgrades
 
@@ -402,7 +425,8 @@ fake `busctl`, and with the real daemon when it is installed, required in CI the
 | `users` | `Account`, `login_accounts`, `admin_logins`, `by_name`, `by_uid`, `session_path` |
 | `filter` | `Filters::apply`: the hidden, admin, allow and deny lists and the "Other…" rule |
 | `roster` | `build` (rows, pictures within the budget, the row cap), `power_menu` ('s rule), `filters` |
-| `picture` | `read(uid, home)`: the `setfsuid` read |
+| `picture` | `read(uid, home)`: the `setfsuid` read; `as_user` |
+| `wallpaper` | `check` (a JPEG by its markers, its sides), `Store::wallpaper` (the read as the user, the copy for the login screen) |
 | `upgrade` | `Watch` (the file the program was started from against its image), `decide` (whether to hand over), `stop` (`SIGTERM` and a bounded wait on a process descriptor) |
 | `auto_login` | `settings_are_trusted` (the mode and owner rule), `claim` (the once-per-boot flag) |
 | `caller` | `CallerSession`, `Need`, `Denial`, `authorise`: who may call the bus interface; `Asker`, `may_end_other_sessions`: who may restart or shut down while other sessions are open (pure) |
@@ -414,7 +438,7 @@ fake `busctl`, and with the real daemon when it is installed, required in CI the
 ## Tests
 
 `cargo test -p cupertino-sessiond --features app`: the roster (filters, picture budget, row cap, the `logged_in` mark, power rule), the account
-database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), the hand-over rule (a replaced file with no user session hands over, with one it waits, an unchanged, missing or unsettled file is kept; a rename over the file seen and settling, another new file starting the wait again; a process asked to stop ends, one that ignores it is reported), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
+database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), the wallpaper read and copy (a valid file copied with its mode and group and its path given, a changed file copied again, a missing one taking the copy away, a home that is not there keeping it, a symlink, another account's file, a directory, a file over the cap or no JPEG refused, a link in place of the directory refused; the JPEG markers), the hand-over rule (a replaced file with no user session hands over, with one it waits, an unchanged, missing or unsettled file is kept; a rename over the file seen and settling, another new file starting the wait again; a process asked to stop ends, one that ignores it is reported), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
 (`caller`), the screen reader (`reader`: the program list, the bus address, the requests, the ancestry walk, and a fake reader run as
 the test's user that sees only its environment, descriptors 0 to 2 and its 0700 directories, and whose `setsid` daemon ends with it;
 `manager`: only the leader's descendants may connect) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and

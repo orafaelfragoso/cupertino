@@ -38,7 +38,7 @@ pub fn power_menu(config: &LoginConfig) -> PowerMenu {
 }
 
 /// The roster for `accounts` (with `admins` the logins of the administrators; `logged_in` the user ids that have a session).
-/// `picture` reads one account's picture file;
+/// `picture` reads one account's picture file, `wallpaper` gives the path of its login screen wallpaper;
 /// the pictures of the first accounts are sent until [`MAX_PICTURE_BYTES_PER_LIST`] is used, and the list ends at
 /// [`MAX_USERS`] rows ("Other…" reaches the rest), so a frame always fits the cap.
 pub fn build(
@@ -47,6 +47,7 @@ pub fn build(
     admins: &[String],
     logged_in: &[u32],
     mut picture: impl FnMut(&Account) -> Option<Vec<u8>>,
+    mut wallpaper: impl FnMut(&Account) -> Option<String>,
 ) -> Roster {
     let offer = filters(config).apply(accounts, admins);
     let mut picture_bytes = 0;
@@ -74,6 +75,7 @@ pub fn build(
                 display_name: account.display_name(),
                 picture,
                 logged_in: logged_in.contains(&account.uid),
+                wallpaper: wallpaper(&account),
             }
         })
         .collect();
@@ -114,6 +116,7 @@ mod tests {
             &[],
             &[],
             |_| None,
+            |_| None,
         );
         assert_eq!(
             roster.users,
@@ -122,10 +125,37 @@ mod tests {
                 login: "alice".into(),
                 display_name: "alice Full".into(),
                 picture: None,
-                logged_in: false
+                logged_in: false,
+                wallpaper: None,
             }]
         );
         assert!(roster.show_other, "a filter removed one");
+    }
+
+    #[test]
+    fn a_row_names_the_wallpaper_its_account_has() {
+        let roster = build(
+            &config(""),
+            vec![account(1000, "alice"), account(1001, "bob")],
+            &[],
+            &[],
+            |_| None,
+            |account| {
+                (account.uid == 1001)
+                    .then(|| format!("/var/lib/cupertino-login/wallpapers/{}.jpg", account.uid))
+            },
+        );
+        assert_eq!(
+            roster
+                .users
+                .iter()
+                .map(|row| (row.login.as_str(), row.wallpaper.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("alice", None),
+                ("bob", Some("/var/lib/cupertino-login/wallpapers/1001.jpg"))
+            ]
+        );
     }
 
     #[test]
@@ -135,6 +165,7 @@ mod tests {
             vec![account(1000, "alice"), account(1001, "bob")],
             &[],
             &[1001],
+            |_| None,
             |_| None,
         );
         assert_eq!(
@@ -153,9 +184,14 @@ mod tests {
         let accounts = (0..5)
             .map(|i| account(1000 + i, &format!("u{i}")))
             .collect();
-        let roster = build(&config(""), accounts, &[], &[], |_| {
-            Some(vec![1; 250 * 1024])
-        });
+        let roster = build(
+            &config(""),
+            accounts,
+            &[],
+            &[],
+            |_| Some(vec![1; 250 * 1024]),
+            |_| None,
+        );
         let pictures: Vec<bool> = roster.users.iter().map(|u| u.picture.is_some()).collect();
         assert_eq!(pictures, [true, true, true, true, false]);
     }
@@ -166,7 +202,9 @@ mod tests {
             .map(|i| account(2000 + i, &format!("u{i}")))
             .collect();
         assert_eq!(
-            build(&config(""), accounts, &[], &[], |_| None).users.len(),
+            build(&config(""), accounts, &[], &[], |_| None, |_| None)
+                .users
+                .len(),
             MAX_USERS
         );
     }

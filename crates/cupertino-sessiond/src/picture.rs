@@ -44,12 +44,18 @@ impl std::error::Error for PictureProblem {}
 /// The picture of the account `uid` whose home directory is `home`.
 pub fn read(uid: u32, home: &Path) -> Result<Option<Vec<u8>>, PictureProblem> {
     let path = home.join(FACE_FILE);
+    as_user(uid, || read_as_current_fsuid(uid, &path))
+}
+
+/// `read` run on a short-lived thread whose file system user id is `uid`, so the kernel checks each file access of it as
+/// that user.
+pub(crate) fn as_user<T: Send>(uid: u32, read: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         scope
             .spawn(|| {
                 // Safety: `setfsuid` has no memory effects. The thread ends after this read, so the id is never restored.
                 unsafe { libc::setfsuid(uid) };
-                read_as_current_fsuid(uid, &path)
+                read()
             })
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))

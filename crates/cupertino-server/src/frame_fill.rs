@@ -5,9 +5,13 @@
 //!
 //! The client's opaque region says so first: browsers and toolkits that draw their own title bar declare their frame
 //! opaque but for small corners. Without such a region, the pixels of a shared-memory buffer along the frame's edges,
-//! just past the window's corners, say so; a buffer of a format without alpha is opaque; a GPU buffer with alpha and no
-//! region covering it is taken as shaped. A region may leave out corners of up to [`REGION_CORNER`] points however small
-//! the window's own corner radius is.
+//! just past the window's corners, say so; a buffer of a format without alpha is opaque. A GPU buffer with alpha and no
+//! region covering it is framed when the client draws a margin of its own around its frame (a shadow): its window
+//! geometry lies inside its surface, short of it on some side, as a toolkit's frame does and a frameless window, whose
+//! geometry is its whole surface, does not. Once seen, that margin keeps the window framed when its geometry later fills
+//! its surface (maximised or tiled, the client drops its margin), until a shared-memory buffer's edges show it
+//! transparent; otherwise such a buffer is taken as shaped. A region may leave out corners of up to [`REGION_CORNER`]
+//! points however small the window's own corner radius is.
 
 use smithay::backend::allocator::format::has_alpha;
 use smithay::backend::allocator::{Buffer as _, Fourcc};
@@ -15,7 +19,7 @@ use smithay::backend::renderer::utils::{with_renderer_surface_state, SurfaceView
 use smithay::reexports::wayland_server::protocol::{
     wl_buffer::WlBuffer, wl_shm, wl_surface::WlSurface,
 };
-use smithay::utils::{Logical, Rectangle, Transform};
+use smithay::utils::{Logical, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{with_states, SurfaceAttributes};
 
 /// The least alpha (of 255) of a pixel that counts as opaque: an edge drawn by the client, antialiasing aside.
@@ -25,9 +29,24 @@ const OPAQUE_ALPHA: u8 = 0xf0;
 /// window's own corner radius is: browsers leave out squares of their own corners whatever the server rounds.
 const REGION_CORNER: f64 = 16.0;
 
-/// Whether the frame `geometry` (surface-local points) of `surface`'s current state is an opaque rectangle past corners
-/// of `radius` points.
-pub fn opaque_frame(surface: &WlSurface, geometry: Rectangle<i32, Logical>, radius: f64) -> bool {
+/// What a client-drawn frame is, as of a commit ([`opaque_frame`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    /// The frame is an opaque rectangle past the window's corners: the window is styled.
+    pub opaque: bool,
+    /// The client has drawn a margin of its own around its frame (its geometry inside its surface) since its edges were
+    /// last seen transparent: the window stays framed when its geometry fills its surface.
+    pub margined: bool,
+}
+
+/// What the frame `geometry` (surface-local points) of `surface`'s current state is, past corners of `radius` points,
+/// for a window `margined` as of its last commit ([`Frame::margined`]).
+pub fn opaque_frame(
+    surface: &WlSurface,
+    geometry: Rectangle<i32, Logical>,
+    radius: f64,
+    margined: bool,
+) -> Frame {
     let region = with_states(surface, |s| {
         s.cached_state
             .get::<SurfaceAttributes>()
@@ -43,29 +62,77 @@ pub fn opaque_frame(surface: &WlSurface, geometry: Rectangle<i32, Logical>, radi
             s.buffer_scale(),
             s.buffer_transform(),
             s.view(),
+            s.surface_size(),
         )
     });
-    let Some((Some(buffer), scale, transform, view)) = state else {
-        return true;
+    let Some((Some(buffer), scale, transform, view, size)) = state else {
+        return Frame {
+            opaque: true,
+            margined,
+        };
     };
     let gpu = smithay::wayland::dmabuf::get_dmabuf(&buffer)
         .ok()
         .map(|dmabuf| dmabuf.format().code);
-    frame_is_opaque(covered, gpu, || {
+    let seen = Seen {
+        covered,
+        gpu,
+        margin: size.is_some_and(|size| margin_around(geometry, size)),
+        margined,
+    };
+    frame_is_opaque(seen, || {
         shared_edges_opaque(&buffer, scale, transform, view, geometry, radius)
     })
 }
 
-/// Whether a frame is opaque: `covered` when the client's opaque region covers it, else by its buffer, a GPU buffer of
-/// the format `gpu` by whether the format has alpha and a shared-memory one by the pixels at its edges (`shared`).
-fn frame_is_opaque(covered: bool, gpu: Option<Fourcc>, shared: impl FnOnce() -> bool) -> bool {
-    if covered {
-        return true;
+/// What a commit shows of a client-drawn frame: the inputs of [`frame_is_opaque`].
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    /// The client's opaque region covers the frame.
+    covered: bool,
+    /// The format of the GPU buffer, `None` for a shared-memory one.
+    gpu: Option<Fourcc>,
+    /// The window geometry lies inside the surface, short of it on some side ([`margin_around`]).
+    margin: bool,
+    /// [`Frame::margined`] as of the last commit.
+    margined: bool,
+}
+
+/// What a frame is: opaque when the client's opaque region covers it, else by its buffer: a GPU buffer by whether its
+/// format has alpha, and one with alpha by a margin drawn around the frame now or since its edges were last seen
+/// transparent; a shared-memory buffer by the pixels at its edges (`shared`), which also end a margin seen before when
+/// they are transparent.
+fn frame_is_opaque(seen: Seen, shared: impl FnOnce() -> bool) -> Frame {
+    let margined = seen.margined || seen.margin;
+    if seen.covered {
+        return Frame {
+            opaque: true,
+            margined,
+        };
     }
-    match gpu {
-        Some(format) => !has_alpha(format),
-        None => shared(),
+    match seen.gpu {
+        Some(format) => Frame {
+            opaque: !has_alpha(format) || margined,
+            margined,
+        },
+        None => {
+            let opaque = shared();
+            Frame {
+                opaque,
+                margined: margined && opaque,
+            }
+        }
     }
+}
+
+/// Whether the frame `geometry` lies inside a surface of `size` (surface-local points) and short of it on some side:
+/// the client draws a margin of its own (a shadow) around its frame.
+fn margin_around(geometry: Rectangle<i32, Logical>, size: Size<i32, Logical>) -> bool {
+    let surface = Rectangle::from_size(size);
+    geometry.size.w > 0
+        && geometry.size.h > 0
+        && surface.contains_rect(geometry)
+        && geometry != surface
 }
 
 /// Whether the shared-memory `buffer`'s pixels along the edges of the frame `geometry` are opaque ([`edges_opaque`]).
@@ -257,25 +324,83 @@ mod tests {
         }
     }
 
+    /// What a commit shows: a buffer of `gpu` (`None` for shared memory), `covered` by the opaque region, with a
+    /// `margin` around its frame now and `margined` before.
+    fn seen(covered: bool, gpu: Option<Fourcc>, margin: bool, margined: bool) -> Seen {
+        Seen {
+            covered,
+            gpu,
+            margin,
+            margined,
+        }
+    }
+
+    fn unread() -> bool {
+        panic!("a GPU buffer's pixels are not read")
+    }
+
     #[test]
-    fn a_gpu_buffer_with_alpha_is_opaque_only_by_a_covering_region() {
-        let unread = || panic!("a GPU buffer's pixels are not read");
+    fn a_gpu_buffer_with_alpha_is_opaque_by_a_covering_region_or_a_margin_of_its_own() {
+        let argb = Some(Fourcc::Argb8888);
         assert!(
-            frame_is_opaque(true, Some(Fourcc::Argb8888), unread),
+            frame_is_opaque(seen(true, argb, false, false), unread).opaque,
             "an ARGB GPU buffer with a covering opaque region"
         );
         assert!(
-            !frame_is_opaque(false, Some(Fourcc::Argb8888), unread),
-            "an ARGB GPU buffer without one is shaped"
+            !frame_is_opaque(seen(false, argb, false, false), unread).opaque,
+            "an ARGB GPU buffer without one or a margin is shaped"
         );
         assert!(
-            frame_is_opaque(false, Some(Fourcc::Xrgb8888), unread),
+            frame_is_opaque(seen(false, Some(Fourcc::Xrgb8888), false, false), unread).opaque,
             "a GPU buffer without alpha is opaque"
         );
+        let framed = frame_is_opaque(seen(false, argb, true, false), unread);
+        assert!(
+            framed.opaque && framed.margined,
+            "an ARGB GPU buffer drawing a margin around its frame, with no region"
+        );
         // a shared-memory buffer's pixels are read only without a covering region
-        assert!(frame_is_opaque(true, None, || panic!("read")));
-        assert!(!frame_is_opaque(false, None, || false));
-        assert!(frame_is_opaque(false, None, || true));
+        assert!(frame_is_opaque(seen(true, None, false, false), || panic!("read")).opaque);
+        assert!(!frame_is_opaque(seen(false, None, false, false), || false).opaque);
+        assert!(frame_is_opaque(seen(false, None, false, false), || true).opaque);
+    }
+
+    #[test]
+    fn a_margin_once_drawn_keeps_the_frame_until_its_edges_show_transparent() {
+        let argb = Some(Fourcc::Argb8888);
+        // drawn with a margin, then maximised: the geometry fills the surface
+        let first = frame_is_opaque(seen(false, argb, true, false), unread);
+        let maximised = frame_is_opaque(seen(false, argb, false, first.margined), unread);
+        assert_eq!(
+            maximised,
+            Frame {
+                opaque: true,
+                margined: true
+            }
+        );
+        // a covering region or a buffer without alpha keeps it too
+        assert!(frame_is_opaque(seen(true, argb, false, true), unread).margined);
+        assert!(frame_is_opaque(seen(false, Some(Fourcc::Xrgb8888), false, true), unread).margined);
+        // a shared-memory buffer whose edges are opaque keeps it, one whose edges are transparent ends it
+        assert!(frame_is_opaque(seen(false, None, false, true), || true).margined);
+        let cleared = frame_is_opaque(seen(false, None, false, true), || false);
+        assert_eq!(cleared, Frame::default());
+        assert!(!frame_is_opaque(seen(false, argb, false, cleared.margined), unread).opaque);
+    }
+
+    #[test]
+    fn a_frame_is_margined_when_its_geometry_lies_inside_its_surface_and_short_of_it() {
+        let surface = Size::from((1707, 960));
+        // a browser drawing its own toolkit frame inside its shadow
+        assert!(margin_around(rect(34, 18, 1639, 892), surface));
+        // short of the surface on one side alone (tiled)
+        assert!(margin_around(rect(0, 0, 1707, 940), surface));
+        // a frameless window: its geometry is its whole surface
+        assert!(!margin_around(rect(0, 0, 1707, 960), surface));
+        // past the surface (a subsurface out of it), or empty
+        assert!(!margin_around(rect(-10, 0, 1707, 960), surface));
+        assert!(!margin_around(rect(0, 0, 1800, 960), surface));
+        assert!(!margin_around(rect(10, 10, 0, 0), surface));
     }
 
     /// The alpha of a rounded rectangle `w` x `h` with corners of `r` points, opaque inside and clear outside.

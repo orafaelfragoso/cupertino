@@ -245,6 +245,9 @@ pub struct WindowEntry {
     /// The client's own frame is an opaque rectangle up to corners no rounder than the window's
     /// ([`crate::frame_fill`]), as of its last commit; a transparent or shaped window is not.
     pub opaque_frame: bool,
+    /// The client has drawn a margin of its own around its frame (a shadow) since its frame was last seen transparent
+    /// ([`crate::frame_fill::Frame::margined`]): the frame stays opaque when the margin goes (maximised or tiled).
+    pub margined_frame: bool,
 }
 
 impl WindowEntry {
@@ -1453,11 +1456,14 @@ impl Cupertino {
             .unwrap_or(false);
         let entry = &mut self.windows[idx];
         if has_buffer && !entry.server_side && entry.toplevel.wl_surface() == surface {
-            entry.opaque_frame = crate::frame_fill::opaque_frame(
+            let frame = crate::frame_fill::opaque_frame(
                 surface,
                 entry.window.geometry(),
                 self.config.window.corner_radius,
+                entry.margined_frame,
             );
+            entry.opaque_frame = frame.opaque;
+            entry.margined_frame = frame.margined;
         }
         let (mapped, id) = (self.windows[idx].mapped, self.windows[idx].id);
         match (mapped, has_buffer) {

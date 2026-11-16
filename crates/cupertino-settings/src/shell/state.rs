@@ -265,6 +265,8 @@ pub struct State {
     pub(crate) account: crate::system::Account,
     pub(crate) account_picture: Option<cupertino_kit::controls::ImageSource>,
     pub(crate) thumbnails_asked: std::collections::HashSet<PathBuf>,
+    /// The cache folder the thumbnails are kept under; the standard one (`XDG_CACHE_HOME`) when `None`.
+    pub(crate) thumbnail_cache: Option<PathBuf>,
     pub(crate) listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
     pub(crate) agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     pub(crate) agent_registered: bool,
@@ -384,6 +386,7 @@ impl State {
                 .and_then(|path| decode_thumbnail(path, ACCOUNT_PICTURE_EDGE)),
             account,
             thumbnails_asked: std::collections::HashSet::new(),
+            thumbnail_cache: None,
             listings: Reads::default(),
             agent_answer: None,
             agent_registered: false,
@@ -1187,7 +1190,7 @@ impl State {
             folders: folders.iter().map(|f| (f.clone(), Vec::new())).collect(),
             default: self.assets.wallpaper_path(false),
             loading: (0..=folders.len()).collect(),
-            // a thumbnail is asked for once: what could not be made stays known
+            // what could not be made stays known until it is asked for again and answered
             unreadable: std::mem::take(&mut self.live.pictures.unreadable),
         };
         let current: Vec<std::path::PathBuf> = self
@@ -1197,6 +1200,7 @@ impl State {
             .iter()
             .map(std::path::PathBuf::from)
             .collect();
+        self.ask_again(&current);
         self.ask_thumbnails(current);
         // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
         self.start_listing(ListingKey::Packs, None);
@@ -1255,6 +1259,18 @@ impl State {
     }
 
     /// Make the thumbnails of `images` that have none and were not asked for yet, one after the other on a thread.
+    /// The pictures among `images` whose thumbnail could not be made are asked for again by the next
+    /// [`Self::ask_thumbnails`], as they are listed again: a file that came back, or was mended, shows; one still
+    /// missing or unreadable says so again. Each keeps what it says until it is answered.
+    pub(crate) fn ask_again(&mut self, images: &[std::path::PathBuf]) {
+        for image in images {
+            if self.live.pictures.unreadable.contains_key(image) {
+                self.thumbnails_asked.remove(image);
+                self.thumbnails.remove(image);
+            }
+        }
+    }
+
     pub(crate) fn ask_thumbnails(&mut self, images: Vec<std::path::PathBuf>) {
         let wanted: Vec<std::path::PathBuf> = images
             .into_iter()
@@ -1266,10 +1282,16 @@ impl State {
             return;
         }
         let notify = self.notify.clone();
+        let cache_home = self.thumbnail_cache.clone();
         let spawned = std::thread::Builder::new()
             .name("wallpaper-thumbnails".into())
             .spawn(move || {
-                let cache = cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings");
+                let cache = match cache_home {
+                    Some(home) => {
+                        cupertino_thumbnails::Thumbnailer::new(home, "cupertino-settings")
+                    }
+                    None => cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings"),
+                };
                 for image in wanted {
                     match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
                         Ok(thumbnail) => {
@@ -1362,6 +1384,7 @@ impl State {
                         0 => pictures.bundled = files,
                         n => pictures.folders[n - 1].1 = files,
                     }
+                    self.ask_again(&images);
                     self.ask_thumbnails(images);
                 }
             }

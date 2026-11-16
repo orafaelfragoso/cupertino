@@ -81,7 +81,7 @@ impl File {
             File::Appearance => "each app",
             File::Launcher => "the launcher",
             File::ScreenSharing => "the portal",
-            File::Notifications => "the notification centre",
+            File::Notifications => "the notification center",
         }
     }
 

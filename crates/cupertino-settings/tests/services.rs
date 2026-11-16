@@ -724,7 +724,7 @@ fn st19_a_missing_daemon_disables_the_switch_with_the_reason() {
     for (pane, reason) in [
         (PaneId::Wifi, "Wi-Fi is not available"),
         (PaneId::Bluetooth, "Bluetooth is not available"),
-        (PaneId::Focus, "The notification centre is not running"),
+        (PaneId::Focus, "The notification center is not running"),
         (PaneId::Network, "Wi-Fi is not available"),
     ] {
         let mut s = sections(pane, &settings(dir.path()), LIGHT, &live);
@@ -1118,7 +1118,7 @@ fn a_bus_that_cannot_be_reached_shows_the_plain_state_and_never_the_error() {
     );
     assert_eq!(
         reason(services.focus()),
-        "The notification centre is not running"
+        "The notification center is not running"
     );
 }
 

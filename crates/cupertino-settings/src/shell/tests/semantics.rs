@@ -196,7 +196,7 @@ fn each_pane_without_a_service_reads_its_controls_by_role_name_value_and_state()
             "Focus",
             &[
                 "StaticText \"Do Not Disturb\"",
-                "StaticText \"The notification centre is not running\"",
+                "StaticText \"The notification center is not running\"",
                 "Switch \"Do Not Disturb\" off disabled",
             ],
         ),

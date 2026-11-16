@@ -102,7 +102,7 @@ surface, ends the process with a failure status so the server restarts it.
   back (at the unlock, or as the centre closes) is said again; one sliding out is no longer live, so it is not said as
   it leaves. Nothing is said or readable while the session is locked, and nothing already said is said again at the
   unlock (see Session); an application whose previews are Never is said as its application and "Notification". The centre
-  is a group named "Notification Centre" holding a list of its cards (list items with their position); its cards are
+  is a group named "Notification Center" holding a list of its cards (list items with their position); its cards are
   not live. Each is named "app: summary" with its whole body as description, read as a reader moves to it, and a
   group's front card says how many more it holds and that it is collapsed (expanded state false). The first card takes the
   focus when the list opens, and keeps it while its group expands. Every card, close button and action button takes assistive technology's click, and the disclosure button reports
@@ -233,7 +233,7 @@ The model's calls, for a host of its own (all take `now`):
 | shadow opacity 0.20 / 0.25, radius 4, no offset; vibrant rim; 1 pt white inner rim | |
 | alerts skip the timer (critical urgency → alert mapping is ours) | |
 | top inset (menu bar + 16 pt), right margin 16 pt (Dock at the bottom) | |
-| centre header: a 33 pt row without a panel, 5 pt above the first card; title "Notification Centre" bold 19 pt 2.5 pt in from the cards' leading edge; a 20 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
+| centre header: a 33 pt row without a panel, 5 pt above the first card; title "Notification Center" bold 19 pt 2.5 pt in from the cards' leading edge; a 20 pt clear button at their trailing edge, growing into "Clear All"; the open list replaces the banners on screen | |
 | card: 18 pt corners, card glass, icon 13 pt from the leading edge and 14 pt before the text, 16 pt trailing, 12 pt top and bottom, at least 58 pt tall; age 11 pt at the top right in 56 pt of room | |
 | expanded group: a 30 pt header row (application 15 pt semibold, Show Less, clear), cards 6 pt apart; a spring of perceptual duration 0.35 s, no bounce | |
 | Clear menu scopes: "Banners Only" (keeps pinned; offered only with both pinned and other notifications in the list) and "All Notifications" (always); panel metrics item 22, edge padding 5, minimum width 150, radius 6, row highlight radius 4 | |

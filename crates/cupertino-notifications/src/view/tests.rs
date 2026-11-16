@@ -44,6 +44,22 @@ fn long(words: usize) -> String {
         .join(" ")
 }
 
+/// The words a person reads and hears for the list: its window's title, its heading and its accessible name are one
+/// string, "Notification Center" (the semantics goldens of `tests/kit_goldens.rs` hold the heading and the name).
+#[test]
+fn the_centre_s_window_title_reads_notification_center() {
+    assert_eq!(CENTRE_TITLE, "Notification Center");
+    let m = metrics();
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let ui = Ui {
+        centre_open: true,
+        ..Ui::default()
+    };
+    let centre = windows::<Input>(&mut c, &ui, &m, 1.0, |i| i);
+    assert_eq!(centre[0].spec.title, "Notification Center");
+}
+
 #[test]
 fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
     let m = metrics();

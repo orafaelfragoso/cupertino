@@ -368,7 +368,7 @@ pub const CORNER_ACTIONS: [(&str, &str); 9] = [
     ("App Grid", "app-grid"),
     ("Launcher", "launcher"),
     ("Lock Screen", "lock"),
-    ("Notification Centre", "notification-center"),
+    ("Notification Center", "notification-center"),
     ("Control Panel", "control-panel"),
 ];
 
@@ -4014,6 +4014,21 @@ mod tests {
             (s.keyboard.repeat_delay_ms, s.keyboard.repeat_interval_ms),
             (Some(417), Some(33)),
             "on again with the saved delay"
+        );
+    }
+
+    /// The hot corner that opens the notification list is labelled "Notification Center", and no choice says "Centre".
+    #[test]
+    fn the_corner_choice_for_the_notification_list_reads_notification_center() {
+        let label = CORNER_ACTIONS
+            .iter()
+            .find(|(_, action)| *action == "notification-center")
+            .map(|(label, _)| *label);
+        assert_eq!(label, Some("Notification Center"));
+        assert!(CORNER_ACTIONS.iter().all(|(l, _)| !l.contains("Centre")));
+        assert_eq!(
+            crate::settings::File::Notifications.owner(),
+            "the notification center"
         );
     }
 

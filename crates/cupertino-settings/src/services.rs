@@ -594,7 +594,7 @@ impl Services {
             });
         reading(
             self.session.checked(result),
-            "The notification centre is not running",
+            "The notification center is not running",
         )
     }
 

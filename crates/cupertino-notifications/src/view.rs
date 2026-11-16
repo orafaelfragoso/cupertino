@@ -69,7 +69,7 @@ pub use motion::{Gap, Removal, Rise, Slide, SLIDE_DISTANCE};
 /// The `app_id` of every window of the process.
 pub const APP_ID: &str = "cupertino-notifications";
 /// The title of the notification centre's window, which tells it from the banners' windows.
-pub const CENTRE_TITLE: &str = "Notification Centre";
+pub const CENTRE_TITLE: &str = "Notification Center";
 /// Room around a banner card in its window for the card's shadow, in points: the shadow's reach.
 pub const SHADOW_MARGIN: f64 = SHADOW_REACH;
 /// Banners below this opacity get no window.

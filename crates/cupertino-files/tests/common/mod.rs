@@ -199,14 +199,17 @@ impl Run {
         let mut driver =
             TestDriver::new(host.capabilities, options, ManualClock::new(Timestamp(0)));
         driver.run_until_idle(budget()).unwrap();
-        let window = driver.runtime().windows()[0].1;
+        // a Files started without a window has none to act on until a call opens one
+        let window = driver.runtime().windows().first().map(|(_, id)| *id);
         let mut run = Run {
             driver,
-            window,
+            window: window.unwrap_or(WindowId(u32::MAX)),
             home,
             now: Timestamp(0),
         };
-        run.activate(window);
+        if let Some(window) = window {
+            run.activate(window);
+        }
         run
     }
 

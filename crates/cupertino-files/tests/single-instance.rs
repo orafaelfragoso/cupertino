@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use common::{place, Run};
 use cupertino_files::instance::{
-    self, Launch, LaunchError, Request, Service, Target, BUS_NAME, INTERFACE, OBJECT_PATH,
+    self, Launch, LaunchError, Request, Service, Target, BUS_NAME, FILE_MANAGER_INTERFACE,
+    FILE_MANAGER_NAME, FILE_MANAGER_PATH, INTERFACE, OBJECT_PATH,
 };
 use cupertino_files::kit::Observer;
 use cupertino_files::notice::Notices;
@@ -82,6 +83,17 @@ fn files(
     bus: &PrivateBus,
     configure: impl FnOnce(cupertino_files::kit::Start) -> cupertino_files::kit::Start,
 ) -> Run {
+    let mut run = files_noticed(bus, Notices::start(None), configure);
+    run.wait_until(|run| run.rows().len() == 2);
+    run
+}
+
+/// [`files`] posting its notices to `notices`, before its window is listed (none, when `configure` takes it away).
+fn files_noticed(
+    bus: &PrivateBus,
+    notices: Notices,
+    configure: impl FnOnce(cupertino_files::kit::Start) -> cupertino_files::kit::Start,
+) -> Run {
     let home = tempfile::tempdir().unwrap();
     let documents = home.path().join("Documents");
     std::fs::create_dir_all(documents.join("Notes")).unwrap();
@@ -93,17 +105,15 @@ fn files(
         reduce_transparency: false,
         reduce_motion: false,
     };
-    let mut run = Run::start_configured(
+    Run::start_configured(
         home,
         documents,
         places,
-        Notices::start(None),
+        notices,
         None,
         preferences,
         |start| configure(start.with_instance(Some(service))),
-    );
-    run.wait_until(|run| run.rows().len() == 2);
-    run
+    )
 }
 
 /// The window with `key`, while it is open.
@@ -751,4 +761,327 @@ fn the_first_window_is_raised_with_the_token_files_was_started_with() {
         [Some("startup-token".to_owned())],
         "once it is shown, and once only"
     );
+}
+
+/// Call `method` of the file manager object on `bus` with these URIs and startup id, as another program's "Show in
+/// folder" does.
+fn file_manager(
+    bus: &PrivateBus,
+    method: &'static str,
+    uris: Vec<String>,
+    startup_id: &str,
+) -> impl FnOnce() -> zbus::Result<()> + Send + 'static {
+    let connection = bus.connect();
+    let startup_id = startup_id.to_owned();
+    move || {
+        connection
+            .call_method(
+                Some(FILE_MANAGER_NAME),
+                FILE_MANAGER_PATH,
+                Some(FILE_MANAGER_INTERFACE),
+                method,
+                &(uris, startup_id),
+            )
+            .map(drop)
+    }
+}
+
+fn uri(path: &Path) -> String {
+    Target::Folder(path.to_path_buf()).uri()
+}
+
+/// Make `window` the one the helpers act on, and wait until its list shows `rows` items.
+fn look_at(run: &mut Run, window: WindowId, rows: usize) {
+    run.activate(window);
+    run.wait_until(|run| run.rows().len() == rows);
+}
+
+#[test]
+fn files_owns_the_file_manager_name_beside_its_own() {
+    let Some(bus) = bus() else { return };
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&bus.connect()).unwrap();
+    let owner_of = |name: &str| {
+        dbus.get_name_owner(name.try_into().unwrap())
+            .ok()
+            .map(|o| o.to_string())
+    };
+    // another file manager holds the name: Files waits in line and gets it once that one lets go
+    let other = bus.connect();
+    zbus::blocking::fdo::DBusProxy::new(&other)
+        .unwrap()
+        .request_name(
+            FILE_MANAGER_NAME.try_into().unwrap(),
+            zbus::fdo::RequestNameFlags::DoNotQueue.into(),
+        )
+        .unwrap();
+    let service = Service::serve(bus.builder()).expect("its own name is free");
+    let files = owner_of(BUS_NAME).expect("Files owns its name");
+    assert_ne!(owner_of(FILE_MANAGER_NAME).as_ref(), Some(&files));
+    drop(other);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while owner_of(FILE_MANAGER_NAME).as_ref() != Some(&files) {
+        assert!(Instant::now() < deadline, "the name never came to Files");
+        std::thread::yield_now();
+    }
+    drop(service);
+    wait_until_unowned(&bus);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while owner_of(FILE_MANAGER_NAME).is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "Files kept the file manager name"
+        );
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn show_items_selects_the_items_of_one_folder_in_the_window_that_shows_it() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    let first = run.window;
+    present(&mut run, first);
+    let documents = run.home().join("Documents");
+    let show = file_manager(
+        &bus,
+        "ShowItems",
+        vec![
+            uri(&documents.join("big.bin")),
+            uri(&documents.join("Notes")),
+        ],
+        "show-token",
+    );
+    while_turning(&mut run, show).expect("ShowItems is taken");
+    assert_eq!(run.windows().len(), 1, "the window on the folder is used");
+    assert_eq!(run.selected_rows(), ["big.bin", "Notes"]);
+    assert_eq!(
+        activations(&mut run, first),
+        [Some("show-token".to_owned())],
+        "raised with the startup id"
+    );
+
+    // Files has no information window: the items' properties select them too, here with no startup id
+    let properties = file_manager(
+        &bus,
+        "ShowItemProperties",
+        vec![uri(&documents.join("Notes"))],
+        "",
+    );
+    while_turning(&mut run, properties).expect("ShowItemProperties is taken");
+    assert_eq!(run.selected_rows(), ["Notes"]);
+    assert_eq!(
+        activations(&mut run, first),
+        [Some("show-token".to_owned()), None]
+    );
+}
+
+#[test]
+fn show_items_opens_a_window_a_folder_with_its_items_selected() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    let home = run.home();
+    let notes = home.join("Documents/Notes");
+    let pictures = home.join("Pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    for name in ["a.png", "b.png", "c.png"] {
+        std::fs::write(pictures.join(name), b"x").unwrap();
+    }
+    std::fs::write(notes.join("todo.txt"), b"x").unwrap();
+    // an absolute path is taken as a URI is
+    let show = file_manager(
+        &bus,
+        "ShowItems",
+        vec![
+            uri(&pictures.join("c.png")),
+            notes.join("todo.txt").display().to_string(),
+            uri(&pictures.join("a.png")),
+        ],
+        "show-token",
+    );
+    while_turning(&mut run, show).expect("ShowItems is taken");
+    assert_eq!(run.windows().len(), 3, "one new window a folder");
+    let on_pictures = window(&run, "browser/1").expect("a window on Pictures");
+    let on_notes = window(&run, "browser/2").expect("a window on Notes");
+    assert_eq!(title(&mut run, on_pictures), "Pictures");
+    assert_eq!(title(&mut run, on_notes), "Notes");
+    look_at(&mut run, on_pictures, 3);
+    run.wait_until(|run| run.selected_rows() == ["a.png", "c.png"]);
+    look_at(&mut run, on_notes, 1);
+    run.wait_until(|run| run.selected_rows() == ["todo.txt"]);
+    assert!(
+        activations(&mut run, on_pictures).is_empty(),
+        "one window is raised"
+    );
+    assert_eq!(
+        activations(&mut run, on_notes),
+        [Some("show-token".to_owned())],
+        "the last, once it is shown"
+    );
+}
+
+#[test]
+fn show_folders_opens_each_folder() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    let notes = run.home().join("Documents/Notes");
+    let show = file_manager(&bus, "ShowFolders", vec![uri(&notes)], "folder-token");
+    while_turning(&mut run, show).expect("ShowFolders is taken");
+    let opened = window(&run, "browser/1").expect("a window on the folder");
+    assert_eq!(title(&mut run, opened), "Notes");
+    present(&mut run, opened);
+    assert_eq!(
+        activations(&mut run, opened),
+        [Some("folder-token".to_owned())]
+    );
+}
+
+/// A notification server that hands over the summary of each notification.
+struct Summaries(Mutex<mpsc::Sender<String>>);
+
+#[zbus::interface(name = "org.freedesktop.Notifications")]
+impl Summaries {
+    #[allow(clippy::too_many_arguments)]
+    fn notify(
+        &self,
+        _app_name: String,
+        _replaces_id: u32,
+        _app_icon: String,
+        summary: String,
+        _body: String,
+        _actions: Vec<String>,
+        _hints: HashMap<String, OwnedValue>,
+        _expire_timeout: i32,
+    ) -> u32 {
+        let _ = self.0.lock().unwrap().send(summary);
+        1
+    }
+}
+
+#[test]
+fn an_item_that_does_not_exist_is_a_notice_and_the_others_are_still_shown() {
+    let Some(bus) = bus() else { return };
+    let (sent, summaries) = mpsc::channel();
+    let _server = bus
+        .blocking_builder()
+        .name("org.freedesktop.Notifications")
+        .unwrap()
+        .serve_at(
+            "/org/freedesktop/Notifications",
+            Summaries(Mutex::new(sent)),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut run = files_noticed(&bus, Notices::start(Some(bus.connect())), |start| start);
+    run.wait_until(|run| run.rows().len() == 2);
+    let documents = run.home().join("Documents");
+    let notice = || {
+        summaries
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a notice")
+    };
+    let show = file_manager(
+        &bus,
+        "ShowItems",
+        vec![
+            uri(&documents.join("gone.txt")),
+            uri(&documents.join("big.bin")),
+        ],
+        "",
+    );
+    while_turning(&mut run, show).expect("the call still succeeds");
+    assert_eq!(run.selected_rows(), ["big.bin"]);
+    let said = notice();
+    assert!(said.contains("gone.txt"), "{said}");
+
+    // nothing the call names is there: a notice, and no window
+    let home = run.home();
+    let gone = file_manager(
+        &bus,
+        "ShowItems",
+        vec![uri(&home.join("nowhere/x.txt"))],
+        "",
+    );
+    while_turning(&mut run, gone).expect("taken");
+    assert_eq!(run.windows().len(), 1);
+    let said = notice();
+    assert!(said.contains("x.txt"), "{said}");
+    let folder = file_manager(&bus, "ShowFolders", vec![uri(&home.join("nowhere"))], "");
+    while_turning(&mut run, folder).expect("taken");
+    assert_eq!(run.windows().len(), 1);
+    let said = notice();
+    assert!(said.contains("nowhere"), "{said}");
+}
+
+#[test]
+fn a_file_manager_call_naming_no_local_item_is_refused() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    for uris in [
+        vec!["sftp://host/x".to_owned()],
+        vec!["relative.txt".to_owned()],
+    ] {
+        let refused = file_manager(&bus, "ShowItems", uris, "");
+        let e = while_turning(&mut run, refused).expect_err("refused");
+        assert_eq!(error_name(&e), "org.freedesktop.DBus.Error.InvalidArgs");
+    }
+    let empty = file_manager(&bus, "ShowItems", Vec::new(), "");
+    while_turning(&mut run, empty).expect("no item is nothing to do");
+    assert_eq!(run.windows().len(), 1);
+}
+
+#[test]
+fn a_files_started_for_a_call_opens_only_what_the_call_asks_for() {
+    let Some(bus) = bus() else { return };
+    let mut run = files_noticed(&bus, Notices::start(None), |start| start.without_window());
+    assert!(run.windows().is_empty(), "no window of its own");
+    let documents = run.home().join("Documents");
+    let show = file_manager(
+        &bus,
+        "ShowItems",
+        vec![uri(&documents.join("big.bin"))],
+        "activation-token",
+    );
+    while_turning(&mut run, show).expect("ShowItems is taken");
+    let opened = window(&run, "browser/0").expect("a window on the folder");
+    look_at(&mut run, opened, 2);
+    run.wait_until(|run| run.selected_rows() == ["big.bin"]);
+    assert_eq!(
+        activations(&mut run, opened),
+        [Some("activation-token".to_owned())]
+    );
+    close(&mut run, opened);
+    assert!(
+        run.driver.runtime().exited(),
+        "it exits with its last window"
+    );
+}
+
+#[test]
+fn a_files_started_for_a_call_that_never_comes_exits_after_the_wait() {
+    let Some(bus) = bus() else { return };
+    let mut run = files_noticed(&bus, Notices::start(None), |start| start.without_window());
+    let wait = cupertino_files::kit::CALL_WAIT.as_millis() as u64;
+    run.frames(wait - 1000, 1000);
+    assert!(!run.driver.runtime().exited(), "it waits for the call");
+    run.frames(1000, 1000);
+    assert!(run.driver.runtime().exited());
+}
+
+#[test]
+fn the_program_the_bus_starts_leaves_the_calls_to_a_running_files() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    let home = run.home();
+    let (ok, said) = run_launch(
+        &mut run,
+        launch(&bus, &home, &home, &["--gapplication-service"]),
+    );
+    assert!(ok, "it exits at once: {said}");
+    assert_eq!(run.windows().len(), 1, "and asks for nothing");
+    let (ok, said) = run_launch(
+        &mut run,
+        launch(&bus, &home, &home, &["--gapplication-service", "Documents"]),
+    );
+    assert!(!ok && said.contains("takes no folder"), "{said}");
 }

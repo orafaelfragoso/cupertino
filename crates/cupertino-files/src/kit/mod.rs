@@ -88,9 +88,9 @@ pub const APP_ID: &str = "cupertino-files";
 
 /// What the first window opens with; [`Start::open`] lists the folder before the toolkit runs.
 pub struct Start {
-    browser: Browser,
-    woken: async_channel::Receiver<()>,
-    wake: Wake,
+    /// The first window's folder, what wakes when it changes and what wakes it; none for a Files started by a call
+    /// ([`Start::without_window`]).
+    first: Option<(Browser, async_channel::Receiver<()>, Wake)>,
     places: Vec<Place>,
     notices: Notices,
     /// What opens a file: the session's associations, read at each open so changed defaults apply at once.
@@ -138,17 +138,41 @@ impl Start {
         terminal: Option<Vec<String>>,
         system: Option<Connection>,
     ) -> io::Result<Start> {
+        let first = open_browser(folder, types.clone(), recents.clone())?;
+        Ok(Start {
+            first: Some(first),
+            ..Start::idle(
+                places,
+                types,
+                recents,
+                notices,
+                applications,
+                terminal,
+                system,
+            )
+        })
+    }
+
+    /// [`Start::open`] without its window: Files opens the windows the calls it serves ask for, and exits when the
+    /// first call has not come within [`CALL_WAIT`], or once it opened nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn idle(
+        places: Vec<Place>,
+        types: Option<Arc<MimeDatabase>>,
+        recents: PathBuf,
+        notices: Notices,
+        applications: Box<dyn Fn() -> io::Result<MimeApps>>,
+        terminal: Option<Vec<String>>,
+        system: Option<Connection>,
+    ) -> Start {
         let (media_wake, media_woken) = wake_channel();
         let volumes = system.and_then(|system| {
             Volumes::watch(system, notices.clone(), media_wake)
                 .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
                 .ok()
         });
-        let (browser, woken, wake) = open_browser(folder, types.clone(), recents.clone())?;
-        Ok(Start {
-            browser,
-            woken,
-            wake,
+        Start {
+            first: None,
             places,
             notices,
             applications,
@@ -171,7 +195,15 @@ impl Start {
             clock: SystemTime::now,
             instance: None,
             activation: None,
-        })
+        }
+    }
+
+    /// The same start without its first window, as [`Start::idle`] makes it.
+    pub fn without_window(self) -> Start {
+        Start {
+            first: None,
+            ..self
+        }
     }
 
     /// The windows moving items to `trash` and putting them back from it, in place of the session's trash.
@@ -330,7 +362,12 @@ pub struct Model {
     session: Session,
     /// Files asked to exit: the messages left in that turn neither wait for the notices again nor exit again.
     exiting: bool,
+    /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
+    awaiting_call: bool,
 }
+
+/// How long a Files started without a window ([`Start::idle`]) waits for the call it was started for before it exits.
+pub const CALL_WAIT: Duration = Duration::from_secs(10);
 
 /// What every window shares.
 struct Session {
@@ -499,6 +536,8 @@ pub enum Message {
     Raise(WindowKey, Option<String>),
     /// A notice of a file operation's end was clicked; none once no click can come any more.
     Noticed(Option<crate::notice::Click>),
+    /// [`CALL_WAIT`] passed since Files started without a window.
+    CallWaitOver,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -720,6 +759,7 @@ impl Application for Files {
             windows: BTreeMap::new(),
             next_window: 0,
             exiting: false,
+            awaiting_call: start.first.is_none(),
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
@@ -755,13 +795,19 @@ impl Application for Files {
                 view_revision: 0,
             },
         };
-        let first = model.next_window;
-        let mut commands = vec![
-            model.add_window(start.browser, start.woken, start.wake),
-            woken(&model.session.places_watch.woken, Message::Places),
-        ];
-        if let Some(token) = start.activation {
-            commands.push(remote::raise(window_key(first), Some(token)));
+        let mut commands = vec![woken(&model.session.places_watch.woken, Message::Places)];
+        match start.first {
+            Some((browser, woken, wake)) => {
+                let first = model.next_window;
+                commands.push(model.add_window(browser, woken, wake));
+                if let Some(token) = start.activation {
+                    commands.push(remote::raise(window_key(first), Some(token)));
+                }
+            }
+            None => commands.push(Command::After {
+                delay: CALL_WAIT,
+                message: Message::CallWaitOver,
+            }),
         }
         if let Some(instance) = &model.session.instance {
             commands.push(woken(instance.woken(), Message::Remote));
@@ -815,6 +861,10 @@ impl Model {
             Message::Job(event) => self.job_event(event),
             Message::Noticed(click) => self.noticed(click),
             Message::Remote => self.remote_calls(),
+            Message::CallWaitOver => {
+                self.awaiting_call = false;
+                Vec::new()
+            }
             Message::Raise(key, token) => {
                 vec![Command::Window(key, WindowRequest::Activate(token))]
             }
@@ -873,7 +923,12 @@ impl Model {
     /// notices posted are sent.
     fn exit_when_done(&mut self) -> Option<Command<Message>> {
         let jobs = &self.session.jobs;
-        if self.exiting || !self.windows.is_empty() || !jobs.running.is_empty() || jobs.visible() {
+        if self.exiting
+            || self.awaiting_call
+            || !self.windows.is_empty()
+            || !jobs.running.is_empty()
+            || jobs.visible()
+        {
             return None;
         }
         self.exiting = true;
@@ -1267,6 +1322,9 @@ impl Model {
                 }
                 window.spring_settle();
                 let mut commands = window.listed(id);
+                if let Some(path) = window.browser.take_revealed() {
+                    commands.extend(window.focus_item(id, &path));
+                }
                 commands.push(woken(&window.woken, Message::Window(id, Event::Woken)));
                 return commands;
             }

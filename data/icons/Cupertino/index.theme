@@ -1,0 +1,12 @@
+[Icon Theme]
+Name=Cupertino
+Comment=The desktop's own symbolic icons for applications that draw their own controls; every other icon comes from the themes it inherits
+Inherits=Adwaita,hicolor
+Directories=symbolic/actions
+
+[symbolic/actions]
+Context=Actions
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable

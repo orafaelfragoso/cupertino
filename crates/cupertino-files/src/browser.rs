@@ -81,6 +81,8 @@ pub struct Browser {
     reselect: Option<SelectionPaths>,
     /// The folders to expand again as the listing reaches them ([`Browser::return_to`]), outermost first.
     reopen: Vec<PathBuf>,
+    /// The item [`Browser::reveal`] puts the keyboard on, until the window takes it ([`Browser::take_revealed`]).
+    revealing: Option<PathBuf>,
 }
 
 /// Where a window was, to go back to with [`Browser::return_to`]: its history, its expanded folders and its
@@ -205,6 +207,7 @@ impl Browser {
             filter: None,
             reselect: None,
             reopen: Vec::new(),
+            revealing: None,
         })
     }
 
@@ -485,6 +488,7 @@ impl Browser {
         self.awaited = None;
         self.reselect = None;
         self.reopen.clear();
+        self.revealing = None;
         old
     }
 
@@ -545,6 +549,25 @@ impl Browser {
             self.reopen.clear();
         }
         !self.reopen.is_empty() || reading
+    }
+
+    /// Select the items at `paths` once the folder has been read, the keyboard on the first, which the window then
+    /// scrolls into sight ([`Browser::take_revealed`]). Items the listing does not show are left out.
+    pub fn reveal(&mut self, paths: Vec<PathBuf>) {
+        let first = paths.first().cloned();
+        self.reselect = Some((paths, first.clone(), first.clone()));
+        self.revealing = first;
+        self.reselect_pending();
+    }
+
+    /// The item a [`Browser::reveal`] put the keyboard on, once its selection is made and while it is listed: given
+    /// once.
+    pub fn take_revealed(&mut self) -> Option<PathBuf> {
+        if self.reselect.is_some() {
+            return None;
+        }
+        let path = self.revealing.take()?;
+        self.index_of_path(&path).map(|_| path)
     }
 
     /// Whether the folder is still being read.
@@ -1144,6 +1167,40 @@ mod tests {
         pump(&mut b, "the empty listing", |b| !b.model.is_loading());
         std::fs::remove_dir_all(d.path().join("Projects")).unwrap();
         pump(&mut b, "the move to the ancestor", |b| b.dir() == d.path());
+    }
+
+    #[test]
+    fn revealed_items_are_selected_once_listed_with_the_keyboard_on_the_first() {
+        let d = tree();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            waking(),
+        )
+        .unwrap();
+        let (notes, file2) = (d.path().join("Notes.md"), d.path().join("file2.txt"));
+        // asked before the folder is read, with an item the listing never shows
+        b.reveal(vec![
+            notes.clone(),
+            d.path().join("gone.txt"),
+            d.path().join(".hidden"),
+            file2.clone(),
+        ]);
+        assert_eq!(b.take_revealed(), None, "nothing is selected yet");
+        pump(&mut b, "the listing", |b| {
+            b.entries().len() == 4 && !b.is_loading()
+        });
+        assert_eq!(selected(&b), ["file2.txt", "Notes.md"]);
+        assert_eq!(b.selection().focus(), Some(2), "the keyboard on Notes.md");
+        assert_eq!(b.take_revealed(), Some(notes));
+        assert_eq!(b.take_revealed(), None, "given once");
+
+        // in a folder already read, at once; a first item that is not listed gives the keyboard to nothing
+        b.reveal(vec![d.path().join("gone.txt"), file2]);
+        assert_eq!(selected(&b), ["file2.txt"]);
+        assert_eq!(b.take_revealed(), None);
     }
 
     #[test]

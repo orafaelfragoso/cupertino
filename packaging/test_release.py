@@ -65,6 +65,70 @@ class ApplicationsTest(unittest.TestCase):
             check(SHIPPED + ['crates/cupertino-settings/data/applications/cupertino-mimeapps.list'])
 
 
+class IconThemeTest(unittest.TestCase):
+    """The installed icon theme answers the symbolic names applications' own title bars look up."""
+    NAMES = ('window-close-symbolic', 'window-minimize-symbolic', 'window-maximize-symbolic', 'window-restore-symbolic')
+
+    def installed(self):
+        """The theme as the data package installs it: {path under usr/share/icons/<theme>: source}."""
+        theme = Path(release.ICON_THEME).name
+        prefix = f'usr/share/icons/{theme}/'
+        return {rel[len(prefix):]: release.ROOT / src for rel, src, _m, _c in release.data() if rel.startswith(prefix)}
+
+    def lookup(self, files, name, size):
+        """The file a theme lookup finds for `name` at `size` in the theme's own directories, as the icon theme
+        specification matches them (a scalable directory between MinSize and MaxSize, else the exact Size), or None."""
+        index = configparser.ConfigParser(interpolation=None)
+        index.optionxform = str
+        index.read_string(files['index.theme'].read_text())
+        for directory in index['Icon Theme']['Directories'].split(','):
+            spec = index[directory]
+            fixed = int(spec['Size'])
+            low, high = int(spec.get('MinSize', fixed)), int(spec.get('MaxSize', fixed))
+            matches = low <= size <= high if spec.get('Type', 'Threshold') == 'Scalable' else size == fixed
+            for ext in ('.svg', '.png'):
+                if matches and f'{directory}/{name}{ext}' in files:
+                    return files[f'{directory}/{name}{ext}']
+        return None
+
+    def test_the_window_button_names_resolve_at_every_size_asked(self):
+        files = self.installed()
+        self.assertIn('index.theme', files)
+        for name in self.NAMES:
+            for size in (16, 24, 32):
+                with self.subTest(name=name, size=size):
+                    found = self.lookup(files, name, size)
+                    self.assertIsNotNone(found)
+                    svg = found.read_text()
+                    self.assertTrue(svg.startswith('<svg ') and 'viewBox="0 0 16 16"' in svg, found)
+                    # a symbolic icon is recoloured by its fill: a stroke or an embedded picture would not follow
+                    for kept in ('stroke', '<image', 'href'):
+                        self.assertNotIn(kept, svg, found)
+
+    def test_other_names_fall_back_to_the_inherited_themes(self):
+        index = configparser.ConfigParser(interpolation=None)
+        index.read_string(self.installed()['index.theme'].read_text())
+        self.assertEqual(index['Icon Theme']['Inherits'].split(','), ['Adwaita', 'hicolor'])
+        self.assertIsNone(self.lookup(self.installed(), 'folder', 16))
+
+
+class FileManagerServiceTest(unittest.TestCase):
+    DEST = f'usr/share/dbus-1/services/{release.FILE_MANAGER_SERVICE}'
+
+    def test_the_bus_starts_files_for_the_file_manager_name(self):
+        files = {rel: src for rel, src, _mode, _conf in release.runtime()}
+        self.assertIn(self.DEST, files)
+        service = configparser.ConfigParser()
+        service.optionxform = str
+        service.read(release.ROOT / files[self.DEST])
+        self.assertEqual(service['D-BUS Service']['Name'], 'org.freedesktop.FileManager1')
+        # an absolute path to the shipped binary, started without a window until the call says what to show
+        self.assertEqual(service['D-BUS Service']['Exec'], '/usr/bin/cupertino-files --gapplication-service')
+        self.assertIn('cupertino-files', release.BINARIES)
+        self.assertNotEqual(release.FILE_MANAGER_SERVICE, 'org.freedesktop.FileManager1.service',
+                            "another file manager's package ships that file name")
+
+
 class PortalsConfTest(unittest.TestCase):
     CONF = 'usr/share/xdg-desktop-portal/cupertino-portals.conf'
 

@@ -67,6 +67,20 @@ The in-window menu bar of all Electron apps comes back with `ELECTRON_FORCE_WIND
 
 Known gap: an Electron app on Wayland with several windows in one process gets each window's menus by the order the windows were opened, which holds while every window has a menu; otherwise the menus of the window registered last show for all of its windows. Electron's menus are usually the same for every window.
 
+## Show in Files from other apps
+
+Other apps' "Show in folder" commands open Files on the item's folder with the item selected and scrolled into view: VS Code's Reveal in File Explorer, Electron apps' `shell.showItemInFolder`, a browser's Show in folder for a download, and the portal's Open Directory, which sandboxed apps use. Files answers the session bus name `org.freedesktop.FileManager1`:
+
+- `ShowItems` selects the items in a window on their folder. Items of one folder share a window, and a window that already shows that folder (with no search typed) is used; items of different folders get a window each. A folder named as an item is selected in its enclosing folder.
+- `ShowFolders` opens a window on each folder.
+- `ShowItemProperties` selects the items as `ShowItems` does; Files has no information window yet.
+
+The app's startup id raises the window, so it comes in front of the app that asked. An item that no longer exists is a notice; the others are still shown. When Files is not running, the bus starts it for the call (`/usr/share/dbus-1/services/org.cupertino.Files.FileManager1.service`), with no window of its own: it opens what the call asks for and exits when that window closes, or after 10 seconds when no call comes. When another file manager already holds the name, it keeps answering until it quits, and Files takes over then.
+
+## Title bars that apps draw
+
+Apps that draw their own title bar (Electron windows with an overlay title bar, GTK header bars) look up their window buttons' symbols in the icon theme. Cupertino's icon theme, `Cupertino` in `/usr/share/icons`, draws `window-close-symbolic`, `window-minimize-symbolic`, `window-maximize-symbolic` and `window-restore-symbolic` and takes every other icon from Adwaita. Apps use it when the session's icon theme is set to `Cupertino`; otherwise they keep Adwaita's symbols.
+
 ## Saved passwords
 
 Apps keep saved passwords and tokens in the keyring: gnome-keyring, which the packages install. Logging in with your password unlocks it, and logging out locks it again. After an automatic login, or after your password was changed with `passwd`, it stays locked: the first app that needs it opens a window that asks for the keyring's password, and Cancel there refuses the app. Unlocking the lock screen with your password also unlocks the keyring.

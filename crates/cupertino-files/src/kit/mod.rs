@@ -833,8 +833,13 @@ impl Application for Files {
         if !matches!(message, Message::Window(_, Event::Scroll(_))) {
             model.session.view_revision += 1;
         }
+        let recheck = match &message {
+            Message::Thumbnails => peek::Recheck::All,
+            Message::Window(id, Event::Woken) => peek::Recheck::Window(*id),
+            _ => peek::Recheck::Unsettled,
+        };
         let mut commands = model.handle(message);
-        commands.extend(model.follow_peeks());
+        commands.extend(model.follow_peeks(recheck));
         commands.extend(model.exit_when_done());
         commands
     }
@@ -902,20 +907,24 @@ impl Model {
     }
 
     /// Each preview window follows whether its item is ready to show: one still waited for starts a wait that ends
-    /// [`file_preview::LOADING_DELAY`] later, when the window shows that it is loading.
-    fn follow_peeks(&mut self) -> Vec<Command<Message>> {
+    /// [`file_preview::LOADING_DELAY`] later, when the window shows that it is loading. An item found ready is looked at
+    /// again only after a message that can change it (`recheck`).
+    fn follow_peeks(&mut self, recheck: peek::Recheck) -> Vec<Command<Message>> {
         let mut commands = Vec::new();
         for (&id, window) in &mut self.windows {
             let Some(look) = window.peek.as_ref() else {
                 continue;
             };
+            if !recheck.wants(id, look) {
+                continue;
+            }
             let entry = window
                 .browser
                 .entries()
                 .iter()
                 .find(|e| e.path == look.browse.current());
             let Some(entry) = entry else { continue };
-            let size = peek::ready(&self.session, &window.texts, entry).map(|(_, size)| size);
+            let size = peek::ready_size(&self.session, &window.texts, entry);
             let look = window.peek.as_mut().expect("checked above");
             if let Some(wait) = look.follow_ready(size) {
                 commands.push(Command::After {

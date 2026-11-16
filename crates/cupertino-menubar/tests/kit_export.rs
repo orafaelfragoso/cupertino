@@ -122,7 +122,7 @@ fn the_bar_loads_the_menus_of_an_application_told_its_reader_after_the_first_loa
             .recv_timeout(wait)
             .expect("the menus once the reader is known")
         {
-            Event::Layout { root, .. } => break root,
+            Event::Layout { root, .. } => break *root,
             _ => continue,
         }
     };
@@ -244,7 +244,7 @@ impl Followed {
             match self.events.recv_timeout(wait) {
                 Ok(Event::Layout { root, .. }) => {
                     if find(&root.children, label).is_some_and(&want) {
-                        return root;
+                        return *root;
                     }
                 }
                 Ok(_) => {}

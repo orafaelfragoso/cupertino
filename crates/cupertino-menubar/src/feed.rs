@@ -56,8 +56,18 @@ fn kind_shown(conf: &MenuBarSettings, kind: ExtraKind) -> bool {
 pub struct StatusState {
     pub item: StatusItem,
     pub icon: Option<IconImage>,
-    /// The item's DBusMenu, loaded when it was announced.
+    /// The item's DBusMenu as its exporter has it now; `None` without one, and until its tree arrives.
     pub menu: Option<MenuItem>,
+}
+
+impl StatusState {
+    /// Where the item's menu is exported; `None` for an item without a menu.
+    pub fn menu_source(&self) -> Option<KdeAppMenu> {
+        Some(KdeAppMenu {
+            service: self.item.service.clone(),
+            path: self.item.menu_path.clone()?,
+        })
+    }
 }
 
 /// What a status slot draws.
@@ -105,14 +115,21 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// Show a status item, or drop it when it turned passive.
-    pub fn set_status(&mut self, state: StatusState) {
+    /// Show a status item, or drop it when it turned passive. An item read again without its menu keeps the menu it
+    /// had while its menu is at the same place: the menu's tree arrives apart from the item ([`Shared::apply_layout`]).
+    pub fn set_status(&mut self, mut state: StatusState) {
         let existing = self.status.iter().position(|s| s.item.id == state.item.id);
         match (existing, state.item.is_passive()) {
             (Some(i), true) => {
                 self.status.remove(i);
             }
-            (Some(i), false) => self.status[i] = state,
+            (Some(i), false) => {
+                let old = &mut self.status[i];
+                if state.menu.is_none() && old.menu_source() == state.menu_source() {
+                    state.menu = old.menu.take();
+                }
+                *old = state;
+            }
             (None, true) => {}
             (None, false) => self.status.push(state),
         }
@@ -140,18 +157,35 @@ impl Shared {
         })
     }
 
-    /// A menu tree arrived from an exporter. Trees nobody asked for, or that no bar uses any
-    /// more, are dropped.
+    /// A menu tree arrived from an exporter: the first, or the tree after the exporter changed it. It replaces the
+    /// menu of the status items whose menu the exporter is, and the tree of the application's menus. Trees nobody
+    /// asked for, or that no bar uses any more, are dropped.
     pub fn apply_layout(&mut self, source: &MenuSource, root: MenuItem) {
+        if let MenuSource::Kde(menu) = source {
+            for status in &mut self.status {
+                if status.menu_source().as_ref() == Some(menu) {
+                    status.menu = Some(root.clone());
+                }
+            }
+        }
         if let Some(tree) = self.layouts.get_mut(source) {
             *tree = root;
         }
     }
 
-    /// Forget the trees of sources no bar uses: the next visit loads them afresh.
-    pub fn prune_layouts(&mut self, in_use: &[MenuSource]) {
-        self.layouts.retain(|source, _| in_use.contains(source));
+    /// Forget the trees of sources no bar uses: the next visit loads them afresh. Returns the sources forgotten, for
+    /// the worker to stop following them.
+    pub fn prune_layouts(&mut self, in_use: &[MenuSource]) -> Vec<MenuSource> {
+        let mut forgotten = Vec::new();
+        self.layouts.retain(|source, _| {
+            let kept = in_use.contains(source);
+            if !kept {
+                forgotten.push(source.clone());
+            }
+            kept
+        });
         self.failed.retain(|source| in_use.contains(source));
+        forgotten
     }
 
     /// The load of `source` failed. It is made again when a group announces the source again, not at once, so an
@@ -1194,6 +1228,76 @@ mod tests {
             (menu.label.as_str(), menu.has_submenu, menu.children.len()),
             ("Volume", true, 1)
         );
+    }
+
+    #[test]
+    fn a_status_menu_follows_its_exporters_tree_and_stays_when_the_item_is_read_again() {
+        let (feed, mut shared) = ready(Some(WindowMenu::None));
+        let item = |title: &str, menu_path: &str| StatusState {
+            item: StatusItem {
+                id: ":1.9/StatusNotifierItem".into(),
+                service: ":1.9".into(),
+                title: title.into(),
+                menu_path: Some(menu_path.into()),
+                ..StatusItem::default()
+            },
+            icon: None,
+            menu: None,
+        };
+        let source = |path: &str| {
+            MenuSource::Kde(KdeAppMenu {
+                service: ":1.9".into(),
+                path: path.into(),
+            })
+        };
+        let rows = |shared: &Shared| {
+            feed.content(shared).status[0].menu.as_ref().map(|menu| {
+                let ids = menu.children.iter().map(|row| row.id.0);
+                (menu.label.clone(), ids.collect::<Vec<_>>())
+            })
+        };
+        shared.set_status(item("Volume", "/Menu"));
+        assert_eq!(rows(&shared), None, "until its tree arrives");
+        shared.apply_layout(
+            &source("/Menu"),
+            MenuItem::submenu(0, "", vec![MenuItem::new(3, "Open")]),
+        );
+        assert_eq!(rows(&shared), Some(("Volume".into(), vec![3])));
+
+        // the exporter replaced its menu
+        shared.apply_layout(
+            &source("/Menu"),
+            MenuItem::submenu(
+                0,
+                "",
+                vec![MenuItem::new(137, "Open"), MenuItem::new(139, "Quit")],
+            ),
+        );
+        assert_eq!(rows(&shared), Some(("Volume".into(), vec![137, 139])));
+        // another exporter's tree, and one of the same service at another path, are not this item's
+        shared.apply_layout(&source("/Other"), MenuItem::submenu(0, "", vec![]));
+        assert_eq!(rows(&shared), Some(("Volume".into(), vec![137, 139])));
+
+        // the item read again (a new title) keeps its menu
+        shared.set_status(item("Volume 50%", "/Menu"));
+        assert_eq!(rows(&shared), Some(("Volume 50%".into(), vec![137, 139])));
+        // its menu at another object: the old rows go, the new object's arrive
+        shared.set_status(item("Volume 50%", "/Other"));
+        assert_eq!(rows(&shared), None);
+        shared.apply_layout(
+            &source("/Other"),
+            MenuItem::submenu(0, "", vec![MenuItem::new(1, "Mute")]),
+        );
+        assert_eq!(rows(&shared), Some(("Volume 50%".into(), vec![1])));
+    }
+
+    #[test]
+    fn pruning_names_the_sources_it_forgot() {
+        let (feed, mut shared) = ready(Some(dbusmenu()));
+        feed.request_layout(&mut shared);
+        assert_eq!(shared.prune_layouts(&[kde()]), Vec::new());
+        assert_eq!(shared.prune_layouts(&[]), vec![kde()]);
+        assert_eq!(shared.prune_layouts(&[]), Vec::new(), "once");
     }
 
     #[test]

@@ -1248,9 +1248,9 @@ impl App {
                 Err(TryRecvError::Disconnected) => return fail(worker::WorkerGone),
             };
             match event {
-                worker::Event::Layout { source, root } => self.shared.apply_layout(&source, root),
+                worker::Event::Layout { source, root } => self.shared.apply_layout(&source, *root),
                 worker::Event::LayoutFailed { source } => self.shared.layout_failed(&source),
-                worker::Event::StatusUpdated { item, menu } => {
+                worker::Event::StatusUpdated { item } => {
                     let px = status_icon_px(ICON_SCALE);
                     let icons = &self.icons;
                     let icon = status_icon(&item, px, |name, px| icons.load(name, px))
@@ -1258,7 +1258,8 @@ impl App {
                     self.shared.set_status(StatusState {
                         item: *item,
                         icon,
-                        menu,
+                        // its tree arrives as a layout; the one it has stays meanwhile
+                        menu: None,
                     });
                 }
                 worker::Event::StatusRemoved { id } => self.shared.remove_status(&id),
@@ -1345,7 +1346,17 @@ impl App {
             .iter()
             .map(|b| b.feed.source(&self.shared))
             .collect();
-        self.shared.prune_layouts(&in_use);
+        for source in self.shared.prune_layouts(&in_use) {
+            if let cupertino_menubar::source::MenuSource::Kde(menu) = source {
+                if let Err(e) = self
+                    .services
+                    .worker
+                    .send(worker::Request::ReleaseDbusMenu(menu))
+                {
+                    return fail(e);
+                }
+            }
+        }
         commands
     }
 

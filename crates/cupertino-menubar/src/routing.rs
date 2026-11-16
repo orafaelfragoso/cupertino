@@ -7,7 +7,7 @@ use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
 use crate::item::{ItemId, Origin};
 use crate::layout::{BarLayout, SlotKey};
-use crate::source::{KdeAppMenu, MenuSource};
+use crate::source::MenuSource;
 use crate::worker::Request;
 use cupertino_apps::Launch;
 use cupertino_shell_client::{EditAction, WindowCommand};
@@ -88,8 +88,9 @@ pub struct Context<'a> {
 ///
 /// The bar's own items (the App menu, the synthetic menus and what the bar adds to an exporter's) act through the
 /// server; the exporter's items, and the bar's items rebound to them, go to the exporter, as do the items of status
-/// menus. A status item's menu is read once when the
-/// item is announced, so it is not refreshed before it opens.
+/// menus. An exporter is told before one of its menus shows, a status item's menu and its submenus included. An item
+/// is sent to an exporter only while the tree the bar shows holds it: a choice of a row the exporter has since
+/// removed does nothing.
 pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
     match effect {
         Effect::Redraw => Some(Action::Redraw),
@@ -121,6 +122,18 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         } if ExtraKind::from_slot_id(&id) == Some(ExtraKind::Wifi) => {
             Some(Action::Extra(ExtraAction::ScanWifi))
         }
+        // a status item's menu, or one of its submenus
+        Effect::AboutToShow {
+            slot: SlotKey::Status(id),
+            item,
+        } => {
+            let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
+            status.menu.as_ref()?.find(item)?;
+            Some(Action::Request(Request::AboutToShow {
+                menu: status.menu_source()?,
+                item: item.0,
+            }))
+        }
         Effect::AboutToShow { .. } => None,
         Effect::Activate {
             slot: SlotKey::Status(id),
@@ -143,12 +156,12 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             item,
         } => {
             let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
-            let path = status.item.menu_path.clone()?;
+            // the row is one the exporter still has, and can be chosen
+            if !status.menu.as_ref()?.find(item)?.is_selectable() {
+                return None;
+            }
             Some(Action::Request(Request::ActivateDbusMenu {
-                menu: KdeAppMenu {
-                    service: status.item.service.clone(),
-                    path,
-                },
+                menu: status.menu_source()?,
                 item: item.0,
             }))
         }
@@ -310,7 +323,7 @@ mod tests {
     use crate::geom::Rect;
     use crate::item::MenuItem;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
-    use crate::source::GtkMenuProps;
+    use crate::source::{GtkMenuProps, KdeAppMenu};
     use cupertino_shell_client::{
         ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu, WindowState,
     };
@@ -483,8 +496,56 @@ mod tests {
                 slot: SlotKey::Status(":1.9/StatusNotifierItem".into()),
                 item: ItemId(0)
             }),
-            None
+            None,
+            "a status item whose menu has not arrived shows none"
         );
+    }
+
+    /// The status item's menu as its exporter has it.
+    fn status_menu() -> MenuItem {
+        let mut off = MenuItem::new(6, "Unavailable");
+        off.enabled = false;
+        MenuItem::submenu(
+            0,
+            "",
+            vec![
+                MenuItem::new(4, "Open"),
+                MenuItem::submenu(5, "More", vec![MenuItem::new(7, "Quit")]),
+                off,
+            ],
+        )
+        .exported()
+    }
+
+    fn status_source() -> KdeAppMenu {
+        KdeAppMenu {
+            service: ":1.9".into(),
+            path: "/MenuBar".into(),
+        }
+    }
+
+    #[test]
+    fn a_status_menu_and_its_submenus_tell_the_items_exporter_before_they_show() {
+        let mut f = Fixture::new(WindowMenu::None);
+        let slot = || SlotKey::Status(":1.9/StatusNotifierItem".into());
+        let about = |f: &Fixture, item| {
+            f.resolve(Effect::AboutToShow {
+                slot: slot(),
+                item: ItemId(item),
+            })
+        };
+        f.shared
+            .apply_layout(&MenuSource::Kde(status_source()), status_menu());
+        for item in [0, 5] {
+            assert_eq!(
+                about(&f, item),
+                Some(Action::Request(Request::AboutToShow {
+                    menu: status_source(),
+                    item
+                }))
+            );
+        }
+        assert_eq!(about(&f, 99), None, "an item the menu does not hold");
     }
 
     #[test]
@@ -781,17 +842,55 @@ mod tests {
 
     #[test]
     fn a_status_menu_item_goes_to_the_items_menu() {
-        let f = Fixture::new(WindowMenu::None);
-        let slot = SlotKey::Status(":1.9/StatusNotifierItem".into());
+        let mut f = Fixture::new(WindowMenu::None);
+        let slot = || SlotKey::Status(":1.9/StatusNotifierItem".into());
         assert_eq!(
-            f.resolve(activate(slot, 4)),
+            f.resolve(activate(slot(), 4)),
+            None,
+            "its menu has not arrived"
+        );
+        f.shared
+            .apply_layout(&MenuSource::Kde(status_source()), status_menu());
+        for item in [4, 7] {
+            assert_eq!(
+                f.resolve(activate(slot(), item)),
+                Some(Action::Request(Request::ActivateDbusMenu {
+                    menu: status_source(),
+                    item
+                }))
+            );
+        }
+        assert_eq!(f.resolve(activate(slot(), 6)), None, "a disabled row");
+    }
+
+    #[test]
+    fn a_row_the_exporter_removed_from_a_status_menu_is_not_sent_to_it() {
+        let mut f = Fixture::new(WindowMenu::None);
+        let slot = || SlotKey::Status(":1.9/StatusNotifierItem".into());
+        let source = MenuSource::Kde(status_source());
+        f.shared.apply_layout(&source, status_menu());
+        // the exporter replaced its menu: the same rows under other ids
+        let replaced = MenuItem::submenu(0, "", vec![MenuItem::new(137, "Open")]).exported();
+        f.shared.apply_layout(&source, replaced);
+        assert_eq!(f.resolve(activate(slot(), 4)), None, "the row is gone");
+        assert_eq!(
+            f.resolve(activate(slot(), 137)),
             Some(Action::Request(Request::ActivateDbusMenu {
-                menu: KdeAppMenu {
-                    service: ":1.9".into(),
-                    path: "/MenuBar".into()
-                },
-                item: 4
+                menu: status_source(),
+                item: 137
             }))
+        );
+        // the item's menu moved to another object: the rows of the old one go nowhere
+        let mut moved = f.shared.status[0].clone();
+        moved.item.menu_path = Some("/Other".into());
+        moved.menu = None;
+        f.shared.set_status(moved);
+        assert_eq!(f.resolve(activate(slot(), 137)), None);
+        f.shared.apply_layout(&source, status_menu());
+        assert_eq!(
+            f.resolve(activate(slot(), 4)),
+            None,
+            "the old object's tree"
         );
     }
 

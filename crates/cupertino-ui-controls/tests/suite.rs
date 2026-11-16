@@ -94,6 +94,8 @@ mod table_under_toolbar;
 mod tabs;
 #[path = "text.rs"]
 mod text;
+#[path = "text-menu.rs"]
+mod text_menu;
 #[path = "toggle.rs"]
 mod toggle;
 #[path = "toolbar.rs"]

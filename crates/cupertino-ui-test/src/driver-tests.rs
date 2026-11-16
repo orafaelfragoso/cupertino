@@ -109,7 +109,14 @@ impl Widget<char> for Field {
                 if let Some(text) = key.text {
                     cx.emit(text);
                 }
+                if key.keysym == Keysym(INSERT) {
+                    cx.request_paste();
+                }
             }
+        }
+        // a paste tells only how long it was
+        if let Event::Paste(pasted) = event {
+            cx.emit(char::from_digit(pasted.0.len() as u32, 36).unwrap_or('?'));
         }
         Propagation::Continue
     }
@@ -200,6 +207,9 @@ fn options() -> RuntimeOptions {
     }
 }
 
+/// The key the fixture's fields paste on.
+const INSERT: u32 = 0xff63;
+
 fn budget() -> NonZeroU32 {
     NonZeroU32::new(16).unwrap()
 }
@@ -276,6 +286,72 @@ fn tab_then_paste_uses_the_requesting_focus_even_at_the_same_timestamp() {
         driver.trace().replay(&SecureInputs::default()),
         Err(TraceError::MissingSecureInput { index: index - 1 })
     );
+}
+
+/// A field that asks for the clipboard's text itself gets it, and the read is as protected as the field: what goes
+/// into a protected one is not in the trace, what goes into a plain one is.
+#[test]
+fn a_paste_a_field_asks_for_is_recorded_as_protected_as_the_field() {
+    let (mut driver, window) = start();
+    driver.window_system_mut().offer_clipboard(
+        ClipboardKind::Clipboard,
+        Some(ClipboardData {
+            mime: "text/plain;charset=utf-8".into(),
+            bytes: b"sensitive".to_vec(),
+        }),
+    );
+    driver
+        .window_system_mut()
+        .enqueue_window(window, key(INSERT, None))
+        .unwrap();
+    driver.run_until_idle(budget()).unwrap();
+    assert_eq!(driver.runtime().model(), &vec!['9'], "nine bytes arrived");
+    assert!(matches!(
+        driver.trace().events.last().unwrap().input,
+        RecordedInput::Protected(ProtectedInput::Clipboard(_))
+    ));
+    assert!(!format!("{:?}", driver.trace()).contains("sensitive"));
+
+    // on to the plain field
+    for event in [key(0xff09, None), key(INSERT, None)] {
+        driver
+            .window_system_mut()
+            .enqueue_window(window, event)
+            .unwrap();
+    }
+    driver.run_until_idle(budget()).unwrap();
+    assert_eq!(driver.runtime().model(), &vec!['9', '9']);
+    assert!(matches!(
+        driver.trace().events.last().unwrap().input,
+        RecordedInput::Event(PlatformEvent::Clipboard { .. })
+    ));
+}
+
+/// Without text on the clipboard a paste reads nothing: an empty clipboard, and one that holds only a picture.
+#[test]
+fn a_paste_reads_nothing_from_a_clipboard_without_text() {
+    let (mut driver, window) = start();
+    let paste = |driver: &mut TestDriver<Fields>| {
+        driver
+            .window_system_mut()
+            .enqueue_window(window, key(INSERT, None))
+            .unwrap();
+        driver.run_until_idle(budget()).unwrap();
+    };
+    paste(&mut driver);
+    driver.window_system_mut().offer_clipboard(
+        ClipboardKind::Clipboard,
+        Some(ClipboardData {
+            mime: "image/png".into(),
+            bytes: vec![1, 2, 3],
+        }),
+    );
+    paste(&mut driver);
+    assert!(driver.runtime().model().is_empty());
+    assert!(driver.trace().events.iter().all(|e| !matches!(
+        e.input,
+        RecordedInput::Event(PlatformEvent::Clipboard { .. })
+    )));
 }
 
 #[test]

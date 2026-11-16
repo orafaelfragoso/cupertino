@@ -4,6 +4,7 @@
 //! runtime then does what the grab would have. A popup the window system refuses outright stays closed: its application
 //! hears it dismissed, and the runtime goes on.
 
+use super::Dismiss;
 use super::{Runtime, WindowState};
 use crate::{Application, UiError, WindowKey};
 use cupertino_semantics::Outcome;
@@ -37,7 +38,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         &mut self,
         key: WindowKey,
         parent: WindowId,
-        on_dismiss: A::Message,
+        on_dismiss: Dismiss<A::Message>,
         error: PlatformError,
     ) -> Result<(), UiError> {
         if let PlatformError::Disconnected(_) = error {
@@ -50,7 +51,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !self.refused_popups.contains(&key) {
             self.refused_popups.push(key);
         }
-        self.messages.push_back(on_dismiss);
+        self.dismissed(on_dismiss);
         for (_, _, outcome) in &mut self.semantic_finishing {
             if *outcome == Outcome::Applied {
                 *outcome = Outcome::Unavailable;
@@ -82,7 +83,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn dismiss_ungrabbed(&mut self, popups: Vec<usize>) {
         for j in popups {
             if let Some(popup) = &self.windows[j].popup {
-                self.messages.push_back(popup.on_dismiss.clone());
+                let dismiss = popup.on_dismiss.clone();
+                self.dismissed(dismiss);
             }
         }
     }

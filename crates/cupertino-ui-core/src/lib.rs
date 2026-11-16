@@ -39,7 +39,7 @@ pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarActi
 pub use cupertino_ui_platform::{GlassStyle, RendererClass};
 pub use cx::{
     glass_outline, EventCx, FocusTarget, Glass, GlassCorners, IdleCx, MeasureCx, OverlayCx,
-    PaintCx, SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
+    OwnedWindows, PaintCx, SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
 };
 pub use drop_target::{
     DropHandler, DropOver, DropPlace, DropTarget, Dropped, HoverHandler, PlaceHandler,
@@ -151,6 +151,31 @@ pub struct Popup<M> {
     pub grab: bool,
     /// Sent when the compositor dismisses the popup; the application then stops declaring it.
     pub on_dismiss: M,
+}
+
+/// A popup window a control opens for itself ([`EventCx::open_popup`]), such as a text field's menu: a popup of the
+/// control's window that takes the keyboard and closes on a press outside when `grab` is set. The application does
+/// not declare it and hears nothing of it: what it holds answers the control ([`EventCx::answer_popup`]) and ends it
+/// ([`EventCx::close_popup`]). `key` is unlike any window key of the application's.
+pub struct OwnedWindow<M> {
+    pub key: WindowKey,
+    /// Its `size` is the most the popup may take, as a declared popup's.
+    pub spec: WindowSpec,
+    pub background: WindowBackground,
+    pub content: Element<M>,
+    pub anchor: PopupAnchor,
+    pub grab: bool,
+}
+
+/// Text from the clipboard on its way into the control that asked for it. Its `Debug` shows only how long it is: it
+/// may be going into a password field.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Pasted(pub String);
+
+impl std::fmt::Debug for Pasted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Pasted({} bytes)", self.0.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -300,6 +325,11 @@ pub enum Event {
     /// The last running animation of the window's surface layers ended in the compositor
     /// ([`WindowEvent::LayersSettled`](cupertino_ui_platform::WindowEvent)); only the window's root hears it.
     LayersSettled,
+    /// The clipboard's text, for the node that asked for it ([`EventCx::request_paste`]).
+    Paste(Pasted),
+    /// The popup this node opened for itself ([`EventCx::open_popup`]) answers with this number
+    /// ([`EventCx::answer_popup`]): the row chosen in its menu.
+    PopupAnswer(u32),
 }
 
 /// The state every interactive control resolves its look from.

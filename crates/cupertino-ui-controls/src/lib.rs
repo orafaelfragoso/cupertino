@@ -48,6 +48,7 @@ mod swatch;
 mod tabs;
 mod text;
 mod text_box;
+mod text_menu;
 pub use bar_chart::{BarChart, ChartBar, ChartColor};
 pub use swatch::{Swatch, SwatchFill, SwatchLook};
 mod thumbnail;

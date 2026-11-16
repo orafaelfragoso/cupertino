@@ -21,7 +21,7 @@ use crate::tree::Tree;
 use crate::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, Application, Clock, Command,
     Drag, DragHandler, DragPreview, Element, Environment, Event, FocusTarget, FrameSnapshot, Icons,
-    Key, Menus, NodeId, NodeSnapshot, Pending, Popup, PopupAnchor, Propagation, StepStatus,
+    Key, Menus, NodeId, NodeSnapshot, OwnedWindow, Pending, PopupAnchor, Propagation, StepStatus,
     TokenHandler, UiError, Window, WindowBackground, WindowKey,
 };
 use cupertino_geometry::{Point, Rect, Size};
@@ -309,17 +309,63 @@ struct WindowState<M> {
     activated_at: Option<Timestamp>,
     /// The opaque region the window system was last asked to show the window with ([`WindowRequest::SetOpaqueRegion`]).
     opaque: Vec<Rect>,
+    /// The clipboard holds text, as the window's controls are told.
+    clipboard_text: bool,
 }
 
 /// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
 const ACTIVATION_NS: u64 = 120_000_000;
+
+/// What tells of a popup the compositor dismissed: the application, by its message, or the runtime itself, for a popup
+/// a control opened for itself.
+#[derive(Clone)]
+pub(super) enum Dismiss<M> {
+    Message(M),
+    Owned,
+}
+
+/// A popup to open or keep: where, and what its dismissal tells.
+struct Declared<M> {
+    parent: WindowKey,
+    anchor: PopupAnchor,
+    grab: bool,
+    on_dismiss: Dismiss<M>,
+}
+
+/// The popup a control opened for itself ([`EventCx::open_popup`](crate::EventCx::open_popup)).
+struct Owned<M> {
+    /// The window the control is in, and the control.
+    parent: WindowKey,
+    node: NodeId,
+    build: crate::OwnedWindows<M>,
+    /// The keys of its windows at the last view.
+    keys: Vec<WindowKey>,
+}
+
+/// The kinds of text the clipboard is read as, the first it offers.
+const TEXT_MIMES: [&str; 5] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "TEXT",
+    "STRING",
+];
+
+/// `bytes` as text: invalid sequences replaced, a character cut at the end dropped.
+fn clipboard_text(bytes: &[u8]) -> String {
+    let whole = match std::str::from_utf8(bytes) {
+        Err(e) if e.error_len().is_none() => &bytes[..e.valid_up_to()],
+        _ => bytes,
+    };
+    String::from_utf8_lossy(whole).into_owned()
+}
 
 struct PopupState<M> {
     parent: WindowKey,
     anchor: PopupAnchor,
     /// What the content measured at the last view.
     size: Size,
-    on_dismiss: M,
+    on_dismiss: Dismiss<M>,
     /// Where the popup was last placed, so it moves only when its anchor or size changes.
     placed: PopupSpec,
     /// Wanted a grab and opened without one ([`WindowSystem::can_grab`]): the runtime closes it as the grab would have.
@@ -407,6 +453,12 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     )>,
     /// Popups the window system refused, kept closed until the view stops declaring them.
     refused_popups: Vec<WindowKey>,
+    /// The kind of text the clipboard offers, when it holds text.
+    clipboard_text: Option<String>,
+    /// The clipboard reads under way for a paste, each with the window and the node that asked.
+    pastes: HashMap<ClipboardToken, (WindowKey, NodeId)>,
+    /// The popup a control opened for itself, while it is open.
+    owned: Option<Owned<A::Message>>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -461,6 +513,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             next_timer: 0,
             semantic_finishing: Vec::new(),
             refused_popups: Vec::new(),
+            clipboard_text: None,
+            pastes: HashMap::new(),
+            owned: None,
         };
         for command in commands {
             runtime.command(command);
@@ -750,7 +805,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     self.to_open.push((key, request));
                 }
             }
-            Command::SetClipboard(text) => Self::set_clipboard(&mut self.system, text),
+            Command::SetClipboard(text) => {
+                Self::set_clipboard(&mut self.system, text);
+                self.clipboard_offers(Some(&[TEXT_MIMES[0].to_owned()]));
+            }
             Command::ActivationToken {
                 window,
                 app_id,
@@ -976,6 +1034,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 let declared: Vec<WindowKey> = popups.iter().map(|w| w.key.clone()).collect();
                 self.close_leftover_popups(&mut old, &declared);
             }
+            let popup = Declared {
+                parent: popup.parent,
+                anchor: popup.anchor,
+                grab: popup.grab,
+                on_dismiss: Dismiss::Message(popup.on_dismiss),
+            };
             if let Some(mut w) = self.popup(key, spec, popup, content, &mut old)? {
                 w.shortcuts = shortcuts;
                 w.on_close = on_close;
@@ -985,6 +1049,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 self.windows.push(w);
             }
         }
+        self.declare_owned(&mut old)?;
         if std::mem::take(&mut self.touch_opened) {
             self.touch_taken();
         }
@@ -1033,6 +1098,169 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.exit = true;
         }
         Ok(())
+    }
+
+    /// Opens or keeps the popup a control opened for itself, after the application's windows: its windows are built
+    /// anew as a declared popup's are. It is gone with its control, with the window the control is in, and when the
+    /// window system refuses it.
+    fn declare_owned(&mut self, old: &mut Vec<WindowState<A::Message>>) -> Result<(), UiError> {
+        let Some(mut owned) = self.owned.take() else {
+            return Ok(());
+        };
+        let open = self.tree.contains(owned.node)
+            && self
+                .windows
+                .iter()
+                .any(|w| w.key == owned.parent && w.fade.is_none());
+        if !open {
+            return Ok(());
+        }
+        owned.keys.clear();
+        for OwnedWindow {
+            key,
+            spec,
+            background,
+            content,
+            anchor,
+            grab,
+        } in (owned.build)()
+        {
+            let reused = old
+                .iter()
+                .any(|w| w.key == key && w.popup.is_some() && w.fade.is_none());
+            if grab && !reused {
+                self.close_leftover_popups(old, &[]);
+            }
+            let popup = Declared {
+                parent: owned.parent.clone(),
+                anchor,
+                grab,
+                on_dismiss: Dismiss::Owned,
+            };
+            owned.keys.push(key.clone());
+            if let Some(mut w) = self.popup(key, spec, popup, content, old)? {
+                set_background(&mut w, background);
+                sync_backdrop(&mut self.system, &mut w);
+                w.invalidate();
+                self.windows.push(w);
+            }
+        }
+        // one the window system refused is not asked for again
+        if owned.keys.iter().any(|k| self.refused_popups.contains(k)) {
+            self.refused_popups.retain(|k| !owned.keys.contains(k));
+            return Ok(());
+        }
+        self.owned = Some(owned);
+        Ok(())
+    }
+
+    /// The compositor dismissed a popup, or it could not open: its application hears so, and a popup a control opened
+    /// for itself is closed.
+    pub(super) fn dismissed(&mut self, dismiss: Dismiss<A::Message>) {
+        match dismiss {
+            Dismiss::Message(message) => self.messages.push_back(message),
+            Dismiss::Owned => self.close_owned(),
+        }
+    }
+
+    /// Closes the popup a control opened for itself, at the next view.
+    fn close_owned(&mut self) {
+        if self.owned.take().is_some() {
+            self.view_dirty = true;
+        }
+    }
+
+    /// The clipboard offers these kinds of data, or none: whether it holds text, and of which kind, for every window.
+    fn clipboard_offers(&mut self, mimes: Option<&[String]>) {
+        self.clipboard_text = mimes.and_then(|mimes| {
+            TEXT_MIMES
+                .iter()
+                .find(|text| mimes.iter().any(|m| m == *text))
+                .map(|text| (*text).to_owned())
+        });
+        let holds = self.clipboard_text.is_some();
+        for w in &mut self.windows {
+            w.clipboard_text = holds;
+        }
+    }
+
+    /// Whether `read` is a clipboard read the runtime started for a paste, and then whether the control it is for
+    /// protects its input, as a password field does: what is read is then a secret.
+    pub fn paste_protected(&self, read: ClipboardToken) -> Option<bool> {
+        self.pastes
+            .get(&read)
+            .map(|(_, node)| self.tree.contains(*node) && protected(&self.tree, *node))
+    }
+
+    /// The text of a paste arrived, or `None` when it could not be read: the control that asked hears it, unless it
+    /// or its window went meanwhile. Whether `read` was a paste's.
+    fn paste_data(&mut self, read: ClipboardToken, data: Option<&ClipboardData>) -> bool {
+        let Some((key, node)) = self.pastes.remove(&read) else {
+            return false;
+        };
+        let text = data
+            .map(|d| clipboard_text(&d.bytes))
+            .filter(|t| !t.is_empty());
+        let window = self.windows.iter().position(|w| w.key == key);
+        if let (Some(text), Some(i)) = (text, window) {
+            if self.tree.contains(node) {
+                let now = self.options.clock.now();
+                let mut effects = Effects::default();
+                route(&mut self.tree, &self.windows[i], now, &mut effects)
+                    .notify(node, &Event::Paste(crate::Pasted(text)));
+                self.apply(i, effects);
+            }
+        }
+        true
+    }
+
+    /// What a control asked of the clipboard and of a popup of its own, in window `i`.
+    fn apply_owned(&mut self, i: usize, effects: &mut Effects<A::Message>) {
+        if let Some(text) = effects.clipboard.take() {
+            Self::set_clipboard(&mut self.system, text);
+            self.clipboard_offers(Some(&[TEXT_MIMES[0].to_owned()]));
+        }
+        if let Some(node) = effects.paste.take() {
+            if let Some(mime) = self.clipboard_text.clone() {
+                let read = self.system.read_clipboard(ClipboardKind::Clipboard, &mime);
+                self.pastes
+                    .insert(read, (self.windows[i].key.clone(), node));
+            }
+        }
+        if let Some((node, build)) = effects.popup.take() {
+            self.owned = Some(Owned {
+                parent: self.windows[i].key.clone(),
+                node,
+                build,
+                keys: Vec::new(),
+            });
+            self.view_dirty = true;
+        }
+        let key = &self.windows[i].key;
+        let inside = self
+            .owned
+            .as_ref()
+            .is_some_and(|owned| owned.keys.contains(key));
+        let opener = self
+            .owned
+            .as_ref()
+            .is_some_and(|owned| &owned.parent == key);
+        if let Some(answer) = effects.popup_answer.take().filter(|_| inside) {
+            let owner = self.owned.as_ref().and_then(|owned| {
+                let p = self.windows.iter().position(|w| w.key == owned.parent)?;
+                self.tree.contains(owned.node).then_some((p, owned.node))
+            });
+            if let Some((p, node)) = owner {
+                let now = self.options.clock.now();
+                let mut heard = Effects::default();
+                route(&mut self.tree, &self.windows[p], now, &mut heard)
+                    .notify(node, &Event::PopupAnswer(answer));
+                self.apply(p, heard);
+            }
+        }
+        if std::mem::take(&mut effects.popup_close) && (inside || opener) {
+            self.close_owned();
+        }
     }
 
     fn new_window(
@@ -1132,6 +1360,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             grow: None,
             activated_at: None,
             opaque: Vec::new(),
+            clipboard_text: self.clipboard_text.is_some(),
         }
     }
 
@@ -1140,7 +1369,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         &mut self,
         key: WindowKey,
         spec: WindowSpec,
-        popup: Popup<A::Message>,
+        popup: Declared<A::Message>,
         content: Element<A::Message>,
         old: &mut Vec<WindowState<A::Message>>,
     ) -> Result<Option<WindowState<A::Message>>, UiError> {
@@ -1241,10 +1470,17 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 return Ok(());
             }
             PlatformEvent::Clipboard { token, data } => {
-                self.drop_data(token, data);
+                if !self.paste_data(token, data.as_ref()) {
+                    self.drop_data(token, data);
+                }
                 return Ok(());
             }
-            PlatformEvent::ClipboardOffered { .. } => return Ok(()),
+            PlatformEvent::ClipboardOffered { kind, mimes } => {
+                if kind == ClipboardKind::Clipboard {
+                    self.clipboard_offers(mimes.as_deref());
+                }
+                return Ok(());
+            }
             PlatformEvent::Wake => {
                 if let Some(theme) = self.personal_refresh.as_mut().and_then(|refresh| refresh()) {
                     self.set_theme(theme);
@@ -1534,8 +1770,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
             }
             WindowEvent::PopupDone => {
-                if let Some(popup) = &w.popup {
-                    self.messages.push_back(popup.on_dismiss.clone());
+                if let Some(dismiss) = w.popup.as_ref().map(|p| p.on_dismiss.clone()) {
+                    self.dismissed(dismiss);
                 }
                 return Ok(());
             }
@@ -2059,8 +2295,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
 
-    fn apply(&mut self, i: usize, effects: Effects<A::Message>) {
+    fn apply(&mut self, i: usize, mut effects: Effects<A::Message>) {
         let now = self.options.clock.now();
+        self.apply_owned(i, &mut effects);
         let w = &mut self.windows[i];
         self.messages.extend(effects.messages);
         // a layout change is the tree's, which the next frame lays out
@@ -2072,9 +2309,6 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
         if let Some(cursor) = effects.cursor {
             self.system.set_cursor(w.id, cursor);
-        }
-        if let Some(text) = effects.clipboard {
-            Self::set_clipboard(&mut self.system, text);
         }
         // a fullscreen window stays where it is: a maximize request would take it out of fullscreen
         for gesture in effects.window.into_iter().filter(|_| !w.fullscreen) {
@@ -3447,6 +3681,7 @@ fn route<'a, M: 'static>(
             window_active: w.active,
             now,
             opening_press: w.opening_press.or(w.opening_touch.map(|(_, start)| start)),
+            clipboard_text: w.clipboard_text,
         },
         popups: &w.popups,
         effects,

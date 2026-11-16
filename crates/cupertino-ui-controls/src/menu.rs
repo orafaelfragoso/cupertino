@@ -166,6 +166,71 @@ impl Columns {
     }
 }
 
+/// What a menu sends as a row is chosen, a submenu opens or it closes: a message of the application's, or, for a menu a
+/// control opened for itself ([`EventCx::open_popup`]), the row's number to that control and the popup's end.
+#[derive(Clone)]
+pub(crate) enum Out<M> {
+    Message(M),
+    Answer(u32),
+    Close,
+    /// Nothing: such a menu has no submenus to open.
+    Nothing,
+}
+
+impl<M: Clone> Out<M> {
+    fn send(&self, cx: &mut EventCx<'_, M>) {
+        match self {
+            Out::Message(message) => cx.emit(message.clone()),
+            Out::Answer(row) => cx.answer_popup(*row),
+            Out::Close => cx.close_popup(),
+            Out::Nothing => {}
+        }
+    }
+}
+
+/// `items` as the menu's levels hold them.
+fn outward<M>(items: Vec<MenuItem<M>>) -> Vec<MenuItem<Out<M>>> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            MenuItem::Item {
+                label,
+                enabled,
+                checked,
+                on_select,
+            } => MenuItem::Item {
+                label,
+                enabled,
+                checked,
+                on_select: Out::Message(on_select),
+            },
+            MenuItem::Shortcut {
+                label,
+                shortcut,
+                enabled,
+                checked,
+                on_select,
+            } => MenuItem::Shortcut {
+                label,
+                shortcut,
+                enabled,
+                checked,
+                on_select: Out::Message(on_select),
+            },
+            MenuItem::Submenu {
+                label,
+                enabled,
+                items,
+            } => MenuItem::Submenu {
+                label,
+                enabled,
+                items: outward(items),
+            },
+            MenuItem::Separator => MenuItem::Separator,
+        })
+        .collect()
+}
+
 /// A row that was chosen, flashing before its messages are sent: its highlight is off for [`FLASH_OFF`], then on for
 /// [`FLASH_ON`]. The menu hears nothing else meanwhile.
 struct Flash<M> {
@@ -174,7 +239,7 @@ struct Flash<M> {
     start: Timestamp,
     /// The panel sends the messages, not the row: the choice was made on the panel.
     by_panel: bool,
-    then: Vec<M>,
+    then: Vec<Out<M>>,
 }
 
 /// What a menu level's panel and rows share: the choice flashing now, if any.
@@ -197,7 +262,7 @@ fn choose<M: Clone>(
     flash: &Flashing<M>,
     row: usize,
     by_panel: bool,
-    then: Vec<M>,
+    then: Vec<Out<M>>,
     cx: &mut EventCx<'_, M>,
 ) {
     if flash.borrow().is_some() {
@@ -205,7 +270,7 @@ fn choose<M: Clone>(
     }
     if cx.env().theme.preferences.reduce_motion {
         for message in then {
-            cx.emit(message);
+            message.send(cx);
         }
         return;
     }
@@ -235,7 +300,7 @@ fn flash_woke<M: Clone>(
     if now >= current.ends() {
         if let Some(done) = slot.take() {
             for message in done.then {
-                cx.emit(message);
+                message.send(cx);
             }
         }
     } else {
@@ -269,159 +334,225 @@ impl<M: Clone + 'static> Menu<M> {
             parent,
             anchor,
             label,
-            mut items,
+            items,
             current,
             open,
             on_open,
             on_close,
         } = self;
-        let mut parent = parent;
-        // the menu opens with its current item over the pointer that pressed the button
-        let over = matches!(anchor, MenuAnchor::Over(_));
-        // a context menu opens at the pointer, which a menu slid to fit can leave over a row
-        let at_pointer = matches!(anchor, MenuAnchor::At(_));
-        let mut anchor = match anchor {
-            MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
-            MenuAnchor::At(point) => PopupAnchor::At(point),
-            MenuAnchor::Above { key, gap, dx } => PopupAnchor::Above { key, gap, dx },
-            MenuAnchor::Over(key) => {
-                let above: f64 = items[..current.unwrap_or(0).min(items.len())]
-                    .iter()
-                    .map(|item| match item {
-                        MenuItem::Separator => SEPARATOR_HEIGHT,
-                        _ => ROW_HEIGHT,
-                    })
-                    .sum();
-                PopupAnchor::Over {
-                    key,
-                    offset: Point::new(
-                        LABEL_INSET - Columns::of(&items, style.min_width).label,
-                        -(PADDING_Y + above + ROW_HEIGHT / 2.0),
-                    ),
-                }
-            }
-        };
-        let mut label = label;
-        let mut windows = Vec::new();
-        for depth in 0..=open.len() {
-            let path = &open[..depth];
-            let next = open.get(depth).copied();
-            let submenu = match next.and_then(|i| items.get_mut(i)) {
-                Some(MenuItem::Submenu {
-                    label,
-                    enabled: true,
-                    items,
-                }) => Some((label.clone(), std::mem::take(items))),
-                _ => None,
-            };
-            let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
-            let typing = Rc::new(RefCell::new(TypeAhead::default()));
-            let flash: Flashing<M> = Rc::new(RefCell::new(None));
-            let panel = Panel {
-                label: label.clone(),
-                rows: items
-                    .iter()
-                    .filter(|i| !matches!(i, MenuItem::Separator))
-                    .count(),
-                current: current
-                    .filter(|_| depth == 0)
-                    .and_then(|i| enabled_position(&items, i)),
-                escape: back.clone().unwrap_or_else(|| on_close.clone()),
-                back,
-                slots: slots(&items, path, &on_open, &on_close),
-                open: next
-                    .zip(submenu.as_ref())
-                    .map(|(index, (_, sub))| (index, height(sub))),
-                submenu: submenu.as_ref().map(|_| level_key(&key, depth + 1)),
-                collapse: on_open(path.to_vec()),
-                start: current.filter(|_| depth == 0 && over),
-                at_pointer: depth == 0 && at_pointer,
-                typing: Rc::clone(&typing),
-                flash: Rc::clone(&flash),
-                radius: style.radius,
-                tailed: depth == 0 && style.tail.is_some(),
-                children: rows(
-                    &items,
-                    style.min_width,
-                    path,
-                    current.filter(|_| depth == 0),
-                    next.filter(|_| submenu.is_some()),
-                    &on_open,
-                    &on_close,
-                    &typing,
-                    &flash,
-                ),
-            };
-            let key = level_key(&key, depth);
-            let tailed = depth == 0 && style.tail.is_some();
-            let name = label.clone();
-            windows.push(Window {
-                key: key.clone(),
-                spec: WindowSpec {
-                    title: label,
-                    app_id: String::new(),
-                    size: MAX,
-                    min_size: None,
-                    max_size: None,
-                    decorations: DecorationMode::None,
-                    foreign_parent: None,
-                    input_region: None,
-                },
-                shortcuts: CommandRegistry::new(),
-                on_close: None,
-                background: if tailed {
-                    WindowBackground::None
-                } else {
-                    WindowBackground::Surface {
-                        surface: Surface::Menu,
-                        radius: style.radius,
-                        alpha: 1.0,
-                    }
-                },
-                content: match style.tail.filter(|_| tailed) {
-                    Some(tail) => Element::new(Callout {
-                        name,
-                        children: vec![
-                            Element::new(panel).key("panel"),
-                            Element::new(TailRow { tail }).key("tail"),
-                        ],
-                    }),
-                    None => Element::new(panel),
-                },
-                popup: Some(Popup {
-                    parent,
-                    anchor,
-                    grab: true,
-                    on_dismiss: on_close.clone(),
-                }),
-                menus: None,
-            });
-            let (Some(index), Some((sub_label, sub_items))) = (next, submenu) else {
-                break;
-            };
-            parent = key;
-            anchor = PopupAnchor::Beside {
-                key: Key::from(index as u64),
-                offset: Point::new(-SUBMENU_OVERLAP, -PADDING_Y),
-            };
-            label = sub_label;
-            items = sub_items;
-        }
-        windows
+        let dismiss = on_close.clone();
+        levels(
+            Levels {
+                parent,
+                anchor,
+                label,
+                items: outward(items),
+                current,
+                open,
+                on_open: &|path| Out::Message(on_open(path)),
+                on_close: Out::Message(on_close),
+            },
+            key,
+            style,
+        )
+        .into_iter()
+        .map(|level| Window {
+            key: level.key,
+            spec: level.spec,
+            shortcuts: CommandRegistry::new(),
+            on_close: None,
+            background: level.background,
+            content: level.content,
+            popup: Some(Popup {
+                parent: level.parent,
+                anchor: level.anchor,
+                grab: true,
+                on_dismiss: dismiss.clone(),
+            }),
+            menus: None,
+        })
+        .collect()
     }
+}
+
+/// A menu as its levels are built from it: a [`Menu`] with what it sends as [`Out`].
+pub(crate) struct Levels<'a, M> {
+    pub(crate) parent: WindowKey,
+    pub(crate) anchor: MenuAnchor,
+    pub(crate) label: String,
+    pub(crate) items: Vec<MenuItem<Out<M>>>,
+    pub(crate) current: Option<usize>,
+    pub(crate) open: Vec<usize>,
+    pub(crate) on_open: &'a dyn Fn(Vec<usize>) -> Out<M>,
+    pub(crate) on_close: Out<M>,
+}
+
+/// One popup window of a menu: the menu itself or an open submenu, and where it opens in which window.
+pub(crate) struct Level<M> {
+    pub(crate) key: WindowKey,
+    pub(crate) spec: WindowSpec,
+    pub(crate) background: WindowBackground,
+    pub(crate) content: Element<M>,
+    pub(crate) parent: WindowKey,
+    pub(crate) anchor: PopupAnchor,
+}
+
+/// The popup windows that show `menu` and its open submenus, with panels of the corner radius and least width of
+/// `style`.
+pub(crate) fn levels<M: Clone + 'static>(
+    menu: Levels<'_, M>,
+    key: WindowKey,
+    style: MenuStyle,
+) -> Vec<Level<M>> {
+    let Levels {
+        parent,
+        anchor,
+        label,
+        mut items,
+        current,
+        open,
+        on_open,
+        on_close,
+    } = menu;
+    let mut parent = parent;
+    // the menu opens with its current item over the pointer that pressed the button
+    let over = matches!(anchor, MenuAnchor::Over(_));
+    // a context menu opens at the pointer, which a menu slid to fit can leave over a row
+    let at_pointer = matches!(anchor, MenuAnchor::At(_));
+    let mut anchor = match anchor {
+        MenuAnchor::Below(key) => PopupAnchor::Below { key, gap: GAP },
+        MenuAnchor::At(point) => PopupAnchor::At(point),
+        MenuAnchor::Above { key, gap, dx } => PopupAnchor::Above { key, gap, dx },
+        MenuAnchor::Over(key) => {
+            let above: f64 = items[..current.unwrap_or(0).min(items.len())]
+                .iter()
+                .map(|item| match item {
+                    MenuItem::Separator => SEPARATOR_HEIGHT,
+                    _ => ROW_HEIGHT,
+                })
+                .sum();
+            PopupAnchor::Over {
+                key,
+                offset: Point::new(
+                    LABEL_INSET - Columns::of(&items, style.min_width).label,
+                    -(PADDING_Y + above + ROW_HEIGHT / 2.0),
+                ),
+            }
+        }
+    };
+    let mut label = label;
+    let mut levels = Vec::new();
+    for depth in 0..=open.len() {
+        let path = &open[..depth];
+        let next = open.get(depth).copied();
+        let submenu = match next.and_then(|i| items.get_mut(i)) {
+            Some(MenuItem::Submenu {
+                label,
+                enabled: true,
+                items,
+            }) => Some((label.clone(), std::mem::take(items))),
+            _ => None,
+        };
+        let back = (depth > 0).then(|| on_open(open[..depth - 1].to_vec()));
+        let typing = Rc::new(RefCell::new(TypeAhead::default()));
+        let flash: Flashing<M> = Rc::new(RefCell::new(None));
+        let panel = Panel {
+            label: label.clone(),
+            rows: items
+                .iter()
+                .filter(|i| !matches!(i, MenuItem::Separator))
+                .count(),
+            current: current
+                .filter(|_| depth == 0)
+                .and_then(|i| enabled_position(&items, i)),
+            escape: back.clone().unwrap_or_else(|| on_close.clone()),
+            back,
+            slots: slots(&items, path, on_open, &on_close),
+            open: next
+                .zip(submenu.as_ref())
+                .map(|(index, (_, sub))| (index, height(sub))),
+            submenu: submenu.as_ref().map(|_| level_key(&key, depth + 1)),
+            collapse: on_open(path.to_vec()),
+            start: current.filter(|_| depth == 0 && over),
+            at_pointer: depth == 0 && at_pointer,
+            typing: Rc::clone(&typing),
+            flash: Rc::clone(&flash),
+            radius: style.radius,
+            tailed: depth == 0 && style.tail.is_some(),
+            children: rows(
+                &items,
+                style.min_width,
+                path,
+                current.filter(|_| depth == 0),
+                next.filter(|_| submenu.is_some()),
+                on_open,
+                &on_close,
+                &typing,
+                &flash,
+            ),
+        };
+        let key = level_key(&key, depth);
+        let tailed = depth == 0 && style.tail.is_some();
+        let name = label.clone();
+        levels.push(Level {
+            key: key.clone(),
+            spec: WindowSpec {
+                title: label,
+                app_id: String::new(),
+                size: MAX,
+                min_size: None,
+                max_size: None,
+                decorations: DecorationMode::None,
+                foreign_parent: None,
+                input_region: None,
+            },
+            background: if tailed {
+                WindowBackground::None
+            } else {
+                WindowBackground::Surface {
+                    surface: Surface::Menu,
+                    radius: style.radius,
+                    alpha: 1.0,
+                }
+            },
+            content: match style.tail.filter(|_| tailed) {
+                Some(tail) => Element::new(Callout {
+                    name,
+                    children: vec![
+                        Element::new(panel).key("panel"),
+                        Element::new(TailRow { tail }).key("tail"),
+                    ],
+                }),
+                None => Element::new(panel),
+            },
+            parent,
+            anchor,
+        });
+        let (Some(index), Some((sub_label, sub_items))) = (next, submenu) else {
+            break;
+        };
+        parent = key;
+        anchor = PopupAnchor::Beside {
+            key: Key::from(index as u64),
+            offset: Point::new(-SUBMENU_OVERLAP, -PADDING_Y),
+        };
+        label = sub_label;
+        items = sub_items;
+    }
+    levels
 }
 
 /// The rows of the menu at `path`, keyed by their index; `current` is the item that takes the focus when it opens,
 /// and `open` the item whose submenu is open.
 #[allow(clippy::too_many_arguments)]
 fn rows<M: Clone + 'static>(
-    items: &[MenuItem<M>],
+    items: &[MenuItem<Out<M>>],
     min_width: f64,
     path: &[usize],
     current: Option<usize>,
     open: Option<usize>,
-    on_open: &Handler<Vec<usize>, M>,
-    on_close: &M,
+    on_open: &dyn Fn(Vec<usize>) -> Out<M>,
+    on_close: &Out<M>,
     typing: &Rc<RefCell<TypeAhead>>,
     flash: &Flashing<M>,
 ) -> Vec<Element<M>> {
@@ -526,10 +657,10 @@ fn rows<M: Clone + 'static>(
 /// What the panel of the menu at `path` needs to follow the pointer over `items`: each row's height, its place among
 /// the enabled rows and what choosing it does.
 fn slots<M: Clone>(
-    items: &[MenuItem<M>],
+    items: &[MenuItem<Out<M>>],
     path: &[usize],
-    on_open: &Handler<Vec<usize>, M>,
-    on_close: &M,
+    on_open: &dyn Fn(Vec<usize>) -> Out<M>,
+    on_close: &Out<M>,
 ) -> Vec<Slot<M>> {
     let mut position = 0;
     items
@@ -607,9 +738,9 @@ struct Panel<M> {
     /// The place among the enabled rows of the row that takes the focus when the menu opens.
     current: Option<usize>,
     /// Sent on Escape: closes a submenu, or the whole menu.
-    escape: M,
+    escape: Out<M>,
     /// Sent on the arrow toward the leading side in a submenu.
-    back: Option<M>,
+    back: Option<Out<M>>,
     /// The rows in order, separators included.
     slots: Vec<Slot<M>>,
     /// The item whose submenu is open, and the submenu's height.
@@ -617,7 +748,7 @@ struct Panel<M> {
     /// The window of the open submenu.
     submenu: Option<WindowKey>,
     /// Closes the submenus of this menu.
-    collapse: M,
+    collapse: Out<M>,
     /// The item over the pointer as the menu opens: a pop-up button's current option.
     start: Option<usize>,
     /// The menu opened at the pointer: the row the pointer is first found on is the one it was on as the menu opened.
@@ -778,7 +909,7 @@ impl<M: Clone + 'static> Panel<M> {
         let open = self.open.map(|(i, _)| i);
         if open.is_some_and(|open| open != index) {
             // the pointer came onto another row, not on its way into the open submenu: it closes now
-            cx.emit(self.collapse.clone());
+            self.collapse.send(cx);
         }
         let opens = matches!(self.slots[index].action, Some(RowAction::Open { .. }));
         state.pending =
@@ -803,7 +934,7 @@ impl<M: Clone + 'static> Panel<M> {
         if let Some((_, index)) = state.pending.filter(|(at, _)| *at <= now) {
             state.pending = None;
             if let Some(RowAction::Open { on_open, .. }) = &self.slots[index].action {
-                cx.emit(on_open.clone());
+                on_open.send(cx);
             }
         }
         self.schedule(state, cx);
@@ -822,7 +953,7 @@ impl<M: Clone + 'static> Panel<M> {
             state.pending = None;
             if let Some(RowAction::Open { on_open, .. }) = action {
                 if self.open.map(|(i, _)| i) != row {
-                    cx.emit(on_open.clone());
+                    on_open.send(cx);
                 }
             }
             return;
@@ -842,7 +973,7 @@ impl<M: Clone + 'static> Panel<M> {
             // them, which the outermost one does; one that never came over the menus leaves them open
             let close = tracking.release(seconds(now), Under::Outside) == Release::Close;
             if close && state.visited && self.back.is_none() {
-                cx.emit(self.escape.clone());
+                self.escape.send(cx);
             }
             return;
         }
@@ -871,7 +1002,7 @@ impl<M: Clone + 'static> Panel<M> {
             }
             (_, Some(RowAction::Open { on_open, .. })) if self.open.map(|(i, _)| i) != row => {
                 state.pending = None;
-                cx.emit(on_open.clone());
+                on_open.send(cx);
             }
             _ => {}
         }
@@ -1034,7 +1165,7 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
         };
         match message {
             Some(message) => {
-                cx.emit(message.clone());
+                message.send(cx);
                 Propagation::Stop
             }
             None => Propagation::Continue,
@@ -1080,8 +1211,8 @@ impl<M: Clone + 'static> Widget<M> for Panel<M> {
 
 #[derive(Clone)]
 enum RowAction<M> {
-    Select { on_select: M, on_close: M },
-    Open { on_open: M, open: bool },
+    Select { on_select: Out<M>, on_close: Out<M> },
+    Open { on_open: Out<M>, open: bool },
 }
 
 struct Row<M> {
@@ -1140,7 +1271,7 @@ impl<M: Clone + 'static> Row<M> {
                 vec![on_select.clone(), on_close.clone()],
                 cx,
             ),
-            RowAction::Open { on_open, .. } => cx.emit(on_open.clone()),
+            RowAction::Open { on_open, .. } => on_open.send(cx),
         }
     }
 

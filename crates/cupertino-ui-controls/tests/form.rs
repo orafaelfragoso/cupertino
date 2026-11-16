@@ -5,14 +5,16 @@ use crate::support;
 
 use cupertino_geometry::{Insets, Point, Size};
 use cupertino_ui_controls::{
-    FormBackground, FormGroup, FormHeader, FormRow, IconTile, NavigationRow, PopUpButton,
-    SearchField, Stack, Text, TextChange, TextField, TextRole, TileColor, TileSidebar,
-    TileSidebarItem, Toggle, FORM_ROW_HEIGHT, FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_ROW_HEIGHT,
+    tile_sidebar_fade, tile_sidebar_fade_layers, FormBackground, FormGroup, FormHeader, FormRow,
+    IconTile, NavigationRow, PopUpButton, SearchField, Stack, Text, TextChange, TextField,
+    TextRole, TileColor, TileSidebar, TileSidebarItem, Toggle, FORM_ROW_HEIGHT,
+    FORM_TILE_ROW_HEIGHT, TILE_SIDEBAR_EDGE_FADE, TILE_SIDEBAR_ROW_HEIGHT,
 };
 use cupertino_ui_core::{
     AccessibilityNode, Action, Application, Command, Element, Key, NodeId, Role, Window,
 };
 use cupertino_ui_layout::{Align, Axis, ScrollState};
+use cupertino_ui_platform::{PointerEvent, ScrollSource};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_ui_theme::{ColorRole, ControlSize, InteractionVariant};
@@ -315,6 +317,185 @@ fn a_sidebar_row_is_a_row_tall_and_the_groups_stand_apart() {
         h.rect("search").max_y() <= h.rect("Network").min_y(),
         "the search field stands above the rows"
     );
+}
+
+/// The fade's model: nothing at the top of the list, the whole row from the band's bottom down, and in between steps
+/// of whole device pixels whose nested layers add up to the fade at each step, at each scale.
+#[test]
+fn the_sidebar_fade_steps_in_whole_device_pixels_and_adds_up_to_the_fade() {
+    let band = TILE_SIDEBAR_EDGE_FADE;
+    assert_eq!(tile_sidebar_fade(0.0, band), 0.0);
+    assert_eq!(tile_sidebar_fade(band, band), 1.0);
+    assert_eq!(tile_sidebar_fade(band / 2.0, band), 0.5);
+    assert!(tile_sidebar_fade(1.0, band) < tile_sidebar_fade(2.0, band));
+    for scale in [1.0, 1.5, 2.0] {
+        // a row whose top lies 5 pt above the list's top: the fade starts 5 pt down the row
+        let layers = tile_sidebar_fade_layers(-5.0, band, TILE_SIDEBAR_ROW_HEIGHT, scale);
+        assert!(
+            !layers.is_empty() && layers.len() <= 12,
+            "{scale}x: {layers:?}"
+        );
+        assert_eq!(
+            layers[0].0, -5.0,
+            "{scale}x: the first step at the list's top"
+        );
+        let mut shown = 0.0f64;
+        for (i, &(top, opacity)) in layers.iter().enumerate() {
+            let pixels = (top + 5.0) * scale;
+            assert!(
+                (pixels - pixels.round()).abs() < 1e-9,
+                "{scale}x: step {i} starts on a device pixel: {top}"
+            );
+            assert!(opacity > 0.0 && opacity <= 1.0, "{scale}x: {opacity}");
+            shown = 1.0 - (1.0 - shown) * (1.0 - f64::from(opacity));
+            let next = layers.get(i + 1).map_or(band - 5.0, |l| l.0);
+            let middle = (top + next) / 2.0 + 5.0;
+            assert!(
+                (shown - tile_sidebar_fade(middle, band)).abs() < 0.06,
+                "{scale}x: step {i} shows {shown} where the fade is {}",
+                tile_sidebar_fade(middle, band)
+            );
+        }
+        assert!(
+            shown < 1.0,
+            "{scale}x: the row shows whole only below the band"
+        );
+        assert!(
+            layers[0].1 < 0.05,
+            "{scale}x: next to nothing at the top: {}",
+            layers[0].1
+        );
+    }
+    assert!(tile_sidebar_fade_layers(0.0, 0.0, 32.0, 1.0).is_empty());
+}
+
+/// The top of the scrolled list, and how much of a row the layers it paints show there and at the band's bottom:
+/// `None` when the row paints whole, without layers.
+fn fade_of(h: &Harness<Settings>, name: &'static str) -> Option<(f64, f64)> {
+    let list_top = h.rect("search").max_y();
+    let row = h.rect(name);
+    let ops = h.ops(name);
+    let mut clip = None;
+    let mut layers = Vec::new();
+    for op in &ops {
+        match op {
+            PaintOp::PushClip(Shape::Rect(rect)) => clip = Some(*rect),
+            PaintOp::PushLayer { opacity, .. } => layers.push((clip.unwrap(), *opacity)),
+            _ => {}
+        }
+    }
+    if layers.is_empty() {
+        return None;
+    }
+    // what the nested layers show at a point of the row, in window coordinates
+    let at = |y: f64| {
+        let local = y - row.min_y();
+        1.0 - layers
+            .iter()
+            .filter(|(clip, _)| clip.min_y() <= local && local < clip.max_y())
+            .fold(1.0, |hidden, (_, o)| hidden * (1.0 - f64::from(*o)))
+    };
+    assert!(
+        (layers[0].0.min_y() + row.min_y() - list_top).abs() < 1e-6,
+        "the first layer starts at the list's top: {:?} {row:?} {list_top}",
+        layers[0]
+    );
+    Some((
+        at(list_top + 0.25),
+        at(list_top + TILE_SIDEBAR_EDGE_FADE - 0.25),
+    ))
+}
+
+/// A row scrolling under the search field fades out over the band at the top of the list instead of being cut there:
+/// at several offsets and at each scale, a row reaching into the band shows next to nothing at the list's top and
+/// nearly all of itself at the band's bottom; a row below the band paints whole, and nothing fades at rest.
+#[test]
+fn a_row_scrolling_under_the_search_field_fades_out_instead_of_showing_a_slice() {
+    for scale in [1.0, 1.5, 2.0] {
+        let mut h = harness();
+        h.send(cupertino_ui_platform::WindowEvent::Scale(scale));
+        h.resize(Size::new(640.0, 150.0));
+        let list_top = h.rect("search").max_y();
+        assert_eq!(
+            h.rect("Network").min_y() - list_top,
+            TILE_SIDEBAR_EDGE_FADE,
+            "{scale}x: at rest the first row starts below the band"
+        );
+        for name in ROWS {
+            assert_eq!(fade_of(&h, name), None, "{scale}x: {name} at rest");
+        }
+        let mut offset = 0.0;
+        for step in [3.0, 9.0, 10.0, 6.0, 16.0, 20.0] {
+            offset += step;
+            h.pointer(PointerEvent::Scroll {
+                position: h.center("Displays"),
+                delta: Point::new(0.0, step),
+                value120: None,
+                source: ScrollSource::Wheel,
+                stop: false,
+                inverted: (false, false),
+            });
+            h.settle();
+            assert_eq!(h.model().scroll.offset.y, offset, "{scale}x");
+            let mut faded = 0;
+            for name in ROWS {
+                let row = h.rect(name);
+                let in_band =
+                    row.max_y() > list_top && row.min_y() < list_top + TILE_SIDEBAR_EDGE_FADE;
+                match fade_of(&h, name) {
+                    Some((top, bottom)) => {
+                        assert!(in_band, "{scale}x at {offset}: {name} fades below the band");
+                        faded += 1;
+                        assert!(
+                            top < 0.05,
+                            "{scale}x at {offset}: {name} shows {top} at the list's top"
+                        );
+                        if row.min_y() < list_top + TILE_SIDEBAR_EDGE_FADE - 0.25 {
+                            assert!(
+                                bottom > 0.9,
+                                "{scale}x at {offset}: {name} shows {bottom} at the band's bottom"
+                            );
+                        }
+                    }
+                    None => assert!(
+                        !in_band || row.max_y() <= list_top,
+                        "{scale}x at {offset}: {name} reaches into the band unfaded"
+                    ),
+                }
+            }
+            assert!(faded > 0, "{scale}x at {offset}: a row lies in the band");
+        }
+    }
+}
+
+/// A row the keyboard comes to while it lies under the fade scrolls into full view below the band.
+#[test]
+fn a_row_the_keyboard_reaches_under_the_fade_scrolls_whole_below_it() {
+    let mut h = harness();
+    h.resize(Size::new(640.0, 150.0));
+    h.click(h.center("Displays"));
+    let list_top = h.rect("search").max_y();
+    // Sound half under the band
+    let under = h.rect("Sound").min_y() - list_top - 4.0;
+    h.pointer(PointerEvent::Scroll {
+        position: h.center("Displays"),
+        delta: Point::new(0.0, under),
+        value120: None,
+        source: ScrollSource::Wheel,
+        stop: false,
+        inverted: (false, false),
+    });
+    h.settle();
+    assert!(fade_of(&h, "Sound").is_some(), "Sound lies in the band");
+    h.tap(UP);
+    assert_eq!(h.model().selected, Some(1));
+    assert!(h.focused("Sound"));
+    assert!(
+        h.rect("Sound").min_y() >= list_top + TILE_SIDEBAR_EDGE_FADE - 0.5,
+        "Sound shows whole below the band: {:?} under {list_top}",
+        h.rect("Sound")
+    );
+    assert_eq!(fade_of(&h, "Sound"), None);
 }
 
 #[test]

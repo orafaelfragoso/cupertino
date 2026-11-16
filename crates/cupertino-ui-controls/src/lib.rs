@@ -79,7 +79,9 @@ pub use slider::SliderState;
 pub use split::DividerState;
 pub use stepper::StepperState;
 pub use text_box::TextBoxState;
-pub use tile_sidebar::TILE_SIDEBAR_ROW_HEIGHT;
+pub use tile_sidebar::{
+    tile_sidebar_fade, tile_sidebar_fade_layers, TILE_SIDEBAR_EDGE_FADE, TILE_SIDEBAR_ROW_HEIGHT,
+};
 pub use toggle::SwitchState;
 pub use toolbar::{
     unobscured_insets, ToolbarButton, ToolbarGlyph, ToolbarGroup, ToolbarItem, ToolbarMenuButton,

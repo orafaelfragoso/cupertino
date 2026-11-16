@@ -60,6 +60,71 @@ fn the_centre_s_window_title_reads_notification_center() {
     assert_eq!(centre[0].spec.title, "Notification Center");
 }
 
+/// The open centre has a window over each output that hears a press outside it, or one where the compositor chooses
+/// while no output is known. A centre that is closed, sliding out or behind the lock screen has none.
+#[test]
+fn the_open_centre_has_a_press_catcher_over_each_output() {
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let mut ui = Ui::default();
+    let outputs = |c: &NotificationCenter, ui: &Ui, outputs: &[u32]| -> Vec<Option<u32>> {
+        catchers::<Input>(c, ui, outputs, |i| i)
+            .iter()
+            .map(|w| catcher_output(&w.spec.app_id).expect("a catcher's app_id"))
+            .collect()
+    };
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "closed");
+    ui.open_centre(1.0, false);
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [Some(3), Some(7)]);
+    assert_eq!(outputs(&c, &ui, &[]), [None], "no output known yet");
+    let shown = catchers::<Input>(&c, &ui, &[3, 7], |i| i);
+    assert_ne!(shown[0].key, shown[1].key);
+    for window in &shown {
+        assert_eq!(window.spec.size, Size::ZERO, "its surface's role sizes it");
+        assert_eq!(window.spec.input_region, None, "all of it takes input");
+        assert_eq!(window.background, WindowBackground::INPUT_ONLY);
+        assert_ne!(window.spec.app_id, APP_ID, "no card window");
+    }
+    c.set_screen_locked(true, 1.5);
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "locked");
+    c.set_screen_locked(false, 1.6);
+    ui.close_centre(2.0, false);
+    assert!(ui.centre_shown(2.0), "still sliding out");
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "closing");
+
+    assert_eq!(catcher_output(APP_ID), None);
+    assert_eq!(catcher_output("cupertino-notifications.catcher.x"), None);
+    assert_eq!(catcher_output("cupertino-notifications.catchers"), None);
+}
+
+/// A press outside closes the centre and its Clear menu in one go (Escape closes the menu first); the window of one
+/// output going is the host's to note and closes nothing, and the last one going closes the centre.
+#[test]
+fn a_press_outside_closes_the_centre_with_its_menu_and_a_lost_output_does_not() {
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let mut ui = Ui::default();
+    ui.open_centre(1.0, true);
+    assert_eq!(apply(&mut c, &mut ui, Input::ToggleClearMenu, 1.0), None);
+    assert_eq!(apply(&mut c, &mut ui, Input::CloseCentre, 1.0), None);
+    assert!(ui.centre_open && !ui.menu_open, "Escape: the menu first");
+    assert_eq!(apply(&mut c, &mut ui, Input::ToggleClearMenu, 1.0), None);
+    assert_eq!(apply(&mut c, &mut ui, Input::PressOutside, 1.0), None);
+    assert!(!ui.centre_open && !ui.menu_open);
+
+    ui.open_centre(5.0, true);
+    assert_eq!(
+        apply(&mut c, &mut ui, Input::CatcherClosed(Some(3)), 5.0),
+        Some(HostAction::OutputGone(3))
+    );
+    assert!(ui.centre_open);
+    assert_eq!(
+        apply(&mut c, &mut ui, Input::CatcherClosed(None), 5.0),
+        None
+    );
+    assert!(!ui.centre_open, "no output is left");
+}
+
 #[test]
 fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
     let m = metrics();

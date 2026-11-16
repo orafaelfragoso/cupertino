@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cupertino_kit::controls::{Icon, IconDirection};
+use cupertino_kit::controls::{Icon, IconDirection, PressCatcher};
 use cupertino_kit::core::next_resource_id;
 use cupertino_kit::core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Checked, CommandRegistry,
@@ -2860,83 +2860,16 @@ pub fn panel<M: Clone + 'static>(
     }
 }
 
-/// Takes a left or right press anywhere on it and draws nothing.
-struct Catcher<M> {
-    on_press: M,
-}
-
-impl<M: Clone + 'static> Widget<M> for Catcher<M> {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        LayoutSpec {
-            width: SizeSpec::Fill,
-            height: SizeSpec::Fill,
-            ..LayoutSpec::new(ContainerKind::Leaf)
-        }
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, _: &Self, _: &mut ()) -> Change {
-        Change::None
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        Measured {
-            size: Size::ZERO,
-            baseline: None,
-        }
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        match event {
-            // a left or right press outside the panel dismisses it
-            Event::Pointer(
-                PointerEvent::Button {
-                    button: MouseButton::Left | MouseButton::Right,
-                    pressed: true,
-                    ..
-                },
-                _,
-            ) => {
-                cx.emit(self.on_press.clone());
-                Propagation::Stop
-            }
-            _ => Propagation::Continue,
-        }
-    }
-
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
-
-    /// Not something assistive technology can reach: Escape dismisses the panel from the keyboard.
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// The transparent window under the panel, over the whole output while the panel is shown.
+/// The transparent window under the panel, over the whole output while the panel is shown: a left or right press
+/// anywhere on it dismisses the panel and goes no further.
 pub fn catcher<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
-    Window {
+    Window::from(PressCatcher {
         key: WindowKey(Key::from("catcher")),
-        spec: WindowSpec {
-            title: TITLE.to_owned(),
-            app_id: CATCHER_APP_ID.to_owned(),
-            size: Size::ZERO,
-            min_size: None,
-            max_size: None,
-            decorations: DecorationMode::None,
-            foreign_parent: None,
-            input_region: None,
-        },
-        shortcuts: CommandRegistry::new(),
+        title: TITLE.to_owned(),
+        app_id: CATCHER_APP_ID.to_owned(),
+        on_press: to(Input::Dismiss),
         on_close: Some(to(Input::Closed)),
-        // shown without a frame of the output's size: it draws nothing
-        background: WindowBackground::INPUT_ONLY,
-        content: Element::new(Catcher {
-            on_press: to(Input::Dismiss),
-        }),
-        popup: None,
-        menus: None,
-    }
+    })
 }
 
 #[cfg(test)]

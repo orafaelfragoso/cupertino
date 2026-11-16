@@ -20,10 +20,12 @@ use cupertino_shell_client::{
 };
 use cupertino_theme::Theme;
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
-use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
+use cupertino_wayland_client::{
+    Connection, Error as WaylandError, ExtensionEvent, OutputId, SurfaceId,
+};
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,7 +81,7 @@ fn start_error(e: zbus::Error) -> Box<dyn Error> {
 }
 
 /// What the bus thread and the surface roles tell the application's loop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Note {
     /// The model changed on the bus.
     Changed,
@@ -92,11 +94,65 @@ pub enum Note {
     ReduceMotion(bool),
     /// `notifications.conf` changed.
     Policy,
+    /// Another surface took the keyboard from the list at this opening of it (another shell panel opened, as a
+    /// rule).
+    Unfocused(u64),
+    /// The compositor's outputs, by their numbers: a press outside the open list is heard on each.
+    Outputs(Vec<u32>),
+}
+
+/// Whether the list losing the keyboard means another surface took it. The list asks for the exclusive keyboard while
+/// it is open and lets it go as a close begins, so the leave that answers its own letting go is no reason to close;
+/// one that comes while it holds the keyboard and still wants it is. An opening of the list that lost the keyboard
+/// that way does not ask for it again: the compositor gives the keyboard to an exclusive surface at each of its
+/// commits, so a list that kept asking would take it back from the panel that has it now.
+#[derive(Debug, Default)]
+struct ListKeyboard {
+    /// The list heard the keyboard enter since it last asked for it or let it go.
+    entered: bool,
+    /// The opening of the list that lost the keyboard to another surface; 0 when none did.
+    lost: u64,
+}
+
+impl ListKeyboard {
+    /// The list asked for the keyboard, or let it go: what it hears next answers that.
+    fn asked(&mut self) {
+        self.entered = false;
+    }
+
+    /// Whether the list wants the keyboard at `opening`, the number of the opening it is at (0 while it is closed or
+    /// closing).
+    fn wants(&self, opening: u64) -> bool {
+        opening != 0 && opening != self.lost
+    }
+
+    /// The list's surface took (`focused`) or lost the keyboard at `opening`. True when the list is to close, having
+    /// lost the keyboard it held and wanted; that opening wants it no more.
+    fn focus(&mut self, focused: bool, opening: u64) -> bool {
+        if focused {
+            self.entered = true;
+            return false;
+        }
+        let lost = std::mem::take(&mut self.entered) && self.wants(opening);
+        if lost {
+            self.lost = opening;
+        }
+        lost
+    }
+}
+
+/// The output a window that hears presses outside the list names for its surface: the one it is for while the
+/// compositor still has it, else none, which leaves the choice to the compositor (an output that went a moment ago
+/// refuses no surface that way).
+fn catcher_surface_output(wanted: Option<u32>, outputs: &[u32]) -> Option<u32> {
+    wanted.filter(|n| outputs.contains(n))
 }
 
 /// Gives the windows of the process their layer surfaces on the overlay layer, at the right edge of the output the
 /// server chooses: a banner's at the top, as tall as its window, taking the pointer only on its card at rest; the
-/// centre's from top to bottom, with the keyboard while it is open (Escape closes it).
+/// centre's from top to bottom, with the keyboard while it is open (Escape closes it). While the centre is open each
+/// output has a transparent surface on the top layer over all of it, under the centre's, which takes the press that
+/// closes the centre.
 struct NotificationRoles {
     shell: LayerShell,
     layout: StackLayout,
@@ -106,10 +162,22 @@ struct NotificationRoles {
     centre: Option<SurfaceId>,
     /// Tells the bus whether the list is open and on which output.
     publisher: CentrePublisher,
-    /// Whether the application wants the keyboard for the list: set while it is open, cleared as a close begins.
-    wants_keys: Arc<AtomicBool>,
+    /// The opening of the list that wants the keyboard: a number each opening has to itself while the list is open, 0
+    /// from the moment a close begins.
+    opening: Arc<AtomicU64>,
     /// The keyboard was let go from the list's surface, which a close does at once.
     keys_released: bool,
+    keyboard: ListKeyboard,
+    /// The outputs the application was last told of.
+    outputs: Option<Vec<u32>>,
+}
+
+/// The compositor's outputs by their numbers, in its order.
+fn output_numbers(conn: &Connection) -> Vec<u32> {
+    conn.outputs()
+        .into_iter()
+        .map(|o| o.id.registry_name())
+        .collect()
 }
 
 /// What the bus says of the centre's list: open while its surface exists, on the output of the given connector name
@@ -125,6 +193,21 @@ fn centre_presence(open: bool, output: Option<String>) -> CentrePresence {
 }
 
 impl NotificationRoles {
+    /// The surface of a window that hears presses outside the list: the top layer, over the whole of `output`,
+    /// without the keyboard.
+    fn catcher_config(output: Option<OutputId>) -> LayerSurfaceConfig {
+        LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output,
+            layer: Layer::Top,
+            anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
+            size: (0, 0),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
+        }
+    }
+
     fn config(&self, spec: &WindowSpec) -> LayerSurfaceConfig {
         let (width, height) = (
             spec.size.width.ceil() as u32,
@@ -165,10 +248,15 @@ impl SurfaceRoles for NotificationRoles {
         conn: &mut Connection,
         spec: &WindowSpec,
     ) -> Option<std::result::Result<SurfaceId, WaylandError>> {
-        if spec.app_id != view::APP_ID {
-            return None;
-        }
-        let layer = match self.shell.layer_surface(conn, &self.config(spec)) {
+        let config = match view::catcher_output(&spec.app_id) {
+            Some(wanted) => Self::catcher_config(
+                catcher_surface_output(wanted, &output_numbers(conn))
+                    .map(OutputId::from_registry_name),
+            ),
+            None if spec.app_id == view::APP_ID => self.config(spec),
+            None => return None,
+        };
+        let layer = match self.shell.layer_surface(conn, &config) {
             Ok(layer) => layer,
             Err(cupertino_shell_client::Error::Transport(e)) => return Some(Err(e)),
             Err(_) => {
@@ -179,10 +267,11 @@ impl SurfaceRoles for NotificationRoles {
         };
         let surface = layer.surface();
         self.layers.insert(surface, layer);
-        if spec.title == CENTRE_TITLE {
+        if spec.app_id == view::APP_ID && spec.title == CENTRE_TITLE {
             self.centre = Some(surface);
             // a new surface asks for the keyboard
             self.keys_released = false;
+            self.keyboard.asked();
         }
         Some(Ok(surface))
     }
@@ -225,11 +314,35 @@ impl SurfaceRoles for NotificationRoles {
         }
     }
 
-    /// Tell the bus whether the centre's list is open and on which output, when that changed.
+    /// Another surface took the keyboard from the open list: the list closes, as it does when another shell panel
+    /// opens.
+    fn keyboard_focus(&mut self, surface: SurfaceId, focused: bool) {
+        if self.centre != Some(surface) {
+            return;
+        }
+        let opening = self.opening.load(Ordering::Relaxed);
+        if self.keyboard.focus(focused, opening) {
+            // the list lets the keyboard go with its next commit, whatever it draws until it hears of the close
+            if let Some(layer) = self.layers.get(&surface) {
+                layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            }
+            self.keys_released = true;
+            self.keyboard.asked();
+            let _ = self.notes.try_send(Note::Unfocused(opening));
+        }
+    }
+
+    /// Tell the bus whether the centre's list is open and on which output, when that changed, and the application
+    /// which outputs there are.
     fn prepare(&mut self, conn: &mut Connection) {
+        let outputs = output_numbers(conn);
+        if self.outputs.as_ref() != Some(&outputs) {
+            let _ = self.notes.try_send(Note::Outputs(outputs.clone()));
+            self.outputs = Some(outputs);
+        }
         // a list on its way out lets the keyboard go to the window that had it; the next commit applies it
         if let Some(layer) = self.centre.and_then(|surface| self.layers.get(&surface)) {
-            let wanted = self.wants_keys.load(Ordering::Relaxed);
+            let wanted = self.keyboard.wants(self.opening.load(Ordering::Relaxed));
             if wanted == self.keys_released {
                 layer.set_keyboard_interactivity(if wanted {
                     KeyboardInteractivity::Exclusive
@@ -237,6 +350,7 @@ impl SurfaceRoles for NotificationRoles {
                     KeyboardInteractivity::None
                 });
                 self.keys_released = !wanted;
+                self.keyboard.asked();
             }
         }
         let output = self.centre.and_then(|surface| {
@@ -266,8 +380,14 @@ pub struct Notifications {
     timer: u64,
     /// Measures the cards with the windows' text system; set once the runtime has its options.
     metrics: Option<CardMetrics>,
-    /// Tells the roles whether the list wants the keyboard (it is open, not closing).
-    wants_keys: Arc<AtomicBool>,
+    /// Tells the roles which opening of the list wants the keyboard (it is open, not closing), 0 for none.
+    opening: Arc<AtomicU64>,
+    /// How many times the list was opened; the number of the opening it is at while it is open.
+    openings: u64,
+    /// The list was open when the roles were last told.
+    was_open: bool,
+    /// The compositor's outputs by their numbers: each has a window that hears presses outside the open list.
+    outputs: Vec<u32>,
     /// Follows `notifications.conf`; `None` when it cannot, and the file then applies at the next start.
     _policy_watch: Option<ConfigWatcher>,
 }
@@ -326,8 +446,16 @@ impl Notifications {
         if let Err(e) = self.server.flush_events() {
             eprintln!("cupertino-notifications: cannot send the signals: {e}");
         }
-        self.wants_keys
-            .store(self.ui.centre_open, Ordering::Relaxed);
+        if self.ui.centre_open && !self.was_open {
+            self.openings += 1;
+        }
+        self.was_open = self.ui.centre_open;
+        let opening = if self.ui.centre_open {
+            self.openings
+        } else {
+            0
+        };
+        self.opening.store(opening, Ordering::Relaxed);
         self.timer += 1;
         let wait = match wakeup {
             Some(Wakeup::Frame) => FRAME,
@@ -383,6 +511,10 @@ impl Notifications {
                 vec![Command::Perform(Box::pin(
                     async move { Message::Focus(key) },
                 ))]
+            }
+            Some(HostAction::OutputGone(output)) => {
+                self.outputs.retain(|&n| n != output);
+                Vec::new()
             }
             None => Vec::new(),
         }
@@ -482,7 +614,10 @@ fn start(options: &Options) -> Result<(Notifications, Vec<Command<Message>>)> {
             sender,
             timer: 0,
             metrics: None,
-            wants_keys: Arc::new(AtomicBool::new(false)),
+            opening: Arc::new(AtomicU64::new(0)),
+            openings: 0,
+            was_open: false,
+            outputs: Vec::new(),
             _policy_watch: policy_watch,
         },
         vec![first],
@@ -539,6 +674,15 @@ impl Application for Notifications {
                         let policy = load_policy(Some(&last));
                         model.server.center().set_policy(policy);
                     }
+                    // a list opened again since is another opening, which has the keyboard
+                    Note::Unfocused(opening) => {
+                        if model.was_open && opening == model.openings {
+                            let now = model.server.now();
+                            let reduce = model.server.center().config.motion.reduce_motion;
+                            model.ui.close_centre(now, reduce);
+                        }
+                    }
+                    Note::Outputs(outputs) => model.outputs = outputs,
                 }
                 vec![listen(&model.notes)]
             }
@@ -563,13 +707,17 @@ impl Application for Notifications {
             return Vec::new();
         };
         let now = model.server.now();
-        view::windows(
-            &mut model.server.center(),
+        let mut center = model.server.center();
+        // the windows that hear a press outside the open list come first: they lie under it
+        let mut windows = view::catchers(&center, &model.ui, &model.outputs, Message::Input);
+        windows.extend(view::windows(
+            &mut center,
             &model.ui,
             metrics,
             now,
             Message::Input,
-        )
+        ));
+        windows
     }
 }
 
@@ -596,8 +744,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         notes: sender,
         centre: None,
         publisher,
-        wants_keys: Arc::clone(&start.0.wants_keys),
+        opening: Arc::clone(&start.0.opening),
         keys_released: false,
+        keyboard: ListKeyboard::default(),
+        outputs: None,
     });
     cupertino_kit::app::run_on_with::<Notifications>(system, move |options| {
         let (mut model, commands) = start;
@@ -641,6 +791,53 @@ mod tests {
             centre_presence(false, Some("DP-1".into())),
             CentrePresence::default()
         );
+    }
+
+    /// The list closes when another surface takes the keyboard it holds and still wants; the leave that answers its
+    /// own letting go, and a leave before it ever had the keyboard, close nothing. An opening that lost the keyboard
+    /// does not ask for it again, and the next opening does.
+    #[test]
+    fn the_list_closes_when_another_surface_takes_its_keyboard_and_not_when_it_lets_go() {
+        let mut keyboard = ListKeyboard::default();
+        assert!(!keyboard.wants(0), "closed");
+        assert!(keyboard.wants(1));
+        keyboard.asked();
+        assert!(!keyboard.focus(false, 1), "it never had the keyboard");
+        assert!(!keyboard.focus(true, 1), "the keyboard came");
+        assert!(keyboard.focus(false, 1), "another surface took it");
+        assert!(
+            !keyboard.wants(1),
+            "this opening leaves the keyboard where it went"
+        );
+        assert!(!keyboard.focus(false, 1), "said once");
+        assert!(keyboard.wants(2), "the next opening asks again");
+
+        // a close begins: the list no longer wants the keyboard, and lets it go
+        assert!(!keyboard.focus(true, 2));
+        assert!(!keyboard.focus(false, 0), "the close is under way");
+        assert!(!keyboard.focus(true, 3));
+        keyboard.asked();
+        assert!(
+            !keyboard.focus(false, 4),
+            "the leave answers the list letting go, even when it was opened again meanwhile"
+        );
+        assert!(!keyboard.focus(true, 4), "and it holds the keyboard again");
+        assert!(keyboard.focus(false, 4));
+        assert!(!keyboard.wants(4));
+    }
+
+    /// A window that hears presses outside the list goes on its own output while the compositor has it, and where the
+    /// compositor chooses once that output is gone or when none was named.
+    #[test]
+    fn a_catcher_names_its_output_only_while_the_compositor_has_it() {
+        assert_eq!(catcher_surface_output(Some(7), &[3, 7]), Some(7));
+        assert_eq!(catcher_surface_output(Some(7), &[3]), None);
+        assert_eq!(catcher_surface_output(None, &[3, 7]), None);
+        let config = NotificationRoles::catcher_config(Some(OutputId::from_registry_name(7)));
+        assert_eq!(config.layer, Layer::Top, "under the list, over the bars");
+        assert_eq!(config.size, (0, 0), "the whole output");
+        assert_eq!(config.keyboard, KeyboardInteractivity::None);
+        assert_eq!(config.namespace, NAMESPACE);
     }
 
     #[test]

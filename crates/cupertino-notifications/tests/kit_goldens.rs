@@ -41,6 +41,9 @@ enum Step {
     OpenCentre,
     /// The session locks (`true`) or unlocks, as the process learns it from the server.
     Lock(bool),
+    /// The compositor's outputs, as the process learns them: the open centre then has a window over each that hears
+    /// a press outside it.
+    Outputs(Vec<u32>),
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +67,8 @@ struct Model {
     metrics: CardMetrics,
     /// What the windows left to the host, in order.
     host: Vec<HostAction>,
+    /// The outputs the process was told of; `None` leaves the windows that hear presses outside the centre out.
+    outputs: Option<Vec<u32>>,
 }
 
 fn next(steps: &async_channel::Receiver<Step>) -> Command<Message> {
@@ -91,6 +96,7 @@ impl Application for Scripted {
             steps,
             metrics,
             host: Vec::new(),
+            outputs: None,
         };
         (model, vec![first])
     }
@@ -108,6 +114,7 @@ impl Application for Scripted {
                     Step::Lock(locked) => {
                         model.center.get_mut().set_screen_locked(locked, model.now)
                     }
+                    Step::Outputs(outputs) => model.outputs = Some(outputs),
                 }
                 // cleared cards that have left go from the model, as the application's housekeeping does
                 model.ui.finish_removals(model.center.get_mut(), model.now);
@@ -123,6 +130,12 @@ impl Application for Scripted {
                             async move { Message::Focus(key) },
                         ))]
                     }
+                    Some(HostAction::OutputGone(output)) => {
+                        if let Some(outputs) = &mut model.outputs {
+                            outputs.retain(|&n| n != output);
+                        }
+                        Vec::new()
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -131,13 +144,19 @@ impl Application for Scripted {
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
-        view::windows(
-            &mut model.center.borrow_mut(),
+        let mut center = model.center.borrow_mut();
+        let mut windows = match &model.outputs {
+            Some(outputs) => view::catchers(&center, &model.ui, outputs, Message::Input),
+            None => Vec::new(),
+        };
+        windows.extend(view::windows(
+            &mut center,
             &model.ui,
             &model.metrics,
             model.now,
             Message::Input,
-        )
+        ));
+        windows
     }
 }
 
@@ -170,6 +189,9 @@ struct Run {
     /// The runtime's clock, moved only while a window animates.
     clock: ManualClock,
 }
+
+/// The size of the outputs the windows that hear presses outside the centre cover.
+const OUTPUT: Size = Size::new(800.0, 600.0);
 
 /// One frame at 60 Hz, in nanoseconds.
 const FRAME_NS: u64 = 16_666_667;
@@ -264,6 +286,8 @@ impl Run {
                     // a layer surface's configure always carries its size, so the window keeps it after its spec
                     // changes: the size it asks for now, as the compositor gives it
                     let size = self.size.unwrap_or_else(|| asked_size(system, window));
+                    // a window that asks for no size is given its output's
+                    let size = if size == Size::ZERO { OUTPUT } else { size };
                     system
                         .configure(window, Some(size), WindowStates::default())
                         .unwrap();
@@ -1716,4 +1740,114 @@ fn the_keyboard_reveals_the_card_it_is_on_and_tab_reaches_its_buttons_whatever_t
         buttons_of(&run, id)
     );
     assert_eq!(run.ui().focused, Some(id));
+}
+
+/// The open centre with a window over each of two outputs that hears a press outside it; returns those windows by
+/// output and the centre's.
+fn centre_on_two_outputs(run: &mut Run) -> (Vec<(Option<u32>, WindowId)>, WindowId) {
+    run.notify(NotifyInput::new("Calendar", "Summary", "Body"));
+    run.step(Step::At(1.0));
+    run.step(Step::Outputs(vec![3, 7]));
+    assert_eq!(run.windows().len(), 1, "a banner alone has none");
+    run.step(Step::OpenCentre);
+    let system = run.driver.runtime().window_system();
+    let mut catchers = Vec::new();
+    let mut centre = None;
+    for (_, window) in run.windows() {
+        let spec = system.spec(window).unwrap();
+        match view::catcher_output(&spec.app_id) {
+            Some(output) => catchers.push((output, window)),
+            None => centre = Some(window),
+        }
+    }
+    (catchers, centre.expect("the centre's window"))
+}
+
+/// A left or right press anywhere outside the open centre closes it, whichever output the press is on: each output
+/// has a window under the centre that takes the press, so nothing under it hears it. The windows go as the close
+/// begins, while the centre still slides out, and the release says nothing.
+#[test]
+fn a_left_or_right_press_outside_the_centre_closes_it_on_every_output() {
+    for output in [3, 7] {
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let mut run = Run::new();
+            let (catchers, centre) = centre_on_two_outputs(&mut run);
+            assert_eq!(
+                catchers.iter().map(|(o, _)| *o).collect::<Vec<_>>(),
+                [Some(3), Some(7)],
+                "one over each output"
+            );
+            let system = run.driver.runtime().window_system();
+            for (_, window) in &catchers {
+                assert!(
+                    system.frames(*window).unwrap().is_empty(),
+                    "it draws no frame"
+                );
+            }
+            let window = catchers
+                .iter()
+                .find(|(o, _)| *o == Some(output))
+                .map(|(_, w)| *w)
+                .unwrap();
+            let at = Point::new(40.0, 500.0);
+            run.pointer(window, PointerEvent::Motion { position: at });
+            assert!(run.ui().centre_open, "the pointer moving closes nothing");
+            let press = |pressed| PointerEvent::Button {
+                position: at,
+                button,
+                pressed,
+                serial: 1,
+                mods: Mods::NONE,
+            };
+            run.pointer(window, press(true));
+            assert!(
+                !run.ui().centre_open,
+                "{button:?} on output {output} closes the centre"
+            );
+            assert_eq!(
+                run.windows().iter().map(|(_, w)| *w).collect::<Vec<_>>(),
+                [centre],
+                "the windows that heard the press went at once; the centre slides out"
+            );
+            assert_eq!(run.host(), [], "nothing is activated");
+        }
+    }
+}
+
+/// The other buttons and the wheel over the windows around the centre close nothing, and the window of an output
+/// that goes is not opened again while the other output keeps its own.
+#[test]
+fn other_buttons_outside_the_centre_close_nothing_and_an_output_that_goes_takes_its_window() {
+    let mut run = Run::new();
+    let (catchers, centre) = centre_on_two_outputs(&mut run);
+    let (_, first) = catchers[0];
+    let at = Point::new(40.0, 500.0);
+    run.pointer(first, PointerEvent::Motion { position: at });
+    for button in [MouseButton::Middle, MouseButton::Back, MouseButton::Forward] {
+        for pressed in [true, false] {
+            run.pointer(
+                first,
+                PointerEvent::Button {
+                    position: at,
+                    button,
+                    pressed,
+                    serial: 1,
+                    mods: Mods::NONE,
+                },
+            );
+        }
+    }
+    run.pointer(first, PointerEvent::Leave);
+    assert!(run.ui().centre_open);
+    assert_eq!(run.windows().len(), 3);
+
+    // the compositor closes the surface of the output that went
+    run.send(first, WindowEvent::CloseRequested);
+    assert_eq!(run.host(), [HostAction::OutputGone(3)]);
+    assert!(run.ui().centre_open, "the centre stays on its own output");
+    assert_eq!(
+        run.windows().iter().map(|(_, w)| *w).collect::<Vec<_>>(),
+        [catchers[1].1, centre],
+        "the other output keeps its window"
+    );
 }

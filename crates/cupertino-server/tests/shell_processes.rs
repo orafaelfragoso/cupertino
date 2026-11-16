@@ -961,6 +961,254 @@ fn centre_backdrop_heights(state: &Cupertino) -> Option<Vec<usize>> {
     )
 }
 
+/// Layer namespace of the notification process's surfaces.
+const NOTIFICATIONS: &str = "cupertino-notifications";
+
+/// The notification process's layer surfaces: whether each is the centre's list (the overlay layer; no banner shows
+/// in these tests), the index of its output in `Cupertino::outputs`, and its surface.
+fn notification_surfaces(
+    state: &Cupertino,
+) -> Vec<(
+    bool,
+    usize,
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+)> {
+    let mut out = Vec::new();
+    for (output, entry) in state.outputs.iter().enumerate() {
+        let map = layer_map_for_output(&entry.output);
+        for layer in map.layers().filter(|l| l.namespace() == NOTIFICATIONS) {
+            out.push((
+                layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                output,
+                layer.wl_surface().clone(),
+            ));
+        }
+    }
+    out
+}
+
+/// The centre's list is open with the keyboard, over a surface on each of the two outputs that hears a press outside
+/// it.
+fn centre_open_on_two_outputs(state: &Cupertino) -> bool {
+    let surfaces = notification_surfaces(state);
+    let focus = state.seat.get_keyboard().unwrap().current_focus();
+    let list = surfaces
+        .iter()
+        .filter(|(list, ..)| *list)
+        .collect::<Vec<_>>();
+    let mut under = surfaces
+        .iter()
+        .filter(|(list, ..)| !*list)
+        .map(|(_, output, _)| *output)
+        .collect::<Vec<_>>();
+    under.sort_unstable();
+    list.len() == 1 && focus.as_ref() == Some(&list[0].2) && under == [0, 1]
+}
+
+/// `ToggleCentre` on the notification process's bus name.
+fn toggle_centre(conn: &zbus::Connection) {
+    zbus::block_on(conn.call_method(
+        Some("org.cupertino.NotificationCenter1"),
+        "/org/cupertino/NotificationCenter1",
+        Some("org.cupertino.NotificationCenter1"),
+        "ToggleCentre",
+        &(),
+    ))
+    .unwrap();
+}
+
+/// The open notification centre closes at a press outside it on either output, and the press goes no further: over a
+/// window the pointer is on the surface under the centre, which takes the press, and on the window again once the
+/// centre has closed. Escape closes it, and so does the control
+/// panel opening, which takes the keyboard. After each close that leaves the keyboard free it is back on the window
+/// that had it. Run with `--no-capture` for the trace.
+#[test]
+fn a_press_outside_the_notification_centre_closes_it_on_either_output_and_reaches_nothing_under_it()
+{
+    const ESCAPE: u32 = 1 + 8;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut panel = real_process(PANEL, &bus);
+    panel.command.push("--fake-backends".into());
+    let Some(mut server) = Server::start(
+        vec![real_process("cupertino-notifications", &bus), panel],
+        true,
+    ) else {
+        return;
+    };
+    let answer = ask_notification_server(&bus);
+    server.wait_until("the notification server to answer", |_| {
+        answer.try_recv().is_ok()
+    });
+    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join(server.state.socket_name.as_ref().unwrap());
+    let has_keyboard = |s: &Cupertino, window| {
+        s.entry(window).is_some_and(|e| {
+            s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(e.surface())
+        })
+    };
+    spawn_toplevel(socket);
+    server.wait_until("the window to map and take the keyboard", |s| {
+        s.wm.key_window().is_some_and(|w| has_keyboard(s, w))
+    });
+    let window = server.state.wm.key_window().unwrap();
+    let window_surface = server.state.entry(window).unwrap().surface().clone();
+    // a point of the window, which the pointer is over there
+    let frame = server.state.wm.window(window).unwrap().geometry();
+    let at: Point<i32, Logical> = ((frame.x + 30.0) as i32, (frame.y + 80.0) as i32).into();
+    let under_pointer = |server: &mut Server, at: Point<i32, Logical>| {
+        server
+            .state
+            .pointer_moved_to((f64::from(at.x), f64::from(at.y)).into(), 0, None);
+        server.step();
+        server.state.seat.get_pointer().unwrap().current_focus()
+    };
+    // the window takes the pointer from its first buffer on
+    let end = Instant::now() + common::HANG_GUARD;
+    while under_pointer(&mut server, at).as_ref() != Some(&window_surface) {
+        assert!(
+            Instant::now() < end,
+            "timed out waiting for the window to take the pointer at {at:?}"
+        );
+    }
+    // The pointer at `at` once the surface under the centre on `output` is mapped there (it takes the pointer from
+    // its first buffer on): that surface.
+    let on_the_surface_under_the_centre =
+        |server: &mut Server, at: Point<i32, Logical>, output: usize| {
+            let end = Instant::now() + common::HANG_GUARD;
+            loop {
+                let over = under_pointer(server, at);
+                let under_the_centre =
+                    notification_surfaces(&server.state)
+                        .into_iter()
+                        .any(|(list, on, surface)| {
+                            !list && on == output && Some(&surface) == over.as_ref()
+                        });
+                if under_the_centre {
+                    return over.unwrap();
+                }
+                assert!(
+                    Instant::now() < end,
+                    "timed out waiting for the surface under the centre on output {output} to take the pointer at {at:?}"
+                );
+            }
+        };
+
+    let second = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: (800, 600),
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut server.state, &second, None).unwrap();
+    server.wait_until("two outputs", |s| s.outputs.len() == 2);
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let closed = |s: &Cupertino| notification_surfaces(s).is_empty();
+
+    // a press on the window, on the first output
+    toggle_centre(&conn);
+    server.wait_until(
+        "the centre to open over both outputs",
+        centre_open_on_two_outputs,
+    );
+    eprintln!("trace: ToggleCentre: the list has the keyboard, a surface under it on each output");
+    let over = on_the_surface_under_the_centre(&mut server, at, 0);
+    assert_ne!(
+        over, window_surface,
+        "the pointer over the window is on the surface under the centre, which takes its press"
+    );
+    server.click_at(at);
+    server.wait_until("the press on a window to close the centre", |s| {
+        closed(s) && has_keyboard(s, window)
+    });
+    eprintln!("trace: press at {at:?} over the window: it went to the surface under the centre, the centre closed, keyboard on the window");
+    assert_eq!(
+        under_pointer(&mut server, at).as_ref(),
+        Some(&window_surface),
+        "the next press there reaches the window"
+    );
+
+    // a press on the other output
+    toggle_centre(&conn);
+    server.wait_until("the centre to open again", centre_open_on_two_outputs);
+    let list_output = notification_surfaces(&server.state)
+        .into_iter()
+        .find(|(list, ..)| *list)
+        .map(|(_, output, _)| output)
+        .unwrap();
+    let other = 1 - list_output;
+    let origin = server.state.outputs[other].output.current_location();
+    let elsewhere: Point<i32, Logical> = (origin.x + 100, origin.y + 300).into();
+    on_the_surface_under_the_centre(&mut server, elsewhere, other);
+    server.click_at(elsewhere);
+    server.wait_until("the press on the other output to close the centre", |s| {
+        closed(s) && has_keyboard(s, window)
+    });
+    eprintln!("trace: list on output {list_output}, press on output {other}: centre closed, keyboard on the window");
+
+    // Escape
+    toggle_centre(&conn);
+    server.wait_until(
+        "the centre to open a third time",
+        centre_open_on_two_outputs,
+    );
+    for state in [KeyState::Pressed, KeyState::Released] {
+        server
+            .state
+            .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
+        server.step();
+    }
+    server.wait_until("Escape to close the centre", |s| {
+        closed(s) && has_keyboard(s, window)
+    });
+    eprintln!("trace: Escape: centre closed, keyboard on the window");
+
+    // another shell panel opening
+    toggle_centre(&conn);
+    server.wait_until(
+        "the centre to open a fourth time",
+        centre_open_on_two_outputs,
+    );
+    // The list slides in for a moment. The compositor gives the keyboard to an exclusive layer at each of its commits,
+    // so a frame the list had sent before it heard that the panel has the keyboard would take it back: the panel
+    // opens once the list is at rest.
+    let list = notification_surfaces(&server.state)
+        .into_iter()
+        .find(|(list, ..)| *list)
+        .map(|(.., surface)| surface)
+        .unwrap();
+    let mut drawn = (buffer_commit(&list), Instant::now());
+    server.wait_until("the list to come to rest", |_| {
+        let commit = buffer_commit(&list);
+        if commit != drawn.0 {
+            drawn = (commit, Instant::now());
+        }
+        drawn.1.elapsed() > Duration::from_millis(300)
+    });
+    server.toggle_panel(&bus);
+    server.wait_until(
+        "the control panel to take the keyboard and the centre to close",
+        |s| {
+            closed(s)
+                && drawn_card(s).is_some_and(|card| {
+                    s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&card.surface)
+                })
+        },
+    );
+    eprintln!("trace: the control panel opened: centre closed, keyboard on the panel's card");
+    server.toggle_panel(&bus);
+    server.wait_until("the keyboard back on the window after the panel", |s| {
+        panel_surfaces(s).is_empty() && has_keyboard(s, window)
+    });
+    assert_eq!(server.state.wm.key_window(), Some(window));
+}
+
 /// The centre draws every visible card and the Clear menu on one surface: a long history must not end the process's
 /// connection.
 #[test]

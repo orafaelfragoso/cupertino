@@ -177,6 +177,14 @@ impl Effects {
         self.drag_return = None;
     }
 
+    /// The picture of window `id` as it showed before an appearance change, while it fades out over the window on
+    /// `output`: the one ghost that belongs with its window in the stack, since its window is still there under it.
+    pub fn fading_over(&self, id: WindowId, output: OutputId) -> Option<&ClosingWindow> {
+        self.closing
+            .iter()
+            .find(|c| c.id == id && c.output == output && c.kind == TransformKind::AppearanceFade)
+    }
+
     pub fn has_ghost(&self, id: WindowId) -> bool {
         self.closing.iter().any(|c| c.id == id)
     }

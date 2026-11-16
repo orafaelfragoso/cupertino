@@ -3,8 +3,9 @@
 //! meets the content, over two backdrops of the window (the sidebar's material on the left, the window background's
 //! on the right). When the appearance changes, the window as it showed fades out over the window drawn again. Every
 //! frame of that fade shows the sidebar, the line and the content where they were, each in a colour between its old
-//! and its new one, starting from the window exactly as it showed. The tests step a fixed clock and skip (pass) when no
-//! EGL device is available.
+//! and its new one, starting from the window exactly as it showed. With a window behind it, the window in front shows
+//! nothing of that window in any frame of the fade, and the shadow around a window at the start of the fade is the one
+//! it had, not that one over the new one. The tests step a fixed clock and skip (pass) when no EGL device is available.
 
 use crate::common;
 
@@ -64,10 +65,14 @@ struct Harness {
 
 impl Harness {
     fn new(scale: f64) -> Option<Harness> {
+        Harness::in_appearance(scale, Appearance::Light)
+    }
+
+    fn in_appearance(scale: f64, appearance: Appearance) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> =
             EventLoop::try_new().expect("creating the event loop");
         let config = Config {
-            appearance: Appearance::Light,
+            appearance,
             ..Config::default()
         };
         let mut state = Cupertino::new(
@@ -135,7 +140,13 @@ impl Harness {
 
     /// Wait for the window `shown` counts the commits of, put it at [`FRAME`] and let it settle there.
     fn open(&mut self, shown: &Arc<AtomicUsize>) -> WindowId {
+        self.open_at(shown, FRAME)
+    }
+
+    /// Wait for the window `shown` counts the commits of, put its top-left corner at `at` and let it settle there.
+    fn open_at(&mut self, shown: &Arc<AtomicUsize>, at: (f64, f64)) -> WindowId {
         let known: BTreeSet<WindowId> = self.state.windows.iter().map(|w| w.id).collect();
+        let opened = known.clone();
         let shown = shown.clone();
         self.wait_until("the window", move |s| {
             shown.load(Ordering::SeqCst) > 0
@@ -146,14 +157,14 @@ impl Harness {
             .windows
             .iter()
             .rev()
-            .find(|w| w.mapped)
+            .find(|w| w.mapped && !opened.contains(&w.id))
             .unwrap()
             .id;
         let output = self.state.outputs[0].id;
         self.state.command(Command::MoveWindowToOutput {
             window: id,
             output,
-            frame: Rect::new(FRAME.0, FRAME.1, f64::from(SIZE.0), f64::from(SIZE.1)),
+            frame: Rect::new(at.0, at.1, f64::from(SIZE.0), f64::from(SIZE.1)),
         });
         self.settle();
         id
@@ -185,21 +196,32 @@ struct Client {
     effects: CupertinoAppEffectsV1,
     backdrops: Vec<CupertinoBackdropV1>,
     scale: i32,
+    /// The colour the window is filled with (blue, green, red, alpha), for a window with no sidebar.
+    fill: Option<[u8; 4]>,
     shown: Arc<AtomicUsize>,
 }
 
 impl Client {
     /// Draw the window: transparent but for the line, one device pixel wide just left of [`SPLIT`], over the
-    /// sidebar's backdrop left of it and the window background's right of it.
+    /// sidebar's backdrop left of it and the window background's right of it; or one fill and no backdrop.
     fn draw(&mut self, qh: &QueueHandle<Client>) {
         let s = self.scale;
         let (w, h) = (SIZE.0 * s, SIZE.1 * s);
         let mut bytes = vec![0u8; (w * h * 4) as usize];
         let line = SPLIT * s - 1;
-        for y in 0..h {
-            // ARGB8888, premultiplied, is B, G, R, A in memory: black at the line's alpha
-            let i = ((y * w + line) * 4) as usize;
-            bytes[i + 3] = LINE_ALPHA;
+        match self.fill {
+            Some(fill) => {
+                for p in bytes.as_chunks_mut::<4>().0 {
+                    *p = fill;
+                }
+            }
+            None => {
+                for y in 0..h {
+                    // ARGB8888, premultiplied, is B, G, R, A in memory: black at the line's alpha
+                    let i = ((y * w + line) * 4) as usize;
+                    bytes[i + 3] = LINE_ALPHA;
+                }
+            }
         }
         let fd =
             rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
@@ -208,7 +230,7 @@ impl Client {
         let pool = self.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
         let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
         pool.destroy();
-        if self.backdrops.is_empty() {
+        if self.backdrops.is_empty() && self.fill.is_none() {
             for (material, x, width) in [
                 ("Sidebar", 0, SPLIT),
                 ("WindowBackground", SPLIT, SIZE.0 - SPLIT),
@@ -229,13 +251,19 @@ impl Client {
 
 /// A client with one sidebar window drawn at `scale`; returns the count of its commits the server presented.
 fn spawn(socket: PathBuf, scale: i32) -> Arc<AtomicUsize> {
+    spawn_filled(socket, scale, None)
+}
+
+/// A client with one window drawn at `scale`, a sidebar window or one filled with `fill`; returns the count of its
+/// commits the server presented.
+fn spawn_filled(socket: PathBuf, scale: i32, fill: Option<[u8; 4]>) -> Arc<AtomicUsize> {
     let shown = Arc::new(AtomicUsize::new(0));
     let counted = shown.clone();
-    std::thread::spawn(move || run(socket, scale, counted));
+    std::thread::spawn(move || run(socket, scale, fill, counted));
     shown
 }
 
-fn run(socket: PathBuf, scale: i32, shown: Arc<AtomicUsize>) {
+fn run(socket: PathBuf, scale: i32, fill: Option<[u8; 4]>, shown: Arc<AtomicUsize>) {
     let conn = Connection::from_socket(UnixStream::connect(socket).expect("connecting")).unwrap();
     let (globals, mut queue) = registry_queue_init::<Client>(&conn).unwrap();
     let qh = queue.handle();
@@ -260,6 +288,7 @@ fn run(socket: PathBuf, scale: i32, shown: Arc<AtomicUsize>) {
         effects,
         backdrops: Vec::new(),
         scale,
+        fill,
         shown,
     };
     let _keep = (toplevel, decoration);
@@ -376,9 +405,14 @@ fn divider(shot: &image::RgbaImage, scale: i32) -> [[u8; 3]; 3] {
 
 /// Whether every channel of `c` lies between those of `a` and `b`, give or take [`TOLERANCE`].
 fn between(c: [u8; 3], a: [u8; 3], b: [u8; 3]) -> bool {
+    between_within(c, a, b, TOLERANCE)
+}
+
+/// Whether every channel of `c` lies between those of `a` and `b`, give or take `tolerance`.
+fn between_within(c: [u8; 3], a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
     (0..3).all(|i| {
         let (lo, hi) = (a[i].min(b[i]), a[i].max(b[i]));
-        c[i] >= lo.saturating_sub(TOLERANCE) && c[i] <= hi.saturating_add(TOLERANCE)
+        c[i] >= lo.saturating_sub(tolerance) && c[i] <= hi.saturating_add(tolerance)
     })
 }
 
@@ -437,4 +471,130 @@ fn a_sidebar_window_fades_to_dark_with_its_divider_in_place_at_1x() {
 #[test]
 fn a_sidebar_window_fades_to_dark_with_its_divider_in_place_at_2x() {
     the_divider_fades_in_place(2);
+}
+
+/// Where the window in front is put, over the right and lower part of the one at [`FRAME`].
+const FRONT: (f64, f64) = (140.0, 100.0);
+/// How far a channel of a material over another window may stray from the colours the fade runs between: the faded
+/// picture's materials read the wallpaper's average colour where the window's own read the window behind it.
+const GLASS_TOLERANCE: u8 = 12;
+/// The window behind: opaque blue (blue, green, red, alpha).
+const BEHIND: [u8; 4] = [255, 0, 0, 255];
+
+fn pixel(shot: &image::RgbaImage, at: (f64, f64), scale: i32) -> [u8; 3] {
+    let p = shot
+        .get_pixel(
+            (at.0 * f64::from(scale)) as u32,
+            (at.1 * f64::from(scale)) as u32,
+        )
+        .0;
+    [p[0], p[1], p[2]]
+}
+
+/// How much bluer than red a colour is.
+fn blueness(c: [u8; 3]) -> i32 {
+    i32::from(c[2]) - i32::from(c[0])
+}
+
+/// A sidebar window in front of a blue window, light to dark: in every frame of the fade the sidebar and the content
+/// of the window in front, where they lie over the blue window, are between their light and their dark colours and
+/// no bluer than in either, so nothing of the window behind shows through the one in front.
+#[test]
+fn a_window_behind_never_shows_through_the_window_in_front_during_the_fade() {
+    let Some(mut h) = Harness::new(1.0) else {
+        return;
+    };
+    let behind = spawn_filled(h.socket(), 1, Some(BEHIND));
+    h.open(&behind);
+    let front = spawn(h.socket(), 1);
+    h.open_at(&front, FRONT);
+    // in the window in front and over the one behind: in its sidebar, and in its content
+    let points = [
+        (FRONT.0 + f64::from(SPLIT) / 2.0, FRONT.1 + 100.0),
+        (FRONT.0 + f64::from(SPLIT) + 60.0, FRONT.1 + 100.0),
+    ];
+    let sample = |shot: &image::RgbaImage| points.map(|at| pixel(shot, at, 1));
+    let shot = h.screenshot();
+    let beside = pixel(&shot, (FRAME.0 + 20.0, FRAME.1 + 100.0), 1);
+    assert!(
+        near(beside, [0, 0, 255]),
+        "the window behind shows blue beside the one in front: {beside:?}"
+    );
+    let light = sample(&shot);
+    let (start, fade) = (h.state.now(), TransformKind::AppearanceFade.duration());
+    h.state.set_appearance(Appearance::Dark);
+    let mut frames = Vec::new();
+    for i in 0..=STEPS {
+        h.at_time(start + fade * f64::from(i) / f64::from(STEPS));
+        frames.push(sample(&h.screenshot()));
+    }
+    h.settle();
+    let dark = sample(&h.screenshot());
+    for (i, frame) in frames.iter().enumerate() {
+        for (j, part) in ["the sidebar", "the content"].iter().enumerate() {
+            assert!(
+                between_within(frame[j], light[j], dark[j], GLASS_TOLERANCE),
+                "frame {i} of the fade: {part} of the window in front is {:?}, not between {:?} and {:?}",
+                frame[j],
+                light[j],
+                dark[j]
+            );
+            let most = blueness(light[j]).max(blueness(dark[j])) + i32::from(TOLERANCE);
+            assert!(
+                blueness(frame[j]) <= most,
+                "frame {i} of the fade: {part} of the window in front shows the blue window behind it: {:?} \
+                 (light {:?}, dark {:?})",
+                frame[j],
+                light[j],
+                dark[j]
+            );
+        }
+    }
+}
+
+/// Dark to light: at the start of the fade the shadow under a window darkens the new wallpaper as much as it darkened
+/// the old one, since the window's own shadow comes in as the faded picture's goes; the two together would darken it
+/// twice.
+#[test]
+fn the_shadow_at_the_start_of_the_fade_is_the_one_the_window_had() {
+    // just under the middle of the window's lower edge, where its shadow is strongest
+    let at = (
+        FRAME.0 + f64::from(SIZE.0) / 2.0,
+        FRAME.1 + f64::from(SIZE.1) + 3.0,
+    );
+    // the wallpaper alone, in each appearance
+    let bare = [Appearance::Dark, Appearance::Light].map(|appearance| {
+        let mut h = Harness::in_appearance(1.0, appearance)?;
+        h.settle();
+        Some(pixel(&h.screenshot(), at, 1))
+    });
+    let [Some(bare_dark), Some(bare_light)] = bare else {
+        return;
+    };
+    let Some(mut h) = Harness::in_appearance(1.0, Appearance::Dark) else {
+        return;
+    };
+    let shown = spawn(h.socket(), 1);
+    h.open(&shown);
+    let shadowed = pixel(&h.screenshot(), at, 1);
+    // the channel the dark wallpaper is brightest in tells the shadow's share best
+    let c = (0..3).max_by_key(|c| bare_dark[*c]).unwrap();
+    let kept = f64::from(shadowed[c]) / f64::from(bare_dark[c]);
+    assert!(
+        kept < 0.9,
+        "the window's shadow darkens the wallpaper under its edge: {shadowed:?} of {bare_dark:?}"
+    );
+    let start = h.state.now();
+    h.state.set_appearance(Appearance::Light);
+    h.at_time(start);
+    let first = pixel(&h.screenshot(), at, 1);
+    let expected = f64::from(bare_light[c]) * kept;
+    let allowed = f64::from(bare_light[c]) * (1.0 - kept) / 6.0;
+    assert!(
+        (f64::from(first[c]) - expected).abs() <= allowed,
+        "the first frame of the fade keeps {kept:.2} of the wallpaper under the window's edge, as before the change: \
+         {} expected within {allowed:.0}, not {} (wallpaper {bare_light:?})",
+        expected.round(),
+        first[c]
+    );
 }

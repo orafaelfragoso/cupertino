@@ -309,9 +309,10 @@ each of its windows to close, and emits `ApplicationQuit(app_id) when the last o
 (`logout::LogOut`): 45 s per application, the next asked 0.1 s after one quits, the logind call once the answer is
 `("", 0).
 
-An application still there after 45 s brings the interrupt panel (`interrupt`): content 413 x 128 pt, a 64 pt icon at (20, 13),
+An application still there after 45 s brings the interrupt panel (`interrupt`), on the same regular glass with 26 pt
+corners as the confirmation it interrupts: content 413 x 128 pt, a 64 pt icon at (20, 13),
 the title (bold 13) at (102, 13) and the info line (10 pt) at (102, 55), both wrapping at 293 pt, the buttons on y 83
-(frames); Cancel and Force Quit.
+(frames); Cancel and Force Quit as 28 pt capsules 8 pt apart.
 
 - Cancel or Escape ends the sequence and the session goes on. The applications that quit stay closed.
 - Force Quit calls `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows) and gives it another 45 s.
@@ -547,7 +548,7 @@ network users).
 | Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session; the tile's description says "Logged in". approximate: the design marks such users in its picker, the shape and place are not read. | `view::widgets::LOGGED_IN_FILL` |
 | Picker tiles | 186 x 112 pt cells (150 pt name plus 18 pt borders, avatar, name line), grid centred from the password screen's user view. Selected tile: white 0.2 rounded square of 86 pt (the register's selection size), 20 pt corners. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::TILE_HEIGHT`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
 | Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
-| Interrupt panel buttons, words | Cancel 83 pt at x 214, Force Quit 100 pt at x 295, 32 pt high, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
+| Interrupt panel buttons, words | Cancel 83 pt at x 204, Force Quit 100 pt at x 295, capsules 28 pt high and 8 pt apart, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
 | Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
 | Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
 | Low-battery words | Ours; the design text is not in the strings read. | `low_battery` |

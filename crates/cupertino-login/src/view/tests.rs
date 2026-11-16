@@ -358,6 +358,11 @@ impl UiRenderer for Counted {
 
 impl Run {
     fn new(surface: Surface) -> Run {
+        Run::on(surface, Capabilities::default())
+    }
+
+    /// The surface on a window system of `capabilities`.
+    fn on(surface: Surface, capabilities: Capabilities) -> Run {
         SURFACE.set(surface);
         let text = text_system();
         let glyphs = Arc::clone(&text);
@@ -399,11 +404,7 @@ impl Run {
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
-        let mut driver = TestDriver::new(
-            Capabilities::default(),
-            options,
-            ManualClock::new(Timestamp(0)),
-        );
+        let mut driver = TestDriver::new(capabilities, options, ManualClock::new(Timestamp(0)));
         // the theme of any appearance, as the application's runner makes it
         let spec = cupertino_theme::Theme::from_dir(data).unwrap();
         driver
@@ -1467,5 +1468,125 @@ fn the_confirmation_alert_has_no_icon_and_its_capsules_stand_8_points_apart() {
             reopen.max_y() <= cancel.min_y() - 16.0,
             "{kind:?}: the checkbox runs into the buttons: {reopen:?}"
         );
+    }
+}
+
+/// The window's theme with the session's display options, as the runner makes it when they change.
+fn set_options(run: &mut Run, appearance: Appearance, reduce_transparency: bool) {
+    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+    let theme = ThemeTokens::cupertino(
+        &cupertino_theme::Theme::from_dir(data).unwrap(),
+        ThemePreferences {
+            appearance,
+            reduce_transparency,
+            reduce_motion: false,
+        },
+    )
+    .unwrap();
+    run.driver.runtime_mut().set_theme(Arc::new(theme));
+    run.settle();
+}
+
+/// The glass regions the window last asked the compositor for.
+fn glass_regions(run: &Run) -> Vec<cupertino_kit::platform::MaterialRegion> {
+    use cupertino_kit::platform::WindowRequest;
+    let system = run.driver.runtime().window_system();
+    system
+        .requests(run.window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            WindowRequest::Materials(regions) => Some(regions.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// The fills the window paints that cover its whole `size` with corners of `radius`.
+fn body_fills(run: &Run, size: Size, radius: f64) -> Vec<Color> {
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::RoundedRect { rect, radius: r },
+                paint: Paint::Solid(color),
+            } if rect.size == size && *r == radius => Some(*color),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Log out, restart, shut down, the power button's panel and the panel that interrupts a log out are each one alert on
+/// regular glass with the alert's corners, where the session draws glass: the window paints no body of its own under
+/// it, and keeps asking for the glass with Reduce Transparency and with Increase Contrast, whose recipes of that glass
+/// the session draws. Where the session draws none, the alert's body is the opaque window colour of the appearance.
+#[test]
+fn each_session_panel_is_an_alert_on_regular_glass_and_paints_its_body_only_without_it() {
+    use cupertino_kit::platform::GlassStyle;
+    let panel = |kind| Surface::Panel { kind, reopen: true };
+    for surface in [
+        panel(Kind::LogOut),
+        panel(Kind::Restart),
+        panel(Kind::ShutDown),
+        panel(Kind::PowerButton),
+        Surface::Interrupt,
+    ] {
+        let glassy = Capabilities {
+            app_effects: true,
+            ..Capabilities::default()
+        };
+        let mut run = Run::on(surface, glassy);
+        let size = run.driver.runtime().snapshot(run.window).unwrap().nodes[0]
+            .rect
+            .size;
+        for (appearance, reduce_transparency) in [
+            (Appearance::Light, false),
+            (Appearance::Dark, false),
+            (Appearance::Light, true),
+            (Appearance::Dark, true),
+            (Appearance::LightHighContrast, false),
+            (Appearance::DarkHighContrast, false),
+        ] {
+            set_options(&mut run, appearance, reduce_transparency);
+            let mode = format!("{surface:?} {appearance:?} reduced {reduce_transparency}");
+            let regions = glass_regions(&run);
+            let [region] = regions.as_slice() else {
+                panic!("{mode}: one piece of glass, not {regions:?}");
+            };
+            let glass = region.glass.expect("glass, not a named material");
+            assert_eq!(glass.style, GlassStyle::Regular, "{mode}");
+            assert_eq!(region.radius, 26.0, "{mode}: an alert's corners");
+            assert_eq!(
+                (region.rect.origin, region.rect.size),
+                (Point::new(0.0, 0.0), size),
+                "{mode}: under the whole alert"
+            );
+            assert_eq!(region.alpha, 1.0, "{mode}");
+            assert_eq!(
+                body_fills(&run, size, 26.0),
+                [],
+                "{mode}: nothing of the window's own between the glass and its text"
+            );
+        }
+
+        let mut run = Run::new(surface);
+        for appearance in [Appearance::Light, Appearance::DarkHighContrast] {
+            set_options(&mut run, appearance, false);
+            assert_eq!(glass_regions(&run), [], "{surface:?}: no glass to ask for");
+            let theme = Arc::clone(run.driver.runtime().theme());
+            let window = theme.surface(cupertino_kit::theme::Surface::Popover).fill;
+            let fills = body_fills(&run, size, 26.0);
+            assert_eq!(
+                fills.first().copied(),
+                window,
+                "{surface:?} {appearance:?}: the opaque window colour, not {fills:?}"
+            );
+            assert_eq!(window.map(|c| c.a), Some(1.0));
+        }
     }
 }

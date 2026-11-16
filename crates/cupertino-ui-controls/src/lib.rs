@@ -1396,6 +1396,9 @@ pub struct SearchField<M> {
 pub struct BareField<M> {
     pub field: TextField<M>,
     pub size: f64,
+    /// Has the menu of every text field (Cut, Copy, Paste, Select All) and takes a paste from the keys. Off for a field
+    /// on a surface that asks who logs in, where nothing opens over it and nothing is read from the clipboard.
+    pub menu: bool,
     /// The caret holds what it shows: its blink draws nothing, so the field draws no frame of its own, a paint for
     /// any other reason draws it as it was last drawn, and once the hold ends the blink goes on where its cycle has
     /// come to. An edit that restarts the blink shows it again. For a field whose surface the compositor is moving (a

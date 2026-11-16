@@ -63,6 +63,7 @@ impl Application for Query {
 
     fn view(model: &Model) -> Vec<Window<Message>> {
         let field = Element::new(BareField {
+            menu: true,
             field: TextField {
                 label: "Search".into(),
                 placeholder: "Search".into(),

@@ -174,6 +174,7 @@ pub(super) fn window(
     // the field's own chrome is shorter than this popover's, so the popover draws the frame and the text stands bare
     let field = Element::new(FieldFrame {
         children: vec![Element::new(BareField {
+            menu: true,
             field: input,
             size: f64::from(TITLE_SIZE),
             hold_caret: false,

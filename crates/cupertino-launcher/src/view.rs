@@ -929,6 +929,7 @@ where
         .then(|| 0..panel.query().len())
         .filter(|r| !r.is_empty());
     let field = Element::new(BareField {
+        menu: true,
         field: TextField {
             label: hint.to_owned(),
             placeholder: hint.to_owned(),
@@ -1719,8 +1720,11 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for PanelRoot<M> {
                     _ => Propagation::Continue,
                 }
             }
-            // another window took the keyboard: the model knows whether that was the view options menu
-            Event::FocusWithin { gained: false, .. } if !cx.window_active() => {
+            // another window took the keyboard: the model knows whether that was the view options menu; the menu of
+            // the query field, a popup the field opened for itself, takes it without the panel closing
+            Event::FocusWithin { gained: false, .. }
+                if !cx.window_active() && !cx.holds_popup() =>
+            {
                 cx.emit(M::from(Input::KeyboardLeft));
                 Propagation::Continue
             }

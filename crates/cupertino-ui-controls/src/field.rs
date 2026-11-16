@@ -1022,6 +1022,8 @@ pub struct FieldState {
     reset_input: bool,
     /// What opens the field's menu.
     menu: text_menu::Opener,
+    /// Whether the field has a menu and takes a paste: every field but a [`BareField`] that turns them off.
+    pastes: bool,
 }
 
 /// The text without what an input method is still composing: what the model holds.
@@ -1230,18 +1232,20 @@ impl<M: Clone + 'static> TextField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
-        if let Some(opens) = state.menu.opens(event, cx) {
-            self.open_menu(state, opens, cx);
-            return Propagation::Stop;
+        if state.pastes {
+            if let Some(opens) = state.menu.opens(event, cx) {
+                self.open_menu(state, opens, cx);
+                return Propagation::Stop;
+            }
         }
         match event {
-            Event::PopupAnswer(answer) => {
+            Event::PopupAnswer(answer) if state.pastes => {
                 if let Some(command) = text_menu::command(*answer) {
                     self.command(state, command, cx);
                 }
                 return Propagation::Stop;
             }
-            Event::Paste(Pasted(text)) if self.enabled => {
+            Event::Paste(Pasted(text)) if self.enabled && state.pastes => {
                 state.buffer.paste(text);
                 self.report(state, cx);
                 self.shown(state, cx);
@@ -1434,7 +1438,8 @@ impl<M: Clone + 'static> TextField<M> {
                 cx.set_clipboard(text);
                 self.report(state, cx);
             }
-            Response::Paste => cx.request_paste(),
+            Response::Paste if state.pastes => cx.request_paste(),
+            Response::Paste => {}
         }
         state.sync_input(ChangeCause::Other, cx);
         cx.request_paint();
@@ -1465,6 +1470,7 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             drag_point: None,
             reset_input: false,
             menu: text_menu::Opener::default(),
+            pastes: true,
         }
     }
 
@@ -1507,7 +1513,9 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
         state.arm_autoscroll(cx);
-        state.menu.arm(cx);
+        if state.pastes {
+            state.menu.arm(cx);
+        }
         propagation
     }
 
@@ -2147,11 +2155,13 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     fn state(&self) -> FieldState {
         FieldState {
             look: bare_look(self.size),
+            pastes: self.menu,
             ..self.field.state()
         }
     }
 
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
+        state.pastes = self.menu;
         let change = self.field.update(&old.field, state);
         if self.size != old.size {
             state.look = bare_look(self.size);

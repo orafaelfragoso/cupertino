@@ -2133,6 +2133,70 @@ fn the_panel_closes_when_the_keyboard_leaves_it_after_its_menu_was_dismissed() {
     }
 }
 
+/// The menu of the query field, while it is open: a popup the field opens for itself.
+fn field_menu(run: &Run) -> Option<WindowId> {
+    run.driver
+        .runtime()
+        .windows()
+        .into_iter()
+        .find(|(k, _)| *k == WindowKey("cupertino.text-menu".into()))
+        .map(|(_, id)| id)
+}
+
+/// The query field has the menu of every text field. On layer surfaces it takes the keyboard from the panel as the
+/// view options menu does: the panel stays open under it and keeps its query, and closes when the keyboard goes
+/// elsewhere after the menu was dismissed.
+#[test]
+fn the_panel_stays_open_while_the_query_fields_menu_holds_the_keyboard() {
+    for taken in [false, true] {
+        let mut run = Run::on_layer_surfaces();
+        run.type_text("fire");
+        let panel = run.panel();
+        let position = run.centre("query");
+        for pressed in [true, false] {
+            run.send(
+                panel,
+                WindowEvent::Pointer(
+                    PointerEvent::Button {
+                        position,
+                        button: MouseButton::Right,
+                        pressed,
+                        serial: 1,
+                        mods: Mods::NONE,
+                    },
+                    Timestamp(0),
+                ),
+            );
+        }
+        let menu = field_menu(&run).expect("the secondary click opened the field's menu");
+        run.send(panel, WindowEvent::Focus(false));
+        run.send(menu, WindowEvent::Focus(true));
+        assert!(run.model().panel.is_visible(), "the panel stayed open");
+        assert!(field_menu(&run).is_some(), "and the menu");
+        assert_eq!(run.model().panel.query(), "fire");
+
+        let mut batch = vec![
+            (menu, WindowEvent::PopupDone),
+            (menu, WindowEvent::Focus(false)),
+            (panel, WindowEvent::Focus(true)),
+        ];
+        if taken {
+            batch.push((panel, WindowEvent::Focus(false)));
+        }
+        let system = run.driver.window_system_mut();
+        for (window, event) in batch {
+            system.enqueue_window(window, event).unwrap();
+        }
+        run.settle();
+        assert!(field_menu(&run).is_none(), "the menu closed");
+        assert_eq!(
+            run.model().panel.is_visible(),
+            !taken,
+            "the panel closes only when the keyboard went elsewhere (taken: {taken})"
+        );
+    }
+}
+
 /// A window system hands over every event it read at once, and the model hears what they emit in that order before
 /// the view is built again: the menu's close and then the panel's leave, while the panel's window still shows the
 /// menu's keys. The leave is judged after the close, so it closes the panel.

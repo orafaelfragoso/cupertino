@@ -311,6 +311,8 @@ struct WindowState<M> {
     opaque: Vec<Rect>,
     /// The clipboard holds text, as the window's controls are told.
     clipboard_text: bool,
+    /// A control of the window has a popup of its own open.
+    owned_popup: bool,
 }
 
 /// How long the colours of a window that becomes active take to cross from the inactive ones, in nanoseconds.
@@ -1104,6 +1106,23 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     /// anew as a declared popup's are. It is gone with its control, with the window the control is in, and when the
     /// window system refuses it.
     fn declare_owned(&mut self, old: &mut Vec<WindowState<A::Message>>) -> Result<(), UiError> {
+        let declared = self.declare_owned_windows(old);
+        self.mark_owner();
+        declared
+    }
+
+    /// Tells each window whether a control of it has a popup of its own open.
+    fn mark_owner(&mut self) {
+        let parent = self.owned.as_ref().map(|owned| &owned.parent);
+        for w in &mut self.windows {
+            w.owned_popup = parent == Some(&w.key);
+        }
+    }
+
+    fn declare_owned_windows(
+        &mut self,
+        old: &mut Vec<WindowState<A::Message>>,
+    ) -> Result<(), UiError> {
         let Some(mut owned) = self.owned.take() else {
             return Ok(());
         };
@@ -1167,6 +1186,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     fn close_owned(&mut self) {
         if self.owned.take().is_some() {
             self.view_dirty = true;
+            self.mark_owner();
         }
     }
 
@@ -1235,6 +1255,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 keys: Vec::new(),
             });
             self.view_dirty = true;
+            self.mark_owner();
         }
         let key = &self.windows[i].key;
         let inside = self
@@ -1361,6 +1382,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             activated_at: None,
             opaque: Vec::new(),
             clipboard_text: self.clipboard_text.is_some(),
+            owned_popup: false,
         }
     }
 
@@ -3682,6 +3704,7 @@ fn route<'a, M: 'static>(
             now,
             opening_press: w.opening_press.or(w.opening_touch.map(|(_, start)| start)),
             clipboard_text: w.clipboard_text,
+            owned_popup: w.owned_popup,
         },
         popups: &w.popups,
         effects,

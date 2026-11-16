@@ -17,6 +17,7 @@ fn status() -> Status {
         now: Timestamp(0),
         opening_press: None,
         clipboard_text: false,
+        owned_popup: false,
     }
 }
 

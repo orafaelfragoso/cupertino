@@ -36,8 +36,9 @@ type App = Form<true>;
 
 #[derive(Default)]
 struct Model {
-    texts: [String; 4],
-    revisions: [u64; 4],
+    /// The text of each of [`TEXTS`], then of the field without chrome that has no menu.
+    texts: [String; 5],
+    revisions: [u64; 5],
     changes: usize,
     /// The length of the password after each edit.
     typed: Vec<usize>,
@@ -58,7 +59,7 @@ enum Message {
 impl<const ENABLED: bool> Form<ENABLED> {
     fn field(model: &Model, index: usize) -> TextField<Message> {
         TextField {
-            label: TEXTS[index].into(),
+            label: format!("field {index}"),
             placeholder: String::new(),
             value: model.texts[index].clone(),
             revision: model.revisions[index],
@@ -121,6 +122,7 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
             })
             .key("notes"),
             Element::new(BareField {
+                menu: true,
                 field: Self::field(model, 3),
                 size: 20.0,
                 hold_caret: false,
@@ -129,6 +131,16 @@ impl<const ENABLED: bool> Application for Form<ENABLED> {
                 on_blink: None,
             })
             .key("bare"),
+            Element::new(BareField {
+                menu: false,
+                field: Self::field(model, 4),
+                size: 20.0,
+                hold_caret: false,
+                blink_start: None,
+                caret_layer: None,
+                on_blink: None,
+            })
+            .key("login"),
             Element::new(SecureField {
                 label: "password".into(),
                 enabled: ENABLED,
@@ -699,6 +711,22 @@ fn a_password_field_without_chrome_has_no_menu_and_takes_no_paste() {
     assert_eq!(menu(&h), None);
     h.press_key(V, 'v' as u32, true, false, Mods::PRIMARY);
     assert_eq!(h.model().lock, [1, 2, 3, 4, 5, 6], "only what was typed");
+}
+
+#[test]
+fn a_field_without_chrome_can_have_no_menu_and_take_no_paste() {
+    let mut h = focused("login");
+    h.type_text("ada");
+    copied(&mut h, "text/plain;charset=utf-8", b"Grace");
+    let at = h.center("login");
+    secondary_click(&mut h, at);
+    assert_eq!(menu(&h), None);
+    h.tap(MENU);
+    h.key_event(F10, true, false, Mods::SHIFT);
+    assert_eq!(menu(&h), None);
+    h.press_key(V, 'v' as u32, true, false, Mods::PRIMARY);
+    assert_eq!(h.model().texts[4], "ada");
+    assert!(h.focused("login"));
 }
 
 #[test]

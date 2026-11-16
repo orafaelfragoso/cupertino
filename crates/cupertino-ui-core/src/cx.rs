@@ -208,6 +208,8 @@ pub(crate) struct Status {
     pub(crate) opening_press: Option<Timestamp>,
     /// The clipboard holds text.
     pub(crate) clipboard_text: bool,
+    /// A control of this window has a popup of its own open.
+    pub(crate) owned_popup: bool,
 }
 
 pub struct EventCx<'a, M> {
@@ -379,6 +381,12 @@ impl<M> EventCx<'_, M> {
     /// ([`close_popup`](Self::close_popup)), when the compositor dismisses it, and when this node or its window goes.
     pub fn open_popup(&mut self, windows: OwnedWindows<M>) {
         self.effects.popup = Some((self.node, windows));
+    }
+
+    /// Whether a control of this window has a popup of its own open ([`open_popup`](Self::open_popup)), such as a text
+    /// field's menu: the keyboard a window loses meanwhile went to that popup.
+    pub fn holds_popup(&self) -> bool {
+        self.status.owned_popup
     }
 
     /// From inside a popup a control opened for itself: tells that control `answer`, which it hears as

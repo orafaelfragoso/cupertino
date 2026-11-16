@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_global_shortcuts_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+  <description summary="the shortcuts applications use while another one has the keyboard">
+    The desktop portal's backend binds the shortcuts the person allowed an application through the
+    GlobalShortcuts portal. The server takes a bound chord before the focused client sees it and
+    tells the backend when it goes down and up; the focused client gets neither the press nor the
+    release. The protocol is private and unstable: interfaces may change without a version bump.
+  </description>
+  <interface name="cupertino_global_shortcuts_v1" version="1">
+    <description summary="the chords of the portal's shortcuts">
+      Global singleton, offered only to the portal process the server started on a connection of
+      its own. Right after binding, and again whenever the server's own key bindings change, the
+      server sends one reserved event for each chord it keeps for itself, followed by done; each
+      group replaces the previous one. A chord the server keeps never reaches a shortcut bound
+      here, whatever was bound.
+
+      A bound chord fires only while the session is unlocked, no application holds the keyboard
+      shortcuts and no switcher is open; then it goes to this object, never to the focused client.
+      Destroying the object, or the connection ending, unbinds every shortcut it bound.
+    </description>
+    <enum name="modifier" bitfield="true">
+      <entry name="shift" value="1"/>
+      <entry name="ctrl" value="2"/>
+      <entry name="alt" value="4"/>
+      <entry name="logo" value="8" summary="the Super key"/>
+    </enum>
+    <request name="destroy" type="destructor">
+      <description summary="unbind every shortcut"/>
+    </request>
+    <request name="bind">
+      <description summary="take a chord">
+        Route the chord of the physical modifiers and the keysym (letters in lower case) to the
+        shortcut `id`, a number the client chooses. Binding an id again moves it to the new chord;
+        a chord another id holds goes to the later one.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="modifiers" type="uint" enum="modifier"/>
+      <arg name="keysym" type="uint"/>
+    </request>
+    <request name="unbind">
+      <description summary="give a chord back">
+        The shortcut `id` no longer takes its chord. An id that is not bound is ignored.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+    <event name="reserved">
+      <description summary="a chord the server keeps for itself"/>
+      <arg name="modifiers" type="uint" enum="modifier"/>
+      <arg name="keysym" type="uint"/>
+    </event>
+    <event name="done">
+      <description summary="end of a group of reserved events"/>
+    </event>
+    <event name="pressed">
+      <description summary="the chord of a shortcut went down">
+        Sent once for a press; the key's repeats send nothing.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="time" type="uint" summary="the key event's time in milliseconds"/>
+    </event>
+    <event name="released">
+      <description summary="the key of a pressed shortcut went up">
+        Sent once for each pressed, when the key that pressed it is released, even if the shortcut
+        was unbound in between.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="time" type="uint" summary="the key event's time in milliseconds"/>
+    </event>
+  </interface>
+</protocol>

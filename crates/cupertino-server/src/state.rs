@@ -671,6 +671,8 @@ pub struct Cupertino {
     pub capture: crate::capture::Capture,
     /// Private desktop-control discovery; no grants or mutation in protocol version 1.
     pub control: crate::control::Control,
+    /// The objects that bind the portal's shortcuts; their chords live in [`KeyRouter::global`].
+    pub global_shortcuts: crate::global_shortcuts::GlobalShortcuts,
 
     pub wm: Wm,
     pub decor: Decor,
@@ -854,6 +856,7 @@ impl Cupertino {
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
         let control = crate::control::Control::new(&dh);
+        let global_shortcuts = crate::global_shortcuts::GlobalShortcuts::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
         let layers = crate::layers_v1::Layers::new(&dh);
         let mut supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
@@ -1000,6 +1003,7 @@ impl Cupertino {
             xwayland: None,
             capture,
             control,
+            global_shortcuts,
             wm,
             decor,
             button_access: Default::default(),
@@ -2613,6 +2617,7 @@ impl Cupertino {
                     self.release_shortcuts();
                 }
                 ShellOp::PowerKey { pressed } => self.power_key(pressed),
+                ShellOp::GlobalShortcut { key, pressed } => self.global_shortcut(key, pressed),
             }
         }
     }

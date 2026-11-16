@@ -476,29 +476,33 @@ fn the_built_in_processes_run_with_exactly_their_roles() {
     let log = dir.file("dock");
     let dock = stand_in("dock", r#"echo $$ >> "$1"; exec sleep 60"#, &log);
     let mut server = Server::start_with_built_ins(vec![dock], false, built_ins).unwrap();
-    for (built_in, log, role) in [
-        (BuiltIn::Portal, "cupertino-portal.log", ShellRole::Capture),
+    for (built_in, log, roles) in [
+        (
+            BuiltIn::Portal,
+            "cupertino-portal.log",
+            &[ShellRole::Capture, ShellRole::GlobalShortcuts][..],
+        ),
         (
             BuiltIn::DesktopControl,
             "cupertino-control.log",
-            ShellRole::DesktopControl,
+            &[ShellRole::DesktopControl],
         ),
         (
             BuiltIn::PolkitAgent,
             "cupertino-polkit-agent.log",
-            ShellRole::Prompt,
+            &[ShellRole::Prompt],
         ),
         (
             BuiltIn::KeyringPrompter,
             "cupertino-keyring-prompter.log",
-            ShellRole::Prompt,
+            &[ShellRole::Prompt],
         ),
     ] {
         let pid: u32 = server.wait_for_lines(&dir.file(log), 1)[0].parse().unwrap();
         assert_eq!(server.state.supervisor.pid_of(built_in.name()), Some(pid));
         assert_eq!(
             capabilities_of_process(&server.state, pid),
-            Some(ClientCapabilitySet::of([role])),
+            Some(ClientCapabilitySet::of(roles.iter().copied())),
             "{built_in:?}"
         );
     }

@@ -4,16 +4,19 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use cupertino_defaults::global_shortcuts::GlobalShortcutsConf;
 use cupertino_defaults::screen_sharing::ScreenSharingConf;
 use cupertino_diagnostic_events as diag;
 use cupertino_portal::app_chooser::AppChooser;
 use cupertino_portal::capture::Capture;
 use cupertino_portal::dialog::{inbox, Dialogs};
 use cupertino_portal::file_chooser::FileChooser;
+use cupertino_portal::global_shortcuts::GlobalShortcuts;
 use cupertino_portal::pick_overlay::PickOverlay;
 use cupertino_portal::screen_cast::ScreenCast;
 use cupertino_portal::screenshot::{self, Screenshot};
 use cupertino_portal::settings::{Appearance, Service};
+use cupertino_portal::shortcut_keys::ShortcutKeys;
 use cupertino_portal::toolkits::{self, ToolkitSettings};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
 use cupertino_protocol_app::{AppEffects, AppEvent};
@@ -75,6 +78,14 @@ fn run() -> Result<()> {
     if capture.is_some() && picker.is_none() {
         eprintln!("cupertino-portal: no colour picking: the server lacks zwlr_layer_shell_v1");
     }
+    let (keys_sender, keys_requested) = mpsc::channel();
+    // without the global the portal serves no shortcuts, and the frontend asks another backend
+    let mut shortcut_keys = ShortcutKeys::bind(&mut conn, keys_requested);
+    if shortcut_keys.is_none() {
+        eprintln!(
+            "cupertino-portal: no global shortcuts: the server lacks cupertino_global_shortcuts_v1"
+        );
+    }
     let first = conn.wait(Some(Duration::ZERO))?;
     let mut appearance = fold(Appearance::default(), &first);
     if let Some(capture) = &mut capture {
@@ -127,6 +138,27 @@ fn run() -> Result<()> {
         }
         bus.object_server().at(PORTAL_PATH, screenshot)?;
     }
+    let shortcuts = match shortcut_keys {
+        Some(_) => {
+            let waker = conn.waker();
+            let shortcuts = GlobalShortcuts::new(
+                |event| inbox().push(event),
+                move |keys| {
+                    let _ = keys_sender.send(keys);
+                    waker.wake();
+                },
+            )
+            .with_applications(cupertino_apps::entry::xdg_application_dirs())
+            .with_answers(GlobalShortcutsConf::path());
+            let handle = shortcuts.handle();
+            shortcuts.serve(&bus)?;
+            Some(handle)
+        }
+        None => None,
+    };
+    if let (Some(keys), Some(handle)) = (&mut shortcut_keys, &shortcuts) {
+        keys.update(&first, handle, &bus);
+    }
     std::thread::Builder::new()
         .name("dialogs".to_owned())
         .spawn(dialogs)?;
@@ -138,6 +170,9 @@ fn run() -> Result<()> {
         }
         if let Some(capture) = &mut capture {
             capture.update(&conn, &events);
+        }
+        if let (Some(keys), Some(handle)) = (&mut shortcut_keys, &shortcuts) {
+            keys.update(&events, handle, &bus);
         }
         let next = fold(appearance, &events);
         if next != appearance {

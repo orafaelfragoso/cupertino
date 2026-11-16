@@ -26,6 +26,7 @@ use zbus::{interface, Connection};
 use crate::consent::identify;
 use crate::file_chooser::plain;
 use crate::request::{answered, from_frontend, Exported, PortalError, Response, FRONTEND};
+use crate::session::Session;
 use crate::sharing::{Indicator, Shown};
 use crate::PORTAL_PATH;
 
@@ -464,54 +465,30 @@ fn lock(sessions: &Sessions) -> std::sync::MutexGuard<'_, HashMap<OwnedObjectPat
     sessions.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The `org.freedesktop.impl.portal.Session` object of one session, at its handle while the session lives.
-struct Session {
+/// The `org.freedesktop.impl.portal.Session` object of the session at `path`: a Start still waiting for the chooser or
+/// the share returns when it closes, and the session ends after the call.
+fn session(
     path: OwnedObjectPath,
     closed: async_channel::Sender<()>,
     sessions: Sessions,
     shares: Shares,
-}
-
-#[interface(name = "org.freedesktop.impl.portal.Session")]
-impl Session {
-    async fn close(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection,
-    ) -> Result<(), PortalError> {
-        let result = async {
-            from_frontend(&header, connection).await?;
-            // a Start still waiting for the chooser or the share returns now
-            let _ = self.closed.try_send(());
-            let (connection, sessions, shares, path) = (
-                connection.clone(),
-                Arc::clone(&self.sessions),
-                Arc::clone(&self.shares),
-                self.path.clone(),
-            );
-            // the object is taken off the bus after this call returns, not from inside it
-            connection
-                .executor()
-                .clone()
-                .spawn(
-                    async move { end(&connection, &sessions, &shares, &path, Ending::Closed).await },
-                    "cupertino-portal-session-close",
-                )
-                .detach();
-            Ok(())
-        }
-        .await;
-        answered("org.freedesktop.impl.portal.Session", "Close", None, result)
-    }
-
-    /// The share ended without the frontend asking.
-    #[zbus(signal)]
-    async fn closed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
-
-    #[zbus(property, name = "version")]
-    fn version(&self) -> u32 {
-        1
-    }
+) -> Session {
+    Session::new(closed, move |connection| {
+        let (connection, sessions, shares, path) = (
+            connection.clone(),
+            Arc::clone(&sessions),
+            Arc::clone(&shares),
+            path.clone(),
+        );
+        connection
+            .executor()
+            .clone()
+            .spawn(
+                async move { end(&connection, &sessions, &shares, &path, Ending::Closed).await },
+                "cupertino-portal-session-close",
+            )
+            .detach();
+    })
 }
 
 /// Why a session ends.
@@ -912,12 +889,12 @@ impl ScreenCast {
                     },
                 );
             }
-            let session = Session {
-                path: session_handle.clone(),
+            let session = session(
+                session_handle.clone(),
                 closed,
-                sessions: Arc::clone(&self.sessions),
-                shares: Arc::clone(&self.shares),
-            };
+                Arc::clone(&self.sessions),
+                Arc::clone(&self.shares),
+            );
             let added = connection
                 .object_server()
                 .at(&session_handle, session)

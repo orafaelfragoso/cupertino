@@ -1,4 +1,5 @@
-//! Generated bindings of the private `protocols/cupertino-shell-v1.xml` and `protocols/cupertino-screenshot-v1.xml`: enable
+//! Generated bindings of the private `protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml`,
+//! `protocols/cupertino-control-v1.xml` and `protocols/cupertino-global-shortcuts-v1.xml`: enable
 //! `client` in shell processes and `server` in the display server. The public protocols are `cupertino-app-protocols`,
 //! re-exported here as `app_effects` and `scroll`.
 
@@ -9,6 +10,7 @@
 const _: &[u8] = include_bytes!("../protocols/cupertino-shell-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-screenshot-v1.xml");
 const _: &[u8] = include_bytes!("../protocols/cupertino-control-v1.xml");
+const _: &[u8] = include_bytes!("../protocols/cupertino-global-shortcuts-v1.xml");
 
 #[cfg(feature = "client")]
 pub mod client {
@@ -60,6 +62,20 @@ pub mod client {
         use self::__interfaces::*;
 
         wayland_scanner::generate_client_code!("protocols/cupertino-control-v1.xml");
+    }
+
+    /// The portal's shortcuts, separated because scanner runs define the same helper items.
+    pub mod global_shortcuts {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-global-shortcuts-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-global-shortcuts-v1.xml");
     }
 
     pub use cupertino_app_protocols::client::{app_effects, layers, scroll, semantics};
@@ -115,6 +131,20 @@ pub mod server {
         use self::__interfaces::*;
 
         wayland_scanner::generate_server_code!("protocols/cupertino-control-v1.xml");
+    }
+
+    /// The portal's shortcuts, separated because scanner runs define the same helper items.
+    pub mod global_shortcuts {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-global-shortcuts-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-global-shortcuts-v1.xml");
     }
 
     pub use cupertino_app_protocols::server::{app_effects, layers, scroll, semantics};

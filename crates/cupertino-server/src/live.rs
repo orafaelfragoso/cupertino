@@ -334,6 +334,7 @@ impl Cupertino {
             self.config.keybindings = target.keybindings.clone();
             self.key_router.bindings = target.keybindings.clone();
             self.refresh_menu_bar_shortcuts();
+            self.refresh_global_shortcut_reserved();
         }
         if changed!(corner_radius) {
             self.config.window.corner_radius = target.window.corner_radius;
@@ -491,6 +492,7 @@ impl Cupertino {
             self.config.keybindings = rebuilt.keybindings.clone();
             self.key_router.bindings = rebuilt.keybindings;
             self.refresh_menu_bar_shortcuts();
+            self.refresh_global_shortcut_reserved();
         }
         if changed!(
             caps_lock_delay_ms,

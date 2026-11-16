@@ -14,13 +14,27 @@
 //!   sticky bit, a trash directory only as a real directory the user owns, and a link found in a trash is deleted
 //!   itself, never followed.
 //!
+//! * A mounted volume may not answer (a network mount whose server went away blocks every call on it for minutes),
+//!   so the volumes are looked at off the calling thread and each is waited for [`VOLUME_ANSWERS_WITHIN`] at most: a
+//!   volume that stays silent counts as holding no trash for that look, and no second look is started on it while
+//!   the first is still out. The home trash is always taken first and never waits for a volume.
+//!
 //! Absolute locations are injectable through [`Trash`] so tests can use temporary directories.
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+mod look;
+pub use look::Look;
+
+/// How long a look at the trash waits for one mounted volume to answer before it goes on without it.
+pub const VOLUME_ANSWERS_WITHIN: Duration = Duration::from_secs(2);
 
 /// What the question asked before the trash is emptied says, for every program that asks it: its title, what happens
 /// and the labels of its two buttons.
@@ -190,6 +204,16 @@ impl TrashedItem {
     }
 }
 
+/// Called with a mount point right before its folders are looked at ([`Trash::with_volume_look`]).
+#[derive(Clone)]
+struct VolumeLook(Arc<dyn Fn(&Path) + Send + Sync>);
+
+impl std::fmt::Debug for VolumeLook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VolumeLook")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Trash {
     home_trash: PathBuf,
@@ -199,6 +223,102 @@ pub struct Trash {
     /// Whether, with no mount points given, the volumes whose trash is emptied are the system's mounts. Only the
     /// trash of the default location says so: one made at a location of its own never reaches for the real volumes.
     system_volumes: bool,
+    /// How long a look waits for one volume ([`VOLUME_ANSWERS_WITHIN`] unless set).
+    volume_wait: Duration,
+    volume_look: Option<VolumeLook>,
+}
+
+/// The mount points a look is out on, each with when it began: one look at a time per volume in this process, so the
+/// looks at a volume that does not answer cannot pile up threads. A look that finds one taken waits for it only
+/// until the one out has had its time.
+static LOOKS_OUT: Mutex<Option<HashMap<PathBuf, Instant>>> = Mutex::new(None);
+static LOOK_BACK: Condvar = Condvar::new();
+
+fn looks_out() -> std::sync::MutexGuard<'static, Option<HashMap<PathBuf, Instant>>> {
+    LOOKS_OUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Take the mount point `top` for a look, waiting while another look is out on it, but no longer than until that one
+/// has been out for `wait`. `false` when it is still out then: the volume does not answer.
+fn take_volume(top: &Path, wait: Duration) -> bool {
+    let mut out = looks_out();
+    loop {
+        let map = out.get_or_insert_with(HashMap::new);
+        let Some(since) = map.get(top) else {
+            map.insert(top.to_path_buf(), Instant::now());
+            return true;
+        };
+        let Some(left) = wait.checked_sub(since.elapsed()).filter(|d| !d.is_zero()) else {
+            return false;
+        };
+        out = LOOK_BACK
+            .wait_timeout(out, left)
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0;
+    }
+}
+
+/// A mount point taken by [`take_volume`]; given back when dropped, wherever the look ended.
+struct Taken(PathBuf);
+
+impl Drop for Taken {
+    fn drop(&mut self) {
+        if let Some(map) = looks_out().as_mut() {
+            map.remove(&self.0);
+        }
+        LOOK_BACK.notify_all();
+    }
+}
+
+/// What a look says of one volume, given its mount point.
+type Ask<T> = Arc<dyn Fn(&Path) -> T + Send + Sync>;
+/// The thread the looks run on: the mount points go in, what the look says of each comes back.
+type Looking<T> = (mpsc::Sender<Taken>, mpsc::Receiver<T>);
+
+fn start_looking<T: Send + 'static>(look: Ask<T>) -> Option<Looking<T>> {
+    let (to, asked) = mpsc::channel::<Taken>();
+    let (answer, from) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("trash-volumes".into())
+        .spawn(move || {
+            for taken in asked {
+                let said = look(&taken.0);
+                drop(taken);
+                if answer.send(said).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok()
+        .map(|_| (to, from))
+}
+
+/// What `look` says of each of the mount points `tops`, in their order; `None` for a volume that did not answer
+/// within `wait`. The looks run one after another on a thread of their own; when a volume stays silent that thread
+/// is left with it (it ends when the volume answers after all, and gives the mount point back) and the next volumes
+/// go to a new one.
+fn ask_volumes<T: Send + 'static>(
+    tops: Vec<PathBuf>,
+    wait: Duration,
+    look: Ask<T>,
+) -> Vec<(PathBuf, Option<T>)> {
+    let mut thread: Option<Looking<T>> = None;
+    let mut answers = Vec::with_capacity(tops.len());
+    for top in tops {
+        let said = take_volume(&top, wait)
+            .then(|| Taken(top.clone()))
+            .and_then(|taken| {
+                let (to, from) = thread.take().or_else(|| start_looking(look.clone()))?;
+                to.send(taken).ok()?;
+                let said = from.recv_timeout(wait).ok()?;
+                thread = Some((to, from));
+                Some(said)
+            });
+        answers.push((top, said));
+    }
+    answers
 }
 
 pub fn encode_path(p: &str) -> String {
@@ -355,6 +475,8 @@ impl Trash {
             uid: unsafe { libc::getuid() },
             mounts: None,
             system_volumes: true,
+            volume_wait: VOLUME_ANSWERS_WITHIN,
+            volume_look: None,
         }
     }
 
@@ -365,11 +487,26 @@ impl Trash {
             uid: unsafe { libc::getuid() },
             mounts: None,
             system_volumes: false,
+            volume_wait: VOLUME_ANSWERS_WITHIN,
+            volume_look: None,
         }
     }
 
     pub fn with_mounts(mut self, mounts: Vec<PathBuf>) -> Self {
         self.mounts = Some(mounts);
+        self
+    }
+
+    /// Wait `wait` for each volume to answer instead of [`VOLUME_ANSWERS_WITHIN`].
+    pub fn with_volume_wait(mut self, wait: Duration) -> Self {
+        self.volume_wait = wait;
+        self
+    }
+
+    /// Call `look` with each mount point right before its folders are looked at, on the thread that looks: a test
+    /// stands in for a volume that does not answer by not returning from it.
+    pub fn with_volume_look(mut self, look: impl Fn(&Path) + Send + Sync + 'static) -> Self {
+        self.volume_look = Some(VolumeLook(Arc::new(look)));
         self
     }
 
@@ -417,38 +554,80 @@ impl Trash {
         Ok((d, Some(top)))
     }
 
-    /// The user's trash directories on the mounted volumes, where they exist and can be written: none for a trash at
-    /// a location of its own that was given no mount points ([`Trash::with_mounts`]); else, for each mount point,
-    /// `.Trash/$uid` when `.Trash` is a real directory with the sticky bit (never a link, which could lead
-    /// anywhere), and `.Trash-$uid`. Each counts only as a real directory the user owns.
-    pub fn volume_trash_dirs(&self) -> Vec<PathBuf> {
-        let mounts = match &self.mounts {
+    /// The mount points whose trash folders count, each once: those given ([`Trash::with_mounts`]), else the
+    /// system's for the trash of the default location, else none. Read from the kernel's list, which touches no
+    /// volume.
+    fn volumes(&self) -> Vec<PathBuf> {
+        let mut tops = match &self.mounts {
             Some(mounts) => mounts.clone(),
             None if self.system_volumes => fs::read_to_string("/proc/self/mountinfo")
                 .map(|s| volumes_of(&s))
                 .unwrap_or_default(),
             None => Vec::new(),
         };
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        for top in mounts {
-            let shared = top.join(".Trash");
-            let shared_ok = fs::symlink_metadata(&shared)
-                .is_ok_and(|m| m.file_type().is_dir() && m.permissions().mode() & 0o1000 != 0);
-            let candidates = [
-                shared_ok.then(|| shared.join(self.uid.to_string())),
-                Some(top.join(format!(".Trash-{}", self.uid))),
-            ];
-            for dir in candidates.into_iter().flatten() {
-                if dir != self.home_trash
-                    && !dirs.contains(&dir)
-                    && own_dir(&dir, self.uid)
-                    && writable(&dir)
-                {
-                    dirs.push(dir);
-                }
-            }
+        let mut seen = std::collections::HashSet::new();
+        tops.retain(|top| seen.insert(top.clone()));
+        tops
+    }
+
+    /// The user's trash directories on the volume mounted at `top`, where they exist and can be written:
+    /// `.Trash/$uid` when `.Trash` is a real directory with the sticky bit (never a link, which could lead
+    /// anywhere), and `.Trash-$uid`. Each counts only as a real directory the user owns. This touches the volume.
+    fn trash_dirs_on(&self, top: &Path) -> Vec<PathBuf> {
+        if let Some(look) = &self.volume_look {
+            (look.0)(top);
         }
-        dirs
+        let shared = top.join(".Trash");
+        let shared_ok = fs::symlink_metadata(&shared)
+            .is_ok_and(|m| m.file_type().is_dir() && m.permissions().mode() & 0o1000 != 0);
+        let candidates = [
+            shared_ok.then(|| shared.join(self.uid.to_string())),
+            Some(top.join(format!(".Trash-{}", self.uid))),
+        ];
+        candidates
+            .into_iter()
+            .flatten()
+            .filter(|dir| *dir != self.home_trash && own_dir(dir, self.uid) && writable(dir))
+            .collect()
+    }
+
+    /// What `read` makes of the trash directories of each mounted volume, by mount point; `None` for a volume that
+    /// did not answer in time. `read` runs off the calling thread, within the time the volume is given, so it may
+    /// read the directories it is handed.
+    fn ask_volumes<T: Send + 'static>(
+        &self,
+        read: impl Fn(&Trash, Vec<PathBuf>) -> T + Send + Sync + 'static,
+    ) -> Vec<(PathBuf, Option<T>)> {
+        let tops = self.volumes();
+        if tops.is_empty() {
+            return Vec::new();
+        }
+        let trash = self.clone();
+        ask_volumes(
+            tops,
+            self.volume_wait,
+            Arc::new(move |top: &Path| read(&trash, trash.trash_dirs_on(top))),
+        )
+    }
+
+    /// The user's trash directories on the mounted volumes that answer ([`Trash::silent_volumes`] are left out),
+    /// where they exist and can be written: none for a trash at a location of its own that was given no mount points
+    /// ([`Trash::with_mounts`]); else, for each mount point, `.Trash/$uid` when `.Trash` is a real directory with the
+    /// sticky bit, and `.Trash-$uid`, each a real directory the user owns.
+    pub fn volume_trash_dirs(&self) -> Vec<PathBuf> {
+        self.ask_volumes(|_, dirs| dirs)
+            .into_iter()
+            .filter_map(|(_, dirs)| dirs)
+            .flatten()
+            .collect()
+    }
+
+    /// The mount points that do not answer within the time a volume is given.
+    pub fn silent_volumes(&self) -> Vec<PathBuf> {
+        self.ask_volumes(|_, _| ())
+            .into_iter()
+            .filter_map(|(top, said)| said.is_none().then_some(top))
+            .collect()
     }
 
     /// Every trash directory an emptying takes: the home trash, then [`Trash::volume_trash_dirs`].
@@ -595,33 +774,68 @@ impl Trash {
         self.list_dir(&self.home_trash)
     }
 
-    /// The items of every trash directory an emptying takes ([`Trash::trash_dirs`]), each directory's by name.
+    /// The items of every trash directory an emptying takes ([`Trash::trash_dirs`]), each directory's by name: the
+    /// home trash's first, then those of the volumes that answer.
     pub fn list_all(&self) -> Result<Vec<TrashedItem>, TrashError> {
+        let mut items = self.list()?;
+        items.extend(self.list_volumes()?);
+        Ok(items)
+    }
+
+    /// The items of the user's trash directories on the mounted volumes that answer, each directory's by name.
+    pub fn list_volumes(&self) -> Result<Vec<TrashedItem>, TrashError> {
+        let listed = self.ask_volumes(|trash, dirs| {
+            let mut items = Vec::new();
+            for dir in dirs {
+                items.extend(trash.list_dir(&dir)?);
+            }
+            Ok::<_, TrashError>(items)
+        });
         let mut items = Vec::new();
-        for dir in self.trash_dirs() {
-            items.extend(self.list_dir(&dir)?);
+        for (_, volume) in listed {
+            items.extend(volume.transpose()?.unwrap_or_default());
         }
         Ok(items)
+    }
+
+    /// The entries of the home trash's `files` folder, without reading their `.trashinfo`. No volume is touched.
+    pub fn home_entries(&self) -> Vec<PathBuf> {
+        entries(std::slice::from_ref(&self.home_trash))
     }
 
     /// The entries of the `files` folders of every trash directory an emptying takes, without reading their
     /// `.trashinfo`: a quick look at what it would delete (an entry without its `.trashinfo` too).
     pub fn entries(&self) -> Vec<PathBuf> {
-        self.trash_dirs()
-            .iter()
-            .filter_map(|dir| fs::read_dir(dir.join("files")).ok())
-            .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        let mut all = self.home_entries();
+        all.extend(self.volume_entries());
+        all
+    }
+
+    /// The entries of the `files` folders of the user's trash directories on the mounted volumes that answer.
+    pub fn volume_entries(&self) -> Vec<PathBuf> {
+        self.ask_volumes(|_, dirs| entries(&dirs))
+            .into_iter()
+            .filter_map(|(_, entries)| entries)
+            .flatten()
             .collect()
     }
 
-    /// Whether the home trash or a volume's holds anything, from the `files` folders alone.
-    pub fn holds_items(&self) -> bool {
-        holds_items(&self.trash_dirs())
+    /// Whether the home trash holds anything, from its `files` folder alone. No volume is touched.
+    pub fn home_holds_items(&self) -> bool {
+        holds_items(std::slice::from_ref(&self.home_trash))
     }
 
-    /// Whether a mounted volume's trash holds anything, whatever the home trash holds.
+    /// Whether the home trash or a volume's holds anything, from the `files` folders alone. The volumes are asked
+    /// only when the home trash is empty.
+    pub fn holds_items(&self) -> bool {
+        self.home_holds_items() || self.volumes_hold_items()
+    }
+
+    /// Whether the trash of a mounted volume that answers holds anything, whatever the home trash holds.
     pub fn volumes_hold_items(&self) -> bool {
-        holds_items(&self.volume_trash_dirs())
+        self.ask_volumes(|_, dirs| holds_items(&dirs))
+            .into_iter()
+            .any(|(_, holds)| holds == Some(true))
     }
 
     /// Put a trashed item back at its original location (fails if the location exists).
@@ -651,11 +865,23 @@ impl Trash {
 
     /// Empty the home trash and the user's trash on every mounted volume that can be written
     /// ([`Trash::trash_dirs`]), and touch nothing else. What could not be deleted is in the result's failures and
-    /// stays in its trash.
+    /// stays in its trash. The home trash goes first, whatever the volumes do; a volume that does not answer in
+    /// time is left as it is and is one of the failures, by its mount point.
     pub fn empty(&self) -> Emptied {
         let mut emptied = Emptied::default();
-        for dir in self.trash_dirs() {
-            empty_dir(&dir, &mut emptied);
+        empty_dir(&self.home_trash, &mut emptied);
+        for (top, dirs) in self.ask_volumes(|_, dirs| dirs) {
+            match dirs {
+                Some(dirs) => {
+                    for dir in dirs {
+                        empty_dir(&dir, &mut emptied);
+                    }
+                }
+                None => emptied.failures.push(Failure {
+                    path: top,
+                    error: io::Error::new(io::ErrorKind::TimedOut, "the volume does not answer"),
+                }),
+            }
         }
         emptied
     }
@@ -680,6 +906,14 @@ impl Trash {
 fn holds_items(dirs: &[PathBuf]) -> bool {
     dirs.iter()
         .any(|dir| fs::read_dir(dir.join("files")).is_ok_and(|mut e| e.next().is_some()))
+}
+
+/// The entries of the `files` folders of the trash directories `dirs`.
+fn entries(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    dirs.iter()
+        .filter_map(|dir| fs::read_dir(dir.join("files")).ok())
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .collect()
 }
 
 /// Empty the trash directory `dir` into `emptied`. Its `files` and `info` folders are swapped for empty ones first, so
@@ -1409,6 +1643,126 @@ mod tests {
             emptied.failure_message().unwrap(),
             "2 items could not be deleted. “a”: no."
         );
+    }
+
+    /// A volume that answers no look while it is shut: the look given to [`Trash::with_volume_look`] does not return
+    /// for its mount point until it is opened, and counts the looks that reached it.
+    #[derive(Default)]
+    struct Shut {
+        open: Mutex<bool>,
+        opened: Condvar,
+        looks: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Shut {
+        fn on(self: &Arc<Self>, trash: Trash, volume: &Path) -> Trash {
+            let (shut, volume) = (self.clone(), volume.to_path_buf());
+            trash.with_volume_look(move |top| {
+                if top == volume {
+                    shut.looks
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let mut open = shut.open.lock().unwrap();
+                    while !*open {
+                        open = shut.opened.wait(open).unwrap();
+                    }
+                }
+            })
+        }
+
+        fn looks(&self) -> usize {
+            self.looks.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        /// Let the volume answer, and wait until the look that was out on it has come back.
+        fn open(&self, volume: &Path) {
+            *self.open.lock().unwrap() = true;
+            self.opened.notify_all();
+            let mut out = looks_out();
+            while out.as_ref().is_some_and(|map| map.contains_key(volume)) {
+                out = LOOK_BACK.wait(out).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_volume_that_does_not_answer_holds_up_neither_the_home_trash_nor_the_other_volumes() {
+        let d = tempfile::tempdir().unwrap();
+        let (stale, usb) = (d.path().join("stale"), d.path().join("usb"));
+        let on_stale = stale.join(format!(".Trash-{}", uid()));
+        let on_usb = usb.join(format!(".Trash-{}", uid()));
+        put(&on_stale, "from stale", false);
+        put(&on_usb, "from usb", false);
+        let shut = Arc::new(Shut::default());
+        // the volume that does not answer comes first, so everything else is behind it
+        let t = shut.on(
+            Trash::with_home(d.path().join("share/Trash"))
+                .with_mounts(vec![stale.clone(), usb.clone()])
+                .with_volume_wait(Duration::from_millis(40)),
+            &stale,
+        );
+        let f = d.path().join("from home");
+        fs::write(&f, b"1").unwrap();
+        t.trash(&f).unwrap();
+
+        let began = Instant::now();
+        assert!(t.home_holds_items());
+        assert!(t.holds_items(), "the home trash answers for itself");
+        assert_eq!(shut.looks(), 0, "and no volume was asked for that");
+        assert_eq!(t.silent_volumes(), std::slice::from_ref(&stale));
+        assert_eq!(
+            t.trash_dirs(),
+            [t.home_trash().to_path_buf(), on_usb.clone()]
+        );
+        assert_eq!(t.entries().len(), 2);
+        assert_eq!(t.list_all().unwrap().len(), 2);
+        assert!(t.volumes_hold_items(), "the volume behind it is seen");
+
+        let emptied = t.empty();
+        assert_eq!(emptied.deleted, 2, "the home trash and the other volume");
+        assert_eq!(emptied.failures.len(), 1);
+        assert_eq!(emptied.failures[0].path, stale);
+        assert_eq!(emptied.failures[0].error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            emptied.failure_message().unwrap(),
+            "“stale” could not be deleted: the volume does not answer."
+        );
+        assert!(names(&t.home_trash().join("files")).is_empty());
+        assert!(names(&on_usb.join("files")).is_empty());
+        assert!(!t.holds_items());
+        // every look after the first went on without the volume, and none of them started a second one on it
+        assert_eq!(shut.looks(), 1);
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "only the first look waited for the volume: {:?}",
+            began.elapsed()
+        );
+        assert_eq!(names(&on_stale.join("files")), ["from stale"]);
+
+        // once the volume answers, the next look sees what it holds and an emptying takes it
+        shut.open(&stale);
+        assert!(t.silent_volumes().is_empty());
+        assert!(t.holds_items());
+        assert_eq!(t.entries(), [on_stale.join("files/from stale")]);
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (1, 0));
+        assert!(!t.holds_items());
+    }
+
+    #[test]
+    fn two_looks_at_one_volume_wait_for_each_other_and_both_see_it() {
+        let d = tempfile::tempdir().unwrap();
+        let usb = d.path().join("usb");
+        put(&usb.join(format!(".Trash-{}", uid())), "a", false);
+        let t = Trash::with_home(d.path().join("share/Trash")).with_mounts(vec![usb]);
+        let looks: Vec<_> = (0..8)
+            .map(|_| {
+                let t = t.clone();
+                std::thread::spawn(move || (0..20).all(|_| t.volumes_hold_items()))
+            })
+            .collect();
+        for look in looks {
+            assert!(look.join().unwrap(), "a look missed the volume");
+        }
     }
 
     #[test]

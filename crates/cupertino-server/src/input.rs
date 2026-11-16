@@ -53,7 +53,6 @@ pub struct Chord {
     pub sym: u32,
 }
 
-/// Normalise a keysym for matching: letters lower-case, the shifted tab symbol becomes tab.
 /// Whether `ev` is the command key and W, without another modifier.
 fn is_command_w(ev: &KeyEvent) -> bool {
     normalize_sym(ev.sym) == keysyms::KEY_w
@@ -64,6 +63,7 @@ fn is_command_w(ev: &KeyEvent) -> bool {
             })
 }
 
+/// Normalise a keysym for matching: letters lower-case, the shifted tab symbol becomes tab.
 pub fn normalize_sym(sym: u32) -> u32 {
     if sym == keysyms::KEY_ISO_Left_Tab {
         return keysyms::KEY_Tab;

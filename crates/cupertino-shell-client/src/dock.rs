@@ -46,6 +46,8 @@ pub const MAX_WINDOW_THUMBNAIL: u32 = 256;
 
 /// Shell version of the overview's drag, drop and workspace picture requests.
 const OVERVIEW_DRAG_VERSION: u32 = 23;
+/// Shell version of the request that shows one window.
+const ACTIVATE_WINDOW_VERSION: u32 = 26;
 
 /// A picture: `width` × `height` pixels of `wl_shm` ARGB8888 (premultiplied, little-endian), rows packed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +174,17 @@ impl Dock {
     /// result is the application's windows closing; an unknown id is ignored.
     pub fn force_quit_app(&self, app_id: &str) {
         self.proxy.force_quit_app(app_id.to_string());
+    }
+
+    /// Show one window: the server restores it when it is minimized, switches to its workspace, raises it and gives
+    /// it the keyboard; an id that is no window any more is ignored. False, with nothing sent, on a server older than
+    /// shell version 26, which can only bring the whole application forward ([`Dock::activate_app`]).
+    pub fn activate_window(&self, id: u32) -> bool {
+        let known = self.proxy.version() >= ACTIVATE_WINDOW_VERSION;
+        if known {
+            self.proxy.activate_window(id);
+        }
+        known
     }
 
     /// Restore a minimized window out of the tile `rect` (surface-local logical points, rounded

@@ -199,6 +199,12 @@ impl<A: Application> TestDriver<A> {
                     {
                         false
                     }
+                    // a paste the runtime reads for a field is as protected as that field
+                    PlatformEvent::Clipboard { token, .. }
+                        if self.runtime.paste_protected(*token).is_some() =>
+                    {
+                        self.runtime.paste_protected(*token).unwrap_or(true)
+                    }
                     PlatformEvent::Clipboard { token, .. } => *self
                         .clipboard_reads
                         .get(token)

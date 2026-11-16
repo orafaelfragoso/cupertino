@@ -554,6 +554,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
 /// Requests a test sends to the dock client thread.
 enum Cmd {
     ActivateApp(&'static str),
+    ActivateWindow(u32),
     RestoreWindow(u32),
     /// `set_minimize_target` followed by a commit of the dock surface.
     SetMinimizeTarget,
@@ -721,6 +722,7 @@ impl DockClient {
             };
             let apply = Box::new(move |cmd: Cmd| match cmd {
                 Cmd::ActivateApp(app_id) => dock.activate_app(app_id.to_string()),
+                Cmd::ActivateWindow(id) => dock.activate_window(id),
                 Cmd::RestoreWindow(id) => dock.restore_window(id, SLOT.0, SLOT.1, SLOT.2, SLOT.3),
                 Cmd::SetMinimizeTarget => {
                     dock.set_minimize_target(SLOT.0, SLOT.1, SLOT.2, SLOT.3);
@@ -1424,6 +1426,48 @@ fn activate_app_raises_the_application() {
     dock.send(Cmd::ActivateApp("org.example.a"));
     h.wait_until("the first application to take focus", |s| {
         s.wm.key_window() == Some(first)
+    });
+}
+
+/// From shell version 26 the dock shows one window of a tile's menu: the window alone takes the keyboard, a minimized
+/// one is restored, and an id that names no window, or any id while the session is locked, changes nothing.
+#[test]
+fn activate_window_shows_the_one_window_and_restores_a_minimized_one() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn_at(h.shell_stream(), true, 0, 26);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    let first = h.mapped_window(1);
+    let _b = spawn_app(h.socket_path(), "org.example.a");
+    let second = h.mapped_window(2);
+    let _c = spawn_app(h.socket_path(), "org.example.c");
+    let third = h.mapped_window(3);
+    assert_eq!(h.state.wm.key_window(), Some(third));
+
+    dock.send(Cmd::ActivateWindow(first.0 as u32));
+    h.wait_until("the first window to take the keyboard", |s| {
+        s.wm.key_window() == Some(first)
+    });
+
+    h.state.command(Command::Minimize {
+        window: second,
+        target: None,
+    });
+    h.advance(5.0);
+    assert!(h.state.wm.window(second).unwrap().state().is_minimized());
+    dock.send(Cmd::ActivateWindow(second.0 as u32));
+    h.wait_until(
+        "the minimized window to restore and take the keyboard",
+        |s| {
+            !s.wm.window(second).unwrap().state().is_minimized()
+                && s.wm.key_window() == Some(second)
+        },
+    );
+
+    // an id of no window is ignored, and the next request still acts
+    dock.send(Cmd::ActivateWindow(9_999));
+    dock.send(Cmd::ActivateWindow(third.0 as u32));
+    h.wait_until("the third window to take the keyboard", |s| {
+        s.wm.key_window() == Some(third)
     });
 }
 

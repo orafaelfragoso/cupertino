@@ -638,6 +638,18 @@ impl HeadlessWindowSystem {
         self.clipboards.get(&kind)
     }
 
+    /// Another application copied `data`, or with `None` cleared the clipboard: it is what a read answers from now
+    /// on, and the application under test is told what the clipboard offers.
+    pub fn offer_clipboard(&mut self, kind: ClipboardKind, data: Option<ClipboardData>) {
+        let mimes = data.as_ref().map(|d| vec![d.mime.clone()]);
+        match data {
+            Some(data) => self.clipboards.insert(kind, data),
+            None => self.clipboards.remove(&kind),
+        };
+        self.queue
+            .push_back(PlatformEvent::ClipboardOffered { kind, mimes });
+    }
+
     pub(crate) fn next_event(&self) -> Option<&PlatformEvent> {
         self.queue.front()
     }

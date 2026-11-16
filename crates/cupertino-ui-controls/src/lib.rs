@@ -48,6 +48,7 @@ mod swatch;
 mod tabs;
 mod text;
 mod text_box;
+mod text_menu;
 pub use bar_chart::{BarChart, ChartBar, ChartColor};
 pub use swatch::{Swatch, SwatchFill, SwatchLook};
 mod thumbnail;
@@ -939,6 +940,23 @@ impl Default for MenuStyle {
     }
 }
 
+impl MenuStyle {
+    /// The look of a menu that points at what it belongs to, such as a dock tile's: a rounder panel that may be
+    /// narrower, with a pointer under it whose middle is `from_leading` points from the panel's leading edge. Its rows,
+    /// separators and material are every menu's.
+    pub fn pointed(from_leading: f64) -> Self {
+        MenuStyle {
+            radius: menu::POINTED_RADIUS,
+            min_width: menu::POINTED_MIN_WIDTH,
+            tail: Some(MenuTail {
+                from_leading,
+                width: menu::TAIL_WIDTH,
+                depth: menu::TAIL_DEPTH,
+            }),
+        }
+    }
+}
+
 /// A menu in a popup window that takes the keyboard while open. Up, Down, Home and End move between the enabled items,
 /// a typed character moves to the next item it starts, and Escape or the arrow toward the leading side closes a
 /// submenu. Escape in the menu itself, a chosen item and a press outside send `on_close`. Declare [`Menu::windows`]
@@ -1378,6 +1396,9 @@ pub struct SearchField<M> {
 pub struct BareField<M> {
     pub field: TextField<M>,
     pub size: f64,
+    /// Has the menu of every text field (Cut, Copy, Paste, Select All) and takes a paste from the keys. Off for a field
+    /// on a surface that asks who logs in, where nothing opens over it and nothing is read from the clipboard.
+    pub menu: bool,
     /// The caret holds what it shows: its blink draws nothing, so the field draws no frame of its own, a paint for
     /// any other reason draws it as it was last drawn, and once the hold ends the blink goes on where its cycle has
     /// come to. An edit that restarts the blink shows it again. For a field whose surface the compositor is moving (a

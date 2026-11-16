@@ -590,6 +590,12 @@ impl AppHost {
         let rect = |r: &Rect| cupertino_geometry::Rect::new(r.x, r.y, r.w, r.h);
         match request {
             Request::ActivateApp(app_id) => role.activate_app(&app_id),
+            Request::ActivateWindow { id, app_id } => {
+                // an older server shows no single window: the application comes forward instead
+                if !role.activate_window(id) {
+                    role.activate_app(&app_id);
+                }
+            }
             Request::RestoreWindow { id, tile } => shape(role.restore_window(id, &rect(&tile)))?,
             Request::MinimizeTarget(target) => shape(role.set_minimize_target(&rect(&target)))?,
             Request::App(app_id, action) => role.app_command(
@@ -775,6 +781,13 @@ impl Host for AppHost {
                 image(pixmap)
             })
             .collect()
+    }
+
+    /// The person's home folder, when the environment names one.
+    fn home(&mut self) -> Option<String> {
+        std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(|h| h.to_string_lossy().into_owned())
     }
 
     /// The user's downloads folder (`XDG_DOWNLOAD_DIR` of `user-dirs.dirs`, else `~/Downloads`), when it exists.

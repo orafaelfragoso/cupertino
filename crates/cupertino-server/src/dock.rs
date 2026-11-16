@@ -903,6 +903,25 @@ impl Cupertino {
         self.command(Command::Restore { window });
     }
 
+    /// `activate_window`: show one window the dock lists, as the person's own choice: a minimized one is restored, and
+    /// the window is raised on its workspace and given the keyboard. Nothing while the session is locked, and for an
+    /// id that is no window any more.
+    fn dock_activate_window(&mut self, id: u32) {
+        if self.session_lock.is_active() {
+            return;
+        }
+        let window = WindowId(u64::from(id));
+        let listed = self.wm.window(window).is_some_and(|w| {
+            !matches!(
+                w.state(),
+                LifecycleState::Created | LifecycleState::Closing | LifecycleState::Destroyed
+            )
+        });
+        if listed {
+            self.focus_window_by_input(window);
+        }
+    }
+
     /// `activate_app`: raise the application's windows and focus the frontmost.
     fn dock_activate_app(&mut self, app_id: &str) {
         if let Some(app) = self.wm.app_for_identity(app_id) {
@@ -983,6 +1002,8 @@ impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
         match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
             cupertino_dock_v1::Request::ForceQuitApp { app_id } => state.force_quit_app(&app_id),
+            // a dock below version 26 cannot send it: the wire rejects a request newer than the object
+            cupertino_dock_v1::Request::ActivateWindow { id } => state.dock_activate_window(id),
             cupertino_dock_v1::Request::RestoreWindow {
                 id,
                 x,

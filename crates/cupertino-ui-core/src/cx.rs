@@ -129,7 +129,19 @@ pub(crate) struct Effects<M> {
     pub(crate) reveal: Option<(NodeId, Rect)>,
     /// The window's overlays draw again on the next frame ([`EventCx::request_overlay`]).
     pub(crate) overlay: bool,
+    /// A node asks for the clipboard's text ([`EventCx::request_paste`]).
+    pub(crate) paste: Option<NodeId>,
+    /// A node opens a popup for itself ([`EventCx::open_popup`]).
+    pub(crate) popup: Option<(NodeId, OwnedWindows<M>)>,
+    /// A popup a node opened for itself answers it ([`EventCx::answer_popup`]).
+    pub(crate) popup_answer: Option<u32>,
+    /// A popup a node opened for itself ends ([`EventCx::close_popup`]).
+    pub(crate) popup_close: bool,
 }
+
+/// Builds the windows of a popup a control opened for itself, each time the application's view is built while it is
+/// open ([`EventCx::open_popup`]).
+pub type OwnedWindows<M> = Box<dyn Fn() -> Vec<crate::OwnedWindow<M>>>;
 
 impl<M> Default for Effects<M> {
     fn default() -> Self {
@@ -147,6 +159,10 @@ impl<M> Default for Effects<M> {
             window: Vec::new(),
             reveal: None,
             overlay: false,
+            paste: None,
+            popup: None,
+            popup_answer: None,
+            popup_close: false,
         }
     }
 }
@@ -171,6 +187,12 @@ impl<M> Effects<M> {
         self.window.extend(other.window);
         self.reveal = other.reveal.or(self.reveal);
         self.overlay |= other.overlay;
+        self.paste = other.paste.or(self.paste);
+        if other.popup.is_some() {
+            self.popup = other.popup;
+        }
+        self.popup_answer = other.popup_answer.or(self.popup_answer);
+        self.popup_close |= other.popup_close;
     }
 }
 
@@ -184,6 +206,10 @@ pub(crate) struct Status {
     pub(crate) now: Timestamp,
     /// When the pointer press that opened this popup went down, if one did.
     pub(crate) opening_press: Option<Timestamp>,
+    /// The clipboard holds text.
+    pub(crate) clipboard_text: bool,
+    /// A control of this window has a popup of its own open.
+    pub(crate) owned_popup: bool,
 }
 
 pub struct EventCx<'a, M> {
@@ -337,6 +363,42 @@ impl<M> EventCx<'_, M> {
     /// Puts `text` on the clipboard, as a field's copy or cut does.
     pub fn set_clipboard(&mut self, text: String) {
         self.effects.clipboard = Some(text);
+    }
+
+    /// Whether the clipboard holds text, so a paste has something to insert.
+    pub fn clipboard_has_text(&self) -> bool {
+        self.status.clipboard_text
+    }
+
+    /// Asks for the clipboard's text: this node hears it as [`Event::Paste`](crate::Event::Paste) once it is read,
+    /// and nothing when the clipboard holds no text or cannot be read.
+    pub fn request_paste(&mut self) {
+        self.effects.paste = Some(self.node);
+    }
+
+    /// Opens a popup of this node's own beside the application's windows, in place of any a control opened before:
+    /// `windows` builds its windows now and at each view while it is open. It closes when something in it asks
+    /// ([`close_popup`](Self::close_popup)), when the compositor dismisses it, and when this node or its window goes.
+    pub fn open_popup(&mut self, windows: OwnedWindows<M>) {
+        self.effects.popup = Some((self.node, windows));
+    }
+
+    /// Whether a control of this window has a popup of its own open ([`open_popup`](Self::open_popup)), such as a text
+    /// field's menu: the keyboard a window loses meanwhile went to that popup.
+    pub fn holds_popup(&self) -> bool {
+        self.status.owned_popup
+    }
+
+    /// From inside a popup a control opened for itself: tells that control `answer`, which it hears as
+    /// [`Event::PopupAnswer`](crate::Event::PopupAnswer). Elsewhere it does nothing.
+    pub fn answer_popup(&mut self, answer: u32) {
+        self.effects.popup_answer = Some(answer);
+    }
+
+    /// Closes the popup a control opened for itself, from inside it or from the window it was opened in. Elsewhere it
+    /// does nothing.
+    pub fn close_popup(&mut self) {
+        self.effects.popup_close = true;
     }
 
     /// Starts an interactive move of the window, in answer to the pointer press being handled: call it while that press

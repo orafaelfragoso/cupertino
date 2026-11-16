@@ -4,11 +4,12 @@
 use crate::field::{self, Blink};
 use crate::look;
 use crate::text_box;
+use crate::text_menu::{self, Can, Command, Opens};
 use crate::{TextChange, TextEditor};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, Environment, Event, EventCx,
-    MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
+    MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{
     Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
@@ -342,6 +343,8 @@ pub struct EditorState {
     drag_point: Option<Point>,
     /// The next change tells the input method to start afresh.
     reset_input: bool,
+    /// What opens the editor's menu.
+    menu: text_menu::Opener,
 }
 
 impl EditorState {
@@ -512,6 +515,25 @@ impl<M: Clone + 'static> TextEditor<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        if let Some(opens) = state.menu.opens(event, cx) {
+            self.open_menu(state, opens, cx);
+            return Propagation::Stop;
+        }
+        match event {
+            Event::PopupAnswer(answer) => {
+                if let Some(command) = text_menu::command(*answer) {
+                    self.command(state, command, cx);
+                }
+                return Propagation::Stop;
+            }
+            Event::Paste(Pasted(text)) if self.enabled => {
+                state.buffer.paste(text);
+                self.report(state, cx);
+                state.changed(ChangeCause::Other, cx);
+                return Propagation::Stop;
+            }
+            _ => {}
+        }
         if self.enabled {
             let selection = state.buffer.selection();
             let caret = state.buffer.caret_position();
@@ -590,6 +612,71 @@ impl<M: Clone + 'static> TextEditor<M> {
         }
     }
 
+    /// Opens the editor's menu, as a text field's opens: at the pointer, where a press outside the selection first
+    /// puts the caret, or from the keyboard under the caret. A disabled editor is read only: its menu copies all its
+    /// text.
+    fn open_menu(&self, state: &mut EditorState, opens: Opens, cx: &mut EventCx<'_, M>) {
+        if self.enabled {
+            if state.buffer.composition().is_some() {
+                state.buffer.commit_composition();
+                state.reset_input = true;
+                self.report(state, cx);
+            }
+            cx.request_focus();
+        }
+        state.sync(cx);
+        let at = match opens {
+            Opens::At(point) => {
+                if let Some(at) = state.index_at(point, cx).filter(|_| self.enabled) {
+                    let selection = state.buffer.selection();
+                    if selection.is_empty() || !(selection.start..=selection.end).contains(&at) {
+                        state.buffer.select(at..at);
+                    }
+                }
+                point
+            }
+            Opens::Keyboard => {
+                let caret = state
+                    .caret_rect(cx.env())
+                    .zip(cx.bounds())
+                    .map(|(caret, bounds)| caret.translate(bounds.min_x(), bounds.min_y()));
+                field::under(caret, cx)
+            }
+        };
+        let selected = !state.buffer.selection().is_empty();
+        let holds = !state.buffer.is_empty();
+        let can = Can {
+            cut: self.enabled && selected,
+            copy: selected || (!self.enabled && holds),
+            paste: self.enabled && cx.clipboard_has_text(),
+            select_all: self.enabled && holds,
+        };
+        text_menu::open(at, can, cx);
+        if self.enabled {
+            state.changed(ChangeCause::Other, cx);
+        }
+    }
+
+    /// A row of the editor's menu was chosen: what the row's keys do.
+    fn command(&self, state: &mut EditorState, command: Command, cx: &mut EventCx<'_, M>) {
+        match command {
+            Command::Cut if self.enabled => {
+                cx.set_clipboard(state.buffer.cut());
+                self.report(state, cx);
+            }
+            Command::Copy if self.enabled => {
+                cx.set_clipboard(state.buffer.selected_text().to_owned())
+            }
+            Command::Copy => cx.set_clipboard(field::committed(&state.buffer)),
+            Command::Paste if self.enabled => cx.request_paste(),
+            Command::SelectAll if self.enabled => state.buffer.select_all(),
+            _ => {}
+        }
+        if self.enabled {
+            state.changed(ChangeCause::Other, cx);
+        }
+    }
+
     fn report(&self, state: &mut EditorState, cx: &mut EventCx<'_, M>) {
         state.reported += 1;
         if let Some(on_change) = &self.on_change {
@@ -622,7 +709,8 @@ impl<M: Clone + 'static> TextEditor<M> {
         };
         match response {
             Response::Ignored => return Propagation::Continue,
-            Response::Moved | Response::Paste => {}
+            Response::Moved => {}
+            Response::Paste => cx.request_paste(),
             Response::Edited => self.report(state, cx),
             Response::Copy(text) => cx.set_clipboard(text),
             Response::Cut(text) => {
@@ -657,6 +745,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
             reported: self.revision,
             hovered: false,
             blink: Blink::default(),
+            menu: text_menu::Opener::default(),
             marks: field::Marks::default(),
             lines: RefCell::default(),
             bordered: self.bordered,
@@ -727,6 +816,7 @@ impl<M: Clone + 'static> Widget<M> for TextEditor<M> {
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
         state.arm_autoscroll(cx);
+        state.menu.arm(cx);
         propagation
     }
 

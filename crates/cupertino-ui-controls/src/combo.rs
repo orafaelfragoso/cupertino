@@ -66,6 +66,7 @@ impl<M: Clone + 'static> From<ComboBox<M>> for Element<M> {
             enabled,
             children: vec![
                 Element::new(BareField {
+                    menu: true,
                     field: combo.field,
                     size,
                     hold_caret: false,

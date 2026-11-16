@@ -3,11 +3,12 @@
 //! method, and assistive technology learns only that there is a value.
 
 use crate::look::{self, paint_focus_ring};
+use crate::text_menu::{self, Can, Command, Opens};
 use crate::{BareField, BareSecureField, SearchField, SecureField, TextChange, TextField};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
-    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Propagation, Role, SemanticsCx,
+    Event, EventCx, MeasureCx, OverlayCx, PaintCx, Pasted, Propagation, Role, SemanticsCx,
     SurfaceLayerMark, TextSemantics, Widget,
 };
 use cupertino_ui_layout::{
@@ -1019,6 +1020,10 @@ pub struct FieldState {
     drag_point: Option<Point>,
     /// The next change tells the input method to start afresh.
     reset_input: bool,
+    /// What opens the field's menu.
+    menu: text_menu::Opener,
+    /// Whether the field has a menu and takes a paste: every field but a [`BareField`] that turns them off.
+    pastes: bool,
 }
 
 /// The text without what an input method is still composing: what the model holds.
@@ -1031,6 +1036,15 @@ pub(crate) fn committed(buffer: &TextBuffer) -> String {
 pub(crate) fn holds(buffer: &TextBuffer, value: &str) -> bool {
     let held = committed(buffer);
     value == held || buffer.cleaned(value) == held
+}
+
+/// Where a menu opened from the keyboard stands: under `caret` (window coordinates), or at the field's corner before
+/// its first layout.
+pub(crate) fn under<M>(caret: Option<Rect>, cx: &EventCx<'_, M>) -> Point {
+    match caret {
+        Some(caret) => Point::new(caret.min_x(), caret.max_y()),
+        None => cx.bounds().map_or(Point::ZERO, |b| b.origin),
+    }
 }
 
 fn anchor(buffer: &TextBuffer) -> usize {
@@ -1218,6 +1232,27 @@ impl<M: Clone + 'static> TextField<M> {
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        if state.pastes {
+            if let Some(opens) = state.menu.opens(event, cx) {
+                self.open_menu(state, opens, cx);
+                return Propagation::Stop;
+            }
+        }
+        match event {
+            Event::PopupAnswer(answer) if state.pastes => {
+                if let Some(command) = text_menu::command(*answer) {
+                    self.command(state, command, cx);
+                }
+                return Propagation::Stop;
+            }
+            Event::Paste(Pasted(text)) if self.enabled && state.pastes => {
+                state.buffer.paste(text);
+                self.report(state, cx);
+                self.shown(state, cx);
+                return Propagation::Stop;
+            }
+            _ => {}
+        }
         if self.enabled {
             let selection = state.buffer.selection();
             let ended = state.select(event, &mut |state, cx| self.report(state, cx), cx);
@@ -1294,6 +1329,71 @@ impl<M: Clone + 'static> TextField<M> {
         }
     }
 
+    /// After the menu or a paste changed the text or the selection: the input method learns of it and the field
+    /// paints.
+    fn shown(&self, state: &mut FieldState, cx: &mut EventCx<'_, M>) {
+        if cx.is_focused() {
+            state.sync_input(ChangeCause::Other, cx);
+        }
+        cx.request_paint();
+    }
+
+    /// Opens the field's menu: at the pointer, where a press outside the selection first puts the caret (one inside
+    /// keeps the selection), or from the keyboard under the caret. The field takes the keyboard as on any press, and
+    /// what the input method composes stays as typed. A disabled field is read only: it has no selection, and its
+    /// menu copies all its text.
+    fn open_menu(&self, state: &mut FieldState, opens: Opens, cx: &mut EventCx<'_, M>) {
+        if self.enabled {
+            if state.buffer.composition().is_some() {
+                state.buffer.commit_composition();
+                state.reset_input = true;
+                self.report(state, cx);
+            }
+            cx.request_focus();
+        }
+        let at = match opens {
+            Opens::At(point) => {
+                if let Some(at) = state.index_at(point, cx).filter(|_| self.enabled) {
+                    let selection = state.buffer.selection();
+                    if selection.is_empty() || !(selection.start..=selection.end).contains(&at.byte)
+                    {
+                        state.buffer.select(at.byte..at.byte);
+                    }
+                }
+                point
+            }
+            Opens::Keyboard => under(state.caret_rect(cx), cx),
+        };
+        let selected = !state.buffer.selection().is_empty();
+        let holds = !state.buffer.is_empty();
+        let can = Can {
+            cut: self.enabled && selected,
+            copy: selected || (!self.enabled && holds),
+            paste: self.enabled && cx.clipboard_has_text(),
+            select_all: self.enabled && holds,
+        };
+        text_menu::open(at, can, cx);
+        self.shown(state, cx);
+    }
+
+    /// A row of the field's menu was chosen: what the row's keys do.
+    fn command(&self, state: &mut FieldState, command: Command, cx: &mut EventCx<'_, M>) {
+        match command {
+            Command::Cut if self.enabled => {
+                cx.set_clipboard(state.buffer.cut());
+                self.report(state, cx);
+            }
+            Command::Copy if self.enabled => {
+                cx.set_clipboard(state.buffer.selected_text().to_owned())
+            }
+            Command::Copy => cx.set_clipboard(state.committed()),
+            Command::Paste if self.enabled => cx.request_paste(),
+            Command::SelectAll if self.enabled => state.buffer.select_all(),
+            _ => {}
+        }
+        self.shown(state, cx);
+    }
+
     fn report(&self, state: &mut FieldState, cx: &mut EventCx<'_, M>) {
         state.reported += 1;
         if let Some(on_change) = &self.on_change {
@@ -1338,6 +1438,7 @@ impl<M: Clone + 'static> TextField<M> {
                 cx.set_clipboard(text);
                 self.report(state, cx);
             }
+            Response::Paste if state.pastes => cx.request_paste(),
             Response::Paste => {}
         }
         state.sync_input(ChangeCause::Other, cx);
@@ -1368,6 +1469,8 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
             look: FieldLook::Plain,
             drag_point: None,
             reset_input: false,
+            menu: text_menu::Opener::default(),
+            pastes: true,
         }
     }
 
@@ -1410,6 +1513,9 @@ impl<M: Clone + 'static> Widget<M> for TextField<M> {
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
         state.arm_autoscroll(cx);
+        if state.pastes {
+            state.menu.arm(cx);
+        }
         propagation
     }
 
@@ -1490,9 +1596,24 @@ pub struct SecureState {
     look: FieldLook,
     /// The placeholder's colour in place of the look's: a [`BareSecureField`]'s own.
     placeholder_color: Option<Color>,
+    /// What opens the field's menu.
+    menu: text_menu::Opener,
+    /// Whether the field has a menu and takes a paste: a [`BareSecureField`], which stands on the surfaces that ask
+    /// for the session's password, has neither.
+    pastes: bool,
 }
 
 impl SecureState {
+    /// The caret in window coordinates.
+    fn caret_rect<M>(&self, cx: &EventCx<'_, M>) -> Option<Rect> {
+        let bounds = cx.bounds()?;
+        let mask = self.buffer.mask(BULLET);
+        let (layout, origin) = placed(cx.env(), &mask, bounds.size, self.scroll.get(), self.look)?;
+        let (caret, _) = self.buffer.masked_selection();
+        let caret = layout.caret_rect(position(caret * BULLET.len_utf8()));
+        Some(caret.translate(bounds.min_x() + origin.x, bounds.min_y() + origin.y))
+    }
+
     /// The bullet boundary under `point` (window coordinates): a grapheme index of the password.
     fn mask_index<M>(&self, point: Point, cx: &EventCx<'_, M>) -> Option<usize> {
         let bounds = cx.bounds()?;
@@ -1582,13 +1703,66 @@ fn insert(buffer: &mut SecureBuffer, text: &str) -> bool {
     (buffer.with_secret(str::len), buffer.selection()) != before
 }
 
-impl<M: 'static> SecureField<M> {
+impl<M: Clone + 'static> SecureField<M> {
+    /// Opens the field's menu, as a text field's opens. A password never leaves its field, so Cut and Copy are always
+    /// disabled; a disabled field's menu has nothing to do.
+    fn open_menu(&self, state: &mut SecureState, opens: Opens, cx: &mut EventCx<'_, M>) {
+        if self.enabled {
+            cx.request_focus();
+        }
+        let at = match opens {
+            Opens::At(point) => {
+                if let Some(at) = state.mask_index(point, cx).filter(|_| self.enabled) {
+                    let (_, selection) = state.buffer.masked_selection();
+                    if selection.is_empty() || !(selection.start..=selection.end).contains(&at) {
+                        state.buffer.select_masked(at, at);
+                    }
+                }
+                point
+            }
+            Opens::Keyboard => under(state.caret_rect(cx), cx),
+        };
+        let can = Can {
+            cut: false,
+            copy: false,
+            paste: self.enabled && cx.clipboard_has_text(),
+            select_all: self.enabled && !state.buffer.is_empty(),
+        };
+        text_menu::open(at, can, cx);
+        cx.request_paint();
+    }
+
     fn handle(
         &self,
         state: &mut SecureState,
         event: &Event,
         cx: &mut EventCx<'_, M>,
     ) -> Propagation {
+        if state.pastes {
+            if let Some(opens) = state.menu.opens(event, cx) {
+                self.open_menu(state, opens, cx);
+                return Propagation::Stop;
+            }
+        }
+        match event {
+            Event::PopupAnswer(answer) if self.enabled && state.pastes => {
+                match text_menu::command(*answer) {
+                    Some(Command::Paste) => cx.request_paste(),
+                    Some(Command::SelectAll) => state.buffer.select_all(),
+                    _ => {}
+                }
+                cx.request_paint();
+                return Propagation::Stop;
+            }
+            Event::Paste(Pasted(text)) if self.enabled && state.pastes => {
+                if insert(&mut state.buffer, text) {
+                    self.changed(&state.buffer, cx);
+                }
+                cx.request_paint();
+                return Propagation::Stop;
+            }
+            _ => {}
+        }
         if self.enabled && state.select(event, cx) {
             cx.request_paint();
             if state.drag.is_some()
@@ -1695,6 +1869,10 @@ impl<M: 'static> SecureField<M> {
                 buffer.select_all();
                 false
             }
+            _ if command && key.text == Some('v') && state.pastes => {
+                cx.request_paste();
+                false
+            }
             // copy, cut and every other command chord do nothing in a password field, and nothing reaches the window
             _ if command || key.mods.contains(Mods::CTRL) => false,
             _ => match key.text {
@@ -1710,7 +1888,7 @@ impl<M: 'static> SecureField<M> {
     }
 }
 
-impl<M: 'static> Widget<M> for SecureField<M> {
+impl<M: Clone + 'static> Widget<M> for SecureField<M> {
     type State = SecureState;
 
     fn layout(&self) -> LayoutSpec {
@@ -1733,6 +1911,8 @@ impl<M: 'static> Widget<M> for SecureField<M> {
             last_press: None,
             look: FieldLook::Plain,
             placeholder_color: None,
+            menu: text_menu::Opener::default(),
+            pastes: true,
         }
     }
 
@@ -1772,6 +1952,9 @@ impl<M: 'static> Widget<M> for SecureField<M> {
         let propagation = self.handle(state, event, cx);
         let selecting = !state.buffer.selection().is_empty();
         state.blink.follow(event, selecting, cx);
+        if state.pastes {
+            state.menu.arm(cx);
+        }
         propagation
     }
 
@@ -1832,7 +2015,7 @@ impl<M: 'static> Widget<M> for SecureField<M> {
 }
 
 /// A bare secure field is its secure field without chrome: the same buffer, keys, input method and semantics.
-impl<M: 'static> Widget<M> for BareSecureField<M> {
+impl<M: Clone + 'static> Widget<M> for BareSecureField<M> {
     type State = SecureState;
 
     fn layout(&self) -> LayoutSpec {
@@ -1843,6 +2026,7 @@ impl<M: 'static> Widget<M> for BareSecureField<M> {
         SecureState {
             look: bare_secure_look(self.size, self.weight),
             placeholder_color: self.placeholder_color,
+            pastes: false,
             ..self.field.state()
         }
     }
@@ -1971,11 +2155,13 @@ impl<M: Clone + 'static> Widget<M> for BareField<M> {
     fn state(&self) -> FieldState {
         FieldState {
             look: bare_look(self.size),
+            pastes: self.menu,
             ..self.field.state()
         }
     }
 
     fn update(&self, old: &Self, state: &mut FieldState) -> Change {
+        state.pastes = self.menu;
         let change = self.field.update(&old.field, state);
         if self.size != old.size {
             state.look = bare_look(self.size);

@@ -44,6 +44,7 @@ use cupertino_ui_test::{
 use cupertino_wm::geometry::Rect as WmRect;
 
 const EDITOR: &str = "org.example.Editor";
+const FILE_MANAGER: &str = cupertino_dock::conf::FILE_MANAGER;
 const TERMINAL: &str = "org.example.Terminal";
 
 const LEFT: u32 = 0xff51;
@@ -120,6 +121,8 @@ struct Record {
     listings: Vec<async_channel::Sender<()>>,
     /// What was opened with the session's opener, in order.
     opened: Vec<String>,
+    /// The person's home folder, as the host names it.
+    home: Option<String>,
 }
 
 thread_local! {
@@ -129,6 +132,8 @@ thread_local! {
     static FOLDERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
     /// The next run's host has this trash.
     static TRASH: RefCell<Option<cupertino_trash::Trash>> = const { RefCell::new(None) };
+    /// The next run's dock has the file manager's tile first, its entry installed, and this home folder.
+    static FILES: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The next run's windows are read by this assistive technology.
     static READER: RefCell<Option<AssistiveTechnology>> = const { RefCell::new(None) };
 }
@@ -197,6 +202,9 @@ impl Host for FakeHost {
     }
     fn folders(&mut self) -> Vec<(String, String)> {
         self.0.borrow().folders.clone()
+    }
+    fn home(&mut self) -> Option<String> {
+        self.0.borrow().home.clone()
     }
     fn folder_entries(&mut self, _: &str) -> kit::FolderListing {
         let mut record = self.0.borrow_mut();
@@ -382,7 +390,9 @@ impl Run {
         // window ids start again with a new runtime: none of them is configured yet
         CONFIGURED.with_borrow_mut(Vec::clear);
         let leave_out = BACKGROUND.take();
+        let files = FILES.take();
         let record = Rc::new(RefCell::new(Record {
+            home: files.clone().filter(|home| !home.is_empty()),
             background: leave_out.is_some(),
             leave_out: leave_out.unwrap_or_default(),
             folders: FOLDERS.take(),
@@ -390,6 +400,9 @@ impl Run {
             ..Record::default()
         }));
         let mut dock = Dock::new(DockConfig::default());
+        if files.is_some() {
+            dock.set_built_in(FILE_MANAGER);
+        }
         dock.set_pinned(&[EDITOR, TERMINAL]);
         let mut entries = vec![
             entry_with(EDITOR, "Editor", "Categories=Development;TextEditor;\n"),
@@ -400,6 +413,9 @@ impl Run {
             ),
         ];
         entries.extend(more);
+        if files.is_some() {
+            entries.push(entry_with(FILE_MANAGER, "Files", ""));
+        }
         // the terminal's entry is D-Bus activatable, the editor's is not
         let desktop = DesktopIndex { entries };
         let model = Model::new(
@@ -948,6 +964,210 @@ fn a_secondary_click_opens_the_tiles_menu_whose_items_reach_the_server() {
 
 /// Longer than a chosen menu item flashes before it acts.
 const MENU_FLASH: f64 = 0.2;
+
+/// The dock with the file manager's tile, the file manager showing two windows; `home` is the folder the host names
+/// as the person's (none when empty).
+fn files_run(home: &str) -> Run {
+    FILES.set(Some(home.to_owned()));
+    let mut run = Run::start();
+    let window = |id, title: &str, minimized| DockEvent::Window {
+        id,
+        app_id: FILE_MANAGER.to_owned(),
+        title: title.to_owned(),
+        minimized,
+    };
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![
+            window(21, "Documents", false),
+            window(22, "Downloads", false),
+        ],
+    });
+    run.advance(1.0);
+    run
+}
+
+/// The rows of the open menu from the top down: their names and where they are.
+fn menu_rows_at(run: &Run, bar: WindowId) -> Vec<(String, Rect)> {
+    let menu = open_menu(run, bar).expect("the menu opened");
+    let mut rows: Vec<(String, Rect)> = run
+        .nodes(menu)
+        .into_iter()
+        .filter(|n| n.0 == Role::MenuItem)
+        .map(|n| (n.1, n.3))
+        .collect();
+    rows.sort_by(|a, b| a.1.min_y().total_cmp(&b.1.min_y()));
+    rows
+}
+
+/// The names of the rows of the open menu, in order.
+fn menu_rows(run: &Run, bar: WindowId) -> Vec<String> {
+    menu_rows_at(run, bar).into_iter().map(|r| r.0).collect()
+}
+
+fn secondary_click(run: &mut Run, bar: WindowId, tile: &str) {
+    let at = centre(run.bounds(bar, Role::Button, tile));
+    run.pointer(bar, PointerEvent::Enter { position: at });
+    run.button(bar, at, MouseButton::Right, true);
+    run.button(bar, at, MouseButton::Right, false);
+}
+
+#[test]
+fn the_file_managers_menu_lists_its_windows_and_shows_the_one_chosen() {
+    let mut run = files_run("/home/person");
+    let bar = run.bar();
+    secondary_click(&mut run, bar, "Files");
+    assert_eq!(
+        menu_rows(&run, bar),
+        [
+            "Documents",
+            "Downloads",
+            "New Window",
+            "Show All Windows",
+            "Hide"
+        ]
+    );
+    run.key(bar, ESCAPE);
+    choose_on_tile(&mut run, bar, "Files", "Downloads");
+    assert_eq!(
+        run.requests().last(),
+        Some(&(
+            1,
+            Request::ActivateWindow {
+                id: 22,
+                app_id: FILE_MANAGER.to_owned()
+            }
+        )),
+        "the one window, not the application"
+    );
+    choose_on_tile(&mut run, bar, "Files", "Show All Windows");
+    assert_eq!(
+        run.requests().last(),
+        Some(&(
+            1,
+            Request::App(FILE_MANAGER.to_owned(), kit::AppAction::ShowWindows)
+        ))
+    );
+    assert!(
+        run.record.borrow().pins.is_empty() && run.record.borrow().spawned.is_empty(),
+        "nothing was pinned, removed or started"
+    );
+}
+
+#[test]
+fn new_window_on_the_file_managers_tile_opens_the_home_folder_in_another_window() {
+    let mut run = files_run("/home/person");
+    let bar = run.bar();
+    choose_on_tile(&mut run, bar, "Files", "New Window");
+    let spawned = run.record.borrow().spawned.clone();
+    assert_eq!(spawned.len(), 1, "{spawned:?}");
+    assert_eq!(spawned[0].0, ["files", "/home/person"]);
+    assert!(
+        spawned[0].1.is_some(),
+        "with an activation token, so the new window takes the keyboard"
+    );
+}
+
+#[test]
+fn a_minimized_window_chosen_in_its_applications_menu_flies_out_of_its_own_tile() {
+    let mut run = files_run("/home/person");
+    let bar = run.bar();
+    run.message(Message::Dock {
+        output: 1,
+        events: vec![DockEvent::Window {
+            id: 22,
+            app_id: FILE_MANAGER.to_owned(),
+            title: "Downloads".to_owned(),
+            minimized: true,
+        }],
+    });
+    run.advance(1.0);
+    let tile = run.bounds(bar, Role::Button, "Downloads");
+    choose_on_tile(&mut run, bar, "Files", "Downloads");
+    match run.requests().last() {
+        Some((1, Request::RestoreWindow { id: 22, tile: from })) => {
+            let from = kit_rect(*from);
+            assert!(
+                (from.x() - tile.x()).abs() < 1.0 && (from.width() - tile.width()).abs() < 1.0,
+                "{from:?} is the minimized window's tile {tile:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_applications_menu_lists_its_windows_before_its_own_items() {
+    let mut run = Run::start();
+    let bar = run.bar();
+    secondary_click(&mut run, bar, "Terminal");
+    let rows = menu_rows(&run, bar);
+    assert_eq!(rows.first().map(String::as_str), Some("shell"), "{rows:?}");
+    assert!(rows.iter().any(|r| r == "Quit"), "{rows:?}");
+    run.key(bar, ESCAPE);
+    choose_on_tile(&mut run, bar, "Terminal", "shell");
+    assert_eq!(
+        run.requests().last(),
+        Some(&(
+            1,
+            Request::ActivateWindow {
+                id: 7,
+                app_id: TERMINAL.to_owned()
+            }
+        ))
+    );
+}
+
+/// The dock's menu is the toolkit's menu: its rows are as tall as a menu's of any application, its separators take as
+/// much room, the rows stand as far from the panel's top and bottom, and its panel has the toolkit's shape for a menu
+/// with a pointer.
+#[test]
+fn the_tile_menu_has_the_rows_and_separators_of_every_menu() {
+    use cupertino_dock::config::Orientation;
+    use cupertino_kit::controls::MenuStyle;
+    assert_eq!(
+        cupertino_dock::view::menu::style(Orientation::Bottom),
+        MenuStyle::pointed(cupertino_dock::view::menu::TAIL_FROM_EDGE),
+        "the pointer's place is the dock's, the panel's shape the toolkit's"
+    );
+    for side in [Orientation::Left, Orientation::Right] {
+        assert_eq!(
+            cupertino_dock::view::menu::style(side),
+            MenuStyle::default(),
+            "beside a side dock it is the plain menu"
+        );
+    }
+    let mut run = Run::start();
+    let bar = run.bar();
+    secondary_click(&mut run, bar, "Terminal");
+    run.settle();
+    let menu = open_menu(&run, bar).expect("the menu opened");
+    let rows: Vec<Rect> = menu_rows_at(&run, bar).into_iter().map(|r| r.1).collect();
+    assert!(rows.len() >= 4, "{rows:?}");
+    let panel = run
+        .nodes(menu)
+        .into_iter()
+        .find(|n| n.0 == Role::Menu)
+        .expect("the menu")
+        .3;
+    // a row is 24 points tall, the first 5 points under the panel's top and the last 5 over its bottom; rows follow
+    // one another at once, or after the 11 points a separator takes
+    assert!(
+        rows.iter().all(|r| (r.height() - 24.0).abs() < 1e-6),
+        "{rows:?}"
+    );
+    assert!(
+        (rows[0].min_y() - panel.min_y() - 5.0).abs() < 1e-6,
+        "{rows:?} in {panel:?}"
+    );
+    assert!((panel.max_y() - rows[rows.len() - 1].max_y() - 5.0).abs() < 1e-6);
+    let gaps: Vec<f64> = rows
+        .windows(2)
+        .map(|w| w[1].min_y() - w[0].max_y())
+        .collect();
+    assert!(gaps.iter().all(|g| *g == 0.0 || *g == 11.0), "{gaps:?}");
+    assert!(gaps.contains(&11.0), "a separator: {gaps:?}");
+}
 
 /// The dock read by an assistive technology, before anything gave it an input event.
 fn untouched() -> (Run, AssistiveTechnology) {

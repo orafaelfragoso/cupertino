@@ -481,6 +481,8 @@ pub fn screen<M: Clone + 'static>(
         ),
         Field::Name { text, revision } => (
             Element::new(BareField {
+                // no menu and no paste where the session asks who logs in
+                menu: false,
                 field: TextField {
                     label: NAME_LABEL.to_owned(),
                     placeholder: NAME_PLACEHOLDER.to_owned(),

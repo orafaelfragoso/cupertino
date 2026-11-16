@@ -74,6 +74,8 @@ impl Fixture {
                 window_active: true,
                 now: time,
                 opening_press: None,
+                clipboard_text: false,
+                owned_popup: false,
             },
             popups: &[],
             effects: &mut effects,

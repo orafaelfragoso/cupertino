@@ -6,8 +6,10 @@ use std::collections::HashSet;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, HEADPHONES, KEYBOARD};
-use cupertino_radios::{detect, refusal, watch, BluetoothBackend, Found, NetworkBackend};
+use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, Silent, HEADPHONES, KEYBOARD};
+use cupertino_radios::{
+    detect, refusal, set_call_timeout, unanswered, watch, BluetoothBackend, Found, NetworkBackend,
+};
 use cupertino_test_bus::PrivateBus;
 
 /// The private bus, or `None` with a note when `dbus-daemon` is missing.
@@ -232,34 +234,82 @@ fn the_services_signals_and_their_coming_and_going_are_followed() {
     let tx = std::sync::Mutex::new(tx);
     zbus::block_on(watch::follow(
         client.inner(),
-        Arc::new(move || {
-            let _ = tx.lock().unwrap().send(());
+        Arc::new(move |radio| {
+            let _ = tx.lock().unwrap().send(radio);
         }),
     ))
     .unwrap();
     let wait = |what: &str| {
-        heard
+        let radio = heard
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_else(|_| panic!("no signal after {what}"));
         // the rest of a burst
         while heard.recv_timeout(Duration::from_millis(50)).is_ok() {}
+        radio
     };
+    let (network, bluetooth) = (watch::Radio::Network, watch::Radio::Bluetooth);
 
     let nm = FakeNetworkManager::serve(bus.blocking_builder()).unwrap();
-    wait("NetworkManager starting");
+    assert_eq!(wait("NetworkManager starting"), network);
     nm.set_joined(Some("Home"));
-    wait("the device joining a network");
+    assert_eq!(wait("the device joining a network"), network);
     NetworkBackend::NetworkManager
         .set_wireless_enabled(&client, false)
         .unwrap();
-    wait("the radio switched off");
+    assert_eq!(wait("the radio switched off"), network);
 
     let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
-    wait("BlueZ starting");
+    assert_eq!(wait("BlueZ starting"), bluetooth);
     bluez.set_connected(HEADPHONES, true);
-    wait("a device connecting");
+    assert_eq!(wait("a device connecting"), bluetooth);
     bluez.set_powered(false);
-    wait("the adapter switched off");
+    assert_eq!(wait("the adapter switched off"), bluetooth);
+    // a device heard again and again while the adapter discovers changes nothing a reading shows
+    for rssi in -70..-50 {
+        bluez.advertise(KEYBOARD, rssi);
+    }
+    bluez.set_connected(HEADPHONES, false);
+    assert_eq!(wait("the device going"), bluetooth);
+    assert!(
+        heard.try_recv().is_err(),
+        "the changes of signal strength were passed over: one signal, the device's going"
+    );
     drop(bluez);
-    wait("BlueZ stopping");
+    assert_eq!(wait("BlueZ stopping"), bluetooth);
+}
+
+#[test]
+fn services_that_never_answer_fail_each_reading_and_switch_after_the_bounded_wait() {
+    let Some(bus) = bus() else { return };
+    let _nm = Silent::network_manager(bus.blocking_builder()).unwrap();
+    let _bluez = Silent::bluez(bus.blocking_builder()).unwrap();
+    let client = bus.connect();
+    set_call_timeout(Duration::from_millis(60));
+    assert_eq!(
+        detect(&client).unwrap(),
+        Found {
+            network: Some(NM),
+            bluetooth: Some(BLUEZ)
+        },
+        "the bus still tells who owns the names"
+    );
+    let started = std::time::Instant::now();
+    let unanswered_all = [
+        NM.link(&client).map(drop),
+        NM.wifi(&client).map(drop),
+        NM.set_wireless_enabled(&client, false),
+        NM.scan(&client),
+        BLUEZ.adapter(&client, &HashSet::new()).map(drop),
+        BLUEZ.set_powered(&client, false),
+    ];
+    for (index, answer) in unanswered_all.iter().enumerate() {
+        let error = answer.as_ref().expect_err("nothing answers");
+        assert!(unanswered(error), "call {index}: {error}");
+        assert_eq!(refusal(error), "The service did not answer in time.");
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "each waited once: {:?}",
+        started.elapsed()
+    );
 }

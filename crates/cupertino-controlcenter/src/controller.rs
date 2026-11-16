@@ -338,6 +338,27 @@ impl Controller {
         shown
     }
 
+    /// The Wi-Fi radio (`wifi`) or the Bluetooth adapter (`bluetooth`) changed: a shown panel reads that radio again
+    /// at once, with its list when its detail view is open, and no other backend. Returns whether it read.
+    pub fn radios_changed(&mut self, now: f64, wifi: bool, bluetooth: bool) -> bool {
+        if self.lifecycle.phase(now) != Phase::Shown || !(wifi || bluetooth) {
+            return false;
+        }
+        let (backends, failures) = (&mut self.backends, &mut self.failures);
+        if wifi {
+            self.controls.wifi = failures.reading("wi-fi", backends.wifi.read());
+        }
+        if bluetooth {
+            self.controls.bluetooth = failures.reading("bluetooth", backends.bluetooth.read());
+        }
+        match self.detail {
+            Some(Detail::WiFi) if wifi => self.read_detail(),
+            Some(Detail::Bluetooth) if bluetooth => self.read_detail(),
+            _ => {}
+        }
+        true
+    }
+
     /// Read the list of the open detail view.
     fn read_detail(&mut self) {
         let (backends, failures) = (&mut self.backends, &mut self.failures);
@@ -687,6 +708,92 @@ mod tests {
             overlay: Box::new(overlay),
             layout: Box::new(MemoryLayout::default()),
         }
+    }
+
+    /// A switch that counts how often it is read.
+    struct CountedSwitch(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Switch for CountedSwitch {
+        fn read(&mut self) -> Result<bool, BackendError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(true)
+        }
+        fn set(&mut self, _: bool) -> Result<(), BackendError> {
+            Ok(())
+        }
+    }
+
+    struct CountedWifi(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Wifi for CountedWifi {
+        fn read(&mut self) -> Result<WifiStatus, BackendError> {
+            let read = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(WifiStatus {
+                enabled: true,
+                network: Some(format!("reading {read}")),
+            })
+        }
+        fn set_enabled(&mut self, _: bool) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn networks(&mut self) -> Result<Vec<Network>, BackendError> {
+            self.0.fetch_add(100, std::sync::atomic::Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+        fn join(&mut self, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_radio_that_changed_is_read_again_alone() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (others, wifi) = (
+            std::sync::Arc::new(AtomicUsize::new(0)),
+            std::sync::Arc::new(AtomicUsize::new(0)),
+        );
+        let mut backends = backends(RecordingOverlay::default());
+        backends.microphone = Box::new(CountedSwitch(others.clone()));
+        backends.dock_hiding = Box::new(CountedSwitch(others.clone()));
+        backends.focus_mode = Box::new(CountedSwitch(others.clone()));
+        backends.wifi = Box::new(CountedWifi(wifi.clone()));
+        let mut controller = Controller::new(backends);
+        assert!(
+            !controller.radios_changed(0.0, true, true),
+            "a hidden panel reads nothing"
+        );
+        assert_eq!(wifi.load(Ordering::SeqCst), 0);
+        controller.toggle(0.0);
+        let opened = others.load(Ordering::SeqCst);
+        assert_eq!((opened, wifi.load(Ordering::SeqCst)), (3, 1));
+
+        // the adapter changed: the Wi-Fi radio is not read, nor any other backend
+        assert!(controller.radios_changed(0.1, false, true));
+        assert_eq!(
+            (others.load(Ordering::SeqCst), wifi.load(Ordering::SeqCst)),
+            (3, 1)
+        );
+        // the Wi-Fi radio changed: it alone is read, and its tile shows the new reading
+        assert!(controller.radios_changed(0.2, true, false));
+        assert_eq!(
+            (others.load(Ordering::SeqCst), wifi.load(Ordering::SeqCst)),
+            (3, 2)
+        );
+        assert_eq!(
+            controller.controls().subtitle(Module::WiFi),
+            Some("reading 1")
+        );
+        assert!(!controller.radios_changed(0.3, false, false));
+        // its list is read with it only while its detail view is open
+        controller.show_detail(Some(Detail::WiFi));
+        assert_eq!(wifi.load(Ordering::SeqCst), 102);
+        assert!(controller.radios_changed(0.4, false, true));
+        assert_eq!(wifi.load(Ordering::SeqCst), 102);
+        assert!(controller.radios_changed(0.5, true, false));
+        assert_eq!(wifi.load(Ordering::SeqCst), 203);
+        assert_eq!(others.load(Ordering::SeqCst), 3);
+        // the periodic reading is not put off by the radios' changes
+        assert_eq!(controller.next_wakeup(0.5), Some(0.5));
     }
 
     /// An open panel whose choice of controls is kept in the returned store.

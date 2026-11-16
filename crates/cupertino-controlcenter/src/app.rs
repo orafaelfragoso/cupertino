@@ -14,7 +14,7 @@ use cupertino_controlcenter::layout::{BAR_MARGIN, SHADOW_TOP};
 use cupertino_controlcenter::lifecycle::{Phase, CLOSE_CURVE, OPEN_CURVE};
 use cupertino_controlcenter::model::{Device, Network, Output, VolumeState, WifiStatus};
 use cupertino_controlcenter::motion::Expansion;
-use cupertino_controlcenter::radios::Radios;
+use cupertino_controlcenter::radios::{Radio, Radios};
 use cupertino_controlcenter::system::{
     LogindLock, MprisPlayer, NotificationFocusMode, PowerdBrightness, SessionOverlay,
     UpowerKeyboard,
@@ -42,7 +42,7 @@ use cupertino_wayland_client::{
 };
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -180,20 +180,32 @@ pub enum Request {
     Appearance { dark: bool },
     /// The session's Reduce Motion: a detail view then cross-fades in place instead of growing out of its tile.
     ReduceMotion(bool),
-    /// A signal of the network or Bluetooth services said a radio changed: a shown panel reads again at once.
+    /// A radio's reading is out of date (a signal of the network or Bluetooth services, or a reading that arrived
+    /// late): a shown panel reads the radios of [`RADIOS_CHANGED`] again at once, and nothing else.
     RadiosChanged,
 }
 
-/// A [`Request::RadiosChanged`] waits in the queue: a burst of signals queues one.
-static RADIOS_CHANGE_WAITING: AtomicBool = AtomicBool::new(false);
+/// The radios whose change waits for a [`Request::RadiosChanged`] in the queue ([`radio_bit`]): a burst of signals
+/// queues one request.
+static RADIOS_CHANGED: AtomicU8 = AtomicU8::new(0);
 
-/// What [`Radios::on_change`] calls: queue one [`Request::RadiosChanged`] unless one waits already.
-fn radios_changed(requests: async_channel::Sender<Request>) -> impl Fn() + Send + Sync + 'static {
-    move || {
-        if !RADIOS_CHANGE_WAITING.swap(true, Ordering::AcqRel)
+fn radio_bit(radio: Radio) -> u8 {
+    match radio {
+        Radio::Network => 1,
+        Radio::Bluetooth => 2,
+    }
+}
+
+/// What [`Radios::on_change`] calls: note the radio, and queue one [`Request::RadiosChanged`] unless one waits
+/// already.
+fn radios_changed(
+    requests: async_channel::Sender<Request>,
+) -> impl Fn(Radio) + Send + Sync + 'static {
+    move |radio| {
+        if RADIOS_CHANGED.fetch_or(radio_bit(radio), Ordering::AcqRel) == 0
             && requests.try_send(Request::RadiosChanged).is_err()
         {
-            RADIOS_CHANGE_WAITING.store(false, Ordering::Release);
+            RADIOS_CHANGED.store(0, Ordering::Release);
         }
     }
 }
@@ -836,8 +848,12 @@ impl Application for Panel {
                     }
                     Request::RadiosChanged => {
                         // cleared before the reading, so a signal that comes during it asks for another
-                        RADIOS_CHANGE_WAITING.store(false, Ordering::Release);
-                        model.controller.backends_changed(now);
+                        let changed = RADIOS_CHANGED.swap(0, Ordering::AcqRel);
+                        model.controller.radios_changed(
+                            now,
+                            changed & radio_bit(Radio::Network) != 0,
+                            changed & radio_bit(Radio::Bluetooth) != 0,
+                        );
                     }
                 }
                 let mut commands = schedule(model);

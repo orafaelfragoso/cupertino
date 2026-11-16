@@ -62,7 +62,10 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
 
 - Every pane has content. Every file the panes write is applied at once by its process, so no pane shows the
   restart footer. A reading with a change signal is read again when the signal comes (`src/watch.rs`: one thread a
-  bus, rules on the objects the panes read, signals the shown pane does not read dropped there); a device plugged in
+  bus, rules on the objects the panes read, signals the shown pane does not read dropped there, and with them a
+  Bluetooth device's signal strength while the adapter discovers); a call to the network or Bluetooth service gives
+  up after the bounded wait of `cupertino-radios` (3 s), so a service that does not answer reads as not available
+  instead of holding the window for good (the reading itself is still made by the window's thread); a device plugged in
   or removed is heard from udev's announcements (`src/hotplug.rs`). The readings without a change signal (the sound
   server's, the display list, the interface addresses, a new notification's application) are read again every
   second (approximate) while their pane shows, and the Wi-Fi pane scans on open and every 10 s (approximate).

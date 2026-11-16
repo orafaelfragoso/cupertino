@@ -5,6 +5,7 @@ use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 
+use crate::bus::Bounded;
 use crate::types::{display_name, Device, KnownNetwork, Link, Network, Wifi};
 
 pub const NAME: &str = "org.cupertino.Network1";
@@ -39,10 +40,10 @@ fn device((index, name, kind, state, ssid, failure, address): DeviceRecord) -> D
 /// The whole reading: the radio, the devices, the networks in range and the saved ones.
 pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
     let p = proxy(connection)?;
-    let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
-    let networks: Vec<NetworkRecord> = p.call("GetNetworks", &())?;
+    let devices: Vec<DeviceRecord> = p.read("Devices")?;
+    let networks: Vec<NetworkRecord> = p.ask("GetNetworks", &())?;
     // a daemon that lists its saved networks (and can forget them) says so by answering
-    let listed: Option<Vec<(String, bool)>> = p.call("GetKnownNetworks", &()).ok();
+    let listed: Option<Vec<(String, bool)>> = p.ask("GetKnownNetworks", &()).ok();
     let in_list = |ssid: &str| networks.iter().find(|n| n.0 == ssid);
     let known: Vec<KnownNetwork> = match &listed {
         Some(listed) => listed
@@ -75,9 +76,9 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
     Ok(Wifi {
         known,
         can_forget: listed.is_some(),
-        enabled: p.get_property("WirelessEnabled")?,
+        enabled: p.read("WirelessEnabled")?,
         devices: devices.into_iter().map(device).collect(),
-        state: p.get_property("State")?,
+        state: p.read("State")?,
         networks: networks
             .into_iter()
             .map(|(ssid, signal, security, saved, connected)| Network {
@@ -97,28 +98,26 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
 /// The radio and its first Wi-Fi device, without the networks.
 pub fn link(connection: &Connection) -> zbus::Result<Link> {
     let p = proxy(connection)?;
-    let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
+    let devices: Vec<DeviceRecord> = p.read("Devices")?;
     Ok(Link {
-        enabled: p.get_property("WirelessEnabled")?,
+        enabled: p.read("WirelessEnabled")?,
         device: devices.into_iter().find(|d| d.2 == "wifi").map(device),
     })
 }
 
 pub fn set_wireless_enabled(connection: &Connection, on: bool) -> zbus::Result<()> {
-    proxy(connection)?
-        .set_property("WirelessEnabled", on)
-        .map_err(zbus::Error::from)
+    proxy(connection)?.write("WirelessEnabled", on)
 }
 
 /// `Connect`: with an empty passphrase an open network, or one whose credentials the service holds.
 pub fn join(connection: &Connection, ssid: &str, passphrase: &str) -> zbus::Result<()> {
-    proxy(connection)?.call("Connect", &(ssid, passphrase))
+    proxy(connection)?.ask("Connect", &(ssid, passphrase))
 }
 
 pub fn disconnect(connection: &Connection) -> zbus::Result<()> {
-    proxy(connection)?.call("Disconnect", &())
+    proxy(connection)?.ask("Disconnect", &())
 }
 
 pub fn scan(connection: &Connection) -> zbus::Result<()> {
-    proxy(connection)?.call("Scan", &())
+    proxy(connection)?.ask("Scan", &())
 }

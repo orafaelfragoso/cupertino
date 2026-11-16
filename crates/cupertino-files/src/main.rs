@@ -20,8 +20,8 @@ use cupertino_files::trash::Trash;
 use cupertino_files::window_prefs;
 use cupertino_kit::file_icons::FileIcons;
 
-const USAGE: &str =
-    "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop";
+const USAGE: &str = "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///] | --desktop | \
+     --gapplication-service";
 
 /// What the command line asks for.
 struct Options {
@@ -31,6 +31,8 @@ struct Options {
     terminal: Option<Vec<String>>,
     /// Show the desktop folder's items on the desktop instead of a browser window.
     desktop: bool,
+    /// Started by the session bus for a call: serve the names and open only the windows the calls ask for.
+    service: bool,
 }
 
 /// `[--terminal PROGRAM] [FOLDER]`.
@@ -38,6 +40,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut folder = None;
     let mut terminal = None;
     let mut desktop = false;
+    let mut service = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--terminal" => {
@@ -47,6 +50,7 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                 ])
             }
             "--desktop" => desktop = true,
+            "--gapplication-service" => service = true,
             a if a.starts_with('-') => return Err(format!("unexpected argument {a}")),
             _ if folder.is_some() => return Err(format!("unexpected argument {arg}")),
             _ => folder = Some(arg),
@@ -59,13 +63,17 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                 .map_err(|e| format!("{arg}: {e}"))
         })
         .transpose()?;
-    if desktop && (target.is_some() || terminal.is_some()) {
+    if desktop && (target.is_some() || terminal.is_some() || service) {
         return Err("--desktop takes no other argument".into());
+    }
+    if service && target.is_some() {
+        return Err("--gapplication-service takes no folder".into());
     }
     Ok(Options {
         target,
         terminal,
         desktop,
+        service,
     })
 }
 
@@ -92,6 +100,19 @@ fn main() -> ExitCode {
     }
     // before any thread starts, so no program Files starts inherits the launch's spent token
     let token = instance::take_activation_token();
+    if options.service {
+        // the bus started Files for a call to one of its names: the running Files already takes those calls
+        let service = match zbus::connection::Builder::session().and_then(Service::serve) {
+            Ok(service) => service,
+            Err(zbus::Error::NameTaken) => return ExitCode::SUCCESS,
+            Err(e) => {
+                diag::exit_error(&e);
+                eprintln!("cupertino-files: cannot claim {}: {e}", instance::BUS_NAME);
+                return ExitCode::FAILURE;
+            }
+        };
+        return run(start(options, Some(service), None));
+    }
     let request = match &options.target {
         Some(target) => Request::Open(vec![target.clone()]),
         None => Request::Activate,
@@ -117,7 +138,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let start = match start(options, service, token) {
+    run(start(options, service, token))
+}
+
+/// Run Files from `start`, or say why it cannot start.
+fn run(start: io::Result<Start>) -> ExitCode {
+    let start = match start {
         Ok(start) => start,
         Err(e) => {
             diag::exit_error(&e);
@@ -172,33 +198,47 @@ fn start(options: Options, service: Option<Service>, token: Option<String>) -> i
     let system = zbus::blocking::Connection::system()
         .map_err(|e| eprintln!("cupertino-files: no removable media: {e}"))
         .ok();
-    Start::open(
-        folder.clone(),
-        places,
-        Some(types),
-        dirs.data_home.join(recents::XBEL_NAME),
-        notices,
-        Box::new(applications),
-        options.terminal,
-        system,
-    )
-    .map(|start| {
-        let start = start
-            .with_file_icons(icons)
-            .with_app_icons(
-                cupertino_icons::ThemeIcons::new(&assets),
-                cupertino_icons::SystemIcons::new(&assets),
-            )
-            .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
-            .with_places_source(source, watched)
-            .with_instance(service)
-            .with_activation_token(token);
-        match window_prefs::location() {
-            Some(file) => start.with_prefs_file(file),
-            None => start,
-        }
-    })
-    .map_err(|e| io::Error::new(e.kind(), format!("cannot open {}: {e}", folder.display())))
+    let recents = dirs.data_home.join(recents::XBEL_NAME);
+    let opened = match options.service {
+        // started for a call, which says what to open
+        true => Ok(Start::idle(
+            places,
+            Some(types),
+            recents,
+            notices,
+            Box::new(applications),
+            options.terminal,
+            system,
+        )),
+        false => Start::open(
+            folder.clone(),
+            places,
+            Some(types),
+            recents,
+            notices,
+            Box::new(applications),
+            options.terminal,
+            system,
+        ),
+    };
+    opened
+        .map(|start| {
+            let start = start
+                .with_file_icons(icons)
+                .with_app_icons(
+                    cupertino_icons::ThemeIcons::new(&assets),
+                    cupertino_icons::SystemIcons::new(&assets),
+                )
+                .with_thumbnails(Thumbnailer::from_env(kit::APP_ID))
+                .with_places_source(source, watched)
+                .with_instance(service)
+                .with_activation_token(token);
+            match window_prefs::location() {
+                Some(file) => start.with_prefs_file(file),
+                None => start,
+            }
+        })
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot open {}: {e}", folder.display())))
 }
 
 /// The default-application resolver of the session's directories and desktops, read again at each open.

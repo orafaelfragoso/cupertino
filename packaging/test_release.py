@@ -65,6 +65,23 @@ class ApplicationsTest(unittest.TestCase):
             check(SHIPPED + ['crates/cupertino-settings/data/applications/cupertino-mimeapps.list'])
 
 
+class FileManagerServiceTest(unittest.TestCase):
+    DEST = f'usr/share/dbus-1/services/{release.FILE_MANAGER_SERVICE}'
+
+    def test_the_bus_starts_files_for_the_file_manager_name(self):
+        files = {rel: src for rel, src, _mode, _conf in release.runtime()}
+        self.assertIn(self.DEST, files)
+        service = configparser.ConfigParser()
+        service.optionxform = str
+        service.read(release.ROOT / files[self.DEST])
+        self.assertEqual(service['D-BUS Service']['Name'], 'org.freedesktop.FileManager1')
+        # an absolute path to the shipped binary, started without a window until the call says what to show
+        self.assertEqual(service['D-BUS Service']['Exec'], '/usr/bin/cupertino-files --gapplication-service')
+        self.assertIn('cupertino-files', release.BINARIES)
+        self.assertNotEqual(release.FILE_MANAGER_SERVICE, 'org.freedesktop.FileManager1.service',
+                            "another file manager's package ships that file name")
+
+
 class PortalsConfTest(unittest.TestCase):
     CONF = 'usr/share/xdg-desktop-portal/cupertino-portals.conf'
 

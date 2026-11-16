@@ -7,6 +7,16 @@
 //! * `Open` opens a window on each folder URI: `file://` (local) and `trash:///`. Anything else refuses the whole call.
 //! * `ActivateAction` takes `show-progress` (the progress window, when it lists something) and `new-window`.
 //!
+//! The same process serves `org.freedesktop.FileManager1` at [`FILE_MANAGER_PATH`], the name other programs' "Show in
+//! folder" calls, when no other file manager holds it (it waits in line for the name otherwise):
+//!
+//! * `ShowItems` opens a window on each item's folder with the items selected, the keyboard on the first, which the
+//!   window scrolls into sight; items of one folder share a window, and a window already showing the folder is used.
+//! * `ShowFolders` opens a window on each folder, as `Open` does.
+//! * `ShowItemProperties` selects the items as `ShowItems` does: Files has no information window.
+//!
+//! Each takes `file://` URIs (an absolute path is taken too) and the caller's startup id, an activation token.
+//!
 //! An `activation-token` (or else `desktop-startup-id`) in the platform data raises the window the call opens or
 //! brings forward. Only an unsandboxed process of the same user may call: the caller's process is named by the bus
 //! daemon's credentials and refused when it runs in a Flatpak or a Snap.
@@ -39,6 +49,11 @@ pub const BUS_NAME: &str = "org.cupertino.Files";
 /// Where the application object is: the bus name with its dots as slashes.
 pub const OBJECT_PATH: &str = "/org/cupertino/Files";
 pub const INTERFACE: &str = "org.freedesktop.Application";
+/// The name programs ask to show files in their folder, which Files claims beside [`BUS_NAME`].
+pub const FILE_MANAGER_NAME: &str = "org.freedesktop.FileManager1";
+/// Where the file manager object is, and its interface.
+pub const FILE_MANAGER_PATH: &str = "/org/freedesktop/FileManager1";
+pub const FILE_MANAGER_INTERFACE: &str = "org.freedesktop.FileManager1";
 
 /// How long a launch waits for the running Files to answer. A Files that has not answered by then and still owns the
 /// name is taken to hang: the launch fails rather than starting a second process.
@@ -179,6 +194,8 @@ pub enum Request {
     Activate,
     Open(Vec<Target>),
     Action(Action),
+    /// Each item selected in a window on its folder; the trash is opened itself.
+    ShowItems(Vec<Target>),
 }
 
 /// A call that reached the window's thread: what it asks, the activation token it brought, and the answer the bus
@@ -216,18 +233,28 @@ impl Service {
             wake,
             own_uid: own_uid(),
         };
+        let file_manager = FileManager(object.clone());
         zbus::block_on(async {
-            let connection = builder.serve_at(OBJECT_PATH, object)?.build().await?;
+            let connection = builder
+                .serve_at(OBJECT_PATH, object)?
+                .serve_at(FILE_MANAGER_PATH, file_manager)?
+                .build()
+                .await?;
             // after the object exists, so no call finds the name without it; a plain call, so the connection reads no
             // signals (zbus's own `request_name` follows the name's loss with a signal stream)
-            match request_name(&connection).await? {
-                PRIMARY_OWNER | ALREADY_OWNER => Ok(Service {
-                    connection,
-                    calls,
-                    woken,
-                }),
-                _ => Err(zbus::Error::NameTaken),
+            match request_name(&connection, BUS_NAME, DO_NOT_QUEUE).await? {
+                PRIMARY_OWNER | ALREADY_OWNER => {}
+                _ => return Err(zbus::Error::NameTaken),
             }
+            // in line behind another file manager that holds it: the bus hands it over once that one lets go
+            if let Err(e) = request_name(&connection, FILE_MANAGER_NAME, 0).await {
+                eprintln!("cupertino-files: cannot claim {FILE_MANAGER_NAME}: {e}");
+            }
+            Ok(Service {
+                connection,
+                calls,
+                woken,
+            })
         })
     }
 
@@ -252,13 +279,15 @@ impl Drop for Service {
         let _ = std::thread::Builder::new()
             .name("files-release".into())
             .spawn(move || {
-                let _ = zbus::block_on(connection.call_method(
-                    Some("org.freedesktop.DBus"),
-                    "/org/freedesktop/DBus",
-                    Some("org.freedesktop.DBus"),
-                    "ReleaseName",
-                    &(BUS_NAME,),
-                ));
+                for name in [BUS_NAME, FILE_MANAGER_NAME] {
+                    let _ = zbus::block_on(connection.call_method(
+                        Some("org.freedesktop.DBus"),
+                        "/org/freedesktop/DBus",
+                        Some("org.freedesktop.DBus"),
+                        "ReleaseName",
+                        &(name,),
+                    ));
+                }
             });
     }
 }
@@ -269,14 +298,14 @@ const DO_NOT_QUEUE: u32 = 4;
 const PRIMARY_OWNER: u32 = 1;
 const ALREADY_OWNER: u32 = 4;
 
-async fn request_name(connection: &Connection) -> zbus::Result<u32> {
+async fn request_name(connection: &Connection, name: &str, flags: u32) -> zbus::Result<u32> {
     connection
         .call_method(
             Some("org.freedesktop.DBus"),
             "/org/freedesktop/DBus",
             Some("org.freedesktop.DBus"),
             "RequestName",
-            &(BUS_NAME, DO_NOT_QUEUE),
+            &(name, flags),
         )
         .await?
         .body()
@@ -289,6 +318,7 @@ fn own_uid() -> u32 {
 }
 
 /// The application object on the bus.
+#[derive(Clone)]
 struct Application {
     calls: async_channel::Sender<Call>,
     wake: async_channel::Sender<()>,
@@ -385,6 +415,97 @@ impl Application {
             .await
             .map_err(|_| zbus::fdo::Error::Disconnected("Files is quitting".into()))
     }
+}
+
+/// The file manager object on the bus: its calls go where the application object's go.
+struct FileManager(Application);
+
+#[zbus::interface(name = "org.freedesktop.FileManager1")]
+impl FileManager {
+    async fn show_items(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        uris: Vec<String>,
+        startup_id: String,
+    ) -> zbus::fdo::Result<()> {
+        self.show(connection, &header, &uris, &startup_id, Request::ShowItems)
+            .await
+    }
+
+    async fn show_folders(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        uris: Vec<String>,
+        startup_id: String,
+    ) -> zbus::fdo::Result<()> {
+        self.show(connection, &header, &uris, &startup_id, Request::Open)
+            .await
+    }
+
+    /// Files has no information window: the items are shown selected, as `ShowItems` shows them.
+    async fn show_item_properties(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        uris: Vec<String>,
+        startup_id: String,
+    ) -> zbus::fdo::Result<()> {
+        self.show(connection, &header, &uris, &startup_id, Request::ShowItems)
+            .await
+    }
+}
+
+impl FileManager {
+    /// Admit the caller, then hand over what `request` makes of the items of `uris`, raised with `startup_id`. No
+    /// item is nothing to do.
+    async fn show(
+        &self,
+        connection: &Connection,
+        header: &zbus::message::Header<'_>,
+        uris: &[String],
+        startup_id: &str,
+        request: fn(Vec<Target>) -> Request,
+    ) -> zbus::fdo::Result<()> {
+        self.0.admit(connection, header).await?;
+        let items = items_of(uris)?;
+        let token = startup_token(startup_id)?;
+        if items.is_empty() {
+            return Ok(());
+        }
+        self.0.hand_over(request(items), token).await
+    }
+}
+
+/// What the URIs of a file manager call name, as [`Target::of_uri`] reads them, an absolute path taken as it is; no
+/// URI is no item, and one URI that names no local item refuses them all.
+fn items_of(uris: &[String]) -> Result<Vec<Target>, zbus::fdo::Error> {
+    if uris.len() > MAX_URIS {
+        return Err(zbus::fdo::Error::InvalidArgs(format!(
+            "a call takes at most {MAX_URIS} URIs"
+        )));
+    }
+    uris.iter()
+        .map(|uri| match uri.starts_with('/') {
+            true if uri.len() > MAX_URI || uri.contains('\0') => {
+                Err(format!("{uri}: not a usable path"))
+            }
+            true => Ok(Target::Folder(PathBuf::from(uri))),
+            false => Target::of_uri(uri),
+        })
+        .map(|item| item.map_err(zbus::fdo::Error::InvalidArgs))
+        .collect()
+}
+
+/// The activation token of a call's startup id: none when it is empty; one too long refuses the call.
+fn startup_token(startup_id: &str) -> Result<Option<String>, zbus::fdo::Error> {
+    if startup_id.len() > MAX_TOKEN {
+        return Err(zbus::fdo::Error::InvalidArgs(format!(
+            "the startup id exceeds {MAX_TOKEN} bytes"
+        )));
+    }
+    Ok((!startup_id.is_empty()).then(|| startup_id.to_owned()))
 }
 
 /// The folders of `uris`; one URI that is not a local folder's or the trash's refuses them all.
@@ -684,6 +805,18 @@ async fn forward(
                 )
                 .await
         }
+        Request::ShowItems(targets) => {
+            let uris: Vec<String> = targets.iter().map(Target::uri).collect();
+            connection
+                .call_method(
+                    Some(owner.as_str()),
+                    FILE_MANAGER_PATH,
+                    Some(FILE_MANAGER_INTERFACE),
+                    "ShowItems",
+                    &(uris, token.unwrap_or_default()),
+                )
+                .await
+        }
         Request::Action(action) => {
             let parameter: Vec<Value<'_>> = Vec::new();
             connection
@@ -849,6 +982,34 @@ mod tests {
             targets_of(&one_bad).is_err(),
             "one bad URI refuses them all"
         );
+    }
+
+    #[test]
+    fn a_file_manager_call_takes_file_uris_and_absolute_paths() {
+        let items =
+            |uris: &[&str]| items_of(&uris.iter().map(|u| u.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            items(&["file:///home/u/My%20File.txt", "/srv/a b", "trash:///"]),
+            Ok(vec![
+                Target::Folder("/home/u/My File.txt".into()),
+                Target::Folder("/srv/a b".into()),
+                Target::Trash
+            ])
+        );
+        assert_eq!(items(&[]), Ok(Vec::new()), "no URI is no item");
+        for bad in [
+            "relative/x",
+            "http://example.com/",
+            "file://host/x",
+            "/a\0b",
+        ] {
+            assert!(items(&["/tmp/x", bad]).is_err(), "{bad:?} refuses the call");
+        }
+        assert!(items(&vec!["/tmp"; MAX_URIS + 1]).is_err());
+
+        assert_eq!(startup_token(""), Ok(None));
+        assert_eq!(startup_token("xdg-token"), Ok(Some("xdg-token".into())));
+        assert!(startup_token(&"t".repeat(MAX_TOKEN + 1)).is_err());
     }
 
     #[test]

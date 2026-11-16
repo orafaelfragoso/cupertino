@@ -55,6 +55,20 @@ environment at startup, so no program it starts inherits it, and raises its own 
   path without a scheme, a file in the trash) refuses the whole call with `InvalidArgs`. `ActivateAction` takes
   `show-progress` (the progress window, when it lists something, as Window › Show Progress) and `new-window` (a window
   on the home folder), with no parameter.
+* The same connection serves `org.freedesktop.FileManager1` at `/org/freedesktop/FileManager1` and asks for that name
+  in line (flags 0): another file manager that holds it keeps it until it lets go. `ShowItems(as uris, s startup_id)`
+  selects each item in a window on its folder (`Browser::reveal`: the selection once the folder is read, the keyboard
+  on the first item, which scrolls it into sight); the items of one folder share a window, the newest window showing
+  that folder without a search is used, a folder item is selected in its parent, and the trash or the root shows
+  itself. `ShowFolders` is `Open`. `ShowItemProperties` is `ShowItems`: there is no information window. The URIs are
+  read as `Open` reads them, an absolute path is taken as well, an empty list is nothing to do, and the startup id is
+  the activation token. An item that does not exist is a notice; the call still succeeds. The callers are admitted as
+  `Open`'s are; a sandboxed app reaches the method through the portal's Open Directory.
+* `cupertino-files --gapplication-service` is what the bus runs for that name when Files is not running
+  (`data/dbus-1/services/org.cupertino.Files.FileManager1.service`, installed under a name of its own because other file
+  managers ship `org.freedesktop.FileManager1.service`). It claims both names, opens no window (`Start::idle`) and
+  exits once the call's windows are closed, or after `kit::CALL_WAIT` (10 s) when no call comes; when Files already
+  runs, it exits at once.
 * The window a call opens or brings forward is raised with the call's token once it has been shown
   (`WindowRequest::Activate`); with several folders, the last window opened is raised. A forwarded `--terminal` is
   ignored: the running Files keeps its own.
@@ -462,7 +476,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `notice` (feature `app`) | failures as notifications | `failure`, `unopened`, `bad_name`, `finished` (an operation that ended unseen) → `Notice`; `Notices::{start, post, flush}`; `shown`, `escape`, `explained` (an error as a sentence for a window) |
 | `kit` (feature `app`) | the window on CupertinoKit; driven headless through `cupertino-ui-test` | `prepare(Start::open(folder, places, types, recents, notices, applications, terminal))`, with `with_file_icons`, `with_thumbnails`, `with_places_source`, `with_instance` and `with_activation_token`, then `run` or a `TestDriver<Files>`; `grid` (the icon view), `list` (the list view's presses and band), `band` (the rubber band), `clicks` (double-click and click-to-rename), `toolbar` (pop-up buttons, path bar folders), `sidebar` (material, keyboard watch), `places` (live places), `transfer` (the worker of a file operation: `Work` → `Outcome`), `jobs` (the file operations of the process and when the progress window shows; `PROGRESS_WINDOW_DELAY`, `Start::with_progress_delay`), `progress` (the progress window, and the click on a window's row that shows it), `remote` (what the calls of later launches and of the desktop do), `context` (context menus), `search` (the field's slot and "No Results"), `dragged` (drag images), `drops` (drops onto folders, places, the path bar and the folder shown), `spring` (spring-loaded folders and the way back), `item_icons` (items' icons, thumbnails and previews), `columns` (the column view), `gallery` (the gallery), `peek` (the preview window), `tabs` (the tab bar and a tab's parked state), `tag_editor` (the tags popover) |
 | `thumbnail_service` | thumbnails of the items in view | `ThumbnailService::{new, want, forget, get, queued, memory}`, `Stamp`, `has_thumbnail`, `MEMORY_BUDGET`, `WORKERS` |
-| `instance` (feature `app`) | one process per session | `Service::serve` (the name and `org.freedesktop.Application`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
+| `instance` (feature `app`) | one process per session | `Service::serve` (the names, `org.freedesktop.Application` and `org.freedesktop.FileManager1`; `take` the waiting `Call`s), `serve_or_forward` → `Launch::{Serve, Forwarded}`, `Target::{of_argument, of_uri, uri, folder}`, `Request`, `Action`, `take_activation_token`, `FORWARD_TIMEOUT`, `BUS_NAME`, `OBJECT_PATH` |
 | `main` (feature `app`) | the binary | arguments, the hand-over to a running Files, the session's places, types, associations and buses, then `kit::run` |
 
 ### Measured defaults

@@ -76,6 +76,8 @@ COMPLETIONS = (('bash', 'usr/share/bash-completion/completions/cupertino'),
                ('fish', 'usr/share/fish/vendor_completions.d/cupertino.fish'))
 # Besides an app's own entry, the only file an app crate may ship there: the session's default applications.
 MIMEAPPS = 'cupertino-mimeapps.list'
+# The activation file of the file manager name Files serves.
+FILE_MANAGER_SERVICE = 'org.cupertino.Files.FileManager1.service'
 PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cupertino-autologin')
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
@@ -184,6 +186,10 @@ def runtime(gendir=None):
         fail(f'crates/*/data/applications:\n  {e}')
     files.append(('usr/share/xdg-desktop-portal/portals/cupertino.portal', 'crates/cupertino-portal/data/cupertino.portal', 0o644,
                   False))
+    # The session bus starts Files for a "show in folder" call when it is not running; named apart from the bus name,
+    # which other file managers' activation files carry.
+    files.append((f'usr/share/dbus-1/services/{FILE_MANAGER_SERVICE}',
+                  f'crates/cupertino-files/data/dbus-1/services/{FILE_MANAGER_SERVICE}', 0o644, False))
     files += [(f'usr/share/applications/{a.name}', a.relative_to(ROOT).as_posix(), 0o644, False) for a in apps]
     files += [(f'usr/lib/systemd/system/{u}.service', f'{f}/usr/lib/systemd/system/{u}.service', 0o644, False)
               for u in UNITS]

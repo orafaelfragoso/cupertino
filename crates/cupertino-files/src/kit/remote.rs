@@ -1,9 +1,10 @@
 //! What the calls of later launches and of the desktop do ([`crate::instance`]): `Activate` brings the most recently
 //! opened browser window forward (or, with none open, the hidden progress window while it has something to list, else
-//! a new window on the home folder), `Open` opens a window on each folder, and the actions show the progress window or open
-//! a new window. A click on the notice of a file operation's end shows the progress window with it, as `Activate` does
-//! when nothing is left to list. The window a call opens or brings forward is raised with the call's activation token
-//! once it is shown.
+//! a new window on the home folder), `Open` opens a window on each folder, `ShowItems` selects each item in a window on
+//! its folder (one window a folder, a window already showing it when there is one), and the actions show the progress
+//! window or open a new window. A click on the notice of a file operation's end shows the progress window with it, as
+//! `Activate` does when nothing is left to list. The window a call opens or brings forward is raised with the call's
+//! activation token once it is shown.
 
 use std::path::PathBuf;
 
@@ -30,6 +31,10 @@ impl Model {
         };
         let calls = instance.take();
         let mut commands = vec![woken(instance.woken(), Message::Remote)];
+        if !calls.is_empty() {
+            // the call a Files started without a window waits for came: it exits once nothing is left open
+            self.awaiting_call = false;
+        }
         for call in calls {
             commands.extend(self.remote_call(&call));
             call.done();
@@ -57,6 +62,7 @@ impl Model {
                 commands.extend(last.map(|id| raise(window_key(id), token)));
                 commands
             }
+            Request::ShowItems(targets) => self.show_items(targets, token),
             Request::Action(Action::NewWindow) => self.open_home(token),
             Request::Action(Action::ShowProgress) => {
                 // nothing to list: the progress window stays closed, as Window › Show Progress is disabled then
@@ -118,6 +124,69 @@ impl Model {
             Some((id, wake)) => vec![wake, raise(window_key(id), token)],
             None => Vec::new(),
         }
+    }
+
+    /// Show each item of `targets` selected in a window on its folder, raised with `token`: the items of one folder in
+    /// one window, the newest window that shows the folder (without a search) when there is one, else a new one; the
+    /// trash is opened itself, and the root shows itself. An item that does not exist is a notice.
+    fn show_items(&mut self, targets: &[Target], token: Option<String>) -> Vec<Command<Message>> {
+        // each folder with its items, in the order the call names them
+        let mut folders: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+        for target in targets {
+            let (folder, item) = match target {
+                Target::Trash => match self.folder_of(target) {
+                    Some(folder) => (folder, None),
+                    None => continue,
+                },
+                Target::Folder(item) => {
+                    if let Err(e) = std::fs::symlink_metadata(item) {
+                        self.session.failed(Failed::Open, &[item], &e);
+                        continue;
+                    }
+                    match item.parent() {
+                        Some(folder) => (folder.to_path_buf(), Some(item.clone())),
+                        None => (item.clone(), None),
+                    }
+                }
+            };
+            match folders.iter_mut().find(|(f, _)| *f == folder) {
+                Some((_, items)) => items.extend(item),
+                None => folders.push((folder, item.into_iter().collect())),
+            }
+        }
+        let mut commands = Vec::new();
+        let mut last = None;
+        for (folder, items) in folders {
+            let shown = self
+                .windows
+                .iter()
+                .rev()
+                .find(|(_, w)| w.browser.dir() == folder && w.search.is_empty())
+                .map(|(&id, _)| id);
+            let id = match shown {
+                Some(id) => id,
+                None => match self.open_window(folder) {
+                    Some((id, wake)) => {
+                        commands.push(wake);
+                        id
+                    }
+                    None => continue,
+                },
+            };
+            last = Some(id);
+            if items.is_empty() {
+                continue;
+            }
+            let window = self.windows.get_mut(&id).expect("the window is open");
+            window.browser.reveal(items);
+            // a folder already read is selected at once; a new window's once its listing is read
+            if let Some(path) = window.browser.take_revealed() {
+                commands.extend(window.focus_item(id, &path));
+            }
+        }
+        // a token raises one window: the last one shown, which the others open beneath
+        commands.extend(last.map(|id| raise(window_key(id), token)));
+        commands
     }
 
     /// The folder a window shows for `target`; a trash that cannot be made is a notice.

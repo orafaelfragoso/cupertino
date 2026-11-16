@@ -59,6 +59,16 @@ Files go to the Desktop folder unless `~/.config/cupertino/screenshot.conf` sets
 
 The first time an app asks to see your windows and their controls and use the pointer and keyboard, or to take pictures of the screen, you are asked, and your answer is remembered for that app in `~/.config/cupertino/desktop-control.conf`. **Settings > Privacy > Desktop Control** and **Settings > Privacy > Screen Capture** list the apps that asked, each by the name of its app or, for a program that runs without a window of its own, by its file name and full path. Turning an app's switch off stops it at once, even in the middle of what it is doing; turning it on allows it again. Forget removes the app, which then asks again the next time. The two pages are separate: an app can be allowed to take pictures of the screen and not to control the desktop. The file must be yours and writable by no one else; otherwise the pages say why and change nothing.
 
+## Show in Files from other apps
+
+Other apps' "Show in folder" commands open Files on the item's folder with the item selected and scrolled into view: VS Code's Reveal in File Explorer, Electron apps' `shell.showItemInFolder`, a browser's Show in folder for a download, and the portal's Open Directory, which sandboxed apps use. Files answers the session bus name `org.freedesktop.FileManager1`:
+
+- `ShowItems` selects the items in a window on their folder. Items of one folder share a window, and a window that already shows that folder (with no search typed) is used; items of different folders get a window each. A folder named as an item is selected in its enclosing folder.
+- `ShowFolders` opens a window on each folder.
+- `ShowItemProperties` selects the items as `ShowItems` does; Files has no information window yet.
+
+The app's startup id raises the window, so it comes in front of the app that asked. An item that no longer exists is a notice; the others are still shown. When Files is not running, the bus starts it for the call (`/usr/share/dbus-1/services/org.cupertino.Files.FileManager1.service`), with no window of its own: it opens what the call asks for and exits when that window closes, or after 10 seconds when no call comes. When another file manager already holds the name, it keeps answering until it quits, and Files takes over then.
+
 ## Saved passwords
 
 Apps keep saved passwords and tokens in the keyring: gnome-keyring, which the packages install. Logging in with your password unlocks it, and logging out locks it again. After an automatic login, or after your password was changed with `passwd`, it stays locked: the first app that needs it opens a window that asks for the keyring's password, and Cancel there refuses the app. Unlocking the lock screen with your password also unlocks the keyring.

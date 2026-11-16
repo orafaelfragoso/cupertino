@@ -261,8 +261,10 @@ enum BarEvent {
     WindowControls(u32),
     /// Version 16: whether the active window is in full screen.
     WindowFullScreen(u32),
-    /// Version 24: the process behind the active window, its kind and the class of its keys.
-    ActiveClient(u32, u32, u32),
+    /// Version 24: the process behind the active window and its kind.
+    ActiveClient(u32, u32),
+    /// Version 25: the class of the active window's keys.
+    ActiveClientKeys(u32),
     Engage,
     EngageHelp,
     ScreenCapture(u32),
@@ -486,9 +488,8 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             },
             E::WindowControls { enabled } => BarEvent::WindowControls(raw(enabled)),
             E::WindowFullScreen { full_screen } => BarEvent::WindowFullScreen(full_screen),
-            E::ActiveClient { pid, kind, keys } => {
-                BarEvent::ActiveClient(pid, raw(kind), raw(keys))
-            }
+            E::ActiveClient { pid, kind } => BarEvent::ActiveClient(pid, raw(kind)),
+            E::ActiveClientKeys { keys } => BarEvent::ActiveClientKeys(raw(keys)),
             E::Engage => BarEvent::Engage,
             E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
@@ -1393,11 +1394,19 @@ fn active_client(bar: &BarClient) -> Option<(u32, u32)> {
     active_client_keys(bar).map(|(pid, kind, _)| (pid, kind))
 }
 
-/// The `active_client` of the latest group that has one.
-fn active_client_keys(bar: &BarClient) -> Option<(u32, u32, u32)> {
-    bar.groups().iter().rev().flatten().find_map(|e| match e {
-        BarEvent::ActiveClient(pid, kind, keys) => Some((*pid, *kind, *keys)),
-        _ => None,
+/// The `active_client` and `active_client_keys` of the latest group that has `active_client`; the keys are `None`
+/// when that group has none.
+fn active_client_keys(bar: &BarClient) -> Option<(u32, u32, Option<u32>)> {
+    bar.groups().iter().rev().find_map(|group| {
+        let (pid, kind) = group.iter().find_map(|e| match e {
+            BarEvent::ActiveClient(pid, kind) => Some((*pid, *kind)),
+            _ => None,
+        })?;
+        let keys = group.iter().find_map(|e| match e {
+            BarEvent::ActiveClientKeys(keys) => Some(*keys),
+            _ => None,
+        });
+        Some((pid, kind, keys))
     })
 }
 
@@ -1469,9 +1478,9 @@ fn the_process_behind_the_active_window_is_read_once_per_connection() {
 }
 
 #[test]
-fn a_version_24_bar_is_told_how_the_active_windows_keys_reach_it() {
+fn a_version_25_bar_is_told_how_the_active_windows_keys_reach_it() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = bar_at(&mut h, 24);
+    let bar = bar_at(&mut h, 25);
     // the window that is not among `before`, focused: one process gets the focus on map only once
     let focus_new = |h: &mut Harness, before: &[WindowId]| {
         let window = h
@@ -1488,7 +1497,7 @@ fn a_version_24_bar_is_told_how_the_active_windows_keys_reach_it() {
     let _kit = AppClient::spawn_with(stream, "org.example.kit-editor", true);
     h.mapped_window(1);
     h.wait_until("the toolkit's class", |_| {
-        active_client_keys(&bar).map(|c| c.2) == Some(1)
+        active_client_keys(&bar).map(|c| c.2) == Some(Some(1))
     });
     // the toolkit, not the name, makes a window first-party
     let before = ids(&h);
@@ -1496,15 +1505,33 @@ fn a_version_24_bar_is_told_how_the_active_windows_keys_reach_it() {
     h.mapped_window(2);
     focus_new(&mut h, &before);
     h.wait_until("another application's class", |_| {
-        active_client_keys(&bar).map(|c| c.2) == Some(0)
+        active_client_keys(&bar).map(|c| c.2) == Some(Some(0))
     });
     let before = ids(&h);
     let _terminal = AppClient::spawn(h.socket_path(), "Alacritty");
     h.mapped_window(3);
     focus_new(&mut h, &before);
     h.wait_until("a terminal's class", |_| {
-        active_client_keys(&bar).map(|c| c.2) == Some(2)
+        active_client_keys(&bar).map(|c| c.2) == Some(Some(2))
     });
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_24_bar_is_sent_the_active_client_without_the_class_of_its_keys() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 24);
+    let stream = UnixStream::connect(h.socket_path()).expect("connecting to the compositor");
+    let _kit = AppClient::spawn_with(stream, "org.example.kit-editor", true);
+    h.mapped_window(1);
+    h.wait_until("the window's process", |_| {
+        active_client(&bar) == Some((std::process::id(), 0))
+    });
+    assert_eq!(
+        active_client_keys(&bar).map(|c| c.2),
+        Some(None),
+        "a version 24 bar is sent active_client as version 24 has it, and no class of the keys"
+    );
     assert_eq!(bar.error(), None);
 }
 

@@ -24,11 +24,33 @@ pub type ExecutableOf = Box<dyn Fn(&DisplayHandle, &Client) -> Option<PathBuf>>;
 /// put it there: the file and every folder above it belong to root and nobody else may write to them. A program the user
 /// could write or copy into place names nothing, and a process id reused while it was read names nothing either. A
 /// program replaced since the process started it, as a package upgrade does, is named by the path it was started from.
+/// The file the process runs must be the one at that path here, not a file of the same path in another mount namespace
+/// (a folder or file mounted over it there).
 pub fn trusted_executable(display: &DisplayHandle, client: &Client) -> Option<PathBuf> {
     let process = peer_process(display, client)?;
-    let exe = started_from(std::fs::read_link(format!("/proc/{}/exe", process.0)).ok()?);
+    let link = format!("/proc/{}/exe", process.0);
+    let exe = started_from(std::fs::read_link(&link).ok()?);
+    // through the link: the file the process runs, wherever it lies
+    let running = std::fs::metadata(&link).ok()?;
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", process.0)).ok()?;
-    (start_time(&stat)? == process.1 && system_owned(&exe)).then_some(exe)
+    (start_time(&stat)? == process.1 && trusted_program(&running, &exe)).then_some(exe)
+}
+
+/// Whether a process that runs the file `running` (its metadata through `/proc/<pid>/exe`) started from `exe` runs a
+/// program only the system can have installed: `exe` is [`system_owned`] and `running` is the file at `exe` in this
+/// server's mount namespace, the same device and inode, or, for a program removed or replaced since it started, a
+/// removed file on that device that belonged to root and nobody else could write to.
+fn trusted_program(running: &std::fs::Metadata, exe: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(installed) = std::fs::metadata(exe) else {
+        return false;
+    };
+    let same_file = running.dev() == installed.dev() && running.ino() == installed.ino();
+    let replaced = running.dev() == installed.dev()
+        && running.nlink() == 0
+        && running.uid() == 0
+        && running.mode() & 0o022 == 0;
+    system_owned(exe) && (same_file || replaced)
 }
 
 /// Names the activation token a client's process was started with; [`launch_token`] in the server.
@@ -174,5 +196,45 @@ mod tests {
         assert!(!system_owned(&mine), "a file of the user's");
         std::fs::remove_file(&mine).unwrap();
         assert!(!system_owned(Path::new("relative/sh")));
+    }
+
+    #[test]
+    fn a_program_is_trusted_only_when_the_file_it_runs_is_the_one_at_its_path() {
+        let sh = std::fs::canonicalize("/bin/sh").unwrap();
+        let sh_running = std::fs::metadata(&sh).unwrap();
+        assert!(
+            trusted_program(&sh_running, &sh),
+            "the system's own program"
+        );
+        // a process in another mount namespace runs a file of the user's mounted at the system program's path: the link
+        // names the path, the file it runs is the user's
+        let mine = std::env::temp_dir().join(format!("cupertino-exe-ns-{}", std::process::id()));
+        std::fs::write(&mine, b"").unwrap();
+        let mine_running = std::fs::metadata(&mine).unwrap();
+        assert!(
+            !trusted_program(&mine_running, &sh),
+            "a file of the user's at a system path"
+        );
+        // the user's file removed while it runs, as a replaced program's is
+        let open = std::fs::File::open(&mine).unwrap();
+        std::fs::remove_file(&mine).unwrap();
+        let removed = open.metadata().unwrap();
+        assert_eq!(std::os::unix::fs::MetadataExt::nlink(&removed), 0);
+        assert!(
+            !trusted_program(&removed, &sh),
+            "a removed file of the user's"
+        );
+        // another system program at that path is another file
+        let other = ["/bin/true", "/usr/bin/env", "/bin/ls"]
+            .into_iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .find(|p| *p != sh)
+            .unwrap();
+        assert!(
+            !trusted_program(&std::fs::metadata(&other).unwrap(), &sh),
+            "the system's {} at the path of {}",
+            other.display(),
+            sh.display()
+        );
     }
 }

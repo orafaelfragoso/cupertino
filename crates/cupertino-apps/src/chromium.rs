@@ -12,7 +12,9 @@
 //! Chromium takes only the last `--enable-features` switch it is given, and the usual launchers put the switches of a
 //! flags file (`~/.config/NAME-flags.conf`, the `NAME` the launcher names) before the launch's own. So the switch a
 //! launch gets lists the features of every list in the flags file and in the launch's arguments, then the overlay scroll
-//! bar feature.
+//! bar feature. A launcher script whose `exec` line puts what it reads after `"$@"` gives Chromium the file's switches
+//! after the launch's: a list among them is the one Chromium takes, which no switch of the launch can follow, so the
+//! launch is then left as it is.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -38,36 +40,61 @@ pub const READ: u64 = 64 * 1024;
 pub const DEPTH: usize = 3;
 /// How many full paths a small launcher program may name before the rest are ignored.
 const PATHS: usize = 64;
+/// The words of a script's `exec` line that pass the launch's arguments on, quotes taken off.
+const ARGUMENTS: [&str; 3] = ["$@", "${@}", "$*"];
 
 /// A program built on Chromium, as its launch needs to know it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Launcher {
-    /// The flags files read on the way to Chromium, a list for each launcher that reads one: the names it tries, in
-    /// order, of which it reads the first that exists.
-    flags: Vec<Vec<String>>,
+    /// The flags files read on the way to Chromium, one for each launcher that reads one.
+    flags: Vec<FlagsFile>,
+}
+
+/// The flags file a launcher reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FlagsFile {
+    /// The names it tries, in order, of which it reads the first that exists.
+    names: Vec<String>,
+    /// The launcher puts the file's switches after the launch's arguments (`"$@"`), not before them.
+    after: bool,
+}
+
+/// The feature switches of the flags files a launch's launchers read, by where Chromium is given them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FlagsSwitches {
+    /// Those put before the launch's arguments.
+    pub before: Vec<String>,
+    /// Those put after them, which a list of the launch's own cannot follow.
+    pub after: Vec<String>,
 }
 
 impl Launcher {
     /// The names of the flags files read on the way, each launcher's in turn.
-    pub fn flags_names(&self) -> &[Vec<String>] {
-        &self.flags
+    pub fn flags_names(&self) -> Vec<&[String]> {
+        self.flags.iter().map(|f| &f.names[..]).collect()
     }
 
     /// The feature switches (`--enable-features=…`, `--disable-features=…`) of the flags files the launchers read, in
-    /// the order Chromium is given them: for each, the system-wide file and then the one in `config_home`.
-    pub fn flags_switches(&self, config_home: Option<&Path>) -> Vec<String> {
-        let mut switches = Vec::new();
-        for names in &self.flags {
+    /// the order Chromium is given them, those before the launch's arguments and those after: for each file, the
+    /// system-wide one and then the one in `config_home`.
+    pub fn flags_switches(&self, config_home: Option<&Path>) -> FlagsSwitches {
+        let mut switches = FlagsSwitches::default();
+        for file in &self.flags {
             let read = |dir: &Path, name: &str| {
                 std::fs::read_to_string(dir.join(format!("{name}{FLAGS_FILE}")))
             };
-            let chosen = names.iter().find_map(|name| {
+            let chosen = file.names.iter().find_map(|name| {
                 let system = read(Path::new(SYSTEM_FLAGS), name).ok();
                 let own = config_home.and_then(|home| read(home, name).ok());
                 (system.is_some() || own.is_some()).then_some((system, own))
             });
+            let to = if file.after {
+                &mut switches.after
+            } else {
+                &mut switches.before
+            };
             for text in chosen.into_iter().flat_map(|(s, o)| [s, o]).flatten() {
-                switches.extend(feature_switches(&text));
+                to.extend(feature_switches(&text));
             }
         }
         switches
@@ -144,20 +171,32 @@ fn modified(path: &Path) -> Option<SystemTime> {
 }
 
 /// `args` (a Chromium program's arguments) with the overlay scroll bar feature on, `flags` being the feature switches
-/// its launchers put before them ([`Launcher::flags_switches`]). Unless the list Chromium would take already names the
-/// feature, one switch lists every feature of the lists in `flags` and `args`, then the overlay scroll bar feature: in
-/// the place of the arguments' last list (their others removed), else before a `--` that ends the switches, else first.
-/// A switch that turns the feature off leaves `args` as they are.
-pub fn with_overlay_scroll_bars(args: &mut Vec<String>, flags: &[String]) {
+/// its launchers put before and after them ([`Launcher::flags_switches`]). Unless the list Chromium would take already
+/// names the feature, one switch lists every feature of the lists in `flags` and `args`, then the overlay scroll bar
+/// feature: in the place of the arguments' last list (their others removed), else before a `--` that ends the
+/// switches, else first. A switch that turns the feature off leaves `args` as they are, and so does a list a launcher
+/// puts after the arguments: Chromium takes that one whatever the arguments hold.
+pub fn with_overlay_scroll_bars(args: &mut Vec<String>, flags: &FlagsSwitches) {
     let named = |list: &str| list.split(',').any(is_overlay_scroll_bars);
     // what follows a `--` is no switch
     let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
-    let all = || flags.iter().chain(args[..end].iter());
+    // in the order Chromium is given them
+    let all = || {
+        flags
+            .before
+            .iter()
+            .chain(args[..end].iter())
+            .chain(flags.after.iter())
+    };
     if all().any(|a| a.strip_prefix(DISABLE).is_some_and(named)) {
         return;
     }
     let lists: Vec<&str> = all().filter_map(|a| a.strip_prefix(ENABLE)).collect();
     if lists.last().is_some_and(|list| named(list)) {
+        return;
+    }
+    // the last list comes after the arguments: no switch of the launch can follow it
+    if flags.after.iter().any(|a| a.starts_with(ENABLE)) {
         return;
     }
     let mut features: Vec<&str> = Vec::new();
@@ -230,13 +269,18 @@ fn inspect(
         return None;
     }
     file.take(READ).read_to_end(&mut head).ok()?;
-    let (names, targets) = if script {
+    let (names, after, targets) = if script {
         let text = String::from_utf8_lossy(&head);
         let script = Script::read(&text);
-        (script.flags_names(), script.targets(path))
+        (
+            script.flags_names(),
+            script.passes_more_after_arguments(),
+            script.targets(path),
+        )
     } else {
         (
             flags_names(&String::from_utf8_lossy(&head)),
+            false,
             named_paths(&head),
         )
     };
@@ -247,7 +291,7 @@ fn inspect(
         .filter(|target| target != path)
         .find_map(|target| inspect(&target, path_dirs, depth - 1, read))?;
     if !names.is_empty() {
-        launcher.flags.insert(0, names);
+        launcher.flags.insert(0, FlagsFile { names, after });
     }
     Some(launcher)
 }
@@ -346,6 +390,29 @@ impl<'a> Script<'a> {
         flags_names(&self.expand(&self.lines.join("\n")))
     }
 
+    /// Whether an `exec` line that passes the launch's arguments on (`"$@"`) puts something the script reads after them
+    /// (a variable, `"${flags[@]}"`, or what a command prints, `$(cat …)`): the switches of a flags file come after the
+    /// launch's own there.
+    fn passes_more_after_arguments(&self) -> bool {
+        self.lines.iter().any(|line| {
+            let Some(rest) = line.strip_prefix("exec ") else {
+                return false;
+            };
+            let words: Vec<&str> = rest
+                .split_whitespace()
+                .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+                .collect();
+            words
+                .iter()
+                .position(|w| ARGUMENTS.contains(w))
+                .is_some_and(|at| {
+                    words[at + 1..]
+                        .iter()
+                        .any(|w| w.contains('$') || w.contains('`'))
+                })
+        })
+    }
+
     /// The programs the script's `exec` lines start with the launch's arguments (`"$@"`). A program named through a
     /// variable that is not set plainly in the script (`"$DIR/app"`, `"${here}/app"`) is looked for beside the script.
     fn targets(&self, path: &Path) -> Vec<String> {
@@ -359,7 +426,7 @@ impl<'a> Script<'a> {
                 .split_whitespace()
                 .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
                 .collect();
-            if !words.iter().any(|w| ["$@", "${@}", "$*"].contains(w)) {
+            if !words.iter().any(|w| ARGUMENTS.contains(w)) {
                 continue;
             }
             // `exec -a NAME PROGRAM` names the process
@@ -395,8 +462,17 @@ mod tests {
     }
 
     fn with_flags(list: &[&str], flags: &[&str]) -> Vec<String> {
+        with_flags_around(list, flags, &[])
+    }
+
+    /// `list` given the flags files' switches `before` it and `after` it.
+    fn with_flags_around(list: &[&str], before: &[&str], after: &[&str]) -> Vec<String> {
         let mut a = args(list);
-        with_overlay_scroll_bars(&mut a, &args(flags));
+        let flags = FlagsSwitches {
+            before: args(before),
+            after: args(after),
+        };
+        with_overlay_scroll_bars(&mut a, &flags);
         a
     }
 
@@ -476,6 +552,102 @@ mod tests {
                 &["--enable-features=OverlayScrollbar"]
             ),
             ["--enable-features=OverlayScrollbar,Mine"]
+        );
+    }
+
+    #[test]
+    fn the_switch_ends_up_last_when_the_flags_file_s_come_after_the_launch_s_own() {
+        let late = "--enable-features=Filed";
+        // the file's list first: the launch's own comes after it and is the one Chromium takes
+        assert_eq!(
+            with_flags_around(&["--enable-features=Mine", "%U"], &[late], &[]),
+            ["--enable-features=Filed,Mine,OverlayScrollbar", "%U"]
+        );
+        // the file's switches after the launch's: with no list among them the launch's own is the last
+        assert_eq!(
+            with_flags_around(
+                &["--enable-features=Mine", "%U"],
+                &[],
+                &["--disable-features=Other"]
+            ),
+            ["--enable-features=Mine,OverlayScrollbar", "%U"]
+        );
+        assert_eq!(
+            with_flags_around(&["%U"], &[], &["--ozone-platform=wayland"]),
+            ["--enable-features=OverlayScrollbar", "%U"]
+        );
+        // a list among them is the one Chromium takes: one that names the feature needs nothing, and no switch of the
+        // launch could follow one that does not, so the launch is left as it is rather than given a list it drops
+        assert_eq!(
+            with_flags_around(&["%U"], &[], &["--enable-features=A,OverlayScrollbar"]),
+            ["%U"]
+        );
+        assert_eq!(
+            with_flags_around(&["--enable-features=Mine", "%U"], &[], &[late]),
+            ["--enable-features=Mine", "%U"]
+        );
+        // a launch's own list that names the feature, followed by the file's that does not, is no list that counts
+        assert_eq!(
+            with_flags_around(&["--enable-features=OverlayScrollbar"], &[], &[late]),
+            ["--enable-features=OverlayScrollbar"]
+        );
+    }
+
+    #[test]
+    fn a_launcher_that_puts_the_flags_file_after_the_arguments_is_told_from_one_before_them() {
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        let bin = r.join("bin");
+        let chromium = chromium_in(&r.join("lib/browser"));
+        executable(
+            &bin.join("first"),
+            &format!(
+                "#!/bin/bash\nmapfile -t flags < \"$HOME/.config/first-flags.conf\"\nexec {} \"${{flags[@]}}\" \"$@\"\n",
+                chromium.display()
+            ),
+        );
+        executable(
+            &bin.join("last"),
+            &format!(
+                "#!/bin/sh\nexec {} \"$@\" $(cat \"$HOME/.config/last-flags.conf\")\n",
+                chromium.display()
+            ),
+        );
+        let config = r.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        for name in ["first", "last"] {
+            std::fs::write(
+                config.join(format!("{name}{FLAGS_FILE}")),
+                "--enable-features=Filed\n",
+            )
+            .unwrap();
+        }
+        let dirs = [bin.clone()];
+        let switches = |name: &str| launcher(name, &dirs).unwrap().flags_switches(Some(&config));
+        let filed = args(&["--enable-features=Filed"]);
+        assert_eq!(
+            switches("first"),
+            FlagsSwitches {
+                before: filed.clone(),
+                after: Vec::new()
+            }
+        );
+        assert_eq!(
+            switches("last"),
+            FlagsSwitches {
+                before: Vec::new(),
+                after: filed
+            }
+        );
+        let mut first = args(&["%U"]);
+        with_overlay_scroll_bars(&mut first, &switches("first"));
+        assert_eq!(first, ["--enable-features=Filed,OverlayScrollbar", "%U"]);
+        let mut last = args(&["%U"]);
+        with_overlay_scroll_bars(&mut last, &switches("last"));
+        assert_eq!(
+            last,
+            ["%U"],
+            "the file's list comes last whatever the launch holds"
         );
     }
 
@@ -621,7 +793,10 @@ mod tests {
         );
         let config = r.join("config");
         std::fs::create_dir_all(&config).unwrap();
-        assert_eq!(launcher.flags_switches(Some(&config)), Vec::<String>::new());
+        assert_eq!(
+            launcher.flags_switches(Some(&config)),
+            FlagsSwitches::default()
+        );
         std::fs::write(
             config.join("runtime-flags.conf"),
             "--enable-features=Fallback\n",
@@ -633,7 +808,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            launcher.flags_switches(Some(&config)),
+            launcher.flags_switches(Some(&config)).before,
             ["--enable-features=Editor", "--enable-features=Fallback"]
         );
         std::fs::write(
@@ -641,13 +816,15 @@ mod tests {
             "--disable-features=OverlayScrollbar\n",
         )
         .unwrap();
+        let switches = launcher.flags_switches(Some(&config));
         assert_eq!(
-            launcher.flags_switches(Some(&config)),
+            switches.before,
             [
                 "--enable-features=Editor",
                 "--disable-features=OverlayScrollbar"
             ]
         );
+        assert!(switches.after.is_empty(), "both put them first");
     }
 
     #[test]

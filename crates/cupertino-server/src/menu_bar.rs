@@ -185,7 +185,7 @@ struct Feed {
     windows: Vec<AppWindow>,
     /// The process behind the window's connection, 0 when unknown, and whether it is the X11 bridge (version 24).
     client: (u32, bool),
-    /// How the server passes chords to the window (version 24).
+    /// How the server passes chords to the window (version 25).
     keys: ClientClass,
 }
 
@@ -242,12 +242,14 @@ impl Feed {
                 } else {
                     ClientKind::Wayland
                 },
-                match self.keys {
-                    ClientClass::FirstParty => KeyClass::Toolkit,
-                    ClientClass::Terminal => KeyClass::Terminal,
-                    ClientClass::Other => KeyClass::Other,
-                },
             );
+        }
+        if bar.version() >= 25 {
+            bar.active_client_keys(match self.keys {
+                ClientClass::FirstParty => KeyClass::Toolkit,
+                ClientClass::Terminal => KeyClass::Terminal,
+                ClientClass::Other => KeyClass::Other,
+            });
         }
         for w in &self.windows {
             bar.app_window(w.id, w.title.clone(), w.flags);

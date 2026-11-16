@@ -23,11 +23,15 @@ use crate::registered::Registration;
 pub const REGISTRAR_NAME: &str = "com.canonical.AppMenu.Registrar";
 pub const REGISTRAR_PATH: &str = "/com/canonical/AppMenu/Registrar";
 
-/// Most registrations kept of one connection; past it that connection's oldest goes, so a client that registers without
-/// end grows neither the list nor takes the place of other clients' registrations.
-const MAX_REGISTRATIONS_PER_CONNECTION: usize = 256;
-/// Most registrations kept in all; past it the oldest of the connection that holds the most goes.
+/// Most registrations kept of one process, over all its connections; past it that process's oldest goes, so a program
+/// that registers without end, on one connection or many, grows neither the list nor takes the place of other
+/// programs' registrations.
+const MAX_REGISTRATIONS_PER_PROCESS: usize = 256;
+/// Most registrations kept in all; past it the process that holds the most gives way ([`Registry::giving_way`]).
 const MAX_REGISTRATIONS: usize = 4096;
+/// The registrations of a process no other process's can take the place of, however many processes register: a full
+/// list then refuses the newcomer.
+const PROTECTED_REGISTRATIONS: usize = 64;
 
 /// Called with every registration after each change.
 pub type Changed = Arc<dyn Fn(Vec<Registration>) + Send + Sync>;
@@ -39,7 +43,9 @@ struct Registry {
 }
 
 impl Registry {
-    fn register(&mut self, service: String, pid: u32, window: u32, path: String) {
+    /// Keep the registration of `window` by connection `service` of process `pid`; whether the list changed (a full
+    /// list may refuse it).
+    fn register(&mut self, service: String, pid: u32, window: u32, path: String) -> bool {
         self.serial += 1;
         // registering a window again keeps the connection's place among those that registered it
         let since = match self
@@ -50,17 +56,13 @@ impl Registry {
             Some(i) => self.list.remove(i).since,
             None => self.serial,
         };
-        let own = self.list.iter().filter(|r| r.service == service).count();
-        if own >= MAX_REGISTRATIONS_PER_CONNECTION {
-            self.drop_oldest_of(&service);
+        let own = self.list.iter().filter(|r| r.pid == pid).count();
+        if own >= MAX_REGISTRATIONS_PER_PROCESS {
+            self.drop_oldest_of(pid);
         } else if self.list.len() >= MAX_REGISTRATIONS {
-            let mut counts: std::collections::HashMap<&str, usize> = Default::default();
-            for r in &self.list {
-                *counts.entry(r.service.as_str()).or_default() += 1;
-            }
-            if let Some((largest, _)) = counts.into_iter().max_by_key(|(_, n)| *n) {
-                let largest = largest.to_string();
-                self.drop_oldest_of(&largest);
+            match self.giving_way(pid, own) {
+                Some(process) => self.drop_oldest_of(process),
+                None => return false,
             }
         }
         self.list.push(Registration {
@@ -71,11 +73,29 @@ impl Registry {
             serial: self.serial,
             since,
         });
+        true
     }
 
-    /// Drop the oldest registration of connection `service`.
-    fn drop_oldest_of(&mut self, service: &str) {
-        if let Some(i) = self.list.iter().position(|r| r.service == service) {
+    /// The process whose oldest registration makes room in a full list for one more of process `pid`, which holds
+    /// `own`: `pid` itself when it holds as many as any other, else the process that holds the most (among equals the
+    /// one that registered last), when it holds more than [`PROTECTED_REGISTRATIONS`]; `None` refuses the newcomer.
+    fn giving_way(&self, pid: u32, own: usize) -> Option<u32> {
+        let mut held: std::collections::HashMap<u32, (usize, u64)> = Default::default();
+        for r in self.list.iter().filter(|r| r.pid != pid) {
+            let (count, latest) = held.entry(r.pid).or_default();
+            *count += 1;
+            *latest = (*latest).max(r.serial);
+        }
+        match held.into_iter().max_by_key(|(_, held)| *held) {
+            Some((_, (most, _))) if own >= most => Some(pid),
+            Some((process, (most, _))) => (most > PROTECTED_REGISTRATIONS).then_some(process),
+            None => Some(pid),
+        }
+    }
+
+    /// Drop the oldest registration of process `pid`.
+    fn drop_oldest_of(&mut self, pid: u32) {
+        if let Some(i) = self.list.iter().position(|r| r.pid == pid) {
             self.list.remove(i);
         }
     }
@@ -110,6 +130,11 @@ impl Registrar {
             registry.list.clone()
         };
         (self.changed)(list);
+    }
+
+    /// Change the registry without telling of it; whether anything changed.
+    fn update_quietly(&self, change: impl FnOnce(&mut Registry) -> bool) -> bool {
+        change(&mut self.registry.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Forget registrations, by connection and window: those whose X11 window is gone.
@@ -153,14 +178,16 @@ impl Service {
             return;
         }
         let (service, path) = (sender.to_string(), menu_object_path.to_string());
+        let kept = self
+            .0
+            .update_quietly(|r| r.register(service.clone(), pid, window_id, path));
+        // a connection that left while its process was asked for has been forgotten before it was kept; the
+        // registration is told of only once its connection is known to stay
+        let stays = has_owner(conn, &service).await;
         self.0.update(|r| {
-            r.register(service.clone(), pid, window_id, path);
-            true
+            let dropped = !stays && r.remove(|reg| reg.service == service);
+            kept || dropped
         });
-        // a connection that left while its process was asked for has been forgotten before it was kept
-        if !has_owner(conn, &service).await {
-            self.0.update(|r| r.remove(|reg| reg.service == service));
-        }
     }
 
     fn unregister_window(&self, window_id: u32, #[zbus(header)] header: Header<'_>) {
@@ -264,8 +291,15 @@ pub async fn release(conn: &Connection) -> zbus::Result<()> {
 mod tests {
     use super::*;
 
+    /// The process of the test's connections, but where a test names one.
+    const PID: u32 = 40;
+
     fn register(registry: &mut Registry, service: &str, window: u32) {
-        registry.register(service.into(), 40, window, format!("/menu/{window}"));
+        register_of(registry, service, PID, window);
+    }
+
+    fn register_of(registry: &mut Registry, service: &str, pid: u32, window: u32) -> bool {
+        registry.register(service.into(), pid, window, format!("/menu/{window}"))
     }
 
     fn windows_of(registry: &Registry, service: &str) -> Vec<u32> {
@@ -277,36 +311,126 @@ mod tests {
             .collect()
     }
 
+    /// An application's own registrations: `windows` windows of process 10 on one connection.
+    fn application(registry: &mut Registry, windows: u32) {
+        for window in 0..windows {
+            register_of(registry, ":1.5", 10, window);
+        }
+    }
+
     #[test]
-    fn a_connection_that_registers_without_end_drops_only_its_own_oldest() {
+    fn a_process_that_registers_without_end_drops_only_its_own_oldest() {
         let mut registry = Registry::default();
-        register(&mut registry, ":1.5", 7);
-        let flood = MAX_REGISTRATIONS_PER_CONNECTION as u32 + 10;
+        register_of(&mut registry, ":1.5", 10, 7);
+        let flood = MAX_REGISTRATIONS_PER_PROCESS as u32 + 10;
         for window in 0..flood {
-            register(&mut registry, ":1.66", 1000 + window);
+            register_of(&mut registry, ":1.66", 66, 1000 + window);
         }
         assert_eq!(
             windows_of(&registry, ":1.5"),
             [7],
-            "another connection's stays"
+            "another process's stays"
         );
         let flooded = windows_of(&registry, ":1.66");
-        assert_eq!(flooded.len(), MAX_REGISTRATIONS_PER_CONNECTION);
+        assert_eq!(flooded.len(), MAX_REGISTRATIONS_PER_PROCESS);
         assert_eq!(flooded[0], 1010, "its oldest went");
     }
 
     #[test]
-    fn past_the_whole_limit_the_connection_that_holds_the_most_gives_way() {
+    fn a_program_spread_over_many_connections_is_held_to_one_process_s_share() {
         let mut registry = Registry::default();
-        register(&mut registry, ":1.5", 7);
-        let full = MAX_REGISTRATIONS / MAX_REGISTRATIONS_PER_CONNECTION;
-        for connection in 0..full {
-            for window in 0..MAX_REGISTRATIONS_PER_CONNECTION as u32 {
-                register(&mut registry, &format!(":2.{connection}"), window);
+        application(&mut registry, 30);
+        // fewer on each connection than the application holds, more than the whole limit over them all
+        for connection in 0..200 {
+            for window in 0..25 {
+                register_of(&mut registry, &format!(":2.{connection}"), 66, window);
+            }
+        }
+        assert_eq!(
+            windows_of(&registry, ":1.5"),
+            (0..30).collect::<Vec<_>>(),
+            "the application keeps every registration"
+        );
+        let flooded = registry.list.iter().filter(|r| r.pid == 66).count();
+        assert_eq!(flooded, MAX_REGISTRATIONS_PER_PROCESS);
+    }
+
+    #[test]
+    fn many_processes_that_flood_take_no_place_of_an_application_s_registrations() {
+        let mut registry = Registry::default();
+        application(&mut registry, 30);
+        for process in 0..300u32 {
+            for window in 0..16 {
+                register_of(
+                    &mut registry,
+                    &format!(":2.{process}"),
+                    1000 + process,
+                    window,
+                );
+            }
+        }
+        assert_eq!(registry.list.len(), MAX_REGISTRATIONS);
+        assert_eq!(
+            windows_of(&registry, ":1.5"),
+            (0..30).collect::<Vec<_>>(),
+            "the application keeps every registration"
+        );
+        assert!(
+            !register_of(&mut registry, ":3.1", 5000, 1),
+            "a newcomer is refused when every process holds its protected share"
+        );
+        // the application's own window registered again keeps its place
+        assert!(register_of(&mut registry, ":1.5", 10, 3));
+        assert_eq!(windows_of(&registry, ":1.5").len(), 30);
+    }
+
+    #[test]
+    fn past_the_whole_limit_the_process_that_holds_the_most_gives_way() {
+        let mut registry = Registry::default();
+        register_of(&mut registry, ":1.5", 10, 7);
+        let full = MAX_REGISTRATIONS / MAX_REGISTRATIONS_PER_PROCESS;
+        for process in 0..full as u32 {
+            for window in 0..MAX_REGISTRATIONS_PER_PROCESS as u32 {
+                register_of(
+                    &mut registry,
+                    &format!(":2.{process}"),
+                    100 + process,
+                    window,
+                );
             }
         }
         assert_eq!(registry.list.len(), MAX_REGISTRATIONS);
         assert_eq!(windows_of(&registry, ":1.5"), [7]);
+        // a newcomer takes the place of the oldest of the last of the largest
+        assert!(register_of(&mut registry, ":3.1", 5000, 1));
+        assert_eq!(windows_of(&registry, ":3.1"), [1]);
+        assert_eq!(windows_of(&registry, ":1.5"), [7]);
+        assert_eq!(registry.list.len(), MAX_REGISTRATIONS);
+        assert_eq!(
+            windows_of(&registry, &format!(":2.{}", full - 1)).len(),
+            MAX_REGISTRATIONS_PER_PROCESS - 1,
+            "the last to register among the largest gave way"
+        );
+    }
+
+    #[test]
+    fn in_a_full_list_a_process_that_holds_as_many_as_any_other_makes_room_from_its_own() {
+        let mut registry = Registry::default();
+        for process in 0..(MAX_REGISTRATIONS / 128) as u32 {
+            for window in 0..128 {
+                register_of(
+                    &mut registry,
+                    &format!(":2.{process}"),
+                    100 + process,
+                    window,
+                );
+            }
+        }
+        assert_eq!(registry.list.len(), MAX_REGISTRATIONS);
+        assert!(register_of(&mut registry, ":2.0", 100, 9999));
+        assert_eq!(windows_of(&registry, ":2.0").len(), 128);
+        assert_eq!(windows_of(&registry, ":2.0")[0], 1, "its own oldest went");
+        assert_eq!(windows_of(&registry, ":2.1").len(), 128);
     }
 
     #[test]

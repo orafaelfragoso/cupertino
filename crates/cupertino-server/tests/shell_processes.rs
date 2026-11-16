@@ -2072,11 +2072,50 @@ fn activity(pid: u32) -> (u64, u64) {
     (ticks, switches)
 }
 
+/// Run the server with no output for a second to settle (a process that cannot run without an output exits within it,
+/// and the server closes the windows of the output that went), then a second measured: each of `names` is still the
+/// process `pids` holds, keeps its connection and takes next to no CPU and wake-ups. `when` names the moment in the
+/// messages.
+fn sit_idle(server: &mut Server, names: &[String], pids: &[u32], when: &str) {
+    let settle = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < settle {
+        server.step();
+    }
+    let start: Vec<(u64, u64)> = pids.iter().map(|&p| activity(p)).collect();
+    let measured = Instant::now();
+    let end = measured + Duration::from_secs(1);
+    while Instant::now() < end {
+        server.step();
+    }
+    let seconds = measured.elapsed().as_secs_f64();
+    for ((name, &pid), (ticks, switches)) in names.iter().zip(pids).zip(start) {
+        let (ticks_now, switches_now) = activity(pid);
+        let (cpu, woken) = (ticks_now - ticks, switches_now - switches);
+        eprintln!(
+            "{name} ({when}): {cpu} clock ticks of CPU, {woken} context switches in {seconds:.2} s"
+        );
+        assert_eq!(
+            server.state.supervisor.pid_of(name),
+            Some(pid),
+            "{name} ({when}) keeps running with no output, the same process"
+        );
+        assert!(
+            connected(&server.state, pid),
+            "{name} ({when}) keeps its connection"
+        );
+        // a spinning process takes about half a processor and thousands of switches a second
+        assert!(
+            cpu <= 10 && woken <= 100,
+            "{name} ({when}) is busy with no output: {cpu} ticks, {woken} switches in {seconds:.2} s"
+        );
+    }
+}
+
 /// The shell processes of a session that loses its only display (one asleep that reports itself unplugged) keep
 /// running and sit idle: none exits, none is started again, none spins in a loop with the server (a window put on no
-/// output is closed at once, and opening it again at once traded windows with the server as fast as both could). A
-/// process started while there is no output (after a crash, say) waits for one. When a display comes back each draws
-/// on it again. Run with `--no-capture` for each process's activity.
+/// output is closed at once, and opening it again at once traded windows with the server as fast as both could): the
+/// processes that ran when the display went are measured first, then each started again while there is no output
+/// (after a crash, say), which waits for one. When a display comes back each draws on it again. Run with `--no-capture` for each process's activity.
 #[test]
 fn the_shell_processes_sit_idle_with_no_output_and_draw_again_when_one_comes_back() {
     let Some(bus) = PrivateBus::start() else {
@@ -2117,15 +2156,18 @@ fn the_shell_processes_sit_idle_with_no_output_and_draw_again_when_one_comes_bac
         "the dock, the menu bar, the overlay and the launcher",
         mapped,
     );
-    let head = server.head_of(0);
-    headless::remove_display(&mut server.state, head).unwrap();
-    server.wait_until("no output", |s| s.outputs.is_empty());
-
-    // each process started again while there is no output, as after a crash
     let before: Vec<u32> = names
         .iter()
         .map(|n| server.state.supervisor.pid_of(n).expect("the process runs"))
         .collect();
+    let head = server.head_of(0);
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_until("no output", |s| s.outputs.is_empty());
+
+    // the processes that ran when the display went: the same ones, idle
+    sit_idle(&mut server, &names, &before, "when the display went");
+
+    // each process started again while there is no output, as after a crash
     for name in &names {
         server
             .state
@@ -2143,36 +2185,7 @@ fn the_shell_processes_sit_idle_with_no_output_and_draw_again_when_one_comes_bac
         .iter()
         .map(|n| server.state.supervisor.pid_of(n).unwrap())
         .collect();
-
-    // what each does once started: a second to settle (a process that cannot run without an output exits within
-    // it), then a second measured
-    let settle = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < settle {
-        server.step();
-    }
-    let start: Vec<(u64, u64)> = pids.iter().map(|&p| activity(p)).collect();
-    let measured = Instant::now();
-    let end = measured + Duration::from_secs(1);
-    while Instant::now() < end {
-        server.step();
-    }
-    let seconds = measured.elapsed().as_secs_f64();
-    for ((name, &pid), (ticks, switches)) in names.iter().zip(&pids).zip(start) {
-        let (ticks_now, switches_now) = activity(pid);
-        let (cpu, woken) = (ticks_now - ticks, switches_now - switches);
-        eprintln!("{name}: {cpu} clock ticks of CPU, {woken} context switches in {seconds:.2} s");
-        assert_eq!(
-            server.state.supervisor.pid_of(name),
-            Some(pid),
-            "{name} keeps running with no output"
-        );
-        assert!(connected(&server.state, pid), "{name} keeps its connection");
-        // a spinning process takes about half a processor and thousands of switches a second
-        assert!(
-            cpu <= 10 && woken <= 100,
-            "{name} is busy with no output: {cpu} ticks, {woken} switches in {seconds:.2} s"
-        );
-    }
+    sit_idle(&mut server, &names, &pids, "started with no output");
 
     // a display is plugged in again: each draws on it
     let display = headless::HeadlessDisplay {

@@ -22,10 +22,14 @@ const TEXT_LEFT: f64 = 102.0;
 const TITLE_TOP: f64 = 13.0;
 const INFO_TOP: f64 = 55.0;
 const BUTTONS_TOP: f64 = 83.0;
-/// Button height of the confirmation panels; approximate for this panel.
-const BUTTON_HEIGHT: f64 = 32.0;
-/// Buttons' x and width, Cancel then Force Quit, right-aligned to the text column's end (approximate).
-const CANCEL_COLUMN: (f64, f64) = (TEXT_LEFT + WRAP_WIDTH - 100.0 - 83.0 + 2.0, 83.0);
+/// Button height: the capsules of the confirmation panels.
+const BUTTON_HEIGHT: f64 = crate::panel::BUTTON_HEIGHT;
+/// Buttons' x and width, Cancel then Force Quit, right-aligned to the text column's end, the capsules as far apart as
+/// the confirmation panels' (approximate).
+const CANCEL_COLUMN: (f64, f64) = (
+    TEXT_LEFT + WRAP_WIDTH - 100.0 - crate::panel::BUTTON_GAP - 83.0,
+    83.0,
+);
 const FORCE_QUIT_COLUMN: (f64, f64) = (TEXT_LEFT + WRAP_WIDTH - 100.0, 100.0);
 
 pub const FORCE_QUIT_LABEL: &str = "Force Quit";
@@ -117,8 +121,13 @@ mod tests {
         let [cancel, force] = f.buttons;
         assert_eq!((cancel.frame.y(), force.frame.y()), (83.0, 83.0));
         assert!(
-            cancel.frame.max_x() <= force.frame.x() + 2.0 && cancel.frame.x() > f.icon.max_x(),
-            "Cancel left of Force Quit, clear of the icon"
+            cancel.frame.max_x() + 8.0 == force.frame.x() && cancel.frame.x() > f.icon.max_x(),
+            "Cancel left of Force Quit, 8 points from it and clear of the icon"
+        );
+        assert_eq!(
+            cancel.frame.height(),
+            28.0,
+            "capsules as the confirmation's"
         );
         assert_eq!(
             force.frame.max_x(),

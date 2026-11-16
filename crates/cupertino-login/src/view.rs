@@ -30,7 +30,7 @@ use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{
     AttributedText, ContentPurpose, FontWeight, SecureBuffer, TextStyle, TextSystem,
 };
-use cupertino_kit::theme::{Color, Surface};
+use cupertino_kit::theme::Color;
 
 use crate::interrupt::{self, Choice};
 use crate::layout::{
@@ -103,11 +103,9 @@ const INITIALS_SIZE: f64 = 0.4;
 const SLOT_WIDTH: f64 = 18.0;
 /// Panel title and info: the title's weight; the icon disc's fill (approximate, a neutral grey).
 const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
-/// Corner radius of a panel (a regular window's).
-const PANEL_RADIUS: f64 = 12.0;
 /// Text size the panels' title and lines are measured at; the roles set the size they draw at.
 const PANEL_TITLE_SIZE: f32 = 13.0;
-/// Corner radius of the confirmation panel's alert.
+/// Corner radius of the alert of the confirmation and interrupt panels.
 const PANEL_ALERT_RADIUS: f64 = 26.0;
 /// The room a check box's box and the gap after it take before its label: where the label of the confirmation panel's
 /// checkbox wraps.
@@ -914,24 +912,6 @@ fn icon_disc<M: 'static>(rect: Rect) -> Element<M> {
     ))
 }
 
-fn panel_window<M: Clone>(
-    key: WindowKey,
-    app_id: &str,
-    title: &str,
-    size: Size,
-    content: Element<M>,
-    on_close: M,
-) -> Window<M> {
-    Window {
-        background: WindowBackground::Surface {
-            surface: Surface::Popover,
-            radius: PANEL_RADIUS,
-            alpha: 1.0,
-        },
-        ..full_screen(key, app_id.to_owned(), title, size, content, Some(on_close))
-    }
-}
-
 /// The confirmation panel, an alert on glass with no icon: its title, the countdown line, the "Reopen windows" checkbox
 /// at `reopen` (log out, restart and shut down), and its buttons as capsules, the default one focused. Return does the
 /// default action, Escape cancels, Space flips the checkbox, and the power-button panel's letters choose.
@@ -1361,12 +1341,20 @@ pub fn desktop_control<M: Clone + 'static>(
     }
 }
 
-/// The interrupt panel for the application `app`: Cancel and Force Quit, Cancel focused. Neither is the default:
+/// The interrupt panel for the application `app`, on the glass of the confirmation it interrupts: Cancel and Force
+/// Quit as capsules, Cancel focused. Neither is the default:
 /// Return does nothing, so a key held from typing does not kill the application.
 pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -> M) -> Window<M> {
     let frames = interrupt::Frames::new();
     let title = interrupt::title(app);
     let mut children = vec![
+        Element::new(AlertBody {
+            width: interrupt::WIDTH,
+            height: Some(interrupt::HEIGHT),
+            radius: PANEL_ALERT_RADIUS,
+            padding: Insets::ZERO,
+            children: Vec::new(),
+        }),
         icon_disc(frames.icon),
         Element::new(Place::text(
             frames.title,
@@ -1391,7 +1379,7 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
                     vec![Element::new(Button {
                         label: button.label.to_owned(),
                         role: ButtonRole::Normal,
-                        style: ButtonStyle::Bordered,
+                        style: ButtonStyle::Pill,
                         enabled: true,
                         busy: false,
                         on_press: Some(map(Input::Interrupt(button.choice))),
@@ -1416,12 +1404,15 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
         modal: true,
         children,
     });
-    panel_window(
-        key,
-        INTERRUPT_APP_ID,
-        &title,
-        Size::new(interrupt::WIDTH, interrupt::HEIGHT),
-        content,
-        map(Input::Interrupt(Choice::Cancel)),
-    )
+    Window {
+        background: WindowBackground::None,
+        ..full_screen(
+            key,
+            INTERRUPT_APP_ID.to_owned(),
+            &title,
+            Size::new(interrupt::WIDTH, interrupt::HEIGHT),
+            content,
+            Some(map(Input::Interrupt(Choice::Cancel))),
+        )
+    }
 }

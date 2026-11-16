@@ -307,6 +307,13 @@ fn a_closing_ghost_and_the_input_hud_resolve_without_a_gpu() {
     let seen = consume(&mut d);
     assert!(seen.kinds.contains(&SceneKind::ClosingGhost), "{seen:?}");
     assert!(seen.kinds.contains(&SceneKind::InputHud), "{seen:?}");
+    // the HUD lies on glass (its stand-in fill here, without the material pass), not on a named material under a veil
+    assert!(seen.kinds.contains(&SceneKind::Backdrop), "{seen:?}");
+    assert!(
+        !seen.kinds.contains(&SceneKind::InputHudMaterial)
+            && !seen.kinds.contains(&SceneKind::InputHudTint),
+        "{seen:?}"
+    );
 }
 
 #[test]

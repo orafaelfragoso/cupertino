@@ -10,8 +10,9 @@
 //!   it is current. `Ctrl+Space` / `Ctrl+Alt+Space` (reference assignments) open the HUD in
 //!   most-recently-used order, further presses and the Up / Down arrows step, releasing the modifiers
 //!   commits, `Escape` cancels. HUD metrics: radius 24, minimum width 167, padding 10, rows of
-//!   40, white tint at 0.35, 0.3 s fade; the material, the placement (screen centre) and the
-//!   source icons are approximate / unknown.
+//!   40, 0.3 s fade, on the regular glass of an alert ([`HUD_GLASS`]), which takes the recipes of
+//!   Reduce Transparency and Increase Contrast; the placement (screen centre) and the source icons
+//!   are approximate / unknown.
 //! * **Caps lock**: the press reaches the keyboard state only when the key is still down after the delay
 //!   (75 ms); with hold-to-switch a tap switches the input source and a 500 ms hold
 //!   turns caps lock on.
@@ -40,8 +41,9 @@ use crate::overlays::OverlayKey;
 use crate::render::image::debug_sig;
 use cupertino_scene::SceneKind;
 
+use crate::app_effects_v1::{BackdropArea, GlassSpec};
 use crate::render::compose::{list_piece, Piece};
-use crate::render::scene::{material_layer, rrect_item, shadow_item, SceneParams, WindowPlan};
+use crate::render::scene::{glass_layer, material_layer, shadow_item, SceneParams, WindowPlan};
 use crate::state::Cupertino;
 
 /// Font size of HUD rows and accent cells in points (approximate).
@@ -50,7 +52,7 @@ pub const FONT_PT: f32 = 13.0;
 pub const ACCENT_FONT_PT: f32 = 18.0;
 /// Edge of the source icon in the HUD (approximate, icon artwork unknown).
 pub const HUD_ICON_PT: f64 = 24.0;
-/// Material behind the HUD and the accent popup (unknown, the menu material is used).
+/// Material behind the accent popup (unknown, the menu material is used).
 const MATERIAL: &str = "Menu";
 
 type Rgba = [f32; 4];
@@ -1064,6 +1066,30 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
     .unwrap_or_default()
 }
 
+/// The glass the input-source HUD lies on: the regular glass of an alert, which takes the recipe of Reduce Transparency
+/// (a wide blur under a nearly opaque face, nothing bent at the edge) and of Increase Contrast (the contrast face) from
+/// the session's display options as every glass does.
+pub const HUD_GLASS: cupertino_theme::GlassStyle = cupertino_theme::GlassStyle::Regular;
+/// The HUD's glass in the element cache and the tone measurements: no surface's backdrop has it (theirs count up from
+/// 1).
+const HUD_GLASS_KEY: u64 = u64::MAX - 0x1d;
+
+/// The HUD's backdrop over `area` (output-local points): one shape of [`HUD_GLASS`] with the HUD's corners.
+pub fn hud_backdrop(area: Rectangle<f64, Logical>) -> BackdropArea {
+    BackdropArea {
+        key: HUD_GLASS_KEY,
+        material: String::new(),
+        area,
+        radius: switcher::HUD_CORNER_RADIUS,
+        alpha: 1.0,
+        glass: Some(GlassSpec {
+            style: HUD_GLASS,
+            container: 0,
+            spacing: 0.0,
+        }),
+    }
+}
+
 /// The input-source HUD (centre of the primary output while it is open or fading).
 pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
     if p.wm.outputs().first().map(|o| o.id) != Some(p.output_id) {
@@ -1111,28 +1137,7 @@ pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
         ));
     }
     let area = Rectangle::<f64, Logical>::new((x, y).into(), (w, h).into());
-    // white tint of the panel (white at 0.35) over the material
-    let (white, tint_alpha) = switcher::HUD_TINT_WHITE_ALPHA;
-    let tint = [white as f32, white as f32, white as f32, tint_alpha as f32];
-    els.push(rrect_item(
-        SceneKind::InputHudTint,
-        0,
-        area,
-        switcher::HUD_CORNER_RADIUS,
-        true,
-        tint,
-        None,
-        alpha,
-    ));
-    els.extend(material_layer(
-        p,
-        SceneKind::InputHudMaterial,
-        0,
-        MATERIAL,
-        area,
-        switcher::HUD_CORNER_RADIUS,
-        alpha,
-    ));
+    els.extend(glass_layer(p, &hud_backdrop(area), alpha));
     let params = p.decor.popup_shadow_params();
     let plan = WindowPlan {
         visual: cupertino_wm::Rect::new(p.rect.x + x, p.rect.y + y, w, h),
@@ -1338,6 +1343,58 @@ pub fn has_input_source_bindings(bindings: &KeyBindings) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HUD is one shape of regular glass with its own corners, with no veil of its own over it; the glass then takes
+    /// the recipe of each display option: with Reduce Transparency nothing bends at its edge and its face is a nearly
+    /// opaque fill, and with Increase Contrast it keeps its optics under the contrast face.
+    #[test]
+    fn the_input_hud_lies_on_regular_glass_which_takes_the_recipes_of_the_display_options() {
+        use crate::accessibility::glass_mode;
+        use cupertino_defaults::accessibility::DisplayOptions;
+        use cupertino_theme::{GlassParams, GlassStyle};
+        let area = Rectangle::<f64, Logical>::new((100.0, 80.0).into(), (167.0, 100.0).into());
+        let backdrop = hud_backdrop(area);
+        assert_eq!(backdrop.area, area);
+        assert_eq!(backdrop.radius, switcher::HUD_CORNER_RADIUS);
+        assert_eq!(backdrop.alpha, 1.0);
+        let glass = backdrop.glass.expect("glass, not a named material");
+        assert_eq!((glass.style, glass.container), (GlassStyle::Regular, 0));
+
+        let recipe = |dark: bool, options: DisplayOptions| {
+            GlassParams::new(glass_mode(dark, glass.style, options), 100.0)
+        };
+        for dark in [false, true] {
+            let plain = recipe(dark, DisplayOptions::default());
+            assert!(plain.refraction.amount != 0.0, "glass bends at its edge");
+            let solid = recipe(
+                dark,
+                DisplayOptions {
+                    reduce_transparency: true,
+                    ..DisplayOptions::default()
+                },
+            );
+            assert_eq!(
+                (solid.refraction.amount, solid.refraction.height),
+                (0.0, 0.0)
+            );
+            assert!(
+                solid.face.fill[3] >= 0.6 && solid.face.fill[3] > plain.face.fill[3],
+                "a nearly opaque face: {:?} against {:?}",
+                solid.face.fill,
+                plain.face.fill
+            );
+            let contrast = recipe(
+                dark,
+                DisplayOptions {
+                    increase_contrast: true,
+                    ..DisplayOptions::default()
+                },
+            );
+            assert_eq!(contrast.refraction, plain.refraction);
+            assert_ne!(contrast.face, plain.face, "the contrast face");
+            assert!(contrast.face.fill[3] > plain.face.fill[3]);
+        }
+    }
 
     fn table() -> AccentTable {
         let mut t = AccentTable::new();

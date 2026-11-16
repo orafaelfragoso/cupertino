@@ -402,13 +402,22 @@ pub fn record_text(program: &str, choice: &Choice) -> String {
     )
 }
 
+/// Write one process's record ([`record_text`]) into `dir` as a file named by its id.
+///
+/// The directories it makes (the session's `cupertino` folder in the runtime directory among them) are its user's
+/// alone (mode 700) whatever the umask, made so at once: the desktop controller beside it refuses a `cupertino` folder
+/// others may read.
 pub fn write_record(
     dir: &std::path::Path,
     pid: u32,
     program: &str,
     choice: &Choice,
 ) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
     let tmp = dir.join(format!(".{pid}.tmp"));
     std::fs::write(&tmp, record_text(program, choice))?;
     std::fs::rename(tmp, dir.join(pid.to_string()))
@@ -601,5 +610,56 @@ mod tests {
             .unwrap()
             .contains("renderer=cpu"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The record's folders, made in a runtime directory that has none yet, are the user's alone under the usual umask
+    /// (022) and under none (000). The test runs itself again in a process of its own under each umask.
+    #[test]
+    fn the_record_s_folders_are_private_whatever_the_umask() {
+        const RUNTIME: &str = "CUPERTINO_TEST_RECORD_RUNTIME";
+        let choice = Choice {
+            kind: RendererKind::Cpu,
+            reason: Reason::CpuClass,
+        };
+        if let Some(runtime) = std::env::var_os(RUNTIME) {
+            let runtime = PathBuf::from(runtime);
+            write_record(&runtime.join("cupertino/renderers"), 42, "files", &choice).unwrap();
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let name =
+            cupertino_test_bus::test_path("the_record_s_folders_are_private_whatever_the_umask");
+        for umask in ["022", "000"] {
+            let runtime = std::env::temp_dir().join(format!(
+                "cupertino-record-umask-{umask}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&runtime).unwrap();
+            std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let status = std::process::Command::new("sh")
+                .args(["-c", &format!("umask {umask} && exec \"$0\" \"$@\"")])
+                .arg(std::env::current_exe().unwrap())
+                .args([name.as_str(), "--exact", "--nocapture"])
+                .env(RUNTIME, &runtime)
+                .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+                .status()
+                .unwrap();
+            // the mode in octal, or why there is none
+            let mode = |p: &str| match std::fs::metadata(runtime.join(p)) {
+                Ok(m) => format!("{:o}", m.permissions().mode() & 0o777),
+                Err(e) => e.to_string(),
+            };
+            let modes = (mode("cupertino"), mode("cupertino/renderers"));
+            let _ = std::fs::remove_dir_all(&runtime);
+            assert!(
+                status.success(),
+                "the record was written under umask {umask}"
+            );
+            assert_eq!(
+                (modes.0.as_str(), modes.1.as_str()),
+                ("700", "700"),
+                "the record's folders under umask {umask}"
+            );
+        }
     }
 }

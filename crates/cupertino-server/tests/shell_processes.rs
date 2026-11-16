@@ -1753,13 +1753,43 @@ fn buffer_commit(
     with_renderer_surface_state(surface, |s| s.current_commit())
 }
 
+/// How far apart on the server's clock [`fade_on_the_server_s_clock`] samples a fade.
+const FADE_SAMPLE: f64 = 0.005;
+
+/// The opacity of `surface`'s presentation through the fade it shows at `now`, sampled on the server's clock every
+/// [`FADE_SAMPLE`] from `now` to the fade's end (the fade starts with the first frame that shows it, `now` at the
+/// latest); empty when it shows none. The samples are the server's, whatever real time the test's steps take: a
+/// runner drawing on a busy CPU can take a step longer than the panel's fade out of 0.18 s, and then no step falls
+/// part way through it.
+fn fade_on_the_server_s_clock(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    now: f64,
+) -> Vec<f64> {
+    use cupertino_server::layers_v1::{presentation, settled};
+    if presentation(surface, now, false).is_none() || settled(surface, now) {
+        return Vec::new();
+    }
+    // two seconds at most: longer than any fade of the panel
+    (0..400)
+        .map(|k| now + f64::from(k) * FADE_SAMPLE)
+        .take_while(|&t| !settled(surface, t))
+        .filter_map(|t| presentation(surface, t, false).map(|p| p.opacity))
+        .collect()
+}
+
 /// The control panel's fade in and out runs on the compositor's clock, as the card's presentation: while it fades the
 /// card draws no frame of the fade (at most a single one after its first while it opens), and
-/// its opacity rises and falls on the server. Run with
+/// its opacity rises and falls on the server, part way between its ends, as the server's clock goes on. Run with
 /// `--no-capture` for the counts.
 #[test]
 fn the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer() {
     use cupertino_server::layers_v1::{presentation, settled};
+    let part_way = |samples: &[f64]| samples.iter().filter(|&&o| o > 0.0 && o < 1.0).count();
+    let monotonic = |samples: &[f64], rising: bool| {
+        samples
+            .windows(2)
+            .all(|w| if rising { w[1] >= w[0] } else { w[1] <= w[0] })
+    };
     let Some(bus) = PrivateBus::start() else {
         eprintln!("skipping: dbus-daemon is not available");
         return;
@@ -1773,7 +1803,9 @@ fn the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer() {
     server.wait_until("the card's first frame", |s| drawn_card(s).is_some());
     let card = drawn_card(&server.state).unwrap();
     let first = buffer_commit(&card.surface);
-    // the fade in: sampled as the scene shows it, until the presentation settles
+    // the fade in: sampled on the server's clock from the first frame, and as the scene shows it until the
+    // presentation settles
+    let fade_in = fade_on_the_server_s_clock(&card.surface, server.state.now());
     let (mut between, mut frames) = (0, 0);
     let mut new_buffers = 0;
     let mut last = first;
@@ -1791,28 +1823,58 @@ fn the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer() {
         }
         shown.opacity == 1.0 && settled(&card.surface, now)
     });
+    // the opening's frames are let through and counted with it: on a busy CPU the fade can be over on the server's
+    // clock before the card's second frame of the opening arrives
+    let mut quiet = Instant::now();
+    server.wait_until("the card to stop drawing its opening", |_| {
+        let commit = buffer_commit(&card.surface);
+        if commit != last {
+            new_buffers += 1;
+            last = commit;
+            quiet = Instant::now();
+        }
+        quiet.elapsed() > Duration::from_millis(300)
+    });
     eprintln!(
-        "trace: fade in: {frames} server steps, {between} of them part way, {new_buffers} new buffers of the card"
+        "trace: fade in: {} samples on the server's clock, {} of them part way; {frames} server steps, {between} of \
+         them part way, {new_buffers} new buffers of the card",
+        fade_in.len(),
+        part_way(&fade_in)
     );
-    assert!(between > 0, "the fade in ran on the server");
+    assert!(
+        part_way(&fade_in) > 0,
+        "the fade in ran on the server: {fade_in:?}"
+    );
+    assert!(
+        monotonic(&fade_in, true),
+        "the card's opacity rose: {fade_in:?}"
+    );
     // the card may draw once more after its first frame as it opens; never a frame per step of the fade
     assert!(
         new_buffers <= 1,
-        "the card drew {new_buffers} frames while it faded in"
+        "the card drew {new_buffers} frames after its first while it opened"
     );
-    // the fade out after Escape, until the card goes
+    // the fade out after Escape, until the card goes: sampled on the server's clock from the first step that shows
+    // it, the steps of the key's press and release among them, and as the scene shows it
     const ESCAPE: u32 = 1 + 8;
+    let mut fade_out = Vec::new();
+    let mut last = buffer_commit(&card.surface);
     for state in [KeyState::Pressed, KeyState::Released] {
         server
             .state
             .keyboard_event_now(Keycode::new(ESCAPE), state, 0);
         server.step();
+        if fade_out.is_empty() && card.surface.is_alive() {
+            fade_out = fade_on_the_server_s_clock(&card.surface, server.state.now());
+        }
     }
     let (mut between, mut new_buffers) = (0, 0);
-    let mut last = buffer_commit(&card.surface);
     server.wait_until("the card to go after its fade out", |s| {
         if !card.surface.is_alive() {
             return true;
+        }
+        if fade_out.is_empty() {
+            fade_out = fade_on_the_server_s_clock(&card.surface, s.now());
         }
         if let Some(shown) = presentation(&card.surface, s.now(), false) {
             if shown.opacity > 0.0 && shown.opacity < 1.0 {
@@ -1827,9 +1889,19 @@ fn the_control_panel_fades_on_the_compositor_s_clock_without_a_new_buffer() {
         false
     });
     eprintln!(
-        "trace: fade out: {between} server steps part way, {new_buffers} new buffers of the card"
+        "trace: fade out: {} samples on the server's clock, {} of them part way; {between} server steps part way, \
+         {new_buffers} new buffers of the card",
+        fade_out.len(),
+        part_way(&fade_out)
     );
-    assert!(between > 0, "the fade out ran on the server");
+    assert!(
+        part_way(&fade_out) > 0,
+        "the fade out ran on the server: {fade_out:?}"
+    );
+    assert!(
+        monotonic(&fade_out, false),
+        "the card's opacity fell: {fade_out:?}"
+    );
     assert_eq!(new_buffers, 0, "the card drew no frame while it faded out");
 }
 
@@ -2699,6 +2771,69 @@ fn the_launcher_closes_on_the_compositor_s_clock_without_a_new_buffer() {
     );
 }
 
+/// Step the server until the launcher's renderer record says where it draws for good: on the GPU once its warm-up is
+/// over, or on the CPU when it fell back (a server on a software rasterizer offers no dmabuf feedback, so its clients
+/// cannot draw on the GPU). A fallback fails at once under `CUPERTINO_GPU_REQUIRED=1`, the tier of a machine with a
+/// render node; without one the test goes on with the frames the CPU draws, which no warm-up draws again.
+fn wait_for_the_launcher_s_renderer(server: &mut Server) {
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-launcher")
+        .expect("the launcher runs");
+    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join("cupertino/renderers")
+        .join(pid.to_string());
+    let mut last = String::new();
+    server.wait_until("the launcher's renderer to settle", |_| {
+        last = std::fs::read_to_string(&record).unwrap_or_default();
+        renderer_settled(&last)
+    });
+    if !last.lines().any(|l| l == "renderer=gpu") {
+        assert!(
+            std::env::var("CUPERTINO_GPU_REQUIRED").as_deref() != Ok("1"),
+            "CUPERTINO_GPU_REQUIRED=1, but the launcher draws on the CPU:\n{last}"
+        );
+        eprintln!(
+            "the launcher draws on the CPU for good, so the CPU's frames are counted:\n{last}"
+        );
+    }
+}
+
+/// Whether a renderer record says where its process draws for good: the GPU, or the CPU for any reason but the GPU's
+/// warm-up or a window not yet large or busy enough, after which the process may still move to the GPU.
+fn renderer_settled(record: &str) -> bool {
+    let line = |key: &str| {
+        record
+            .lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+    };
+    match line("renderer") {
+        Some("gpu") => true,
+        Some("cpu") => !matches!(
+            line("reason"),
+            None | Some("warming up") | Some("no window large or busy enough yet")
+        ),
+        _ => false,
+    }
+}
+
+#[test]
+fn a_renderer_record_is_settled_on_the_gpu_or_on_a_fallback_to_the_cpu() {
+    let record = |renderer: &str, reason: &str| {
+        format!("program=cupertino-launcher\nrenderer={renderer}\nreason={reason}\n")
+    };
+    assert!(renderer_settled(&record("gpu", "the GPU")));
+    assert!(renderer_settled(&record("cpu", "no dmabuf feedback")));
+    assert!(renderer_settled(&record("cpu", "a software rasterizer")));
+    assert!(!renderer_settled(&record("cpu", "warming up")));
+    assert!(!renderer_settled(&record(
+        "cpu",
+        "no window large or busy enough yet"
+    )));
+    assert!(!renderer_settled(""), "no record yet");
+}
+
 /// The launcher's application browser opens from hidden on the compositor's clock: its window draws one frame, with
 /// its layers (the glass, which carries the edge the compositor draws along it, the query row, the view options button
 /// and the body) at rest,
@@ -2768,21 +2903,11 @@ fn the_launcher_opens_a_scope_on_the_compositor_s_clock_without_a_new_buffer() {
         launcher_surfaces(&server.state, BROWSER).unwrap()
     };
     let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
-    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
-    // the close
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says where it draws for good,
+    // then the close
     toggle(&mut server);
     first_frame(&mut server);
-    let pid = server
-        .state
-        .supervisor
-        .pid_of("cupertino-launcher")
-        .expect("the launcher runs");
-    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
-        .join("cupertino/renderers")
-        .join(pid.to_string());
-    server.wait_until("the launcher to draw on the GPU", |_| {
-        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
-    });
+    wait_for_the_launcher_s_renderer(&mut server);
     toggle(&mut server);
     server.wait_until("the browser to close", launcher_closed);
     // the open counted
@@ -2872,21 +2997,11 @@ fn the_launcher_opens_the_search_field_on_the_compositor_s_clock_without_a_new_b
         launcher_surfaces(&server.state, SEARCH).unwrap()
     };
     let commits = |surfaces: &[_]| -> Vec<_> { surfaces.iter().map(buffer_commit).collect() };
-    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
-    // the close
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says where it draws for good,
+    // then the close
     toggle(&mut server);
     first_frame(&mut server);
-    let pid = server
-        .state
-        .supervisor
-        .pid_of("cupertino-launcher")
-        .expect("the launcher runs");
-    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
-        .join("cupertino/renderers")
-        .join(pid.to_string());
-    server.wait_until("the launcher to draw on the GPU", |_| {
-        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
-    });
+    wait_for_the_launcher_s_renderer(&mut server);
     toggle(&mut server);
     server.wait_until("the search field to close", launcher_closed);
     // the open counted
@@ -3008,21 +3123,11 @@ fn the_launcher_folds_a_scope_on_the_compositor_s_clock_drawing_its_row_at_most_
         });
         launcher_surfaces(&server.state, BROWSER).unwrap()
     };
-    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
-    // the close
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says where it draws for good,
+    // then the close
     toggle(&mut server);
     at_rest(&mut server);
-    let pid = server
-        .state
-        .supervisor
-        .pid_of("cupertino-launcher")
-        .expect("the launcher runs");
-    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
-        .join("cupertino/renderers")
-        .join(pid.to_string());
-    server.wait_until("the launcher to draw on the GPU", |_| {
-        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
-    });
+    wait_for_the_launcher_s_renderer(&mut server);
     toggle(&mut server);
     server.wait_until("the browser to close", launcher_closed);
     for run in 0..3 {
@@ -3189,21 +3294,11 @@ fn the_launcher_unfolds_the_search_field_on_the_compositor_s_clock_drawing_its_r
         });
         panel
     };
-    // the first open, the renderer's warm-up in it until the launcher's renderer record says it draws on the GPU, then
-    // the close
+    // the first open, the renderer's warm-up in it until the launcher's renderer record says where it draws for good,
+    // then the close
     op(&mut server, ShellOp::ToggleLauncher);
     at_rest(&mut server);
-    let pid = server
-        .state
-        .supervisor
-        .pid_of("cupertino-launcher")
-        .expect("the launcher runs");
-    let record = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
-        .join("cupertino/renderers")
-        .join(pid.to_string());
-    server.wait_until("the launcher to draw on the GPU", |_| {
-        std::fs::read_to_string(&record).is_ok_and(|r| r.lines().any(|l| l == "renderer=gpu"))
-    });
+    wait_for_the_launcher_s_renderer(&mut server);
     op(&mut server, ShellOp::ToggleLauncher);
     server.wait_until("the search field to close", launcher_closed);
     for run in 0..3 {

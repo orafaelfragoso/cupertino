@@ -9,7 +9,7 @@ mod tests;
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -72,10 +72,10 @@ impl Listener {
         if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
             return Err(io::Error::other("runtime directory is not private"));
         }
-        match std::fs::create_dir(dir) {
-            Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
+        // made private at once, whatever the umask: never a moment in which others may enter it
+        match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+            Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
         }
         let meta = std::fs::symlink_metadata(dir)?;
         if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {

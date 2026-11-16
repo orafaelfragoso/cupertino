@@ -89,3 +89,45 @@ fn the_socket_appears_only_private_and_listening_and_leaves_no_staging_name() {
         drop(listener);
     }
 }
+/// The controller's folder, made in a runtime directory that has none yet, is the user's alone under the usual umask
+/// (022) and under none (000), and the socket binds in it; one another program left readable to others is refused.
+/// The test runs itself again in a process of its own under each umask.
+#[test]
+fn the_controller_s_folder_is_private_whatever_the_umask_and_a_shared_one_is_refused() {
+    const RUNTIME: &str = "CUPERTINO_TEST_CONTROL_RUNTIME";
+    if let Some(runtime) = std::env::var_os(RUNTIME) {
+        Listener::bind(Path::new(&runtime), "wayland-97").unwrap();
+        return;
+    }
+    let name = "ipc::tests::the_controller_s_folder_is_private_whatever_the_umask_and_a_shared_one_is_refused";
+    for umask in ["022", "000"] {
+        let runtime = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let status = std::process::Command::new("sh")
+            .args(["-c", &format!("umask {umask} && exec \"$0\" \"$@\"")])
+            .arg(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture"])
+            .env(RUNTIME, runtime.path())
+            .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+            .status()
+            .unwrap();
+        assert!(status.success(), "the controller bound under umask {umask}");
+        let mode = std::fs::metadata(runtime.path().join("cupertino"))
+            .unwrap()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "the controller's folder under umask {umask}");
+    }
+    let runtime = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let shared = runtime.path().join("cupertino");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let refused = Listener::bind(runtime.path(), "wayland-97")
+        .err()
+        .map(|e| e.to_string());
+    assert_eq!(
+        refused.as_deref(),
+        Some("controller directory is not private")
+    );
+}

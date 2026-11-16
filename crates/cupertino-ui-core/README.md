@@ -276,7 +276,10 @@ declared popup; the application declares nothing and hears nothing. Inside it `E
 control as `Event::PopupAnswer(n)` and `EventCx::close_popup()` ends it; it also ends when the compositor dismisses
 it, when the window system refuses it, and with its control or the control's window. One is open at a time: another
 control's replaces it. A text field's menu is one. `EventCx::holds_popup()` says whether a control of the window has
-one open, so a window that closes when it loses the keyboard can tell that the keyboard went to that popup.
+one open, so a window that closes when it loses the keyboard can tell that the keyboard went to that popup. When the
+compositor dismisses that popup and the keyboard does not come back with it (another surface took it), the ancestors
+of the window's focused node hear `Event::FocusWithin { gained: false, .. }` once more, now with no popup open: the
+loss they took for the popup's is the window's own.
 
 ## Not yet
 

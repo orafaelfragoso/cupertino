@@ -461,6 +461,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     pastes: HashMap<ClipboardToken, (WindowKey, NodeId)>,
     /// The popup a control opened for itself, while it is open.
     owned: Option<Owned<A::Message>>,
+    /// The window whose control's popup the compositor dismissed among the events of this turn: it hears where that
+    /// left the keyboard once they are all handled ([`Runtime::keyboard_after_dismissal`]).
+    owned_dismissed: Option<WindowKey>,
 }
 
 impl<A: Application, W: WindowSystem> Runtime<A, W> {
@@ -517,6 +520,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             refused_popups: Vec::new(),
             clipboard_text: None,
             pastes: HashMap::new(),
+            owned_dismissed: None,
             owned: None,
         };
         for command in commands {
@@ -732,6 +736,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             .entered();
             self.platform_event(event)?;
         }
+        self.keyboard_after_dismissal();
         self.assistive_actions();
         self.semantic_actions();
         let ready = tracing::trace_span!("ui.tasks").in_scope(|| self.executor.run_ready());
@@ -1188,6 +1193,42 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.view_dirty = true;
             self.mark_owner();
         }
+    }
+
+    /// The compositor dismissed the popup a control of a window opened for itself, and every event it sent with that is
+    /// handled. A window that lost the keyboard to that popup was told so while [`EventCx::holds_popup`] was true, and
+    /// took it for the popup's. When the dismissal gave the keyboard back, the window heard so among those events;
+    /// when it did not (another surface took the keyboard, which is what dismissed the popup), no event says so, as
+    /// the keyboard never passed through the window. The ancestors of its focused node then hear the loss again, now
+    /// with no popup open, so a panel that closes without the keyboard closes.
+    fn keyboard_after_dismissal(&mut self) {
+        let Some(key) = self.owned_dismissed.take() else {
+            return;
+        };
+        let Some(i) = self.windows.iter().position(|w| w.key == key) else {
+            return;
+        };
+        let w = &mut self.windows[i];
+        if w.active || w.keyboard_in_popup || w.owned_popup || w.fade.is_some() {
+            return;
+        }
+        let Some(node) = w.focus.node() else {
+            return;
+        };
+        let mut ancestors = self.tree.path(node);
+        ancestors.pop();
+        ancestors.reverse();
+        let lost = Event::FocusWithin {
+            gained: false,
+            visible: false,
+        };
+        let now = self.options.clock.now();
+        let mut effects = Effects::default();
+        let mut route = route(&mut self.tree, w, now, &mut effects);
+        for ancestor in ancestors {
+            route.notify(ancestor, &lost);
+        }
+        self.apply(i, effects);
     }
 
     /// The clipboard offers these kinds of data, or none: whether it holds text, and of which kind, for every window.
@@ -1793,6 +1834,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
             WindowEvent::PopupDone => {
                 if let Some(dismiss) = w.popup.as_ref().map(|p| p.on_dismiss.clone()) {
+                    if let (Dismiss::Owned, Some(owned)) = (&dismiss, &self.owned) {
+                        self.owned_dismissed = Some(owned.parent.clone());
+                    }
                     self.dismissed(dismiss);
                 }
                 return Ok(());

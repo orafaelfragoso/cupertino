@@ -101,7 +101,8 @@ that `LauncherRoles` gives it, none of them on an output, so the server puts the
 
 Opening the panel closes the hidden window and opens the panel and the catcher; closing it does the reverse. A panel or catcher
 window the server closes (its output went away) closes the panel; a hidden window it closes is replaced by a new one
-(`Message::Remap`, a new window key), which the server puts on an output still there, so the process keeps running. The panel's
+(`Message::Remap`, a new window key), which the server puts on an output still there, so the process keeps running. With no
+output left the new one waits until one comes back (`Message::Outputs`), as the server closes a window put on none at once. The panel's
 margin is first guessed from the first output's height, since the output the server picks is not known before the configure; the
 catcher's configure gives the height of the output both were put on, and `LauncherRoles` corrects the margin
 (`LayerSurface::set_margin`) when it differs, before the panel's first frame commits it.

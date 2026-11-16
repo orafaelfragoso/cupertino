@@ -13,6 +13,8 @@ use cupertino_app_protocols::server::app_effects::cupertino_appearance_v1::{
 use cupertino_app_protocols::server::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1,
 };
+use cupertino_app_protocols::server::layers::cupertino_layer_v1::CupertinoLayerV1;
+use cupertino_app_protocols::server::layers::cupertino_layers_v1::{self, CupertinoLayersV1};
 use cupertino_geometry::Rect;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{rgba_to_argb8888, Ready, ShmPresenter};
@@ -270,9 +272,31 @@ plain_global!(
     WlCompositor,
     WlDataDeviceManager,
     CupertinoAppEffectsV1,
+    CupertinoLayersV1,
     WpViewporter,
     WpSinglePixelBufferManagerV1
 );
+
+/// The layers global makes each layer and presentation it is asked for, and shows none of them.
+impl Dispatch<CupertinoLayersV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoLayersV1,
+        request: cupertino_layers_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            cupertino_layers_v1::Request::GetLayer { id, .. }
+            | cupertino_layers_v1::Request::GetPresentation { id, .. } => {
+                init.init(id, ());
+            }
+            _ => {}
+        }
+    }
+}
 
 impl Dispatch<WpViewporter, ()> for Mock {
     fn request(
@@ -427,7 +451,8 @@ ignore_requests!(
     WlTouch: (),
     WlKeyboard: (),
     XdgToplevel: (),
-    CupertinoAppearanceV1: ()
+    CupertinoAppearanceV1: (),
+    CupertinoLayerV1: ()
 );
 
 impl Dispatch<WlCompositor, ()> for Mock {
@@ -1007,16 +1032,17 @@ fn spawn_server_with(
     stream: UnixStream,
     effects: Option<u32>,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
-    spawn_server_offering(stream, effects, false, false)
+    spawn_server_offering(stream, effects, false, false, false)
 }
 
 /// [`spawn_server_with`], offering `wp_viewporter` and `wp_single_pixel_buffer_manager_v1` when `solid`, and with
-/// `wl_shm` listing `abgr8888` when `abgr`.
+/// `wl_shm` listing `abgr8888` when `abgr`, and `cupertino_layers_v1` when `layers`.
 fn spawn_server_offering(
     stream: UnixStream,
     effects: Option<u32>,
     solid: bool,
     abgr: bool,
+    layers: bool,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
@@ -1034,6 +1060,9 @@ fn spawn_server_offering(
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         if let Some(version) = effects {
             dh.create_global::<Mock, CupertinoAppEffectsV1, _>(version, ());
+        }
+        if layers {
+            dh.create_global::<Mock, CupertinoLayersV1, _>(6, ());
         }
         if solid {
             dh.create_global::<Mock, WpViewporter, _>(1, ());
@@ -1371,7 +1400,8 @@ fn a_frame_is_drawn_at_the_output_scale_in_wl_shm_byte_order_and_the_next_waits_
 fn a_solid_colour_is_one_stretched_pixel_or_where_the_compositor_cannot_a_filled_frame() {
     for offered in [true, false] {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_offering(server_stream, None, offered, false);
+        let (control, committed, seen) =
+            spawn_server_offering(server_stream, None, offered, false, false);
         let mut app = App::connect(client_stream);
         app.wait_for_draw();
         // straight half-transparent red
@@ -1669,8 +1699,8 @@ mod window_system {
     use cupertino_modifiers::Profile;
     use cupertino_ui_platform::{
         ClipboardKind, Color, DecorationMode, MaterialRegion, MenuDescription, MouseButton,
-        PlatformEvent, PointerEvent, PresentOutcome, TouchEvent, WindowEvent, WindowId,
-        WindowRequest, WindowSpec, WindowSystem,
+        PlatformEvent, PointerEvent, PresentOutcome, SurfaceLayer, SurfaceLayerLook, TouchEvent,
+        WindowEvent, WindowId, WindowRequest, WindowSpec, WindowSystem,
     };
     use cupertino_ui_render::{CpuFrame, DamageRegion, PixelFormat, PixelRect, RenderFrameId};
     use cupertino_ui_wayland::WaylandWindowSystem;
@@ -1775,8 +1805,18 @@ mod window_system {
         effects: Option<u32>,
         abgr: bool,
     ) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        created_offering(effects, abgr, false)
+    }
+
+    /// [`created_listing`] on a server that offers `cupertino_layers_v1` when `layers`.
+    fn created_offering(
+        effects: Option<u32>,
+        abgr: bool,
+        layers: bool,
+    ) -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_offering(server_stream, effects, false, abgr);
+        let (control, committed, seen) =
+            spawn_server_offering(server_stream, effects, false, abgr, layers);
         let mut ws = WaylandWindowSystem::new(
             Connection::from_stream(client_stream).unwrap(),
             Profile::cupertino(),
@@ -2571,6 +2611,53 @@ mod window_system {
             kit.ws.present(w, &frame(9, [0; 4], &[]), None).unwrap(),
             PresentOutcome::Presented
         );
+    }
+
+    /// A layer the compositor draws (a surface of its own) that finds no free buffer holds its window back as the
+    /// window's own buffers do: the frame asked for next comes once the compositor releases one, not at once, which
+    /// would draw every layer again and again while the compositor keeps their buffers.
+    #[test]
+    fn a_surface_layer_with_no_free_buffer_holds_the_next_frame_until_the_compositor_releases_one()
+    {
+        let (mut kit, control, committed, _seen) = created_offering(None, false, true);
+        kit.window_event(|e| matches!(e, WindowEvent::Configure(_)).then_some(()));
+        let w = kit.window;
+        assert!(kit.ws.capabilities().surface_layers);
+        control.send(Control::HoldBuffers).unwrap();
+        let present = |kit: &mut Kit, id: u64| {
+            let frame = frame_sized(id, (40, 20), [0; 4], &[]);
+            let layer = SurfaceLayer {
+                key: 1,
+                rect: Rect::new(0.0, 0.0, 20.0, 10.0),
+                look: SurfaceLayerLook::default(),
+                frame: Some(&frame),
+            };
+            kit.ws.present_surface_layers(w, &[layer]).unwrap()
+        };
+        let mut presented = 0;
+        while present(&mut kit, presented) == PresentOutcome::Presented {
+            presented += 1;
+            assert!(presented < 8, "the transport never ran out of buffers");
+        }
+        kit.pump();
+        for _ in 0..presented {
+            committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        kit.pump();
+        kit.stash.clear();
+
+        // no frame callback is outstanding: only the layer's held buffers keep the next frame back
+        kit.ws.request_frame(w);
+        kit.pump();
+        kit.pump();
+        assert!(
+            !kit.took_frame(),
+            "a frame at once would draw the layer again into no buffer"
+        );
+
+        control.send(Control::ReleaseBuffers).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        assert_eq!(present(&mut kit, 9), PresentOutcome::Presented);
     }
 
     #[test]
@@ -3399,7 +3486,8 @@ mod window_system {
     #[test]
     fn a_solid_window_is_one_pixel_stretched_over_its_configured_size_and_keeps_its_input_region() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let (control, committed, seen) = spawn_server_offering(server_stream, None, true, false);
+        let (control, committed, seen) =
+            spawn_server_offering(server_stream, None, true, false, false);
         let ws = WaylandWindowSystem::new(
             Connection::from_stream(client_stream).unwrap(),
             Profile::cupertino(),

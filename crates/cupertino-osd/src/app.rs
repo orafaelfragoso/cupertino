@@ -2,7 +2,7 @@
 //! bus interface's commands arrive as messages, and timers pace the hold and the fade.
 
 use cupertino_alsa::DEVICE_DIR;
-use cupertino_kit::core::{Application, Command, Window};
+use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_modifiers::Profile;
 use cupertino_osd::backend::{
@@ -91,12 +91,14 @@ fn controller(options: &Options) -> Controller {
     )
 }
 
-/// Gives the overlay's window its layer surface: on the overlay layer of `output`, anchored to the bottom only, so it
-/// is centred horizontally `BOTTOM_MARGIN` above the edge, with no keyboard and an empty input region.
+/// Gives the overlay's window its layer surface: on the overlay layer of the server's first output, anchored to the
+/// bottom only, so it is centred horizontally `BOTTOM_MARGIN` above the edge, with no keyboard and an empty input
+/// region. Which output that is goes to the model at each change, so the overlay follows it and has no window while
+/// the server has no output.
 struct OsdRoles {
     shell: LayerShell,
-    output: OutputId,
     layer: Option<LayerSurface>,
+    outputs: async_channel::Sender<Option<OutputId>>,
 }
 
 impl SurfaceRoles for OsdRoles {
@@ -110,7 +112,8 @@ impl SurfaceRoles for OsdRoles {
         }
         let config = LayerSurfaceConfig {
             namespace: NAMESPACE.to_string(),
-            output: Some(self.output),
+            // with no output known the server picks one, or closes the surface when it has none
+            output: first_output(conn),
             layer: Layer::Overlay,
             anchor: Anchor::Bottom,
             size: (WINDOW_SIZE, WINDOW_SIZE),
@@ -139,7 +142,7 @@ impl SurfaceRoles for OsdRoles {
         let layer = self.layer.as_ref()?;
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } if surface == layer.surface() => {
-                // a configure without a size closes the overlay, which restarts the process
+                // a configure without a size closes the overlay, which opens again on an output still there
                 Some(match layer.configured(size) {
                     Ok(size) => RoleEvent::Configure { surface, size },
                     Err(_) => RoleEvent::Closed(surface),
@@ -157,6 +160,28 @@ impl SurfaceRoles for OsdRoles {
             self.layer = None;
         }
     }
+
+    fn outputs_changed(&mut self, conn: &Connection) {
+        let _ = self.outputs.try_send(first_output(conn));
+    }
+}
+
+/// Where the overlay's window goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// Wherever the window system puts a window (a toplevel, without the layer shell).
+    Anywhere,
+    /// On this output, the server's first.
+    On(OutputId),
+    /// Nowhere: the server has no output. The bus is still served, so the keys still change the volume and the
+    /// brightness.
+    Nowhere,
+}
+
+impl From<Option<OutputId>> for Placement {
+    fn from(output: Option<OutputId>) -> Placement {
+        output.map_or(Placement::Nowhere, Placement::On)
+    }
 }
 
 pub struct Osd {
@@ -165,6 +190,12 @@ pub struct Osd {
     start: Instant,
     /// The timer that counts; one scheduled before it is ignored when it fires.
     timer: u64,
+    /// The server's first output at each change, from the window system.
+    outputs: async_channel::Receiver<Option<OutputId>>,
+    placement: Placement,
+    /// The window's generation: each one is a new window, so one the server closed, or one on an output that went, is
+    /// not kept.
+    window: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +204,10 @@ pub enum Message {
     Timer(u64),
     /// The bus thread is gone.
     Unheard,
+    /// The server's first output is now this one, or it has none.
+    Output(Option<OutputId>),
+    /// The server closed the window: its output went away.
+    Closed,
 }
 
 impl Osd {
@@ -188,6 +223,17 @@ fn listen(commands: &async_channel::Receiver<controller::Command>) -> Command<Me
             .recv()
             .await
             .map_or(Message::Unheard, Message::Command)
+    }))
+}
+
+/// The next change of the server's first output; a closed channel (no window system tells any) waits for ever.
+fn follow(outputs: &async_channel::Receiver<Option<OutputId>>) -> Command<Message> {
+    let outputs = outputs.clone();
+    Command::Perform(Box::pin(async move {
+        match outputs.recv().await {
+            Ok(output) => Message::Output(output),
+            Err(_) => std::future::pending().await,
+        }
     }))
 }
 
@@ -213,15 +259,30 @@ fn schedule(model: &mut Osd) -> Vec<Command<Message>> {
 fn start(
     controller: Controller,
     commands: async_channel::Receiver<controller::Command>,
+    outputs: async_channel::Receiver<Option<OutputId>>,
+    placement: Placement,
 ) -> (Osd, Vec<Command<Message>>) {
-    let first = listen(&commands);
+    let first = vec![listen(&commands), follow(&outputs)];
     let model = Osd {
         controller,
         commands,
         start: Instant::now(),
         timer: 0,
+        outputs,
+        placement,
+        window: 0,
     };
-    (model, vec![first])
+    (model, first)
+}
+
+/// What the model does when the server's first output becomes `output`: the window goes onto it, made anew, or goes
+/// while there is none; one already on it stays.
+fn place(model: &mut Osd, output: Option<OutputId>) {
+    let placement = Placement::from(output);
+    if placement != model.placement {
+        model.placement = placement;
+        model.window += 1;
+    }
 }
 
 impl Application for Osd {
@@ -236,6 +297,8 @@ impl Application for Osd {
         start(
             controller(&Options::default()),
             async_channel::unbounded().1,
+            async_channel::unbounded().1,
+            Placement::Anywhere,
         )
     }
 
@@ -256,32 +319,51 @@ impl Application for Osd {
                 eprintln!("cupertino-osd: the bus interface stopped");
                 vec![Command::Exit]
             }
+            Message::Output(output) => {
+                place(model, output);
+                vec![follow(&model.outputs)]
+            }
+            Message::Closed => {
+                // a new window, on the output the server still has; while it has none there is no window
+                model.window += 1;
+                Vec::new()
+            }
         }
     }
 
     fn view(model: &Osd) -> Vec<Window<Message>> {
-        vec![view::window(model.controller.view(model.now()))]
+        if model.placement == Placement::Nowhere {
+            return Vec::new();
+        }
+        let mut window = view::window(model.controller.view(model.now()));
+        window.key = WindowKey(Key::from(format!("osd-{}", model.window)));
+        // a toplevel closed by the person ends the process; a layer surface the server closed is made again
+        if model.placement != Placement::Anywhere {
+            window.on_close = Some(Message::Closed);
+        }
+        vec![window]
     }
 }
 
-/// The first output the server has described.
-fn first_output(conn: &Connection) -> Result<OutputId> {
-    Ok(conn
-        .outputs()
+/// The first output the server has described, if it has one.
+fn first_output(conn: &Connection) -> Option<OutputId> {
+    conn.outputs()
         .into_iter()
         .find(|o| o.geometry.is_some())
-        .ok_or("the server has no output")?
-        .id)
+        .map(|o| o.id)
 }
 
-/// Connect, claim the bus name and serve until the connection, the bus or the overlay's surface goes.
+/// Connect, claim the bus name and serve until the connection or the bus goes. While the server has no output the
+/// overlay has no window and the bus is still served, so the volume and brightness keys still work; the window comes
+/// back with an output.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Osd::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let conn = system.connection();
     let shell = LayerShell::bind(conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
-    let output = first_output(conn)?;
+    let output = first_output(conn);
     let (sender, commands) = async_channel::unbounded();
+    let (outputs_sender, outputs) = async_channel::unbounded();
     // the bus thread only queues; the application's loop carries the commands out, so the effects never block the bus
     let _control = control::serve(zbus::connection::Builder::session()?, move |command| {
         let _ = sender.send_blocking(command);
@@ -292,11 +374,12 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     })?;
     let system = system.with_roles(OsdRoles {
         shell,
-        output,
         layer: None,
+        outputs: outputs_sender,
     });
-    cupertino_kit::app::run_on::<Osd>(system, start(controller(options), commands))?;
-    Err("the overlay's surface was closed".into())
+    let model = start(controller(options), commands, outputs, output.into());
+    cupertino_kit::app::run_on::<Osd>(system, model)?;
+    Err("the overlay's window system stopped".into())
 }
 
 #[cfg(test)]
@@ -310,5 +393,97 @@ mod renderer_class {
             <Osd as Application>::RENDERER,
             cupertino_kit::core::RendererClass::Cpu
         );
+    }
+}
+
+#[cfg(test)]
+mod outputs {
+    use super::*;
+
+    fn osd(placement: Placement) -> Osd {
+        let fake = Options {
+            fake_backends: true,
+            alsa_card: None,
+        };
+        let (model, _) = start(
+            controller(&fake),
+            async_channel::unbounded().1,
+            async_channel::unbounded().1,
+            placement,
+        );
+        model
+    }
+
+    fn keys(model: &Osd) -> Vec<WindowKey> {
+        <Osd as Application>::view(model)
+            .into_iter()
+            .map(|w| w.key)
+            .collect()
+    }
+
+    fn update(model: &mut Osd, message: Message) {
+        let _ = <Osd as Application>::update(model, message);
+    }
+
+    /// Started while the server has no output, the overlay waits with no window, so it neither exits nor has a
+    /// surface the server closes at once; the window comes with the first output.
+    #[test]
+    fn with_no_output_the_overlay_has_no_window_until_one_comes() {
+        let mut model = osd(Placement::Nowhere);
+        assert!(keys(&model).is_empty());
+        update(
+            &mut model,
+            Message::Output(Some(OutputId::from_registry_name(7))),
+        );
+        assert_eq!(keys(&model).len(), 1);
+    }
+
+    /// When the last output goes the window goes, and a new one opens when an output is back; a close from the
+    /// server makes a new window, as does a change of the first output, while a description of the same output
+    /// keeps the one there.
+    #[test]
+    fn the_window_follows_the_first_output_and_waits_while_there_is_none() {
+        let a = OutputId::from_registry_name(1);
+        let b = OutputId::from_registry_name(2);
+        let mut model = osd(Placement::On(a));
+        let first = keys(&model);
+        assert_eq!(first.len(), 1);
+        update(&mut model, Message::Output(Some(a)));
+        assert_eq!(keys(&model), first, "the same output keeps its window");
+
+        update(&mut model, Message::Closed);
+        let reopened = keys(&model);
+        assert_eq!(reopened.len(), 1);
+        assert_ne!(reopened, first, "a closed window is not kept");
+
+        update(&mut model, Message::Output(None));
+        assert!(keys(&model).is_empty());
+        update(&mut model, Message::Closed);
+        assert!(
+            keys(&model).is_empty(),
+            "a close with no output opens nothing"
+        );
+
+        update(&mut model, Message::Output(Some(b)));
+        let back = keys(&model);
+        assert_eq!(back.len(), 1);
+        assert!(back != first && back != reopened);
+    }
+
+    /// With no output the bus is still heard: a volume key changes the volume, with no window to show it.
+    #[test]
+    fn a_volume_key_with_no_output_still_changes_the_volume() {
+        let mut model = osd(Placement::Nowhere);
+        let step = controller::Command::VolumeStep {
+            direction: 1,
+            fine: false,
+        };
+        update(&mut model, Message::Command(step));
+        let shown = model
+            .controller
+            .view(model.now())
+            .expect("the step is carried out");
+        assert!(shown.overlay.level() > FAKE_LEVEL);
+        assert!(keys(&model).is_empty());
     }
 }

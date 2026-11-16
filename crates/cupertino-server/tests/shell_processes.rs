@@ -2033,6 +2033,167 @@ fn the_dock_process_moves_between_displays_and_keeps_running() {
     assert_eq!(server.state.supervisor.pid_of("cupertino-dock"), pid);
 }
 
+/// Whether a layer surface with `namespace` on the first output shows a buffer, of shared memory or the GPU's.
+fn drawn(state: &Cupertino, namespace: &str) -> bool {
+    state.outputs.first().is_some_and(|o| {
+        layer_map_for_output(&o.output).layers().any(|l| {
+            l.namespace() == namespace
+                && with_renderer_surface_state(l.wl_surface(), |r| r.buffer().is_some())
+                    .unwrap_or(false)
+        })
+    })
+}
+
+/// The CPU time (clock ticks) and the context switches of the process `pid` and all its threads so far.
+fn activity(pid: u32) -> (u64, u64) {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    // the fields after the command's name, which is in parentheses and may hold spaces
+    let fields: Vec<&str> = stat
+        .rsplit_once(')')
+        .map_or(Vec::new(), |(_, rest)| rest.split_whitespace().collect());
+    // utime and stime are the 14th and 15th fields, the 12th and 13th after the name
+    let ticks = [11, 12]
+        .iter()
+        .filter_map(|&i| fields.get(i)?.parse::<u64>().ok())
+        .sum();
+    let mut switches = 0;
+    for task in std::fs::read_dir(format!("/proc/{pid}/task"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let status = std::fs::read_to_string(task.path().join("status")).unwrap_or_default();
+        switches += status
+            .lines()
+            .filter(|l| l.contains("ctxt_switches:"))
+            .filter_map(|l| l.split_whitespace().last()?.parse::<u64>().ok())
+            .sum::<u64>();
+    }
+    (ticks, switches)
+}
+
+/// The shell processes of a session that loses its only display (one asleep that reports itself unplugged) keep
+/// running and sit idle: none exits, none is started again, none spins in a loop with the server (a window put on no
+/// output is closed at once, and opening it again at once traded windows with the server as fast as both could). A
+/// process started while there is no output (after a crash, say) waits for one. When a display comes back each draws
+/// on it again. Run with `--no-capture` for each process's activity.
+#[test]
+fn the_shell_processes_sit_idle_with_no_output_and_draw_again_when_one_comes_back() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("no-output-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    let mut osd = real_process("cupertino-osd", &bus);
+    osd.command.push("--fake-backends".into());
+    let mut panel = real_process(PANEL, &bus);
+    panel.command.push("--fake-backends".into());
+    let mut desktop = real_process_without_host_data("cupertino-files", &bus, &empty.0);
+    desktop.command.push("--desktop".into());
+    let procs = vec![
+        real_process_without_host_data("cupertino-dock", &bus, &empty.0),
+        real_process("cupertino-menubar", &bus),
+        real_process("cupertino-notifications", &bus),
+        real_process("cupertino-windowmanager", &bus),
+        osd,
+        panel,
+        launcher,
+        desktop,
+    ];
+    let names: Vec<String> = procs.iter().map(|p| p.name.clone()).collect();
+    let Some(mut server) = Server::start(procs, true) else {
+        return;
+    };
+    let mapped = |s: &Cupertino| {
+        s.outputs
+            .first()
+            .is_some_and(|o| s.dock_rect(o.id).is_some() && s.menu_bars.has_bar(o.id))
+            && layer_geometry(s, "cupertino-osd").is_some()
+            && drawn(s, "cupertino-launcher")
+    };
+    server.wait_until(
+        "the dock, the menu bar, the overlay and the launcher",
+        mapped,
+    );
+    let head = server.head_of(0);
+    headless::remove_display(&mut server.state, head).unwrap();
+    server.wait_until("no output", |s| s.outputs.is_empty());
+
+    // each process started again while there is no output, as after a crash
+    let before: Vec<u32> = names
+        .iter()
+        .map(|n| server.state.supervisor.pid_of(n).expect("the process runs"))
+        .collect();
+    for name in &names {
+        server
+            .state
+            .supervisor
+            .request_restart(name, Instant::now(), Box::new(|_| {}));
+    }
+    server.wait_until("every process started again and connected", |s| {
+        names.iter().zip(&before).all(|(n, old)| {
+            s.supervisor
+                .pid_of(n)
+                .is_some_and(|pid| pid != *old && connected(s, pid))
+        })
+    });
+    let pids: Vec<u32> = names
+        .iter()
+        .map(|n| server.state.supervisor.pid_of(n).unwrap())
+        .collect();
+
+    // what each does once started: a second to settle (a process that cannot run without an output exits within
+    // it), then a second measured
+    let settle = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < settle {
+        server.step();
+    }
+    let start: Vec<(u64, u64)> = pids.iter().map(|&p| activity(p)).collect();
+    let measured = Instant::now();
+    let end = measured + Duration::from_secs(1);
+    while Instant::now() < end {
+        server.step();
+    }
+    let seconds = measured.elapsed().as_secs_f64();
+    for ((name, &pid), (ticks, switches)) in names.iter().zip(&pids).zip(start) {
+        let (ticks_now, switches_now) = activity(pid);
+        let (cpu, woken) = (ticks_now - ticks, switches_now - switches);
+        eprintln!("{name}: {cpu} clock ticks of CPU, {woken} context switches in {seconds:.2} s");
+        assert_eq!(
+            server.state.supervisor.pid_of(name),
+            Some(pid),
+            "{name} keeps running with no output"
+        );
+        assert!(connected(&server.state, pid), "{name} keeps its connection");
+        // a spinning process takes about half a processor and thousands of switches a second
+        assert!(
+            cpu <= 10 && woken <= 100,
+            "{name} is busy with no output: {cpu} ticks, {woken} switches in {seconds:.2} s"
+        );
+    }
+
+    // a display is plugged in again: each draws on it
+    let display = headless::HeadlessDisplay {
+        name: "headless-2".into(),
+        size: OUTPUT,
+        physical_mm: (0, 0),
+    };
+    headless::add_display(&mut server.state, &display, None).unwrap();
+    server.wait_until(
+        "the dock, the menu bar, the overlay and the launcher on the display plugged in",
+        mapped,
+    );
+    for (name, &pid) in names.iter().zip(&pids) {
+        assert_eq!(
+            server.state.supervisor.pid_of(name),
+            Some(pid),
+            "{name} is the same process"
+        );
+    }
+}
+
 /// An application a shell process starts (the launcher or the dock opening an application) is an application, not a
 /// part of the shell: its process connects to the public socket and its window gets a dock tile. The stand-in launcher
 /// drops its own connection from the child's environment as a shell binary's Wayland client does on connecting.

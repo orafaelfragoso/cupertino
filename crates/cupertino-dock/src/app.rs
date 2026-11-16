@@ -1075,8 +1075,18 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
             observed.apply(&event);
         }
     }
-    let outputs = outputs(conn);
-    let display_height = outputs.first().ok_or("the server has no output")?.height;
+    // started while the server has no output (its only display asleep or unplugged), the dock waits for one, so its
+    // tiles take the size that fits the display it comes on, and it neither exits nor is started again and again
+    let mut outputs = outputs(conn);
+    while outputs.is_empty() {
+        for event in conn.wait(None)? {
+            if let Event::Extension(event) = event {
+                observed.apply(&event);
+            }
+        }
+        outputs = self::outputs(conn);
+    }
+    let display_height = outputs[0].height;
 
     let desktop = DesktopIndex::load_from(&cupertino_defaults::data_dirs());
     let conf_path = DockSettings::path();

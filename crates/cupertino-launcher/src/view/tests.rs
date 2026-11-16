@@ -1174,6 +1174,34 @@ fn a_hidden_window_the_server_closes_is_opened_again() {
     assert!(run.model().panel.is_visible());
 }
 
+/// With no output left the server closes every window put on none at once: the hidden window it closes is opened
+/// again only once an output is back, so the launcher and the server do not trade windows as fast as they can.
+#[test]
+fn a_hidden_window_closed_with_no_output_left_waits_for_one() {
+    let mut run = Run::new();
+    let panel = run.panel();
+    run.send(panel, WindowEvent::CloseRequested);
+    let hidden = run.hidden().expect("the hidden window is mapped");
+    run.deliver(Message::Outputs(false));
+    run.send(hidden, WindowEvent::CloseRequested);
+    assert!(!run.driver.runtime().exited(), "the launcher keeps running");
+    assert_eq!(
+        run.hidden(),
+        Some(hidden),
+        "no new window while there is no output"
+    );
+    // another output described while there is still none changes nothing
+    run.deliver(Message::Outputs(false));
+    assert_eq!(run.hidden(), Some(hidden));
+    run.deliver(Message::Outputs(true));
+    let again = run.hidden().expect("a new hidden window is mapped");
+    assert_ne!(again, hidden);
+    assert!(!run.driver.window_system_mut().windows().contains(&hidden));
+    // an output described again with the window open keeps it
+    run.deliver(Message::Outputs(true));
+    assert_eq!(run.hidden(), Some(again));
+}
+
 #[test]
 fn locking_the_session_closes_the_panel() {
     let mut run = Run::new();

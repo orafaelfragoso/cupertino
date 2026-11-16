@@ -141,6 +141,8 @@ enum Signal {
     Locked,
     /// The output the launcher is on is this large (the catcher covers it).
     Output(Size),
+    /// Whether the server has an output described.
+    Outputs(bool),
     /// The session's Reduce Motion option.
     ReduceMotion(bool),
     /// The session's steady caret option.
@@ -312,6 +314,10 @@ impl SurfaceRoles for LauncherRoles {
         }
     }
 
+    fn outputs_changed(&mut self, conn: &Connection) {
+        let _ = self.signals.try_send(Signal::Outputs(any_output(conn)));
+    }
+
     fn destroyed(&mut self, surface: SurfaceId) {
         let surfaces = &mut *self.surfaces.borrow_mut();
         for slot in [
@@ -324,6 +330,11 @@ impl SurfaceRoles for LauncherRoles {
             }
         }
     }
+}
+
+/// Whether the server has an output it has described, which a window can be put on.
+fn any_output(conn: &Connection) -> bool {
+    conn.outputs().iter().any(|o| o.geometry.is_some())
 }
 
 fn unix_now() -> f64 {
@@ -944,6 +955,7 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
                 Signal::Applications => Message::Browse,
                 Signal::Locked => Message::Locked,
                 Signal::Output(size) => Message::Output(size),
+                Signal::Outputs(any) => Message::Outputs(any),
                 Signal::ReduceMotion(on) => Message::ReduceMotion(on),
                 Signal::SteadyCaret(on) => Message::SteadyCaret(on),
                 Signal::Opened(launch, running) => Message::Opened(launch, running),
@@ -970,6 +982,7 @@ impl Application for App {
                 | Message::Browse
                 | Message::Locked
                 | Message::Output(_)
+                | Message::Outputs(_)
                 | Message::ReduceMotion(_)
                 | Message::SteadyCaret(_)
                 | Message::Opened(..)
@@ -1024,6 +1037,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
             f64::from(g.height),
         )));
     }
+    let no_output = !any_output(system.connection());
     let toggles = sender.clone();
     let _control = control::serve(zbus::connection::Builder::session()?, move |call| {
         let _ = toggles.send_blocking(match call {
@@ -1057,6 +1071,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let mut model = Model::new(Launcher::from_system(config), Box::new(host));
     model.files = files;
     model.settled = cupertino_shell_client::test_clock::motion_settled();
+    // started while the server has no output, the hidden window the server closes waits for one
+    model.no_output = no_output;
     // the compositor runs the panel's close when it shows a window's parts as layers of their own, with glass
     let capabilities = system.capabilities();
     model.compositor_layers = capabilities.surface_layers && capabilities.app_effects;

@@ -225,8 +225,11 @@ pub enum Message {
     Unheard,
     /// The session was locked: what is shown goes at once, and the launch history is written.
     Locked,
-    /// The server closed the hidden window (its output went away): a new one is opened, on an output still there.
+    /// The server closed the hidden window (its output went away): a new one is opened, on an output still there,
+    /// or once one comes back when none is left.
     Remap,
+    /// Whether the server has an output the launcher's windows can go on.
+    Outputs(bool),
     /// What the preview shows of the result with this id.
     Previewed(String, Arc<Preview>),
     /// The preview of the result with this id shows only the result itself.
@@ -348,6 +351,11 @@ pub struct Model {
     frame_waiting: bool,
     /// The hidden window's generation: each one is a new window, so one the server closed is not kept.
     pub hidden: u64,
+    /// The server has no output: a window it closes is opened again only once one comes back, as the server closes
+    /// every window put on none at once.
+    pub no_output: bool,
+    /// The hidden window was closed while the server had no output, and waits for one.
+    remap_waiting: bool,
     preview: PreviewState,
     /// The id of the result the preview was last asked for.
     previewed: Option<String>,
@@ -482,6 +490,8 @@ impl Model {
             frame: 0,
             frame_waiting: false,
             hidden: 0,
+            no_output: false,
+            remap_waiting: false,
             preview: PreviewState::None,
             previewed: None,
             arrangement: Arrangement::Grid,
@@ -2307,7 +2317,18 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::Remap => {
-            model.hidden += 1;
+            if model.no_output {
+                model.remap_waiting = true;
+            } else {
+                model.hidden += 1;
+            }
+            Vec::new()
+        }
+        Message::Outputs(any) => {
+            model.no_output = !any;
+            if any && std::mem::take(&mut model.remap_waiting) {
+                model.hidden += 1;
+            }
             Vec::new()
         }
         Message::Previewed(id, preview) => {

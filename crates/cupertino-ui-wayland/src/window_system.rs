@@ -117,6 +117,8 @@ struct Window {
     frame_pending: bool,
     /// The last present was not ready; the next frame waits for this.
     stalled: Option<Stall>,
+    /// The surface layers whose present found no free buffer: a window stalled on a buffer waits for theirs too.
+    busy_layers: Vec<SurfaceId>,
     /// The runtime asked for a frame.
     frame_wanted: bool,
     /// Presented frames the compositor has not yet said it showed or discarded, oldest first.
@@ -667,6 +669,7 @@ impl WaylandWindowSystem {
             shown: None,
             frame_pending: false,
             stalled: None,
+            busy_layers: Vec::new(),
             frame_wanted: false,
             in_flight: VecDeque::new(),
             backdrop: None,
@@ -990,6 +993,7 @@ impl WaylandWindowSystem {
     fn resume(&mut self, i: usize) -> bool {
         let w = &mut self.windows[i];
         w.stalled = None;
+        w.busy_layers.clear();
         !w.frame_pending && std::mem::take(&mut w.frame_wanted)
     }
 
@@ -2209,11 +2213,16 @@ impl WindowSystem for WaylandWindowSystem {
         let gone = self
             .surface_layers
             .sync(&mut self.conn, global, window, parent, layers)?;
+        self.window_mut(window)?
+            .busy_layers
+            .retain(|s| !gone.contains(s));
         for s in gone {
             self.gpu.forget(&mut self.conn, s);
             let _ = self.conn.destroy(s);
         }
         let mut ready = true;
+        let mut stall = None;
+        let mut busy = Vec::new();
         for layer in layers {
             let Some(frame) = layer.frame else { continue };
             let Some(state) = self
@@ -2263,18 +2272,27 @@ impl WindowSystem for WaylandWindowSystem {
                 .expect("found above");
             match shown {
                 Ok(()) => state.shown = Some((frame.width, frame.height)),
-                Err(_) => {
+                Err(waits) => {
                     state.carried.extend(damage);
                     bound(&mut state.carried, frame.width, frame.height);
                     ready = false;
+                    if waits == Some(Stall::Buffer) {
+                        busy.push(surface);
+                    }
+                    stall = stall.or(waits);
                 }
             }
         }
-        Ok(if ready {
-            PresentOutcome::Presented
-        } else {
-            PresentOutcome::NotReady
-        })
+        if ready {
+            return Ok(PresentOutcome::Presented);
+        }
+        // a layer with no free buffer stalls its window, as a raised layer does: the frame the runtime asks for again
+        // comes once the window and every layer have a buffer, not at once, which would draw every layer again and
+        // again while the compositor holds their buffers
+        let w = self.window_mut(window)?;
+        w.stalled = stall;
+        w.busy_layers = busy;
+        Ok(PresentOutcome::NotReady)
     }
 
     /// One pixel of `color` the compositor stretches over the window ([`Connection::present_solid`]), with the input
@@ -2333,7 +2351,8 @@ impl WindowSystem for WaylandWindowSystem {
         let gpu_stalled = self
             .windows
             .iter()
-            .any(|w| w.stalled == Some(Stall::Buffer) && self.gpu.draws(w.surface));
+            .filter(|w| w.stalled == Some(Stall::Buffer))
+            .any(|w| self.gpu.draws(w.surface) || w.busy_layers.iter().any(|&s| self.gpu.draws(s)));
         let warm_up = self
             .gpu
             .deadline()
@@ -2377,10 +2396,12 @@ impl WindowSystem for WaylandWindowSystem {
             if w.stalled != Some(Stall::Buffer) {
                 continue;
             }
-            // the window's surface and its raised layer's, which presents with it
+            // the window's surface, its raised layer's and its surface layers' that had none, which present with it
             let (surface, layer) = (w.surface, w.layer.as_ref().map(|l| l.surface));
+            let busy = w.busy_layers.clone();
             let free = self.surface_can_present(surface)
-                && layer.is_none_or(|l| self.surface_can_present(l));
+                && layer.is_none_or(|l| self.surface_can_present(l))
+                && busy.into_iter().all(|l| self.surface_can_present(l));
             if free && self.resume(i) {
                 events.push(PlatformEvent::Window {
                     window: self.windows[i].id,

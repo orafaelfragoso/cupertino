@@ -2066,42 +2066,42 @@ fn minimize_elements(
     }))])
 }
 
-/// Closing ghosts of this output: the last frame of a window fading out.
-fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
-    if p.res.mesh.is_none() {
-        return Vec::new();
+/// The ghosts of this output that lie over every window, front to back: the last frame of a window fading out. The
+/// ghosts in `placed` are left out: each was drawn with its own window ([`ghost_piece`]).
+fn closing_elements(p: &SceneParams<'_>, placed: &[WindowId]) -> Vec<Piece> {
+    p.fx.closing
+        .iter()
+        .rev()
+        .filter(|c| c.output == p.output_id && !placed.contains(&c.id))
+        .filter_map(|c| ghost_piece(p, c))
+        .collect()
+}
+
+/// The picture of the ghost `c` where and as far as it shows now, `None` once it has faded out.
+fn ghost_piece(p: &SceneParams<'_>, c: &crate::fx::ClosingWindow) -> Option<Piece> {
+    p.res.mesh.as_ref()?;
+    let (rect, alpha) = c.placement(p.now);
+    let alpha = alpha as f32;
+    if alpha <= 0.0 {
+        return None;
     }
-    let mut out = Vec::new();
-    for c in
-        p.fx.closing
-            .iter()
-            .rev()
-            .filter(|c| c.output == p.output_id)
-    {
-        let (rect, alpha) = c.placement(p.now);
-        let alpha = alpha as f32;
-        if alpha <= 0.0 {
-            continue;
+    let r = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
+    let lease = match p.res.snapshots.pin(c.snapshot.id()) {
+        Ok(lease) => lease,
+        Err(error) => {
+            tracing::error!(%error, window = c.id.0, "closing ghost without its snapshot");
+            return None;
         }
-        let r = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
-        let lease = match p.res.snapshots.pin(c.snapshot.id()) {
-            Ok(lease) => lease,
-            Err(error) => {
-                tracing::error!(%error, window = c.id.0, "closing ghost without its snapshot");
-                continue;
-            }
-        };
-        out.push(Piece::Mesh(Box::new(MeshPiece {
-            kind: SceneKind::ClosingGhost,
-            index: c.id.0,
-            snapshot: lease.id(),
-            keep: SnapshotKeep::Pinned(lease),
-            mesh: Mesh::quad(r.into_geom()),
-            opacity: alpha,
-            revision: Sig::new().f(c.progress(p.now)).finish(),
-        })));
-    }
-    out
+    };
+    Some(Piece::Mesh(Box::new(MeshPiece {
+        kind: SceneKind::ClosingGhost,
+        index: c.id.0,
+        snapshot: lease.id(),
+        keep: SnapshotKeep::Pinned(lease),
+        mesh: Mesh::quad(r.into_geom()),
+        opacity: alpha,
+        revision: Sig::new().f(c.progress(p.now)).finish(),
+    })))
 }
 
 /// Elements of the layer-shell `layer`, front to back. The backdrop captures of menu bars are
@@ -3285,6 +3285,8 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
         let mut front_to_back: Vec<Piece> = Vec::new();
         // strip thumbnails, drawn below every window on the stage
         let mut strip: Vec<Piece> = Vec::new();
+        // the windows whose ghost was drawn with them
+        let mut with_their_window: Vec<WindowId> = Vec::new();
         for (id, slide, workspace_opacity) in list.into_iter().rev() {
             let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
                 continue;
@@ -3333,6 +3335,14 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
                     continue;
                 }
             }
+            // the picture of the window as it showed before an appearance change fades out over this window alone, under
+            // the windows in front of it: over every window it would show a window behind through the ones in front.
+            // The window's own shadow and outline come in as the picture's go, so the two never add up
+            if let Some(ghost) = p.fx.fading_over(id, p.output_id) {
+                plan.shadow *= 1.0 - ghost.placement(p.now).1.clamp(0.0, 1.0);
+                front_to_back.extend(ghost_piece(p, ghost));
+                with_their_window.push(id);
+            }
             // a window with a sheet is covered by the sheet-underlay material, as far as the sheet is
             // shown; the material samples the window below it rather than the desktop
             // behind it (approximate: the design blends behind the window)
@@ -3361,7 +3371,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
-        let mut ghosts: Vec<Piece> = closing_elements(p);
+        let mut ghosts: Vec<Piece> = closing_elements(p, &with_their_window);
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);

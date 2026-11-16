@@ -33,6 +33,7 @@ use crate::limits::{RateLimit, ATTEMPTS_PER_WINDOW, ATTEMPT_TIMEOUT, ATTEMPT_WIN
 use crate::logind::{self, Logind, SeatSession, Signal};
 use crate::service::{self, Authorizer, Call, ReadyRefusal};
 use crate::system_accessibility;
+use crate::upgrade::{self, Decision};
 use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
 use crate::{picture, roster, users, vt};
 
@@ -65,11 +66,15 @@ const SWITCH_GIVE_UP: Duration = Duration::from_secs(5);
 /// How long a started session may take to announce that its agent is up before the login screen is shown again without it
 /// (the design's login waits for the session at most 15.0 s).
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the login screen's session has to end when the manager hands over to a new version before its worker is
+/// killed and logind ends what is left (approximate, ours: the compositor ends in well under a second).
+const GREETER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Entry point of `cupertino-sessiond`: runs until a failure; systemd restarts the unit.
+/// Entry point of `cupertino-sessiond`: runs until a failure, or until it hands the console over to a new version of
+/// itself ([`upgrade`]); systemd restarts the unit either way.
 pub fn run() -> ExitCode {
     match Manager::start().and_then(|mut manager| manager.run()) {
-        Ok(never) => match never {},
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("cupertino-sessiond: {e}");
             diag::exit_error(&e);
@@ -416,6 +421,12 @@ struct Manager {
     _held_terminals: Vec<File>,
     /// Users whose picture file was found unusable, so the journal says it once.
     reported_pictures: HashSet<u32>,
+    /// The file this program was started from, watched for a new version; `None` when it cannot be known.
+    upgrade: Option<upgrade::Watch>,
+    /// When the manager looks at its file next.
+    upgrade_check_at: Instant,
+    /// The manager has stopped the login screen for a new version and ends.
+    handed_over: bool,
 }
 
 impl Manager {
@@ -486,6 +497,9 @@ impl Manager {
         let listener = bind(Path::new(SOCKET_PATH), greeter.uid, greeter.gid)?;
         let (logind, incoming, mailbox) = watch_logind()?;
         let bus = serve_bus(&mailbox, admin_groups.clone())?;
+        let upgrade = upgrade::Watch::this_process()
+            .map_err(|e| eprintln!("cupertino-sessiond: the program's file is unknown ({e}); a new version starts only with the service"))
+            .ok();
         let mut manager = Manager {
             session_path: users::session_path()?,
             _held_terminals: vec![vt::hold(config.vt)
@@ -518,6 +532,9 @@ impl Manager {
             listed: Vec::new(),
             denial_at: None,
             reported_pictures: HashSet::new(),
+            upgrade,
+            upgrade_check_at: Instant::now() + upgrade::CHECK_INTERVAL,
+            handed_over: false,
         };
         manager.adopt_sessions()?;
         if manager.greeter_session.is_none() {
@@ -529,9 +546,16 @@ impl Manager {
         Ok(manager)
     }
 
-    fn run(&mut self) -> Result<std::convert::Infallible> {
+    /// Serve until a failure, or (`Ok`) until the manager handed the console over to a new version.
+    fn run(&mut self) -> Result<()> {
         loop {
+            if self.handed_over {
+                return Ok(());
+            }
             for ready in self.wait()? {
+                if self.handed_over {
+                    break;
+                }
                 match ready {
                     Ready::Listener => self.accept()?,
                     Ready::Screen => self.screen_readable(),
@@ -579,6 +603,7 @@ impl Manager {
             self.greeter_restart_at,
             self.attempt.as_ref().and_then(|attempt| attempt.deadline),
             self.switch.as_ref().map(|switch| switch.next_poll),
+            self.upgrade.is_some().then_some(self.upgrade_check_at),
         ]
         .into_iter()
         .chain(self.sessions.iter().map(|session| session.ready_deadline))
@@ -1611,7 +1636,99 @@ impl Manager {
         if gave_up {
             self.show_login_screen();
         }
+        if self.upgrade_check_at <= now {
+            self.upgrade_check_at = now + upgrade::CHECK_INTERVAL;
+            self.hand_over_if_due(now);
+        }
         Ok(())
+    }
+
+    /// Whether a user session runs, or something that leads to one: an attempt, a session's worker, a switch of the console.
+    fn user_session_runs(&self) -> bool {
+        !self.sessions.is_empty()
+            || self.attempt.is_some()
+            || self.switch.is_some()
+            || self.auto_login_worker.is_some()
+            || self
+                .workers
+                .iter()
+                .any(|worker| worker.role == Role::Session)
+    }
+
+    /// Hand the console over to a new version of the manager when its file was replaced and no user session runs
+    /// ([`upgrade::decide`]): stop the login screen's session and end, so that systemd starts the new version, which starts a
+    /// new login screen.
+    fn hand_over_if_due(&mut self, now: Instant) {
+        let user_session = self.user_session_runs();
+        let Some(watch) = &mut self.upgrade else {
+            return;
+        };
+        let (installed, settled) = watch.look(now);
+        if upgrade::decide(installed, settled, user_session) != Decision::HandOver {
+            return;
+        }
+        eprintln!(
+            "cupertino-sessiond: {} was replaced by a new version and no user session runs; stopping the login screen and ending, so that the new version starts",
+            watch.path().display()
+        );
+        self.screen = None;
+        self.stop_greeter();
+        self.handed_over = true;
+    }
+
+    /// End the login screen's session as its worker ends it (the worker passes `SIGTERM` to the compositor, waits for it and
+    /// closes the PAM session), then have logind end what is left in it, so the next manager finds no login screen to adopt
+    /// and starts its own on a terminal nothing else draws on. A login screen of an earlier run is stopped through its
+    /// session's leader, which is its worker too.
+    fn stop_greeter(&mut self) {
+        self.greeter_restart_at = None;
+        let session = self.greeter_session.take();
+        self.greeter_leader = None;
+        if let Some(index) = self
+            .workers
+            .iter()
+            .position(|worker| worker.role == Role::Greeter)
+        {
+            let mut worker = self.workers.remove(index);
+            match upgrade::stop(&worker.exited, GREETER_STOP_TIMEOUT) {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!(
+                        "cupertino-sessiond: the login screen's worker did not end within {} s; killing it",
+                        GREETER_STOP_TIMEOUT.as_secs()
+                    );
+                    if let Err(e) = worker.child.kill() {
+                        eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
+                    }
+                }
+                Err(e) => eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id),
+            }
+            if let Err(e) = worker.child.wait() {
+                eprintln!("cupertino-sessiond: worker {}: {e}", worker.id);
+            }
+        } else if let Some(index) = self.adopted.iter().position(|adopted| {
+            self.greeter_adopted && session.as_deref() == Some(adopted.id.as_str())
+        }) {
+            let adopted = self.adopted.remove(index);
+            match upgrade::stop(&adopted.leader, GREETER_STOP_TIMEOUT) {
+                Ok(true) => {}
+                Ok(false) => eprintln!(
+                    "cupertino-sessiond: the login screen's session {} did not end within {} s",
+                    adopted.id,
+                    GREETER_STOP_TIMEOUT.as_secs()
+                ),
+                Err(e) => eprintln!(
+                    "cupertino-sessiond: stopping the login screen's session {}: {e}",
+                    adopted.id
+                ),
+            }
+        }
+        self.greeter_adopted = false;
+        if let Some(id) = session {
+            if let Err(e) = self.logind.terminate_session(&id) {
+                eprintln!("cupertino-sessiond: {e}");
+            }
+        }
     }
 
     /// Ask logind whether the session switched to is in the foreground; the switch is over when it is, or after
@@ -1884,10 +2001,12 @@ impl Manager {
         if foreground.is_some() {
             eprintln!("cupertino-sessiond: session {id} ended in the background");
             self.refresh_users();
-            return Ok(());
+        } else {
+            eprintln!("cupertino-sessiond: session {id} ended; returning to the login screen");
+            self.return_to_login_screen();
         }
-        eprintln!("cupertino-sessiond: session {id} ended; returning to the login screen");
-        self.return_to_login_screen();
+        // the last session may have been what kept a new version waiting
+        self.hand_over_if_due(Instant::now());
         Ok(())
     }
 

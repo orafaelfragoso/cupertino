@@ -4,6 +4,7 @@
 //! session). The design is.
 //!
 //! * [`filter`], [`users`], [`picture`], [`roster`]: which accounts the screen lists and with what (pure but for the files).
+//! * [`upgrade`]: when the manager hands the console over to a new version of itself.
 //! * [`caller`]: who may call the manager's bus interface (pure); feature `app`: [`service`], the interface itself.
 //! * [`channel`], [`worker_protocol`]: frames over a socket, and the messages between the manager and a worker.
 //! * feature `app`: [`worker`] (the PAM transaction and the privilege drop), [`manager`] (the main loop) and the process.
@@ -24,6 +25,7 @@ pub mod roster;
 #[cfg(feature = "app")]
 pub mod service;
 pub mod system_accessibility;
+pub mod upgrade;
 pub mod users;
 #[cfg(feature = "app")]
 pub mod vt;

@@ -102,12 +102,27 @@ reference; they were options of `cupertino-login --greeter`.
 | Administrator's authentication | `will_prompt` in `Welcome` and `Users` is true while logind has a user session (the same rule as the refusal above): the screen titles Restart and Shut Down with an ellipsis and, instead of sending `Power`, sends `AuthenticatePower { name, action }`. The manager answers a name that is no administrator (see "Administrators"), an invalid name, an `action` of `Sleep` or a hidden item like a wrong password (`Denied` after 2 s; `Refused` for the last two); otherwise it runs a `Mode::Verify` worker for the typed account (PAM service `cupertino-session`, so `pam_faillock` counts the failures). On `Accepted` it answers `Result`, then carries the action out as `Requester::Administrator` (the open sessions no longer refuse it; the settings and block inhibitors still do) and, when logind refuses, sends `PowerRefused` and `Reset`. The in-session agent has no such dialog (the manager takes no secret on the bus): a non-administrator's agent is still refused with `OtherUsersLoggedIn`, and the person can switch to the login window and use the dialog there. The password and the name are never logged |
 | Greeter ends | its worker exits and the login screen's session is started again after 1 s; five exits within 30 s stop that (logged, the manager stays up, the other terminals keep their getty) |
 | logind | the manager ends with failure when logind's signal stream ends (logind restarted); systemd restarts the unit. The design's single in-process reconnect is not built |
+| Upgrade | the manager ends by itself, so systemd starts the new version, once a package upgrade replaced its file and no user session runs; see "Upgrades" |
 
 ## Upgrades
 
 A package upgrade replaces `/usr/bin/cupertino-sessiond` while the manager runs. The manager goes on with its own image:
 workers start from `/proc/self/exe`, not from the path, so they are the manager's code even when that path names a new program
-or nothing (before this, a removed path ended every login with `starting a worker: No such file or directory`).
+or nothing (before this, a removed path ended every login with `starting a worker: No such file or directory`). The rest of the
+upgrade is new at once, though: the login screen, started again by its compositor, would talk to the old manager. So the manager
+hands over (`upgrade.rs`):
+
+- Every 10 s, and when a user session ends, it compares the file at the path it was started from with its own image (device and
+  inode). A different file is a new version once it has stayed in place for 10 s (so the rest of the package is written too);
+  a missing file is none (the package was removed: the manager keeps running).
+- It hands over only while no user session runs, nor anything that leads to one (an attempt, a session's worker, an auto login,
+  a switch of the console): a user's session is never ended for it. The decision is `upgrade::decide`.
+- Then it logs `… was replaced by a new version and no user session runs; stopping the login screen and ending, so that the new
+  version starts`, drops the screen's connection, stops the login screen's session (its worker passes `SIGTERM` to the
+  compositor, waits for it and closes the PAM session; after 5 s the worker is killed; a login screen of an earlier run is
+  stopped through its session's leader), has logind terminate what is left of that session, and exits with success.
+  `Restart=always` starts the new version 1 s later; it finds no login screen to adopt (a terminated session is `closing`) and
+  starts its own on the login terminal, so the manager, the login screen and its compositor are one version again.
 
 ## Auto login
 
@@ -388,6 +403,7 @@ fake `busctl`, and with the real daemon when it is installed, required in CI the
 | `filter` | `Filters::apply`: the hidden, admin, allow and deny lists and the "Other…" rule |
 | `roster` | `build` (rows, pictures within the budget, the row cap), `power_menu` ('s rule), `filters` |
 | `picture` | `read(uid, home)`: the `setfsuid` read |
+| `upgrade` | `Watch` (the file the program was started from against its image), `decide` (whether to hand over), `stop` (`SIGTERM` and a bounded wait on a process descriptor) |
 | `auto_login` | `settings_are_trusted` (the mode and owner rule), `claim` (the once-per-boot flag) |
 | `caller` | `CallerSession`, `Need`, `Denial`, `authorise`: who may call the bus interface; `Asker`, `may_end_other_sessions`: who may restart or shut down while other sessions are open (pure) |
 | `channel` | `Channel`: one read per call over a socket, frames of `cupertino-login-ipc` |
@@ -398,7 +414,7 @@ fake `busctl`, and with the real daemon when it is installed, required in CI the
 ## Tests
 
 `cargo test -p cupertino-sessiond --features app`: the roster (filters, picture budget, row cap, the `logged_in` mark, power rule), the account
-database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
+database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), the hand-over rule (a replaced file with no user session hands over, with one it waits, an unchanged, missing or unsettled file is kept; a rename over the file seen and settling, another new file starting the wait again; a process asked to stop ends, one that ignores it is reported), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
 (`caller`), the screen reader (`reader`: the program list, the bus address, the requests, the ancestry walk, and a fake reader run as
 the test's user that sees only its environment, descriptors 0 to 2 and its 0700 directories, and whose `setsid` daemon ends with it;
 `manager`: only the leader's descendants may connect) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and

@@ -4,8 +4,8 @@
 #![cfg(feature = "dbus")]
 
 use cupertino_controlcenter::backend::{
-    Bluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume, RecordingLauncher,
-    RecordingLock, RecordingOverlay, Wifi,
+    Bluetooth, MemoryBrightness, MemoryLayout, MemoryMedia, MemorySwitch, MemoryVolume,
+    RecordingLauncher, RecordingLock, RecordingOverlay, Wifi,
 };
 use cupertino_controlcenter::model::Detail;
 use cupertino_controlcenter::radios::Radios;
@@ -66,6 +66,7 @@ fn controller(radios: &Radios) -> Controller {
         lock: Box::new(RecordingLock::default()),
         launcher: Box::new(RecordingLauncher::default()),
         overlay: Box::new(RecordingOverlay::default()),
+        layout: Box::new(MemoryLayout::default()),
     })
 }
 

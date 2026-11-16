@@ -7,6 +7,7 @@ pub mod appearance;
 pub mod atomic;
 pub mod compositor;
 pub mod conf;
+pub mod control_panel;
 pub mod data_control;
 pub mod desktop_control;
 pub mod displays;

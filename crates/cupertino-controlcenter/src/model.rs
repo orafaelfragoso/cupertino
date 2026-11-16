@@ -61,6 +61,28 @@ impl Module {
         }
     }
 
+    /// The module's name in a stored layout and in the keys of its controls; it never changes.
+    pub fn id(self) -> &'static str {
+        match self {
+            Module::WiFi => "wifi",
+            Module::NowPlaying => "now-playing",
+            Module::Bluetooth => "bluetooth",
+            Module::Microphone => "microphone",
+            Module::DockHiding => "dock-hiding",
+            Module::LockScreen => "lock-screen",
+            Module::Mute => "mute",
+            Module::KeyboardBrightness => "keyboard-brightness",
+            Module::FocusMode => "focus",
+            Module::Display => "display",
+            Module::Sound => "sound",
+        }
+    }
+
+    /// The module a stored layout names `id`; `None` for a name no module has.
+    pub fn from_id(id: &str) -> Option<Module> {
+        Module::ALL.into_iter().find(|module| module.id() == id)
+    }
+
     /// The detail view the module opens, for the modules that have one.
     pub fn detail(self) -> Option<Detail> {
         match self {
@@ -463,6 +485,15 @@ mod tests {
                 "Sound"
             ]
         );
+    }
+
+    #[test]
+    fn every_module_has_a_name_of_its_own_that_finds_it_again() {
+        for module in Module::ALL {
+            assert_eq!(Module::from_id(module.id()), Some(module));
+        }
+        assert_eq!(Module::from_id("sharing"), None);
+        assert_eq!(Module::from_id(""), None);
     }
 
     #[test]

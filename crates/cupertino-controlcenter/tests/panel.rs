@@ -11,6 +11,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
+use cupertino_controlcenter::arrangement::Arrangement;
+use cupertino_controlcenter::layout::editing;
 use cupertino_controlcenter::layout::{
     BAR_MARGIN, GRID_ORIGIN, SHADOW_TOP, SURFACE, WINDOW_ORIGIN,
 };
@@ -18,9 +20,10 @@ use cupertino_controlcenter::model::{
     Controls, Detail, Device, MediaCommand, Module, Network, Output, Reading, Slider, VolumeState,
     WifiStatus,
 };
-use cupertino_controlcenter::view::{self, Input, Opened, Presentation, Via};
+use cupertino_controlcenter::view::{self, Editing, Held, Input, Opened, Presentation, Via};
 use cupertino_kit::core::{
-    Application, Command, Key, PlaceholderIcons, Role, RuntimeOptions, Window, WindowBackground,
+    AccessibleValue, Action, Application, Command, Key, PlaceholderIcons, Role, RuntimeOptions,
+    Window, WindowBackground,
 };
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::LayoutDirection;
@@ -34,7 +37,7 @@ use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
 use cupertino_kit::theme::{Appearance, ThemePreferences, ThemeTokens};
 use cupertino_theme::glass::adapts_foreground;
 use cupertino_theme::Theme;
-use cupertino_ui_test::{Inspector, ManualClock, TestDriver};
+use cupertino_ui_test::{AssistiveTechnology, Inspector, ManualClock, TestDriver};
 use tiny_skia::Pixmap;
 
 /// Where the window's corner lies in the surface, past the margin its shadow takes.
@@ -50,6 +53,8 @@ thread_local! {
     /// Show the catcher instead of the panel.
     static CATCHER: Cell<bool> = const { Cell::new(false) };
     static CONTROLS: RefCell<Option<Controls>> = const { RefCell::new(None) };
+    /// The controls the panel shows and their order, when not every one in reading order.
+    static LAYOUT: RefCell<Option<Arrangement>> = const { RefCell::new(None) };
 }
 
 /// Every backend answering, as `--fake-backends` does, with the microphone and focus mode on and nothing playing.
@@ -94,31 +99,84 @@ fn controls() -> Controls {
     }
 }
 
-/// The shown panel; it keeps what the user did on it and moves the focus where an arrow key asks.
+/// The shown panel; it keeps what the user did on it and moves the focus where an arrow key asks. An edit of its
+/// controls is carried out on the arrangement it shows, as the process does on the controller's, and ends with Done
+/// or Cancel; what either keeps is the controller's and the process's to prove.
 struct Shown;
 
+struct State {
+    controls: Controls,
+    heard: Vec<Input>,
+    arrangement: Arrangement,
+    edit: Option<Editing>,
+}
+
 impl Application for Shown {
-    type Model = (Controls, Vec<Input>);
+    type Model = State;
     type Message = Input;
 
     fn init() -> (Self::Model, Vec<Command<Input>>) {
-        let controls = CONTROLS.with_borrow(|c| c.clone()).unwrap_or_else(controls);
-        ((controls, Vec::new()), Vec::new())
+        let state = State {
+            controls: CONTROLS.with_borrow(|c| c.clone()).unwrap_or_else(controls),
+            heard: Vec::new(),
+            arrangement: LAYOUT.with_borrow(|l| l.clone()).unwrap_or_default(),
+            edit: PRESENTATION.get().edit,
+        };
+        (state, Vec::new())
     }
 
-    fn update((_, heard): &mut Self::Model, input: Input) -> Vec<Command<Input>> {
-        heard.push(input.clone());
+    fn update(state: &mut Self::Model, input: Input) -> Vec<Command<Input>> {
+        state.heard.push(input.clone());
+        let focus = |key: String| vec![Command::Focus(Key::from(key))];
         match input {
-            Input::Focus(key) => vec![Command::Focus(Key::from(key))],
-            _ => Vec::new(),
+            Input::Focus(key) => return focus(key),
+            Input::EditControls => state.edit = Some(Editing::default()),
+            Input::Done | Input::Cancel => state.edit = None,
+            Input::Remove(module, via) => {
+                let place = state.arrangement.position(module);
+                state.arrangement.remove(module);
+                let shown = state.arrangement.shown();
+                if let (Via::Keyboard, Some(next)) = (via, place.and_then(|p| shown.get(p))) {
+                    return focus(view::edit_key(*next));
+                }
+            }
+            Input::Add(module, via) => {
+                state.arrangement.add(module);
+                if via == Via::Keyboard {
+                    // the tile is there to take the focus once the view that follows has built it
+                    let focus = Input::Focus(view::edit_key(module));
+                    return vec![Command::Perform(Box::pin(async move { focus }))];
+                }
+            }
+            Input::Step(module, forward) => {
+                state.arrangement.step(module, forward);
+            }
+            Input::DragTo(module, origin) => {
+                state.edit = Some(Editing {
+                    held: Some(Held { module, origin }),
+                });
+                state.arrangement.move_near(module, origin);
+            }
+            Input::Drop => state.edit = Some(Editing::default()),
+            _ => {}
         }
+        Vec::new()
     }
 
-    fn view((controls, _): &Self::Model) -> Vec<Window<Input>> {
+    fn view(state: &Self::Model) -> Vec<Window<Input>> {
         if CATCHER.get() {
             vec![view::catcher(|input| input)]
         } else {
-            vec![view::panel(controls, PRESENTATION.get(), |input| input)]
+            let presentation = Presentation {
+                edit: state.edit,
+                ..PRESENTATION.get()
+            };
+            vec![view::arranged(
+                &state.controls,
+                &state.arrangement,
+                presentation,
+                |input| input,
+            )]
         }
     }
 }
@@ -133,6 +191,7 @@ const WIFI_OPEN: Presentation = Presentation {
         progress: 1.0,
         morph: true,
     }),
+    edit: None,
 };
 
 fn budget() -> NonZeroU32 {
@@ -152,6 +211,8 @@ fn tokens(appearance: Appearance, reduce_transparency: bool) -> ThemeTokens {
 struct Run {
     driver: TestDriver<Shown>,
     window: WindowId,
+    /// The screen reader the panel talks to.
+    reader: AssistiveTechnology,
 }
 
 impl Run {
@@ -181,6 +242,7 @@ impl Run {
         fonts.add_font(Arc::new(BUILTIN_FONT.to_vec())).unwrap();
         let text = Arc::new(TextSystem::new(fonts, "Inter Variable"));
         let glyphs = Arc::clone(&text);
+        let reader = AssistiveTechnology::new();
         let options = RuntimeOptions {
             theme: Arc::new(theme),
             text,
@@ -198,7 +260,7 @@ impl Run {
                     GlyphRaster::new(Arc::clone(&glyphs)),
                 ))
             }),
-            accessibility: None,
+            accessibility: Some(reader.adapter()),
             clock: Arc::new(ManualClock::new(Timestamp(0))),
             on_window_error: None,
         };
@@ -217,7 +279,11 @@ impl Run {
             .window_system_mut()
             .configure(window, size, active)
             .unwrap();
-        let mut run = Self { driver, window };
+        let mut run = Self {
+            driver,
+            window,
+            reader,
+        };
         run.settle();
         run
     }
@@ -283,7 +349,48 @@ impl Run {
     }
 
     fn heard(&self) -> &[Input] {
-        &self.driver.runtime().model().1
+        &self.driver.runtime().model().heard
+    }
+
+    /// The controls the panel shows, in their order.
+    fn order(&self) -> Vec<Module> {
+        self.driver.runtime().model().arrangement.shown().to_vec()
+    }
+
+    /// The accessible node named `name` with `role`, when there is one.
+    fn node(&self, role: Role, name: &str) -> Option<cupertino_kit::core::AccessibilityNode> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.role == role && n.name.as_deref() == Some(name))
+            .cloned()
+    }
+
+    /// Asks the node named `name` with `role` for `action`, as a screen reader does.
+    fn ask(&mut self, role: Role, name: &str, action: Action) {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        let target = snapshot
+            .accessibility
+            .iter()
+            .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no {role:?} named {name}"))
+            .0;
+        let reader = self.reader.clone();
+        self.driver.ask(&reader, target, action, None);
+        self.settle();
+    }
+
+    /// The name of the node that holds the keyboard focus.
+    fn focused(&self) -> Option<String> {
+        let snapshot = self.driver.runtime().snapshot(self.window).unwrap();
+        snapshot
+            .accessibility
+            .iter()
+            .map(|(_, n)| n)
+            .find(|n| n.states.focused)
+            .and_then(|n| n.name.clone())
     }
 
     /// The bounds of the accessible node named `name` with `role`.
@@ -889,12 +996,11 @@ fn a_press_on_a_badge_switches_its_module_and_on_the_text_opens_its_view() {
 }
 
 #[test]
-fn the_circles_the_media_buttons_and_edit_controls_act() {
+fn the_circles_the_output_button_and_the_media_buttons_act() {
     let mut run = Run::shown();
     for (role, name) in [
         (Role::Button, "Lock Screen"),
         (Role::Switch, "Dock Hiding"),
-        (Role::Button, "Edit Controls"),
         (Role::Button, "Output"),
     ] {
         let at = run.bounds(role, name).center();
@@ -905,19 +1011,18 @@ fn the_circles_the_media_buttons_and_edit_controls_act() {
         [
             Input::Press(Module::LockScreen),
             Input::Press(Module::DockHiding),
-            Input::EditControls,
             Input::Expand(Detail::Sound, Via::Pointer),
         ]
     );
     // nothing plays, so the media buttons are disabled
     let play = run.bounds(Role::Button, "Play").center();
     click(&mut run, play);
-    assert_eq!(run.heard().len(), 4);
+    assert_eq!(run.heard().len(), 3);
     let keyboard = run.bounds(Role::Switch, "Keyboard Brightness").center();
     click(&mut run, keyboard);
     assert_eq!(
         run.heard().len(),
-        4,
+        3,
         "a module without a backend is disabled"
     );
 }
@@ -1128,4 +1233,512 @@ fn the_catcher_covers_the_output_and_draws_nothing() {
     assert_eq!(solids.len(), 1);
     assert_eq!(solids[0].color.a, 0.0, "transparent");
     assert!(solids[0].acknowledged.is_some(), "it answers the configure");
+}
+
+/// The panel with its controls being edited and no tile held.
+const EDITING: Presentation = Presentation {
+    alpha: 1.0,
+    light: false,
+    input: true,
+    detail: None,
+    edit: Some(Editing { held: None }),
+};
+
+const DELETE: u32 = 0xffff;
+const LEFT: u32 = 0xff51;
+
+/// The frame of a rect of the window from the window's corner, past the shadow's margin.
+fn within(r: Rect) -> (f64, f64, f64, f64) {
+    let (x, y, w, h) = frame(r);
+    (x - ORIGIN.x, y - ORIGIN.y, w, h)
+}
+
+/// The panel in the dark appearance with its controls being edited.
+fn editing_run() -> Run {
+    Run::start(tokens(Appearance::Dark, false), EDITING)
+}
+
+/// Some controls shown, in an order of their own, and three left out.
+fn some_controls() -> Arrangement {
+    Arrangement::from_ids(&[
+        "wifi",
+        "now-playing",
+        "microphone",
+        "lock-screen",
+        "dock-hiding",
+        "focus",
+        "display",
+        "sound",
+    ])
+}
+
+/// Tab until the control named `name` holds the focus.
+fn tab_to(run: &mut Run, name: &str) {
+    for _ in 0..40 {
+        if run.focused().as_deref() == Some(name) {
+            return;
+        }
+        run.key(TAB);
+    }
+    panic!(
+        "Tab never reaches {name}; it stopped on {:?}",
+        run.focused()
+    );
+}
+
+#[test]
+fn edit_controls_starts_editing_on_the_panel() {
+    let mut run = Run::shown();
+    let edit = run.bounds(Role::Button, "Edit Controls").center();
+    click(&mut run, edit);
+    assert_eq!(run.heard(), [Input::EditControls]);
+    assert!(
+        run.node(Role::Button, "Edit Controls").is_none(),
+        "Cancel and Done take its place"
+    );
+    assert_eq!(
+        within(run.bounds(Role::Button, "Cancel")),
+        (92.5, 468.0, 62.0, 24.0)
+    );
+    assert_eq!(
+        within(run.bounds(Role::Button, "Done")),
+        (166.5, 468.0, 49.0, 24.0)
+    );
+    let count = Module::ALL.len();
+    for (index, module) in Module::ALL.into_iter().enumerate() {
+        let title = module.title();
+        let handle = run
+            .node(Role::Slider, title)
+            .unwrap_or_else(|| panic!("{title} can be moved"));
+        assert!(handle.states.focusable, "{title}");
+        assert_eq!(
+            handle.value,
+            Some(AccessibleValue::Number {
+                value: (index + 1) as f64,
+                min: 1.0,
+                max: count as f64,
+                step: Some(1.0)
+            }),
+            "{title}: its place in the order"
+        );
+        assert_eq!(
+            handle.description,
+            Some(format!(
+                "Place {} of {count}. The arrow keys move it, Delete removes it.",
+                index + 1
+            ))
+        );
+        assert_eq!(
+            (
+                handle.actions.contains(&Action::Decrement),
+                handle.actions.contains(&Action::Increment)
+            ),
+            (index > 0, index + 1 < count),
+            "{title}: earlier and later, where there is such a place"
+        );
+        assert_eq!(
+            handle.bounds,
+            run.bounds(Role::Group, title),
+            "{title}: the whole tile moves it"
+        );
+        let remove = run
+            .node(Role::Button, &format!("Remove {title}"))
+            .unwrap_or_else(|| panic!("{title} can be removed"));
+        assert!(remove.states.focusable && remove.actions.contains(&Action::Click));
+        let (x, y, w, h) = frame(remove.bounds);
+        // on the leading corner; on the trailing one of the wide tiles, whose title starts on the leading one
+        let leading = match module {
+            Module::Display | Module::Sound => 292.0 - 4.0 - 18.0,
+            _ => 4.0,
+        };
+        assert_eq!(
+            (x - handle.bounds.x(), y - handle.bounds.y(), w, h),
+            (leading, 4.0, 18.0, 18.0),
+            "{title}: the mark on its corner"
+        );
+    }
+    // a tile's own controls show and are no controls while the tiles are edited
+    for (role, name) in [
+        (Role::Switch, "Wi-Fi"),
+        (Role::Button, "Bluetooth Devices"),
+        (Role::Switch, "Dock Hiding"),
+        (Role::Button, "Lock Screen"),
+        (Role::Button, "Output"),
+    ] {
+        assert!(run.node(role, name).is_none(), "{name}");
+    }
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let focusable = snapshot
+        .accessibility
+        .iter()
+        .filter(|(_, n)| n.states.focusable)
+        .count();
+    assert_eq!(
+        focusable,
+        2 * count + 2,
+        "each tile and its mark, Cancel and Done"
+    );
+}
+
+#[test]
+fn the_keyboard_starts_editing_with_the_focus_staying_where_done_is() {
+    let mut run = Run::shown();
+    tab_to(&mut run, "Edit Controls");
+    run.key(SPACE);
+    assert_eq!(run.heard(), [Input::EditControls]);
+    assert_eq!(run.focused().as_deref(), Some("Done"));
+    run.key(SPACE);
+    assert_eq!(run.heard()[1..], [Input::Done]);
+    assert_eq!(run.focused().as_deref(), Some("Edit Controls"));
+}
+
+#[test]
+fn a_tile_s_mark_removes_it_and_its_chip_adds_it_again() {
+    let mut run = editing_run();
+    assert!(
+        run.node(Role::Button, "Add Bluetooth").is_none(),
+        "every control shows: none is offered"
+    );
+    let mark = run.bounds(Role::Button, "Remove Bluetooth").center();
+    click(&mut run, mark);
+    assert_eq!(
+        run.heard(),
+        [Input::Remove(Module::Bluetooth, Via::Pointer)]
+    );
+    assert!(run.node(Role::Slider, "Bluetooth").is_none());
+    assert_eq!(
+        within(run.bounds(Role::Group, "Microphone")),
+        (8.0, 84.0, 140.0, 64.0),
+        "the tiles close up"
+    );
+    // the control is offered under Cancel and Done, a chip centred on the grid
+    let chip = run.bounds(Role::Button, "Add Bluetooth");
+    assert_eq!(within(chip), (136.0, 508.0, 36.0, 36.0));
+    assert_eq!(
+        frame(chip),
+        frame(editing::chip(0, 1, 444.0).translate(GRID_ORIGIN.x, GRID_ORIGIN.y))
+    );
+    click(&mut run, chip.center());
+    assert_eq!(
+        run.heard()[1..],
+        [Input::Add(Module::Bluetooth, Via::Pointer)]
+    );
+    assert_eq!(run.order().last(), Some(&Module::Bluetooth));
+    assert!(run.node(Role::Button, "Add Bluetooth").is_none());
+    assert!(run.node(Role::Slider, "Bluetooth").is_some());
+}
+
+#[test]
+fn the_window_takes_presses_on_the_controls_offered_under_it() {
+    let arrangement = Arrangement::from_ids(&["wifi", "sound"]);
+    LAYOUT.set(Some(arrangement.clone()));
+    let offered = Module::ALL.len() - 2;
+    let bottom = GRID_ORIGIN.y + editing::bottom(offered, arrangement.height());
+    let region = |presentation| {
+        view::arranged::<()>(&controls(), &arrangement, presentation, |_| ())
+            .spec
+            .input_region
+            .unwrap()
+    };
+    let window = Rect::from_origin_size(ORIGIN, Size::new(308.0, 500.0));
+    assert_eq!(region(Presentation::SHOWN), [window]);
+    let reach = region(EDITING);
+    assert_eq!(reach.len(), 1);
+    assert!(reach[0].max_y() >= bottom && reach[0].max_y() <= SURFACE.height);
+    // six rows of tiles and a row of chips reach under the window, into the margin its shadow takes
+    let mut tall = Arrangement::default();
+    tall.remove(Module::Mute);
+    let under = view::arranged::<()>(&controls(), &tall, EDITING, |_| ())
+        .spec
+        .input_region
+        .unwrap();
+    assert!(under[0].max_y() > window.max_y() && under[0].max_y() <= SURFACE.height);
+    let mut run = editing_run();
+    let chips = arrangement
+        .available()
+        .into_iter()
+        .map(|m| run.bounds(Role::Button, &format!("Add {}", m.title())))
+        .collect::<Vec<_>>();
+    assert_eq!(chips.len(), offered);
+    for chip in &chips {
+        assert!(reach[0].contains(chip.center()), "{chip:?} in {reach:?}");
+    }
+    click(&mut run, chips[8].center());
+    assert_eq!(run.heard(), [Input::Add(Module::Display, Via::Pointer)]);
+}
+
+#[test]
+fn a_drag_carries_a_tile_and_the_others_make_room() {
+    let mut run = editing_run();
+    let sound = run.bounds(Role::Group, "Sound");
+    let display = run.bounds(Role::Group, "Display");
+    let from = Point::new(sound.x() + 100.0, sound.y() + 30.0);
+    run.pointer(PointerEvent::Motion { position: from });
+    run.button(from, true);
+    run.pointer(PointerEvent::Motion {
+        position: Point::new(from.x + 1.0, from.y + 1.0),
+    });
+    assert!(run.heard().is_empty(), "a small move holds nothing");
+    let to = Point::new(from.x + 2.0, from.y - 70.0);
+    run.pointer(PointerEvent::Motion { position: to });
+    let held = Point::new(
+        sound.x() - GRID_ORIGIN.x + 2.0,
+        sound.y() - GRID_ORIGIN.y - 70.0,
+    );
+    assert_eq!(run.heard(), [Input::DragTo(Module::Sound, held)]);
+    assert_eq!(run.order()[9..], [Module::Sound, Module::Display]);
+    assert_eq!(
+        frame(run.bounds(Role::Group, "Sound")),
+        frame(sound.translate(2.0, -70.0)),
+        "the held tile follows the pointer"
+    );
+    assert_eq!(
+        frame(run.bounds(Role::Group, "Display")),
+        frame(sound),
+        "the display tile makes room"
+    );
+    run.button(to, false);
+    assert_eq!(run.heard()[1..], [Input::Drop]);
+    assert_eq!(
+        frame(run.bounds(Role::Group, "Sound")),
+        frame(display),
+        "let go, the tile takes its place"
+    );
+    // a press and release without a move holds and drops nothing
+    click(&mut run, to);
+    assert_eq!(run.heard().len(), 2);
+}
+
+#[test]
+fn the_keyboard_moves_removes_and_adds_a_tile() {
+    let mut run = editing_run();
+    run.key(TAB);
+    assert_eq!(run.focused().as_deref(), Some("Wi-Fi"));
+    run.key(RIGHT);
+    assert_eq!(run.heard(), [Input::Step(Module::WiFi, true)]);
+    assert_eq!(run.order()[..2], [Module::NowPlaying, Module::WiFi]);
+    assert_eq!(
+        run.focused().as_deref(),
+        Some("Wi-Fi"),
+        "the focus moves with the tile"
+    );
+    run.key(DOWN);
+    run.key(LEFT);
+    run.key(LEFT);
+    assert_eq!(run.order(), Module::ALL, "and back");
+    run.key(DELETE);
+    assert_eq!(
+        run.heard().last(),
+        Some(&Input::Remove(Module::WiFi, Via::Keyboard))
+    );
+    assert_eq!(
+        run.focused().as_deref(),
+        Some("Now Playing"),
+        "the focus goes to the tile that took the place"
+    );
+    tab_to(&mut run, "Add Wi-Fi");
+    run.key(SPACE);
+    assert_eq!(
+        run.heard()[run.heard().len() - 2..],
+        [
+            Input::Add(Module::WiFi, Via::Keyboard),
+            Input::Focus(view::edit_key(Module::WiFi))
+        ],
+        "the focus is asked onto the new tile once it is there"
+    );
+    assert_eq!(run.focused().as_deref(), Some("Wi-Fi"));
+    assert_eq!(run.order().last(), Some(&Module::WiFi));
+    // the mark is a control of its own for the keyboard too
+    tab_to(&mut run, "Remove Wi-Fi");
+    run.key(SPACE);
+    assert_eq!(
+        run.heard().last(),
+        Some(&Input::Remove(Module::WiFi, Via::Keyboard))
+    );
+}
+
+#[test]
+fn a_screen_reader_moves_removes_and_adds_a_tile() {
+    let mut run = editing_run();
+    run.ask(Role::Slider, "Sound", Action::Decrement);
+    assert_eq!(run.heard(), [Input::Step(Module::Sound, false)]);
+    assert_eq!(run.order()[9..], [Module::Sound, Module::Display]);
+    run.ask(Role::Slider, "Sound", Action::Increment);
+    assert_eq!(run.order(), Module::ALL);
+    run.ask(Role::Button, "Remove Mute", Action::Click);
+    assert_eq!(
+        run.heard().last(),
+        Some(&Input::Remove(Module::Mute, Via::Keyboard))
+    );
+    run.ask(Role::Button, "Add Mute", Action::Click);
+    assert!(run
+        .heard()
+        .contains(&Input::Add(Module::Mute, Via::Keyboard)));
+    assert_eq!(run.order().last(), Some(&Module::Mute));
+    run.ask(Role::Button, "Done", Action::Click);
+    assert_eq!(run.heard().last(), Some(&Input::Done));
+}
+
+#[test]
+fn done_cancel_and_escape_end_editing_and_a_press_between_the_tiles_does_not() {
+    let mut run = editing_run();
+    // between the first two rows of tiles
+    click(&mut run, Point::new(ORIGIN.x + 80.0, ORIGIN.y + 78.0));
+    assert!(
+        run.heard().is_empty(),
+        "no edit is lost to a press that misses"
+    );
+    run.key(ESCAPE);
+    assert_eq!(run.heard(), [Input::Cancel], "Escape cancels the edit");
+    assert!(run.node(Role::Button, "Edit Controls").is_some());
+    for (name, input) in [("Cancel", Input::Cancel), ("Done", Input::Done)] {
+        let edit = run.bounds(Role::Button, "Edit Controls").center();
+        click(&mut run, edit);
+        let button = run.bounds(Role::Button, name).center();
+        click(&mut run, button);
+        assert_eq!(run.heard().last(), Some(&input));
+        assert!(run.node(Role::Button, name).is_none());
+    }
+    // not editing, Escape dismisses the panel as before
+    run.key(ESCAPE);
+    assert_eq!(run.heard().last(), Some(&Input::Dismiss));
+}
+
+#[test]
+fn the_panel_shows_the_arrangement_it_is_given() {
+    LAYOUT.set(Some(Arrangement::from_ids(&["sound", "wifi", "mute"])));
+    let mut run = Run::shown();
+    let group = |run: &Run, name| within(run.bounds(Role::Group, name));
+    assert_eq!(group(&run, "Sound"), (8.0, 8.0, 292.0, 64.0));
+    assert_eq!(group(&run, "Wi-Fi"), (8.0, 84.0, 140.0, 64.0));
+    assert_eq!(group(&run, "Mute"), (160.0, 84.0, 64.0, 64.0));
+    assert_eq!(
+        group(&run, "Edit Controls"),
+        (107.0, 164.0, 94.0, 24.0),
+        "16 below the last row of tiles"
+    );
+    for hidden in ["Bluetooth", "Display", "Now Playing"] {
+        assert!(run.node(Role::Group, hidden).is_none(), "{hidden}");
+    }
+    assert_eq!(
+        glass_regions(&mut run).len(),
+        4,
+        "three tiles and Edit Controls"
+    );
+}
+
+#[test]
+fn the_editing_panel_is_glass_as_the_tiles_are() {
+    LAYOUT.set(Some(Arrangement::from_ids(&[
+        "wifi",
+        "now-playing",
+        "display",
+    ])));
+    let mut run = editing_run();
+    let requests = glass_requests(&mut run);
+    assert_eq!(
+        requests.len(),
+        3 + 2 + 8,
+        "the tiles, Cancel and Done, and a chip for each control offered"
+    );
+    let first = requests[0];
+    assert!(
+        requests.iter().all(|r| r.2 == first.2 && r.1 == first.1),
+        "one container of module glass: {requests:?}"
+    );
+}
+
+#[test]
+fn the_editing_panel_matches_its_golden() {
+    LAYOUT.set(Some(some_controls()));
+    check("editing", Appearance::Dark, false, EDITING);
+}
+
+#[test]
+fn the_editing_panel_under_reduce_transparency_matches_its_golden() {
+    LAYOUT.set(Some(some_controls()));
+    check(
+        "editing-reduce-transparency",
+        Appearance::Light,
+        true,
+        EDITING,
+    );
+}
+
+#[test]
+fn the_editing_panel_under_increase_contrast_matches_its_golden() {
+    LAYOUT.set(Some(some_controls()));
+    check(
+        "editing-increase-contrast",
+        Appearance::DarkHighContrast,
+        false,
+        EDITING,
+    );
+}
+
+/// The marks stand out from the tiles where the tiles are opaque: white on the dark tiles, dark on the light ones, with
+/// a sign of the other tone, with Reduce Transparency in either appearance and with Increase Contrast.
+#[test]
+fn the_marks_stand_out_from_opaque_tiles_in_either_appearance() {
+    LAYOUT.set(Some(some_controls()));
+    let luma = |frame: &Pixmap, x: f64, y: f64| {
+        let pixel = frame.pixel(x as u32, y as u32).unwrap();
+        assert_eq!(pixel.alpha(), 255, "opaque at ({x}, {y})");
+        f64::from(pixel.red())
+    };
+    for (appearance, reduce_transparency, name) in [
+        (Appearance::Dark, true, "dark, Reduce Transparency"),
+        (Appearance::Light, true, "light, Reduce Transparency"),
+    ] {
+        let mut run = Run::start(tokens(appearance, reduce_transparency), EDITING);
+        let remove = run.bounds(Role::Button, "Remove Wi-Fi");
+        let add = run.bounds(Role::Button, "Add Bluetooth");
+        let (frame, _) = run.capture();
+        let centre = remove.center();
+        // the disc above its bar, the bar, and the tile beside the mark
+        let disc = luma(&frame, centre.x, centre.y - 5.0);
+        let sign = luma(&frame, centre.x, centre.y);
+        let tile = luma(&frame, remove.max_x() + 6.0, centre.y - 5.0);
+        assert!((disc - tile).abs() > 150.0, "{name}: disc {disc} on {tile}");
+        assert!((disc - sign).abs() > 150.0, "{name}: sign {sign} on {disc}");
+        // the chip's mark: its disc beside the cross, against the chip
+        let disc = luma(&frame, add.x() + 3.0, add.y() + 4.0);
+        let chip = luma(&frame, add.center().x, add.max_y() - 4.0);
+        assert!((disc - chip).abs() > 150.0, "{name}: disc {disc} on {chip}");
+    }
+}
+
+/// With `CUPERTINO_LOOK_DIR` set, the editing panel with some controls offered and a tile held, for review by eye.
+#[test]
+fn the_editing_panel_can_be_looked_at() {
+    LAYOUT.set(Some(some_controls()));
+    let held = Presentation {
+        edit: Some(Editing {
+            held: Some(Held {
+                module: Module::FocusMode,
+                origin: Point::new(120.0, 190.0),
+            }),
+        }),
+        ..EDITING
+    };
+    for (appearance, reduce_transparency, presentation, name) in [
+        (Appearance::Dark, false, EDITING, "controlcenter-editing"),
+        (Appearance::Dark, true, EDITING, "controlcenter-editing-rt"),
+        (
+            Appearance::Light,
+            true,
+            EDITING,
+            "controlcenter-editing-rt-light",
+        ),
+        (
+            Appearance::DarkHighContrast,
+            false,
+            EDITING,
+            "controlcenter-editing-ic",
+        ),
+        (Appearance::Dark, false, held, "controlcenter-editing-held"),
+    ] {
+        let mut run = Run::start(tokens(appearance, reduce_transparency), presentation);
+        run.driver.look(run.window, name).unwrap();
+    }
 }

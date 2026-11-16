@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use cupertino_alsa::{Master, OpenMode};
+use cupertino_defaults::control_panel::ControlPanelSettings;
 use cupertino_defaults::dock::DockSettings;
 use cupertino_pipewire::{Target, VolumeWorker, Wpctl};
 
@@ -83,6 +84,14 @@ pub trait SessionLock: Send {
 pub trait Launcher: Send {
     /// Open the settings application on the page with identifier `pane`.
     fn open_settings(&mut self, pane: &str) -> Result<(), BackendError>;
+}
+
+/// Where the person's choice of controls is kept.
+pub trait LayoutStore: Send {
+    /// The names of the controls shown, in order, as stored; `None` when nothing is stored.
+    fn load(&mut self) -> Result<Option<Vec<String>>, BackendError>;
+    /// Keep `controls` as the names of the controls shown, in order.
+    fn store(&mut self, controls: &[&str]) -> Result<(), BackendError>;
 }
 
 /// The overlay the panel tells about a level it changed itself.
@@ -402,6 +411,39 @@ impl Launcher for RecordingLauncher {
     }
 }
 
+/// A choice of controls kept in memory, shared with its clones; nothing stored at first.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryLayout {
+    stored: Arc<Mutex<Option<Vec<String>>>>,
+}
+
+impl MemoryLayout {
+    /// What is stored now.
+    pub fn stored(&self) -> Option<Vec<String>> {
+        self.stored
+            .lock()
+            .expect("the lock is never poisoned")
+            .clone()
+    }
+
+    /// Store `controls`, as another process writing the layout would.
+    pub fn set(&self, controls: &[&str]) {
+        *self.stored.lock().expect("the lock is never poisoned") =
+            Some(controls.iter().map(|name| name.to_string()).collect());
+    }
+}
+
+impl LayoutStore for MemoryLayout {
+    fn load(&mut self) -> Result<Option<Vec<String>>, BackendError> {
+        Ok(self.stored())
+    }
+
+    fn store(&mut self, controls: &[&str]) -> Result<(), BackendError> {
+        self.set(controls);
+        Ok(())
+    }
+}
+
 /// Records what the overlay was asked to show.
 pub type RecordingOverlay = Recording<(OverlayKind, f64)>;
 
@@ -482,6 +524,37 @@ impl Switch for DockHiding {
         let (mut settings, _) = DockSettings::load(&path, None)?;
         settings.autohide = Some(on);
         settings.store(&path)?;
+        Ok(())
+    }
+}
+
+/// The choice of controls in the panel's settings file, the `controls` key, read each time it is asked for.
+#[derive(Clone, Debug, Default)]
+pub struct StoredLayout {
+    /// The file; `None` takes the panel's own (`ControlPanelSettings::path`).
+    pub path: Option<PathBuf>,
+}
+
+impl StoredLayout {
+    fn path(&self) -> Result<PathBuf, BackendError> {
+        self.path
+            .clone()
+            .or_else(ControlPanelSettings::path)
+            .ok_or_else(|| "there is no settings directory".into())
+    }
+}
+
+impl LayoutStore for StoredLayout {
+    fn load(&mut self) -> Result<Option<Vec<String>>, BackendError> {
+        let (settings, _) = ControlPanelSettings::load(&self.path()?, None)?;
+        Ok(settings.controls)
+    }
+
+    fn store(&mut self, controls: &[&str]) -> Result<(), BackendError> {
+        let settings = ControlPanelSettings {
+            controls: Some(controls.iter().map(|name| name.to_string()).collect()),
+        };
+        settings.store(&self.path()?)?;
         Ok(())
     }
 }
@@ -788,6 +861,44 @@ mod tests {
             overlay.shown(),
             [(OverlayKind::Volume, 0.5), (OverlayKind::Mute, 0.0)]
         );
+    }
+
+    #[test]
+    fn the_stored_layout_is_the_controls_key_of_the_panel_s_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("control-panel.conf");
+        let mut layout = StoredLayout {
+            path: Some(path.clone()),
+        };
+        assert_eq!(layout.load().unwrap(), None, "no file stores nothing");
+        layout.store(&["sound", "wifi"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "controls = sound,wifi\n"
+        );
+        assert_eq!(
+            layout.load().unwrap(),
+            Some(vec!["sound".to_owned(), "wifi".to_owned()])
+        );
+        // another process wrote the file: the next reading has it, names the panel does not know included
+        std::fs::write(&path, "controls = mute, later-control\n").unwrap();
+        assert_eq!(
+            layout.load().unwrap(),
+            Some(vec!["mute".to_owned(), "later-control".to_owned()])
+        );
+        layout.store(&[]).unwrap();
+        assert_eq!(layout.load().unwrap(), Some(Vec::new()), "none shown");
+    }
+
+    #[test]
+    fn a_layout_kept_in_memory_is_shared_with_its_clones() {
+        let layout = MemoryLayout::default();
+        let mut store: Box<dyn LayoutStore> = Box::new(layout.clone());
+        assert_eq!(store.load().unwrap(), None);
+        store.store(&["display"]).unwrap();
+        assert_eq!(layout.stored(), Some(vec!["display".to_owned()]));
+        layout.set(&["mute"]);
+        assert_eq!(store.load().unwrap(), Some(vec!["mute".to_owned()]));
     }
 
     #[test]

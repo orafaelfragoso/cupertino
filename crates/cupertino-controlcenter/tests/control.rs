@@ -3,8 +3,8 @@
 #![cfg(feature = "dbus")]
 
 use cupertino_controlcenter::backend::{
-    MediaPlayer, MemoryBluetooth, MemoryBrightness, MemoryMedia, MemorySwitch, MemoryVolume,
-    MemoryWifi, RecordingLauncher, RecordingLock, RecordingOverlay,
+    MediaPlayer, MemoryBluetooth, MemoryBrightness, MemoryLayout, MemoryMedia, MemorySwitch,
+    MemoryVolume, MemoryWifi, RecordingLauncher, RecordingLock, RecordingOverlay,
 };
 use cupertino_controlcenter::control::{serve, Presence, BUS_NAME, OBJECT_PATH};
 use cupertino_controlcenter::system::{MprisPlayer, PLAYER_TIMEOUT};
@@ -44,6 +44,7 @@ fn fake_backends() -> Backends {
         lock: Box::new(RecordingLock::default()),
         launcher: Box::new(RecordingLauncher::default()),
         overlay: Box::new(RecordingOverlay::default()),
+        layout: Box::new(MemoryLayout::default()),
     }
 }
 

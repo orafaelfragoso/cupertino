@@ -252,9 +252,9 @@ the tile, 8 pt inside the output. The popup anchors to a rectangle of the bar's 
 depends on how a mirrored popup treats its offset. The panel and its pointer are one piece of glass (the dense glass of
 a floating surface with text on it, one container); Reduce Transparency and Increase Contrast take the compositor's
 recipes for that glass. Where the desktop draws no glass the panel paints the popover's opaque fill with a 1 pt edge
-(2 pt with Increase Contrast) that goes on round the pointer. It holds the folder's name along the top (13 pt semibold), a grid of the newest entries and a capsule
-button, "Open in Files", that opens the folder and closes the stack. The grid has up to 5 columns and 3 rows of 96 × 96 pt
-cells, each a 56 pt icon (the type's generic theme icon, or `folder`) over its name (11 pt, one line, ellipsized); the
+(2 pt with Increase Contrast) that goes on round the pointer. It holds the folder's name along the top (14 pt semibold), a grid of the newest entries and a capsule
+button, "Open in Files", that opens the folder and closes the stack. The grid has up to 5 columns and 3 rows of 112 × 102 pt
+cells, each a 56 pt icon (the type's generic theme icon, or `folder`) over its name (13 pt, one line, ellipsized, with room for about fifteen letters); the
 panel is 16 pt in from its edges with a 20 pt corner radius. Entries are listed when the stack opens, on a thread of
 their own, and the stack shows once they are (a click on the tile meanwhile closes it): hidden files, names that are not
 UTF-8 and links that point nowhere are left out, the most recently changed first, at most 15, and only those shown have

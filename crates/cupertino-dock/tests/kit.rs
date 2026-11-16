@@ -3275,7 +3275,7 @@ fn check_grid_reads(scale: f64, reduce: bool) {
             "{what}: the folder's name reads at {title:.2}:1"
         );
         let cell = layout.cell(0);
-        let label = Rect::new(cell.x, cell.y + StackLayout::LABEL_CY - 8.0, cell.w, 16.0);
+        let label = Rect::new(cell.x, cell.y + StackLayout::LABEL_CY - 9.0, cell.w, 18.0);
         let file = picture.strongest(label, fill);
         assert!(file >= 7.0, "{what}: a file's name reads at {file:.2}:1");
         // the button's own tint, at its round end, and its label on it

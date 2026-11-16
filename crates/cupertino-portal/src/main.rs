@@ -82,9 +82,11 @@ fn run() -> Result<()> {
     }
     let bus = zbus::blocking::Connection::session()?;
     let settings = Service::serve(&bus, appearance)?;
-    let toolkits = toolkits::Writer::start(cupertino_defaults::config_home(), || {
-        std::process::Command::new("gsettings")
-    })?;
+    let toolkits = toolkits::Writer::start(
+        cupertino_defaults::config_home(),
+        toolkits::written_file(),
+        || std::process::Command::new("gsettings"),
+    )?;
     toolkits.apply(ToolkitSettings::from(appearance));
     bus.object_server()
         .at(PORTAL_PATH, FileChooser::new(|event| inbox().push(event)))?;

@@ -22,10 +22,11 @@ pub type ExecutableOf = Box<dyn Fn(&DisplayHandle, &Client) -> Option<PathBuf>>;
 
 /// The program the process on the other end of `client`'s socket runs (`/proc/<pid>/exe`), when only the system can have
 /// put it there: the file and every folder above it belong to root and nobody else may write to them. A program the user
-/// could write or copy into place names nothing, and a process id reused while it was read names nothing either.
+/// could write or copy into place names nothing, and a process id reused while it was read names nothing either. A
+/// program replaced since the process started it, as a package upgrade does, is named by the path it was started from.
 pub fn trusted_executable(display: &DisplayHandle, client: &Client) -> Option<PathBuf> {
     let process = peer_process(display, client)?;
-    let exe = std::fs::read_link(format!("/proc/{}/exe", process.0)).ok()?;
+    let exe = started_from(std::fs::read_link(format!("/proc/{}/exe", process.0)).ok()?);
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", process.0)).ok()?;
     (start_time(&stat)? == process.1 && system_owned(&exe)).then_some(exe)
 }
@@ -55,6 +56,20 @@ fn environ_value(environ: &[u8], name: &str) -> Option<String> {
             .filter(|v| !v.is_empty())
             .map(str::to_string)
     })
+}
+
+/// What the kernel marks a program that was removed or replaced while it runs with, after its path in `/proc/<pid>/exe`.
+const REMOVED_PROGRAM_MARK: &str = " (deleted)";
+
+/// The path a process started its program from, out of the link `/proc/<pid>/exe` holds: without the mark of a program
+/// removed since.
+fn started_from(link: PathBuf) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = link.as_os_str().as_bytes();
+    match bytes.strip_suffix(REMOVED_PROGRAM_MARK.as_bytes()) {
+        Some(path) => PathBuf::from(std::ffi::OsStr::from_bytes(path)),
+        None => link,
+    }
 }
 
 /// Whether `path` and each folder above it belong to root and are writable by nobody else.
@@ -106,6 +121,19 @@ mod tests {
     fn the_start_time_is_field_22_even_when_the_command_name_has_parentheses() {
         let stat = "4242 (a (b) c) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10 18446744073709551615";
         assert_eq!(start_time(stat), Some(987654));
+    }
+
+    #[test]
+    fn a_program_replaced_while_it_runs_is_named_by_the_path_it_was_started_from() {
+        assert_eq!(
+            started_from(PathBuf::from("/usr/bin/xwayland-satellite (deleted)")),
+            Path::new("/usr/bin/xwayland-satellite")
+        );
+        assert_eq!(
+            started_from(PathBuf::from("/usr/bin/xwayland-satellite")),
+            Path::new("/usr/bin/xwayland-satellite")
+        );
+        assert!(system_owned(&started_from(PathBuf::from("/usr (deleted)"))));
     }
 
     #[test]

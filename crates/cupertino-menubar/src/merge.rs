@@ -64,7 +64,8 @@ pub struct Export<'a> {
     /// The application's names: its desktop entry's `Name` and the last component of its id. A DBusMenu menu titled
     /// with either is the application's own menu, and "Configure <name>" its preferences.
     pub names: [&'a str; 2],
-    /// How the server treats the application's keys ([`client_class`]); its accelerators show the keys pressed.
+    /// How the server treats the application's keys, as it names them for the active window; its accelerators show the
+    /// keys pressed.
     pub class: ClientClass,
 }
 
@@ -370,17 +371,6 @@ fn profile(primary: ShortcutModifier) -> Profile {
     match primary {
         ShortcutModifier::Ctrl => Profile::classic_pc(),
         _ => Profile::cupertino(),
-    }
-}
-
-/// How the server treats an exporter's keys: [`ClientClass::FirstParty`] for a `cupertino-*` application id, as the
-/// server decides, else [`ClientClass::Other`] (the bar knows neither the terminals nor the applications whose keys
-/// the server leaves alone).
-pub fn client_class(app_id: &str) -> ClientClass {
-    if app_id.starts_with("cupertino-") {
-        ClientClass::FirstParty
-    } else {
-        ClientClass::Other
     }
 }
 
@@ -959,8 +949,6 @@ mod tests {
     #[test]
     fn a_first_party_apps_accelerators_show_as_they_are() {
         use ShortcutModifier::{Ctrl, Primary};
-        assert_eq!(client_class("cupertino-files"), ClientClass::FirstParty);
-        assert_eq!(client_class("org.example.editor"), ClientClass::Other);
         let first = ClientClass::FirstParty;
         for primary in [Primary, Ctrl] {
             assert_eq!(

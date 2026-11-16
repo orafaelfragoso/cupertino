@@ -342,6 +342,7 @@ mod tests {
                 backdrop_lightness: None,
                 backdrop_bands: None,
                 active_client: None,
+                key_class: None,
                 windows: None,
                 shortcuts: None,
             };
@@ -943,6 +944,7 @@ mod tests {
                 backdrop_lightness: None,
                 backdrop_bands: None,
                 active_client: None,
+                key_class: None,
                 windows: None,
                 shortcuts: None,
             },

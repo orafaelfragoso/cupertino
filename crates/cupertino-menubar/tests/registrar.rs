@@ -21,6 +21,7 @@ use cupertino_shell_client::{
 use cupertino_test_bus::PrivateBus;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use futures_util::StreamExt;
 use zbus::{block_on, fdo, Connection};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -170,6 +171,10 @@ impl X11Windows for FakeBridge {
     fn focused(&mut self, _bridge: u32) -> Option<u32> {
         None
     }
+
+    fn owner(&mut self, _bridge: u32, _window: u32) -> Option<u32> {
+        None
+    }
 }
 
 /// The bar's worker and what it reports.
@@ -183,7 +188,19 @@ struct Bar {
 impl Bar {
     fn start(bus: &PrivateBus) -> Bar {
         let (worker, events) = Worker::start(block_on(bus.connect_async()), || {}).unwrap();
-        worker.send(Request::AppMenuRegistrar(true)).unwrap();
+        // owned once the worker has handled the request: wait, so the first registration finds the registrar
+        let registrar_owned = block_on(async {
+            let conn = bus.connect_async().await;
+            let dbus = fdo::DBusProxy::new(&conn).await.unwrap();
+            let mut owners = dbus
+                .receive_name_owner_changed_with_args(&[(0, REGISTRAR)])
+                .await
+                .unwrap();
+            worker.send(Request::AppMenuRegistrar(true)).unwrap();
+            let name = zbus::names::BusName::try_from(REGISTRAR).unwrap();
+            dbus.name_has_owner(name).await.unwrap() || owners.next().await.is_some()
+        });
+        assert!(registrar_owned, "the worker owns the registrar");
         Bar {
             worker,
             events,
@@ -488,6 +505,82 @@ fn registrar_forgets_a_program_that_leaves_the_bus_and_an_x11_window_that_is_gon
     bar.worker.send(Request::ForgetRegistrations(gone)).unwrap();
     bar.registrations(0);
     assert_eq!(menu_for(&other, X11_WINDOW).0, "");
+}
+
+#[test]
+fn registrar_keeps_a_wayland_windows_menus_while_an_x11_window_is_active() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut bar = Bar::start(&bus);
+    // the X server has only another program's window, never the Wayland program's number
+    let bridge = FakeBridge::default();
+    bridge
+        .0
+        .lock()
+        .unwrap()
+        .insert(0x60_0002, "Terminal".into());
+    bar.shared.x11 = Some(Box::new(bridge));
+    let heard = Arc::new(Mutex::new(Heard::default()));
+    let electron = program(&bus, &heard);
+    register(&electron, 1, MENU_PATH);
+    bar.registrations(1);
+    let menu = MenuSource::Kde(KdeAppMenu {
+        service: electron.unique_name().unwrap().to_string(),
+        path: MENU_PATH.into(),
+    });
+    bar.focus("Notes", ActiveClient::Wayland(std::process::id()));
+    assert_eq!(bar.feed.source(&bar.shared), menu);
+
+    bar.focus("Terminal", ActiveClient::X11(77));
+    assert_eq!(bar.feed.source(&bar.shared), MenuSource::Synthetic);
+    assert!(
+        bar.shared.take_gone().is_empty(),
+        "the Wayland window is not gone"
+    );
+    bar.focus("Notes", ActiveClient::Wayland(std::process::id()));
+    assert_eq!(bar.feed.source(&bar.shared), menu, "its menus come back");
+    assert_eq!(
+        menu_for(&electron, 1).0,
+        electron.unique_name().unwrap().as_str()
+    );
+}
+
+#[test]
+fn registrar_keeps_nothing_of_a_connection_that_left_as_it_registered() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut bar = Bar::start(&bus);
+    // the program registers without waiting for an answer and leaves the bus at once
+    let leaver = block_on(bus.connect_async());
+    let left = leaver.unique_name().unwrap().to_string();
+    let call = zbus::Message::method_call(REGISTRAR_PATH, "RegisterWindow")
+        .unwrap()
+        .destination(REGISTRAR)
+        .unwrap()
+        .interface(REGISTRAR)
+        .unwrap()
+        .with_flags(zbus::message::Flags::NoReplyExpected)
+        .unwrap()
+        .build(&(X11_WINDOW, ObjectPath::from_static_str_unchecked(MENU_PATH)))
+        .unwrap();
+    block_on(leaver.send(&call)).unwrap();
+    block_on(leaver.close()).unwrap();
+
+    // later registrations show it was never kept, nor kept after its leaving was heard
+    let stays = block_on(bus.connect_async());
+    for (window, count) in [(5, 1), (6, 2)] {
+        register(&stays, window, MENU_PATH);
+        let list = bar.registrations(count);
+        assert!(
+            list.iter().all(|r| r.service != left),
+            "the connection that left: {list:?}"
+        );
+    }
+    assert_eq!(menu_for(&stays, X11_WINDOW).0, "");
 }
 
 #[test]

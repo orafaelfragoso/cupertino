@@ -2,7 +2,7 @@
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, ClientKind, Command,
-    CupertinoMenuBarV1, EditAction as WireEditAction, ModifierKey,
+    CupertinoMenuBarV1, EditAction as WireEditAction, KeyClass as WireKeyClass, ModifierKey,
     SessionAction as WireSessionAction, WindowControl,
 };
 use std::collections::BTreeMap;
@@ -69,6 +69,18 @@ pub enum ActiveClient {
     Wayland(u32),
     /// The X11 bridge, which shows the windows of every X11 program; its process id.
     X11(u32),
+}
+
+/// How the server passes the person's chords to the active window (version 24).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyClass {
+    /// The window gets the control chord of each command-key chord.
+    #[default]
+    Other,
+    /// The window uses the desktop's toolkit and reads the command key itself.
+    Toolkit,
+    /// A terminal's window: it gets the control and shift chord.
+    Terminal,
 }
 
 /// A window of the active application, for the window list.
@@ -176,6 +188,8 @@ pub struct MenuBarUpdate {
     pub shortcuts: Option<Shortcuts>,
     /// The process that shows the active window, from version 24 in every group with `window_state`.
     pub active_client: Option<ActiveClient>,
+    /// How the server passes chords to the active window, from version 24 with [`MenuBarUpdate::active_client`].
+    pub key_class: Option<KeyClass>,
 }
 
 /// The most bands of [`MenuBarUpdate::backdrop_bands`] a bar reads; the rest of a longer array is dropped.
@@ -517,11 +531,16 @@ impl GroupBuilder {
                 })
             }
             Event::WindowFullScreen { full_screen } => self.full_screen = Some(full_screen != 0),
-            Event::ActiveClient { pid, kind } => {
+            Event::ActiveClient { pid, kind, keys } => {
                 self.update.active_client = Some(match kind {
                     WEnum::Value(ClientKind::X11) => ActiveClient::X11(pid),
                     WEnum::Value(_) | WEnum::Unknown(_) => ActiveClient::Wayland(pid),
-                })
+                });
+                self.update.key_class = Some(match keys {
+                    WEnum::Value(WireKeyClass::Toolkit) => KeyClass::Toolkit,
+                    WEnum::Value(WireKeyClass::Terminal) => KeyClass::Terminal,
+                    WEnum::Value(_) | WEnum::Unknown(_) => KeyClass::Other,
+                });
             }
             Event::Done => {
                 if self.lists_windows && self.update.window_state.is_some() {
@@ -600,6 +619,7 @@ mod tests {
                 backdrop_lightness: None,
                 backdrop_bands: None,
                 active_client: None,
+                key_class: None,
                 windows: None,
                 shortcuts: None,
             }]
@@ -832,11 +852,13 @@ mod tests {
                 MenuBarUpdate {
                     backdrop_bands: Some(vec![[0, 1, 2], [65_535, 300, 45]]),
                     active_client: None,
+                    key_class: None,
                     ..MenuBarUpdate::default()
                 },
                 MenuBarUpdate {
                     backdrop_bands: Some(vec![[7, 8, 9]; MAX_BACKDROP_BANDS]),
                     active_client: None,
+                    key_class: None,
                     ..MenuBarUpdate::default()
                 }
             ]
@@ -868,18 +890,20 @@ mod tests {
 
     #[test]
     fn the_process_behind_the_active_window_comes_in_its_group() {
-        let client = |pid, kind| Event::ActiveClient {
+        let client = |pid, kind, keys| Event::ActiveClient {
             pid,
             kind: WEnum::Value(kind),
+            keys: WEnum::Value(keys),
         };
         let updates = feed(vec![
-            client(41, ClientKind::Wayland),
+            client(41, ClientKind::Wayland, WireKeyClass::Toolkit),
             Event::Done,
-            client(7, ClientKind::X11),
+            client(7, ClientKind::X11, WireKeyClass::Terminal),
             Event::Done,
             Event::ActiveClient {
                 pid: 9,
                 kind: WEnum::Unknown(5),
+                keys: WEnum::Unknown(7),
             },
             Event::Done,
             window_state(),
@@ -894,6 +918,16 @@ mod tests {
                 None
             ],
             "a kind this bar does not know is the window's own process"
+        );
+        assert_eq!(
+            updates.iter().map(|u| u.key_class).collect::<Vec<_>>(),
+            [
+                Some(KeyClass::Toolkit),
+                Some(KeyClass::Terminal),
+                Some(KeyClass::Other),
+                None
+            ],
+            "the server's class of the window's keys comes with it; one this bar does not know is the default"
         );
     }
 

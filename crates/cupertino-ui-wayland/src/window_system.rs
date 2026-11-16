@@ -58,9 +58,10 @@ enum Stall {
 const GPU_RELEASE_POLL: Duration = Duration::from_millis(2);
 
 /// How long the run loop waits for the wire: the runtime's `timeout`, cut to [`GPU_RELEASE_POLL`] while a window
-/// waits for a GPU buffer (a release point signals through an eventfd the connection does not poll), and to `warm_up`
-/// while the warm-up thread is inside `Device::new` (so a hung one is noticed without anything waking the loop). A
-/// window that has its buffer again leaves the runtime's own timeout, so an idle process sleeps.
+/// waits for a GPU buffer the compositor can release by itself ([`polls_release`]; a release point signals through an
+/// eventfd the connection does not poll), and to `warm_up` while the warm-up thread is inside `Device::new` (so a hung
+/// one is noticed without anything waking the loop). A window that has its buffer again leaves the runtime's own
+/// timeout, so an idle process sleeps.
 fn wait_timeout(
     timeout: Option<Duration>,
     gpu_stalled: bool,
@@ -68,6 +69,15 @@ fn wait_timeout(
 ) -> Option<Duration> {
     let poll = gpu_stalled.then_some(GPU_RELEASE_POLL);
     [timeout, poll, warm_up].into_iter().flatten().min()
+}
+
+/// Whether a window stalled on a GPU buffer has its release points looked at every [`GPU_RELEASE_POLL`]: only while the
+/// compositor can draw it and so release a buffer by itself, with an output on the connection (`outputs`) and the
+/// window on one (`on_output`). With no output, or the window on none (hidden, minimized, its display gone), no frame
+/// can come: its buffers come back only after something reaches the wire (an output, the window entering one, a
+/// configure), which ends the wait itself, so the loop sleeps until then.
+fn polls_release(outputs: bool, on_output: bool) -> bool {
+    outputs && on_output
 }
 
 /// The most drops kept while their data is read, as the transport keeps them.
@@ -2347,12 +2357,22 @@ impl WindowSystem for WaylandWindowSystem {
         }
         let ready = !self.queued.is_empty() || self.woken.load(Ordering::Acquire);
         events.append(&mut self.queued);
-        // a release point signals through an eventfd the connection does not poll: look again soon
+        // a release point signals through an eventfd the connection does not poll: look again soon, while the
+        // compositor can draw the window and so release a buffer by itself
         let gpu_stalled = self
             .windows
             .iter()
             .filter(|w| w.stalled == Some(Stall::Buffer))
-            .any(|w| self.gpu.draws(w.surface) || w.busy_layers.iter().any(|&s| self.gpu.draws(s)));
+            .filter(|w| {
+                self.gpu.draws(w.surface) || w.busy_layers.iter().any(|&s| self.gpu.draws(s))
+            })
+            .any(|w| {
+                let on_output = self
+                    .conn
+                    .surface_outputs(w.surface)
+                    .is_ok_and(|o| !o.is_empty());
+                polls_release(!self.conn.outputs().is_empty(), on_output)
+            });
         let warm_up = self
             .gpu
             .deadline()
@@ -2692,6 +2712,27 @@ mod tests {
         assert_eq!(
             wait_timeout(None, false, Some(Duration::from_secs(4))),
             Some(Duration::from_secs(4))
+        );
+    }
+
+    #[test]
+    fn a_window_stalled_on_a_gpu_buffer_with_no_output_sleeps_until_the_wire_wakes_it() {
+        let wait = |outputs, on_output| wait_timeout(None, polls_release(outputs, on_output), None);
+        assert_eq!(
+            wait(true, true),
+            Some(GPU_RELEASE_POLL),
+            "a window on an output looks at its release points every 2 ms"
+        );
+        assert_eq!(wait(false, false), None, "with no output at all");
+        assert_eq!(wait(true, false), None, "on no output: hidden or minimized");
+        // the runtime's own timeout still bounds the wait
+        assert_eq!(
+            wait_timeout(
+                Some(Duration::from_secs(1)),
+                polls_release(false, false),
+                None
+            ),
+            Some(Duration::from_secs(1))
         );
     }
 

@@ -361,11 +361,22 @@ fn follow(scroll: f64, caret_x: f64, caret_width: f64, text_width: f64, width: f
         .max(0.0)
 }
 
+/// The room between an empty centred field's caret and the start of its placeholder, in points.
+const PLACEHOLDER_CARET_GAP: f64 = 1.0;
+
+/// The field centres its text ([`BareSecureField::centered`]).
+fn centred(field: FieldLook) -> bool {
+    matches!(
+        field,
+        FieldLook::Bare(_, _, BareSetting { centered: true, .. })
+    )
+}
+
 /// The left edge of text `width` wide before it scrolls: the interior's start, or in right-to-left as far right as
 /// leaves the caret room after it; in a field that centres its text, centred while it fits (the caret's room
 /// counted).
 fn leading_x(env: &Environment, area: Rect, width: f64, field: FieldLook) -> f64 {
-    if let FieldLook::Bare(_, _, BareSetting { centered: true, .. }) = field {
+    if centred(field) {
         return area.min_x() + ((area.width() - CARET_WIDTH - width) / 2.0).max(0.0);
     }
     match env.direction {
@@ -470,12 +481,15 @@ fn paint_text(
             cx.fill_pixels(rect.translate(origin.x, origin.y), selected);
         }
     }
+    // where the placeholder starts while it shows
+    let mut placeholder_x = None;
     if shown.text.is_empty() {
         if let Some(placeholder) = field_label(&env, placeholder, field) {
             let at = Point::new(
                 leading_x(&env, area, placeholder.size().width, field),
                 field_top(&placeholder, chrome, &env, field),
             );
+            placeholder_x = (placeholder.size().width > 0.0).then_some(at.x);
             // a search field's placeholder, and a bare field's, read as its label, so they are stronger than a plain
             // field's
             let role = match field {
@@ -512,10 +526,15 @@ fn paint_text(
             FieldLook::Bare(..) => ColorRole::Text,
             FieldLook::Plain | FieldLook::Search(_) => ColorRole::DefaultButtonFill,
         };
-        marks.caret(
-            caret_bar(caret.translate(origin.x, origin.y), env.scale),
-            color(ink),
-        );
+        let mut bar = caret.translate(origin.x, origin.y);
+        // an empty field that centres its text centres the caret too, which would stand in the middle of the centred
+        // placeholder and through its letters: it stands just before the placeholder's first glyph instead, and
+        // follows the centred text once there is some (approximate)
+        if let (true, Some(x)) = (centred(field), placeholder_x) {
+            let x = (x - CARET_WIDTH - PLACEHOLDER_CARET_GAP).max(area.min_x());
+            bar = bar.translate(x - bar.min_x(), 0.0);
+        }
+        marks.caret(caret_bar(bar, env.scale), color(ink));
     }
     marks.finish(cx);
 }

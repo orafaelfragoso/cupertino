@@ -5,7 +5,7 @@ use crate::support;
 
 use std::cell::Cell;
 
-use cupertino_geometry::{Insets, Point, Size};
+use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_ui_controls::{BareSecureField, SecureField, Stack};
 use cupertino_ui_core::{Application, Command, Element, Role, Window};
 use cupertino_ui_layout::{Align, Axis};
@@ -160,6 +160,20 @@ fn glyphs_x(h: &Harness<Lock>) -> Vec<f64> {
         .collect()
 }
 
+/// The caret bars the field drew last, in its own points.
+fn carets(h: &Harness<Lock>) -> Vec<Rect> {
+    h.ops("password")
+        .into_iter()
+        .filter_map(|op| match op {
+            PaintOp::Fill {
+                shape: Shape::Rect(r),
+                ..
+            } if r.width() <= 2.0 && r.height() > 4.0 => Some(r),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn a_centred_bare_secure_field_centres_its_placeholder_and_dots_clear_of_its_submit_strip() {
     // the field of every view on this thread centres
@@ -172,11 +186,27 @@ fn a_centred_bare_secure_field_centres_its_placeholder_and_dots_clear_of_its_sub
         (placeholder - (width - SUBMIT - label) / 2.0).abs() < 2.0,
         "the placeholder {label} wide starts at {placeholder} in {width} less {SUBMIT}"
     );
+    // while empty the caret stands just before the placeholder's first glyph, not through its letters
+    let [caret] = carets(&h)[..] else {
+        panic!("one caret: {:?}", carets(&h));
+    };
+    assert!(
+        caret.max_x() <= placeholder && placeholder - caret.max_x() <= 2.0,
+        "the caret {caret:?} stands just before the placeholder at {placeholder}"
+    );
     h.type_text("ab");
     let dots = glyphs_x(&h)[0];
     assert!(
         dots > placeholder && dots < (width - SUBMIT) / 2.0,
         "two dots, narrower than the placeholder, start at {dots}"
+    );
+    // with text it follows the centred dots: after the second one
+    let [caret] = carets(&h)[..] else {
+        panic!("one caret: {:?}", carets(&h));
+    };
+    assert!(
+        caret.min_x() > dots + 2.0 && caret.max_x() < (width - SUBMIT) / 2.0 + label,
+        "the caret {caret:?} follows the dots from {dots}"
     );
 }
 

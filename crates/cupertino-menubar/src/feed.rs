@@ -7,7 +7,7 @@
 
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
-use crate::extras::{tray_glyph, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
+use crate::extras::{tray_glyph, tray_radio, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
@@ -444,22 +444,28 @@ impl BarFeed {
             width: PRIVACY_DOT_PT,
             menu: None,
         });
-        let extras = shared
+        let own: Vec<ExtraKind> = shared
             .extras
             .shown()
             .into_iter()
             .filter(|kind| kind_shown(&shared.conf, *kind))
-            .map(|kind| StatusEntry {
-                id: kind.slot_id().to_owned(),
-                width: STATUS_ICON_PT,
-                menu: Some(shared.extras.status_menu(kind)),
-            });
+            .collect();
+        let extras = own.iter().copied().map(|kind| StatusEntry {
+            id: kind.slot_id().to_owned(),
+            width: STATUS_ICON_PT,
+            menu: Some(shared.extras.status_menu(kind)),
+        });
         let items = shared
             .status
             .iter()
             .filter(|s| {
                 let key = tray_key(&s.item);
                 !shared.conf.hidden_tray.iter().any(|h| h == key)
+            })
+            // an applet of a radio the bar shows its own item of would show that radio twice
+            .filter(|s| {
+                tray_radio(&s.item.app_id, s.item.current_icon_name())
+                    .is_none_or(|radio| !own.contains(&radio))
             })
             .map(|s| StatusEntry {
                 id: s.item.id.clone(),
@@ -1346,6 +1352,70 @@ mod tests {
             ),
             (16, 24, 32)
         );
+    }
+
+    /// One radio, one item: the network and Bluetooth applets show while the bar has no item of its own for their
+    /// radio (no service, or the item switched off in the settings) and are left out while it has.
+    #[test]
+    fn an_applet_of_a_radio_is_left_out_while_the_bar_shows_its_own_item() {
+        use crate::extras::BluetoothState;
+        const NETWORK: &str = ":1.7/org/ayatana/NotificationItem/nm_applet";
+        const BLUETOOTH: &str = ":1.8/org/blueman/sni";
+        const OTHER: &str = ":1.9/StatusNotifierItem";
+        let (feed, mut shared) = ready(Some(WindowMenu::None));
+        for (id, app, icon) in [
+            (NETWORK, "nm-applet", "nm-signal-75"),
+            (BLUETOOTH, "blueman", "blueman-tray"),
+            (OTHER, "mixer", "audio-volume-high"),
+        ] {
+            shared.set_status(StatusState {
+                item: StatusItem {
+                    id: id.into(),
+                    app_id: app.into(),
+                    icon_name: icon.into(),
+                    status: ItemStatus::Active,
+                    ..StatusItem::default()
+                },
+                icon: None,
+                menu: None,
+            });
+        }
+        let ids = |shared: &Shared| {
+            let mut ids: Vec<String> = feed
+                .content(shared)
+                .status
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        let sorted = |ids: &[&str]| {
+            let mut ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+            ids.sort();
+            ids
+        };
+        // no service of either radio: the applets are the only items of their radios
+        assert_eq!(ids(&shared), sorted(&[NETWORK, BLUETOOTH, OTHER]));
+        shared.extras.wifi = Some(WifiState {
+            enabled: true,
+            networks: Vec::new(),
+        });
+        assert_eq!(ids(&shared), sorted(&["extra:wifi", BLUETOOTH, OTHER]));
+        shared.extras.bluetooth = Some(BluetoothState {
+            powered: false,
+            devices: Vec::new(),
+        });
+        assert_eq!(
+            ids(&shared),
+            sorted(&["extra:wifi", "extra:bluetooth", OTHER])
+        );
+        // the bar's own item switched off in the settings: the applet's stands for the radio again
+        shared.conf.shown.wifi = false;
+        assert_eq!(ids(&shared), sorted(&[NETWORK, "extra:bluetooth", OTHER]));
+        // the Bluetooth service went: so does the bar's item, and the applet's is back
+        shared.extras.bluetooth = None;
+        assert_eq!(ids(&shared), sorted(&[NETWORK, BLUETOOTH, OTHER]));
     }
 
     /// Every radio and Focus item, the bar's own and a third-party applet's alike, draws a template symbol of the asset

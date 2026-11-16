@@ -492,24 +492,35 @@ const UNLINKED_WORDS: [&str; 8] = [
 /// size and in the bar's colour, rather than the icon theme's picture of a size and colour of its own. `None` for any
 /// other item, which keeps its own icon.
 pub fn tray_glyph(id: &str, icon_name: &str) -> Option<ExtraGlyph> {
+    let symbol = match tray_radio(id, icon_name)? {
+        ExtraKind::Bluetooth => "symbol.bluetooth",
+        _ => "symbol.wifi",
+    };
+    let icon = icon_name.to_ascii_lowercase();
+    let dimmed = UNLINKED_WORDS.iter().any(|word| icon.contains(word));
+    Some(ExtraGlyph { symbol, dimmed })
+}
+
+/// The radio a third-party status item stands for, from its id and the icon name it shows: a network applet for
+/// Wi-Fi, a Bluetooth applet for Bluetooth; `None` for any other item. While the bar shows its own item of that
+/// radio the applet's is left out ([`crate::feed`]): one radio, one item.
+pub fn tray_radio(id: &str, icon_name: &str) -> Option<ExtraKind> {
     let id = id.to_ascii_lowercase();
     let icon = icon_name.to_ascii_lowercase();
-    let symbol = if id == "nm-applet"
+    if id == "nm-applet"
         || id.starts_with("networkmanager")
         || icon.starts_with("nm-")
         || icon.starts_with("network-wireless")
     {
-        "symbol.wifi"
+        Some(ExtraKind::Wifi)
     } else if id.starts_with("blueman")
         || icon.starts_with("blueman")
         || icon.starts_with("bluetooth")
     {
-        "symbol.bluetooth"
+        Some(ExtraKind::Bluetooth)
     } else {
-        return None;
-    };
-    let dimmed = UNLINKED_WORDS.iter().any(|word| icon.contains(word));
-    Some(ExtraGlyph { symbol, dimmed })
+        None
+    }
 }
 
 impl Extras {

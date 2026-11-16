@@ -18,6 +18,8 @@ pub const MAX_WAITING: usize = 8;
 pub const MISMATCH: &str = "The passwords do not match.";
 pub const CONTINUE: &str = "Continue";
 pub const CANCEL: &str = "Cancel";
+/// The property a caller sets when Escape must not count as its cancel button.
+pub const ESCAPE_DISMISSES: &str = "escape-dismisses";
 
 /// Who asks: the caller's unique bus name and the path of its callback object.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -70,6 +72,9 @@ pub struct Properties {
     pub caller_window: String,
     pub continue_label: String,
     pub cancel_label: String,
+    /// Escape is no answer to this caller's questions: the prompt ends as one that could not be shown, and only the
+    /// cancel button says no. Asked for by a caller that keeps a no; the keyring daemon never sets it.
+    pub escape_dismisses: bool,
 }
 
 impl Properties {
@@ -88,6 +93,7 @@ impl Properties {
                 ("caller-window", Value::Str(v)) => self.caller_window = v,
                 ("continue-label", Value::Str(v)) => self.continue_label = v,
                 ("cancel-label", Value::Str(v)) => self.cancel_label = v,
+                (ESCAPE_DISMISSES, Value::Bool(v)) => self.escape_dismisses = v,
                 _ => {}
             }
         }
@@ -469,6 +475,17 @@ impl Prompter {
             return Vec::new();
         }
         self.reply(Reply::No)
+    }
+
+    /// Escape on the question on screen: the person's cancel, as the cancel button is, unless the caller asked that
+    /// only the button be one. Then the question is answered as cancelled and its prompt ends, as one the session
+    /// took away, and the next waiting caller becomes active.
+    pub fn escape(&mut self) -> Vec<Effect> {
+        match self.asking_mut() {
+            Some(prompt) if prompt.properties.escape_dismisses => self.dismiss(),
+            Some(_) => self.cancel(),
+            None => Vec::new(),
+        }
     }
 
     fn asking_mut(&mut self) -> Option<&mut Prompt> {

@@ -267,6 +267,53 @@ fn a_question_that_cannot_be_shown_is_cancelled_its_prompt_ends_and_the_next_cal
 }
 
 #[test]
+fn escape_is_the_persons_cancel_unless_the_caller_takes_only_the_button_as_one() {
+    // the keyring daemon's question: Escape answers no and the prompt stays the caller's, as the button does
+    let (mut prompter, _theirs) = asking(Kind::Password, Vec::new());
+    assert!(matches!(
+        &prompter.escape()[..],
+        [Effect::Ready {
+            reply: Reply::No,
+            ..
+        }]
+    ));
+    assert_eq!(prompter.prompt().map(|p| p.phase), Some(Phase::Checking));
+    assert!(prompter.escape().is_empty(), "nothing is asked any more");
+
+    // a caller that keeps a no: Escape ends its prompt as one taken away, and the next caller is active
+    let only_the_button = vec![(ESCAPE_DISMISSES, Value::Bool(true))];
+    let (mut prompter, _theirs) = asking(Kind::Confirm, only_the_button.clone());
+    assert_eq!(prompter.begin(caller(2)), Ok(Vec::new()));
+    let effects = prompter.escape();
+    let [Effect::Ready {
+        caller: cancelled,
+        reply: Reply::No,
+        ..
+    }, Effect::Done { caller: ended }, Effect::Ready {
+        caller: next,
+        reply: Reply::Ready,
+        ..
+    }] = &effects[..]
+    else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(
+        (cancelled, ended, next),
+        (&caller(1), &caller(1), &caller(2))
+    );
+    // its cancel button still answers no and ends no prompt
+    let (mut prompter, _theirs) = asking(Kind::Confirm, only_the_button);
+    assert!(matches!(
+        &prompter.cancel()[..],
+        [Effect::Ready {
+            reply: Reply::No,
+            ..
+        }]
+    ));
+    assert!(prompter.prompt().is_some());
+}
+
+#[test]
 fn too_many_waiting_callers_are_refused() {
     let mut prompter = Prompter::new();
     for n in 0..=MAX_WAITING as u32 {

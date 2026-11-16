@@ -420,6 +420,7 @@ impl App {
             }
             Command::Continue => self.host.model.answer(),
             Command::Cancel => self.host.model.cancel(),
+            Command::Escape => self.host.model.escape(),
             Command::Focused => Vec::new(),
         };
         // a mismatched confirmation gives the confirmation the keyboard again

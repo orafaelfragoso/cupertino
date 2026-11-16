@@ -13,6 +13,7 @@ use zbus::message::Type;
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
 use crate::keyring::exchange::Exchange;
+use crate::keyring::model::ESCAPE_DISMISSES;
 use crate::keyring::offer::{
     move_items, Answer, FailedStep, Flow, MoveError, Outcome, Remembered, Step, KEEP, LOGIN, MOVE,
     NOT_NOW, TRY_AGAIN,
@@ -136,7 +137,7 @@ pub fn run(bus: &Connection, setup: &Setup) -> Outcome {
                     })
                     .and_then(|mut store| move_items(&mut store, &collection, LOGIN));
                 if let Err(error) = &result {
-                    eprintln!("{LOG}: nothing was moved to the login keyring: {error}");
+                    eprintln!("{LOG}: the move to the login keyring did not finish: {error}");
                 }
                 flow.moved(result)
             }
@@ -179,9 +180,9 @@ fn service(bus: &Connection, wait: Duration) -> bool {
     }
 }
 
-/// Ask `question` in the alert of the prompter named `prompter` and wait for the answer. An answer the prompter gave
-/// itself, because the session went away or the alert could not be shown, is [`Answer::Dismissed`], and so is any
-/// failure to ask.
+/// Ask `question` in the alert of the prompter named `prompter` and wait for the answer. Only the alert's buttons
+/// answer: Escape, and an answer the prompter gave itself because the session went away or the alert could not be
+/// shown, is [`Answer::Dismissed`], and so is any failure to ask.
 pub fn ask(bus: &Connection, prompter: &str, question: &Question<'_>) -> Answer {
     match try_ask(bus, prompter, question) {
         Ok(answer) => answer,
@@ -249,6 +250,8 @@ fn try_ask(bus: &Connection, prompter: &str, question: &Question<'_>) -> zbus::R
                                 ("description", Value::from(question.description)),
                                 ("continue-label", Value::from(question.yes)),
                                 ("cancel-label", Value::from(question.no)),
+                                // only the button is a no: Escape ends the prompt, which is no answer
+                                (ESCAPE_DISMISSES, Value::from(true)),
                             ]);
                             asked = Some(send(
                                 bus,

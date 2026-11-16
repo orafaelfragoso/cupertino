@@ -57,6 +57,11 @@ pub(crate) enum Background {
         /// The thumbnail's pixels, decoded on the thread that made it.
         pixels: Option<cupertino_kit::controls::ImageSource>,
     },
+    /// No thumbnail of a picture of the Wallpaper pane could be made.
+    NoThumbnail {
+        image: std::path::PathBuf,
+        why: crate::controls::Unreadable,
+    },
     /// Whether the Login Screen section shows, asked at the Accessibility pane's opening `opening`.
     LoginScreen {
         opening: u64,
@@ -99,6 +104,16 @@ pub(crate) enum VideoMemory {
 
 /// The longest edge of a thumbnail the cache keeps, in pixels: the decoder keeps a picture of this size whole.
 const THUMBNAIL_EDGE: u32 = 256;
+
+/// Why the thumbnail of a picture could not be made: its file is gone, or it is no picture that can be read.
+fn unreadable(error: &cupertino_thumbnails::ThumbError) -> crate::controls::Unreadable {
+    match error {
+        cupertino_thumbnails::ThumbError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            crate::controls::Unreadable::Missing
+        }
+        _ => crate::controls::Unreadable::Damaged,
+    }
+}
 
 /// The longest edge of the account picture kept for the sidebar's row, in pixels.
 const ACCOUNT_PICTURE_EDGE: u32 = 128;
@@ -1172,6 +1187,8 @@ impl State {
             folders: folders.iter().map(|f| (f.clone(), Vec::new())).collect(),
             default: self.assets.wallpaper_path(false),
             loading: (0..=folders.len()).collect(),
+            // a thumbnail is asked for once: what could not be made stays known
+            unreadable: std::mem::take(&mut self.live.pictures.unreadable),
         };
         let current: Vec<std::path::PathBuf> = self
             .settings
@@ -1267,7 +1284,11 @@ impl State {
                             eprintln!(
                                 "cupertino-settings: no thumbnail of {}: {e}",
                                 image.display()
-                            )
+                            );
+                            notify(Background::NoThumbnail {
+                                why: unreadable(&e),
+                                image,
+                            })
                         }
                     }
                 }
@@ -1359,10 +1380,23 @@ impl State {
                 thumbnail,
                 pixels,
             } => {
-                if let Some(pixels) = pixels {
-                    self.thumbnail_images.insert(image.clone(), pixels);
+                match pixels {
+                    Some(pixels) => {
+                        self.live.pictures.unreadable.remove(&image);
+                        self.thumbnail_images.insert(image.clone(), pixels);
+                    }
+                    // a thumbnail that cannot be decoded shows as a picture that cannot be read
+                    None => {
+                        self.live
+                            .pictures
+                            .unreadable
+                            .insert(image.clone(), crate::controls::Unreadable::Damaged);
+                    }
                 }
                 self.thumbnails.insert(image, thumbnail);
+            }
+            Background::NoThumbnail { image, why } => {
+                self.live.pictures.unreadable.insert(image, why);
             }
             Background::LoginScreen { opening, allowed } => {
                 if opening == self.login_opening {
@@ -1721,5 +1755,22 @@ mod tests {
         let queued: Vec<_> = background.try_iter().collect();
         assert_eq!(queued.len(), BACKGROUND_QUEUE);
         assert!(matches!(queued.last(), Some(Background::Paired(_, Ok(())))));
+    }
+
+    /// A picture whose file is gone is missing; any other failure to make its thumbnail means it cannot be read.
+    #[test]
+    fn a_thumbnail_that_cannot_be_made_names_a_missing_or_an_unreadable_picture() {
+        use crate::controls::Unreadable;
+        use cupertino_thumbnails::ThumbError;
+        let io = |kind| ThumbError::Io(std::io::Error::from(kind));
+        assert_eq!(
+            unreadable(&io(std::io::ErrorKind::NotFound)),
+            Unreadable::Missing
+        );
+        assert_eq!(
+            unreadable(&io(std::io::ErrorKind::PermissionDenied)),
+            Unreadable::Damaged
+        );
+        assert_eq!(unreadable(&ThumbError::KnownFailure), Unreadable::Damaged);
     }
 }

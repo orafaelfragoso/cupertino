@@ -10,13 +10,16 @@ use cupertino_kit::controls::{
     PopUpButton, Progress, SegmentedControl, Slider, SliderStyle, Swatch, SwatchFill, SwatchLook,
     TextRole, ThumbnailTile, TileColor, Wrap,
 };
+use cupertino_kit::controls::{Canvas, IconDirection, Image, ImageFit};
 use cupertino_kit::core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget, Window,
 };
-use cupertino_kit::geometry::{Insets, Size};
+use cupertino_kit::geometry::{Insets, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured};
 use cupertino_kit::prelude::*;
+use cupertino_kit::render::{Paint, PaintOp, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
+use cupertino_kit::theme::{ColorRole, StateVariant};
 
 use super::Message;
 use crate::controls::{metrics, Control, SwatchKind, Value};
@@ -325,7 +328,12 @@ fn control(row: &Row, name: &str, view: &View<'_>) -> Option<Element<Message>> {
             ],
         }),
         Control::Text { value } => styled(value, TextRole::Body, true)?,
-        Control::Preview { title, note, .. } => {
+        Control::Preview {
+            image,
+            title,
+            note,
+            unreadable,
+        } => {
             let lines = text(title, TextRole::Body)
                 .into_iter()
                 .chain(
@@ -333,7 +341,30 @@ fn control(row: &Row, name: &str, view: &View<'_>) -> Option<Element<Message>> {
                         .and_then(|n| styled(n, TextRole::Body, true)),
                 )
                 .collect();
-            column(2.0, lines)
+            let thumbnail = image.as_ref().and_then(|i| view.thumbnails.get(i));
+            let picture = match (thumbnail, unreadable) {
+                (_, Some(why)) => no_picture(CURRENT_PICTURE, CURRENT_RADIUS, title, Some(*why)),
+                (Some(source), None) => Element::new(Image {
+                    sources: vec![source.clone()],
+                    size: CURRENT_PICTURE,
+                    fit: ImageFit::Cover,
+                    radius: CURRENT_RADIUS,
+                    label: Some(title.clone()),
+                }),
+                // still being made
+                (None, None) if image.is_some() => {
+                    no_picture(CURRENT_PICTURE, CURRENT_RADIUS, title, None)
+                }
+                // the built-in picture has no file to show: its name and note alone
+                (None, None) => return Some(column(2.0, lines).key(control_key(id))),
+            };
+            Element::new(Stack {
+                axis: Axis::Horizontal,
+                padding: Insets::ZERO,
+                spacing: CURRENT_GAP,
+                align: Align::Center,
+                children: vec![picture.key("picture"), column(2.0, lines)],
+            })
         }
         Control::Tiles { tiles, selected } => tile_strip(id, tiles, *selected, enabled, view),
         Control::Swatches { items, selected } => swatch_row(id, items, *selected, enabled),
@@ -483,6 +514,125 @@ fn row_key(rows: &[Row], i: usize) -> String {
     }
 }
 
+/// The current picture's width and height, its corners, and the space between it and its name.
+const CURRENT_PICTURE: Size = Size::new(160.0, 100.0);
+const CURRENT_RADIUS: f64 = 7.0;
+const CURRENT_GAP: f64 = 14.0;
+/// The symbol of a picture that cannot be shown, and the space between it and the words under it.
+const NO_PICTURE_SYMBOL: f64 = 18.0;
+const NO_PICTURE_GAP: f64 = 3.0;
+/// How strongly the place of a picture that cannot be shown is filled, a share of the label colour: the fill of one
+/// still being made.
+const NO_PICTURE_SHARE: f32 = 0.08;
+
+/// The place of a picture `size` big with corners of `radius` that shows no picture: filled while it is being made, and
+/// with a symbol and words saying `why` when it cannot be shown. Named `title` for assistive technology.
+fn no_picture(
+    size: Size,
+    radius: f64,
+    title: &str,
+    why: Option<crate::controls::Unreadable>,
+) -> Element<Message> {
+    let label = match why {
+        Some(why) => format!("{title}, {}", why.words()),
+        None => title.to_owned(),
+    };
+    Element::new(Canvas {
+        size: Some(size),
+        label,
+        paint: Box::new(move |cx: &mut PaintCx<'_>| {
+            let tint = cx
+                .env()
+                .theme
+                .colors
+                .get(ColorRole::Text, StateVariant::NORMAL)
+                .map(|c| c.with_alpha(c.a * NO_PICTURE_SHARE));
+            if let Some(tint) = tint {
+                cx.push(PaintOp::Fill {
+                    shape: Shape::RoundedRect {
+                        rect: Rect::new(0.0, 0.0, size.width, size.height),
+                        radius,
+                    },
+                    paint: Paint::Solid(tint),
+                });
+            }
+        }),
+        children: why
+            .map(|why| why_no_picture(size, why))
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// The symbol and words over the place of a picture `size` big that cannot be shown, centred in it.
+fn why_no_picture(size: Size, why: crate::controls::Unreadable) -> Element<Message> {
+    Element::new(Canvas {
+        size: Some(size),
+        label: why.words().to_string(),
+        paint: Box::new(|_: &mut PaintCx<'_>| {}),
+        children: vec![Element::new(Stack {
+            axis: Axis::Vertical,
+            padding: Insets::ZERO,
+            spacing: NO_PICTURE_GAP,
+            align: Align::Center,
+            children: vec![
+                Element::new(Spacer::default()),
+                Element::new(Icon {
+                    name: NO_PICTURE_ICON.into(),
+                    size: NO_PICTURE_SYMBOL,
+                    direction: IconDirection::Fixed,
+                    label: None,
+                    tint: Some(ColorRole::SecondaryText),
+                }),
+                line(why.words(), TextRole::Caption, true),
+                Element::new(Spacer::default()),
+            ],
+        })
+        .fill()],
+    })
+}
+
+/// The symbol of a picture that cannot be shown.
+pub(crate) const NO_PICTURE_ICON: &str = "symbol.photo";
+
+/// Its children laid over each other, the first underneath.
+struct Layered<M> {
+    children: Vec<Element<M>>,
+}
+
+impl<M: 'static> Widget<M> for Layered<M> {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec::new(ContainerKind::Overlay)
+    }
+
+    fn take_children(&mut self) -> Vec<Element<M>> {
+        std::mem::take(&mut self.children)
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, _: &Self, _: &mut ()) -> Change {
+        Change::None
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        Measured {
+            size: Size::ZERO,
+            baseline: None,
+        }
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+
+    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+}
+
 /// The thumbnail's width and height, its corners, and the space between two of them.
 const THUMBNAIL: Size = Size::new(108.5, 72.0);
 const THUMBNAIL_RADIUS: f64 = 5.0;
@@ -565,7 +715,7 @@ fn tile_strip(
         .iter()
         .enumerate()
         .map(|(i, tile)| {
-            Element::new(ThumbnailTile {
+            let thumbnail = Element::new(ThumbnailTile {
                 label: tile.title.clone(),
                 image: view.thumbnails.get(&tile.image).cloned(),
                 size: THUMBNAIL,
@@ -574,8 +724,32 @@ fn tile_strip(
                 selected: selected == Some(i),
                 enabled,
                 on_press: Some(Message::Commit(id, Value::Index(i))),
-            })
-            .key(i as u64)
+            });
+            match tile.unreadable {
+                None => thumbnail.key(i as u64),
+                // the placeholder says why, over the picture's place, and the tile reads it too
+                Some(why) => Element::new(Layered {
+                    children: vec![
+                        Element::new(Described {
+                            description: why.words().to_string(),
+                            child: vec![thumbnail],
+                        }),
+                        Element::new(Stack {
+                            axis: Axis::Vertical,
+                            padding: Insets {
+                                top: THUMBNAIL_RING_ROOM,
+                                left: THUMBNAIL_RING_ROOM,
+                                bottom: 0.0,
+                                right: 0.0,
+                            },
+                            spacing: 0.0,
+                            align: Align::Start,
+                            children: vec![why_no_picture(THUMBNAIL, why)],
+                        }),
+                    ],
+                })
+                .key(i as u64),
+            }
         })
         .collect();
     // as many in a row as the group's width holds, the rows scrolling with the page
@@ -709,6 +883,7 @@ fn row(row: &Row, names: &Names, view: &View<'_>) -> Element<Message> {
             | Control::Swatches { .. }
             | Control::Chart(_)
             | Control::Tiles { .. }
+            | Control::Preview { .. }
     ) {
         let mut children = Vec::new();
         if !label.is_empty() {

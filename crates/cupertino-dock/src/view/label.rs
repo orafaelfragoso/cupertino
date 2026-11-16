@@ -1,7 +1,8 @@
 //! The name of the tile under the pointer, over it: a popup of the bar shown as soon as the pointer is on a tile, a
 //! capsule on a translucent veil with the name (and, for an application that runs without windows, a dimmer line under
 //! it) and a pointer under it towards the tile. At the bottom of the output it stands over the bar, the pointer's tip a
-//! little above the bar's top edge. It takes neither the pointer nor the keyboard.
+//! little above the bar's top edge, or above its tile where that stands higher than the bar (a magnified one), coming
+//! down with it. It takes neither the pointer nor the keyboard.
 
 use cupertino_kit::controls::CalloutPointer;
 use cupertino_kit::core::{
@@ -37,7 +38,8 @@ pub const RADIUS: f64 = 13.0;
 /// The pointer under the capsule: its width at the base, before its sides curve out into the capsule, and its depth.
 pub const POINTER_WIDTH: f64 = 12.0;
 pub const POINTER_DEPTH: f64 = 6.5;
-/// How far the pointer's tip stands above the bar's top edge (the label's window ends at the tip).
+/// How far the pointer's tip stands above the bar's top edge, or above the label's tile where that stands higher (the
+/// label's window ends at the tip).
 pub const GAP: f64 = 3.0;
 /// How far a label beside a bar at the side of the output stands off its tile.
 const SIDE_GAP: f64 = 3.0;
@@ -97,6 +99,13 @@ const OUTLINE_WIDTH: f64 = 0.5;
 fn shown_on_glass(cx: &mut PaintCx<'_>, glass: Glass) -> bool {
     cx.env().theme.surface(Surface::Tooltip).material.is_some()
         && cx.glass(glass.container(GLASS_CONTAINER, GLASS_BLEND))
+}
+
+/// The line a label over a bar at the bottom stands [`GAP`] above: the bar's top edge at `bar_top`, or the top of
+/// the label's tile at `tile_top` where the tile stands higher than the bar (a magnified one), raised by the tile's
+/// bounce `lift`. A tile inside the bar leaves the label where the bar puts it, so it does not move from tile to tile.
+pub fn stands_on(bar_top: f64, tile_top: f64, lift: f64) -> f64 {
+    bar_top.min(tile_top) - lift
 }
 
 pub fn key() -> WindowKey {
@@ -431,6 +440,19 @@ mod tests {
         // a five letter name about 34 points wide at 13 points makes a 63 point capsule
         assert_eq!(34.0 + 2.0 * PADDING, 63.0);
         assert_eq!((POINTER_WIDTH, POINTER_DEPTH), (12.0, 6.5));
+    }
+
+    #[test]
+    fn the_label_stands_on_the_bar_or_on_a_tile_that_stands_higher_and_rides_a_bounce() {
+        // a resting tile lies inside the bar: the bar's top edge, whichever tile
+        assert_eq!(stands_on(900.0, 911.0, 0.0), 900.0);
+        assert_eq!(stands_on(900.0, 900.0, 0.0), 900.0);
+        // a magnified tile stands 22 points over the bar: its top, and the label comes down as it shrinks
+        assert_eq!(stands_on(900.0, 878.0, 0.0), 878.0);
+        assert_eq!(stands_on(900.0, 893.5, 0.0), 893.5);
+        // a bounce raises the label as far as the tile
+        assert_eq!(stands_on(900.0, 911.0, 17.9), 900.0 - 17.9);
+        assert_eq!(stands_on(900.0, 878.0, 10.0), 868.0);
     }
 
     #[test]

@@ -3023,10 +3023,11 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 .filter(|(id, ..)| hidden < 1.0 && layout.tiles.iter().any(|t| t.id == *id))
         });
         let label_opacity = 1.0 - hidden;
-        // the name rides its tile's bounce
+        // the name rides its tile's bounce, and stands over a tile that is higher than the bar
         let label_anchor = label.as_ref().and_then(|(id, ..)| {
             let t = layout.tiles.iter().find(|t| t.id == *id)?;
-            to_bottom(t.rect.x, layout.bar.y - t.lift, t.rect.w)
+            let top = view::label::stands_on(layout.bar.y, t.rect.y, t.lift);
+            to_bottom(t.rect.x, top, t.rect.w)
         });
         let fan_open = model
             .stack

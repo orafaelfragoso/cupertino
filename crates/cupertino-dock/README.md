@@ -150,8 +150,9 @@ The bar follows Reduce Motion too:
   click is never dropped.
 - **Name label.** The tile under the pointer shows its name over it at once (`src/view/label.rs`): a popup of the bar
   that takes neither the pointer nor the keyboard, a 25 pt capsule with the name at 13 pt and 13 pt either side, and a
-  16 pt wide, 6.5 pt deep pointer under its middle whose tip stands 3 pt off the tile (beside the tile, without the
-  pointer, when the dock is on a side). It is a translucent fill with a 0.5 pt outline, light or dark with the
+  16 pt wide, 6.5 pt deep pointer under its middle whose tip stands 3 pt above the bar's top edge, or 3 pt above its
+  tile where that stands higher than the bar (a magnified one), coming down as the tile does (`view::label::stands_on`);
+  when the dock is on a side it stands beside the tile, without the pointer. It is a translucent fill with a 0.5 pt outline, light or dark with the
   appearance, and follows the pointer from tile to tile. It does not show over a separator, with a menu or a stack
   open, during a press or a drag, or while the session is locked. For assistive technology it is a tooltip.
 - **Recents.** With `recents` on (off by default), the bar has a section of up to three recent applications
@@ -252,9 +253,9 @@ the tile, 8 pt inside the output. The popup anchors to a rectangle of the bar's 
 depends on how a mirrored popup treats its offset. The panel and its pointer are one piece of glass (the dense glass of
 a floating surface with text on it, one container); Reduce Transparency and Increase Contrast take the compositor's
 recipes for that glass. Where the desktop draws no glass the panel paints the popover's opaque fill with a 1 pt edge
-(2 pt with Increase Contrast) that goes on round the pointer. It holds the folder's name along the top (13 pt semibold), a grid of the newest entries and a capsule
-button, "Open in Files", that opens the folder and closes the stack. The grid has up to 5 columns and 3 rows of 96 × 96 pt
-cells, each a 56 pt icon (the type's generic theme icon, or `folder`) over its name (11 pt, one line, ellipsized); the
+(2 pt with Increase Contrast) that goes on round the pointer. It holds the folder's name along the top (14 pt semibold), a grid of the newest entries and a capsule
+button, "Open in Files", that opens the folder and closes the stack. The grid has up to 5 columns and 3 rows of 112 × 102 pt
+cells, each a 56 pt icon (the type's generic theme icon, or `folder`) over its name (13 pt, one line, ellipsized, with room for about fifteen letters); the
 panel is 16 pt in from its edges with a 20 pt corner radius. Entries are listed when the stack opens, on a thread of
 their own, and the stack shows once they are (a click on the tile meanwhile closes it): hidden files, names that are not
 UTF-8 and links that point nowhere are left out, the most recently changed first, at most 15, and only those shown have

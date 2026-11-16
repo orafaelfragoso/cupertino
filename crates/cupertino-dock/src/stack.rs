@@ -59,17 +59,20 @@ impl StackLayout {
     /// The space around the parts, the title's row and the button's.
     pub const PADDING: f64 = 16.0;
     pub const TITLE_HEIGHT: f64 = 28.0;
-    pub const TITLE_FONT_PT: f64 = 13.0;
+    pub const TITLE_FONT_PT: f64 = 14.0;
     pub const TITLE_WEIGHT: u16 = 600;
     pub const BUTTON_HEIGHT: f64 = 28.0;
     pub const BUTTON_WIDTH: f64 = 120.0;
     pub const BUTTON_FONT_PT: f64 = 13.0;
-    /// One entry's cell, its icon's side and where the icon's top is in it, the label's centre line and size.
-    pub const CELL: (f64, f64) = (96.0, 96.0);
+    /// One entry's cell, its icon's side and where the icon's top is in it, the label's centre line and size. The
+    /// cell is as wide as eight times the label's size and a label's inset either side, so a name of about fifteen
+    /// letters shows whole; the label's centre line is 19 points under the icon and as far from the cell's
+    /// bottom, so its line stands clear of both rows' icons.
+    pub const CELL: (f64, f64) = (112.0, 102.0);
     pub const ICON: f64 = 56.0;
     pub const ICON_TOP: f64 = 8.0;
-    pub const LABEL_CY: f64 = 80.0;
-    pub const LABEL_FONT_PT: f64 = 11.0;
+    pub const LABEL_CY: f64 = 83.0;
+    pub const LABEL_FONT_PT: f64 = 13.0;
     pub const LABEL_INSET: f64 = 4.0;
     /// The panel's corner radius; the highlight under a pressed entry's corner radius.
     pub const RADIUS: f64 = 20.0;
@@ -335,17 +338,17 @@ mod tests {
     fn the_grid_grows_to_five_columns_then_rows_up_to_three() {
         let one = StackLayout::new(1);
         assert_eq!((one.columns, one.rows), (1, 1));
-        assert_eq!(one.width, 2.0 * 16.0 + 96.0);
+        assert_eq!(one.width, 2.0 * 16.0 + 112.0);
         let five = StackLayout::new(5);
         assert_eq!((five.columns, five.rows), (5, 1));
         let seven = StackLayout::new(7);
         assert_eq!((seven.columns, seven.rows), (5, 2));
         let many = StackLayout::new(40);
         assert_eq!((many.columns, many.rows), (5, 3), "at most fifteen show");
-        assert_eq!(many.width, 2.0 * 16.0 + 5.0 * 96.0);
+        assert_eq!(many.width, 2.0 * 16.0 + 5.0 * 112.0);
         assert_eq!(
             many.height,
-            16.0 + 28.0 + 3.0 * 96.0 + 8.0 + 28.0 + 16.0,
+            16.0 + 28.0 + 3.0 * 102.0 + 8.0 + 28.0 + 16.0,
             "padding, title, rows, half a padding, button, padding"
         );
         let empty = StackLayout::new(0);
@@ -357,11 +360,28 @@ mod tests {
     }
 
     #[test]
+    fn the_folder_s_name_is_14_points_and_a_file_s_13_in_a_cell_that_follows_the_name_s_size() {
+        assert_eq!(StackLayout::TITLE_FONT_PT, 14.0);
+        assert_eq!(StackLayout::LABEL_FONT_PT, 13.0);
+        assert_eq!(StackLayout::BUTTON_FONT_PT, 13.0);
+        let (cw, ch) = StackLayout::CELL;
+        let size = StackLayout::LABEL_FONT_PT;
+        // room for eight times the name's size between the insets: about fifteen letters
+        assert_eq!(cw - 2.0 * StackLayout::LABEL_INSET, 8.0 * size);
+        // the name's line stands clear of the icon over it and of the next row's icon under it
+        let icon_bottom = StackLayout::ICON_TOP + StackLayout::ICON;
+        assert_eq!(StackLayout::LABEL_CY - icon_bottom, 19.0);
+        assert_eq!(ch - StackLayout::LABEL_CY, 19.0);
+        // a row of the title is deeper than its text
+        const { assert!(StackLayout::TITLE_HEIGHT >= 1.5 * StackLayout::TITLE_FONT_PT) };
+    }
+
+    #[test]
     fn cells_go_in_reading_order_and_presses_find_them_and_the_button() {
         let l = StackLayout::new(7);
-        assert_eq!(l.cell(0), Rect::new(16.0, 44.0, 96.0, 96.0));
-        assert_eq!(l.cell(4).x, 16.0 + 4.0 * 96.0);
-        assert_eq!(l.cell(5), Rect::new(16.0, 140.0, 96.0, 96.0));
+        assert_eq!(l.cell(0), Rect::new(16.0, 44.0, 112.0, 102.0));
+        assert_eq!(l.cell(4).x, 16.0 + 4.0 * 112.0);
+        assert_eq!(l.cell(5), Rect::new(16.0, 146.0, 112.0, 102.0));
         assert_eq!(l.hit(l.cell(6).center(), 7), Some(StackHit::Entry(6)));
         assert_eq!(l.hit(l.cell(7).center(), 7), None, "past the last entry");
         assert_eq!(l.hit(l.button.center(), 7), Some(StackHit::OpenFolder));

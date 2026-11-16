@@ -44,6 +44,87 @@ fn long(words: usize) -> String {
         .join(" ")
 }
 
+/// The words a person reads and hears for the list: its window's title, its heading and its accessible name are one
+/// string, "Notification Center" (the semantics goldens of `tests/kit_goldens.rs` hold the heading and the name).
+#[test]
+fn the_centre_s_window_title_reads_notification_center() {
+    assert_eq!(CENTRE_TITLE, "Notification Center");
+    let m = metrics();
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let ui = Ui {
+        centre_open: true,
+        ..Ui::default()
+    };
+    let centre = windows::<Input>(&mut c, &ui, &m, 1.0, |i| i);
+    assert_eq!(centre[0].spec.title, "Notification Center");
+}
+
+/// The open centre has a window over each output that hears a press outside it, or one where the compositor chooses
+/// while no output is known. A centre that is closed, sliding out or behind the lock screen has none.
+#[test]
+fn the_open_centre_has_a_press_catcher_over_each_output() {
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let mut ui = Ui::default();
+    let outputs = |c: &NotificationCenter, ui: &Ui, outputs: &[u32]| -> Vec<Option<u32>> {
+        catchers::<Input>(c, ui, outputs, |i| i)
+            .iter()
+            .map(|w| catcher_output(&w.spec.app_id).expect("a catcher's app_id"))
+            .collect()
+    };
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "closed");
+    ui.open_centre(1.0, false);
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [Some(3), Some(7)]);
+    assert_eq!(outputs(&c, &ui, &[]), [None], "no output known yet");
+    let shown = catchers::<Input>(&c, &ui, &[3, 7], |i| i);
+    assert_ne!(shown[0].key, shown[1].key);
+    for window in &shown {
+        assert_eq!(window.spec.size, Size::ZERO, "its surface's role sizes it");
+        assert_eq!(window.spec.input_region, None, "all of it takes input");
+        assert_eq!(window.background, WindowBackground::INPUT_ONLY);
+        assert_ne!(window.spec.app_id, APP_ID, "no card window");
+    }
+    c.set_screen_locked(true, 1.5);
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "locked");
+    c.set_screen_locked(false, 1.6);
+    ui.close_centre(2.0, false);
+    assert!(ui.centre_shown(2.0), "still sliding out");
+    assert_eq!(outputs(&c, &ui, &[3, 7]), [], "closing");
+
+    assert_eq!(catcher_output(APP_ID), None);
+    assert_eq!(catcher_output("cupertino-notifications.catcher.x"), None);
+    assert_eq!(catcher_output("cupertino-notifications.catchers"), None);
+}
+
+/// A press outside closes the centre and its Clear menu in one go (Escape closes the menu first); the window of one
+/// output going is the host's to note and closes nothing, and the last one going closes the centre.
+#[test]
+fn a_press_outside_closes_the_centre_with_its_menu_and_a_lost_output_does_not() {
+    let mut c = NotificationCenter::default();
+    c.notify(NotifyInput::new("app", "Hello", "World"), 0.0);
+    let mut ui = Ui::default();
+    ui.open_centre(1.0, true);
+    assert_eq!(apply(&mut c, &mut ui, Input::ToggleClearMenu, 1.0), None);
+    assert_eq!(apply(&mut c, &mut ui, Input::CloseCentre, 1.0), None);
+    assert!(ui.centre_open && !ui.menu_open, "Escape: the menu first");
+    assert_eq!(apply(&mut c, &mut ui, Input::ToggleClearMenu, 1.0), None);
+    assert_eq!(apply(&mut c, &mut ui, Input::PressOutside, 1.0), None);
+    assert!(!ui.centre_open && !ui.menu_open);
+
+    ui.open_centre(5.0, true);
+    assert_eq!(
+        apply(&mut c, &mut ui, Input::CatcherClosed(Some(3)), 5.0),
+        Some(HostAction::OutputGone(3))
+    );
+    assert!(ui.centre_open);
+    assert_eq!(
+        apply(&mut c, &mut ui, Input::CatcherClosed(None), 5.0),
+        None
+    );
+    assert!(!ui.centre_open, "no output is left");
+}
+
 #[test]
 fn a_card_is_as_tall_as_its_text_and_never_shorter_than_its_icon() {
     let m = metrics();
@@ -517,6 +598,33 @@ fn a_group_expands_and_collapses_with_a_spring_and_at_once_under_reduce_motion()
     // clearing the group clears each of its notifications
     apply(&mut c, &mut ui, Input::ClearGroup(key), 7.0);
     assert!(c.groups().is_empty());
+}
+
+/// A halo is kept off a neighbouring card only where the list shows that card: the part of a card under the header
+/// or past the list's bottom edge, and a card wholly past either, leave no unshadowed patch in the shape of a card.
+#[test]
+fn a_halo_is_kept_off_a_neighbour_only_where_the_list_shows_it() {
+    let card = |y: f64| Rect::new(112.0, y, 344.0, 58.0);
+    // the list from 68 to 624
+    assert_eq!(shown_in_list(card(200.0), 68.0, 556.0), Some(card(200.0)));
+    assert_eq!(
+        shown_in_list(card(48.0), 68.0, 556.0),
+        Some(Rect::new(112.0, 68.0, 344.0, 38.0)),
+        "cut at the list's top, as its glass is"
+    );
+    assert_eq!(
+        shown_in_list(card(600.0), 68.0, 556.0),
+        Some(Rect::new(112.0, 600.0, 344.0, 24.0)),
+        "cut at the list's bottom"
+    );
+    assert_eq!(shown_in_list(card(-10.0), 68.0, 556.0), None, "above");
+    assert_eq!(shown_in_list(card(10.0), 68.0, 556.0), None, "at the edge");
+    assert_eq!(shown_in_list(card(624.0), 68.0, 556.0), None, "below");
+    assert_eq!(
+        shown_in_list(card(-10.0), 68.0, 0.0),
+        Some(card(-10.0)),
+        "before the list was laid out"
+    );
 }
 
 /// A card fading in covers a neighbour's halo by as much as it is there: at the start of its fade the halo still shows

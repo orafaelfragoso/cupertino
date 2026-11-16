@@ -36,7 +36,7 @@ use std::sync::Arc;
 use cupertino_animation::{Spring, SpringParams};
 use cupertino_kit::controls::{
     paint_glass_edge, AppIcon, Button, ButtonRole, ButtonStyle, DisclosureButton, DisclosureStyle,
-    GlassEdge, RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
+    GlassEdge, PressCatcher, RichText, ScrollView, Scroller, Stack, Text, TextLink, TextRole,
 };
 use cupertino_kit::core::{
     AccessibleStates, Action, Change, CommandRegistry, Element, Environment, Event, EventCx, Glass,
@@ -69,7 +69,12 @@ pub use motion::{Gap, Removal, Rise, Slide, SLIDE_DISTANCE};
 /// The `app_id` of every window of the process.
 pub const APP_ID: &str = "cupertino-notifications";
 /// The title of the notification centre's window, which tells it from the banners' windows.
-pub const CENTRE_TITLE: &str = "Notification Centre";
+pub const CENTRE_TITLE: &str = "Notification Center";
+/// The `app_id` of the windows that hear a press outside the open centre, one over each output; the output's number
+/// follows it after a dot ([`catcher_output`]).
+pub const CATCHER_APP_ID: &str = "cupertino-notifications.catcher";
+/// The title of those windows.
+const CATCHER_TITLE: &str = "Close Notification Center";
 /// Room around a banner card in its window for the card's shadow, in points: the shadow's reach.
 pub const SHADOW_MARGIN: f64 = SHADOW_REACH;
 /// Banners below this opacity get no window.
@@ -202,6 +207,12 @@ pub enum Input {
     ClearScope(ClearScope),
     /// Escape, or a press outside the cards.
     CloseCentre,
+    /// A left or right press outside the centre's window, on any output: the centre closes, its Clear menu with it.
+    /// The press goes no further.
+    PressOutside,
+    /// The compositor closed the window that hears presses outside the centre on this output (the output went), or
+    /// the one on the output it chose (`None`: there is no output).
+    CatcherClosed(Option<u32>),
     /// The pointer moved onto this card of the centre; `None` when the pointer is over no card. A revealed card shows
     /// its close and action buttons.
     Reveal(Option<u32>),
@@ -406,6 +417,8 @@ pub enum HostAction {
     /// Give the keyboard focus to the node with this key once the view is rebuilt
     /// ([`Command::Focus`](cupertino_kit::core::Command::Focus)).
     Focus(Key),
+    /// This output is gone: nothing more is shown on it.
+    OutputGone(u32),
 }
 
 /// How much of a card's body shows.
@@ -745,6 +758,49 @@ pub fn banner_key(n: &Notification, height: f64) -> WindowKey {
     )))
 }
 
+/// The windows that hear a press outside the open centre: one over each of `outputs` (the compositor's numbers for
+/// them), or one on the output the compositor chooses while none is known. A left or right press on one closes the
+/// centre and goes no further, so what lies under it (a window, the desktop, the dock, the menu bar) does not hear the
+/// press that closes the centre. None while the centre is closed, sliding out or hidden by the lock screen, so a
+/// closing centre is never in the way of the next press.
+pub fn catchers<M: Clone + 'static>(
+    center: &NotificationCenter,
+    ui: &Ui,
+    outputs: &[u32],
+    map: fn(Input) -> M,
+) -> Vec<Window<M>> {
+    if !ui.centre_open || center.screen_locked() {
+        return Vec::new();
+    }
+    let catcher = |output: Option<u32>| {
+        let name = output.map_or_else(|| "any".to_owned(), |n| n.to_string());
+        Window::from(PressCatcher {
+            key: WindowKey(Key::from(format!("catcher-{name}"))),
+            title: CATCHER_TITLE.to_owned(),
+            app_id: match output {
+                Some(n) => format!("{CATCHER_APP_ID}.{n}"),
+                None => CATCHER_APP_ID.to_owned(),
+            },
+            on_press: map(Input::PressOutside),
+            on_close: Some(map(Input::CatcherClosed(output))),
+        })
+    };
+    if outputs.is_empty() {
+        return vec![catcher(None)];
+    }
+    outputs.iter().map(|&n| catcher(Some(n))).collect()
+}
+
+/// Whether a window with this `app_id` is one of [`catchers`], and the output it is for (`None`: the one the
+/// compositor chooses).
+pub fn catcher_output(app_id: &str) -> Option<Option<u32>> {
+    let rest = app_id.strip_prefix(CATCHER_APP_ID)?;
+    if rest.is_empty() {
+        return Some(None);
+    }
+    rest.strip_prefix('.')?.parse().ok().map(Some)
+}
+
 /// The key of the card of notification `id`, a banner's or the front card of its group in the centre.
 pub fn card_key(id: u32) -> Key {
     Key::from(format!("card-{id}"))
@@ -886,6 +942,10 @@ pub fn apply(
         }
         Input::CloseCentre if ui.menu_open => ui.menu_open = false,
         Input::CloseCentre => ui.close_centre(now, center.config.motion.reduce_motion),
+        Input::PressOutside | Input::CatcherClosed(None) => {
+            ui.close_centre(now, center.config.motion.reduce_motion)
+        }
+        Input::CatcherClosed(Some(output)) => return Some(HostAction::OutputGone(output)),
         Input::Reveal(id) => {
             if ui.revealed != id {
                 ui.close_wide = None;
@@ -1495,11 +1555,15 @@ fn centre_window<M: Clone + 'static>(
         let top = list_top + rect.y() - scroll.offset.y;
         Rect::new(rect.x() + slide, top, rect.width(), rect.height())
     };
-    let spots: Vec<(Rect, f64)> = cards
+    // each with the part of it the list shows: the scroll view cuts a card and its glass at the list's top and bottom
+    // edges, so past them there is nothing to keep a halo off
+    let spots: Vec<(Rect, Rect, f64)> = cards
         .iter()
         .filter_map(|piece| match piece {
             Piece::Card(c) | Piece::Sheet(c) if c.opacity > 0.0 => {
-                Some((in_layer(c.rect), c.opacity))
+                let rect = in_layer(c.rect);
+                let shown = shown_in_list(rect, list_top, scroll.viewport.height)?;
+                Some((rect, shown, c.opacity))
             }
             _ => None,
         })
@@ -1526,8 +1590,8 @@ fn centre_window<M: Clone + 'static>(
                 let reach = rect.outset(SHADOW_REACH);
                 let others = spots
                     .iter()
-                    .filter(|(r, _)| *r != rect && r.intersects(&reach))
-                    .map(|(r, opacity)| (r.translate(-rect.x(), -rect.y()), *opacity))
+                    .filter(|(whole, shown, _)| *whole != rect && shown.intersects(&reach))
+                    .map(|(_, shown, opacity)| (shown.translate(-rect.x(), -rect.y()), *opacity))
                     .collect();
                 Element::new(Halo {
                     rect,
@@ -2544,6 +2608,18 @@ fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow
     });
     cx.push(PaintOp::PopLayer);
     cx.push(PaintOp::PopClip);
+}
+
+/// The part of a card at `rect` in the centre's window that its list shows, the list starting at `list_top` and
+/// `viewport` tall: the list cuts its cards at its top and bottom edges. `None` when the card is wholly past an edge;
+/// the whole card before the list was first laid out (`viewport` 0).
+fn shown_in_list(rect: Rect, list_top: f64, viewport: f64) -> Option<Rect> {
+    if viewport <= 0.0 {
+        return Some(rect);
+    }
+    let top = rect.min_y().max(list_top);
+    let bottom = rect.max_y().min(list_top + viewport);
+    (bottom > top).then(|| Rect::new(rect.x(), top, rect.width(), bottom - top))
 }
 
 /// The halo of a card of the centre, in the layer under the whole list: the scroll view clips what it holds at its

@@ -32,6 +32,7 @@ mod navigation;
 mod pages;
 mod popover;
 mod press;
+mod press_catcher;
 mod preview;
 mod progress;
 mod rich_text;
@@ -660,6 +661,22 @@ pub struct NavigationStack<M> {
 /// Build its element with `Element::from`.
 pub struct WindowDragArea<M> {
     pub content: Element<M>,
+}
+
+/// The window a shell panel puts under itself, over a whole output, to hear a press outside the panel: it fills the
+/// surface its role gives it (it asks for no size), is shown as one transparent colour without a frame of that size
+/// ([`WindowBackground::INPUT_ONLY`]) and sends `on_press` for a left or right press anywhere on it. The press stops
+/// there: what lies under the window never hears it. Other buttons, motion and scrolling say nothing, and assistive
+/// technology cannot reach the window, since the panel's own dismissal is the keyboard's way. Build the window with
+/// `Window::from`.
+pub struct PressCatcher<M> {
+    pub key: WindowKey,
+    pub title: String,
+    pub app_id: String,
+    /// Sent for a left or right press anywhere on the window.
+    pub on_press: M,
+    /// Sent when the compositor closes the window's surface, as it does when its output goes.
+    pub on_close: Option<M>,
 }
 
 /// Wraps `content` (the size of the content) and, while `on_frame` holds a message, sends it once at each frame the

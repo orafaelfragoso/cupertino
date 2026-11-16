@@ -41,6 +41,9 @@ enum Step {
     OpenCentre,
     /// The session locks (`true`) or unlocks, as the process learns it from the server.
     Lock(bool),
+    /// The compositor's outputs, as the process learns them: the open centre then has a window over each that hears
+    /// a press outside it.
+    Outputs(Vec<u32>),
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +67,8 @@ struct Model {
     metrics: CardMetrics,
     /// What the windows left to the host, in order.
     host: Vec<HostAction>,
+    /// The outputs the process was told of; `None` leaves the windows that hear presses outside the centre out.
+    outputs: Option<Vec<u32>>,
 }
 
 fn next(steps: &async_channel::Receiver<Step>) -> Command<Message> {
@@ -91,6 +96,7 @@ impl Application for Scripted {
             steps,
             metrics,
             host: Vec::new(),
+            outputs: None,
         };
         (model, vec![first])
     }
@@ -108,6 +114,7 @@ impl Application for Scripted {
                     Step::Lock(locked) => {
                         model.center.get_mut().set_screen_locked(locked, model.now)
                     }
+                    Step::Outputs(outputs) => model.outputs = Some(outputs),
                 }
                 // cleared cards that have left go from the model, as the application's housekeeping does
                 model.ui.finish_removals(model.center.get_mut(), model.now);
@@ -123,6 +130,12 @@ impl Application for Scripted {
                             async move { Message::Focus(key) },
                         ))]
                     }
+                    Some(HostAction::OutputGone(output)) => {
+                        if let Some(outputs) = &mut model.outputs {
+                            outputs.retain(|&n| n != output);
+                        }
+                        Vec::new()
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -131,13 +144,19 @@ impl Application for Scripted {
     }
 
     fn view(model: &Model) -> Vec<Window<Message>> {
-        view::windows(
-            &mut model.center.borrow_mut(),
+        let mut center = model.center.borrow_mut();
+        let mut windows = match &model.outputs {
+            Some(outputs) => view::catchers(&center, &model.ui, outputs, Message::Input),
+            None => Vec::new(),
+        };
+        windows.extend(view::windows(
+            &mut center,
             &model.ui,
             &model.metrics,
             model.now,
             Message::Input,
-        )
+        ));
+        windows
     }
 }
 
@@ -170,6 +189,9 @@ struct Run {
     /// The runtime's clock, moved only while a window animates.
     clock: ManualClock,
 }
+
+/// The size of the outputs the windows that hear presses outside the centre cover.
+const OUTPUT: Size = Size::new(800.0, 600.0);
 
 /// One frame at 60 Hz, in nanoseconds.
 const FRAME_NS: u64 = 16_666_667;
@@ -264,6 +286,8 @@ impl Run {
                     // a layer surface's configure always carries its size, so the window keeps it after its spec
                     // changes: the size it asks for now, as the compositor gives it
                     let size = self.size.unwrap_or_else(|| asked_size(system, window));
+                    // a window that asks for no size is given its output's
+                    let size = if size == Size::ZERO { OUTPUT } else { size };
                     system
                         .configure(window, Some(size), WindowStates::default())
                         .unwrap();
@@ -1716,4 +1740,531 @@ fn the_keyboard_reveals_the_card_it_is_on_and_tab_reaches_its_buttons_whatever_t
         buttons_of(&run, id)
     );
     assert_eq!(run.ui().focused, Some(id));
+}
+
+/// The open centre with a window over each of two outputs that hears a press outside it; returns those windows by
+/// output and the centre's.
+fn centre_on_two_outputs(run: &mut Run) -> (Vec<(Option<u32>, WindowId)>, WindowId) {
+    run.notify(NotifyInput::new("Calendar", "Summary", "Body"));
+    run.step(Step::At(1.0));
+    run.step(Step::Outputs(vec![3, 7]));
+    assert_eq!(run.windows().len(), 1, "a banner alone has none");
+    run.step(Step::OpenCentre);
+    let system = run.driver.runtime().window_system();
+    let mut catchers = Vec::new();
+    let mut centre = None;
+    for (_, window) in run.windows() {
+        let spec = system.spec(window).unwrap();
+        match view::catcher_output(&spec.app_id) {
+            Some(output) => catchers.push((output, window)),
+            None => centre = Some(window),
+        }
+    }
+    (catchers, centre.expect("the centre's window"))
+}
+
+/// A left or right press anywhere outside the open centre closes it, whichever output the press is on: each output
+/// has a window under the centre that takes the press, so nothing under it hears it. The windows go as the close
+/// begins, while the centre still slides out, and the release says nothing.
+#[test]
+fn a_left_or_right_press_outside_the_centre_closes_it_on_every_output() {
+    for output in [3, 7] {
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let mut run = Run::new();
+            let (catchers, centre) = centre_on_two_outputs(&mut run);
+            assert_eq!(
+                catchers.iter().map(|(o, _)| *o).collect::<Vec<_>>(),
+                [Some(3), Some(7)],
+                "one over each output"
+            );
+            let system = run.driver.runtime().window_system();
+            for (_, window) in &catchers {
+                assert!(
+                    system.frames(*window).unwrap().is_empty(),
+                    "it draws no frame"
+                );
+            }
+            let window = catchers
+                .iter()
+                .find(|(o, _)| *o == Some(output))
+                .map(|(_, w)| *w)
+                .unwrap();
+            let at = Point::new(40.0, 500.0);
+            run.pointer(window, PointerEvent::Motion { position: at });
+            assert!(run.ui().centre_open, "the pointer moving closes nothing");
+            let press = |pressed| PointerEvent::Button {
+                position: at,
+                button,
+                pressed,
+                serial: 1,
+                mods: Mods::NONE,
+            };
+            run.pointer(window, press(true));
+            assert!(
+                !run.ui().centre_open,
+                "{button:?} on output {output} closes the centre"
+            );
+            assert_eq!(
+                run.windows().iter().map(|(_, w)| *w).collect::<Vec<_>>(),
+                [centre],
+                "the windows that heard the press went at once; the centre slides out"
+            );
+            assert_eq!(run.host(), [], "nothing is activated");
+        }
+    }
+}
+
+/// The other buttons and the wheel over the windows around the centre close nothing, and the window of an output
+/// that goes is not opened again while the other output keeps its own.
+#[test]
+fn other_buttons_outside_the_centre_close_nothing_and_an_output_that_goes_takes_its_window() {
+    let mut run = Run::new();
+    let (catchers, centre) = centre_on_two_outputs(&mut run);
+    let (_, first) = catchers[0];
+    let at = Point::new(40.0, 500.0);
+    run.pointer(first, PointerEvent::Motion { position: at });
+    for button in [MouseButton::Middle, MouseButton::Back, MouseButton::Forward] {
+        for pressed in [true, false] {
+            run.pointer(
+                first,
+                PointerEvent::Button {
+                    position: at,
+                    button,
+                    pressed,
+                    serial: 1,
+                    mods: Mods::NONE,
+                },
+            );
+        }
+    }
+    run.pointer(first, PointerEvent::Leave);
+    assert!(run.ui().centre_open);
+    assert_eq!(run.windows().len(), 3);
+
+    // the compositor closes the surface of the output that went
+    run.send(first, WindowEvent::CloseRequested);
+    assert_eq!(run.host(), [HostAction::OutputGone(3)]);
+    assert!(run.ui().centre_open, "the centre stays on its own output");
+    assert_eq!(
+        run.windows().iter().map(|(_, w)| *w).collect::<Vec<_>>(),
+        [catchers[1].1, centre],
+        "the other output keeps its window"
+    );
+}
+
+// ---- the look of a full centre and of banners, in every appearance ------------------------------------------------
+
+/// A frame of a window as it was drawn: device pixels, `scale` of them a point.
+struct Picture {
+    width: u32,
+    height: u32,
+    scale: f64,
+    pixels: Vec<u8>,
+    premultiplied: bool,
+}
+
+impl Picture {
+    /// The colour and the alpha of the device pixel under the point `at`, the colour not premultiplied.
+    fn at(&self, at: Point) -> ([f64; 3], f64) {
+        let x = ((at.x * self.scale) as u32).min(self.width - 1) as usize;
+        let y = ((at.y * self.scale) as u32).min(self.height - 1) as usize;
+        let px = &self.pixels[(y * self.width as usize + x) * 4..][..4];
+        let alpha = f64::from(px[3]) / 255.0;
+        let colour = [0, 1, 2].map(|c| {
+            let v = f64::from(px[c]) / 255.0;
+            if self.premultiplied && alpha > 0.0 {
+                (v / alpha).min(1.0)
+            } else {
+                v
+            }
+        });
+        (colour, alpha)
+    }
+
+    /// The colour under `at` as it shows over `backdrop`.
+    fn over(&self, at: Point, backdrop: [f64; 3]) -> [f64; 3] {
+        let (colour, alpha) = self.at(at);
+        [0, 1, 2].map(|c| colour[c] * alpha + backdrop[c] * (1.0 - alpha))
+    }
+
+    /// The centres of the device pixels inside `rect`, in points.
+    fn points(&self, rect: Rect) -> Vec<Point> {
+        let step = 1.0 / self.scale;
+        let mut out = Vec::new();
+        let mut y = rect.min_y() + step / 2.0;
+        while y < rect.max_y() {
+            let mut x = rect.min_x() + step / 2.0;
+            while x < rect.max_x() {
+                out.push(Point::new(x, y));
+                x += step;
+            }
+            y += step;
+        }
+        out
+    }
+}
+
+/// The relative luminance of an sRGB colour.
+fn luminance(colour: [f64; 3]) -> f64 {
+    let linear = colour.map(|c| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+}
+
+/// The contrast ratio of two colours, 1 to 21.
+fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The name an appearance has in a picture's file name.
+fn appearance_name(appearance: Appearance) -> &'static str {
+    match appearance {
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+        Appearance::LightHighContrast => "light-increase-contrast",
+        Appearance::DarkHighContrast => "dark-increase-contrast",
+    }
+}
+
+const APPEARANCES: [Appearance; 4] = [
+    Appearance::Light,
+    Appearance::Dark,
+    Appearance::LightHighContrast,
+    Appearance::DarkHighContrast,
+];
+
+impl Run {
+    /// `window` drawn in `appearance` at `scale`. With `CUPERTINO_LOOK_DIR` set the picture is also written there as
+    /// `<name>-<light|dark>[-hc]@<scale>x.png`, to look at.
+    fn picture(
+        &mut self,
+        window: WindowId,
+        name: &str,
+        appearance: Appearance,
+        scale: f64,
+    ) -> Picture {
+        let data =
+            Theme::from_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme")).unwrap();
+        let mut preferences = self.driver.runtime().theme().preferences;
+        preferences.appearance = appearance;
+        let tokens = ThemeTokens::cupertino(&data, preferences).unwrap();
+        self.driver.runtime_mut().set_theme(Arc::new(tokens));
+        self.driver
+            .window_system_mut()
+            .enqueue_window(window, WindowEvent::Scale(scale))
+            .unwrap();
+        self.settle_frames();
+        if let Some(dir) = std::env::var_os("CUPERTINO_LOOK_DIR") {
+            self.driver
+                .look_into(
+                    std::path::Path::new(&dir),
+                    window,
+                    name,
+                    scale,
+                    &[appearance],
+                )
+                .unwrap();
+            // the look leaves the window at scale 1 in its own theme: draw it again as asked
+            self.driver
+                .window_system_mut()
+                .enqueue_window(window, WindowEvent::Scale(scale))
+                .unwrap();
+            self.settle_frames();
+        }
+        let frame = self
+            .driver
+            .runtime()
+            .window_system()
+            .frames(window)
+            .unwrap()
+            .last()
+            .expect("the window drew a frame");
+        Picture {
+            width: frame.width,
+            height: frame.height,
+            scale,
+            pixels: frame.pixels.clone(),
+            premultiplied: frame.format == cupertino_kit::render::PixelFormat::Rgba8Premultiplied,
+        }
+    }
+}
+
+/// What a card shows in a picture: its fill beside its icon, the strongest contrast of anything drawn in it (its
+/// text) against that fill, and the strongest contrast of its edge against the fill.
+struct CardLook {
+    fill: [f64; 3],
+    fill_alpha: f64,
+    text: f64,
+    edge: f64,
+}
+
+fn card_look(picture: &Picture, card: Rect) -> CardLook {
+    // the padding left of the icon, half way down: inside the corner curves and clear of the icon and the text
+    let (fill, fill_alpha) = picture.at(Point::new(card.min_x() + 5.0, card.center().y));
+    let inner = Rect::new(
+        card.min_x() + 3.0,
+        card.min_y() + 3.0,
+        card.width() - 6.0,
+        card.height() - 6.0,
+    );
+    let text = picture
+        .points(inner)
+        .into_iter()
+        .map(|at| contrast(picture.over(at, fill), fill))
+        .fold(1.0, f64::max);
+    // across the leading edge, half way down
+    let across = Rect::new(
+        card.min_x() - 0.5,
+        card.center().y,
+        2.0,
+        1.0 / picture.scale,
+    );
+    let edge = picture
+        .points(across)
+        .into_iter()
+        .filter(|at| picture.at(*at).1 > 0.5)
+        .map(|at| contrast(picture.at(at).0, fill))
+        .fold(1.0, f64::max);
+    CardLook {
+        fill,
+        fill_alpha,
+        text,
+        edge,
+    }
+}
+
+/// Checks what a card shows in `appearance` at the picture's scale: an opaque fill of the appearance's tone and
+/// text that reads on it at 7:1 at least. With Increase Contrast its edge stands out from the fill: at 3:1 at least
+/// where the half-point rim fills whole device pixels (2x), and more than a card's outline at rest does where it
+/// covers half of one (1x).
+fn assert_card_reads(look: &CardLook, appearance: Appearance, scale: f64, what: &str) {
+    assert!(
+        look.fill_alpha > 0.99,
+        "{what}: the card paints its own opaque fill where the desktop draws no glass ({})",
+        look.fill_alpha
+    );
+    let tone = luminance(look.fill);
+    let dark = matches!(appearance, Appearance::Dark | Appearance::DarkHighContrast);
+    assert!(
+        if dark { tone < 0.2 } else { tone > 0.6 },
+        "{what}: the fill's tone {tone} is the appearance's"
+    );
+    assert!(
+        look.text >= 7.0,
+        "{what}: the text reads on the card at {:.2}:1",
+        look.text
+    );
+    let increase_contrast = matches!(
+        appearance,
+        Appearance::LightHighContrast | Appearance::DarkHighContrast
+    );
+    if increase_contrast {
+        let least = if scale >= 2.0 { 3.0 } else { 1.25 };
+        assert!(
+            look.edge >= least,
+            "{what}: with Increase Contrast the card's edge stands out at {:.2}:1, under {least}:1",
+            look.edge
+        );
+    } else {
+        assert!(
+            look.edge < 1.25,
+            "{what}: at rest the card's outline is faint ({:.2}:1)",
+            look.edge
+        );
+    }
+}
+
+/// The centre with more notifications than its list shows, at its top or scrolled to its `end`, drawn at `scale` in
+/// the light and the dark appearance and each with Increase Contrast: the picture is the window at the scale, and
+/// every card wholly in the list has an opaque fill of the appearance's tone, text that reads on it and, with
+/// Increase Contrast, an edge that stands out. With `CUPERTINO_LOOK_DIR` set the pictures are written there as
+/// `<name>-<light|dark>[-hc]@<scale>x.png`.
+fn a_full_centre_reads(name: &str, scale: f64, end: bool) {
+    let config = CenterConfig::default();
+    let width = view::strip_width(&config.layout, &config.swipe);
+    let size = Size::new(width, 640.0);
+    let mut run = Run::with(Setup {
+        size: Some(size),
+        ..Setup::default()
+    });
+    let ids = many(&mut run);
+    run.step(Step::OpenCentre);
+    let window = run.only_window();
+    run.send(window, WindowEvent::Focus(true));
+    let scroll = run.ui().scroll;
+    assert!(
+        scroll.content.height > scroll.viewport.height + 200.0,
+        "more notifications than the list shows: {scroll:?}"
+    );
+    if end {
+        // End
+        run.key(window, 0xff57);
+        assert!(run.ui().scroll.offset.y > 200.0, "scrolled to the end");
+    }
+    let snapshot = run.snapshot(window);
+    let list = rect(&snapshot, "list");
+    let cards: Vec<(u32, Rect)> = ids
+        .iter()
+        .filter_map(|&id| {
+            let key = Key::from(format!("card-{id}"));
+            let card = snapshot
+                .nodes
+                .iter()
+                .find(|n| n.key == Some(key.clone()))?
+                .rect;
+            (card.min_y() >= list.min_y() && card.max_y() <= list.max_y()).then_some((id, card))
+        })
+        .collect();
+    assert!(
+        cards.len() >= 4,
+        "{name}: several whole cards show: {cards:?}"
+    );
+    // the newest notification, with the long body, is the first card; the oldest is the last
+    let expected = if end { ids[0] } else { ids[ids.len() - 1] };
+    assert!(
+        cards.iter().any(|(id, _)| *id == expected),
+        "{name}: card {expected} shows whole: {cards:?}"
+    );
+    for appearance in APPEARANCES {
+        let picture = run.picture(window, name, appearance, scale);
+        assert_eq!(
+            (picture.width, picture.height),
+            (
+                (size.width * scale).round() as u32,
+                (size.height * scale).round() as u32
+            ),
+            "{name}: the window at {scale}x"
+        );
+        for (id, card) in &cards {
+            assert_card_reads(
+                &card_look(&picture, *card),
+                appearance,
+                scale,
+                &format!(
+                    "{name}, {} at {scale}x, card {id}",
+                    appearance_name(appearance)
+                ),
+            );
+        }
+    }
+}
+
+#[test]
+fn a_full_centre_reads_in_light_and_dark_with_and_without_increase_contrast_at_1x() {
+    a_full_centre_reads("centre-full", 1.0, false);
+}
+
+#[test]
+fn a_full_centre_reads_in_light_and_dark_with_and_without_increase_contrast_at_2x() {
+    a_full_centre_reads("centre-full", 2.0, false);
+}
+
+#[test]
+fn a_full_centre_scrolled_to_its_end_reads_in_every_appearance_at_1x() {
+    a_full_centre_reads("centre-full-end", 1.0, true);
+}
+
+#[test]
+fn a_full_centre_scrolled_to_its_end_reads_in_every_appearance_at_2x() {
+    a_full_centre_reads("centre-full-end", 2.0, true);
+}
+
+/// A banner with a long body and an action with Increase Contrast, light and dark, at 1x and 2x: its card has an
+/// opaque fill, text that reads on it and an edge that stands out. With `CUPERTINO_LOOK_DIR` set the pictures are
+/// written there (`banner-…`).
+#[test]
+fn a_banner_reads_with_increase_contrast_in_light_and_dark_at_1x_and_2x() {
+    let mut run = Run::with(Setup {
+        increase_contrast: true,
+        ..Setup::default()
+    });
+    run.notify(mail("Release notes draft", RELEASE_NOTES).with_action("reply", "Reply"));
+    run.step(Step::At(1.0));
+    let window = run.only_window();
+    let card = rect(&run.snapshot(window), "card-1");
+    for appearance in [Appearance::LightHighContrast, Appearance::DarkHighContrast] {
+        for scale in [1.0, 2.0] {
+            let picture = run.picture(window, "banner", appearance, scale);
+            assert_card_reads(
+                &card_look(&picture, card),
+                appearance,
+                scale,
+                &format!("banner, {} at {scale}x", appearance_name(appearance)),
+            );
+        }
+    }
+}
+
+/// With Increase Contrast on a desktop that draws glass, every card the full centre shows keeps its glass and lays
+/// its rim over it, as a banner does; at rest none strokes an edge. A screen reader reads the centre either way
+/// (every run's windows pass the accessibility audit as they settle).
+#[test]
+fn every_card_of_a_full_centre_lays_its_rim_over_its_glass_with_increase_contrast() {
+    let rims = |increase_contrast: bool| -> (usize, usize) {
+        let config = CenterConfig::default();
+        let width = view::strip_width(&config.layout, &config.swipe);
+        let mut run = Run::with(Setup {
+            effects: true,
+            increase_contrast,
+            size: Some(Size::new(width, 640.0)),
+            ..Setup::default()
+        });
+        let ids = many(&mut run);
+        run.step(Step::OpenCentre);
+        let window = run.only_window();
+        let snapshot = run.snapshot(window);
+        let list = rect(&snapshot, "list");
+        let cards: Vec<Rect> = ids
+            .iter()
+            .filter_map(|&id| {
+                let key = Key::from(format!("card-{id}"));
+                let card = snapshot
+                    .nodes
+                    .iter()
+                    .find(|n| n.key == Some(key.clone()))?
+                    .rect;
+                (card.max_y() > list.min_y() && card.min_y() < list.max_y()).then_some(card)
+            })
+            .collect();
+        let glass = run
+            .materials(window)
+            .last()
+            .cloned()
+            .expect("materials were asked for");
+        for card in &cards {
+            assert!(
+                glass.iter().any(|m| m.material == "CardGlass"
+                    && (m.rect.min_x() - card.min_x()).abs() < 0.5
+                    && (m.rect.width() - card.width()).abs() < 0.5),
+                "the card at {card:?} keeps its glass (Increase Contrast {increase_contrast}): {glass:?}"
+            );
+        }
+        let rimmed = cards
+            .iter()
+            .filter(|card| {
+                snapshot
+                    .display_list
+                    .nodes
+                    .iter()
+                    .flat_map(|n| n.ops.iter())
+                    .any(|op| {
+                        matches!(op, cupertino_kit::render::PaintOp::Stroke { shape: cupertino_kit::render::Shape::RoundedRect { rect, .. }, .. }
+                            if (rect.size.width - card.size.width).abs() < 2.0 && (rect.size.height - card.size.height).abs() < 2.0)
+                    })
+            })
+            .count();
+        (cards.len(), rimmed)
+    };
+    let (shown, rimmed) = rims(true);
+    assert!(shown >= 5, "{shown} cards show");
+    assert_eq!(rimmed, shown, "every card has its rim");
+    let (shown, rimmed) = rims(false);
+    assert!(shown >= 5);
+    assert_eq!(rimmed, 0, "at rest the compositor's glass marks the edges");
 }

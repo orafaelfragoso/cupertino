@@ -1,0 +1,5 @@
+title = "Notification Center with more notifications than fit: stacks, a long body, the list cut at the bottom"
+programs = ["cupertino-notifications"]
+after = 6.5
+scales = [1, 2]
+args = ["--spawn", "sh @ROOT@/scenarios/notify-many.sh", "--action", "5:notification-center"]

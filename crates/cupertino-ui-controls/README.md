@@ -183,6 +183,11 @@ from the application's model and reports changes as messages.
   (an alert raised by a timer or a task has none) and is dismissed by a press outside, and no anchor hangs one centred
   under the toolbar row. Dialogs show and go at once: the window draws no motion for them, since a fade keyed to the
   clock would leave them unseen in every test harness whose clock stands still.
+- **Press catchers.** `PressCatcher` is the window a shell panel puts under itself, over a whole output, to hear a press
+  outside the panel: it asks for no size (its surface's role gives it one), is shown as one transparent colour without
+  a frame (`WindowBackground::INPUT_ONLY`) and sends its message for a left or right press anywhere on it. The press
+  stops there, so nothing under the window hears it; other buttons, motion and scrolling say nothing, and it has no
+  node for assistive technology. The control panel and the notification centre build theirs with `Window::from`.
 - **Window drag regions.** `WindowDragArea` marks its content as a drag region of the window, and the toolbar row of
   `NavigationStack` is one, so every Kit app with a navigation toolbar gets it. A left press there that no control
   takes starts an interactive move (`WindowRequest::Move`, answering the press) once the pointer travels more than

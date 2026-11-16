@@ -78,6 +78,8 @@ COMPLETIONS = (('bash', 'usr/share/bash-completion/completions/cupertino'),
 MIMEAPPS = 'cupertino-mimeapps.list'
 # The activation file of the file manager name Files serves.
 FILE_MANAGER_SERVICE = 'org.cupertino.Files.FileManager1.service'
+# The desktop's freedesktop icon theme, installed under its directory name.
+ICON_THEME = 'data/icons/Cupertino'
 PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cupertino-autologin')
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
@@ -211,6 +213,10 @@ def data(gendir=None):
     original = ROOT / 'data/assets/cupertino'
     files += [(f'{a}/cupertino/{p.relative_to(original).as_posix()}', p.relative_to(ROOT).as_posix(), 0o644, False)
               for p in sorted(original.rglob('*')) if p.is_file() and p.suffix != '.py']
+    # The icon theme applications look their symbolic icons up in (the window buttons of title bars they draw)
+    theme = ROOT / ICON_THEME
+    files += [(f'usr/share/icons/{theme.name}/{p.relative_to(theme).as_posix()}', p.relative_to(ROOT).as_posix(), 0o644,
+               False) for p in sorted(theme.rglob('*')) if p.is_file()]
     lic = 'usr/share/licenses/cupertino-data'
     files += [(f'{lic}/DATA', 'packaging/licenses/DATA', 0o644, False),
               (f'{lic}/Unsplash.txt', 'packaging/licenses/Unsplash.txt', 0o644, False),

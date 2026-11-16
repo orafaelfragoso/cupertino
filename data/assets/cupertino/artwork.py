@@ -88,7 +88,6 @@ def gear(cx=512, cy=512, radius=286, hole=119):
 
 # Shared glass, paper and sky-blue folder colours.
 PALETTE = {
-    "files": [(0, "#50bdf0"), (.24, "#258ddd"), (.63, "#2169c8"), (1, "#254caa")],
     "settings": [(0, "#8495ba"), (.28, "#60749c"), (.65, "#39496f"), (1, "#252e4b")],
     "glass": [(0, "#f2fcff", .84), (.22, "#c6edff", .53), (.57, "#8acdf3", .28), (.82,"#82c9f0",.32), (1, "#b2e8ff", .74)],
     "back": [(0, "#b9e6fb"), (.3, "#8acaf1"), (.72, "#549ad5"), (1, "#3a79b5")],
@@ -103,7 +102,6 @@ class Artwork:
         self.size = size
         self.small = size <= 32
         self.defs = []
-        self.defs += [linear("tile-files", self.p["files"], (400, 100, 640, 924))]
         self.defs += [linear("tile-settings", self.p["settings"], (350, 100, 650, 924))]
         self.defs += [linear("glass", self.p["glass"], (300, 300, 700, 830))]
         self.defs += [linear("folder-back", self.p["back"], (420, 150, 570, 860))]
@@ -169,27 +167,30 @@ class Artwork:
         return result
 
     def files(self):
-        result = self.tile("files")
-        tile = result
-        result = ''
-        # A quiet back leaf is seen through the front glass, rather than floating as a badge.
-        back = 'M258 384V326C258 300 276 286 302 286H420C439 286 448 296 465 314L493 342H734C758 342 774 359 774 385V704C774 735 755 752 726 752H302C274 752 258 735 258 706Z'
-        face = 'M249 430C247 411 263 398 284 398H749C772 398 784 414 780 435L738 725C735 752 720 768 694 768H334C308 768 293 753 289 727Z'
-        result += self.shadow(path(back,"#142f5d"),y=23,strength=.35,blur="wide")
-        result += path(back,"url(#glass)", 'stroke="url(#glass-rim)" stroke-width="2" filter="url(#glass-bevel)"')
-        leaf = rect(306, 365, 408, 326, 24, "#e5f3ff", 'fill-opacity=".67" transform="rotate(-6 510 600)"')
-        result += self.shadow(rect(306, 370, 408, 326, 24, "#284f8b",'transform="rotate(-6 510 600)"'),y=7,strength=.2)
-        result += leaf
-        result += line('M337 390L672 355', '#ffffff', 3, 'opacity=".73"')
-        result += self.shadow(path(face,"#102f6d"),y=18,strength=.35,blur="contact")
-        result += path(face,"url(#glass)", 'stroke="url(#glass-rim)" stroke-width="2" filter="url(#glass-bevel)"')
-        self.clip("front-clip",path(face,"#fff"))
-        result += group(path(face,"url(#glass-glow)")+path(face,"url(#glass-bottom)")+path(face,"url(#edge-glow)")+path(face,"url(#glass-caustic)"), 'clip-path="url(#front-clip)"')
-        edge = 'M284 403H744'
-        result += line(edge, '#fff', 2, 'opacity=".68"')
-        # Broad refraction in the overlap is clipped to the glass silhouette.
-        result += group(rect(307,421,404,290,22,"#e4f5ff",'opacity=".10" transform="rotate(-6 510 600)" filter="url(#soft)"'), 'clip-path="url(#front-clip)"')
-        return tile+group(result,'transform="translate(-128 -146) scale(1.25)"')
+        # A bright blue tile on the shared keyline carries the system mark in frosted white.
+        tile = 'M5.36 1.058c-1.53 0-2.577.457-3.26 1.2-.678.74-1.042 1.8-1.042 3v6.416c0 1.2.364 2.261 1.042 3.001.683.744 1.73 1.2 3.26 1.2h6.23c1.53 0 2.579-.456 3.26-1.2.68-.74 1.025-1.703 1.025-3V5.5c0-1.57-.345-2.502-1.024-3.242-.682-.743-1.73-1.2-3.26-1.2H6.745z'
+        rim = 'M5.36 1.058c-1.53 0-2.577.457-3.26 1.2-.678.74-1.042 1.8-1.042 3.001v6.415c0 1.2.364 2.26 1.043 3 .682.744 1.73 1.2 3.26 1.2h6.23c1.53 0 2.577-.456 3.26-1.2.678-.739 1.024-1.702 1.024-3V5.5c0-1.57-.346-2.502-1.024-3.242-.683-.743-1.73-1.2-3.26-1.2zm0 .264h6.232c1.477 0 2.437.432 3.064 1.116.634.69.954 1.53.954 3.062v6.174c0 1.251-.322 2.134-.954 2.822-.627.684-1.587 1.114-3.064 1.114H5.359c-1.477 0-2.437-.43-3.064-1.114-.625-.682-.973-1.675-.973-2.822V5.26c0-1.148.348-2.14.973-2.822.627-.684 1.587-1.116 3.064-1.116'
+        scale = TILE_SIZE/14.817
+        place = f'transform="translate({512-8.4665*scale:.3f} {512-8.4665*scale:.3f}) scale({scale:.4f})"'
+        self.defs += [linear("files-tile", [(0,"#02c5fd"),(1,"#2f71f9")], (8.466,1.058,8.466,15.875))]
+        self.defs += [linear("files-rim-top", [(0,"#fff",1),(1,"#fff",0)], (6.745,1.058,10.583,11.312))]
+        self.defs += [linear("files-rim-bottom", [(0,"#fff",1),(1,"#fff",0)], (15.081,14.816,12.7,12.171))]
+        # The mark is frosted glass: clear white at its top thinning to half strength, with lit left and lower edges.
+        self.defs += [linear("files-mark", [(0,"#fff",1),(.549,"#fff",.796),(1,"#fff",.5)], (8,2,8,14))]
+        self.defs += [linear("files-mark-side", [(0,"#fff",.9),(.35,"#fff",0)], (2,8,14,8))]
+        self.defs += [linear("files-mark-base", [(.45,"#fff",0),(1,"#fff",.5)], (8,2,8,14))]
+        self.defs += ['<filter id="files-rim-soft" x="-.012" y="-.012" width="1.024" height="1.024" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation=".074"/></filter>']
+        self.defs += ['<filter id="files-mark-soft" x="-.1" y="-.1" width="1.2" height="1.2" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation=".1"/></filter>']
+        # An open ring with a square dot in its gap, drawn on a 16-unit grid.
+        ring = 'M11.6 3.2A6 6 0 1 0 11.6 12.8A1 1 0 0 0 10.4 11.2A4 4 0 1 1 10.4 4.8A1 1 0 0 0 11.6 3.2Z'
+        def mark(fill, attrs=""):
+            return path(ring, fill, attrs)+rect(12, 7, 2, 2, .7, fill, attrs)
+        self.clip("files-mark-clip", mark("#fff"))
+        edges = mark("none", 'stroke="url(#files-mark-side)" stroke-width=".5"')+mark("none", 'stroke="url(#files-mark-base)" stroke-width=".5"')
+        result = path(tile, "url(#files-tile)")
+        result += group(path(rim, "url(#files-rim-top)", 'style="mix-blend-mode:overlay"')+path(rim, "url(#files-rim-bottom)", 'style="mix-blend-mode:overlay"'), 'filter="url(#files-rim-soft)" opacity=".45" style="mix-blend-mode:overlay"')
+        result += group(mark("url(#files-mark)")+group(group(edges, 'filter="url(#files-mark-soft)"'), 'clip-path="url(#files-mark-clip)"'), 'transform="translate(8.466 8.466) scale(.8) translate(-8 -8)"')
+        return self.shadow(path(tile, "#111f38", place), y=19, strength=.27, blur="wide")+group(result, place)
 
     def settings(self):
         result = self.tile("settings")

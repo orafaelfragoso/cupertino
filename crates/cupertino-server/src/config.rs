@@ -447,7 +447,8 @@ pub struct WindowStyle {
     pub corner_radius: f64,
     pub continuous_corners: bool,
     pub shadow: ShadowStyle,
-    /// Apply shadow and corner mask to clients that draw their own decorations.
+    /// Apply the corner mask, outline and shadow to clients that draw their own decorations, as to the windows the
+    /// compositor decorates.
     pub style_client_decorated: bool,
     /// Insets around the surface of server-side decorated windows (integration point for the
     /// decoration component: window frame = surface geometry + insets).

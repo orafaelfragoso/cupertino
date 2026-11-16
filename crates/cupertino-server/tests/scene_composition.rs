@@ -5,6 +5,7 @@ use crate::common;
 use common::desktop::Desktop;
 use cupertino_scene::{SceneKind, SceneLayer};
 use cupertino_server::render::scene::{compose_scene, LockView};
+use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
 
 fn composed(d: &mut Desktop) -> Vec<(SceneLayer, SceneKind)> {
     let mut backend = d.state.backend.take().unwrap();
@@ -203,14 +204,15 @@ fn rounded(clip: &cupertino_scene::Clip) -> bool {
     matches!(clip, cupertino_scene::Clip::Rounded { radius, .. } if *radius > 0.0)
 }
 
-/// A desktop with one window of a client that asks for `mode` decorations (none: it never binds the protocol), opened
-/// and settled.
+/// A desktop at `scale` with one window of a client that asks for `mode` decorations (none: it never binds the
+/// protocol), opened and settled.
 fn desktop_with(
     mode: Option<
         wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode,
     >,
+    scale: f64,
 ) -> (Desktop, cupertino_wm::WindowId) {
-    let mut d = Desktop::new(1.0);
+    let mut d = Desktop::new(scale);
     match mode {
         None => d.window(),
         Some(mode) => {
@@ -282,11 +284,12 @@ fn frames_by_state(d: &mut Desktop, id: cupertino_wm::WindowId) -> [(&'static st
 fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_screen_one_is_square()
 {
     use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
-    // the compositor's decorations, and a client that never said whether it draws its own
-    for mode in [Some(Mode::ServerSide), None] {
-        let (mut d, id) = desktop_with(mode);
+    // the compositor's decorations, a client that said it draws its own and one that never said whether it does: the
+    // same corners, outline and shadow, and the compositor's title bar only on the first
+    for mode in [Some(Mode::ServerSide), Some(Mode::ClientSide), None] {
+        let (mut d, id) = desktop_with(mode, 1.0);
         for (state, frame) in frames_by_state(&mut d, id) {
-            let decorated = mode.is_some();
+            let decorated = mode == Some(Mode::ServerSide);
             if state == "full screen" {
                 assert!(!rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
                 assert!(
@@ -306,18 +309,53 @@ fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_scr
     }
 }
 
+/// A window has the corner radius, outline and shadow of a native one at `scale`, whoever draws its decorations
+/// (`mode`): the compositor (as for an X11 program, whose satellite asks for them), its client after saying so, or a
+/// client that never said. A client's own frame, square or tighter, is cut to that outline.
+fn has_the_native_corner_radius_outline_and_shadow(mode: Option<Mode>, scale: f64) {
+    let (mut d, id) = desktop_with(mode, scale);
+    assert_eq!(
+        d.state.entry(id).unwrap().draws_own_frame(),
+        mode == Some(Mode::ClientSide)
+    );
+    let frame = framed(&mut d);
+    let cupertino_scene::Clip::Rounded { radius, .. } = frame.clip else {
+        panic!("{mode:?} at {scale}: a rounded mask, not {:?}", frame.clip);
+    };
+    assert_eq!(
+        radius,
+        cupertino_theme::WINDOW_CORNER_RADIUS_REGULAR,
+        "{mode:?} at {scale}"
+    );
+    assert!(
+        frame.shadow && frame.outline && frame.titlebar == (mode == Some(Mode::ServerSide)),
+        "{mode:?} at {scale}: {frame:?}"
+    );
+}
+
 #[test]
-fn a_window_whose_client_draws_its_own_decorations_keeps_its_own_shape_in_every_state() {
-    use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::Mode;
-    let (mut d, id) = desktop_with(Some(Mode::ClientSide));
-    assert!(d.state.entry(id).unwrap().draws_own_frame());
-    for (state, frame) in frames_by_state(&mut d, id) {
-        assert!(!rounded(&frame.clip), "{state}: {frame:?}");
-        assert!(
-            !(frame.shadow || frame.outline || frame.titlebar || frame.rim),
-            "{state}: {frame:?}"
-        );
-    }
+fn a_client_drawn_window_has_the_native_corner_radius_outline_and_shadow_at_one() {
+    has_the_native_corner_radius_outline_and_shadow(Some(Mode::ClientSide), 1.0);
+}
+
+#[test]
+fn a_client_drawn_window_has_the_native_corner_radius_outline_and_shadow_at_one_and_a_half() {
+    has_the_native_corner_radius_outline_and_shadow(Some(Mode::ClientSide), 1.5);
+}
+
+#[test]
+fn a_client_drawn_window_has_the_native_corner_radius_outline_and_shadow_at_two() {
+    has_the_native_corner_radius_outline_and_shadow(Some(Mode::ClientSide), 2.0);
+}
+
+#[test]
+fn a_server_decorated_window_has_the_native_corner_radius_outline_and_shadow_at_one_and_a_half() {
+    has_the_native_corner_radius_outline_and_shadow(Some(Mode::ServerSide), 1.5);
+}
+
+#[test]
+fn a_window_that_never_says_who_decorates_it_has_the_native_corner_radius_at_one_and_a_half() {
+    has_the_native_corner_radius_outline_and_shadow(None, 1.5);
 }
 
 /// At a fractional scale a window's frame need not lie on device pixels. The content's rounded mask covers whole device

@@ -35,8 +35,12 @@ fn shows_bar(p: [u8; 4]) -> bool {
     p[0].abs_diff(p[1]) < 0x08 && p[1].abs_diff(p[2]) < 0x08
 }
 
-/// The display's image with one window of server-side decorations, and the window's frame in display pixels.
-fn shown(appearance: Appearance, mode: FractionalScaleMode) -> (RgbaImage, Rect) {
+/// The display's image with one window whose client asks for `decorations`, and the window's frame in display pixels.
+fn shown(
+    appearance: Appearance,
+    mode: FractionalScaleMode,
+    decorations: Mode,
+) -> (RgbaImage, Rect) {
     let config = Config {
         appearance,
         wallpaper_color: Some(DESKTOP),
@@ -57,7 +61,7 @@ fn shown(appearance: Appearance, mode: FractionalScaleMode) -> (RgbaImage, Rect)
     );
     d.state.cursor_status = CursorImageStatus::Hidden;
     d.clients
-        .push(common::Client::decorated(d.socket(), Mode::ServerSide));
+        .push(common::Client::decorated(d.socket(), decorations));
     let deadline = std::time::Instant::now() + common::HANG_GUARD;
     while d.state.wm.windows().count() != 1 {
         d.pump();
@@ -68,9 +72,10 @@ fn shown(appearance: Appearance, mode: FractionalScaleMode) -> (RgbaImage, Rect)
     }
     d.at(3000);
     let id = d.state.wm.key_window().expect("the window is key");
-    assert!(
-        !d.state.entry(id).unwrap().draws_own_frame(),
-        "the compositor draws the window's title bar"
+    assert_eq!(
+        d.state.entry(id).unwrap().draws_own_frame(),
+        decorations == Mode::ClientSide,
+        "who draws the window's title bar"
     );
     let f = d.state.wm.window(id).unwrap().geometry();
     let o = d.state.outputs[0].rect;
@@ -91,7 +96,7 @@ fn shown(appearance: Appearance, mode: FractionalScaleMode) -> (RgbaImage, Rect)
 
 fn check(mode: FractionalScaleMode) {
     for appearance in [Appearance::Dark, Appearance::Light] {
-        let (image, frame) = shown(appearance, mode);
+        let (image, frame) = shown(appearance, mode, Mode::ServerSide);
         let window = Config::default().window;
         let style = if window.continuous_corners {
             CornerStyle::continuous()
@@ -150,4 +155,65 @@ fn a_title_bar_keeps_to_the_window_s_rounded_corners_drawn_at_two_and_shrunk() {
 #[test]
 fn a_title_bar_keeps_to_the_window_s_rounded_corners_drawn_straight_at_one_and_a_half() {
     check(FractionalScaleMode::Direct);
+}
+
+/// The client's own square, opaque frame: its blue, which the desktop's magenta never is.
+fn shows_client(p: [u8; 4]) -> bool {
+    p[0] < 0x40 && p[1] < 0x40 && p[2] > 0xa0
+}
+
+/// A window whose client draws its own decorations with square corners is cut to the same rounded outline as one the
+/// compositor decorates, at all four corners, at a display at 1.5 drawn straight: every pixel well outside the outline
+/// shows the desktop, every pixel just inside it the client's frame.
+#[test]
+fn a_client_drawn_window_with_square_corners_is_cut_to_the_native_outline_at_one_and_a_half() {
+    let (image, frame) = shown(
+        Appearance::Dark,
+        FractionalScaleMode::Direct,
+        Mode::ClientSide,
+    );
+    let window = Config::default().window;
+    assert!(window.continuous_corners);
+    let style = CornerStyle::continuous();
+    let radius = cupertino_theme::WINDOW_CORNER_RADIUS_REGULAR * SCALE;
+    let extent = RoundedRect::new(frame, radius, style).extents()[0] as f32;
+    let centre = [
+        (frame.min_x() + frame.width() / 2.0) as f32,
+        (frame.min_y() + frame.height() / 2.0) as f32,
+    ];
+    let half = [(frame.width() / 2.0) as f32, (frame.height() / 2.0) as f32];
+    let (top, left, right, bottom) = (
+        frame.min_y().floor() as u32,
+        frame.min_x().floor() as u32,
+        frame.max_x().ceil() as u32,
+        frame.max_y().ceil() as u32,
+    );
+    let reach = extent.ceil() as u32 + 2;
+    let (mut outside, mut inside) = (0, 0);
+    let rows = (top.saturating_sub(2)..top + reach).chain(bottom - reach..bottom + 2);
+    for y in rows {
+        for x in (left.saturating_sub(2)..left + reach).chain(right - reach..right + 2) {
+            let p = [x as f32 + 0.5 - centre[0], y as f32 + 0.5 - centre[1]];
+            let d = rounded_distance(p, half, extent, style.exponent() as f32);
+            let px = image.get_pixel(x, y).0;
+            if d > CLEAR {
+                outside += 1;
+                assert!(
+                    shows_desktop(px),
+                    "({x}, {y}), {d:.2} px outside the outline, shows the client's square corner: {px:?}"
+                );
+            } else if d < -CLEAR && d > -BAND {
+                inside += 1;
+                assert!(
+                    shows_client(px),
+                    "({x}, {y}), {:.2} px inside the outline, does not show the client: {px:?}",
+                    -d
+                );
+            }
+        }
+    }
+    assert!(
+        outside > 200 && inside > 100,
+        "the four corners were looked at: {outside} outside, {inside} inside"
+    );
 }

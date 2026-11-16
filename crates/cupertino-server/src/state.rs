@@ -245,8 +245,8 @@ impl WindowEntry {
     pub const REVEALED_TITLEBAR: cupertino_decorations::TitlebarStyle =
         cupertino_decorations::TitlebarStyle::Standard;
 
-    /// Whether the client said it draws its own decorations (`xdg-decoration` client-side mode): its window keeps its
-    /// own shape, with no corner mask and no shadow of the compositor's.
+    /// Whether the client said it draws its own decorations (`xdg-decoration` client-side mode): the compositor draws no
+    /// title bar for it, and shapes it as [`Self::styled`] says.
     pub fn draws_own_frame(&self) -> bool {
         !self.server_side
             && self
@@ -254,10 +254,12 @@ impl WindowEntry {
                 .with_pending_state(|st| st.decoration_mode == Some(DecorationMode::ClientSide))
     }
 
-    /// Whether the compositor masks the window's corners and draws its shadow: a window it decorates, and, with
-    /// `style_client_decorated`, one whose client never said it draws its own decorations.
+    /// Whether the compositor masks the window's corners and draws its outline and shadow: a window it decorates, and,
+    /// with `style_client_decorated`, one whose client draws its own decorations, whether it said so or not. Such a
+    /// client's own frame (square corners, tighter ones, its own shadow) is cut to the window's outline, so every window
+    /// has the same corners, outline and shadow as a native one.
     pub fn styled(&self, style_client_decorated: bool) -> bool {
-        self.server_side || (style_client_decorated && !self.draws_own_frame())
+        self.server_side || style_client_decorated
     }
 
     /// The space the decorations take now: none while the window is full screen.

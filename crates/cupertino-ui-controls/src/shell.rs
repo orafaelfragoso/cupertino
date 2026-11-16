@@ -18,8 +18,9 @@ use cupertino_ui_layout::{
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 
-/// The window's corner radius, which the sidebar panel's corners follow.
-pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
+/// The window's corner radius, which the sidebar panel's corners follow: the theme's, the one the compositor shapes
+/// the window with.
+pub const WINDOW_CORNER_RADIUS: f64 = cupertino_theme::WINDOW_CORNER_RADIUS_REGULAR;
 /// The background of a small window that is a single panel, such as an About window or a prompt for permission: the
 /// sidebar's glass under the whole window, its corners the window's, so it reads as the same glass as a sidebar
 /// window's panel. Where the desktop's effects offer no glass it is the theme's opaque window colour in that shape.

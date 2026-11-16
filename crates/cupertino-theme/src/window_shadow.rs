@@ -693,6 +693,9 @@ impl WindowCornerSize {
     }
 }
 
+/// The corner radius of a titled window, in points: the one source of the corners, outline and shadow the compositor
+/// gives every window (decorated by it or by its client, native or not) and of the shapes inside a native window that
+/// follow its corners.
 pub const WINDOW_CORNER_RADIUS_REGULAR: f64 = 16.0;
 pub const WINDOW_CORNER_RADIUS_SMALL: f64 = 10.0;
 

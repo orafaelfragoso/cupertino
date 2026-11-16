@@ -67,8 +67,8 @@ pub const COMPACT_TOOLBAR_ROW_HEIGHT: f64 = 40.0;
 /// Distance from the leading edge to the first button of the compact unified row (its top is 13 pt down, the middle
 /// of the row).
 pub const COMPACT_BUTTON_LEADING: f64 = 12.0;
-/// The window's corner radius.
-pub const WINDOW_CORNER_RADIUS: f64 = 16.0;
+/// The window's corner radius: the theme's, shared by every window the compositor shapes.
+pub const WINDOW_CORNER_RADIUS: f64 = cupertino_theme::WINDOW_CORNER_RADIUS_REGULAR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ButtonKind {

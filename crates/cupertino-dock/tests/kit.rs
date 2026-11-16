@@ -3413,6 +3413,124 @@ fn with_reduce_transparency_the_fans_names_read_on_opaque_pills() {
     check_fan_reads(true);
 }
 
+/// The slope of the line through `points` by least squares, as the angle its upper end leans to the right of upright,
+/// in degrees: each point is a height, the place across at that height and its weight.
+fn lean_degrees(points: &[(f64, f64, f64)]) -> f64 {
+    let weight: f64 = points.iter().map(|p| p.2).sum();
+    let mean_y = points.iter().map(|p| p.0 * p.2).sum::<f64>() / weight;
+    let mean_x = points.iter().map(|p| p.1 * p.2).sum::<f64>() / weight;
+    let across: f64 = points
+        .iter()
+        .map(|p| p.2 * (p.0 - mean_y) * (p.1 - mean_x))
+        .sum();
+    let down: f64 = points.iter().map(|p| p.2 * (p.0 - mean_y).powi(2)).sum();
+    (-across / down).atan().to_degrees()
+}
+
+/// Every row of the fan is turned whole: the stem of its one-letter name and the upright side of its icon lean by the
+/// row's angle, more the higher the row stands, in the light appearance at one device pixel a point and in the dark one
+/// at two. A name whose letters stood upright along a turned line, or an icon left level, would lean by nothing.
+#[test]
+fn a_fan_rows_name_and_icon_lean_by_the_rows_angle() {
+    use cupertino_dock::fan::{FanLayout, ICON, PILL_GAP, PILL_PADDING, PITCH};
+    use cupertino_dock::stack::OPEN_FOLDER;
+    const ROWS: usize = 5;
+    for (appearance, scale) in [(Appearance::Light, 1.0), (Appearance::Dark, 2.0)] {
+        let dark = appearance.is_dark();
+        let mut run = stack_run_on(appearance_tokens(appearance, false), false, ROWS);
+        for entry in &mut run.record.borrow_mut().folder_entries {
+            // one upright stem
+            entry.name = "l".to_owned();
+        }
+        let bar = run.bar();
+        let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+        run.click(bar, tile);
+        run.advance(1.0);
+        let fan = stack_window(&run).expect("the stack opened");
+        run.send_to(fan, WindowEvent::Scale(scale));
+        let picture = Picture::of(&mut run, fan, scale);
+        let layout = FanLayout::new(&["l"; ROWS], OPEN_FOLDER, 0.0);
+        let width = run.driver.window_system_mut().spec(fan).unwrap().size.width;
+        assert_eq!(layout.width, width, "the fan's width");
+        // the button is the top row, and the entries stand under it a pitch apart
+        let top = run.bounds(fan, Role::Button, OPEN_FOLDER).center().y;
+        let step = 1.0 / scale;
+        let tone = |colour: [f64; 3]| (colour[0] + colour[1] + colour[2]) / 3.0;
+        for row in 0..ROWS {
+            let what = format!(
+                "row {row} in the {} appearance at {scale}x",
+                if dark { "dark" } else { "light" }
+            );
+            let angle = layout.tilt(row, 1.0).to_degrees();
+            let middle = Point::new(layout.centre(row, 1.0).x, top + (ROWS - row) as f64 * PITCH);
+            // the name's stem: where the row's turn puts the middle of a level name, and what differs there from
+            // the pill's own tone, clear of the pill's ends and rim
+            let (sin, cos) = layout.tilt(row, 1.0).sin_cos();
+            let out = ICON / 2.0 + PILL_GAP + PILL_PADDING + 1.5;
+            let name = Point::new(middle.x - out * cos, middle.y - out * sin);
+            let pill = tone(picture.at(Point::new(name.x - 6.0, name.y)).0);
+            let mut stem = Vec::new();
+            let mut y = (name.y - 8.0).floor() + step / 2.0;
+            while y < name.y + 8.0 {
+                let (mut ink, mut moment) = (0.0, 0.0);
+                let mut x = (name.x - 5.0).floor() + step / 2.0;
+                while x < name.x + 5.0 {
+                    let differs = (tone(picture.at(Point::new(x, y)).0) - pill).abs();
+                    if differs > 0.08 {
+                        ink += differs;
+                        moment += differs * x;
+                    }
+                    x += step;
+                }
+                if ink > 0.0 {
+                    stem.push((y, moment / ink, ink));
+                }
+                y += step;
+            }
+            // the stem's own rows, not the faint ends of it
+            let most = stem.iter().map(|p| p.2).fold(0.0, f64::max);
+            stem.retain(|p| p.2 > most * 0.5);
+            assert!(
+                stem.len() as f64 >= 5.0 * scale,
+                "{what}: the name's stem is drawn ({} rows)",
+                stem.len()
+            );
+            let lean = lean_degrees(&stem);
+            assert!(
+                (lean - angle).abs() < 2.0,
+                "{what}: the name leans {lean:.1} degrees in a row turned {angle:.1}"
+            );
+            // the icon: its leading side, across the middle of its height
+            let mut side = Vec::new();
+            let mut y = (middle.y - 10.0).floor() + step / 2.0;
+            while y < middle.y + 10.0 {
+                let mut x = (middle.x - ICON / 2.0 - 2.0).floor() + step / 2.0;
+                let mut before = 0.0;
+                while x < middle.x {
+                    let alpha = picture.at(Point::new(x, y)).1;
+                    if alpha >= 0.5 {
+                        // where the side crosses half, between this pixel and the one before
+                        side.push((y, x - step * (alpha - 0.5) / (alpha - before), 1.0));
+                        break;
+                    }
+                    before = alpha;
+                    x += step;
+                }
+                y += step;
+            }
+            assert!(
+                side.len() as f64 >= 18.0 * scale,
+                "{what}: the icon is drawn"
+            );
+            let lean = lean_degrees(&side);
+            assert!(
+                (lean - angle).abs() < 1.5,
+                "{what}: the icon leans {lean:.1} degrees in a row turned {angle:.1}"
+            );
+        }
+    }
+}
+
 /// The label popup, while it shows: its window and the name it says.
 fn label(run: &Run) -> Option<(WindowId, String)> {
     run.driver

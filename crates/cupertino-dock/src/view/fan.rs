@@ -1,5 +1,6 @@
 //! A folder's stack as a fan: a popup of the bar standing over the folder's tile with a column of rows rising from it in
-//! an arc, each a small icon with its name on a pill to its left and turned a little more the higher it stands, and a
+//! an arc, each a small icon with its name on a pill to its left, turned whole (pill, letters and icon) about the icon's
+//! middle a little more the higher it stands, and a
 //! round button at the top that opens the folder. The rows rise out of the tile as it opens and fall back into it as it
 //! closes. It takes the keyboard and closes on a press outside it or Escape; the model moves the selection with the
 //! arrows. Where the parts go is [`FanLayout`]'s.
@@ -17,6 +18,7 @@ use cupertino_kit::theme::Color;
 
 use super::bar::FAN_ANCHOR;
 use super::paint::{self, Root};
+use super::turn::turn_point as turned;
 use super::{IconSet, Input};
 use crate::fan::{
     FanLayout, ICON, PILL_FONT_PT, PILL_GAP, PILL_HEIGHT, PILL_MAX_WIDTH, PILL_PADDING, PITCH,
@@ -252,12 +254,6 @@ pub fn window<M: Clone + 'static>(view: FanView<'_>, input: fn(Input) -> M) -> W
     }
 }
 
-/// `r` turned clockwise by `sin_cos` of an angle about `pivot`.
-fn turned(p: Point, pivot: Point, (sin, cos): (f64, f64)) -> Point {
-    let (x, y) = (p.x - pivot.x, p.y - pivot.y);
-    Point::new(pivot.x + x * cos - y * sin, pivot.y + x * sin + y * cos)
-}
-
 /// The outline of the rounded rectangle `r` with round ends, turned clockwise by `angle` about `pivot`.
 fn pill_path(r: Rect, pivot: Point, angle: f64) -> Vec<PathVerb> {
     let sc = angle.sin_cos();
@@ -378,6 +374,9 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
         }
         // the row's own coordinates: the node's top edge is the band's
         let c = Point::new(self.centre.x, PITCH / 2.0);
+        let node = self.band().origin;
+        // at rest the turned name and icon are drawn at their best; on the way, once a pixel
+        let fine = self.progress >= 1.0;
         let icon = Rect::new(c.x - ICON / 2.0, c.y - ICON / 2.0, ICON, ICON);
         let fade = |color: Color, share: f64| Color {
             a: color.a * share as f32,
@@ -400,7 +399,9 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 paint: Paint::Solid(button_fill),
             });
             let reach = ARROW_REACH;
-            let at = |dx: f64, dy: f64| Point::new(c.x + dx, c.y + dy);
+            // the arrow turns with the row
+            let sin_cos = self.tilt.sin_cos();
+            let at = |dx: f64, dy: f64| turned(Point::new(c.x + dx, c.y + dy), c, sin_cos);
             cx.push(PaintOp::Stroke {
                 shape: Shape::Path {
                     verbs: vec![
@@ -416,9 +417,9 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 paint: Paint::Solid(TEXT[mode]),
             });
         } else {
-            paint::image(cx, &self.image, icon);
+            paint::image_turned(cx, &self.image, icon, c, self.tilt, node, fine);
         }
-        // the pill, to the left of the icon, turned with the row
+        // the pill, to the left of the icon, turned with the row about the icon's middle, and its name with it
         let Some(text) = paint::line(
             &env,
             &self.label,
@@ -457,6 +458,8 @@ impl<M: Clone + 'static> Widget<M> for RowNode<M> {
                 c,
                 self.tilt,
                 fade(TEXT[mode], text_alpha),
+                node,
+                fine,
             );
         }
     }

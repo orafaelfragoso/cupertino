@@ -15,6 +15,7 @@ pub mod label;
 pub mod menu;
 pub(crate) mod paint;
 pub mod stack;
+pub mod turn;
 
 use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{Key, WindowKey};

@@ -267,6 +267,37 @@ mod watch {
         *watched = now;
     }
 
+    /// How often at most the watches are set again for folders that keep appearing while they are being set.
+    const SETTLES: usize = 16;
+
+    /// Set the watches for `dirs` ([`arm`]) until the plan made after them is the plan they were set for. A folder
+    /// made while the watches were being set was seen by none of them, yet the reading that follows finds its
+    /// entries: without a watch of its own its later changes would be missed. Once the two plans agree, whatever is
+    /// made next is made under a watch.
+    pub(super) fn settle(
+        watcher: &mut impl Watcher,
+        watched: &mut BTreeMap<PathBuf, bool>,
+        dirs: &[PathBuf],
+        mut again: bool,
+        report: &mut dyn FnMut(Change),
+    ) {
+        let mut planned = plan(dirs);
+        for _ in 0..SETTLES {
+            arm(
+                watcher,
+                watched,
+                planned.clone(),
+                std::mem::take(&mut again),
+                report,
+            );
+            let now = plan(dirs);
+            if now == planned {
+                return;
+            }
+            planned = now;
+        }
+    }
+
     /// The watch thread: sets the watches, then reads the folders after each burst of events.
     fn follow(
         mut catalogue: Catalogue,
@@ -285,10 +316,10 @@ mod watch {
             if over {
                 burst.end();
                 // the watches first: what changes after them comes as an event, what changed before is read
-                arm(
+                settle(
                     &mut watcher,
                     &mut watched,
-                    plan(&dirs),
+                    &dirs,
                     std::mem::take(&mut again),
                     &mut report,
                 );
@@ -531,8 +562,9 @@ mod tests {
 
     #[cfg(feature = "watch")]
     mod watching {
-        use super::super::watch::{concerns, plan};
+        use super::super::watch::{concerns, plan, settle};
         use super::*;
+        use notify::{RecursiveMode, Watcher};
         use std::collections::BTreeMap;
         use std::sync::mpsc::{self, Receiver};
 
@@ -648,6 +680,53 @@ mod tests {
                     ("vendor-draw.desktop", "Sketch"),
                 ],
             );
+        }
+
+        /// A watcher that sets no watch and lets something happen the first time one is asked for, as another
+        /// program making a folder at that moment would.
+        struct Meanwhile(Option<Box<dyn FnOnce()>>);
+
+        impl Watcher for Meanwhile {
+            fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+                Ok(Self(None))
+            }
+            fn watch(&mut self, _: &Path, _: RecursiveMode) -> notify::Result<()> {
+                if let Some(happen) = self.0.take() {
+                    happen();
+                }
+                Ok(())
+            }
+            fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+                Ok(())
+            }
+            fn kind() -> notify::WatcherKind {
+                notify::WatcherKind::NullWatcher
+            }
+        }
+
+        #[test]
+        fn a_folder_made_while_the_watches_are_set_gets_its_watch_too() {
+            let root = tempfile::tempdir().unwrap();
+            let (user, system) = folders(root.path());
+            std::fs::create_dir_all(&system).unwrap();
+            let dirs = [user.clone(), system.clone()];
+            // the person's folder and an entry in it appear after the plan was made, while its watches are set
+            let made = user.clone();
+            let mut watcher = Meanwhile(Some(Box::new(move || {
+                put(&made, "paint.desktop", &entry("My Paint", ""));
+            })));
+            let mut watched = BTreeMap::new();
+            let mut reported = Vec::new();
+            settle(&mut watcher, &mut watched, &dirs, true, &mut |change| {
+                reported.push(change);
+            });
+            assert_eq!(
+                watched.get(&user),
+                Some(&true),
+                "the folder is watched whole: {watched:?}"
+            );
+            assert_eq!(watched, plan(&dirs));
+            assert_eq!(reported, []);
         }
 
         #[test]

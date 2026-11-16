@@ -2410,7 +2410,11 @@ fn sit_idle(server: &mut Server, names: &[String], pids: &[u32], when: &str) {
     let seconds = measured.elapsed().as_secs_f64();
     for ((name, &pid), (ticks, switches)) in names.iter().zip(pids).zip(start) {
         let (ticks_now, switches_now) = activity(pid);
-        let (cpu, woken) = (ticks_now - ticks, switches_now - switches);
+        // a thread that ended in between took its switches out of the sum: count what the others added
+        let (cpu, woken) = (
+            ticks_now.saturating_sub(ticks),
+            switches_now.saturating_sub(switches),
+        );
         eprintln!(
             "{name} ({when}): {cpu} clock ticks of CPU, {woken} context switches in {seconds:.2} s"
         );

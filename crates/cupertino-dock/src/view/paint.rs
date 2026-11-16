@@ -9,13 +9,17 @@ use cupertino_kit::core::{
 use cupertino_kit::geometry::{Point, Rect, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, Overflow, SizeSpec};
 use cupertino_kit::platform::{KeyEvent, MouseButton, PointerEvent};
-use cupertino_kit::render::{ImageResource, Paint, PaintOp, Sampling, Shape};
+use cupertino_kit::render::{ImageResource, Paint, PaintOp, PixelFormat, Sampling, Shape};
 use cupertino_kit::text::{
-    AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, Wrap,
+    AttributedText, FontWeight, GlyphFormat, GlyphKey, GlyphRaster, GlyphRasterizer,
+    ParagraphLayout, ParagraphStyle, TextStyle, TextSystem, Wrap,
 };
 use cupertino_kit::theme::{Color, ColorRole, StateVariant};
 
+use super::turn::{self, Bitmap};
 use super::Pointer;
+use std::cell::RefCell;
+use std::sync::Arc;
 
 /// A colour as red, green, blue and alpha from 0 to 1.
 pub type Rgba = [f32; 4];
@@ -158,8 +162,126 @@ pub fn glyphs(cx: &mut PaintCx<'_>, layout: &ParagraphLayout, origin: Point, c: 
     }
 }
 
-/// Draw `layout` with its top-left corner at `origin`, the whole of it turned clockwise by `angle` radians about
-/// `pivot`: the glyphs stay upright and follow the turned baseline.
+/// How much finer than the device a line of text is drawn level before it is turned, and the room kept around it for
+/// what a glyph draws outside its line, in points.
+const TURNED_TEXT_FINER: f64 = 2.0;
+const TURNED_TEXT_ROOM: f64 = 2.0;
+
+thread_local! {
+    /// The glyphs of turned text, drawn by the text system they were last drawn for.
+    static TURNED_GLYPHS: RefCell<Option<(Arc<TextSystem>, GlyphRaster)>> = const { RefCell::new(None) };
+}
+
+/// `layout` in the colour `c`, opaque, drawn level into a picture `finer` times as fine as a device of `scale` pixels
+/// a point, with [`TURNED_TEXT_ROOM`] around it; and the picture's size in points.
+fn level_text(env: &Environment, layout: &ParagraphLayout, c: Color, finer: f64) -> (Bitmap, Size) {
+    let per = env.scale * finer;
+    let size = layout.size();
+    let width = ((size.width + 2.0 * TURNED_TEXT_ROOM) * per)
+        .ceil()
+        .max(1.0);
+    let height = ((size.height + 2.0 * TURNED_TEXT_ROOM) * per)
+        .ceil()
+        .max(1.0);
+    let mut level = Bitmap::new(width as u32, height as u32);
+    TURNED_GLYPHS.with_borrow_mut(|kept| {
+        if !kept
+            .as_ref()
+            .is_some_and(|(of, _)| Arc::ptr_eq(of, &env.text))
+        {
+            *kept = Some((env.text.clone(), GlyphRaster::new(env.text.clone())));
+        }
+        let Some((_, raster)) = kept else { return };
+        for line in layout.lines() {
+            for run in &line.runs {
+                for g in &run.run.glyphs {
+                    let x = (TURNED_TEXT_ROOM + run.origin.x + f64::from(g.x)) * per;
+                    let y = (TURNED_TEXT_ROOM + run.origin.y + f64::from(g.y)) * per;
+                    let whole = x.floor();
+                    let key = GlyphKey::for_draw(
+                        run.run.font,
+                        g.id,
+                        f64::from(run.run.size) * per,
+                        x - whole,
+                        true,
+                        [c.r, c.g, c.b],
+                    );
+                    let Ok(Some(glyph)) = raster.rasterize(&key) else {
+                        continue;
+                    };
+                    let left = whole as i64 + i64::from(glyph.bearing_x);
+                    let top = y.round() as i64 - i64::from(glyph.bearing_y);
+                    let stride = glyph.stride as usize;
+                    match glyph.format {
+                        GlyphFormat::Coverage => level.cover(
+                            &glyph.pixels,
+                            stride,
+                            glyph.width,
+                            glyph.height,
+                            left,
+                            top,
+                            [c.r, c.g, c.b],
+                        ),
+                        GlyphFormat::ColorPremultiplied => {
+                            level.draw(&glyph.pixels, stride, glyph.width, glyph.height, left, top);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    (level, Size::new(width / per, height / per))
+}
+
+/// Draw the picture `level`, which standing level fills `placed`, turned clockwise by `angle` radians about `pivot`
+/// and shown at `alpha`. `placed` and `pivot` are in the node's coordinates, and `node` is where the node's own
+/// top-left corner is in its window, so the picture's pixels are the window's. `fine` for a picture at rest; one drawn
+/// anew at every frame of a motion is sampled once a pixel.
+#[allow(clippy::too_many_arguments)]
+pub fn turned_picture(
+    cx: &mut PaintCx<'_>,
+    level: &Bitmap,
+    placed: Rect,
+    pivot: Point,
+    angle: f64,
+    alpha: f64,
+    node: Point,
+    fine: bool,
+) {
+    let scale = cx.env().scale;
+    let in_window = |p: Point| Point::new(p.x + node.x, p.y + node.y);
+    let Some(out) = turn::turned(
+        level,
+        Rect::from_origin_size(in_window(placed.origin), placed.size),
+        in_window(pivot),
+        angle,
+        scale,
+        alpha,
+        fine,
+    ) else {
+        return;
+    };
+    let image = ImageResource {
+        revision: 0,
+        width: out.bitmap.width,
+        height: out.bitmap.height,
+        stride: out.bitmap.width * 4,
+        format: PixelFormat::Rgba8Premultiplied,
+        pixels: out.bitmap.pixels.into(),
+    };
+    let dst = Rect::new(
+        out.rect.x() - node.x,
+        out.rect.y() - node.y,
+        out.rect.width(),
+        out.rect.height(),
+    );
+    cx.image(next_resource_id(), &image, dst, Sampling::Linear);
+}
+
+/// Draw `layout`, which standing level has its top-left corner at `origin`, turned clockwise by `angle` radians about
+/// `pivot`: the line and every glyph on it stand at the angle. `node` is where the node's top-left corner is in its
+/// window; `fine` as for [`turned_picture`].
+#[allow(clippy::too_many_arguments)]
 pub fn glyphs_turned(
     cx: &mut PaintCx<'_>,
     layout: &ParagraphLayout,
@@ -167,26 +289,77 @@ pub fn glyphs_turned(
     pivot: Point,
     angle: f64,
     c: Color,
+    node: Point,
+    fine: bool,
 ) {
-    let (sin, cos) = angle.sin_cos();
-    let turn = |x: f64, y: f64| Point::new(x * cos - y * sin, x * sin + y * cos);
-    for line in layout.lines() {
-        for run in &line.runs {
-            let from = origin + run.origin;
-            let about = turn(from.x - pivot.x, from.y - pivot.y);
-            let mut glyphs = run.run.clone();
-            for g in &mut glyphs.glyphs {
-                let moved = turn(f64::from(g.x), f64::from(g.y));
-                g.x = moved.x as f32;
-                g.y = moved.y as f32;
+    let env = cx.env().clone();
+    let (level, size) = level_text(&env, layout, c, TURNED_TEXT_FINER);
+    let placed = Rect::new(
+        origin.x - TURNED_TEXT_ROOM,
+        origin.y - TURNED_TEXT_ROOM,
+        size.width,
+        size.height,
+    );
+    turned_picture(cx, &level, placed, pivot, angle, f64::from(c.a), node, fine);
+}
+
+/// `icon` centred in `rect`, as large as fits, turned clockwise by `angle` radians about `pivot`.
+/// `node` is where the node's top-left corner is in its window; `fine` as for [`turned_picture`].
+pub fn image_turned(
+    cx: &mut PaintCx<'_>,
+    icon: &[ImageSource],
+    rect: Rect,
+    pivot: Point,
+    angle: f64,
+    node: Point,
+    fine: bool,
+) {
+    let scale = cx.env().scale;
+    let side = rect.width().max(rect.height());
+    let Some(source) = rendition(icon, side, scale) else {
+        return;
+    };
+    let image = &source.image;
+    let (w, h) = (f64::from(image.width), f64::from(image.height));
+    if w < 1.0 || h < 1.0 {
+        return;
+    }
+    let fit = (rect.width() / w).min(rect.height() / h);
+    let (dw, dh) = (w * fit, h * fit);
+    let placed = Rect::new(
+        rect.x() + (rect.width() - dw) / 2.0,
+        rect.y() + (rect.height() - dh) / 2.0,
+        dw,
+        dh,
+    );
+    let mut level = Bitmap::new(image.width, image.height);
+    let straight = image.format == PixelFormat::Rgba8;
+    for (y, row) in image
+        .pixels
+        .chunks(image.stride.max(1) as usize)
+        .take(image.height as usize)
+        .enumerate()
+    {
+        for (x, px) in row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(image.width as usize)
+            .enumerate()
+        {
+            let at = (y * image.width as usize + x) * 4;
+            let alpha = u32::from(px[3]);
+            for (c, &value) in px.iter().enumerate().take(3) {
+                level.pixels[at + c] = if straight {
+                    ((u32::from(value) * alpha + 127) / 255) as u8
+                } else {
+                    value
+                };
             }
-            cx.push(PaintOp::Glyphs {
-                origin: Point::new(pivot.x + about.x, pivot.y + about.y),
-                run: glyphs,
-                color: c,
-            });
+            level.pixels[at + 3] = px[3];
         }
     }
+    turned_picture(cx, &level, placed, pivot, angle, 1.0, node, fine);
 }
 
 /// One line of `s` starting at `x`, centred on `cy`, cut at `max_width`; returns its width.

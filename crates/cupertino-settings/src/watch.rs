@@ -171,6 +171,24 @@ pub fn classify(
     }
 }
 
+/// What the signal `message` that came through `bus`'s rules changed ([`classify`]). A change of the Bluetooth stack's
+/// objects that the pane does not show (a device's signal strength and advertisement while the adapter discovers)
+/// changed nothing.
+fn changed_by(bus: Which, message: &zbus::Message) -> Option<Changed> {
+    let header = message.header();
+    let changed = classify(
+        bus,
+        header.sender().map(|s| s.as_str()),
+        header.path().map(|p| p.as_str()),
+        header.interface().map(|i| i.as_str()),
+        header.member().map(|m| m.as_str()),
+    )?;
+    if changed == Changed::Bluetooth && cupertino_radios::watch::concern(message).is_none() {
+        return None;
+    }
+    Some(changed)
+}
+
 /// Watch `bus` on `connection` from a thread of its own; `on` hears what each signal the shown pane reads changed
 /// (`interest`), and [`Changed::Ended`] once the connection closes. Returns once the bus daemon has the rules.
 ///
@@ -269,14 +287,7 @@ async fn serve(
             if message.message_type() != Type::Signal {
                 continue;
             }
-            let header = message.header();
-            let changed = classify(
-                bus,
-                header.sender().map(|s| s.as_str()),
-                header.path().map(|p| p.as_str()),
-                header.interface().map(|i| i.as_str()),
-                header.member().map(|m| m.as_str()),
-            );
+            let changed = changed_by(bus, message);
             if let Some(changed) = changed.filter(|c| !told.contains(c) && interest.wants(*c)) {
                 told.push(changed);
                 on(changed);
@@ -298,6 +309,24 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bluetooth_devices_signal_strength_changes_nothing_the_pane_reads() {
+        let device = "/org/bluez/hci0/dev_AA_00_00_00_00_02";
+        let properties = |property: &str| {
+            let changed: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+                [(property, zbus::zvariant::Value::from(-60i16))].into();
+            let message = zbus::Message::signal(device, PROPERTIES, "PropertiesChanged")
+                .unwrap()
+                .build(&("org.bluez.Device1", changed, Vec::<&str>::new()))
+                .unwrap();
+            changed_by(Which::System, &message)
+        };
+        assert_eq!(properties("RSSI"), None);
+        assert_eq!(properties("ManufacturerData"), None);
+        assert_eq!(properties("Connected"), Some(Changed::Bluetooth));
+        assert_eq!(properties("Paired"), Some(Changed::Bluetooth));
+    }
     use crate::services::{BLUETOOTH_NAME, BLUETOOTH_PATH, NETWORK_NAME, NETWORK_PATH};
 
     const OBJECT_MANAGER: &str = "org.freedesktop.DBus.ObjectManager";

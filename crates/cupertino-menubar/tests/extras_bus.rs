@@ -8,7 +8,7 @@ use cupertino_menubar::extras::{
     BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, OpenPanels, Passphrase,
     SessionAction, WifiNetwork,
 };
-use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
+use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent, Waits};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use std::time::Duration;
 use zbus::block_on;
 use zbus::zvariant::{OwnedValue, Value};
 
-use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, HEADPHONES, KEYBOARD};
+use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, Silent, HEADPHONES, KEYBOARD};
 use cupertino_test_bus::PrivateBus;
 
 /// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
@@ -224,6 +224,12 @@ impl FakeCentre {
     }
 }
 
+/// The waits of a test that reads the state its services have now: as long as a busy machine may take.
+const PATIENT: Waits = Waits {
+    fresh: Duration::from_secs(20),
+    silent: Duration::from_secs(60),
+};
+
 fn next(events: &mpsc::Receiver<Extras>) -> Extras {
     events
         .recv_timeout(Duration::from_secs(5))
@@ -293,9 +299,10 @@ fn the_extras_follow_the_services_and_act_on_them() {
     });
 
     let system = zbus::block_on(bus.connect_async());
-    let (extras, events) = ExtrasBus::with_system(
+    let (extras, events) = ExtrasBus::with_waits(
         zbus::block_on(bus.connect_async()),
         std::future::ready(Ok(system)),
+        PATIENT,
         || {},
     );
     let first = next(&events);
@@ -448,9 +455,10 @@ fn the_wifi_and_bluetooth_items_follow_networkmanager_and_bluez_and_act_on_them(
     let nm = FakeNetworkManager::serve(bus.blocking_builder()).unwrap();
     let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
     let system = zbus::block_on(bus.connect_async());
-    let (extras, events) = ExtrasBus::with_system(
+    let (extras, events) = ExtrasBus::with_waits(
         zbus::block_on(bus.connect_async()),
         std::future::ready(Ok(system)),
+        PATIENT,
         || {},
     );
 
@@ -594,9 +602,10 @@ fn a_machine_without_a_wifi_device_or_an_adapter_has_neither_item() {
     let _nm = FakeNetworkManager::serve_wired(bus.blocking_builder()).unwrap();
     let _bluez = FakeBluez::serve_without_adapter(bus.blocking_builder()).unwrap();
     let system = zbus::block_on(bus.connect_async());
-    let (_extras, events) = ExtrasBus::with_system(
+    let (_extras, events) = ExtrasBus::with_waits(
         zbus::block_on(bus.connect_async()),
         std::future::ready(Ok(system)),
+        PATIENT,
         || {},
     );
     let first = next(&events);
@@ -723,9 +732,10 @@ fn the_open_panels_follow_their_processes() {
     };
 
     let system = zbus::block_on(bus.connect_async());
-    let (_extras, events) = ExtrasBus::with_system(
+    let (_extras, events) = ExtrasBus::with_waits(
         zbus::block_on(bus.connect_async()),
         std::future::ready(Ok(system)),
+        PATIENT,
         || {},
     );
     until_panels(&events, OpenPanels::default());
@@ -775,4 +785,158 @@ fn the_open_panels_follow_their_processes() {
     );
     drop(list_process);
     until_panels(&events, OpenPanels::default());
+}
+
+#[test]
+fn a_network_service_that_never_answers_hides_its_item_and_holds_no_other() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let _nm = Silent::network_manager(bus.blocking_builder()).unwrap();
+    let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
+    let system = zbus::block_on(bus.connect_async());
+    let started = std::time::Instant::now();
+    let (extras, events) = ExtrasBus::with_waits(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        Waits {
+            fresh: Duration::from_millis(20),
+            silent: Duration::from_millis(200),
+        },
+        || {},
+    );
+    // the adapter is read and shown while the network's reading is under way, and the Wi-Fi item stays hidden
+    let shown = until(&events, "the Bluetooth item", |e| e.bluetooth.is_some());
+    assert_eq!(shown.wifi, None);
+    assert_eq!(shown.wifi_link.state, "");
+
+    // the task carries out what it is asked meanwhile: the session agent is named, the adapter is switched
+    extras.session_agent(SessionAgent::Any).unwrap();
+    until(&events, "the session agent", |e| e.lock_without_agent);
+    extras.act(ExtraAction::SetBluetoothPowered(false)).unwrap();
+    let off = until(&events, "the adapter off", |e| {
+        e.bluetooth.as_ref().is_some_and(|b| !b.powered)
+    });
+    assert!(!bluez.powered());
+    assert_eq!(off.wifi, None);
+    // more requests for the silent service start no reading beside the one under way, and hold nothing
+    for _ in 0..5 {
+        extras.refresh().unwrap();
+        extras.act(ExtraAction::ScanWifi).unwrap();
+    }
+    extras.act(ExtraAction::SetBluetoothPowered(true)).unwrap();
+    until(&events, "the adapter on again", |e| {
+        e.bluetooth.as_ref().is_some_and(|b| b.powered)
+    });
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "nothing waited for the silent service: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_network_service_that_hangs_keeps_its_item_until_the_bound_then_hides_it() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let nm = FakeNetworkManager::serve(bus.blocking_builder()).unwrap();
+    let system = zbus::block_on(bus.connect_async());
+    let silent = Duration::from_millis(300);
+    // the bar gives a service 300 ms: it reads the radio, then the service hangs and says it changed
+    let (extras, events) = ExtrasBus::with_waits(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        Waits {
+            fresh: Duration::from_millis(20),
+            silent,
+        },
+        || {},
+    );
+    until(&events, "the Wi-Fi item", |e| e.wifi.is_some());
+    nm.hang();
+    let hung = std::time::Instant::now();
+    nm.announce();
+    // the task still answers, with the item as it was last read
+    extras.session_agent(SessionAgent::Any).unwrap();
+    let meanwhile = until(&events, "the session agent", |e| e.lock_without_agent);
+    if hung.elapsed() < silent {
+        assert!(meanwhile.wifi.is_some(), "the last reading is shown");
+    }
+    // within the bound the item is hidden, without anything else asking
+    let hidden = until(&events, "no Wi-Fi item", |e| e.wifi.is_none());
+    assert_eq!(hidden.wifi_link.state, "");
+    assert!(hung.elapsed() >= silent, "{:?}", hung.elapsed());
+    assert!(
+        hung.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        hung.elapsed()
+    );
+}
+
+#[test]
+fn a_radios_signal_has_that_radio_read_and_the_networks_listed_only_when_wanted() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let nm = FakeNetworkManager::serve(bus.blocking_builder()).unwrap();
+    let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
+    let system = zbus::block_on(bus.connect_async());
+    let (extras, events) = ExtrasBus::with_waits(
+        zbus::block_on(bus.connect_async()),
+        std::future::ready(Ok(system)),
+        PATIENT,
+        || {},
+    );
+    let first = next(&events);
+    assert!(first.wifi.is_some() && first.bluetooth.is_some());
+    let powered = |e: &Extras| e.bluetooth.as_ref().is_some_and(|b| b.powered);
+    // the services' start may be told after the first reading: let its readings pass
+    bluez.set_powered(false);
+    until(&events, "the adapter off", |e| {
+        e.bluetooth.is_some() && !powered(e)
+    });
+    let (network, listed, adapter) = (nm.readings(), nm.listings(), bluez.readings());
+
+    // a device heard again and again while the adapter discovers reads nothing; the adapter's switch reads the
+    // adapter once, and the network not at all
+    for step in 0..200 {
+        bluez.advertise(KEYBOARD, -90 + (step % 40));
+    }
+    bluez.set_powered(true);
+    until(&events, "the adapter on", powered);
+    assert_eq!(bluez.readings(), adapter + 1);
+    assert_eq!((nm.readings(), nm.listings()), (network, listed));
+
+    // a signal of the network service that changes nothing the bar shows reads the radio and its device, not the
+    // networks in range; the adapter's switch after it proves the signal was handled
+    nm.announce();
+    bluez.set_powered(false);
+    until(&events, "the adapter off again", |e| {
+        e.bluetooth.is_some() && !powered(e)
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while nm.readings() == network && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert_eq!(nm.readings(), network + 1, "the radio and its device");
+    assert_eq!(nm.listings(), listed, "not the networks in range");
+
+    // the device joins a network: what the bar shows changed, so the networks are read with it
+    nm.set_joined(Some("Home"));
+    until(&events, "the joined network", |e| {
+        e.wifi_link.joined("Home")
+    });
+    assert!(nm.listings() > listed);
+    // the Wi-Fi menu opens: the networks in range are read though nothing changed
+    let listed = nm.listings();
+    extras.act(ExtraAction::ScanWifi).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while nm.listings() == listed && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(nm.listings() > listed, "the list is read as the menu opens");
 }

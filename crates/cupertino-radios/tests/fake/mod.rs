@@ -1,7 +1,8 @@
 //! Stand-ins for NetworkManager and BlueZ on a test bus (feature `fake`), for the tests of the crates that read the
 //! radios: enough of each service's objects for the readings and the calls of this crate, with the signals the real
 //! services send when their state changes. Each keeps what it was asked ([`FakeNetworkManager::calls`],
-//! [`FakeBluez::calls`]) and can be changed from outside, as another program or the radio itself would.
+//! [`FakeBluez::calls`]) and can be changed from outside, as another program or the radio itself would. [`Silent`] owns
+//! a service's name and answers nothing, as a service that hangs.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -46,6 +47,11 @@ struct Net {
     /// The Wi-Fi device's state.
     state: u32,
     calls: Vec<String>,
+    /// How many times the devices and the access points were asked for.
+    readings: usize,
+    listings: usize,
+    /// The service answers no reading from now on.
+    hung: bool,
 }
 
 type SharedNet = Arc<Mutex<Net>>;
@@ -76,10 +82,20 @@ async fn announce(connection: &zbus::Connection) {
 
 struct Manager(SharedNet);
 
+impl Manager {
+    /// Never ends once the service hangs.
+    async fn answering(&self) {
+        if net(&self.0).hung {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 #[interface(name = "org.freedesktop.NetworkManager")]
 impl Manager {
     #[zbus(property)]
-    fn wireless_enabled(&self) -> bool {
+    async fn wireless_enabled(&self) -> bool {
+        self.answering().await;
         net(&self.0).enabled
     }
 
@@ -107,7 +123,9 @@ impl Manager {
         Vec::new()
     }
 
-    fn get_devices(&self) -> Vec<OwnedObjectPath> {
+    async fn get_devices(&self) -> Vec<OwnedObjectPath> {
+        self.answering().await;
+        net(&self.0).readings += 1;
         if net(&self.0).wifi_device {
             vec![path(WLAN), path(ETH)]
         } else {
@@ -235,6 +253,7 @@ impl Wireless {
     }
 
     fn get_all_access_points(&self) -> Vec<OwnedObjectPath> {
+        net(&self.0).listings += 1;
         if net(&self.0).enabled {
             (0..NETWORKS.len()).map(access_point).collect()
         } else {
@@ -357,6 +376,9 @@ impl FakeNetworkManager {
             active: None,
             state: DISCONNECTED,
             calls: Vec::new(),
+            readings: 0,
+            listings: 0,
+            hung: false,
         }));
         let device = |wifi| Device {
             net: net.clone(),
@@ -386,6 +408,26 @@ impl FakeNetworkManager {
     /// What the service was asked, oldest first.
     pub fn calls(&self) -> Vec<String> {
         net(&self.net).calls.clone()
+    }
+
+    /// How many times the radio and its devices were read from the service.
+    pub fn readings(&self) -> usize {
+        net(&self.net).readings
+    }
+
+    /// How many times the access points in range were listed.
+    pub fn listings(&self) -> usize {
+        net(&self.net).listings
+    }
+
+    /// The service hangs: it keeps its name and answers no reading from now on.
+    pub fn hang(&self) {
+        net(&self.net).hung = true;
+    }
+
+    /// The service sends its signal though nothing a reading shows has changed.
+    pub fn announce(&self) {
+        self.changed(|_| {});
     }
 
     /// Whether the radio is enabled.
@@ -453,6 +495,8 @@ struct Bt {
     /// What a `Connect` is refused with.
     refusal: Option<String>,
     calls: Vec<String>,
+    /// How many times the adapter's state was read.
+    readings: usize,
 }
 
 type SharedBt = Arc<Mutex<Bt>>;
@@ -467,7 +511,9 @@ struct BtAdapter(SharedBt);
 impl BtAdapter {
     #[zbus(property)]
     fn powered(&self) -> bool {
-        bt(&self.0).powered
+        let mut bt = bt(&self.0);
+        bt.readings += 1;
+        bt.powered
     }
 
     #[zbus(property)]
@@ -580,6 +626,7 @@ impl FakeBluez {
             connected: Vec::new(),
             refusal: None,
             calls: Vec::new(),
+            readings: 0,
         }));
         let mut builder = builder.serve_at("/", fdo::ObjectManager)?;
         if adapter {
@@ -627,6 +674,26 @@ impl FakeBluez {
 
     pub fn powered(&self) -> bool {
         bt(&self.bt).powered
+    }
+
+    /// How many times the adapter's state was read from the service.
+    pub fn readings(&self) -> usize {
+        bt(&self.bt).readings
+    }
+
+    /// The device at `path` is heard again while the adapter discovers: its signal strength changes, as it does
+    /// several times a second, and nothing else.
+    pub fn advertise(&self, path: &str, rssi: i16) {
+        let changed: HashMap<&str, Value<'_>> = HashMap::from([("RSSI", Value::from(rssi))]);
+        self.connection
+            .emit_signal(
+                None::<&str>,
+                path,
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+                &(bluez::DEVICE, changed, Vec::<&str>::new()),
+            )
+            .expect("the fake's bus takes its signal");
     }
 
     /// Whether the device at `path` is connected.
@@ -678,5 +745,69 @@ impl FakeBluez {
             }
         }
         self.property_changed(path, bluez::DEVICE, "Connected", on);
+    }
+}
+
+// ---- A service that hangs ------------------------------------------------------------------------------------------
+
+type ManagedObjects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
+
+struct SilentManager;
+
+#[interface(name = "org.freedesktop.NetworkManager")]
+impl SilentManager {
+    #[zbus(property)]
+    async fn wireless_enabled(&self) -> bool {
+        std::future::pending().await
+    }
+
+    #[zbus(property)]
+    async fn set_wireless_enabled(&mut self, _on: bool) {
+        std::future::pending().await
+    }
+
+    #[zbus(property)]
+    async fn state(&self) -> u32 {
+        std::future::pending().await
+    }
+
+    async fn get_devices(&self) -> Vec<OwnedObjectPath> {
+        std::future::pending().await
+    }
+}
+
+struct SilentObjects;
+
+#[interface(name = "org.freedesktop.DBus.ObjectManager")]
+impl SilentObjects {
+    async fn get_managed_objects(&self) -> ManagedObjects {
+        std::future::pending().await
+    }
+}
+
+/// A service that owns its name and never answers a reading, as one that hangs.
+pub struct Silent {
+    _connection: Connection,
+}
+
+impl Silent {
+    /// A NetworkManager that answers nothing, on a connection built from `builder`.
+    pub fn network_manager(builder: Builder<'static>) -> zbus::Result<Self> {
+        Ok(Silent {
+            _connection: builder
+                .serve_at(nm::PATH, SilentManager)?
+                .name(nm::NAME)?
+                .build()?,
+        })
+    }
+
+    /// A BlueZ that answers nothing, on a connection built from `builder`.
+    pub fn bluez(builder: Builder<'static>) -> zbus::Result<Self> {
+        Ok(Silent {
+            _connection: builder
+                .serve_at("/", SilentObjects)?
+                .name(bluez::NAME)?
+                .build()?,
+        })
     }
 }

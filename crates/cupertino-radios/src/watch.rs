@@ -1,13 +1,16 @@
 //! The signals that tell a reading of the radios is out of date: a service starting or stopping, and the services'
 //! signals on the objects the readings come from. An access point's strength, a device's statistics or any other
-//! object of these services sends nothing here.
+//! object of these services sends nothing here, and a change of a Bluetooth object that no reading shows (a device's
+//! signal strength and advertisement while the adapter discovers, a player's position) is passed over ([`concern`]).
 
+use std::collections::HashMap;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use zbus::export::futures_core::Stream;
-use zbus::{MessageStream, OwnedMatchRule};
+use zbus::zvariant::Value;
+use zbus::{Message, MessageStream, OwnedMatchRule};
 
 use crate::{bluez, btd, netd, nm};
 
@@ -70,12 +73,59 @@ pub fn classify(path: &str, interface: Option<&str>) -> Option<Radio> {
     }
 }
 
-/// Call `on` after every signal of [`rules`] on `connection` (the system bus), from tasks of the connection's own
-/// executor, until the connection closes: a reading taken after the call sees what the signal announced. `on` must
-/// not wait; a burst of signals calls it once per signal, so it should only note that a reading is due.
+/// The properties of the Bluetooth stack's adapter and devices that a reading shows.
+const ADAPTER_SHOWN: [&str; 2] = ["Powered", "Discovering"];
+const DEVICE_SHOWN: [&str; 5] = ["Address", "Name", "Icon", "Paired", "Connected"];
+
+/// Whether a change of `properties` of the Bluetooth stack's `interface` changes a reading. A device's signal
+/// strength and advertisement, which change all the time while the adapter discovers, and the objects of its other
+/// interfaces do not.
+pub fn shown<'a>(interface: &str, mut properties: impl Iterator<Item = &'a str>) -> bool {
+    let shown: &[&str] = match interface {
+        bluez::ADAPTER => &ADAPTER_SHOWN,
+        bluez::DEVICE => &DEVICE_SHOWN,
+        _ => return false,
+    };
+    properties.any(|property| shown.contains(&property))
+}
+
+/// Which radio's reading a signal that came through [`rules`] makes out of date; `None` for one that changes nothing
+/// a reading shows.
+pub fn concern(message: &Message) -> Option<Radio> {
+    let header = message.header();
+    let interface = header.interface().map(|i| i.as_str());
+    let member = header.member().map(|m| m.as_str());
+    if interface == Some(BUS_DAEMON) && member == Some("NameOwnerChanged") {
+        let body = message.body();
+        let (name, _, _): (&str, &str, &str) = body.deserialize().ok()?;
+        return match name {
+            netd::NAME | nm::NAME => Some(Radio::Network),
+            btd::NAME | bluez::NAME => Some(Radio::Bluetooth),
+            _ => None,
+        };
+    }
+    let path = header.path()?.as_str();
+    let radio = classify(path, interface)?;
+    if path.starts_with(bluez::PATHS)
+        && interface == Some(PROPERTIES)
+        && member == Some("PropertiesChanged")
+    {
+        let body = message.body();
+        let (of, changed, invalidated): (&str, HashMap<&str, Value<'_>>, Vec<&str>) =
+            body.deserialize().ok()?;
+        let properties = changed.keys().copied().chain(invalidated.iter().copied());
+        return shown(of, properties).then_some(radio);
+    }
+    Some(radio)
+}
+
+/// Call `on` with the radio of every signal of [`rules`] on `connection` (the system bus) that makes a reading out of
+/// date ([`concern`]), from tasks of the connection's own executor, until the connection closes: a reading taken
+/// after the call sees what the signal announced. `on` must not wait; a burst of signals calls it once per signal, so
+/// it should only note that a reading is due.
 pub async fn follow(
     connection: &zbus::Connection,
-    on: Arc<dyn Fn() + Send + Sync>,
+    on: Arc<dyn Fn(Radio) + Send + Sync>,
 ) -> zbus::Result<()> {
     for rule in rules() {
         let rule = OwnedMatchRule::try_from(rule.as_str())?;
@@ -85,11 +135,12 @@ pub async fn follow(
             .executor()
             .spawn(
                 async move {
-                    while poll_fn(|cx| Pin::new(&mut stream).poll_next(cx))
-                        .await
-                        .is_some()
+                    while let Some(message) =
+                        poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await
                     {
-                        on();
+                        if let Some(radio) = message.ok().as_ref().and_then(concern) {
+                            on(radio);
+                        }
                     }
                 },
                 "cupertino-radios-follow",
@@ -138,6 +189,71 @@ mod tests {
                 .any(|r| r.contains("AccessPoint") || r.contains("/Devices")),
             "an access point's strength and a device's statistics send nothing"
         );
+    }
+
+    #[test]
+    fn only_what_a_reading_shows_of_the_bluetooth_stack_makes_it_out_of_date() {
+        let properties = |path: &str, of: &str, changed: &[&str], invalidated: &[&str]| {
+            let changed: HashMap<&str, Value<'_>> =
+                changed.iter().map(|k| (*k, Value::from(-60i16))).collect();
+            let message = Message::signal(path, PROPERTIES, "PropertiesChanged")
+                .unwrap()
+                .build(&(of, changed, invalidated.to_vec()))
+                .unwrap();
+            concern(&message)
+        };
+        let device = "/org/bluez/hci0/dev_00";
+        for advertised in ["RSSI", "TxPower", "ManufacturerData", "ServiceData"] {
+            assert_eq!(
+                properties(device, bluez::DEVICE, &[advertised], &[]),
+                None,
+                "{advertised}"
+            );
+        }
+        assert_eq!(
+            properties(device, bluez::DEVICE, &[], &["RSSI"]),
+            None,
+            "a strength that is no longer known"
+        );
+        assert_eq!(
+            properties(device, bluez::DEVICE, &["RSSI", "Connected"], &[]),
+            Some(Radio::Bluetooth)
+        );
+        assert_eq!(
+            properties(device, bluez::DEVICE, &["Name"], &[]),
+            Some(Radio::Bluetooth)
+        );
+        assert_eq!(
+            properties("/org/bluez/hci0", bluez::ADAPTER, &["Discovering"], &[]),
+            Some(Radio::Bluetooth)
+        );
+        assert_eq!(
+            properties(
+                "/org/bluez/hci0/dev_00/player0",
+                "org.bluez.MediaPlayer1",
+                &["Position"],
+                &[]
+            ),
+            None
+        );
+        // the network services' objects tell every change
+        assert_eq!(
+            properties(nm::PATH, nm::NAME, &["Anything"], &[]),
+            Some(Radio::Network)
+        );
+
+        let owner = |name: &str| {
+            let message = Message::signal("/org/freedesktop/DBus", BUS_DAEMON, "NameOwnerChanged")
+                .unwrap()
+                .build(&(name, "", ":1.5"))
+                .unwrap();
+            concern(&message)
+        };
+        assert_eq!(owner(nm::NAME), Some(Radio::Network));
+        assert_eq!(owner(netd::NAME), Some(Radio::Network));
+        assert_eq!(owner(bluez::NAME), Some(Radio::Bluetooth));
+        assert_eq!(owner(btd::NAME), Some(Radio::Bluetooth));
+        assert_eq!(owner("org.example.Other"), None);
     }
 
     #[test]

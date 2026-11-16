@@ -7,6 +7,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedValue;
 
+use crate::bus::Bounded;
 use crate::types::{display_name, Adapter, BtDevice};
 
 pub const NAME: &str = "org.cupertino.Bluetooth1";
@@ -44,25 +45,23 @@ fn device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
 /// The adapter and its devices.
 pub fn adapter(connection: &Connection) -> zbus::Result<Adapter> {
     let p = proxy(connection)?;
-    let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
+    let devices: Vec<HashMap<String, OwnedValue>> = p.read("Devices")?;
     Ok(Adapter {
-        available: p.get_property("Available")?,
-        powered: p.get_property("Powered")?,
-        discovering: p.get_property("Discovering")?,
+        available: p.read("Available")?,
+        powered: p.read("Powered")?,
+        discovering: p.read("Discovering")?,
         devices: devices.iter().filter_map(device).collect(),
     })
 }
 
 pub fn set_powered(connection: &Connection, on: bool) -> zbus::Result<()> {
-    proxy(connection)?
-        .set_property("Powered", on)
-        .map_err(zbus::Error::from)
+    proxy(connection)?.write("Powered", on)
 }
 
 pub fn connect(connection: &Connection, id: &str) -> zbus::Result<()> {
-    proxy(connection)?.call("Connect", &(id,))
+    proxy(connection)?.ask("Connect", &(id,))
 }
 
 pub fn disconnect(connection: &Connection, id: &str) -> zbus::Result<()> {
-    proxy(connection)?.call("Disconnect", &(id,))
+    proxy(connection)?.ask("Disconnect", &(id,))
 }

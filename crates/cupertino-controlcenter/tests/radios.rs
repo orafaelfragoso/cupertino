@@ -8,14 +8,14 @@ use cupertino_controlcenter::backend::{
     RecordingLauncher, RecordingLock, RecordingOverlay, Wifi,
 };
 use cupertino_controlcenter::model::Detail;
-use cupertino_controlcenter::radios::Radios;
+use cupertino_controlcenter::radios::{Radio, Radios};
 use cupertino_controlcenter::{
     Backends, Controller, Module, Phase, TileState, VolumeState, WifiStatus,
 };
-use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, HEADPHONES};
+use cupertino_radios::fake::{FakeBluez, FakeNetworkManager, Silent, HEADPHONES, KEYBOARD};
 use cupertino_test_bus::PrivateBus;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The private bus, or `None` with a note when `dbus-daemon` is missing.
 fn bus() -> Option<PrivateBus> {
@@ -26,19 +26,25 @@ fn bus() -> Option<PrivateBus> {
     bus
 }
 
-/// The radios of `bus`, and what hears their change signals.
-fn radios(bus: &PrivateBus) -> (Radios, mpsc::Receiver<()>) {
-    let radios = Radios::at(&bus.address);
+/// The radios of `bus`, and what hears which radio changed. A reading and a switch are waited for as long as a busy
+/// machine may take, so each test reads the state its service has now.
+fn radios(bus: &PrivateBus) -> (Radios, mpsc::Receiver<Radio>) {
+    radios_waiting(bus, Duration::from_secs(20))
+}
+
+/// As [`radios`], waiting `wait` for a reading and for a switch.
+fn radios_waiting(bus: &PrivateBus, wait: Duration) -> (Radios, mpsc::Receiver<Radio>) {
+    let radios = Radios::at(&bus.address).waiting(wait, wait);
     let (tx, changes) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
-    radios.on_change(move || {
-        let _ = tx.lock().unwrap().send(());
+    radios.on_change(move |radio| {
+        let _ = tx.lock().unwrap().send(radio);
     });
     (radios, changes)
 }
 
 /// Wait for a change signal, and let the rest of its burst pass.
-fn changed(changes: &mpsc::Receiver<()>, what: &str) {
+fn changed(changes: &mpsc::Receiver<Radio>, what: &str) {
     changes
         .recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|_| panic!("no change signal after {what}"));
@@ -289,4 +295,122 @@ fn a_shown_panel_follows_the_services_signals_and_its_tiles_act_on_them() {
         Some("no network service is running")
     );
     assert_eq!(controller.controls().tile(Module::Bluetooth), TileState::On);
+}
+
+#[test]
+fn services_that_never_answer_leave_the_panel_responsive_and_their_tiles_unavailable() {
+    let Some(bus) = bus() else { return };
+    let _nm = Silent::network_manager(bus.blocking_builder()).unwrap();
+    let _bluez = Silent::bluez(bus.blocking_builder()).unwrap();
+    // the services' answers are waited for 400 ms, and the panel's thread waits 10 ms for a reading or a switch
+    cupertino_radios::set_call_timeout(Duration::from_millis(400));
+    let (radios, changes) = radios_waiting(&bus, Duration::from_millis(10));
+    let mut controller = controller(&radios);
+    let started = Instant::now();
+    // every call of the panel's thread returns at once, whatever the services do
+    fn prompt(controller: &mut Controller, what: &str, call: impl FnOnce(&mut Controller)) {
+        let before = Instant::now();
+        call(controller);
+        let took = before.elapsed();
+        assert!(
+            took < Duration::from_millis(300),
+            "{what} held the panel {took:?}"
+        );
+    }
+
+    prompt(&mut controller, "opening", |c| c.toggle(0.0));
+    prompt(&mut controller, "the periodic reading", |c| c.refresh(0.1));
+    prompt(&mut controller, "a detail view", |c| {
+        c.show_detail(Some(Detail::WiFi))
+    });
+    prompt(&mut controller, "a press", |c| {
+        assert!(
+            !c.press(Module::WiFi),
+            "a tile that was never read is not pressable"
+        );
+    });
+    // while the first readings are under way the tiles are unavailable, and say what they wait for
+    assert_eq!(
+        disabled(&controller, Module::WiFi).as_deref(),
+        Some("waiting for the network service")
+    );
+    assert_eq!(
+        disabled(&controller, Module::Bluetooth).as_deref(),
+        Some("waiting for the Bluetooth service")
+    );
+
+    // within the bound the readings fail, the panel is told, and the tiles say that the services do not answer
+    let silent = |controller: &Controller| {
+        disabled(controller, Module::WiFi).as_deref() == Some("the network service does not answer")
+            && disabled(controller, Module::Bluetooth).as_deref()
+                == Some("the Bluetooth service does not answer")
+    };
+    let mut now = 0.2;
+    while !silent(&controller) {
+        let radio = changes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a reading that failed late is told");
+        now += 0.01;
+        prompt(&mut controller, "a late reading", |c| {
+            c.radios_changed(now, radio == Radio::Network, radio == Radio::Bluetooth);
+        });
+    }
+    assert_eq!(
+        controller.controls().subtitle(Module::WiFi),
+        Some("Unavailable")
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "unavailable within the bound: {:?}",
+        started.elapsed()
+    );
+
+    // a switch that the service does not answer is given up at once, with the reason
+    let before = Instant::now();
+    assert_eq!(
+        radios.wifi().set_enabled(false).unwrap_err().to_string(),
+        "the network service does not answer"
+    );
+    assert_eq!(
+        radios
+            .bluetooth()
+            .set_powered(false)
+            .unwrap_err()
+            .to_string(),
+        "the Bluetooth service does not answer"
+    );
+    assert!(before.elapsed() < Duration::from_millis(200));
+}
+
+#[test]
+fn a_burst_of_signal_strength_changes_has_the_panel_read_nothing() {
+    let Some(bus) = bus() else { return };
+    let (radios, changes) = radios(&bus);
+    let bluez = FakeBluez::serve(bus.blocking_builder()).unwrap();
+    let mut controller = controller(&radios);
+    controller.toggle(0.0);
+    assert_eq!(controller.controls().tile(Module::Bluetooth), TileState::On);
+    // the service's start may be told after the first reading
+    while changes.recv_timeout(Duration::from_millis(100)).is_ok() {}
+    let read = bluez.readings();
+
+    // a device is heard again and again while the adapter discovers, then the adapter is switched off elsewhere
+    for rssi in 0..200 {
+        bluez.advertise(KEYBOARD, -90 + (rssi % 40));
+    }
+    bluez.set_powered(false);
+    assert_eq!(
+        changes.recv_timeout(Duration::from_secs(5)),
+        Ok(Radio::Bluetooth)
+    );
+    assert_eq!(bluez.readings(), read, "nothing was read meanwhile");
+    assert!(
+        changes.recv_timeout(Duration::from_millis(100)).is_err(),
+        "the changes of signal strength told the panel nothing: one change, the switch"
+    );
+    assert!(controller.radios_changed(0.1, false, true));
+    assert_eq!(
+        controller.controls().tile(Module::Bluetooth),
+        TileState::Off
+    );
 }

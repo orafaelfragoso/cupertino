@@ -12,11 +12,12 @@ layer = "foundation"
 [features]
 default = []
 # the services over the system bus; without it only the readings' types
-dbus = ["dep:zbus"]
+dbus = ["dep:async-io", "dep:zbus"]
 # `fake`: stand-ins for NetworkManager and BlueZ on a test bus, for the tests of the crates that use this one
 fake = ["dbus"]
 
 [dependencies]
+async-io = { version = "2", optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
 [dev-dependencies]

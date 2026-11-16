@@ -8,6 +8,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
+use crate::bus::{get_all, property, unanswered, Bounded};
 use crate::types::{display_name, Device, KnownNetwork, Link, Network, Vpn, Wifi};
 
 pub const NAME: &str = "org.freedesktop.NetworkManager";
@@ -125,17 +126,35 @@ struct AccessPoint {
 }
 
 fn access_point(connection: &Connection, path: OwnedObjectPath) -> zbus::Result<AccessPoint> {
-    let p = proxy(connection, path.as_str(), ACCESS_POINT)?;
+    let p = get_all(connection, NAME, path.as_str(), ACCESS_POINT)?;
     Ok(AccessPoint {
-        ssid: p.get_property("Ssid")?,
-        strength: p.get_property("Strength")?,
+        ssid: property(&p, "Ssid")?,
+        strength: property(&p, "Strength")?,
         security: security(
-            p.get_property("Flags")?,
-            p.get_property("WpaFlags")?,
-            p.get_property("RsnFlags")?,
+            property(&p, "Flags")?,
+            property(&p, "WpaFlags")?,
+            property(&p, "RsnFlags")?,
         ),
         path,
     })
+}
+
+/// The items of `paths` that `read` could read. One the service refuses or no longer has is left out; a service that
+/// does not answer ends the reading, so a list of them waits once and not once per item.
+fn each<T>(
+    paths: impl IntoIterator<Item = OwnedObjectPath>,
+    mut read: impl FnMut(OwnedObjectPath) -> zbus::Result<Option<T>>,
+) -> zbus::Result<Vec<T>> {
+    let mut items = Vec::new();
+    for path in paths {
+        match read(path) {
+            Ok(Some(item)) => items.push(item),
+            Ok(None) => {}
+            Err(e) if unanswered(&e) => return Err(e),
+            Err(_) => {}
+        }
+    }
+    Ok(items)
 }
 
 struct WifiDevice {
@@ -146,28 +165,26 @@ struct WifiDevice {
 
 /// The listed devices: each Ethernet and Wi-Fi one, and the Wi-Fi ones' access points.
 fn devices(connection: &Connection) -> zbus::Result<(Vec<Device>, Vec<WifiDevice>)> {
-    let paths: Vec<OwnedObjectPath> = proxy(connection, PATH, NAME)?.call("GetDevices", &())?;
+    let paths: Vec<OwnedObjectPath> = proxy(connection, PATH, NAME)?.ask("GetDevices", &())?;
     let mut devices = Vec::new();
     let mut wifi = Vec::new();
     for (index, path) in paths.into_iter().enumerate() {
-        let d = proxy(connection, path.as_str(), DEVICE)?;
-        let kind: u32 = d.get_property("DeviceType")?;
+        let d = get_all(connection, NAME, path.as_str(), DEVICE)?;
+        let kind: u32 = property(&d, "DeviceType")?;
         if kind != ETHERNET && kind != WIFI {
             continue;
         }
-        let state: u32 = d.get_property("State")?;
-        let (_, reason): (u32, u32) = d.get_property("StateReason")?;
+        let state: u32 = property(&d, "State")?;
+        let (_, reason): (u32, u32) = property(&d, "StateReason")?;
         let mut ssid = String::new();
         if kind == WIFI {
             let w = proxy(connection, path.as_str(), WIRELESS)?;
-            let active: OwnedObjectPath = w.get_property("ActiveAccessPoint")?;
+            let active: OwnedObjectPath = w.read("ActiveAccessPoint")?;
             let active = (active.as_str() != "/").then_some(active);
-            let listed: Vec<OwnedObjectPath> = w.call("GetAllAccessPoints", &())?;
-            let access_points: Vec<AccessPoint> = listed
-                .into_iter()
-                .take(MAX_ACCESS_POINTS)
-                .filter_map(|ap| access_point(connection, ap).ok())
-                .collect();
+            let listed: Vec<OwnedObjectPath> = w.ask("GetAllAccessPoints", &())?;
+            let access_points = each(listed.into_iter().take(MAX_ACCESS_POINTS), |ap| {
+                access_point(connection, ap).map(Some)
+            })?;
             if let Some(ap) = access_points
                 .iter()
                 .find(|ap| Some(&ap.path) == active.as_ref())
@@ -182,12 +199,12 @@ fn devices(connection: &Connection) -> zbus::Result<(Vec<Device>, Vec<WifiDevice
         }
         devices.push(Device {
             index: u32::try_from(index).unwrap_or(u32::MAX),
-            name: d.get_property("Interface")?,
+            name: property(&d, "Interface")?,
             kind: if kind == WIFI { "wifi" } else { "ethernet" }.to_string(),
             state: device_state(state).to_string(),
             ssid,
             failure: failure(state, reason),
-            address: d.get_property("HwAddress")?,
+            address: property(&d, "HwAddress")?,
         });
     }
     Ok((devices, wifi))
@@ -202,25 +219,6 @@ fn failure(state: u32, reason: u32) -> String {
     }
 }
 
-/// The SSIDs of the saved Wi-Fi connections, with the connection of each.
-fn saved(connection: &Connection) -> zbus::Result<Vec<(Vec<u8>, OwnedObjectPath)>> {
-    let paths: Vec<OwnedObjectPath> =
-        proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
-    Ok(paths
-        .into_iter()
-        .take(MAX_CONNECTIONS)
-        .filter_map(|path| {
-            let settings: HashMap<String, HashMap<String, OwnedValue>> =
-                proxy(connection, path.as_str(), CONNECTION)
-                    .ok()?
-                    .call("GetSettings", &())
-                    .ok()?;
-            let ssid = settings.get("802-11-wireless")?.get("ssid")?;
-            Some((ssid.try_clone().ok()?.try_into().ok()?, path))
-        })
-        .collect())
-}
-
 /// One saved Wi-Fi connection: its network's SSID bytes, its object and whether it joins by itself.
 struct SavedWifi {
     ssid: Vec<u8>,
@@ -232,16 +230,11 @@ struct SavedWifi {
 /// The saved Wi-Fi connections, in range or not.
 fn saved_wifi(connection: &Connection) -> zbus::Result<Vec<SavedWifi>> {
     let paths: Vec<OwnedObjectPath> =
-        proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
-    Ok(paths
-        .into_iter()
-        .take(MAX_CONNECTIONS)
-        .filter_map(|path| {
-            let settings: HashMap<String, HashMap<String, OwnedValue>> =
-                proxy(connection, path.as_str(), CONNECTION)
-                    .ok()?
-                    .call("GetSettings", &())
-                    .ok()?;
+        proxy(connection, SETTINGS_PATH, SETTINGS)?.ask("ListConnections", &())?;
+    each(paths.into_iter().take(MAX_CONNECTIONS), |path| {
+        let settings: HashMap<String, HashMap<String, OwnedValue>> =
+            proxy(connection, path.as_str(), CONNECTION)?.ask("GetSettings", &())?;
+        Ok((|| {
             let ssid = settings.get("802-11-wireless")?.get("ssid")?;
             let auto_join = settings
                 .get("connection")
@@ -254,8 +247,8 @@ fn saved_wifi(connection: &Connection) -> zbus::Result<Vec<SavedWifi>> {
                 auto_join,
                 path,
             })
-        })
-        .collect())
+        })())
+    })
 }
 
 /// Take the saved connections of the network `ssid` ([`ssid_key`]) away, so the machine no longer joins it.
@@ -265,7 +258,7 @@ pub fn forget(connection: &Connection, ssid: &str) -> zbus::Result<()> {
         .into_iter()
         .filter(|s| s.ssid == ssid)
     {
-        proxy(connection, saved.path.as_str(), CONNECTION)?.call::<_, _, ()>("Delete", &())?;
+        proxy(connection, saved.path.as_str(), CONNECTION)?.ask::<_, ()>("Delete", &())?;
     }
     Ok(())
 }
@@ -279,12 +272,12 @@ pub fn set_auto_join(connection: &Connection, ssid: &str, on: bool) -> zbus::Res
     {
         let p = proxy(connection, saved.path.as_str(), CONNECTION)?;
         let mut settings: HashMap<String, HashMap<String, OwnedValue>> =
-            p.call("GetSettings", &())?;
+            p.ask("GetSettings", &())?;
         settings
             .entry("connection".to_owned())
             .or_default()
             .insert("autoconnect".to_owned(), Value::from(on).try_into()?);
-        p.call::<_, _, ()>("Update", &(settings,))?;
+        p.ask::<_, ()>("Update", &(settings,))?;
     }
     Ok(())
 }
@@ -293,23 +286,23 @@ pub fn set_auto_join(connection: &Connection, ssid: &str, on: bool) -> zbus::Res
 /// access point alone.
 pub fn link(connection: &Connection) -> zbus::Result<Link> {
     let nm = proxy(connection, PATH, NAME)?;
-    let enabled: bool = nm.get_property("WirelessEnabled")?;
-    let paths: Vec<OwnedObjectPath> = nm.call("GetDevices", &())?;
+    let enabled: bool = nm.read("WirelessEnabled")?;
+    let paths: Vec<OwnedObjectPath> = nm.ask("GetDevices", &())?;
     for (index, path) in paths.into_iter().enumerate() {
-        let d = proxy(connection, path.as_str(), DEVICE)?;
-        if d.get_property::<u32>("DeviceType")? != WIFI {
+        let d = get_all(connection, NAME, path.as_str(), DEVICE)?;
+        if property::<u32>(&d, "DeviceType")? != WIFI {
             continue;
         }
-        let state: u32 = d.get_property("State")?;
-        let (_, reason): (u32, u32) = d.get_property("StateReason")?;
+        let state: u32 = property(&d, "State")?;
+        let (_, reason): (u32, u32) = property(&d, "StateReason")?;
         let active: OwnedObjectPath =
-            proxy(connection, path.as_str(), WIRELESS)?.get_property("ActiveAccessPoint")?;
+            proxy(connection, path.as_str(), WIRELESS)?.read("ActiveAccessPoint")?;
         let ssid = if active.as_str() == "/" {
             String::new()
         } else {
             // the access point may have gone between the two readings: the device then names no network
             proxy(connection, active.as_str(), ACCESS_POINT)?
-                .get_property::<Vec<u8>>("Ssid")
+                .read::<Vec<u8>>("Ssid")
                 .map(|ssid| display_name(&String::from_utf8_lossy(&ssid)))
                 .unwrap_or_default()
         };
@@ -317,12 +310,12 @@ pub fn link(connection: &Connection) -> zbus::Result<Link> {
             enabled,
             device: Some(Device {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
-                name: d.get_property("Interface")?,
+                name: property(&d, "Interface")?,
                 kind: "wifi".to_string(),
                 state: device_state(state).to_string(),
                 ssid,
                 failure: failure(state, reason),
-                address: d.get_property("HwAddress")?,
+                address: property(&d, "HwAddress")?,
             }),
         });
     }
@@ -336,7 +329,7 @@ pub fn link(connection: &Connection) -> zbus::Result<Link> {
 pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
     let nm = proxy(connection, PATH, NAME)?;
     let (devices, radios) = devices(connection)?;
-    let saved = saved(connection)?;
+    let saved = saved_wifi(connection)?;
     let mut networks: Vec<Network> = Vec::new();
     for radio in &radios {
         for ap in &radio.access_points {
@@ -356,14 +349,14 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
                     ssid: key,
                     signal,
                     security: ap.security.to_string(),
-                    saved: saved.iter().any(|(s, _)| *s == ap.ssid),
+                    saved: saved.iter().any(|s| s.ssid == ap.ssid),
                     connected,
                 }),
             }
         }
     }
     networks.sort_by(|a, b| b.connected.cmp(&a.connected).then(b.signal.cmp(&a.signal)));
-    let known = saved_wifi(connection)?
+    let known = saved
         .into_iter()
         .map(|s| {
             let key = ssid_key(&s.ssid);
@@ -378,11 +371,11 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
             }
         })
         .collect();
-    let state: u32 = nm.get_property("State")?;
+    let state: u32 = nm.read("State")?;
     Ok(Wifi {
         known,
         can_forget: true,
-        enabled: nm.get_property("WirelessEnabled")?,
+        enabled: nm.read("WirelessEnabled")?,
         devices,
         state: overall_state(state).to_string(),
         networks,
@@ -392,9 +385,7 @@ pub fn wifi(connection: &Connection) -> zbus::Result<Wifi> {
 }
 
 pub fn set_wireless_enabled(connection: &Connection, on: bool) -> zbus::Result<()> {
-    proxy(connection, PATH, NAME)?
-        .set_property("WirelessEnabled", on)
-        .map_err(zbus::Error::from)
+    proxy(connection, PATH, NAME)?.write("WirelessEnabled", on)
 }
 
 /// The Wi-Fi device to join with and the strongest access point named `ssid` it sees.
@@ -422,9 +413,9 @@ pub fn join(connection: &Connection, ssid: &str, passphrase: &str) -> zbus::Resu
     let nm = proxy(connection, PATH, NAME)?;
     let ssid = ssid_bytes(ssid);
     let (device, ap) = strongest(connection, &ssid)?;
-    if let Some((_, saved)) = saved(connection)?.into_iter().find(|(s, _)| *s == ssid) {
+    if let Some(saved) = saved_wifi(connection)?.into_iter().find(|s| s.ssid == ssid) {
         return nm
-            .call::<_, _, OwnedObjectPath>("ActivateConnection", &(saved, &device, &ap.path))
+            .ask::<_, OwnedObjectPath>("ActivateConnection", &(saved.path, &device, &ap.path))
             .map(drop);
     }
     let key_mgmt = match ap.security {
@@ -448,7 +439,7 @@ pub fn join(connection: &Connection, ssid: &str, passphrase: &str) -> zbus::Resu
             ]),
         );
     }
-    nm.call::<_, _, (OwnedObjectPath, OwnedObjectPath)>(
+    nm.ask::<_, (OwnedObjectPath, OwnedObjectPath)>(
         "AddAndActivateConnection",
         &(settings, &device, &ap.path),
     )
@@ -459,7 +450,7 @@ pub fn join(connection: &Connection, ssid: &str, passphrase: &str) -> zbus::Resu
 pub fn disconnect(connection: &Connection) -> zbus::Result<()> {
     let (_, radios) = devices(connection)?;
     for radio in radios.iter().filter(|r| r.active.is_some()) {
-        proxy(connection, radio.path.as_str(), DEVICE)?.call::<_, _, ()>("Disconnect", &())?;
+        proxy(connection, radio.path.as_str(), DEVICE)?.ask::<_, ()>("Disconnect", &())?;
     }
     Ok(())
 }
@@ -470,7 +461,7 @@ pub fn scan(connection: &Connection) -> zbus::Result<()> {
     for radio in &radios {
         let options: HashMap<&str, Value<'_>> = HashMap::new();
         proxy(connection, radio.path.as_str(), WIRELESS)?
-            .call::<_, _, ()>("RequestScan", &(options,))?;
+            .ask::<_, ()>("RequestScan", &(options,))?;
     }
     Ok(())
 }
@@ -479,24 +470,19 @@ pub fn scan(connection: &Connection) -> zbus::Result<()> {
 pub fn vpns(connection: &Connection) -> zbus::Result<Vec<Vpn>> {
     let nm = proxy(connection, PATH, NAME)?;
     let mut active: Vec<(String, u32)> = Vec::new();
-    let actives: Vec<OwnedObjectPath> = nm.get_property("ActiveConnections")?;
+    let actives: Vec<OwnedObjectPath> = nm.read("ActiveConnections")?;
     for path in actives {
         let a = proxy(connection, path.as_str(), ACTIVE)?;
-        if let Ok(uuid) = a.get_property::<String>("Uuid") {
-            active.push((uuid, a.get_property("State").unwrap_or(0)));
+        if let Ok(uuid) = a.read::<String>("Uuid") {
+            active.push((uuid, a.read("State").unwrap_or(0)));
         }
     }
     let paths: Vec<OwnedObjectPath> =
-        proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
-    Ok(paths
-        .into_iter()
-        .take(MAX_CONNECTIONS)
-        .filter_map(|path| {
-            let settings: HashMap<String, HashMap<String, OwnedValue>> =
-                proxy(connection, path.as_str(), CONNECTION)
-                    .ok()?
-                    .call("GetSettings", &())
-                    .ok()?;
+        proxy(connection, SETTINGS_PATH, SETTINGS)?.ask("ListConnections", &())?;
+    each(paths.into_iter().take(MAX_CONNECTIONS), |path| {
+        let settings: HashMap<String, HashMap<String, OwnedValue>> =
+            proxy(connection, path.as_str(), CONNECTION)?.ask("GetSettings", &())?;
+        Ok((|| {
             let c = settings.get("connection")?;
             let kind: String = c.get("type")?.try_clone().ok()?.try_into().ok()?;
             if kind != "vpn" && kind != "wireguard" {
@@ -513,8 +499,8 @@ pub fn vpns(connection: &Connection) -> zbus::Result<Vec<Vpn>> {
                 busy: matches!(state, Some(1) | Some(3)),
                 id,
             })
-        })
-        .collect())
+        })())
+    })
 }
 
 /// What a VPN connection is called in the list: the plug-in's name where NetworkManager gives one.
@@ -542,10 +528,10 @@ pub fn set_vpn(connection: &Connection, id: &str, on: bool) -> zbus::Result<()> 
     let nm = proxy(connection, PATH, NAME)?;
     if on {
         let paths: Vec<OwnedObjectPath> =
-            proxy(connection, SETTINGS_PATH, SETTINGS)?.call("ListConnections", &())?;
+            proxy(connection, SETTINGS_PATH, SETTINGS)?.ask("ListConnections", &())?;
         for path in paths {
             let settings: HashMap<String, HashMap<String, OwnedValue>> =
-                proxy(connection, path.as_str(), CONNECTION)?.call("GetSettings", &())?;
+                proxy(connection, path.as_str(), CONNECTION)?.ask("GetSettings", &())?;
             let uuid: Option<String> = settings
                 .get("connection")
                 .and_then(|c| c.get("uuid"))
@@ -554,17 +540,17 @@ pub fn set_vpn(connection: &Connection, id: &str, on: bool) -> zbus::Result<()> 
             if uuid.as_deref() == Some(id) {
                 let none = OwnedObjectPath::try_from("/")?;
                 return nm
-                    .call::<_, _, OwnedObjectPath>("ActivateConnection", &(path, &none, &none))
+                    .ask::<_, OwnedObjectPath>("ActivateConnection", &(path, &none, &none))
                     .map(drop);
             }
         }
         return Err(zbus::fdo::Error::Failed("That VPN connection is gone.".into()).into());
     }
-    let actives: Vec<OwnedObjectPath> = nm.get_property("ActiveConnections")?;
+    let actives: Vec<OwnedObjectPath> = nm.read("ActiveConnections")?;
     for path in actives {
-        let uuid: String = proxy(connection, path.as_str(), ACTIVE)?.get_property("Uuid")?;
+        let uuid: String = proxy(connection, path.as_str(), ACTIVE)?.read("Uuid")?;
         if uuid == id {
-            nm.call::<_, _, ()>("DeactivateConnection", &(path,))?;
+            nm.ask::<_, ()>("DeactivateConnection", &(path,))?;
         }
     }
     Ok(())

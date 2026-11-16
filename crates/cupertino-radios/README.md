@@ -17,18 +17,24 @@ change and follow the radios through this crate, so the three show the same stat
 | `NetworkBackend` | `wifi`, `link`, `set_wireless_enabled`, `join` (an empty passphrase joins an open or a saved network), `disconnect`, `scan` |
 | `BluetoothBackend` | `adapter`, `set_powered`, `connect`, `disconnect` (BlueZ answers a `connect` once the link is up or failed: call it from a thread that may wait) |
 | `refusal` | the text a service sent with its refusal |
+| `CALL_TIMEOUT`, `LINK_TIMEOUT`, `call_timeout`, `set_call_timeout`, `unanswered` | how long a reading or a switch waits for a service's answer (3 s; a process can set another wait), how long a call waits that answers once a link is up, down or removed (90 s), and whether an error says the service did not answer in time |
 | `netd`, `btd`, `nm`, `bluez` | each service's readings and calls; `nm` also has the saved networks' Forget and Auto-Join and the VPN connections, `bluez` discovery, pairing and removal |
-| `watch::rules`, `watch::classify`, `watch::follow` | the match rules of the signals that tell a reading is out of date (a service starting or stopping, the services' objects), which radio a signal is about, and a follower that calls back after each on a connection's own executor |
-| `fake::FakeNetworkManager`, `fake::FakeBluez` (feature `fake`) | stand-ins for the two services on a test bus, for the tests of the crates that use this one: they record what they were asked, send the services' signals, and can be changed from outside as the radio itself would change |
+| `watch::rules`, `watch::classify`, `watch::concern`, `watch::shown`, `watch::follow` | the match rules of the signals that tell a reading is out of date (a service starting or stopping, the services' objects), which radio an object is about, which radio's reading a signal makes out of date (none for a change of the Bluetooth stack that no reading shows: a device's signal strength and advertisement, a player's position), and a follower that calls back with the radio after each such signal on a connection's own executor |
+| `fake::FakeNetworkManager`, `fake::FakeBluez`, `fake::Silent` (feature `fake`) | stand-ins for the two services on a test bus, for the tests of the crates that use this one: they record what they were asked and how often they were read, send the services' signals, and can be changed from outside as the radio itself would change; `FakeNetworkManager::hang` and `Silent` keep a service's name and answer no reading |
 
 ## How it works
 
 Every reading asks the service again; nothing is cached, so a reading taken after a change signal sees what the signal
 announced. The blocking calls take a `zbus::blocking::Connection`; a caller that must not wait runs them on a thread
-of its own. Without the feature `dbus` the crate is the readings' types alone and has no dependency.
+of its own. Every call gives up after a bounded wait, whatever the connection: a reading or a switch after
+`call_timeout()`, a call that answers once a link is up, down or removed after `LINK_TIMEOUT`; only a pairing, which
+waits for a person, has no bound. A service that does not answer fails the whole reading at its first call
+(`unanswered`), and a list of objects waits once, not once per object. Without the feature `dbus` the crate is the
+readings' types alone and has no dependency.
 
-A NetworkManager reading works the daemon's records out of NetworkManager's objects: one network per SSID with its
-strongest access point, the security from the access point's flags, the signal as dBm. An SSID that is not text keeps
+A NetworkManager reading works the daemon's records out of NetworkManager's objects, each device's and each access
+point's properties in one call and the saved connections read once: one network per SSID with its strongest access
+point, the security from the access point's flags, the signal as dBm. An SSID that is not text keeps
 a key of its own (`nm::ssid_key`), so a Join reaches the network chosen. On BlueZ the adapter is the first by path and
 a device's id is its object path; a call naming any other path is refused before it is sent.
 
@@ -40,5 +46,5 @@ cargo test -p cupertino-radios --all-features
 
 | Test | Proves |
 |---|---|
-| Unit tests | The security and signal names, SSID keys, the link's network, the match rules (each names its sender and one object or name) and the radio a signal is about. |
-| `tests/services.rs` (feature `fake`) | On a private bus: detection on an empty bus, with NetworkManager and BlueZ, and the Cupertino daemons first; the NetworkManager link enabled, disabled, connected, disconnected and failed, and absent without a Wi-Fi device; networks listed, joined (saved, open, with a passphrase, out of range), left and scanned; the BlueZ adapter powered and off, devices connecting, disconnecting and refusing, and no adapter; the follower called when a service starts, changes or stops. |
+| Unit tests | The security and signal names, SSID keys, the link's network, the match rules (each names its sender and one object or name), the radio a signal is about, the changes of the Bluetooth stack that make a reading out of date and those that do not, and a call that is not answered failing after its wait. |
+| `tests/services.rs` (feature `fake`) | On a private bus: detection on an empty bus, with NetworkManager and BlueZ, and the Cupertino daemons first; the NetworkManager link enabled, disabled, connected, disconnected and failed, and absent without a Wi-Fi device; networks listed, joined (saved, open, with a passphrase, out of range), left and scanned; the BlueZ adapter powered and off, devices connecting, disconnecting and refusing, and no adapter; the follower called with the radio when a service starts, changes or stops, and not for a burst of a device's signal strength; services that never answer failing each reading and switch after the bounded wait. |

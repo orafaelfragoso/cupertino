@@ -8,6 +8,7 @@ use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
+use crate::bus::Bounded;
 use crate::types::{display_name, Adapter, BtDevice};
 
 pub const NAME: &str = "org.bluez";
@@ -33,7 +34,7 @@ pub fn proxy<'a>(
 }
 
 fn objects(connection: &Connection) -> zbus::Result<Objects> {
-    proxy(connection, "/", "org.freedesktop.DBus.ObjectManager")?.call("GetManagedObjects", &())
+    proxy(connection, "/", "org.freedesktop.DBus.ObjectManager")?.ask("GetManagedObjects", &())
 }
 
 /// The adapter everything works with: the first by path, as `bluetoothctl` picks it.
@@ -116,9 +117,7 @@ fn device(connection: &Connection, id: &str) -> zbus::Result<Proxy<'static>> {
 }
 
 pub fn set_powered(connection: &Connection, on: bool) -> zbus::Result<()> {
-    the_adapter(connection)?
-        .set_property("Powered", on)
-        .map_err(zbus::Error::from)
+    the_adapter(connection)?.write("Powered", on)
 }
 
 pub fn discovery(connection: &Connection, on: bool) -> zbus::Result<()> {
@@ -127,21 +126,21 @@ pub fn discovery(connection: &Connection, on: bool) -> zbus::Result<()> {
     } else {
         "StopDiscovery"
     };
-    the_adapter(connection)?.call(method, &())
+    the_adapter(connection)?.ask(method, &())
 }
 
 pub fn connect(connection: &Connection, id: &str) -> zbus::Result<()> {
-    device(connection, id)?.call("Connect", &())
+    device(connection, id)?.ask_link("Connect", &())
 }
 
 pub fn disconnect(connection: &Connection, id: &str) -> zbus::Result<()> {
-    device(connection, id)?.call("Disconnect", &())
+    device(connection, id)?.ask_link("Disconnect", &())
 }
 
 pub fn remove(connection: &Connection, id: &str) -> zbus::Result<()> {
     device(connection, id)?;
     let path = ObjectPath::try_from(id).map_err(zbus::Error::from)?;
-    the_adapter(connection)?.call("RemoveDevice", &(path,))
+    the_adapter(connection)?.ask_link("RemoveDevice", &(path,))
 }
 
 /// The device to pair, checked; [`pair`] runs on the pairing's own thread.
@@ -152,7 +151,5 @@ pub fn pairing(connection: &Connection, id: &str) -> zbus::Result<Proxy<'static>
 /// Pair, then trust the device, so its services connect again later without asking (as BlueZ's own clients do).
 pub fn pair(device: &Proxy<'_>) -> zbus::Result<()> {
     device.call::<_, _, ()>("Pair", &())?;
-    device
-        .set_property("Trusted", true)
-        .map_err(zbus::Error::from)
+    device.write("Trusted", true)
 }

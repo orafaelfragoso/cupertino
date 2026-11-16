@@ -12,6 +12,8 @@
 pub mod bluez;
 #[cfg(feature = "dbus")]
 pub mod btd;
+#[cfg(feature = "dbus")]
+mod bus;
 // the stand-ins are test code: they live beside the tests and are built only for other crates' tests
 #[cfg(feature = "fake")]
 #[path = "../tests/fake/mod.rs"]
@@ -54,18 +56,28 @@ pub struct Found {
 mod services {
     use std::collections::HashSet;
 
-    use zbus::blocking::Connection;
+    use zbus::blocking::proxy::Builder;
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::proxy::CacheProperties;
 
+    use super::bus::Bounded;
     use super::{
         bluez, btd, netd, nm, Adapter, BluetoothBackend, Found, Link, NetworkBackend, Wifi,
     };
 
+    const BUS_DAEMON: &str = "org.freedesktop.DBus";
+
     /// Look up which services are on the system bus, running or activatable. `org.cupertino.Network1` comes before
     /// NetworkManager, whose name the network daemon also claims, and `org.cupertino.Bluetooth1` before BlueZ.
     pub fn detect(connection: &Connection) -> zbus::Result<Found> {
-        let bus = zbus::blocking::fdo::DBusProxy::new(connection)?;
-        let mut names = bus.list_names()?;
-        names.extend(bus.list_activatable_names()?);
+        let bus: Proxy<'_> = Builder::new(connection)
+            .destination(BUS_DAEMON)?
+            .path("/org/freedesktop/DBus")?
+            .interface(BUS_DAEMON)?
+            .cache_properties(CacheProperties::No)
+            .build()?;
+        let mut names: Vec<String> = bus.ask("ListNames", &())?;
+        names.extend(bus.ask::<(), Vec<String>>("ListActivatableNames", &())?);
         let has = |name: &str| names.iter().any(|n| n.as_str() == name);
         Ok(Found {
             network: if has(netd::NAME) {
@@ -190,5 +202,7 @@ mod services {
     }
 }
 
+#[cfg(feature = "dbus")]
+pub use bus::{call_timeout, set_call_timeout, unanswered, CALL_TIMEOUT, LINK_TIMEOUT};
 #[cfg(feature = "dbus")]
 pub use services::{detect, refusal};

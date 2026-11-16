@@ -385,3 +385,79 @@ fn only_main_application_windows_make_tiles_one_per_application() {
     s.window(3, "org.example.Agent", "w", false, 1.0);
     assert!(!s.has_windows("org.example.Editor"));
 }
+
+/// An executable `name` in `dir`; with `chromium`, beside the resource file every Chromium build ships beside its own.
+#[cfg(feature = "app")]
+fn program_in(dir: &Path, name: &str, chromium: bool) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    let program = dir.join(name);
+    std::fs::write(&program, "\x7fELF").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if chromium {
+        std::fs::write(dir.join("chrome_100_percent.pak"), "").unwrap();
+    }
+    program.display().to_string()
+}
+
+#[cfg(feature = "app")]
+fn entry_running(id: &str, exec: &str) -> cupertino_dock::desktop::DesktopEntry {
+    parse_entry(
+        id,
+        Path::new("x"),
+        &format!("[Desktop Entry]\nName={id}\nExec={exec}\n"),
+    )
+    .unwrap()
+}
+
+#[cfg(feature = "app")]
+#[test]
+fn a_chromium_program_started_from_the_dock_gets_its_overlay_scroll_bars() {
+    use cupertino_apps::exec::ACTIVATION_TOKEN_ENV;
+    use cupertino_dock::desktop::exec_command_with;
+    use cupertino_dock::session::launch_command;
+    let root = tempfile::tempdir().unwrap();
+    let browser = program_in(&root.path().join("browser"), "chromium", true);
+    let exec = format!("\"{browser}\" --new-window %U");
+    let s = session(&[], vec![entry_running("org.example.Browser", &exec)]);
+    let spec = launch_command(s.launch("org.example.Browser").argv, Some("token")).unwrap();
+    assert_eq!(spec.program, browser);
+    assert_eq!(
+        spec.args,
+        ["--enable-features=OverlayScrollbar", "--new-window"]
+    );
+    assert!(
+        spec.env
+            .iter()
+            .any(|(k, v)| k == ACTIVATION_TOKEN_ENV && v == "token"),
+        "the activation token is kept: {:?}",
+        spec.env
+    );
+    // opening a page with it: the target takes the place of the URL code
+    let spec = launch_command(exec_command_with(&exec, "https://example.org"), None).unwrap();
+    assert_eq!(
+        spec.args,
+        [
+            "--enable-features=OverlayScrollbar",
+            "--new-window",
+            "https://example.org"
+        ]
+    );
+}
+
+#[cfg(feature = "app")]
+#[test]
+fn any_other_program_started_from_the_dock_runs_as_its_entry_says() {
+    use cupertino_dock::session::launch_command;
+    let root = tempfile::tempdir().unwrap();
+    // a program of the same name with no Chromium resources beside it
+    let editor = program_in(&root.path().join("editor"), "chromium", false);
+    let exec = format!("{editor} --new-window %F");
+    let s = session(&[], vec![entry_running("org.example.Editor", &exec)]);
+    let argv = s.launch("org.example.Editor").argv;
+    assert_eq!(argv, [editor, "--new-window".to_owned()]);
+    let spec = launch_command(argv.clone(), None).unwrap();
+    assert_eq!(spec.argv(), argv);
+    assert!(spec.env.is_empty());
+    assert!(launch_command(Vec::new(), None).is_none());
+}

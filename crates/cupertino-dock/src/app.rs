@@ -4,7 +4,6 @@
 //! sends the dock's requests, places the bar, gives the surfaces the keyboard, starts programs, keeps the pins and
 //! loads the icons. Every surface is drawn by CupertinoKit.
 
-use cupertino_apps::exec::CommandSpec;
 use cupertino_apps::launch::{spawn, OPEN_COMMAND};
 use cupertino_assets::Assets;
 use cupertino_defaults::dock::DockSettings;
@@ -21,7 +20,7 @@ use cupertino_dock::kit::{
     Placement, Request, Sized, WindowIcon,
 };
 use cupertino_dock::overview_ui::{Mode, Workspace};
-use cupertino_dock::session::Session;
+use cupertino_dock::session::{launch_command, Session};
 use cupertino_dock::view::{
     edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID,
     SWITCHER_APP_ID,
@@ -662,11 +661,7 @@ impl Host for AppHost {
     }
 
     fn spawn(&mut self, argv: Vec<String>, token: Option<String>) -> Option<Exited> {
-        let spec = CommandSpec::from_argv(argv)?;
-        let spec = match token {
-            Some(token) => spec.with_activation_token(&token),
-            None => spec,
-        };
+        let spec = launch_command(argv, token.as_deref())?;
         spawn_watched(spec.to_command())
     }
 

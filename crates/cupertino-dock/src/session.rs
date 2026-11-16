@@ -46,6 +46,22 @@ pub struct Launch {
     pub terminal: bool,
 }
 
+/// The command the dock runs for a launch's `argv` (a tile's entry, or the file manager opening a folder) with the
+/// activation `token`: a program built on Chromium gets its overlay scroll bars turned on, as in every launch from a
+/// desktop entry ([`cupertino_apps::chromium::launch_args`]). `None` for an empty `argv`.
+#[cfg(feature = "app")]
+pub fn launch_command(
+    argv: Vec<String>,
+    token: Option<&str>,
+) -> Option<cupertino_apps::exec::CommandSpec> {
+    let mut spec = cupertino_apps::exec::CommandSpec::from_argv(argv)?;
+    cupertino_apps::chromium::launch_args(&spec.program, &mut spec.args);
+    Some(match token {
+        Some(token) => spec.with_activation_token(token),
+        None => spec,
+    })
+}
+
 /// How many of the applications that quit the session remembers.
 const QUIT_KEPT: usize = 16;
 

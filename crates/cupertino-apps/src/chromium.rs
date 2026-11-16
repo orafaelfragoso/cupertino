@@ -170,6 +170,20 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// `args` of `program` (a path, or a name looked for on `PATH`) as a launch gives them: a program built on Chromium gets
+/// its overlay scroll bars turned on ([`with_overlay_scroll_bars`]), its launchers' flags files read from the person's
+/// configuration folder ([`config_home`]); any other program's are left as they are. Every launch of an application
+/// goes through it, whatever starts it.
+pub fn launch_args(program: &str, args: &mut Vec<String>) {
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    if let Some(chromium) = launcher(program, &path_dirs) {
+        let flags = chromium.flags_switches(config_home().as_deref());
+        with_overlay_scroll_bars(args, &flags);
+    }
+}
+
 /// `args` (a Chromium program's arguments) with the overlay scroll bar feature on, `flags` being the feature switches
 /// its launchers put before and after them ([`Launcher::flags_switches`]). Unless the list Chromium would take already
 /// names the feature, one switch lists every feature of the lists in `flags` and `args`, then the overlay scroll bar
@@ -678,6 +692,27 @@ mod tests {
         executable(&dir.join("chromium"), "\x7fELF");
         std::fs::write(dir.join(MARKER), "").unwrap();
         dir.join("chromium")
+    }
+
+    #[test]
+    fn a_launch_of_a_chromium_program_gets_the_feature_and_any_other_is_left_as_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let browser = chromium_in(&root.path().join("browser"));
+        let mut a = args(&["--new-window", "https://example.org"]);
+        launch_args(&browser.display().to_string(), &mut a);
+        assert_eq!(
+            a,
+            [
+                "--enable-features=OverlayScrollbar",
+                "--new-window",
+                "https://example.org"
+            ]
+        );
+        let other = root.path().join("editor/editor");
+        executable(&other, "\x7fELF");
+        let mut a = args(&["--new-window", "notes.txt"]);
+        launch_args(&other.display().to_string(), &mut a);
+        assert_eq!(a, ["--new-window", "notes.txt"]);
     }
 
     #[test]

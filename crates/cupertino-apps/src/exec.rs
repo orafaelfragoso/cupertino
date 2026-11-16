@@ -189,18 +189,12 @@ pub fn strip_field_codes(exec: &str, ctx: &ExpandContext<'_>) -> Option<Vec<Stri
 }
 
 /// The command of an entry's expanded `Exec`; a program built on Chromium gets its overlay scroll bars turned on
-/// ([`crate::chromium`]).
+/// ([`crate::chromium::launch_args`]).
 fn spec_from(argv: Vec<String>, entry: &DesktopEntry) -> CommandSpec {
     let mut it = argv.into_iter();
     let program = it.next().unwrap_or_default();
     let mut args: Vec<String> = it.collect();
-    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
-    if let Some(chromium) = crate::chromium::launcher(&program, &path_dirs) {
-        let flags = chromium.flags_switches(crate::chromium::config_home().as_deref());
-        crate::chromium::with_overlay_scroll_bars(&mut args, &flags);
-    }
+    crate::chromium::launch_args(&program, &mut args);
     CommandSpec {
         program,
         args,

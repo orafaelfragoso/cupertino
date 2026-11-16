@@ -48,6 +48,10 @@ const WINDOW: (i32, i32) = (400, 300);
 const POPUP: (i32, i32) = (900, 690);
 /// A point of the output inside the bar, and inside the popup once it is open.
 const OVERLAP: (f64, f64) = (650.0, 660.0);
+/// A small menu a full-screen window opens by its bottom edge: anchored at `LOW_ANCHOR` of the window, it ends above
+/// the output's bottom edge but runs into the strip the bar reserves.
+const LOW_POPUP: (i32, i32) = (200, 100);
+const LOW_ANCHOR: (i32, i32) = (100, 580);
 
 struct Harness {
     state: Cupertino,
@@ -180,6 +184,8 @@ struct Client {
     window: wl_surface::WlSurface,
     size: (i32, i32),
     popup: Option<wl_surface::WlSurface>,
+    /// The popup's size: `POPUP`, or `LOW_POPUP` for the small menu.
+    popup_size: (i32, i32),
     /// The second window, mapped in front of the first once the popup is open.
     front: Option<wl_surface::WlSurface>,
 }
@@ -288,7 +294,7 @@ impl Dispatch<xdg_surface::XdgSurface, Role> for Client {
             Role::Window => state.draw(&state.window, state.size, [255; 4], qh),
             Role::Popup => {
                 if let Some(surface) = &state.popup {
-                    state.draw(surface, POPUP, [0; 4], qh);
+                    state.draw(surface, state.popup_size, [0; 4], qh);
                 }
             }
             Role::Front => {
@@ -322,9 +328,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> 
     }
 }
 
-/// The client: the bar and the window at once, the popup when `open` is set, a second window when `front` is set.
+/// The client: the bar and the window at once, the popup when `open` is set (the small menu by the bottom edge when
+/// `low` is set), a second window when `front` is set.
 struct App {
     open: Arc<AtomicBool>,
+    low: Arc<AtomicBool>,
     front: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
@@ -332,9 +340,11 @@ struct App {
 impl App {
     fn spawn(socket: PathBuf) -> App {
         let open = Arc::new(AtomicBool::new(false));
+        let low = Arc::new(AtomicBool::new(false));
         let front = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let (opening, fronting, stopping) = (open.clone(), front.clone(), stop.clone());
+        let lowering = low.clone();
         std::thread::spawn(move || {
             let conn = Connection::from_socket(
                 UnixStream::connect(socket).expect("connecting to the compositor"),
@@ -374,6 +384,7 @@ impl App {
                 window,
                 size: WINDOW,
                 popup: None,
+                popup_size: POPUP,
                 front: None,
             };
             let mut front_toplevel: Option<xdg_toplevel::XdgToplevel> = None;
@@ -383,10 +394,20 @@ impl App {
                     break;
                 }
                 if opening.load(Ordering::SeqCst) && client.popup.is_none() {
-                    let (w, h) = POPUP;
+                    let low = lowering.load(Ordering::SeqCst);
+                    let (w, h) = if low { LOW_POPUP } else { POPUP };
+                    client.popup_size = (w, h);
                     let positioner = wm_base.create_positioner(&qh, ());
                     positioner.set_size(w, h);
-                    positioner.set_anchor_rect(0, 0, 1, 1);
+                    if low {
+                        positioner.set_anchor_rect(LOW_ANCHOR.0, LOW_ANCHOR.1, 1, 1);
+                        positioner.set_constraint_adjustment(
+                            xdg_positioner::ConstraintAdjustment::SlideY
+                                | xdg_positioner::ConstraintAdjustment::FlipY,
+                        );
+                    } else {
+                        positioner.set_anchor_rect(0, 0, 1, 1);
+                    }
                     positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
                     positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
                     let surface = compositor.create_surface(&qh, ());
@@ -417,7 +438,12 @@ impl App {
             }
             drop(front_toplevel);
         });
-        App { open, front, stop }
+        App {
+            open,
+            low,
+            front,
+            stop,
+        }
     }
 
     fn open_popup(&self) {
@@ -613,5 +639,46 @@ fn a_window_in_front_of_the_popups_window_covers_its_popup_and_takes_the_pointer
             .iter()
             .any(|(l, k)| *l == SceneLayer::Popups && *k == SceneKind::PopupContent),
         "{items:?}"
+    );
+}
+
+/// A full-screen window covers the strips the menu bar and the dock reserve, so a menu it opens by its bottom edge stays
+/// at its anchor over the dock's strip, where a window that is not full screen has it slid or flipped clear of the dock.
+#[test]
+fn a_full_screen_window_s_popup_by_its_bottom_edge_stays_at_its_anchor() {
+    let Some((mut h, app)) = desktop() else {
+        return;
+    };
+    let id = h.state.wm.key_window().expect("a key window");
+    h.state.command(cupertino_wm::Command::Fullscreen {
+        window: id,
+        output: None,
+        requested_by: cupertino_wm::Requester::Client,
+    });
+    h.settle();
+    let output = h.state.wm.outputs()[0];
+    assert!(
+        output.usable.y + output.usable.h <= f64::from(OUTPUT.1 - DOCK.1 as i32),
+        "the bar reserves its strip: {output:?}"
+    );
+    let frame = h.state.wm.window(id).unwrap().geometry();
+    assert_eq!(frame, output.rect, "the window covers the output");
+    app.low.store(true, Ordering::SeqCst);
+    open_popup(&mut h, &app);
+    let at = h
+        .state
+        .windows
+        .iter()
+        .find_map(|w| {
+            let t = w.window.toplevel()?;
+            PopupManager::popups_for_surface(t.wl_surface())
+                .find(|(p, _)| p.wl_surface().is_alive())
+                .map(|(_, at)| at)
+        })
+        .expect("the popup is open");
+    assert_eq!(
+        (at.x, at.y),
+        LOW_ANCHOR,
+        "the menu opens at its anchor, over the dock's strip"
     );
 }

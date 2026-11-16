@@ -2421,4 +2421,64 @@ mod tests {
         settle(&mut driver, window);
         assert!(!named(&driver, "Missing").is_empty(), "the tile says why");
     }
+
+    /// A picture marked missing is asked for again when its group is listed again: once its file is back, its
+    /// thumbnail is made and the mark goes, without Settings starting again.
+    #[test]
+    fn a_missing_picture_whose_file_comes_back_shows_once_it_is_listed_again() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let back = dir.path().join("back.png");
+        std::fs::write(
+            dir.path().join("compositor.json"),
+            format!("{{\"wallpaper\": {:?}}}", back.display().to_string()),
+        )
+        .unwrap();
+        let cache = dir.path().join("cache");
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let (mut driver, _window) = start_state(dir.path(), PaneId::Wallpaper, services, |state| {
+            state.thumbnail_cache = Some(cache.clone());
+        });
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .unreadable
+            .get(&back)
+            == Some(&crate::controls::Unreadable::Missing)));
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .loading
+            .is_empty()));
+        // the file comes back: a picture of one pixel
+        const PIXEL_PNG: [u8; 67] = [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(&back, PIXEL_PNG).unwrap();
+        // its group is listed again
+        let notify = driver.runtime().model().state.notify.clone();
+        notify(Background::Pictures {
+            key: state::ListingKey::Packs,
+            files: vec![cupertino_assets::WallpaperFile {
+                name: "back".into(),
+                light: back.clone(),
+                dark: None,
+                credit: None,
+            }],
+        });
+        assert!(
+            until(&mut driver, |state| !state
+                .live
+                .pictures
+                .unreadable
+                .contains_key(&back)
+                && state.thumbnail_images.contains_key(&back)),
+            "the picture shows"
+        );
+        assert!(cache.join("thumbnails").exists(), "made in the cache given");
+    }
 }

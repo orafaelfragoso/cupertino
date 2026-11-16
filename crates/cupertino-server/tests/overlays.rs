@@ -127,6 +127,10 @@ struct Shared {
     key_log: Vec<KeyLog>,
     /// The compositor asked the window to close.
     closed: bool,
+    /// The windows (by their place in the client's list) the compositor asked to close, in order.
+    closed_windows: Vec<usize>,
+    /// How many of the client's windows have their buffer.
+    drawn: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,10 +144,11 @@ enum KeyLog {
 struct Client {
     shared: Arc<Mutex<Shared>>,
     shm: wl_shm::WlShm,
-    surface: wl_surface::WlSurface,
+    /// The surfaces of the client's windows; the text input is the first one's.
+    surfaces: Vec<wl_surface::WlSurface>,
     cursor: (i32, i32, i32, i32),
     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
-    buffer: Option<wl_buffer::WlBuffer>,
+    buffers: Vec<Option<wl_buffer::WlBuffer>>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
@@ -190,33 +195,37 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Client {
     }
 }
 
-impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Client {
+/// Each window's toplevel and xdg surface carry its place in the client's list.
+impl Dispatch<xdg_toplevel::XdgToplevel, usize> for Client {
     fn event(
         state: &mut Self,
         _: &xdg_toplevel::XdgToplevel,
         event: xdg_toplevel::Event,
-        _: &(),
+        index: &usize,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let xdg_toplevel::Event::Close = event {
-            state.shared.lock().unwrap().closed = true;
+            let mut shared = state.shared.lock().unwrap();
+            shared.closed = true;
+            shared.closed_windows.push(*index);
         }
     }
 }
 
-impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
+impl Dispatch<xdg_surface::XdgSurface, usize> for Client {
     fn event(
         state: &mut Self,
         surface: &xdg_surface::XdgSurface,
         event: xdg_surface::Event,
-        _: &(),
+        index: &usize,
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
-            if state.buffer.is_none() {
+            let index = *index;
+            if state.buffers[index].is_none() {
                 let (w, h) = (300, 200);
                 let file =
                     rustix::fs::memfd_create("overlay-test", rustix::fs::MemfdFlags::CLOEXEC)
@@ -230,11 +239,14 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
                 let pool = state.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
                 let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
                 pool.destroy();
-                state.surface.attach(Some(&buffer), 0, 0);
-                state.surface.damage_buffer(0, 0, w, h);
-                state.surface.commit();
-                state.buffer = Some(buffer);
-                state.shared.lock().unwrap().mapped = true;
+                let window = &state.surfaces[index];
+                window.attach(Some(&buffer), 0, 0);
+                window.damage_buffer(0, 0, w, h);
+                window.commit();
+                state.buffers[index] = Some(buffer);
+                let mut shared = state.shared.lock().unwrap();
+                shared.drawn += 1;
+                shared.mapped = shared.drawn == state.surfaces.len();
             }
         }
     }
@@ -346,6 +358,18 @@ impl TestClient {
         with_keyboard: bool,
         kit: bool,
     ) -> TestClient {
+        Self::spawn_windows(socket, vec![app_id], with_text_input, with_keyboard, kit)
+    }
+
+    /// One connection with a window for each of `app_ids`, in order, as the X11 satellite shows every X11 program's
+    /// windows on its one connection; it counts as mapped once every window has its buffer.
+    fn spawn_windows(
+        socket: PathBuf,
+        app_ids: Vec<&'static str>,
+        with_text_input: bool,
+        with_keyboard: bool,
+        kit: bool,
+    ) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Mutex::new(Shared::default()));
         let (s2, sh2) = (stop.clone(), shared.clone());
@@ -364,23 +388,31 @@ impl TestClient {
                     .unwrap()
             });
             let _keyboard = with_keyboard.then(|| seat.get_keyboard(&qh, ()));
-            let surface = compositor.create_surface(&qh, ());
-            let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
-            let toplevel = xdg.get_toplevel(&qh, ());
-            toplevel.set_app_id(app_id.to_string());
+            let mut surfaces = Vec::new();
+            let mut toplevels = Vec::new();
+            for (index, app_id) in app_ids.iter().enumerate() {
+                let surface = compositor.create_surface(&qh, ());
+                let xdg = wm_base.get_xdg_surface(&surface, &qh, index);
+                let toplevel = xdg.get_toplevel(&qh, index);
+                toplevel.set_app_id(app_id.to_string());
+                surfaces.push(surface);
+                toplevels.push(toplevel);
+            }
             let text_input = with_text_input.then(|| {
                 let manager: zwp_text_input_manager_v3::ZwpTextInputManagerV3 =
                     globals.bind(&qh, 1..=1, ()).unwrap();
                 manager.get_text_input(&seat, &qh, ())
             });
-            surface.commit();
+            for surface in &surfaces {
+                surface.commit();
+            }
             let mut client = Client {
                 shared: sh2,
                 shm,
-                surface,
+                buffers: vec![None; surfaces.len()],
+                surfaces,
                 cursor: (40, 30, 2, 18),
                 text_input,
-                buffer: None,
             };
             let _ = client.text_input.as_ref();
             while !s2.load(Ordering::SeqCst) {
@@ -1514,15 +1546,68 @@ fn super_w_reaches_a_third_party_wayland_application_as_its_ctrl_w_and_closes_no
     assert!(!closed, "the application closes its tab, the window stays");
 }
 
-/// An X11 program's window comes from the satellite, a client that never binds the toolkit's protocol, with the
-/// program's class as its application id: Super+W reaches the program as Ctrl+W, as for any Wayland application.
+/// A client that never binds the toolkit's protocol and names its window with an X11 program's class, as the satellite
+/// does: Super+W reaches it as Ctrl+W, as for any Wayland application.
 #[test]
-fn super_w_reaches_an_x11_program_through_the_satellite_as_its_ctrl_w() {
+fn super_w_reaches_a_window_named_by_an_x11_class_without_the_toolkit_as_its_ctrl_w() {
     let Some(mut h) = Harness::new() else { return };
     let client = client_as(&mut h, "Google-chrome");
     let (log, closed) = super_w(&mut h, &client, 8);
     assert_eq!(log, as_chord(MOD_CTRL));
     assert!(!closed);
+}
+
+/// The X11 satellite shows the windows of every X11 program on its one connection, which never binds the toolkit's
+/// protocol, each window named by its program's class. Super+W follows the class of the window in front, not the
+/// connection: a terminal without tabs has its window closed and the browser's window on the same connection is left
+/// alone; with the browser's window in front, the browser gets its Ctrl+W and nothing more is closed.
+#[test]
+fn super_w_follows_the_class_of_each_x11_window_on_the_satellite_s_one_connection() {
+    const WINDOWS: &[&str] = &["Google-chrome", "xterm"];
+    let Some(mut h) = Harness::new() else { return };
+    let satellite =
+        TestClient::spawn_windows(h.socket_path(), WINDOWS.to_vec(), false, true, false);
+    let satellite = focused(&mut h, satellite);
+    assert_eq!(h.state.wm.windows().count(), 2, "both windows are mapped");
+    let window_of = |h: &Harness, class: &str| {
+        h.state
+            .wm
+            .windows()
+            .find(|w| h.state.wm.app(w.app).is_some_and(|a| a.identity == class))
+            .map(|w| w.id)
+            .expect("the class's window")
+    };
+    let (browser, terminal) = (window_of(&h, WINDOWS[0]), window_of(&h, WINDOWS[1]));
+    let front = |h: &mut Harness, window| {
+        h.state
+            .command(cupertino_wm::Command::FocusWindow { window });
+        for _ in 0..10 {
+            h.step();
+        }
+        assert_eq!(h.state.wm.key_window(), Some(window));
+        satellite.shared.lock().unwrap().key_log.clear();
+    };
+
+    front(&mut h, terminal);
+    let log = super_w(&mut h, &satellite, 4).0;
+    assert_eq!(
+        satellite.shared.lock().unwrap().closed_windows,
+        [1],
+        "the terminal's window alone is asked to close: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|e| matches!(e, KeyLog::Key(KEY_W, _))),
+        "{log:?}"
+    );
+
+    front(&mut h, browser);
+    let log = super_w(&mut h, &satellite, 8).0;
+    assert_eq!(log, as_chord(MOD_CTRL));
+    assert_eq!(
+        satellite.shared.lock().unwrap().closed_windows,
+        [1],
+        "the browser closes its own tab: no other window is asked to close"
+    );
 }
 
 #[test]

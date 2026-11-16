@@ -185,6 +185,30 @@ pub(super) struct Peek {
     slow: bool,
     /// The size the window last showed an item at, which it keeps while it waits for the next.
     size: (f64, f64),
+    /// The item found ready to show: it is not looked at again until it changes ([`Peek::settled`], [`Recheck`]).
+    ready: Option<PathBuf>,
+}
+
+/// Which preview windows look at their item again after a message, once it was found ready: those whose folder
+/// changed or whose text was read (the browser window's [`super::Event::Woken`]), and all of them when pictures were
+/// made ([`super::Message::Thumbnails`]). One still being made ready is looked at after every message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Recheck {
+    Unsettled,
+    Window(u64),
+    All,
+}
+
+impl Recheck {
+    /// Whether the preview of browser window `id`, `look`, looks at its item again.
+    pub(super) fn wants(self, id: u64, look: &Peek) -> bool {
+        !look.settled()
+            || match self {
+                Recheck::Unsettled => false,
+                Recheck::Window(window) => window == id,
+                Recheck::All => true,
+            }
+    }
 }
 
 /// What the preview window asks of its browser window.
@@ -217,7 +241,13 @@ impl Peek {
             waits: 0,
             slow: false,
             size: file_preview::WINDOW_SIZE,
+            ready: None,
         }
+    }
+
+    /// Whether the item shown was found ready to show, so only what can change it makes it looked at again.
+    pub fn settled(&self) -> bool {
+        self.ready.as_deref() == Some(self.browse.current())
     }
 
     /// The item shown is ready to show at `size` (`Some`), or is still being made ready: the number of a wait that
@@ -228,8 +258,10 @@ impl Peek {
             self.size = size;
             self.slow = false;
             self.waiting = None;
+            self.ready = Some(self.browse.current().to_path_buf());
             return None;
         }
+        self.ready = None;
         let current = self.browse.current();
         if self
             .waiting
@@ -316,6 +348,23 @@ pub(super) fn ready(
             Some((content, file_preview::WINDOW_SIZE))
         }
         PreviewKind::Icon => Some((icon(), file_preview::WINDOW_SIZE)),
+    }
+}
+
+/// The size the preview window shows `entry` at once it is ready, as [`ready`] gives it, without making what it shows;
+/// `None` while it is still being made ready.
+pub(super) fn ready_size(session: &Session, texts: &Texts, entry: &Entry) -> Option<(f64, f64)> {
+    match file_preview::kind(entry) {
+        PreviewKind::Picture => Some(match session.icons.preview_picture(entry, PICTURE)? {
+            Some(picture) => file_preview::picture_window(
+                (picture.image.width, picture.image.height),
+                2.0,
+                TOOLBAR_HEIGHT,
+            ),
+            None => file_preview::WINDOW_SIZE,
+        }),
+        PreviewKind::Text if !texts.read(&entry.path) => None,
+        PreviewKind::Text | PreviewKind::Icon => Some(file_preview::WINDOW_SIZE),
     }
 }
 
@@ -1046,5 +1095,27 @@ mod tests {
         look.waited(next);
         assert!(look.slow);
         assert_eq!(look.size, (300.0, 200.0), "the size it last showed");
+    }
+
+    #[test]
+    fn an_item_found_ready_is_looked_at_again_only_when_something_can_change_it() {
+        let mut look = peek(&["a.png", "b.png"]);
+        // still being made ready: looked at after every message
+        assert!(Recheck::Unsettled.wants(1, &look));
+        look.follow_ready(None);
+        assert!(!look.settled() && Recheck::Unsettled.wants(1, &look));
+        // ready: only its own window's folder or texts, or new pictures, make it looked at again
+        look.follow_ready(Some((300.0, 200.0)));
+        assert!(look.settled());
+        assert!(!Recheck::Unsettled.wants(1, &look));
+        assert!(
+            !Recheck::Window(2).wants(1, &look),
+            "another window's folder"
+        );
+        assert!(Recheck::Window(1).wants(1, &look));
+        assert!(Recheck::All.wants(1, &look));
+        // the next item is not ready until it is found so
+        look.browse.step(1);
+        assert!(!look.settled() && Recheck::Unsettled.wants(1, &look));
     }
 }

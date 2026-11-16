@@ -177,7 +177,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// A popover that grows out of a node of its parent other than its anchor ([`PopupAnchor::Panel`]) follows that
-    /// node, so it shrinks back into wherever the node is when it closes.
+    /// node, so it shrinks back into wherever the node is when it closes. The node is looked for in the parent's tree
+    /// only after the parent was laid out again, or the popover placed or asked to be elsewhere.
     pub(super) fn follow_grow_origins(&mut self) {
         for i in 0..self.windows.len() {
             let w = &self.windows[i];
@@ -198,11 +199,21 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             else {
                 continue;
             };
+            let followed = (parent.layouts, placed, popup.placed.clone());
+            if w.grow_followed.as_ref() == Some(&followed) {
+                continue;
+            }
             let at = origin(
                 super::grows_out_of(&self.tree, parent, &popup.anchor, &popup.placed),
                 placed,
             );
-            self.windows[i].grows_from = Some(at);
+            #[cfg(test)]
+            {
+                self.grow_origin_walks += 1;
+            }
+            let w = &mut self.windows[i];
+            w.grows_from = Some(at);
+            w.grow_followed = Some(followed);
         }
     }
 

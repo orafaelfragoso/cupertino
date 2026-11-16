@@ -4076,6 +4076,8 @@ mod popup_release {
         own_glass: bool,
         /// The menu is a popover.
         popover: bool,
+        /// The menu is a panel over the main window that grows out of its opener.
+        panel: bool,
         /// Every message, in order.
         heard: Vec<String>,
     }
@@ -4132,6 +4134,7 @@ mod popup_release {
                 "more:Target:motion" => model.submenu = true,
                 "other:Target:press" => model.own_glass = true,
                 "elsewhere:Target:press" => model.popover = true,
+                "as a panel" => model.panel = true,
                 "menu dismissed" => model.menu = false,
                 _ => {}
             }
@@ -4154,7 +4157,7 @@ mod popup_release {
                 ),
             ];
             if model.menu {
-                windows.push(popup(
+                let mut menu = popup(
                     "menu",
                     "main",
                     Point::new(0.0, 10.0),
@@ -4164,7 +4167,14 @@ mod popup_release {
                         closes_as_menu: model.own_glass,
                         grows: model.popover,
                     }),
-                ));
+                );
+                if let (true, Some(popup)) = (model.panel, &mut menu.popup) {
+                    popup.anchor = PopupAnchor::Panel {
+                        over: "opener".into(),
+                        from: "opener".into(),
+                    };
+                }
+                windows.push(menu);
             }
             if model.submenu {
                 windows.push(popup(
@@ -4380,6 +4390,56 @@ mod popup_release {
             }
             self.rt.step(steps()).unwrap();
         }
+    }
+
+    /// A popover that grows out of a node of its parent follows that node, but looks for it in the parent's tree only
+    /// when the parent is laid out again or the popover is placed anew: frames that change neither find nothing again.
+    #[test]
+    fn a_panel_s_growth_point_is_looked_for_only_after_its_parent_is_laid_out_again() {
+        let mut desk = Desk::new();
+        desk.rt.messages.push_back("as a panel".into());
+        desk.button("second", Point::new(5.0, 5.0), true);
+        desk.button("second", Point::new(5.0, 5.0), false);
+        assert!(desk.rt.model().popover && desk.rt.model().panel);
+        desk.press_opener();
+        let menu = desk.id("menu");
+        let placed = Rect::new(0.0, 20.0, 100.0, 40.0);
+        desk.rt
+            .window_system_mut()
+            .send(menu, WindowEvent::PopupPlaced(placed));
+        desk.rt.step(steps()).unwrap();
+        desk.frames();
+        let found = desk.rt.grow_origin_walks;
+        assert!(found >= 1, "the growth point was found");
+        let grows_from = |desk: &Desk| {
+            desk.rt
+                .windows
+                .iter()
+                .find(|w| w.id == menu)
+                .and_then(|w| w.grows_from)
+        };
+        let first = grows_from(&desk).expect("a growth point");
+        // the popover grows and rests: a frame each time, its parent as it was
+        for ms in 1..=25 {
+            desk.at(PRESSED + ms * 16_000_000);
+            desk.frames();
+        }
+        assert_eq!(desk.rt.grow_origin_walks, found, "nothing looked for again");
+        assert_eq!(grows_from(&desk), Some(first));
+        // placed elsewhere: looked for again, and the point follows
+        let left = Rect::new(-20.0, 20.0, 100.0, 40.0);
+        desk.rt
+            .window_system_mut()
+            .send(menu, WindowEvent::PopupPlaced(left));
+        desk.rt.step(steps()).unwrap();
+        desk.frames();
+        assert_eq!(desk.rt.grow_origin_walks, found + 1);
+        let moved = grows_from(&desk).expect("a growth point");
+        assert_eq!(moved.x, first.x + 20.0, "{first:?} then {moved:?}");
+        // the parent laid out again at another size: looked for again
+        desk.show("main", Size::new(240.0, 120.0));
+        desk.frames();
+        assert!(desk.rt.grow_origin_walks > found + 1);
     }
 
     /// The window a menu opens from stays drawn active while its menu and then the menu's submenu take the keyboard,

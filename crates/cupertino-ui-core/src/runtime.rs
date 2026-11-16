@@ -298,6 +298,11 @@ struct WindowState<M> {
     /// The point of this popover it grows out of as it opens and shrinks into as it closes
     /// ([`Widget::grows_from_anchor`]), in its coordinates; set as its first frame is drawn.
     grows_from: Option<Point>,
+    /// What [`Self::grows_from`] was last found from for a popover that grows out of a node of its parent: the parent's
+    /// layout count, where the popover was placed and where it was asked to be. It is found again only when one changes.
+    grow_followed: Option<(u64, Rect, PopupSpec)>,
+    /// How many times the window was laid out: its nodes' places change only then.
+    layouts: u64,
     /// The popover is growing to its size.
     grow: Option<morph::Grow>,
     /// When the window last became active, while its colours still cross from the inactive ones.
@@ -343,6 +348,9 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     messages: VecDeque<A::Message>,
     executor: Executor<A::Message>,
     events: Vec<PlatformEvent>,
+    /// How many times a popover's growth point was looked for in its parent's tree ([`Self::follow_grow_origins`]).
+    #[cfg(test)]
+    grow_origin_walks: usize,
     view_dirty: bool,
     /// Parents whose popups wait for their first layout to find the anchor.
     awaiting_layout: Vec<WindowKey>,
@@ -425,6 +433,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             messages: VecDeque::new(),
             executor,
             events: Vec::new(),
+            #[cfg(test)]
+            grow_origin_walks: 0,
             view_dirty: true,
             awaiting_layout: Vec::new(),
             awaiting_anchor: Vec::new(),
@@ -1117,6 +1127,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             drop: None,
             fade: None,
             grows_from: None,
+            grow_followed: None,
+            layouts: 0,
             grow: None,
             activated_at: None,
             opaque: Vec::new(),
@@ -2404,6 +2416,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             };
             // scroll offsets and hit targets are the nodes' own state, so the placements are made again
             w.geometry = placements_kept(&self.tree, root, &result, &w.env, &[], &mut w.placements);
+            w.layouts += 1;
             w.raised = raised_nodes(&self.tree, root, &w.geometry);
             w.obscuring = w
                 .raised

@@ -216,6 +216,71 @@ fn solid_buffer(
     buffer
 }
 
+/// A frame a client draws itself, with no decorations of the compositor's ([`Client::drawing_own_frame`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnFrame {
+    /// An opaque window whose corners are cut by 8 points, declared opaque but for those corners, as a browser drawing
+    /// its own title bar does.
+    Opaque,
+    /// A transparent window holding a pill, as round at its ends as it is tall, declared opaque only between its ends.
+    Pill,
+}
+
+impl OwnFrame {
+    /// The radius of the frame's own corners, in points.
+    pub fn corner(self, (w, h): (i32, i32)) -> i32 {
+        match self {
+            OwnFrame::Opaque => 8,
+            OwnFrame::Pill => w.min(h) / 2,
+        }
+    }
+
+    /// The frame's pixels at `size`, premultiplied ARGB8888 in memory order: [`TOPLEVEL_BLUE`] inside its rounded
+    /// outline, clear outside.
+    fn pixels(self, (w, h): (i32, i32)) -> Vec<u8> {
+        let r = f64::from(self.corner((w, h)));
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                let (cx, cy) = (px.clamp(r, f64::from(w) - r), py.clamp(r, f64::from(h) - r));
+                let inside = (px - cx).hypot(py - cy) <= r;
+                out.extend(if inside { TOPLEVEL_BLUE } else { [0; 4] });
+            }
+        }
+        out
+    }
+
+    /// The opaque region the frame declares at `size`: all but its corners' squares, a pill's core between its ends.
+    fn opaque(self, (w, h): (i32, i32)) -> Vec<(i32, i32, i32, i32)> {
+        let r = self.corner((w, h));
+        match self {
+            OwnFrame::Opaque => vec![
+                (r, 0, w - 2 * r, r),
+                (0, r, w, h - 2 * r),
+                (r, h - r, w - 2 * r, r),
+            ],
+            OwnFrame::Pill => vec![(r, 0, w - 2 * r, h)],
+        }
+    }
+}
+
+/// A shared-memory buffer of `size` holding `pixels` (ARGB8888 in memory order).
+fn pixel_buffer(
+    shm: &wl_shm::WlShm,
+    (w, h): (i32, i32),
+    pixels: &[u8],
+    qh: &QueueHandle<ClientState>,
+) -> wl_buffer::WlBuffer {
+    let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+    let mut file = std::fs::File::from(fd);
+    file.write_all(pixels).unwrap();
+    let pool = shm.create_pool(file.as_fd(), w * h * 4, qh, ());
+    let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
+    pool.destroy();
+    buffer
+}
+
 #[derive(Default)]
 struct LockStatus {
     locked: bool,
@@ -251,6 +316,8 @@ struct ClientState {
     held_ping: Option<(xdg_wm_base::XdgWmBase, u32)>,
     /// The roundtrips the thread finished, setup loops included.
     rounds: Rounds,
+    /// The frame the client draws itself on every configure, with its opaque region, instead of a solid buffer.
+    own_frame: Option<(OwnFrame, wl_compositor::WlCompositor)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
@@ -376,11 +443,19 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for ClientState {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg.ack_configure(serial);
             let size = state.toplevel_size;
-            surface.attach(
-                Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)),
-                0,
-                0,
-            );
+            let buffer = match &state.own_frame {
+                Some((frame, compositor)) => {
+                    let region = compositor.create_region(qh, ());
+                    for (x, y, w, h) in frame.opaque(size) {
+                        region.add(x, y, w, h);
+                    }
+                    surface.set_opaque_region(Some(&region));
+                    region.destroy();
+                    pixel_buffer(&state.shm, size, &frame.pixels(size), qh)
+                }
+                None => solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh),
+            };
+            surface.attach(Some(&buffer), 0, 0);
             surface.damage_buffer(0, 0, size.0, size.1);
             surface.commit();
         }
@@ -758,6 +833,7 @@ impl Client {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 lock_status: status2,
                 toplevel_size: (400, 300),
+                own_frame: None,
                 silent: silent2.clone(),
                 held_ping: None,
                 rounds: rounds2.clone(),
@@ -887,6 +963,32 @@ impl Client {
             toplevel.set_app_id("org.example.decorated".to_string());
             let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
             decoration.set_mode(mode);
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, manager, decoration, xdg, toplevel, surface)),
+                lock: None,
+                release: None,
+            }
+        })
+    }
+
+    /// A client with one mapped toplevel that says it draws its own decorations (`xdg-decoration` client-side mode) and
+    /// draws `frame`, declaring its opaque region.
+    pub fn drawing_own_frame(socket: PathBuf, frame: OwnFrame) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            client.own_frame = Some((frame, compositor.clone()));
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id("org.example.own-frame".to_string());
+            let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
+            decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ClientSide);
             surface.commit();
             queue.roundtrip(client).unwrap();
             Setup {

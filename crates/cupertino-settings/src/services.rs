@@ -332,6 +332,9 @@ type DeviceRecord = (u32, String, String, String, String, String, String);
 type NetworkRecord = (String, i32, String, bool, bool);
 
 /// The live services and their connections.
+/// What the Displays pane says when no display server answers.
+const NO_COMPOSITOR: &str = "The display server does not answer";
+
 pub struct Services {
     pub system: Bus,
     pub session: Bus,
@@ -355,6 +358,9 @@ pub struct Services {
     watching: [bool; 2],
     /// The change signals the shown pane reads, shared with the watches.
     interest: crate::watch::Interest,
+    /// The displays are read from and set on the display server the session names; services on given buses (tests)
+    /// reach none, so a test never reads or changes the displays of the session it runs in.
+    compositor: bool,
 }
 
 impl Services {
@@ -374,6 +380,7 @@ impl Services {
             on_change: None,
             watching: [false; 2],
             interest: crate::watch::Interest::default(),
+            compositor: true,
         }
     }
 
@@ -394,6 +401,7 @@ impl Services {
             on_change: None,
             watching: [false; 2],
             interest: crate::watch::Interest::default(),
+            compositor: false,
         }
     }
 
@@ -656,6 +664,9 @@ impl Services {
 
     /// The connected displays with a current mode: one short connection asks the server.
     pub fn displays(&self) -> Reading<Vec<Monitor>> {
+        if !self.compositor {
+            return Reading::Unavailable(NO_COMPOSITOR.to_owned());
+        }
         let outputs = cupertino_wayland_client::Connection::connect()
             .map_err(|e| e.to_string())
             .and_then(|mut conn| {
@@ -704,7 +715,7 @@ impl Services {
             ),
             Err(e) => {
                 log_once(&format!("the displays could not be listed: {e}"));
-                Reading::Unavailable("The display server does not answer".into())
+                Reading::Unavailable(NO_COMPOSITOR.into())
             }
         }
     }
@@ -1109,6 +1120,9 @@ impl Services {
 
     /// Carry out `call`; the error text for the row when it is refused or fails.
     pub fn call(&mut self, call: &Call) -> Result<(), String> {
+        if !self.compositor && call.sets_displays() {
+            return Err(NO_COMPOSITOR.to_owned());
+        }
         let system =
             |s: &mut Self, name, path, iface, f: &dyn Fn(&Proxy<'static>) -> zbus::Result<()>| {
                 let result = s.system.proxy(name, path, iface).and_then(|p| f(&p));
@@ -1234,6 +1248,9 @@ impl Services {
         call: &Call,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) -> Option<Result<(), String>> {
+        if !self.compositor && call.sets_displays() {
+            return Some(Err(NO_COMPOSITOR.to_owned()));
+        }
         type Job = Box<dyn FnOnce() -> Result<(), String> + Send>;
         type BusCall = Box<dyn FnOnce(&Connection) -> zbus::Result<()> + Send>;
         let on_bus = |s: &mut Self, f: BusCall| -> Result<Job, String> {
@@ -1574,4 +1591,45 @@ fn sound_worker(wpctl: &Wpctl) -> VolumeWorker {
     let worker = VolumeWorker::new(wpctl.clone(), Target::DefaultSink);
     worker.request_read(true);
     worker
+}
+
+#[cfg(test)]
+mod compositor_tests {
+    use super::*;
+
+    const NOWHERE: &str = "unix:path=/nonexistent/cupertino-test-bus";
+
+    /// Services on given buses never reach the display server the environment names: the displays read as
+    /// unavailable and changing them is refused, so a test run inside a session leaves its displays alone.
+    #[test]
+    fn services_on_given_buses_neither_read_nor_change_the_sessions_displays() {
+        let mut services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        assert_eq!(
+            services.displays(),
+            Reading::Unavailable(NO_COMPOSITOR.to_owned())
+        );
+        for call in [
+            Call::SetDisplayScale {
+                connector: "DP-1".into(),
+                scale: 2.0,
+            },
+            Call::SetDisplayRefresh {
+                connector: "DP-1".into(),
+                mhz: 60_000,
+            },
+            Call::SetDisplayPosition {
+                connector: "DP-1".into(),
+                x: 0,
+                y: 0,
+            },
+        ] {
+            assert!(call.sets_displays());
+            assert_eq!(services.call(&call), Err(NO_COMPOSITOR.to_owned()));
+            assert_eq!(
+                services.call_in_background(&call, |_| {}),
+                Some(Err(NO_COMPOSITOR.to_owned()))
+            );
+        }
+        assert!(!Call::SetWirelessEnabled(true).sets_displays());
+    }
 }

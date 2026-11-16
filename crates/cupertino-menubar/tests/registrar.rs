@@ -19,9 +19,9 @@ use cupertino_shell_client::{
     ActiveApp, ActiveClient, AppWindow, MenuBarUpdate, WindowMenu, WindowState,
 };
 use cupertino_test_bus::PrivateBus;
+use futures_util::StreamExt;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
-use futures_util::StreamExt;
 use zbus::{block_on, fdo, Connection};
 
 const WAIT: Duration = Duration::from_secs(10);

@@ -11,17 +11,18 @@ use crate::extras::{tray_glyph, ExtraGlyph, ExtraKind, Extras, FrontApp, SystemR
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry, PRIVACY_DOT_PT, STATUS_ICON_PT};
-use crate::merge::{self, Export, Exporter};
+use crate::merge::{Export, Exporter};
 use crate::recent::RecentItems;
-use crate::registered::{self, ActiveWindow, Client, NoX11, Registration, X11Windows};
+use crate::registered::{self, ActiveWindow, Client, NoX11, Registration, SeenX11, X11Windows};
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_icons::from_argb;
+use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_kit::core::IconImage;
 use cupertino_shell_client::{
-    ActiveClient, AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts,
-    WindowMenu, WindowState,
+    ActiveClient, AppWindow, BoundAction, GtkMenu, KeyClass, MenuBarUpdate, PrimaryModifier,
+    Shortcuts, WindowMenu, WindowState,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -97,6 +98,8 @@ pub struct Shared {
     pub registrations: Vec<Registration>,
     /// The X server of the X11 bridge, asked about registered X11 windows; `None` asks nothing.
     pub x11: Option<Box<dyn X11Windows>>,
+    /// Registrations whose X11 window the X server has had; only those can be gone.
+    x11_seen: SeenX11,
     /// Registrations whose X11 window is gone, for the registrar to forget ([`Shared::take_gone`]).
     gone: Vec<(String, u32)>,
 }
@@ -216,6 +219,8 @@ pub struct BarFeed {
     title: String,
     /// The process that shows the active window, when the server says.
     client: Option<ActiveClient>,
+    /// How the server passes chords to the active window; the default until the server says.
+    keys: KeyClass,
     /// The server announced the active window's menus: no registered menu is looked for.
     announced: bool,
     /// The bar's server sends the chords of the Edit items (`MenuBar::can_edit`).
@@ -242,6 +247,7 @@ impl BarFeed {
             windows: Vec::new(),
             title: String::new(),
             client: None,
+            keys: KeyClass::Other,
             announced: false,
         }
     }
@@ -260,6 +266,9 @@ impl BarFeed {
         }
         if let Some(client) = update.active_client {
             self.client = Some(client);
+        }
+        if let Some(keys) = update.key_class {
+            self.keys = keys;
         }
         if let Some(menu) = &update.menu {
             let source = match menu {
@@ -321,7 +330,8 @@ impl BarFeed {
             Some(x11) => x11,
             None => &mut no_x11,
         };
-        let matched = registered::resolve(&shared.registrations, &active, x11);
+        let matched =
+            registered::resolve(&shared.registrations, &active, x11, &mut shared.x11_seen);
         shared.gone.extend(matched.gone);
         match matched.menu {
             Some(menu) => {
@@ -465,7 +475,7 @@ impl BarFeed {
             tree,
             exporter,
             names: [&app.name, id_name],
-            class: merge::client_class(&self.app_id),
+            class: client_class(self.keys),
         })
     }
 
@@ -496,6 +506,16 @@ impl BarFeed {
 
 /// The chords of the synthetic menus and the system menu: the server's binding of each system item, and its primary
 /// modifier.
+/// How the server treats an exporter's keys, as the server names it for the active window: first-party for a window of
+/// the desktop's toolkit, the terminals' for a terminal's, else the class of every other application.
+fn client_class(keys: KeyClass) -> ClientClass {
+    match keys {
+        KeyClass::Toolkit => ClientClass::FirstParty,
+        KeyClass::Terminal => ClientClass::Terminal,
+        KeyClass::Other => ClientClass::Other,
+    }
+}
+
 fn chords(shortcuts: &Shortcuts) -> Chords {
     Chords {
         bound: parsed(shortcuts, fallback_action),
@@ -593,6 +613,7 @@ mod tests {
             backdrop_lightness: None,
             backdrop_bands: None,
             active_client: None,
+            key_class: None,
             windows: None,
             shortcuts: None,
         }
@@ -729,6 +750,41 @@ mod tests {
             ],
             "merged with the bar's Window and Help"
         );
+    }
+
+    #[test]
+    fn accelerators_show_as_the_server_classes_the_windows_keys_whatever_its_id() {
+        let tree = || {
+            let mut new = MenuItem::new(2, "New");
+            new.accel = Some("<Control>n".into());
+            MenuItem::submenu(0, "", vec![MenuItem::submenu(1, "File", vec![new])])
+        };
+        let shown = |app_id: &str, keys: Option<KeyClass>| {
+            let mut feed = BarFeed::new(1, true, true);
+            let mut shared = Shared::default();
+            let group = MenuBarUpdate {
+                key_class: keys,
+                ..update(app_id, Some(dbusmenu()))
+            };
+            feed.apply(&group, &mut shared, |_| editor());
+            feed.request_layout(&mut shared);
+            shared.apply_layout(&kde(), tree());
+            let content = feed.content(&shared);
+            let file = content.menus.iter().find(|m| m.label == "File").unwrap();
+            file.children[0].shortcut.as_ref().unwrap().display()
+        };
+        // a third-party window gets Ctrl for the command key: the bar shows the command key
+        assert_eq!(
+            shown("cupertino-lookalike", Some(KeyClass::Other)),
+            "Super+N"
+        );
+        assert_eq!(
+            shown("cupertino-files", None),
+            "Super+N",
+            "until the server says"
+        );
+        // a window of the desktop's toolkit reads the command key itself: its accelerators show as they are
+        assert_eq!(shown("org.example.kit", Some(KeyClass::Toolkit)), "Ctrl+N");
     }
 
     #[test]

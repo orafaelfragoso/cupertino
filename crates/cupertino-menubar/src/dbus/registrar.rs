@@ -5,7 +5,9 @@
 //! bar matches the active window to one ([`crate::registered`]).
 //!
 //! A registration lasts until its program unregisters the window or registers it again, its connection leaves the bus,
-//! or the bar finds its X11 window gone ([`Registrar::forget`]).
+//! or the bar finds its X11 window gone ([`Registrar::forget`]). A connection whose process the bus cannot name, as one
+//! that left while it was asked, is not kept. Several connections may register one window: `GetMenuForWindow` answers
+//! with the first.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,8 +23,11 @@ use crate::registered::Registration;
 pub const REGISTRAR_NAME: &str = "com.canonical.AppMenu.Registrar";
 pub const REGISTRAR_PATH: &str = "/com/canonical/AppMenu/Registrar";
 
-/// Most registrations kept; past it the oldest goes, so a client that registers without end cannot grow the list.
-const MAX_REGISTRATIONS: usize = 1024;
+/// Most registrations kept of one connection; past it that connection's oldest goes, so a client that registers without
+/// end grows neither the list nor takes the place of other clients' registrations.
+const MAX_REGISTRATIONS_PER_CONNECTION: usize = 256;
+/// Most registrations kept in all; past it the oldest of the connection that holds the most goes.
+const MAX_REGISTRATIONS: usize = 4096;
 
 /// Called with every registration after each change.
 pub type Changed = Arc<dyn Fn(Vec<Registration>) + Send + Sync>;
@@ -35,19 +40,49 @@ struct Registry {
 
 impl Registry {
     fn register(&mut self, service: String, pid: u32, window: u32, path: String) {
-        self.list
-            .retain(|r| !(r.service == service && r.window == window));
-        if self.list.len() >= MAX_REGISTRATIONS {
-            self.list.remove(0);
-        }
         self.serial += 1;
+        // registering a window again keeps the connection's place among those that registered it
+        let since = match self
+            .list
+            .iter()
+            .position(|r| r.service == service && r.window == window)
+        {
+            Some(i) => self.list.remove(i).since,
+            None => self.serial,
+        };
+        let own = self.list.iter().filter(|r| r.service == service).count();
+        if own >= MAX_REGISTRATIONS_PER_CONNECTION {
+            self.drop_oldest_of(&service);
+        } else if self.list.len() >= MAX_REGISTRATIONS {
+            let mut counts: std::collections::HashMap<&str, usize> = Default::default();
+            for r in &self.list {
+                *counts.entry(r.service.as_str()).or_default() += 1;
+            }
+            if let Some((largest, _)) = counts.into_iter().max_by_key(|(_, n)| *n) {
+                let largest = largest.to_string();
+                self.drop_oldest_of(&largest);
+            }
+        }
         self.list.push(Registration {
             service,
             path,
             pid,
             window,
             serial: self.serial,
+            since,
         });
+    }
+
+    /// Drop the oldest registration of connection `service`.
+    fn drop_oldest_of(&mut self, service: &str) {
+        if let Some(i) = self.list.iter().position(|r| r.service == service) {
+            self.list.remove(i);
+        }
+    }
+
+    /// The registration that stands for `window`: the connection that registered it first.
+    fn menu_for(&self, window: u32) -> Option<&Registration> {
+        crate::registered::preferred(self.list.iter().filter(|r| r.window == window), None)
     }
 
     /// Drop what `drop` names; whether anything went.
@@ -112,12 +147,20 @@ impl Service {
         let Some(sender) = header.sender() else {
             return;
         };
+        // the bus names no process for a connection that already left: nothing to keep
         let pid = process_of(conn, sender.as_str()).await;
+        if pid == 0 {
+            return;
+        }
         let (service, path) = (sender.to_string(), menu_object_path.to_string());
         self.0.update(|r| {
-            r.register(service, pid, window_id, path);
+            r.register(service.clone(), pid, window_id, path);
             true
         });
+        // a connection that left while its process was asked for has been forgotten before it was kept
+        if !has_owner(conn, &service).await {
+            self.0.update(|r| r.remove(|reg| reg.service == service));
+        }
     }
 
     fn unregister_window(&self, window_id: u32, #[zbus(header)] header: Header<'_>) {
@@ -128,14 +171,12 @@ impl Service {
             .update(|r| r.remove(|reg| reg.service == sender.as_str() && reg.window == window_id));
     }
 
-    /// The latest registration of the window from any connection; an empty service and the root path when none.
+    /// The registration of the window by the connection that registered it first; an empty service and the root path
+    /// when none.
     fn get_menu_for_window(&self, window_id: u32) -> (String, OwnedObjectPath) {
         let registry = self.0.registry.lock().unwrap_or_else(|e| e.into_inner());
         registry
-            .list
-            .iter()
-            .filter(|r| r.window == window_id)
-            .max_by_key(|r| r.serial)
+            .menu_for(window_id)
             .and_then(|r| {
                 Some((
                     r.service.clone(),
@@ -159,6 +200,18 @@ async fn process_of(conn: &Connection, name: &str) -> u32 {
     match DBusProxy::new(conn).await {
         Ok(bus) => bus.get_connection_unix_process_id(name).await.unwrap_or(0),
         Err(_) => 0,
+    }
+}
+
+/// Whether the connection `name` is still on the bus; `true` when the bus does not answer, so its leaving is still
+/// heard of.
+async fn has_owner(conn: &Connection, name: &str) -> bool {
+    let Ok(name) = BusName::try_from(name) else {
+        return false;
+    };
+    match DBusProxy::new(conn).await {
+        Ok(bus) => bus.name_has_owner(name).await.unwrap_or(true),
+        Err(_) => true,
     }
 }
 
@@ -205,4 +258,72 @@ pub async fn own(conn: &Connection) -> zbus::Result<()> {
 /// Give the name up; a name another process owns stays with it.
 pub async fn release(conn: &Connection) -> zbus::Result<()> {
     conn.release_name(REGISTRAR_NAME).await.map(drop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register(registry: &mut Registry, service: &str, window: u32) {
+        registry.register(service.into(), 40, window, format!("/menu/{window}"));
+    }
+
+    fn windows_of(registry: &Registry, service: &str) -> Vec<u32> {
+        registry
+            .list
+            .iter()
+            .filter(|r| r.service == service)
+            .map(|r| r.window)
+            .collect()
+    }
+
+    #[test]
+    fn a_connection_that_registers_without_end_drops_only_its_own_oldest() {
+        let mut registry = Registry::default();
+        register(&mut registry, ":1.5", 7);
+        let flood = MAX_REGISTRATIONS_PER_CONNECTION as u32 + 10;
+        for window in 0..flood {
+            register(&mut registry, ":1.66", 1000 + window);
+        }
+        assert_eq!(
+            windows_of(&registry, ":1.5"),
+            [7],
+            "another connection's stays"
+        );
+        let flooded = windows_of(&registry, ":1.66");
+        assert_eq!(flooded.len(), MAX_REGISTRATIONS_PER_CONNECTION);
+        assert_eq!(flooded[0], 1010, "its oldest went");
+    }
+
+    #[test]
+    fn past_the_whole_limit_the_connection_that_holds_the_most_gives_way() {
+        let mut registry = Registry::default();
+        register(&mut registry, ":1.5", 7);
+        let full = MAX_REGISTRATIONS / MAX_REGISTRATIONS_PER_CONNECTION;
+        for connection in 0..full {
+            for window in 0..MAX_REGISTRATIONS_PER_CONNECTION as u32 {
+                register(&mut registry, &format!(":2.{connection}"), window);
+            }
+        }
+        assert_eq!(registry.list.len(), MAX_REGISTRATIONS);
+        assert_eq!(windows_of(&registry, ":1.5"), [7]);
+    }
+
+    #[test]
+    fn a_window_is_the_first_connections_and_registering_again_keeps_its_place() {
+        let mut registry = Registry::default();
+        register(&mut registry, ":1.5", 7);
+        register(&mut registry, ":1.66", 7);
+        assert_eq!(registry.menu_for(7).unwrap().service, ":1.5");
+        register(&mut registry, ":1.5", 7);
+        assert_eq!(
+            registry.menu_for(7).unwrap().service,
+            ":1.5",
+            "registered again: still first"
+        );
+        assert_eq!(registry.list.len(), 2, "one registration each");
+        registry.remove(|r| r.service == ":1.5");
+        assert_eq!(registry.menu_for(7).unwrap().service, ":1.66");
+        assert!(registry.menu_for(8).is_none());
+    }
 }

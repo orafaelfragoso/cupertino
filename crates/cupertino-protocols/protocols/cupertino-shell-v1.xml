@@ -535,15 +535,24 @@
       <entry name="x11" value="1" summary="the X11 bridge shows the window of an X11 program"/>
     </enum>
 
+    <enum name="key_class" since="24">
+      <entry name="other" value="0" summary="the server gives the window the control chord of each command-key chord"/>
+      <entry name="toolkit" value="1" summary="the window uses the desktop's toolkit and reads the command key itself"/>
+      <entry name="terminal" value="2" summary="the window is a terminal's: the server gives it the control and shift chord"/>
+    </enum>
+
     <event name="active_client" since="24">
       <description summary="the process that shows the active window">
         The process on the other end of the active window's connection, for a window that
         registers its menus on the session bus instead of announcing them: pid is 0 when no
         window is active or the process is not known. With kind x11 the window belongs to an
-        X11 program and pid is the bridge's. Sent in every group that has window_state.
+        X11 program and pid is the bridge's. keys is how the server passes the person's chords to
+        the window, so the bar shows the keys pressed for the window's accelerators. Sent in every
+        group that has window_state.
       </description>
       <arg name="pid" type="uint"/>
       <arg name="kind" type="uint" enum="client_kind"/>
+      <arg name="keys" type="uint" enum="key_class"/>
     </event>
 
     <request name="set_menu_open">

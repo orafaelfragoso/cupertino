@@ -19,7 +19,8 @@ use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
 };
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction, ClientKind, Command as BarCommand,
-    CupertinoMenuBarV1, EditAction, Error as BarError, ModifierKey, SessionAction, WindowControl,
+    CupertinoMenuBarV1, EditAction, Error as BarError, KeyClass, ModifierKey, SessionAction,
+    WindowControl,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -45,6 +46,9 @@ const INACTIVE_DIM: f64 = 0.4;
 
 /// Most windows the window list of a group names.
 const MAX_APP_WINDOWS: usize = 1000;
+
+/// Most connections whose process the bars' groups remember; past it the one active longest ago is read again.
+const MAX_REMEMBERED_CLIENTS: usize = 16;
 
 /// Longest window title or application id, in bytes, an event to a shell client carries: a client sets both to any
 /// length, and one message must stay under the 4096 bytes the Wayland wire allows.
@@ -181,6 +185,8 @@ struct Feed {
     windows: Vec<AppWindow>,
     /// The process behind the window's connection, 0 when unknown, and whether it is the X11 bridge (version 24).
     client: (u32, bool),
+    /// How the server passes chords to the window (version 24).
+    keys: ClientClass,
 }
 
 /// One row of the window list.
@@ -235,6 +241,11 @@ impl Feed {
                     ClientKind::X11
                 } else {
                     ClientKind::Wayland
+                },
+                match self.keys {
+                    ClientClass::FirstParty => KeyClass::Toolkit,
+                    ClientClass::Terminal => KeyClass::Terminal,
+                    ClientClass::Other => KeyClass::Other,
                 },
             );
         }
@@ -535,6 +546,9 @@ pub struct MenuBars {
     reader_backoff: Duration,
     /// The keyboard is on a bar or one of its menus ([`Cupertino::keep_activated_under_menu_bar`]).
     holds_keyboard: bool,
+    /// The process behind the connections of the latest active windows and whether it is the X11 bridge, latest
+    /// last: read once per connection, not on each group ([`Cupertino::window_process`]).
+    clients: Vec<(ClientId, (u32, bool))>,
 }
 
 impl MenuBars {
@@ -562,6 +576,7 @@ impl MenuBars {
             reader_retry: None,
             reader_backoff: READER_RETRY_FIRST,
             holds_keyboard: false,
+            clients: Vec::new(),
         }
     }
 
@@ -975,8 +990,9 @@ impl Cupertino {
         }
     }
 
-    /// The group the bars show now: the key window and the menu it exports.
-    fn menu_feed(&self) -> Feed {
+    /// The group the bars show now: the key window and the menu it exports. `client` is what [`Self::window_process`]
+    /// says of the key window's connection.
+    fn menu_feed(&self, client: (u32, bool)) -> Feed {
         let window = self.wm.key_window().and_then(|id| self.wm.window(id));
         let Some(window) = window else {
             return Feed {
@@ -990,6 +1006,7 @@ impl Cupertino {
                 workspaces: 0,
                 windows: Vec::new(),
                 client: (0, false),
+                keys: ClientClass::Other,
             };
         };
         let workspaces = self.wm.workspaces(window.output);
@@ -1013,6 +1030,8 @@ impl Cupertino {
                 .app(window.app)
                 .map(|a| a.identity.clone())
                 .unwrap_or_default(),
+            // the key window's, as the chord rewrite classes it
+            keys: self.key_client_class(),
             title: window.title.clone(),
             menu: self.menu_bars.address(window.id.0).cloned(),
             can_zoom: window.can_zoom(),
@@ -1024,16 +1043,25 @@ impl Cupertino {
                 .map_or(0, |i| i as u32 + 1),
             workspaces: workspaces.len() as u32,
             windows,
-            client: self.window_process(window.id),
+            client,
         }
     }
 
     /// The process behind the connection of window `id` (0 when unknown) and whether it is the X11 bridge, which shows
-    /// the windows of every X11 program: the one the server started, or one started apart, known by its program.
-    fn window_process(&self, id: WindowId) -> (u32, bool) {
+    /// the windows of every X11 program: the one the server started, or one started apart whose program only the
+    /// system can have installed. Read once per connection and remembered.
+    fn window_process(&mut self, id: WindowId) -> (u32, bool) {
         let Some(client) = self.entry(id).and_then(|e| e.surface().client()) else {
             return (0, false);
         };
+        let clients = &mut self.menu_bars.clients;
+        if let Some(i) = clients.iter().position(|(c, _)| *c == client.id()) {
+            let remembered = clients.remove(i);
+            let process = remembered.1;
+            clients.push(remembered);
+            return process;
+        }
+        // a process not known yet is asked for again with the next group
         let Some((pid, _)) = (self.process_of)(&self.display_handle, &client) else {
             return (0, false);
         };
@@ -1042,10 +1070,15 @@ impl Cupertino {
             .as_ref()
             .and_then(crate::xwayland::XWayland::pid);
         let bridge = started == Some(pid)
-            || std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| {
-                exe.file_name() == Some(std::ffi::OsStr::new(crate::xwayland::SATELLITE))
-            });
-        (pid, bridge)
+            || (self.executable_of)(&self.display_handle, &client)
+                .is_some_and(|program| is_bridge_program(&program));
+        let process = (pid, bridge);
+        let clients = &mut self.menu_bars.clients;
+        if clients.len() >= MAX_REMEMBERED_CLIENTS {
+            clients.remove(0);
+        }
+        clients.push((client.id(), process));
+        process
     }
 
     /// The windows of `app` the window list names, top of the stack first: the ones the dock lists.
@@ -1072,7 +1105,11 @@ impl Cupertino {
         if self.menu_bars.bars.is_empty() {
             return;
         }
-        let feed = self.menu_feed();
+        let client = self
+            .wm
+            .key_window()
+            .map_or((0, false), |id| self.window_process(id));
+        let feed = self.menu_feed(client);
         // a bar before version 10 has no window list: a change of the list alone is nothing new for it
         let listless = Feed {
             windows: Vec::new(),
@@ -1721,6 +1758,12 @@ pub const MAX_BUS_NAME_BYTES: usize = 255;
 
 /// The longest application id a window's menu announcement may carry.
 pub const MAX_APPLICATION_ID_BYTES: usize = 255;
+
+/// Whether `program`, a program only the system can have installed ([`crate::process::trusted_executable`]), is the X11
+/// bridge.
+fn is_bridge_program(program: &std::path::Path) -> bool {
+    program.file_name() == Some(std::ffi::OsStr::new(crate::xwayland::SATELLITE))
+}
 
 /// Whether `name` is a unique bus name such as `:1.42`.
 pub(crate) fn is_unique_bus_name(name: &str) -> bool {

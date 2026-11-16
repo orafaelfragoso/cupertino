@@ -1,5 +1,5 @@
-//! The X server of the X11 bridge, asked for the titles of X11 windows that registered menus and for the window with
-//! the input focus ([`crate::registered::X11Windows`]). The connection is made the first time the active window is an
+//! The X server of the X11 bridge, asked for the titles of X11 windows that registered menus, the process each names as
+//! its own and the window with the input focus ([`crate::registered::X11Windows`]). The connection is made the first time the active window is an
 //! X11 program's, when the bridge runs, so the bar never starts the bridge itself; it is made again after it broke.
 //! The display is `DISPLAY` (with `XAUTHORITY`, which the server gives the shell processes), else the one the bridge
 //! was started for, from its command line.
@@ -23,6 +23,7 @@ struct Link {
     net_wm_name: Atom,
     utf8_string: Atom,
     active_window: Atom,
+    net_wm_pid: Atom,
 }
 
 /// A lazily made connection to the bridge's X server.
@@ -71,10 +72,11 @@ fn connect(bridge: u32) -> Option<Link> {
     let atom = |name: &[u8]| -> Option<Atom> {
         Some(conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
     };
-    let (net_wm_name, utf8_string, active_window) = (
+    let (net_wm_name, utf8_string, active_window, net_wm_pid) = (
         atom(b"_NET_WM_NAME")?,
         atom(b"UTF8_STRING")?,
         atom(b"_NET_ACTIVE_WINDOW")?,
+        atom(b"_NET_WM_PID")?,
     );
     Some(Link {
         conn,
@@ -82,6 +84,7 @@ fn connect(bridge: u32) -> Option<Link> {
         net_wm_name,
         utf8_string,
         active_window,
+        net_wm_pid,
     })
 }
 
@@ -165,6 +168,20 @@ impl X11Windows for XServer {
         let link = self.link(bridge)?;
         match focused(link) {
             Ok(window) => window,
+            Err(e) => {
+                self.broke(&e);
+                None
+            }
+        }
+    }
+
+    fn owner(&mut self, bridge: u32, window: u32) -> Option<u32> {
+        let link = self.link(bridge)?;
+        match get_property(link, window, link.net_wm_pid, AtomEnum::CARDINAL.into()) {
+            Ok(reply) => reply
+                .value32()
+                .and_then(|mut v| v.next())
+                .filter(|p| *p != 0),
             Err(e) => {
                 self.broke(&e);
                 None

@@ -2175,6 +2175,155 @@ fn a_full_centre_scrolled_to_its_end_reads_in_every_appearance_at_2x() {
     a_full_centre_reads("centre-full-end", 2.0, true);
 }
 
+/// The alpha of the shadow in the row of pixels at `y`, a point apart, from 20 points left of `card` to 20 points
+/// right of it (inside the picture), with the index of the first and of the last sample over the card.
+fn shadow_row(picture: &Picture, card: Rect, y: f64) -> (Vec<f64>, usize, usize) {
+    let width = f64::from(picture.width) / picture.scale;
+    let mut alphas = Vec::new();
+    let (mut first, mut last) = (usize::MAX, 0);
+    let mut x = (card.min_x() - 20.0).max(0.5);
+    while x < (card.max_x() + 20.0).min(width) {
+        if x > card.min_x() && x < card.max_x() {
+            first = first.min(alphas.len());
+            last = alphas.len();
+        }
+        alphas.push(picture.at(Point::new(x, y)).1);
+        x += 1.0;
+    }
+    (alphas, first, last)
+}
+
+/// The full centre scrolled so that a card lies across the list's top edge and another across its bottom edge, drawn
+/// at `scale` in the light and the dark appearance, each with Increase Contrast, with or without Reduce
+/// Transparency: just outside either edge the shadow goes on unbroken over the part of the card the list has cut
+/// off. It is nowhere lighter over the card than beside it, has no step at the card's sides, and over the middle of
+/// the card cut at the top it is as strong as over the top of that card when it is whole. With
+/// `CUPERTINO_LOOK_DIR` set the pictures are written there as
+/// `centre-cut[-reduce-transparency]-<appearance>@<scale>x.png`.
+fn a_full_centre_s_shadow_goes_on_under_a_cut_card(scale: f64, reduce_transparency: &[bool]) {
+    let config = CenterConfig::default();
+    let width = view::strip_width(&config.layout, &config.swipe);
+    let size = Size::new(width, 640.0);
+    for &reduce_transparency in reduce_transparency {
+        let mut run = Run::with(Setup {
+            size: Some(size),
+            reduce_transparency,
+            ..Setup::default()
+        });
+        let ids = many(&mut run);
+        run.step(Step::OpenCentre);
+        let window = run.only_window();
+        run.send(window, WindowEvent::Focus(true));
+        let list = rect(&run.snapshot(window), "list");
+        let at = Point::new(list.center().x, list.min_y() + 100.0);
+        // the card across an edge of the list, with a good part of it on either side
+        let across = |run: &Run, edge: f64| {
+            let snapshot = run.snapshot(window);
+            ids.iter().find_map(|&id| {
+                let card = keyed(&snapshot, &format!("card-{id}"))?.rect;
+                (card.min_y() < edge - 12.0 && card.max_y() > edge + 12.0).then_some(card)
+            })
+        };
+        let name = if reduce_transparency {
+            "centre-cut-reduce-transparency"
+        } else {
+            "centre-cut"
+        };
+        // the shadow over the middle of the first card's top edge while the list shows it whole, in each appearance
+        let first = rect(
+            &run.snapshot(window),
+            &format!("card-{}", ids[ids.len() - 1]),
+        );
+        assert!(first.min_y() >= list.min_y(), "{first:?} in {list:?}");
+        let whole: Vec<f64> = APPEARANCES
+            .iter()
+            .map(|&appearance| {
+                let picture = run.picture(window, &format!("{name}-whole"), appearance, scale);
+                picture
+                    .at(Point::new(first.center().x, first.min_y() - 1.5))
+                    .1
+            })
+            .collect();
+        let mut seen = [false, false];
+        // a wheel detent at a time, until a card has lain across each edge
+        for _ in 0..12 {
+            run.scroll(
+                window,
+                at,
+                PointerEvent::Scroll {
+                    position: at,
+                    delta: Point::ZERO,
+                    value120: Some((0, 120)),
+                    source: ScrollSource::Wheel,
+                    stop: false,
+                    inverted: (false, false),
+                },
+            );
+            let cut = [
+                (0, across(&run, list.min_y()), list.min_y() - 1.5),
+                (1, across(&run, list.max_y()), list.max_y() + 1.5),
+            ];
+            if cut
+                .iter()
+                .all(|(edge, card, _)| seen[*edge] || card.is_none())
+            {
+                continue;
+            }
+            for (appearance, whole) in APPEARANCES.into_iter().zip(&whole) {
+                let picture = run.picture(window, name, appearance, scale);
+                for (edge, card, y) in cut {
+                    let Some(card) = card else { continue };
+                    seen[edge] = true;
+                    let what = format!(
+                        "{name}, {} at {scale}x, {} edge",
+                        appearance_name(appearance),
+                        ["top", "bottom"][edge]
+                    );
+                    let (alphas, first, last) = shadow_row(&picture, card, y);
+                    assert!(first > 2 && last + 3 < alphas.len(), "{what}: {card:?}");
+                    let beside = alphas[first - 2].min(alphas[last + 2]);
+                    assert!(beside > 0.02, "{what}: a shadow beside the card ({beside})");
+                    let over = alphas[first..=last].iter().copied().fold(1.0, f64::min);
+                    assert!(
+                        over >= beside - 0.01,
+                        "{what}: the shadow over the cut part of the card ({over}) is no lighter than beside it \
+                         ({beside}): {alphas:?}"
+                    );
+                    let step = alphas
+                        .windows(2)
+                        .map(|pair| (pair[1] - pair[0]).abs())
+                        .fold(0.0, f64::max);
+                    assert!(
+                        step < 0.03,
+                        "{what}: the shadow has no step along the edge ({step}): {alphas:?}"
+                    );
+                    let middle = alphas[(first + last) / 2];
+                    assert!(
+                        edge == 1 || (middle - whole).abs() < 0.04,
+                        "{what}: the shadow over the cut card ({middle}) is as strong as over a whole one ({whole})"
+                    );
+                }
+            }
+            if seen == [true, true] {
+                break;
+            }
+        }
+        assert_eq!(seen, [true, true], "{name}: a card lay across each edge");
+    }
+}
+
+#[test]
+fn a_full_centre_s_shadow_goes_on_under_a_card_cut_by_the_list_s_edge_at_1x() {
+    a_full_centre_s_shadow_goes_on_under_a_cut_card(1.0, &[false]);
+}
+
+/// The same with Reduce Transparency at 1x, and with and without it at 2x.
+#[test]
+fn a_full_centre_s_shadow_goes_on_under_a_cut_card_with_reduce_transparency_and_at_2x() {
+    a_full_centre_s_shadow_goes_on_under_a_cut_card(1.0, &[true]);
+    a_full_centre_s_shadow_goes_on_under_a_cut_card(2.0, &[false, true]);
+}
+
 /// A banner with a long body and an action with Increase Contrast, light and dark, at 1x and 2x: its card has an
 /// opaque fill, text that reads on it and an edge that stands out. With `CUPERTINO_LOOK_DIR` set the pictures are
 /// written there (`banner-…`).

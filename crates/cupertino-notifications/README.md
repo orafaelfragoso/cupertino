@@ -122,7 +122,7 @@ surface, ends the process with a failure status so the server restarts it.
 - **Do not disturb.** Banners are suppressed and notifications kept in the centre. Critical urgency bypasses it
   (`critical_bypasses_dnd`), and `Until(t) ends by itself.
 - **Drawing.** Kit controls on a card the `view` module paints: card glass under the card (`PaintCx::glass`, `Glass::card`, cut to the
-  part the list shows), a 0.5 pt separator outline, 18 pt corners and a wide dark halo (standard deviation 32 pt, peak 0.45 black, the surface holds its 96 pt reach) drawn only outside it and kept off the other cards only where the list shows them (a card under the header or past the list's bottom edge leaves no unshadowed patch in its shape), faded as one
+  part the list shows), a 0.5 pt separator outline, 18 pt corners and a wide dark halo (standard deviation 32 pt, peak 0.45 black, the surface holds its 96 pt reach) drawn only outside it and kept off the other cards only where the list shows them (a card under the header or past the list's bottom edge leaves no unshadowed patch in its shape; a card the list cuts casts the halo of the part it shows, straight along the list's edge, so the halo goes on over the part cut off), faded as one
   layer with its content. A collapsed group's front card and the sheets peeking below it join one glass container with a
   hard edge, so they read as one shape; each sheet's shadow, darkening and outline stay off the front card. The list keeps its glass
   within what one window shows (`MAX_MATERIALS`, counted over the part in view): every card keeps its glass, and the

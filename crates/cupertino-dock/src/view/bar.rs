@@ -121,8 +121,10 @@ pub struct BarView {
     /// Where the hovered tile's name stands over: a rectangle across the tile from the top of the bar down to the
     /// bottom of the window, so the label's popup, which does not fit below it, stands above the bar.
     pub label_anchor: Option<Rect>,
-    /// The same for the open stack of a folder tile and its fan: from the middle of the tile down.
+    /// The same for the fan of a folder tile's open stack: from the middle of the tile down.
     pub fan_anchor: Option<Rect>,
+    /// What the grid of a folder tile's open stack stands on or beside (`StackPlacement::anchor`).
+    pub stack_anchor: Option<Rect>,
     /// The same for the open context menu's tail and panel: from the top of the bar down.
     pub menu_anchor: Option<Rect>,
     /// Where the window takes the pointer.
@@ -177,6 +179,7 @@ pub fn window<M: Clone + 'static>(view: BarView, input: fn(Input) -> M) -> Windo
     for (key, rect) in [
         (LABEL_ANCHOR, view.label_anchor),
         (FAN_ANCHOR, view.fan_anchor),
+        (STACK_ANCHOR, view.stack_anchor),
         (MENU_ANCHOR, view.menu_anchor),
     ] {
         if let Some(rect) = rect {
@@ -573,6 +576,7 @@ impl<M: Clone + 'static> Widget<M> for MarkNode {
 /// The keys of the nodes the popups of the bar stand over.
 pub const LABEL_ANCHOR: &str = "label-anchor";
 pub const FAN_ANCHOR: &str = "fan-anchor";
+pub const STACK_ANCHOR: &str = "stack-anchor";
 pub const MENU_ANCHOR: &str = "menu-anchor";
 
 /// A rectangle of the bar's window that only a popup anchors to: it paints nothing and takes no input.

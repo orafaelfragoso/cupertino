@@ -39,7 +39,7 @@ use crate::menu::{self, MenuCommand, MenuItem, TileFacts};
 use crate::overview_kit::{OverviewInput, OverviewRequest, OverviewSurface};
 use crate::overview_ui::{Mode, WindowEntry, Workspace};
 use crate::session::{Activation, Session};
-use crate::stack::{self, StackEntry, StackHit, StackLayout};
+use crate::stack::{self, StackEntry, StackHit, StackLayout, StackPlacement};
 use crate::switcher_kit::{SwitcherEntry, SwitcherInput, SwitcherRequest, SwitcherSurface};
 use crate::tile_drag::{Poof, TilePress};
 use crate::tiles::{TileId, TileKind, TileLifecycle};
@@ -1148,9 +1148,11 @@ impl Model {
     /// for a folder with more entries than the fan holds and where the fan has no room.
     fn stack_shape(&self, tile: TileId, count: usize) -> fan::Shape {
         let bottom = self.session.dock.cfg.orientation == Orientation::Bottom;
-        let room = self.screen().map_or(0, |screen| {
+        // the fan rises over the whole output, not only over the bar's own window
+        let output = self.output.and_then(|key| self.output_info(key));
+        let room = self.screen().zip(output).map_or(0, |(screen, output)| {
             let layout = self.session.dock.layout(screen, self.now());
-            fan_basis(&layout, screen, tile).map_or(0, |b| fan::room(screen.h, b.above_screen))
+            fan_basis(&layout, screen, tile).map_or(0, |b| fan::room(output.height, b.above_screen))
         });
         fan::shape(self.conf.stack.unwrap_or_default(), count, room, bottom)
     }
@@ -2571,7 +2573,9 @@ struct FanBasis {
 fn fan_basis(layout: &crate::dock::DockLayout, screen: Rect, tile: TileId) -> Option<FanBasis> {
     let t = layout.tiles.iter().find(|t| t.id == tile)?;
     let (cx, cy) = (t.rect.x + t.rect.w / 2.0, t.rect.y + t.rect.h / 2.0);
-    let lowest = (cy - layout.bar.y) + fan::LOWEST_ABOVE_BAR;
+    // over a tile that stands above the bar's top edge (a magnified one) the rows stand that much higher
+    let rise = (layout.bar.y - t.rect.y).max(0.0);
+    let lowest = (cy - layout.bar.y) + fan::LOWEST_ABOVE_BAR + rise;
     Some(FanBasis {
         tile_cx: cx,
         tile_cy: cy,
@@ -2973,6 +2977,23 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         let fan_anchor = fan_basis
             .as_ref()
             .and_then(|b| to_bottom(b.tile_cx - 0.5, b.tile_cy, 1.0));
+        // the grid of an open stack: where its popup stands by its tile as the bar is laid out now
+        let grid = model
+            .stack
+            .as_ref()
+            .filter(|s| s.shape == fan::Shape::Grid)
+            .and_then(|s| {
+                let entries = s.entries.as_ref()?;
+                let t = layout.tiles.iter().find(|t| t.id == s.tile)?;
+                let panel = StackLayout::new(entries.len());
+                Some(StackPlacement::new(
+                    orientation,
+                    (panel.width, panel.height),
+                    layout.bar,
+                    t.visible_rect(orientation),
+                    screen,
+                ))
+            });
         let menu_tile = model.menu.as_ref().map(|m| m.tile);
         let menu_anchor = menu_tile.and_then(|tile| {
             let t = layout.tiles.iter().find(|t| t.id == tile)?;
@@ -2989,6 +3010,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 tiles,
                 label_anchor,
                 fan_anchor,
+                stack_anchor: grid.map(|g| view::kit_rect(&g.anchor)),
                 menu_anchor,
                 input,
                 initial: model.tile_order.first().map(|t| t.0),
@@ -3039,16 +3061,14 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                     },
                     message,
                 ));
-            } else if open.shape == fan::Shape::Grid
-                && layout.tiles.iter().any(|t| t.id == open.tile)
-            {
+            } else if let Some(placement) = grid {
                 let lookup = |name: &str| -> IconSet {
                     model.icon(&IconKey::Named(name.to_owned()), &[StackLayout::ICON])
                 };
                 windows.push(view::stack::window(
                     view::stack::StackView {
                         parent: key.clone(),
-                        tile: open.tile.0,
+                        placement,
                         orientation,
                         name: &open.name,
                         entries,

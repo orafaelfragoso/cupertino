@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use cupertino_wm::geometry::{Point, Rect};
 
+use crate::config::Orientation;
+
 /// One file or folder a stack shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StackEntry {
@@ -139,6 +141,90 @@ impl StackLayout {
         (0..count.min(MAX_ENTRIES))
             .find(|&i| self.cell(i).contains(p))
             .map(StackHit::Entry)
+    }
+}
+
+/// The pointer under a stack that stands over the bar: its width where it leaves the panel, and its depth.
+pub const POINTER_WIDTH: f64 = 30.0;
+pub const POINTER_DEPTH: f64 = 11.0;
+/// How far the pointer's tip stands above the bar's top edge, or above the stack's tile where that stands higher.
+pub const TIP_GAP: f64 = 3.0;
+/// How far a stack beside a bar at the side of the output stands off the bar.
+pub const SIDE_GAP: f64 = 8.0;
+/// The least room the stack keeps to the edges of the output.
+pub const SCREEN_MARGIN: f64 = 8.0;
+
+/// Where a stack's popup stands by its tile, in the coordinates of the bar's window. Over a bar at the bottom of the
+/// output the popup is the panel with its pointer under it, the pointer's tip [`TIP_GAP`] above the bar; beside a bar
+/// at a side it is the panel alone, [`SIDE_GAP`] off the bar. The panel is centred on its tile and moves along the bar
+/// only to stay [`SCREEN_MARGIN`] inside the output; the pointer stays over the tile.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StackPlacement {
+    /// The popup's window: the panel at its top-leading corner, and the pointer's depth under it where it has one.
+    pub window: Rect,
+    /// What the popup anchors to, so the window system puts it at `window` without having to move it: over a bar at
+    /// the bottom the window's width from the bar's top edge down, the popup centred above it; at a side a line from
+    /// the output's edge to the side of the panel nearest the bar, at the panel's top, the popup beside it.
+    pub anchor: Rect,
+    /// How far the middle of the pointer is from the window's leading edge; `None` beside a bar at a side, where the
+    /// stack has no pointer.
+    pub pointer: Option<f64>,
+}
+
+impl StackPlacement {
+    /// The popup of a panel `width` by `height` for the tile at `tile` of the bar at `bar`, both in the bar's window,
+    /// which covers `screen` (the output's whole extent along the bar, at the output's edge). Everything is on whole
+    /// points, which is all the window system places a popup at.
+    pub fn new(
+        orientation: Orientation,
+        (width, height): (f64, f64),
+        bar: Rect,
+        tile: Rect,
+        screen: Rect,
+    ) -> Self {
+        // along the bar: centred on the tile, kept inside the output
+        let along = |centre: f64, extent: f64, from: f64, to: f64| {
+            let (lo, hi) = (
+                (from + SCREEN_MARGIN).ceil(),
+                (to - SCREEN_MARGIN - extent).floor(),
+            );
+            (centre - extent / 2.0).round().min(hi).max(lo)
+        };
+        match orientation {
+            Orientation::Bottom => {
+                let x = along(tile.cx(), width, screen.x, screen.right());
+                let top = bar.y.min(tile.y).floor();
+                let depth = height + POINTER_DEPTH;
+                // the pointer keeps off the panel's round corners
+                let (lo, hi) = (
+                    StackLayout::RADIUS + POINTER_WIDTH / 2.0,
+                    width - StackLayout::RADIUS - POINTER_WIDTH / 2.0,
+                );
+                Self {
+                    window: Rect::new(x, top - TIP_GAP - depth, width, depth),
+                    anchor: Rect::new(x, top, width, (screen.bottom() - top).max(1.0)),
+                    pointer: Some((tile.cx() - x).min(hi).max(lo)),
+                }
+            }
+            Orientation::Left => {
+                let y = along(tile.cy(), height, screen.y, screen.bottom());
+                let edge = (bar.right().max(tile.right()) + SIDE_GAP).ceil();
+                Self {
+                    window: Rect::new(edge, y, width, height),
+                    anchor: Rect::new(screen.x, y, (edge - screen.x).max(1.0), 1.0),
+                    pointer: None,
+                }
+            }
+            Orientation::Right => {
+                let y = along(tile.cy(), height, screen.y, screen.bottom());
+                let edge = (bar.x.min(tile.x) - SIDE_GAP).floor();
+                Self {
+                    window: Rect::new(edge - width, y, width, height),
+                    anchor: Rect::new(edge, y, (screen.right() - edge).max(1.0), 1.0),
+                    pointer: None,
+                }
+            }
+        }
     }
 }
 
@@ -299,6 +385,124 @@ mod tests {
         let (a, s) = entry(ENTRY_S / 2.0, true);
         assert!(a > 0.5 && a < 1.0);
         assert_eq!(s, 1.0, "Reduce Motion only fades");
+    }
+
+    /// A 1512 by 982 output seen from a bar window 110 points deep at its bottom edge, the bar's top 21 points down
+    /// the window, and a 64 point tile in it whose middle is at `cx`.
+    fn over_a_bar(cx: f64, panel: (f64, f64)) -> (StackPlacement, Rect, Rect) {
+        let screen = Rect::new(0.0, 0.0, 1512.0, 110.0);
+        let bar = Rect::new(400.0, 21.0, 712.0, 84.0);
+        let tile = Rect::new(cx - 32.0, 31.0, 64.0, 64.0);
+        let placement = StackPlacement::new(Orientation::Bottom, panel, bar, tile, screen);
+        (placement, bar, tile)
+    }
+
+    #[test]
+    fn over_a_bar_the_pointers_tip_is_3_points_above_it_and_the_panel_is_centred_on_the_tile() {
+        let layout = StackLayout::new(7);
+        let size = (layout.width, layout.height);
+        let (p, bar, tile) = over_a_bar(906.0, size);
+        assert_eq!(p.window.bottom(), bar.y - TIP_GAP, "the tip");
+        assert_eq!(
+            p.window.bottom() - POINTER_DEPTH,
+            bar.y - 14.0,
+            "the panel's bottom edge"
+        );
+        assert_eq!(p.window.cx(), tile.cx());
+        assert_eq!((p.window.w, p.window.h), (size.0, size.1 + POINTER_DEPTH));
+        assert_eq!(p.pointer, Some(size.0 / 2.0), "under the panel's middle");
+        // the popup centred above the anchor, the gap apart, is the window
+        assert_eq!((p.anchor.x, p.anchor.w), (p.window.x, p.window.w));
+        assert_eq!(p.anchor.y - TIP_GAP, p.window.bottom());
+        assert_eq!(p.anchor.bottom(), 110.0, "down to the window's bottom edge");
+    }
+
+    #[test]
+    fn a_panel_moved_to_stay_inside_the_output_keeps_its_pointer_over_the_tile() {
+        let layout = StackLayout::new(15);
+        let size = (layout.width, layout.height);
+        // a tile near the output's trailing edge: the panel stops 8 points inside it
+        let (p, _, tile) = over_a_bar(1400.0, size);
+        assert_eq!(p.window.right(), 1512.0 - SCREEN_MARGIN);
+        assert_eq!(p.window.x + p.pointer.unwrap(), tile.cx(), "on the tile");
+        assert!(p.pointer.unwrap() > size.0 / 2.0);
+        // and near the leading edge
+        let (p, _, tile) = over_a_bar(100.0, size);
+        assert_eq!(p.window.x, SCREEN_MARGIN);
+        assert_eq!(p.window.x + p.pointer.unwrap(), tile.cx(), "on the tile");
+        // a tile nearer the edge than the panel's corner: the pointer stops at the corner's end
+        let (p, ..) = over_a_bar(1500.0, size);
+        assert_eq!(
+            p.pointer,
+            Some(size.0 - StackLayout::RADIUS - POINTER_WIDTH / 2.0)
+        );
+        let (p, ..) = over_a_bar(12.0, size);
+        assert_eq!(p.pointer, Some(StackLayout::RADIUS + POINTER_WIDTH / 2.0));
+    }
+
+    #[test]
+    fn over_a_tile_that_stands_above_the_bar_the_tip_is_3_points_above_the_tile() {
+        let layout = StackLayout::new(3);
+        let screen = Rect::new(0.0, 0.0, 1512.0, 174.0);
+        let bar = Rect::new(400.0, 85.0, 712.0, 84.0);
+        // a magnified tile, 128 points, its bottom edge where a resting tile's is
+        let tile = Rect::new(842.0, 31.0, 128.0, 128.0);
+        let p = StackPlacement::new(
+            Orientation::Bottom,
+            (layout.width, layout.height),
+            bar,
+            tile,
+            screen,
+        );
+        assert_eq!(p.window.bottom(), tile.y - TIP_GAP);
+        assert_eq!(p.window.cx(), tile.cx());
+    }
+
+    #[test]
+    fn a_place_is_on_whole_points_whatever_the_bar_s_are() {
+        let layout = StackLayout::new(2);
+        let screen = Rect::new(0.0, 0.0, 1280.0, 96.75);
+        let bar = Rect::new(500.25, 7.5, 300.5, 84.25);
+        let tile = Rect::new(700.3, 17.4, 64.6, 64.6);
+        let p = StackPlacement::new(
+            Orientation::Bottom,
+            (layout.width, layout.height),
+            bar,
+            tile,
+            screen,
+        );
+        for v in [
+            p.window.x, p.window.y, p.window.w, p.window.h, p.anchor.x, p.anchor.y, p.anchor.w,
+        ] {
+            assert_eq!(v.fract(), 0.0, "{p:?}");
+        }
+        let gap = bar.y - p.window.bottom();
+        assert!((TIP_GAP..TIP_GAP + 1.0).contains(&gap), "{gap}");
+        assert!((p.window.x + p.pointer.unwrap() - tile.cx()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn beside_a_bar_at_a_side_the_panel_stands_8_points_off_it_without_a_pointer() {
+        let layout = StackLayout::new(7);
+        let size = (layout.width, layout.height);
+        // a bar window 110 points wide at the output's left edge, 982 points tall
+        let screen = Rect::new(0.0, 0.0, 110.0, 982.0);
+        let bar = Rect::new(5.0, 300.0, 84.0, 400.0);
+        let tile = Rect::new(15.0, 600.0, 64.0, 64.0);
+        let p = StackPlacement::new(Orientation::Left, size, bar, tile, screen);
+        assert_eq!(p.pointer, None);
+        assert_eq!(p.window.x, bar.right() + SIDE_GAP);
+        assert_eq!(p.window.cy(), tile.cy());
+        assert_eq!((p.window.w, p.window.h), size);
+        // the popup beside the anchor, their tops aligned, is the window
+        assert_eq!((p.anchor.right(), p.anchor.y), (p.window.x, p.window.y));
+        // at the right edge, mirrored; a tile near the output's bottom keeps the panel inside it
+        let bar = Rect::new(21.0, 300.0, 84.0, 660.0);
+        let tile = Rect::new(31.0, 890.0, 64.0, 64.0);
+        let p = StackPlacement::new(Orientation::Right, size, bar, tile, screen);
+        assert_eq!(p.window.right(), bar.x - SIDE_GAP);
+        assert_eq!((p.anchor.x, p.anchor.y), (p.window.right(), p.window.y));
+        assert_eq!(p.window.bottom(), 982.0 - SCREEN_MARGIN);
     }
 
     #[test]

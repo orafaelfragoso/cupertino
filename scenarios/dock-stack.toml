@@ -1,0 +1,4 @@
+title = "Dock: the downloads folder open as a fan"
+programs = ["cupertino-dock"]
+after = 3.5
+args = ["--click", "2:634,600"]

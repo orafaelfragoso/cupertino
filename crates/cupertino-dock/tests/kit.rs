@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cupertino_assets::BUILTIN_FONT;
-use cupertino_defaults::dock::DockSettings;
+use cupertino_defaults::dock::{DockSettings, Position, StackStyle};
 use cupertino_dock::actions::{ActionMap, Trigger};
 use cupertino_dock::desktop::{parse_entry, DesktopIndex};
 use cupertino_dock::kit::{
@@ -31,7 +31,8 @@ use cupertino_kit::geometry::{Point, Rect};
 use cupertino_kit::layout::LayoutDirection;
 use cupertino_kit::platform::{
     semantics, Capabilities, ClipboardData, DropAction, KeyEvent, Keysym, MaterialRegion, Mods,
-    MouseButton, PointerEvent, Timestamp, WindowEvent, WindowId, WindowRequest, WindowStates,
+    MouseButton, PointerEvent, PopupEdge, PopupSpec, Timestamp, WindowEvent, WindowId,
+    WindowRequest, WindowStates,
 };
 use cupertino_kit::render::{CpuConfig, CpuRenderer, ImageResource, PixelFormat};
 use cupertino_kit::text::{FontIndex, GlyphRaster, TextSystem};
@@ -1231,7 +1232,7 @@ fn without_a_grab_serial_a_menu_desktop_control_shows_before_any_input_opens_wit
 /// The downloads stack of two files, its folder listed only once [`end_listings`] says so, watched by desktop control
 /// before anything gave it an input event.
 fn controlled_stack() -> Run {
-    let run = watched(stack_run(2));
+    let run = watched(grid_run(2));
     run.record.borrow_mut().hold_listings = true;
     run
 }
@@ -2278,8 +2279,13 @@ const DOWNLOADS: &str = "/fixture/Downloads";
 
 /// A run whose host shows the downloads folder as a stack of `count` files.
 fn stack_run(count: usize) -> Run {
+    stack_run_on(tokens(false), true, count)
+}
+
+/// [`stack_run`] in `theme`, on a desktop that offers its materials (`app_effects`) or not.
+fn stack_run_on(theme: ThemeTokens, app_effects: bool, count: usize) -> Run {
     FOLDERS.set(vec![(DOWNLOADS.to_owned(), "folder-download".to_owned())]);
-    let run = Run::start();
+    let run = Run::on(theme, ActionMap::default(), app_effects);
     run.record.borrow_mut().folder_entries = (0..count)
         .map(|i| cupertino_dock::stack::StackEntry {
             name: format!("file-{i}.txt"),
@@ -2287,6 +2293,17 @@ fn stack_run(count: usize) -> Run {
             icon: "text-x-generic".to_owned(),
         })
         .collect();
+    run
+}
+
+/// [`stack_run`] with the folder set to open as a grid whatever it holds (`dock.conf`'s `stack`).
+fn grid_run(count: usize) -> Run {
+    let mut run = stack_run(count);
+    run.record.borrow_mut().conf = Some(DockSettings {
+        stack: Some(StackStyle::Grid),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
     run
 }
 
@@ -2311,7 +2328,7 @@ fn stack_window(run: &Run) -> Option<WindowId> {
 /// a file opens it and closes the stack; a second click on the tile closes it too.
 #[test]
 fn the_downloads_folder_is_a_tile_before_the_trash_whose_click_opens_its_stack() {
-    let mut run = stack_run(7);
+    let mut run = grid_run(7);
     let row = bar_row(&mut run);
     assert_eq!(
         &row[..4],
@@ -2394,7 +2411,7 @@ fn escape_closes_the_stack_and_its_button_opens_the_folder() {
 /// is listed closes it for good (the listing that ends later opens nothing).
 #[test]
 fn a_stack_shows_once_its_folder_is_listed_and_a_listing_for_a_closed_stack_opens_nothing() {
-    let mut run = stack_run(3);
+    let mut run = grid_run(3);
     run.record.borrow_mut().hold_listings = true;
     let bar = run.bar();
     let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
@@ -2428,6 +2445,752 @@ fn a_stack_shows_once_its_folder_is_listed_and_a_listing_for_a_closed_stack_open
         stack_window(&run).is_none(),
         "closed while it was listed, it stays closed"
     );
+}
+
+// ---- where the open stack stands, and how it reads ------------------------------------------------------------------
+
+/// The place the popup `window` last asked for.
+fn asked_place(run: &mut Run, window: WindowId) -> PopupSpec {
+    let system = run.driver.window_system_mut();
+    system
+        .requests(window)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            WindowRequest::Reposition(spec) => Some(spec.clone()),
+            _ => None,
+        })
+        .or_else(|| system.placement(window).unwrap().cloned())
+        .expect("a popup")
+}
+
+/// Where a popup that asked for `spec` stands with its anchor and its gravity mirrored across `flip`'s axes (the
+/// offset is never mirrored), in its parent's coordinates.
+fn put(spec: &PopupSpec, flip: (bool, bool)) -> Rect {
+    let sides = |edge: PopupEdge| -> (f64, f64) {
+        let (x, y) = match edge {
+            PopupEdge::None => (0.0, 0.0),
+            PopupEdge::Top => (0.0, -1.0),
+            PopupEdge::Bottom => (0.0, 1.0),
+            PopupEdge::Left => (-1.0, 0.0),
+            PopupEdge::Right => (1.0, 0.0),
+            PopupEdge::TopLeft => (-1.0, -1.0),
+            PopupEdge::TopRight => (1.0, -1.0),
+            PopupEdge::BottomLeft => (-1.0, 1.0),
+            PopupEdge::BottomRight => (1.0, 1.0),
+        };
+        (if flip.0 { -x } else { x }, if flip.1 { -y } else { y })
+    };
+    let (anchor, gravity) = (sides(spec.anchor), sides(spec.gravity));
+    let (a, size) = (spec.anchor_rect, spec.size);
+    Rect::new(
+        a.min_x()
+            + a.width() * (anchor.0 + 1.0) / 2.0
+            + size.width * (gravity.0 - 1.0) / 2.0
+            + spec.offset.x,
+        a.min_y()
+            + a.height() * (anchor.1 + 1.0) / 2.0
+            + size.height * (gravity.1 - 1.0) / 2.0
+            + spec.offset.y,
+        size.width,
+        size.height,
+    )
+}
+
+/// Where the window system puts a popup that asked for `spec` on an output at `output` (in the parent's coordinates),
+/// as the popup protocol has it: at the anchor; mirrored on an axis where that leaves the output and the mirrored
+/// place does not; then slid inside. With whether it was mirrored, and whether it had to slide.
+fn resolved(spec: &PopupSpec, output: Rect) -> (Rect, bool, bool) {
+    let fits_x = |r: Rect| r.min_x() >= output.min_x() && r.max_x() <= output.max_x();
+    let fits_y = |r: Rect| r.min_y() >= output.min_y() && r.max_y() <= output.max_y();
+    let first = put(spec, (false, false));
+    let flip = (
+        spec.constraint.flip && !fits_x(first) && fits_x(put(spec, (true, false))),
+        spec.constraint.flip && !fits_y(first) && fits_y(put(spec, (false, true))),
+    );
+    let at = put(spec, flip);
+    let slid = Rect::new(
+        at.x().min(output.max_x() - at.width()).max(output.min_x()),
+        at.y().min(output.max_y() - at.height()).max(output.min_y()),
+        at.width(),
+        at.height(),
+    );
+    (slid, flip.0 || flip.1, slid != at)
+}
+
+/// A run whose downloads folder holds `count` files, with the bar at `position`, magnifying or not, and the stack's
+/// form set to `stack`; and the bar's window.
+fn placed_stack_run(
+    count: usize,
+    position: Position,
+    magnification: bool,
+    stack: StackStyle,
+    scale: f64,
+) -> (Run, WindowId) {
+    let mut run = stack_run(count);
+    run.record.borrow_mut().conf = Some(DockSettings {
+        position: Some(position),
+        magnification: Some(magnification),
+        stack: Some(stack),
+        ..DockSettings::default()
+    });
+    run.message(Message::ConfChanged);
+    run.advance(1.0);
+    let bar = run.bar();
+    run.send_to(bar, WindowEvent::Scale(scale));
+    (run, bar)
+}
+
+/// The edge of the bar away from the screen and the output's rectangle, in the bar's window, from where the folder's
+/// tile rests: the bar's padding and its margin lie between the tile and them.
+fn bar_edge_and_output(position: Position, rest: Rect) -> (f64, Rect) {
+    let cfg = DockConfig::default();
+    let (inner, outer) = (cfg.bar_padding(), cfg.edge_padding() + cfg.edge_margin);
+    let (w, h) = (OUTPUTS[0].width, OUTPUTS[0].height);
+    match position {
+        Position::Bottom => (
+            rest.min_y() - inner,
+            Rect::new(0.0, rest.max_y() + outer - h, w, h),
+        ),
+        Position::Left => (
+            rest.max_x() + inner,
+            Rect::new(rest.min_x() - outer, 0.0, w, h),
+        ),
+        Position::Right => (
+            rest.min_x() - inner,
+            Rect::new(rest.max_x() + outer - w, 0.0, w, h),
+        ),
+    }
+}
+
+/// Every number of a place a popup asks for is a whole point: the window system places popups at whole points, so
+/// the place is the same at every scale.
+fn assert_whole_points(spec: &PopupSpec, what: &str) {
+    let a = spec.anchor_rect;
+    for v in [
+        a.x(),
+        a.y(),
+        a.width(),
+        a.height(),
+        spec.size.width,
+        spec.size.height,
+        spec.offset.x,
+        spec.offset.y,
+    ] {
+        assert_eq!(v.fract(), 0.0, "{what}: {spec:?}");
+    }
+}
+
+/// Checks where the open grid of a folder of `count` files stands by a bar at `position`, magnifying or not, at
+/// `scale`: clear of the bar and of its tile. Over a bar at the bottom its pointer's tip is 3 points above the bar's
+/// top edge (above a magnified tile's while the pointer magnifies it) and the panel is centred on the tile; beside a
+/// bar at a side the panel stands 8 points off the bar, centred on the tile. The popup asks for that very place: the
+/// window system neither slides it nor, at the bottom and at the left, mirrors it.
+fn check_grid_place(position: Position, magnification: bool, scale: f64, count: usize) {
+    use cupertino_dock::stack::{StackLayout, POINTER_DEPTH, SIDE_GAP, TIP_GAP};
+    let what = format!("{position:?}, magnification {magnification}, {scale}x, {count} files");
+    let (mut run, bar) = placed_stack_run(count, position, magnification, StackStyle::Grid, scale);
+    let rest = run.bounds(bar, Role::Button, "Downloads");
+    let (edge, output) = bar_edge_and_output(position, rest);
+    run.click(bar, centre(rest));
+    run.advance(1.0);
+    let stack = stack_window(&run).expect("the stack opened");
+    run.send_to(stack, WindowEvent::Scale(scale));
+    let panel = StackLayout::new(count);
+    // with the pointer still on the tile (magnified, if the bar magnifies), then with it gone
+    for pointer_on_tile in [true, false] {
+        if !pointer_on_tile {
+            run.pointer(bar, PointerEvent::Leave);
+            run.advance(1.0);
+            run.advance(1.0);
+        }
+        let what = format!("{what}, pointer on the tile {pointer_on_tile}");
+        let tile = run.bounds(bar, Role::Button, "Downloads");
+        if magnification && pointer_on_tile {
+            assert!(
+                tile.width() > rest.width() + 30.0,
+                "{what}: magnified {tile:?}"
+            );
+        } else {
+            assert_eq!(tile, rest, "{what}: the tile rests");
+        }
+        let spec = asked_place(&mut run, stack);
+        assert_whole_points(&spec, &what);
+        let (place, mirrored, slid) = resolved(&spec, output);
+        assert!(
+            !slid,
+            "{what}: asked for a place inside the output: {spec:?}"
+        );
+        assert_eq!(mirrored, position == Position::Right, "{what}: {spec:?}");
+        assert!(
+            place.min_x() >= output.min_x()
+                && place.max_x() <= output.max_x()
+                && place.min_y() >= output.min_y()
+                && place.max_y() <= output.max_y(),
+            "{what}: {place:?} in {output:?}"
+        );
+        match position {
+            Position::Bottom => {
+                let top = edge.min(tile.min_y()).floor();
+                assert_eq!(place.max_y(), top - TIP_GAP, "{what}: the tip");
+                assert!(place.max_y() <= edge - TIP_GAP, "{what}: over the bar");
+                assert_eq!(
+                    (place.width(), place.height()),
+                    (panel.width, panel.height + POINTER_DEPTH),
+                    "{what}: the panel and its pointer"
+                );
+                assert!(
+                    (place.center().x - tile.center().x).abs() <= 0.5,
+                    "{what}: centred on the tile: {place:?} {tile:?}"
+                );
+            }
+            Position::Left => {
+                let from = (edge.max(tile.max_x()) + SIDE_GAP).ceil();
+                assert_eq!(place.min_x(), from, "{what}");
+                assert!(place.min_x() >= edge + SIDE_GAP, "{what}: off the bar");
+            }
+            Position::Right => {
+                let to = (edge.min(tile.min_x()) - SIDE_GAP).floor();
+                assert_eq!(place.max_x(), to, "{what}");
+                assert!(place.max_x() <= edge - SIDE_GAP, "{what}: off the bar");
+            }
+        }
+        if position != Position::Bottom {
+            assert_eq!(
+                (place.width(), place.height()),
+                (panel.width, panel.height),
+                "{what}: the panel alone"
+            );
+            assert!(
+                (place.center().y - tile.center().y).abs() <= 0.5,
+                "{what}: centred on the tile: {place:?} {tile:?}"
+            );
+        }
+    }
+}
+
+/// The settled grid stands off a bar at the bottom of the output, with and without magnification.
+#[test]
+fn the_settled_grid_stands_over_a_bar_at_the_bottom_with_its_tip_3_points_above_it() {
+    for magnification in [false, true] {
+        check_grid_place(Position::Bottom, magnification, 1.0, 7);
+    }
+}
+
+/// The settled grid stands off a bar at the left of the output, with and without magnification.
+#[test]
+fn the_settled_grid_stands_8_points_off_a_bar_at_the_left() {
+    for magnification in [false, true] {
+        check_grid_place(Position::Left, magnification, 1.0, 7);
+    }
+}
+
+/// The settled grid stands off a bar at the right of the output, with and without magnification.
+#[test]
+fn the_settled_grid_stands_8_points_off_a_bar_at_the_right() {
+    for magnification in [false, true] {
+        check_grid_place(Position::Right, magnification, 1.0, 7);
+    }
+}
+
+/// The grid and the fan keep their places at the scales 1.5 and 2, at every edge, with and without magnification,
+/// the grid for a folder of one file and for a full one. Slow tier: some forty runs of the dock.
+#[test]
+fn the_settled_stack_keeps_its_place_at_every_scale_edge_and_size() {
+    for scale in [1.5, 2.0] {
+        for magnification in [false, true] {
+            for position in [Position::Bottom, Position::Left, Position::Right] {
+                for count in [1, 15] {
+                    check_grid_place(position, magnification, scale, count);
+                }
+            }
+            check_fan_place(magnification, scale);
+        }
+    }
+}
+
+/// Checks where the fan of a folder of four files stands over a bar at the bottom, magnifying or not, at `scale`: its
+/// lowest row's middle 40.5 points above the bar's top edge, the rows a pitch apart over the tile; over a tile the
+/// pointer magnifies they stand as much higher as the tile rises over the bar. The window system mirrors the fan's
+/// popup to above the tile and does not slide it.
+fn check_fan_place(magnification: bool, scale: f64) {
+    use cupertino_dock::fan::{LOWEST_ABOVE_BAR, PITCH};
+    let what = format!("magnification {magnification}, {scale}x");
+    let (mut run, bar) =
+        placed_stack_run(4, Position::Bottom, magnification, StackStyle::Auto, scale);
+    let rest = run.bounds(bar, Role::Button, "Downloads");
+    let (bar_top, output) = bar_edge_and_output(Position::Bottom, rest);
+    run.click(bar, centre(rest));
+    run.advance(1.0);
+    let fan = stack_window(&run).expect("the stack opened");
+    run.send_to(fan, WindowEvent::Scale(scale));
+    assert_eq!(named(&run, fan, Role::Button).len(), 5, "{what}");
+    for pointer_on_tile in [true, false] {
+        if !pointer_on_tile {
+            run.pointer(bar, PointerEvent::Leave);
+            run.advance(1.0);
+            run.advance(1.0);
+        }
+        let what = format!("{what}, pointer on the tile {pointer_on_tile}");
+        let tile = run.bounds(bar, Role::Button, "Downloads");
+        let rise = (bar_top - tile.min_y()).max(0.0);
+        assert_eq!(rise > 0.0, magnification && pointer_on_tile, "{what}");
+        let spec = asked_place(&mut run, fan);
+        let (place, mirrored, slid) = resolved(&spec, output);
+        assert!(mirrored && !slid, "{what}: {spec:?}");
+        let rows: Vec<Rect> = (0..4)
+            .map(|i| run.bounds(fan, Role::Button, &format!("file-{i}.txt")))
+            .collect();
+        assert_eq!(rows[0].height(), PITCH, "{what}: a row of the fan");
+        let lowest = place.min_y() + rows[0].center().y;
+        // the anchor is sent in whole points
+        assert!(
+            (bar_top - lowest - LOWEST_ABOVE_BAR - rise).abs() <= 1.0,
+            "{what}: the lowest row {} above the bar",
+            bar_top - lowest
+        );
+        assert!(
+            (rows[0].center().y - rows[1].center().y - PITCH).abs() < 1e-6,
+            "{what}: {rows:?}"
+        );
+        assert!(
+            (place.center().x - tile.center().x).abs() <= 1.0,
+            "{what}: over the tile: {place:?} {tile:?}"
+        );
+    }
+}
+
+/// A small folder opens as a fan on an output with room for it, though the bar's own window is only as deep as the
+/// bar: the fan's room is the output's. It stands over its tile, with and without magnification.
+#[test]
+fn the_settled_fan_stands_over_its_tile_its_lowest_row_40_5_points_above_the_bar() {
+    for magnification in [false, true] {
+        check_fan_place(magnification, 1.0);
+    }
+}
+
+/// A folder with more files than the fan holds, and one set to open as a grid, open as the grid; so does any folder
+/// of a bar at a side.
+#[test]
+fn a_full_folder_and_a_bar_at_a_side_open_the_grid() {
+    let grid = |count: usize, position: Position, stack: StackStyle| {
+        let (mut run, bar) = placed_stack_run(count, position, false, stack, 1.0);
+        let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+        run.click(bar, tile);
+        run.advance(1.0);
+        let stack = stack_window(&run).expect("the stack opened");
+        let layout = cupertino_dock::stack::StackLayout::new(count);
+        run.bounds(stack, Role::Button, "Open in Files") == kit_rect(layout.button)
+    };
+    assert!(!grid(4, Position::Bottom, StackStyle::Auto), "a fan");
+    assert!(grid(12, Position::Bottom, StackStyle::Auto));
+    assert!(grid(12, Position::Bottom, StackStyle::Fan));
+    assert!(grid(4, Position::Left, StackStyle::Auto));
+    assert!(grid(4, Position::Right, StackStyle::Fan));
+}
+
+/// The grid is glass of a dense surface with text on it, its panel and the pointer under it one piece (one container)
+/// that points at the folder's tile: the pointer's layers lie under the panel, narrowing to a tip over the tile's
+/// middle. Beside a bar at a side the panel has no pointer.
+#[test]
+fn the_grid_and_its_pointer_are_one_piece_of_glass_that_points_at_the_tile() {
+    use cupertino_dock::stack::{StackLayout, POINTER_DEPTH, POINTER_WIDTH};
+    use cupertino_kit::platform::GlassStyle;
+    let (mut run, bar) = placed_stack_run(7, Position::Bottom, false, StackStyle::Grid, 1.0);
+    let rest = run.bounds(bar, Role::Button, "Downloads");
+    let (_, output) = bar_edge_and_output(Position::Bottom, rest);
+    run.click(bar, centre(rest));
+    run.advance(1.0);
+    let stack = stack_window(&run).expect("the stack opened");
+    let (place, ..) = resolved(&asked_place(&mut run, stack), output);
+    let regions = last_materials(run.driver.window_system_mut().requests(stack).unwrap());
+    let panel = StackLayout::new(7);
+    assert!(
+        regions.len() > 2,
+        "the panel and the pointer's layers: {regions:?}"
+    );
+    let container = regions[0].glass.expect("glass").container;
+    assert_ne!(container, 0, "joined");
+    for region in &regions {
+        let glass = region.glass.expect("glass");
+        assert_eq!(
+            (glass.style, glass.container),
+            (GlassStyle::Dense, container)
+        );
+        assert_eq!(region.alpha, 1.0, "settled");
+    }
+    let body = regions
+        .iter()
+        .find(|r| r.rect.height() > POINTER_DEPTH)
+        .expect("the panel");
+    assert_eq!(body.rect, Rect::new(0.0, 0.0, panel.width, panel.height));
+    assert_eq!(body.radius, StackLayout::RADIUS);
+    let mut layers: Vec<Rect> = regions
+        .iter()
+        .filter(|r| r.rect.height() <= POINTER_DEPTH)
+        .map(|r| r.rect)
+        .collect();
+    layers.sort_by(|a, b| a.min_y().total_cmp(&b.min_y()));
+    assert!(layers.len() >= 3, "{layers:?}");
+    assert!(
+        (layers[0].min_y() - panel.height).abs() < 1e-6,
+        "from the panel's bottom edge"
+    );
+    assert!((layers[0].width() - POINTER_WIDTH).abs() < 1e-6);
+    for pair in layers.windows(2) {
+        assert!(pair[1].width() < pair[0].width(), "narrowing: {layers:?}");
+    }
+    for layer in &layers {
+        assert!(layer.max_y() <= panel.height + POINTER_DEPTH + 1e-6);
+        assert!(
+            (place.min_x() + layer.center().x - rest.center().x).abs() <= 0.5,
+            "over the tile's middle: {layer:?}"
+        );
+    }
+
+    let (mut run, bar) = placed_stack_run(7, Position::Left, false, StackStyle::Grid, 1.0);
+    let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+    run.click(bar, tile);
+    run.advance(1.0);
+    let stack = stack_window(&run).expect("the stack opened");
+    let regions = last_materials(run.driver.window_system_mut().requests(stack).unwrap());
+    assert_eq!(regions.len(), 1, "the panel alone: {regions:?}");
+}
+
+/// A frame of a window as it was drawn: device pixels, `scale` of them a point.
+struct Picture {
+    width: u32,
+    height: u32,
+    scale: f64,
+    pixels: Vec<u8>,
+    premultiplied: bool,
+}
+
+impl Picture {
+    /// The last frame of `window`.
+    fn of(run: &mut Run, window: WindowId, scale: f64) -> Self {
+        let frame = run
+            .driver
+            .window_system_mut()
+            .frames(window)
+            .unwrap()
+            .last()
+            .expect("the window drew a frame");
+        Self {
+            width: frame.width,
+            height: frame.height,
+            scale,
+            pixels: frame.pixels.clone(),
+            premultiplied: frame.format == PixelFormat::Rgba8Premultiplied,
+        }
+    }
+
+    /// The colour and the alpha of the device pixel under the point `at`, the colour not premultiplied.
+    fn at(&self, at: Point) -> ([f64; 3], f64) {
+        let x = ((at.x * self.scale) as u32).min(self.width - 1) as usize;
+        let y = ((at.y * self.scale) as u32).min(self.height - 1) as usize;
+        let px = &self.pixels[(y * self.width as usize + x) * 4..][..4];
+        let alpha = f64::from(px[3]) / 255.0;
+        let colour = [0, 1, 2].map(|c| {
+            let v = f64::from(px[c]) / 255.0;
+            if self.premultiplied && alpha > 0.0 {
+                (v / alpha).min(1.0)
+            } else {
+                v
+            }
+        });
+        (colour, alpha)
+    }
+
+    /// The strongest contrast against `fill` of anything drawn in `rect`, as it shows over `fill`.
+    fn strongest(&self, rect: Rect, fill: [f64; 3]) -> f64 {
+        let step = 1.0 / self.scale;
+        let mut best: f64 = 1.0;
+        let mut y = rect.min_y() + step / 2.0;
+        while y < rect.max_y() {
+            let mut x = rect.min_x() + step / 2.0;
+            while x < rect.max_x() {
+                let (colour, alpha) = self.at(Point::new(x, y));
+                let shown = [0, 1, 2].map(|c| colour[c] * alpha + fill[c] * (1.0 - alpha));
+                best = best.max(contrast(shown, fill));
+                x += step;
+            }
+            y += step;
+        }
+        best
+    }
+}
+
+/// The relative luminance of an sRGB colour.
+fn luminance(colour: [f64; 3]) -> f64 {
+    let linear = colour.map(|c| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+}
+
+/// The contrast ratio of two colours, 1 to 21.
+fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The theme of `appearance`, with Reduce Transparency or without.
+fn appearance_tokens(appearance: Appearance, reduce_transparency: bool) -> ThemeTokens {
+    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme");
+    let preferences = ThemePreferences {
+        appearance,
+        reduce_transparency,
+        reduce_motion: false,
+    };
+    ThemeTokens::cupertino(&Theme::from_dir(data).unwrap(), preferences).unwrap()
+}
+
+/// The name of a look's pictures: `name`, marked where the session reduces transparency.
+fn look_name(name: &str, reduce_transparency: bool) -> String {
+    if reduce_transparency {
+        format!("{name}-reduce-transparency")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// What a test calls an appearance, with Reduce Transparency or without.
+fn appearance_name(appearance: Appearance, reduce_transparency: bool) -> String {
+    let name = match appearance {
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+        Appearance::LightHighContrast => "light-increase-contrast",
+        Appearance::DarkHighContrast => "dark-increase-contrast",
+    };
+    if reduce_transparency {
+        format!("{name}-reduce-transparency")
+    } else {
+        name.to_owned()
+    }
+}
+
+const APPEARANCES: [Appearance; 4] = [
+    Appearance::Light,
+    Appearance::Dark,
+    Appearance::LightHighContrast,
+    Appearance::DarkHighContrast,
+];
+
+/// Checks that the open grid reads at `scale` where the desktop draws no glass and it paints its own panel: in the
+/// light and the dark appearance and each with Increase Contrast, with Reduce Transparency (`reduce`) or without, the
+/// panel and the pointer under it are one opaque fill of the appearance's tone, and the folder's name, a file's name and the
+/// button's label stand on it at 7:1 at least (the button's label on the button's own tint); with Increase Contrast
+/// the panel's edge stands out from the fill more than it does at rest. With `CUPERTINO_LOOK_DIR` set the pictures
+/// are written there.
+fn check_grid_reads(scale: f64, reduce: bool) {
+    use cupertino_dock::stack::{StackLayout, POINTER_DEPTH};
+    let look_dir = std::env::var_os("CUPERTINO_LOOK_DIR").map(std::path::PathBuf::from);
+    let mut edges = Vec::new();
+    for appearance in APPEARANCES {
+        let name = appearance_name(appearance, reduce);
+        let what = format!("{name} at {scale}x");
+        let mut run = stack_run_on(appearance_tokens(appearance, reduce), false, 7);
+        run.record.borrow_mut().conf = Some(DockSettings {
+            stack: Some(StackStyle::Grid),
+            ..DockSettings::default()
+        });
+        run.message(Message::ConfChanged);
+        let bar = run.bar();
+        let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+        run.click(bar, tile);
+        run.advance(1.0);
+        let stack = stack_window(&run).expect("the stack opened");
+        if let Some(dir) = &look_dir {
+            let file = look_name("dock-stack-grid", reduce);
+            run.driver
+                .look_into(dir, stack, &file, scale, &[appearance])
+                .unwrap();
+        }
+        // a look leaves the window at scale 1
+        run.send_to(stack, WindowEvent::Scale(scale));
+        let picture = Picture::of(&mut run, stack, scale);
+        let layout = StackLayout::new(7);
+        let dark = appearance.is_dark();
+        // the padding beside the grid, half way down: clear of the corners, the icons and the text
+        let (fill, alpha) = picture.at(Point::new(StackLayout::PADDING / 2.0, layout.height / 2.0));
+        assert!(alpha > 0.99, "{what}: an opaque panel ({alpha})");
+        let tone = luminance(fill);
+        assert!(
+            if dark { tone < 0.2 } else { tone > 0.6 },
+            "{what}: the fill's tone {tone} is the appearance's"
+        );
+        // the pointer, half way down it under the tile: the same fill
+        let pointer = picture.at(Point::new(
+            layout.width / 2.0,
+            layout.height + POINTER_DEPTH / 2.0,
+        ));
+        assert!(
+            pointer.1 > 0.99,
+            "{what}: the pointer is filled ({})",
+            pointer.1
+        );
+        assert!(
+            contrast(pointer.0, fill) < 1.05,
+            "{what}: the pointer in the panel's fill"
+        );
+        // beside the pointer, under the panel, nothing is drawn
+        let beside = picture.at(Point::new(
+            layout.width / 4.0,
+            layout.height + POINTER_DEPTH / 2.0,
+        ));
+        assert!(
+            beside.1 < 0.01,
+            "{what}: clear beside the pointer ({})",
+            beside.1
+        );
+        let title = picture.strongest(kit_rect(layout.title), fill);
+        assert!(
+            title >= 7.0,
+            "{what}: the folder's name reads at {title:.2}:1"
+        );
+        let cell = layout.cell(0);
+        let label = Rect::new(cell.x, cell.y + StackLayout::LABEL_CY - 8.0, cell.w, 16.0);
+        let file = picture.strongest(label, fill);
+        assert!(file >= 7.0, "{what}: a file's name reads at {file:.2}:1");
+        // the button's own tint, at its round end, and its label on it
+        let button = kit_rect(layout.button);
+        let (tint, _) = picture.at(Point::new(button.min_x() + 6.0, button.center().y));
+        let open = picture.strongest(button, tint);
+        assert!(
+            open >= 7.0,
+            "{what}: the button's label reads at {open:.2}:1"
+        );
+        // across the panel's leading edge, half way down
+        let edge = picture.strongest(Rect::new(0.0, layout.height / 2.0, 2.0, 1.0 / scale), fill);
+        edges.push((appearance, edge));
+    }
+    for (appearance, edge) in &edges {
+        if !appearance.is_high_contrast() {
+            continue;
+        }
+        let rest = edges
+            .iter()
+            .find(|(a, _)| !a.is_high_contrast() && a.is_dark() == appearance.is_dark())
+            .expect("the appearance at rest")
+            .1;
+        assert!(
+            *edge > rest,
+            "{} at {scale}x: with Increase Contrast the edge stands out at {edge:.2}:1, at rest {rest:.2}:1",
+            appearance_name(*appearance, reduce)
+        );
+    }
+}
+
+#[test]
+fn the_open_grid_reads_on_its_own_fill_in_every_appearance() {
+    check_grid_reads(1.0, false);
+}
+
+#[test]
+fn with_reduce_transparency_the_open_grid_reads_on_its_own_fill() {
+    check_grid_reads(1.0, true);
+}
+
+/// Slow tier: eight runs of the dock drawn at two device pixels a point.
+#[test]
+fn the_open_grid_reads_on_its_own_fill_in_every_appearance_at_2x() {
+    for reduce in [false, true] {
+        check_grid_reads(2.0, reduce);
+    }
+}
+
+/// Checks that the fan's names read on their pills in the light and the dark appearance and each with Increase
+/// Contrast, with Reduce Transparency (`reduce`) or without, over a light and over a dark desktop: the pill's fill laid
+/// over white and over black, and the name laid over that, stand apart at 4.5:1 at least. With `CUPERTINO_LOOK_DIR`
+/// set pictures of the fan are written there.
+fn check_fan_reads(reduce: bool) {
+    let look_dir = std::env::var_os("CUPERTINO_LOOK_DIR").map(std::path::PathBuf::from);
+    for appearance in APPEARANCES {
+        let name = appearance_name(appearance, reduce);
+        let mut run = stack_run_on(appearance_tokens(appearance, reduce), false, 4);
+        let bar = run.bar();
+        let tile = centre(run.bounds(bar, Role::Button, "Downloads"));
+        run.click(bar, tile);
+        run.advance(1.0);
+        let fan = stack_window(&run).expect("the stack opened");
+        if let Some(dir) = &look_dir {
+            let file = look_name("dock-stack-fan", reduce);
+            for scale in [1.0, 2.0] {
+                run.driver
+                    .look_into(dir, fan, &file, scale, &[appearance])
+                    .unwrap();
+            }
+        }
+        // a look leaves the window at scale 1
+        run.send_to(fan, WindowEvent::Scale(1.0));
+        let picture = Picture::of(&mut run, fan, 1.0);
+        let row = run.bounds(fan, Role::Button, "file-0.txt");
+        // the part of the pill the name stands on: from the pill's leading end to its end by the icon, less
+        // the room either side of the name, a band through the middle of the row
+        let column = run.driver.window_system_mut().spec(fan).unwrap().size.width / 2.0;
+        let trailing = column - cupertino_dock::fan::ICON / 2.0 - cupertino_dock::fan::PILL_GAP;
+        let middle = row.center().y;
+        let leading = (0..trailing as usize)
+            .map(|x| x as f64 + 0.5)
+            .find(|&x| picture.at(Point::new(x, middle)).1 > 0.0)
+            .expect("the pill is drawn");
+        let padding = cupertino_dock::fan::PILL_PADDING;
+        let mut samples = Vec::new();
+        let mut x = leading + padding;
+        while x < trailing - padding {
+            for dy in -4..=4 {
+                samples.push(picture.at(Point::new(x, middle + f64::from(dy))));
+            }
+            x += 1.0;
+        }
+        assert!(samples.len() > 100, "{name}: a pill with a name on it");
+        // the pill's own fill is what most of the band shows
+        let key = |(colour, alpha): &([f64; 3], f64)| {
+            let byte = |v: f64| (v * 255.0).round() as u8;
+            [
+                byte(colour[0]),
+                byte(colour[1]),
+                byte(colour[2]),
+                byte(*alpha),
+            ]
+        };
+        let mut counts = std::collections::HashMap::new();
+        for sample in &samples {
+            *counts.entry(key(sample)).or_insert(0usize) += 1;
+        }
+        let most = counts.iter().max_by_key(|(_, n)| **n).unwrap().0;
+        let pill = *samples.iter().find(|s| key(s) == *most).unwrap();
+        for (desktop, backdrop) in [("light", [1.0; 3]), ("dark", [0.0; 3])] {
+            let over = |(colour, alpha): ([f64; 3], f64)| {
+                [0, 1, 2].map(|c| colour[c] * alpha + backdrop[c] * (1.0 - alpha))
+            };
+            // the name: what stands out most from the fill
+            let reads = samples
+                .iter()
+                .map(|s| contrast(over(*s), over(pill)))
+                .fold(1.0, f64::max);
+            assert!(
+                reads >= 4.5,
+                "{name}: over a {desktop} desktop the name reads on its pill at {reads:.2}:1"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_fans_names_read_on_their_pills_over_a_light_and_a_dark_desktop() {
+    check_fan_reads(false);
+}
+
+#[test]
+fn with_reduce_transparency_the_fans_names_read_on_opaque_pills() {
+    check_fan_reads(true);
 }
 
 /// The label popup, while it shows: its window and the name it says.

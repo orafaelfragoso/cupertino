@@ -277,6 +277,14 @@ pub(crate) fn decorations(mode: platform::DecorationMode) -> wl::Decorations {
     }
 }
 
+/// The other application's window a window opens as a child of, for the transport.
+pub(crate) fn foreign_parent(parent: &platform::ForeignParent) -> wl::ForeignParent {
+    wl::ForeignParent {
+        handle: parent.handle.clone(),
+        modal: parent.modal,
+    }
+}
+
 fn anchor(edge: platform::PopupEdge) -> wl::Anchor {
     match edge {
         platform::PopupEdge::None => wl::Anchor::None,
@@ -448,6 +456,23 @@ mod tests {
     use cupertino_geometry::Rect;
 
     const MS: u64 = 1_000_000;
+
+    #[test]
+    fn a_parent_in_another_application_keeps_its_handle_and_whether_the_window_is_modal_to_it() {
+        for modal in [true, false] {
+            let parent = platform::ForeignParent {
+                handle: "ab12".into(),
+                modal,
+            };
+            assert_eq!(
+                foreign_parent(&parent),
+                wl::ForeignParent {
+                    handle: "ab12".into(),
+                    modal
+                }
+            );
+        }
+    }
 
     #[test]
     fn input_times_keep_the_compositors_spacing_from_the_first_anchor() {

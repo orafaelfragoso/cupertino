@@ -56,6 +56,8 @@ use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1:
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
     self, ZxdgToplevelDecorationV1,
 };
+use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2::{self, ZxdgImportedV2};
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_importer_v2::ZxdgImporterV2;
 use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
@@ -137,6 +139,16 @@ impl Popup {
     }
 }
 
+/// Another client's toplevel that a window opens as a child of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignParent {
+    /// The handle the other client exported its toplevel under (xdg-foreign-unstable-v2).
+    pub handle: String,
+    /// The window is a modal dialog of that parent (xdg-dialog-v1). A compositor without the protocol shows it as any
+    /// child.
+    pub modal: bool,
+}
+
 /// How a new application window starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToplevelConfig {
@@ -148,10 +160,10 @@ pub struct ToplevelConfig {
     /// Who should draw the frame. A compositor without the decoration protocol, or one that answers otherwise,
     /// decides; the outcome is in [`WindowConfigure::decorations`].
     pub decorations: Decorations,
-    /// The handle another client exported its toplevel under (xdg-foreign-unstable-v2), which the window opens as a
-    /// child of, as a dialog of that client's window. A compositor without the protocol, or one that does not know the
-    /// handle, leaves the window without a parent.
-    pub foreign_parent: Option<String>,
+    /// The toplevel another client exported, which the window opens as a child of, as a dialog of that client's
+    /// window. A compositor without the protocol, or one that does not know the handle, leaves the window without a
+    /// parent.
+    pub foreign_parent: Option<ForeignParent>,
 }
 
 /// Where a popup goes, relative to its parent's surface (`xdg_positioner`).
@@ -372,6 +384,8 @@ enum Role {
         decorations: Decorations,
         /// The other client's toplevel this one is a child of, until the compositor ends the import.
         imported: Option<ZxdgImportedV2>,
+        /// The window's dialog role, which says it is modal; few windows have one, so it is kept out of line.
+        dialog: Option<Box<XdgDialogV1>>,
         pending: PendingToplevel,
         current: Option<WindowConfigure>,
     },
@@ -469,6 +483,7 @@ pub struct State {
     seat: Option<WlSeat>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
     importer: Option<ZxdgImporterV2>,
+    dialogs: Option<XdgWmDialogV1>,
     scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
     /// The viewporter on its own, which also stretches a solid colour's pixel where the compositor has no fractional
     /// scaling.
@@ -605,6 +620,7 @@ impl Connection {
             seat,
             decoration_manager: bind(&globals, &qh, 1..=1),
             importer: bind(&globals, &qh, 1..=1),
+            dialogs: bind(&globals, &qh, 1..=1),
             scaling: fractional.zip(viewporter.clone()),
             viewporter,
             single_pixel: bind(&globals, &qh, 1..=1),
@@ -730,11 +746,22 @@ impl Connection {
                 .foreign_parent
                 .as_ref()
                 .zip(s.importer.as_ref())
-                .map(|(handle, importer)| {
-                    let imported = importer.import_toplevel(handle.clone(), &qh, id);
+                .map(|(parent, importer)| {
+                    let imported = importer.import_toplevel(parent.handle.clone(), &qh, id);
                     imported.set_parent_of(&wl);
                     imported
                 });
+        // before the first commit, so the compositor places the window as its parent's modal dialog from the start
+        let dialog = config
+            .foreign_parent
+            .as_ref()
+            .filter(|parent| parent.modal)
+            .zip(s.dialogs.as_ref())
+            .map(|(_, dialogs)| {
+                let dialog = dialogs.get_xdg_dialog(&toplevel, &qh, ());
+                dialog.set_modal();
+                Box::new(dialog)
+            });
         s.add_surface(
             id,
             wl,
@@ -744,6 +771,7 @@ impl Connection {
                 decoration,
                 decorations: Decorations::Client,
                 imported,
+                dialog,
                 pending: PendingToplevel::default(),
                 current: None,
             },
@@ -889,9 +917,13 @@ impl Connection {
                 toplevel,
                 decoration,
                 imported,
+                dialog,
                 ..
             } => {
                 if let Some(d) = decoration {
+                    d.destroy();
+                }
+                if let Some(d) = dialog {
                     d.destroy();
                 }
                 toplevel.destroy();
@@ -2377,6 +2409,8 @@ delegate_noop!(State: WpViewport);
 delegate_noop!(State: WpSinglePixelBufferManagerV1);
 delegate_noop!(State: ZxdgDecorationManagerV1);
 delegate_noop!(State: ZxdgImporterV2);
+delegate_noop!(State: XdgWmDialogV1);
+delegate_noop!(State: XdgDialogV1);
 delegate_noop!(State: XdgActivationV1);
 delegate_noop!(State: WpCursorShapeManagerV1);
 delegate_noop!(State: WpCursorShapeDeviceV1);

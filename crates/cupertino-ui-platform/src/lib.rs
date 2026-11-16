@@ -114,6 +114,16 @@ impl DecorationMode {
     }
 }
 
+/// A window of another application that a window opens as a child of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignParent {
+    /// The handle the other application exported its window under.
+    pub handle: String,
+    /// The window is modal to that parent: while it is open the parent takes no input, and a desktop that presents
+    /// such a window as part of its parent does so.
+    pub modal: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowSpec {
     pub title: String,
@@ -122,10 +132,10 @@ pub struct WindowSpec {
     pub min_size: Option<Size>,
     pub max_size: Option<Size>,
     pub decorations: DecorationMode,
-    /// The handle another application exported one of its windows under, which this window opens as a child of (a
-    /// dialog the system shows for that window). Read when the window opens; an unknown handle, or a platform without
-    /// the protocol, leaves the window without a parent.
-    pub foreign_parent: Option<String>,
+    /// The window another application exported, which this window opens as a child of (a dialog the system shows for
+    /// that window). Read when the window opens; an unknown handle, or a platform without the protocol, leaves the
+    /// window without a parent.
+    pub foreign_parent: Option<ForeignParent>,
     /// The part of the window that takes pointer input, in points; elsewhere input reaches what is below. `None` is the
     /// whole window, an empty list none of it.
     pub input_region: Option<Vec<Rect>>,

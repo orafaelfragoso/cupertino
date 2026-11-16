@@ -33,9 +33,9 @@ pub use connection::gpu::{
     DmabufAttributes, DmabufFeedback, DmabufPlaneRef, FrameSize, GpuBufferId, GpuFrame, TimelineId,
 };
 pub use connection::{
-    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, HeldPress, Popup,
-    PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId, TokenRequest, Toplevel,
-    ToplevelConfig, Waker,
+    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, ForeignParent, FrameCallback,
+    HeldPress, Popup, PopupConfigure, PopupPlacement, PressDevice, State, SurfaceId, TokenRequest,
+    Toplevel, ToplevelConfig, Waker,
 };
 pub use cursor::CursorTheme;
 pub use error::{Disconnect, Error};

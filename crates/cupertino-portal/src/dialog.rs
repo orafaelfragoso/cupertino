@@ -23,7 +23,7 @@ use cupertino_kit::core::{
 use cupertino_kit::file_icons::FileIcons;
 use cupertino_kit::geometry::{Insets, Point, Size};
 use cupertino_kit::layout::{Constraints, ContainerKind, LayoutSpec, Measured, ScrollState};
-use cupertino_kit::platform::{DecorationMode, Keysym, Mods};
+use cupertino_kit::platform::{DecorationMode, ForeignParent, Keysym, Mods};
 use cupertino_kit::prelude::*;
 use cupertino_kit::render::{ImageResource, PixelFormat};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
@@ -52,6 +52,18 @@ const BAR_INSETS: Insets = Insets {
     right: 16.0,
 };
 const SIZE: Size = Size::new(720.0, 460.0);
+/// The room above the first row of the chooser's sidebar and of its file pane: the chooser has no title bar, and its
+/// first rows clear the window's round corners; an approximate design value.
+const TOP_INSET: f64 = 10.0;
+
+/// The room above the chooser's panes: none under the Save As row, which is the window's top then.
+fn top_inset(d: &Dialog) -> f64 {
+    if d.chooser.ask().kind == Kind::Save {
+        0.0
+    } else {
+        TOP_INSET
+    }
+}
 /// The prompt windows: the row of the window's buttons ([`SIDEBAR_TOP`]) over their content.
 const PICKER_SIZE: Size = Size::new(480.0, 360.0 + SIDEBAR_TOP);
 const PICKER_MIN_SIZE: Size = Size::new(360.0, 240.0 + SIDEBAR_TOP);
@@ -1076,7 +1088,7 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         .collect();
     let names: Vec<String> = rows.iter().map(|(_, n)| n.clone()).collect();
     let keys: Vec<&'static str> = places.iter().map(|p| p.name).collect();
-    Element::from(ListView {
+    let list = Element::from(ListView {
         label: "Places".into(),
         count: rows.len(),
         row_height: ROW_HEIGHT,
@@ -1095,7 +1107,17 @@ fn sidebar(d: &Dialog, places: &[Place]) -> Element<Message> {
         double_click_activates: true,
         on_activate: Some(Box::new(move |i| Message::Place(id, i))),
     })
-    .key("places")
+    .key("places");
+    Element::new(Stack {
+        axis: Axis::Vertical,
+        padding: Insets {
+            top: top_inset(d),
+            ..Insets::ZERO
+        },
+        spacing: 0.0,
+        align: Align::Stretch,
+        children: vec![list],
+    })
 }
 
 fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
@@ -1155,10 +1177,11 @@ fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
         )
         .key("unreadable")
     });
+    // the row at the top of the pane moves the window, which has no title bar
     let path = Element::new(Stack {
         axis: Axis::Horizontal,
         padding: Insets {
-            top: 6.0,
+            top: 6.0 + top_inset(d),
             left: GAP,
             bottom: 6.0,
             right: GAP,
@@ -1182,6 +1205,7 @@ fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
             .key("path"),
         ],
     });
+    let path = Element::from(WindowDragArea { content: path });
     Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets::ZERO,
@@ -1196,7 +1220,8 @@ fn files(d: &Dialog, icons: &RefCell<FileIcons>) -> Element<Message> {
 
 fn save_as(d: &Dialog) -> Element<Message> {
     let id = d.id;
-    Element::new(Stack {
+    // the window's top row, which moves the window: it has no title bar
+    let row = Element::new(Stack {
         axis: Axis::Horizontal,
         padding: BAR_INSETS,
         spacing: GAP,
@@ -1220,7 +1245,8 @@ fn save_as(d: &Dialog) -> Element<Message> {
             .width(SAVE_AS_WIDTH),
             Element::new(Spacer { min: 0.0 }),
         ],
-    })
+    });
+    Element::from(WindowDragArea { content: row })
 }
 
 fn bar(d: &Dialog) -> Element<Message> {
@@ -1390,8 +1416,8 @@ fn window(d: &Dialog, places: &[Place], icons: &RefCell<FileIcons>) -> Window<Me
             size: SIZE,
             min_size: Some(Size::new(560.0, 340.0)),
             max_size: None,
-            decorations: DecorationMode::Preferred,
-            foreign_parent: crate::wayland_parent(&ask.parent_window).map(str::to_owned),
+            decorations: DecorationMode::None,
+            foreign_parent: foreign_parent(&ask.parent_window, ask.modal),
             input_region: None,
         },
         shortcuts: CommandRegistry::new(),
@@ -1407,6 +1433,15 @@ fn window(d: &Dialog, places: &[Place], icons: &RefCell<FileIcons>) -> Window<Me
             children,
         }),
     }
+}
+
+/// The window of another application a request names as its parent, for the dialog's window: the dialog opens as its
+/// child, and as its modal dialog when `modal`.
+fn foreign_parent(parent_window: &str, modal: bool) -> Option<ForeignParent> {
+    crate::wayland_parent(parent_window).map(|handle| ForeignParent {
+        handle: handle.to_owned(),
+        modal,
+    })
 }
 
 /// A source as its row shows it: the display's description or connector name, the window's title and app.
@@ -1554,7 +1589,7 @@ fn picker_window(p: &Picker, app_icons: &AppIcons) -> Window<Message> {
             min_size: Some(PICKER_MIN_SIZE),
             max_size: None,
             decorations: PROMPT_DECORATIONS,
-            foreign_parent: crate::wayland_parent(&p.ask.parent_window).map(str::to_owned),
+            foreign_parent: foreign_parent(&p.ask.parent_window, false),
             input_region: None,
         },
         // Return presses the focused button, Cancel when the window opens; with the focus in the list it is the default
@@ -1701,7 +1736,7 @@ fn app_window(a: &AppPicker, app_icons: &AppIcons) -> Window<Message> {
             min_size: Some(PICKER_MIN_SIZE),
             max_size: None,
             decorations: PROMPT_DECORATIONS,
-            foreign_parent: crate::wayland_parent(&a.ask.parent_window).map(str::to_owned),
+            foreign_parent: foreign_parent(&a.ask.parent_window, false),
             input_region: None,
         },
         // Return opens the selected app and Escape cancels, wherever the focus is
@@ -1771,7 +1806,7 @@ fn consent_window(c: &Consent, app_icons: &AppIcons) -> Window<Message> {
             min_size: Some(CONSENT_SIZE),
             max_size: None,
             decorations: PROMPT_DECORATIONS,
-            foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+            foreign_parent: foreign_parent(&c.ask.parent_window, false),
             input_region: None,
         },
         // Escape cancels wherever the focus is; Return has no shortcut and presses only the focused button, which is
@@ -1922,7 +1957,7 @@ fn shortcuts_window(c: &ShortcutConsent, app_icons: &AppIcons) -> Window<Message
             min_size: Some(size),
             max_size: None,
             decorations: PROMPT_DECORATIONS,
-            foreign_parent: crate::wayland_parent(&c.ask.parent_window).map(str::to_owned),
+            foreign_parent: foreign_parent(&c.ask.parent_window, false),
             input_region: None,
         },
         // Escape and closing the window answer nothing that is remembered; Return presses only the focused button,
@@ -2347,6 +2382,92 @@ mod tests {
         armed(&mut driver, window);
         click(&mut driver, window, "take");
         assert_eq!(answer.try_recv().unwrap(), screenshot::Answer::Granted);
+    }
+
+    /// The chooser opens as a child of the window the request names, modal to it unless the request says it is not;
+    /// with no window named it opens on its own.
+    #[test]
+    fn the_file_chooser_is_modal_to_the_window_the_request_names_unless_it_says_otherwise() {
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = tempfile::tempdir().unwrap();
+        let data = icon_theme("org.example.Viewer");
+        std::env::set_var("XDG_DATA_DIRS", data.path());
+        let parent_of = |parent_window: &str, modal: bool| {
+            let mut ask = ask(Kind::Open, folder.path());
+            ask.parent_window = parent_window.to_owned();
+            ask.modal = modal;
+            let _answer = post(1, ask);
+            let (mut driver, window) = start();
+            let spec = driver.window_system_mut().spec(window).unwrap().clone();
+            spec.foreign_parent
+        };
+        let parent = |modal| ForeignParent {
+            handle: "ab12".into(),
+            modal,
+        };
+        assert_eq!(parent_of("wayland:ab12", true), Some(parent(true)));
+        assert_eq!(parent_of("wayland:ab12", false), Some(parent(false)));
+        assert_eq!(parent_of("", true), None);
+        assert_eq!(parent_of("x11:3a00004", true), None);
+    }
+
+    /// The chooser has no title bar: its content reaches the window's top, and a drag on the row at the top of the
+    /// file pane, beside the button in it, moves the window; the button keeps its press.
+    #[test]
+    fn the_file_chooser_has_no_title_bar_and_the_row_at_its_top_moves_the_window() {
+        use cupertino_kit::platform::WindowRequest;
+        let _turn = INBOX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = tempfile::tempdir().unwrap();
+        let data = icon_theme("org.example.Viewer");
+        std::env::set_var("XDG_DATA_DIRS", data.path());
+        let _answer = post(1, ask(Kind::Open, folder.path()));
+        let (mut driver, window) = start();
+        let spec = driver.window_system_mut().spec(window).unwrap().clone();
+        assert_eq!(spec.decorations, DecorationMode::None);
+
+        let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+        let button = |position, pressed| PointerEvent::Button {
+            position,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        };
+        let drag = |driver: &mut TestDriver<Dialogs>, from: Point| {
+            let to = Point::new(from.x + 40.0, from.y + 30.0);
+            send(
+                driver,
+                window,
+                pointer(PointerEvent::Motion { position: from }),
+            );
+            send(driver, window, pointer(button(from, true)));
+            send(
+                driver,
+                window,
+                pointer(PointerEvent::Motion { position: to }),
+            );
+            send(driver, window, pointer(button(to, false)));
+            let system = driver.runtime().window_system();
+            system
+                .requests(window)
+                .unwrap()
+                .iter()
+                .filter(|r| **r == WindowRequest::Move)
+                .count()
+        };
+        let parent = rect_of(&driver, window, &Key::from("parent"));
+        let on_button = Point::new(
+            parent.origin.x + parent.size.width / 2.0,
+            parent.origin.y + parent.size.height / 2.0,
+        );
+        assert_eq!(
+            drag(&mut driver, on_button),
+            0,
+            "the button keeps its press"
+        );
+        // the end of the row, past the folder's path
+        let beside = Point::new(spec.size.width - 12.0, on_button.y);
+        assert_eq!(drag(&mut driver, beside), 1);
     }
 
     #[test]

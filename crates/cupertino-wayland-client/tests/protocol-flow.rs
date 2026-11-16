@@ -5,11 +5,11 @@ use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, ClipboardOffer, Connection, ConstraintAdjustment,
     CursorShape, CursorTheme, Decorations, DragActions, DragEvent, DragIcon, DragOffer,
-    DragSourceEvent, Error, Event, Extension, Gravity, HeldPress, KeyboardEvent, OutputGeometry,
-    OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented, PresentedKind,
-    PressDevice, ReadId, ResizeEdge, Scale, ScrollSource, SurfaceId, SurroundingText,
-    TextInputDone, TextInputEvent, TextInputState, Toplevel, ToplevelConfig, TouchEvent,
-    WindowConfigure, WmCapabilities,
+    DragSourceEvent, Error, Event, Extension, ForeignParent, Gravity, HeldPress, KeyboardEvent,
+    OutputGeometry, OutputTransform, PixelRect, PointerEvent, PopupPlacement, Preedit, Presented,
+    PresentedKind, PressDevice, ReadId, ResizeEdge, Scale, ScrollSource, SurfaceId,
+    SurroundingText, TextInputDone, TextInputEvent, TextInputState, Toplevel, ToplevelConfig,
+    TouchEvent, WindowConfigure, WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -46,6 +46,8 @@ use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1:
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::{
     self, Mode, ZxdgToplevelDecorationV1,
 };
+use wayland_protocols::xdg::dialog::v1::server::xdg_dialog_v1::{self, XdgDialogV1};
+use wayland_protocols::xdg::dialog::v1::server::xdg_wm_dialog_v1::{self, XdgWmDialogV1};
 use wayland_protocols::xdg::foreign::zv2::server::zxdg_imported_v2::{self, ZxdgImportedV2};
 use wayland_protocols::xdg::foreign::zv2::server::zxdg_importer_v2::{self, ZxdgImporterV2};
 use wayland_protocols::xdg::shell::server::xdg_popup::{self, XdgPopup};
@@ -123,7 +125,7 @@ struct Globals {
     subcompositor: bool,
     /// `wl_shm` lists `abgr8888` besides the two formats it must take.
     abgr: bool,
-    /// `zxdg_importer_v2`, and the compositor reports each window it sees destroyed.
+    /// `zxdg_importer_v2` and `xdg_wm_dialog_v1`, and the compositor reports each window it sees destroyed.
     importer: bool,
 }
 
@@ -286,6 +288,9 @@ enum Seen {
     ParentOf,
     ImportedDestroyed,
     ToplevelDestroyed,
+    /// A window was said to be a modal dialog.
+    Modal,
+    DialogDestroyed,
     Positioner(PositionerState),
     Receive(String),
     LayerAck(u32),
@@ -484,7 +489,8 @@ plain_global!(
     ZwpTextInputManagerV3,
     WpSinglePixelBufferManagerV1,
     WlSubcompositor,
-    ZxdgImporterV2
+    ZxdgImporterV2,
+    XdgWmDialogV1
 );
 
 /// Requests the compositor ignores.
@@ -1014,6 +1020,41 @@ impl Dispatch<ZxdgImporterV2, ()> for Mock {
             init.init(id, ());
             state.seen.send(Seen::Imported(handle)).unwrap();
         }
+    }
+}
+
+impl Dispatch<XdgWmDialogV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &XdgWmDialogV1,
+        request: xdg_wm_dialog_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_wm_dialog_v1::Request::GetXdgDialog { id, .. } = request {
+            init.init(id, ());
+        }
+    }
+}
+
+impl Dispatch<XdgDialogV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &XdgDialogV1,
+        request: xdg_dialog_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            xdg_dialog_v1::Request::SetModal => Seen::Modal,
+            xdg_dialog_v1::Request::Destroy => Seen::DialogDestroyed,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
     }
 }
 
@@ -1612,6 +1653,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         }
         if globals.importer {
             dh.create_global::<Mock, ZxdgImporterV2, _>(1, ());
+            dh.create_global::<Mock, XdgWmDialogV1, _>(1, ());
         }
         if globals.fractional_scale {
             dh.create_global::<Mock, WpFractionalScaleManagerV1, _>(1, ());
@@ -2068,7 +2110,10 @@ fn a_window_with_a_parent_in_another_client_keeps_that_parent_until_it_is_gone()
             min_size: None,
             max_size: None,
             decorations: Decorations::Client,
-            foreign_parent: Some("handle-of-the-parent".into()),
+            foreign_parent: Some(ForeignParent {
+                handle: "handle-of-the-parent".into(),
+                modal: false,
+            }),
         })
         .unwrap();
     conn.flush().unwrap();
@@ -2089,6 +2134,62 @@ fn a_window_with_a_parent_in_another_client_keeps_that_parent_until_it_is_gone()
     // imported handle up ends that parent
     assert_eq!(seen_matching(&seen, parent), Seen::ToplevelDestroyed);
     assert_eq!(seen_matching(&seen, parent), Seen::ImportedDestroyed);
+}
+
+/// A window that is modal to its parent in another client says so before its first commit, so the compositor places
+/// it as that window's dialog from the start; one that is not modal says nothing. The dialog role goes before the
+/// window does.
+#[test]
+fn a_modal_window_of_another_clients_window_says_so_before_it_is_shown() {
+    let dialog = |s: &Seen| {
+        matches!(
+            s,
+            Seen::ParentOf
+                | Seen::Modal
+                | Seen::Commit { .. }
+                | Seen::DialogDestroyed
+                | Seen::ToplevelDestroyed
+        )
+    };
+    // a connection each: the compositor of these tests shows one window
+    let open = |modal: bool| {
+        let (mut conn, control, seen) = connect(Globals {
+            importer: true,
+            ..Globals::core()
+        });
+        let w = conn
+            .toplevel(&ToplevelConfig {
+                app_id: "test".into(),
+                title: "Test".into(),
+                min_size: None,
+                max_size: None,
+                decorations: Decorations::Client,
+                foreign_parent: Some(ForeignParent {
+                    handle: "handle-of-the-parent".into(),
+                    modal,
+                }),
+            })
+            .unwrap();
+        let mut stash = Stash::new();
+        configured(&mut conn, &mut stash, w);
+        present(&mut conn, w.surface(), (320, 240));
+        (conn, control, seen, w)
+    };
+    let (mut conn, _control, seen, w) = open(true);
+    assert_eq!(seen_matching(&seen, dialog), Seen::ParentOf);
+    assert_eq!(seen_matching(&seen, dialog), Seen::Modal);
+    assert!(matches!(seen_matching(&seen, dialog), Seen::Commit { .. }));
+    conn.destroy(w.surface()).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(seen_matching(&seen, dialog), Seen::DialogDestroyed);
+    assert_eq!(seen_matching(&seen, dialog), Seen::ToplevelDestroyed);
+
+    let (_conn, _control, seen, _) = open(false);
+    assert_eq!(seen_matching(&seen, dialog), Seen::ParentOf);
+    assert!(
+        matches!(seen_matching(&seen, dialog), Seen::Commit { .. }),
+        "a window that is not modal has no dialog role"
+    );
 }
 
 #[test]

@@ -446,6 +446,16 @@ impl Drop for Portal {
 /// Ask the portal for a file chooser titled `title` for the window `parent_window`, as the frontend does; the call waits
 /// for the dialog's answer, so it runs on a thread of its own and is never answered here.
 fn open_file(frontend: &zbus::blocking::Connection, title: &'static str, parent_window: String) {
+    open_file_with(frontend, title, parent_window, None);
+}
+
+/// [`open_file`] with the request's `modal` option, when there is one.
+fn open_file_with(
+    frontend: &zbus::blocking::Connection,
+    title: &'static str,
+    parent_window: String,
+    modal: Option<bool>,
+) {
     let frontend = frontend.clone();
     std::thread::spawn(move || {
         let handle = zbus::zvariant::ObjectPath::try_from(format!(
@@ -453,8 +463,11 @@ fn open_file(frontend: &zbus::blocking::Connection, title: &'static str, parent_
             title.to_lowercase().replace(' ', "_")
         ))
         .unwrap();
-        let options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+        let mut options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
             Default::default();
+        if let Some(modal) = modal {
+            options.insert("modal", zbus::zvariant::Value::Bool(modal));
+        }
         let _ = frontend.call_method(
             Some("org.freedesktop.impl.portal.desktop.cupertino"),
             "/org/freedesktop/portal/desktop",
@@ -508,6 +521,54 @@ fn the_portal_opens_its_file_chooser_as_a_child_of_the_window_that_asked_and_alo
         Some(app),
         "the first chooser keeps its parent"
     );
+}
+
+/// The portal's file chooser is modal to the window that asked, as the request says unless it says otherwise: while
+/// it is open that window takes no input, and the chooser has the keyboard. A request that is not modal leaves the
+/// window free.
+#[test]
+fn the_portals_file_chooser_blocks_the_window_that_asked_unless_the_request_is_not_modal() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+        eprintln!("skipped: dbus-daemon is not available");
+        return;
+    };
+    let (_app, app, handle) = exporter(&mut h, "org.example.App");
+    let (_other, other, other_handle) = exporter(&mut h, "org.example.Other");
+    let frontend = bus.connect();
+    frontend
+        .request_name("org.freedesktop.portal.Desktop")
+        .unwrap();
+    let _portal = Portal::start(&h, &bus);
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&frontend).unwrap();
+    let name: zbus::names::BusName<'_> = "org.freedesktop.impl.portal.desktop.cupertino"
+        .try_into()
+        .unwrap();
+    h.wait_until("the portal on the bus", |_| {
+        dbus.name_has_owner(name.clone()).unwrap()
+    });
+
+    open_file(&frontend, "Open Attachment", format!("wayland:{handle}"));
+    let dialog = h.window("Open Attachment");
+    assert_eq!(h.parent(dialog), Some(app));
+    assert_eq!(
+        h.state.wm.blocking_modal(app),
+        Some(dialog),
+        "the window that asked is blocked while the chooser is open"
+    );
+    h.wait_until("the chooser to take the keyboard", |s| {
+        s.wm.key_window() == Some(dialog)
+    });
+
+    open_file_with(
+        &frontend,
+        "Open Beside",
+        format!("wayland:{other_handle}"),
+        Some(false),
+    );
+    let beside = h.window("Open Beside");
+    assert_eq!(h.parent(beside), Some(other));
+    assert_eq!(h.state.wm.blocking_modal(other), None);
 }
 
 #[test]

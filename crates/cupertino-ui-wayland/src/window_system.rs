@@ -1578,7 +1578,7 @@ impl WindowSystem for WaylandWindowSystem {
                 min_size: spec.min_size.map(convert::whole),
                 max_size: spec.max_size.map(convert::whole),
                 decorations: convert::decorations(spec.decorations),
-                foreign_parent: spec.foreign_parent.clone(),
+                foreign_parent: spec.foreign_parent.as_ref().map(convert::foreign_parent),
             })
             .map_err(platform_error)?;
         // the style goes with the surface's first commit, before any buffer

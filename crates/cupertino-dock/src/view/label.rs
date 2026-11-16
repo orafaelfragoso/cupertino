@@ -93,7 +93,8 @@ const TEXT: [Color; 2] = [
 const OUTLINE_WIDTH: f64 = 0.5;
 
 /// Asks for the label's glass under the node when the session shows materials; false where the label paints its own
-/// opaque fill (Reduce Transparency, Increase Contrast, no desktop effects).
+/// opaque fill (Reduce Transparency, no desktop effects). With Increase Contrast the label keeps its glass, which the
+/// compositor draws with the contrast face.
 fn shown_on_glass(cx: &mut PaintCx<'_>, glass: Glass) -> bool {
     cx.env().theme.surface(Surface::Tooltip).material.is_some()
         && cx.glass(glass.container(GLASS_CONTAINER, GLASS_BLEND))

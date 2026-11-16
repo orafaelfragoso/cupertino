@@ -74,7 +74,7 @@ fn choose(bus: &PrivateBus, app_id: &str, menus: &MenuBar, title: &str, label: &
     loop {
         match events.recv_timeout(WAIT).expect("the worker answers") {
             Event::Layout { source, root } => {
-                shared.apply_layout(&source, root);
+                shared.apply_layout(&source, *root);
                 break;
             }
             Event::LayoutFailed { .. } => panic!("the bar could not read the menus of {app_id}"),

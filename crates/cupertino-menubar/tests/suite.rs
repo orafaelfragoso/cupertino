@@ -17,5 +17,7 @@ mod gtk_changes;
 mod kit_export;
 #[path = "registrar.rs"]
 mod registrar;
+#[path = "status-menus.rs"]
+mod status_menus;
 #[path = "worker.rs"]
 mod worker;

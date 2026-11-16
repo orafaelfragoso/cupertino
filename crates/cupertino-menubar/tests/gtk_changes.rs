@@ -78,7 +78,7 @@ fn tree_of(events: &Receiver<Event>, path: &str) -> MenuItem {
             Ok(Event::Layout {
                 source: MenuSource::Gtk(props),
                 root,
-            }) if props.menubar_object_path.as_deref() == Some(path) => return root,
+            }) if props.menubar_object_path.as_deref() == Some(path) => return *root,
             Ok(_) => {}
             Err(_) => panic!("no tree of {path} within 10 s"),
         }

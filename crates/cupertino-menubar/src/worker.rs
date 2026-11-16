@@ -1,5 +1,5 @@
-//! Session bus worker of the `cupertino-menubar` process: serves the status notifier watcher, loads menu trees (DBusMenu and GMenuModel exporters), reads
-//! status items and relays activations.
+//! Session bus worker of the `cupertino-menubar` process: serves the status notifier watcher, loads menu trees (DBusMenu and GMenuModel exporters)
+//! and follows their changes, reads status items and relays activations.
 //!
 //! Everything runs on one background thread that drives `zbus` futures. The process talks to it
 //! through [`Worker::send`] and reads [`Event`]s from a channel; each event wakes the process's
@@ -9,6 +9,7 @@ use crate::dbus::dbusmenu::DBusMenuClient;
 use crate::dbus::gtk::{GtkChange, GtkMenuClient};
 use crate::dbus::registrar;
 use crate::dbus::sni::{self, StatusItem, WatcherEvent, WatcherService};
+use crate::follow::{Command, Follower};
 use crate::item::{ItemId, MenuItem};
 use crate::registered::Registration;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource};
@@ -33,6 +34,8 @@ const GTK_CHANGE_INTERVAL: Duration = Duration::from_millis(50);
 /// again, this many times at most.
 const GTK_RELOADS: u8 = 2;
 
+pub use crate::follow::Waits;
+
 /// The interface of the notification process (`cupertino-notifications`, its `dbus` module).
 const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
 const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
@@ -43,11 +46,16 @@ const PANEL_PATH: &str = "/org/cupertino/ControlPanel1";
 /// What the process asks of the worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    /// Load the whole tree of a DBusMenu exporter.
+    /// Load the whole tree of a DBusMenu exporter and follow its changes until it is released: every change is
+    /// reported as a tree.
     FetchDbusMenu(KdeAppMenu),
+    /// No bar shows the menus of a DBusMenu exporter any more: stop following it.
+    ReleaseDbusMenu(KdeAppMenu),
     /// Load the menu bar of a GMenuModel exporter.
     FetchGtk(GtkMenuProps),
-    /// A menu is about to be shown: tell the exporter, then reload its tree.
+    /// The menu of an item (0 for the whole menu) of a followed DBusMenu exporter, an application's or a status
+    /// item's, is about to be shown: tell the exporter, then read again what it says has changed. The answer is waited
+    /// for by the worker, never by the bar, and no longer than [`Waits::about_to_show`].
     AboutToShow {
         menu: KdeAppMenu,
         item: i32,
@@ -81,14 +89,15 @@ pub enum Request {
 /// What the worker reports.
 #[derive(Debug)]
 pub enum Event {
-    /// A menu tree arrived from an exporter.
+    /// A menu tree arrived from an exporter: the first, or the tree after a change. A status item's menu comes this
+    /// way too, under the item's service and the path of its menu.
     Layout {
         source: MenuSource,
-        root: MenuItem,
+        root: Box<MenuItem>,
     },
+    /// A status item was read. Its menu follows as an [`Event::Layout`], and again whenever it changes.
     StatusUpdated {
         item: Box<StatusItem>,
-        menu: Option<MenuItem>,
     },
     StatusRemoved {
         id: String,
@@ -142,6 +151,11 @@ impl std::error::Error for WorkerGone {}
 enum Work {
     Request(Request),
     Watcher(WatcherEvent),
+    /// The status item `id` was read: `menu` is where its menu is now, `None` without one.
+    StatusMenu {
+        id: String,
+        menu: Option<KdeAppMenu>,
+    },
     /// A GTK exporter's menus loaded, with their tree: the task that forwards its `Changed` signals, when they could be
     /// followed, and how many loads came before this one.
     GtkLoaded {
@@ -159,13 +173,13 @@ enum Work {
 
 /// Sends events to the process and wakes its loop.
 #[derive(Clone)]
-struct Out {
+pub(crate) struct Out {
     events: mpsc::Sender<Event>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Out {
-    fn emit(&self, event: Event) {
+    pub(crate) fn emit(&self, event: Event) {
         // a closed channel means the process is shutting down and nobody needs the event
         if self.events.send(event).is_ok() {
             (self.wake)();
@@ -184,7 +198,7 @@ fn is_access_denied(e: &zbus::Error) -> bool {
     }
 }
 
-fn report(context: &str, error: impl fmt::Display) {
+pub(crate) fn report(context: &str, error: impl fmt::Display) {
     eprintln!("cupertino-menubar: {context}: {error}");
 }
 
@@ -200,6 +214,15 @@ impl Worker {
         conn: Connection,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
+        Self::start_with(conn, Waits::default(), wake)
+    }
+
+    /// [`Worker::start`] with other waits for the answers of menu exporters.
+    pub fn start_with(
+        conn: Connection,
+        waits: Waits,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
         let (work_tx, work_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = mpsc::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
@@ -210,7 +233,7 @@ impl Worker {
         let tx = work_tx.clone();
         std::thread::Builder::new()
             .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(run(conn, work_rx, tx, out, started_tx)))
+            .spawn(move || zbus::block_on(run(conn, work_rx, tx, out, waits, started_tx)))
             .map_err(StartError::Thread)?;
         started_rx.recv().map_err(|_| StartError::Died)??;
         Ok((Worker { work: work_tx }, events_rx))
@@ -243,6 +266,7 @@ async fn run(
     rx: async_channel::Receiver<Work>,
     tx: async_channel::Sender<Work>,
     out: Out,
+    waits: Waits,
     started: mpsc::SyncSender<Result<(), StartError>>,
 ) {
     // the caller holds the receiver until this is read
@@ -265,21 +289,42 @@ async fn run(
     // exporters whose menus are loaded again, and those a change came for while they loaded
     let mut reloading: HashSet<GtkMenuProps> = HashSet::new();
     let mut missed: HashSet<GtkMenuProps> = HashSet::new();
+    let mut menus = Followed {
+        conn: conn.clone(),
+        out: out.clone(),
+        waits,
+        menus: HashMap::new(),
+    };
+    // the task that reads each status item and follows its changes; dropping it ends the following
+    let mut items: HashMap<String, zbus::Task<()>> = HashMap::new();
     while let Ok(work) = rx.recv().await {
         match work {
-            Work::Watcher(WatcherEvent::ItemRegistered { service, path, .. }) => {
-                let (conn, out) = (conn.clone(), out.clone());
-                conn.executor()
+            Work::Watcher(WatcherEvent::ItemRegistered { id, service, path }) => {
+                let follow = follow_status_item(
+                    conn.clone(),
+                    out.clone(),
+                    tx.clone(),
+                    id.clone(),
+                    service,
+                    path,
+                );
+                let task = conn
+                    .executor()
                     .clone()
-                    .spawn(
-                        follow_status_item(conn, out, service, path),
-                        "cupertino-status-item",
-                    )
-                    .detach();
+                    .spawn(follow, "cupertino-status-item");
+                items.insert(id, task);
             }
             Work::Watcher(WatcherEvent::ItemUnregistered { id }) => {
+                items.remove(&id);
+                menus.hold(&Holder::Status(id.clone()), None);
                 out.emit(Event::StatusRemoved { id })
             }
+            // read before its item went: nothing shows it
+            Work::StatusMenu { id, .. } if !items.contains_key(&id) => {}
+            Work::StatusMenu { id, menu } => menus.hold(&Holder::Status(id), menu),
+            Work::Request(Request::FetchDbusMenu(menu)) => menus.hold(&Holder::Bars, Some(menu)),
+            Work::Request(Request::ReleaseDbusMenu(menu)) => menus.release(&Holder::Bars, &menu),
+            Work::Request(Request::AboutToShow { menu, item }) => menus.show(&menu, item),
             // hosts need no action: this process is the host
             Work::Watcher(WatcherEvent::HostRegistered) => {}
             Work::GtkLoaded {
@@ -292,7 +337,7 @@ async fn run(
                 // sent once the client is kept, so an item chosen from the tree finds its action
                 out.emit(Event::Layout {
                     source: MenuSource::Gtk(props.clone()),
-                    root: MenuItem::submenu(0, "", items),
+                    root: Box::new(MenuItem::submenu(0, "", items)),
                 });
                 gtk.insert(props.clone(), *client);
                 if reloads == 0 {
@@ -341,7 +386,7 @@ async fn run(
                 if let Some(client) = gtk.get_mut(&props) {
                     out.emit(Event::Layout {
                         source: MenuSource::Gtk(props),
-                        root: MenuItem::submenu(0, "", client.items()),
+                        root: Box::new(MenuItem::submenu(0, "", client.items())),
                     });
                 }
             }
@@ -355,6 +400,82 @@ async fn run(
                 }
             }
             Work::Request(request) => handle(&conn, &out, &tx, &mut gtk, request),
+        }
+    }
+}
+
+/// Who shows the menu of a followed DBusMenu exporter.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Holder {
+    /// The bars, as the menus of an application.
+    Bars,
+    /// The status item of this id.
+    Status(String),
+}
+
+/// The DBusMenu exporters followed, each for as long as something shows its menu.
+struct Followed {
+    conn: Connection,
+    out: Out,
+    waits: Waits,
+    menus: HashMap<KdeAppMenu, (Follower, HashSet<Holder>)>,
+}
+
+impl Followed {
+    /// `holder` shows `menu` from now on. A status item shows one menu: the one it showed before is released, so
+    /// `None` releases it.
+    fn hold(&mut self, holder: &Holder, menu: Option<KdeAppMenu>) {
+        if matches!(holder, Holder::Status(_)) {
+            let held: Vec<KdeAppMenu> = self
+                .menus
+                .iter()
+                .filter(|(key, (_, holders))| {
+                    holders.contains(holder) && Some(*key) != menu.as_ref()
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in held {
+                self.release(holder, &key);
+            }
+        }
+        let Some(menu) = menu else {
+            return;
+        };
+        match self.menus.get_mut(&menu) {
+            // its holder has no tree yet, or lost it: the follower reports it again
+            Some((follower, holders)) => {
+                holders.insert(holder.clone());
+                follower.send(Command::Publish);
+            }
+            None => {
+                let patient = matches!(holder, Holder::Status(_));
+                let follower = Follower::start(
+                    &self.conn,
+                    self.out.clone(),
+                    menu.clone(),
+                    patient,
+                    self.waits,
+                );
+                self.menus
+                    .insert(menu, (follower, HashSet::from([holder.clone()])));
+            }
+        }
+    }
+
+    /// `holder` shows `menu` no more; a menu nothing shows is followed no more.
+    fn release(&mut self, holder: &Holder, menu: &KdeAppMenu) {
+        if let Some((_, holders)) = self.menus.get_mut(menu) {
+            holders.remove(holder);
+            if holders.is_empty() {
+                self.menus.remove(menu);
+            }
+        }
+    }
+
+    /// The menu of `item` of `menu` is about to show. A menu that is not followed is shown by nothing.
+    fn show(&self, menu: &KdeAppMenu, item: i32) {
+        if let Some((follower, _)) = self.menus.get(menu) {
+            follower.send(Command::Show(item));
         }
     }
 }
@@ -447,46 +568,52 @@ async fn app_menu_registrar(conn: &Connection, owned: bool) {
     }
 }
 
-/// Publish a status item, then again every time it changes.
-async fn follow_status_item(conn: Connection, out: Out, service: String, path: String) {
-    publish_status(&conn, &out, &service, &path).await;
+/// Publish the status item `id`, then again every time it changes (the place of its menu included). The item's
+/// changes are followed before it is first read, so none between the two is missed.
+async fn follow_status_item(
+    conn: Connection,
+    out: Out,
+    tx: async_channel::Sender<Work>,
+    id: String,
+    service: String,
+    path: String,
+) {
     let mut changes = match sni::item_changes(&conn, &service, &path).await {
-        Ok(changes) => changes,
-        Err(e) => return report(&format!("cannot follow the status item {service}{path}"), e),
+        Ok(changes) => Some(changes),
+        Err(e) => {
+            report(&format!("cannot follow the status item {id}"), e);
+            None
+        }
     };
-    while changes.next().await.is_some() {
-        publish_status(&conn, &out, &service, &path).await;
-    }
-}
-
-async fn publish_status(conn: &Connection, out: &Out, service: &str, path: &str) {
-    match sni::fetch_item(conn, service, path).await {
-        Ok(item) => {
-            let menu = sni::load_menu(conn, &item).await;
-            out.emit(Event::StatusUpdated {
-                item: Box::new(item),
-                menu,
-            });
+    loop {
+        match sni::fetch_item(&conn, &service, &path).await {
+            Ok(item) => {
+                let menu = item.menu_path.clone().map(|path| KdeAppMenu {
+                    service: item.service.clone(),
+                    path,
+                });
+                // the item first, then its menu: the tree the follower reports finds the item it belongs to
+                out.emit(Event::StatusUpdated {
+                    item: Box::new(item),
+                });
+                let work = Work::StatusMenu {
+                    id: id.clone(),
+                    menu,
+                };
+                // the worker drops its receiver only when it ends
+                if tx.send(work).await.is_err() {
+                    return;
+                }
+            }
+            Err(e) => report(&format!("status item {id} is not readable"), e),
         }
-        Err(e) => report(&format!("status item {service}{path} is not readable"), e),
-    }
-}
-
-/// The whole tree of a DBusMenu exporter; `about_to_show` first tells it that an item is about
-/// to be shown.
-async fn fetch_dbusmenu(
-    conn: &Connection,
-    menu: &KdeAppMenu,
-    about_to_show: Option<i32>,
-) -> zbus::Result<MenuItem> {
-    let client = DBusMenuClient::connect(conn, &menu.service, &menu.path).await?;
-    if let Some(item) = about_to_show {
-        // many exporters do not implement it and the tree is worth loading anyway
-        if let Err(e) = client.about_to_show(ItemId(item)).await {
-            report(&format!("AboutToShow on {}{}", menu.service, menu.path), e);
+        let Some(changes) = &mut changes else {
+            return;
+        };
+        if changes.next().await.is_none() {
+            return;
         }
     }
-    Ok(client.fetch(ItemId(0), -1).await?.1)
 }
 
 fn handle(
@@ -499,41 +626,6 @@ fn handle(
     let (conn, out) = (conn.clone(), out.clone());
     let executor = conn.executor().clone();
     let task = match request {
-        Request::FetchDbusMenu(menu) => executor.spawn(
-            async move {
-                match fetch_dbusmenu(&conn, &menu, None).await {
-                    Ok(root) => out.emit(Event::Layout {
-                        source: MenuSource::Kde(menu),
-                        root,
-                    }),
-                    Err(e) => {
-                        report(
-                            &format!("cannot load the menu of {}{}", menu.service, menu.path),
-                            e,
-                        );
-                        out.emit(Event::LayoutFailed {
-                            source: MenuSource::Kde(menu),
-                        });
-                    }
-                }
-            },
-            "cupertino-fetch-menu",
-        ),
-        Request::AboutToShow { menu, item } => executor.spawn(
-            async move {
-                match fetch_dbusmenu(&conn, &menu, Some(item)).await {
-                    Ok(root) => out.emit(Event::Layout {
-                        source: MenuSource::Kde(menu),
-                        root,
-                    }),
-                    Err(e) => report(
-                        &format!("cannot reload the menu of {}{}", menu.service, menu.path),
-                        e,
-                    ),
-                }
-            },
-            "cupertino-about-to-show",
-        ),
         Request::FetchGtk(props) => {
             let tx = tx.clone();
             executor.spawn(
@@ -667,8 +759,12 @@ fn handle(
             },
             "cupertino-toggle-centre",
         ),
-        Request::AppMenuRegistrar(_) | Request::ForgetRegistrations(_) => {
-            unreachable!("the worker's loop handles the registrar")
+        Request::AppMenuRegistrar(_)
+        | Request::ForgetRegistrations(_)
+        | Request::FetchDbusMenu(_)
+        | Request::ReleaseDbusMenu(_)
+        | Request::AboutToShow { .. } => {
+            unreachable!("the worker's loop handles the registrar and the followed menus")
         }
         Request::TogglePanel => executor.spawn(
             async move {

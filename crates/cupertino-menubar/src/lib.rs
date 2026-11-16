@@ -22,7 +22,7 @@
 //!   of the server): [`feed`] (what the bars show, from the server's groups and the bus),
 //!   [`routing`] (keys and controller effects to actions), [`popups`] (placement of the menus'
 //!   popups), [`view`] (the bar and its menus as CupertinoKit windows), [`desktop`] (application names),
-//!   [`worker`] (the session bus thread), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
+//!   [`worker`] (the session bus thread), [`follow`] (a DBusMenu exporter's tree kept current), [`extras_bus`] (the system services behind the extras) and [`x11`] (the X
 //!   server of the X11 bridge, for menus X11 programs register).
 //!
 //! the bar structure and the interaction model are as designed behaviour of the
@@ -54,6 +54,8 @@ pub mod desktop;
 pub mod extras_bus;
 #[cfg(feature = "app")]
 pub mod feed;
+#[cfg(feature = "app")]
+pub mod follow;
 #[cfg(feature = "app")]
 pub mod popups;
 #[cfg(feature = "app")]

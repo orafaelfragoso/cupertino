@@ -296,6 +296,104 @@ pub fn replace_subtree(root: &mut MenuItem, fresh: MenuItem) -> bool {
     }
 }
 
+/// What a followed menu reads again after a batch of `LayoutUpdated` signals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reread {
+    /// The layouts below these items.
+    Parents(Vec<ItemId>),
+    /// The whole tree.
+    Whole,
+}
+
+/// At most this many parents of one batch are read one by one; more are read as the whole tree.
+const REREAD_PARENTS: usize = 4;
+
+/// The tree of one exporter as its replies and signals describe it, with the revision the exporter gave the last
+/// whole layout read.
+///
+/// Its user makes one read at a time and applies the replies in the order asked, so a reply never replaces a newer
+/// one. A signal's revision says which part to read: at or past the revision held, the parent it names; below it, the
+/// whole tree, since an exporter that counts again from the start has replaced its menu.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MenuTree {
+    root: Option<MenuItem>,
+    revision: u32,
+}
+
+impl MenuTree {
+    /// The tree, once a whole layout was read.
+    pub fn root(&self) -> Option<&MenuItem> {
+        self.root.as_ref()
+    }
+
+    /// The revision of the last whole layout read.
+    pub fn revision(&self) -> u32 {
+        self.revision
+    }
+
+    /// No whole layout was read yet, so there is nothing to read a part of.
+    pub fn is_unread(&self) -> bool {
+        self.root.is_none()
+    }
+
+    /// What to read for the `LayoutUpdated` signals `(revision, parent)` of one batch; `None` for no signal, and
+    /// before a whole layout was read.
+    pub fn reread(&self, signals: &[(u32, ItemId)]) -> Option<Reread> {
+        let root = self.root.as_ref()?;
+        let mut parents: Vec<ItemId> = Vec::new();
+        for (revision, parent) in signals {
+            // a parent the tree does not hold changed with something above it
+            if *revision < self.revision || parent.0 == 0 || root.find(*parent).is_none() {
+                return Some(Reread::Whole);
+            }
+            if !parents.contains(parent) {
+                parents.push(*parent);
+            }
+        }
+        match parents.len() {
+            0 => None,
+            n if n > REREAD_PARENTS => Some(Reread::Whole),
+            _ => Some(Reread::Parents(parents)),
+        }
+    }
+
+    /// A `GetLayout` reply for `parent` arrived. `false` when the tree has no such item any more (or was never read),
+    /// so the whole tree is to be read instead.
+    pub fn apply_reply(&mut self, parent: ItemId, revision: u32, layout: MenuItem) -> bool {
+        if parent.0 == 0 {
+            self.root = Some(layout);
+            self.revision = revision;
+            return true;
+        }
+        match &mut self.root {
+            Some(root) if layout.id == parent => replace_subtree(root, layout),
+            _ => false,
+        }
+    }
+
+    /// Apply an `ItemsPropertiesUpdated` signal; `true` when the tree changed.
+    pub fn apply_properties(
+        &mut self,
+        updated: &[(i32, HashMap<String, OwnedValue>)],
+        removed: &[(i32, Vec<String>)],
+    ) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let before = root.clone();
+        apply_properties_update(root, updated, removed);
+        *root != before
+    }
+
+    /// Whether `id` is a submenu whose rows were never read (or an item the tree does not hold).
+    pub fn is_unloaded(&self, id: ItemId) -> bool {
+        match self.root.as_ref().map(|root| root.find(id)) {
+            Some(Some(item)) => item.needs_load(),
+            _ => true,
+        }
+    }
+}
+
 /// A change reported by the service.
 #[derive(Debug)]
 pub enum MenuUpdate {
@@ -654,6 +752,91 @@ mod tests {
         assert!(replace_subtree(&mut root, fresh));
         assert_eq!(root.children[1].children[0].label, "Undo");
         assert!(!replace_subtree(&mut root, MenuItem::new(1000, "x")));
+    }
+
+    #[test]
+    fn a_followed_tree_reads_the_parent_a_signal_names_and_the_whole_tree_when_in_doubt() {
+        let mut tree = MenuTree::default();
+        assert!(tree.is_unread());
+        assert_eq!(tree.reread(&[(3, ItemId(1))]), None, "nothing to patch yet");
+        assert!(
+            !tree.apply_reply(ItemId(8), 9, MenuItem::submenu(8, "Edit", vec![])),
+            "a part of a tree that was never read"
+        );
+        assert!(tree.apply_reply(ItemId(0), 7, parse_layout(&sample()).unwrap()));
+        assert_eq!((tree.is_unread(), tree.revision()), (false, 7));
+
+        assert_eq!(tree.reread(&[]), None);
+        assert_eq!(
+            tree.reread(&[(8, ItemId(8)), (9, ItemId(8)), (9, ItemId(1))]),
+            Some(Reread::Parents(vec![ItemId(8), ItemId(1)])),
+            "each parent once"
+        );
+        assert_eq!(
+            tree.reread(&[(7, ItemId(1))]),
+            Some(Reread::Parents(vec![ItemId(1)])),
+            "the revision held may have been read before the change"
+        );
+        assert_eq!(tree.reread(&[(8, ItemId(0))]), Some(Reread::Whole));
+        assert_eq!(
+            tree.reread(&[(8, ItemId(77))]),
+            Some(Reread::Whole),
+            "a parent the tree does not hold"
+        );
+        assert_eq!(
+            tree.reread(&[(1, ItemId(1))]),
+            Some(Reread::Whole),
+            "an exporter that counts again replaced its menu"
+        );
+        let many: Vec<_> = [1, 2, 4, 5, 6].map(|id| (8, ItemId(id))).to_vec();
+        assert_eq!(tree.reread(&many), Some(Reread::Whole));
+
+        // a part's reply replaces that part and leaves the revision of the whole
+        let fresh = MenuItem::submenu(8, "Edit", vec![MenuItem::new(9, "Undo")]);
+        assert!(tree.is_unloaded(ItemId(8)));
+        assert!(tree.apply_reply(ItemId(8), 9, fresh.clone()));
+        assert!(!tree.is_unloaded(ItemId(8)));
+        assert_eq!(tree.root().unwrap().children[1].children[0].label, "Undo");
+        assert_eq!(tree.revision(), 7);
+        assert!(
+            tree.is_unloaded(ItemId(77)),
+            "an item the tree does not hold"
+        );
+        assert!(
+            !tree.apply_reply(ItemId(77), 9, MenuItem::new(77, "x")),
+            "its parent went with a newer layout"
+        );
+        assert!(
+            !tree.apply_reply(ItemId(1), 9, fresh),
+            "a reply for another item than the one asked"
+        );
+
+        // a whole layout replaces everything, with an exporter's restarted count too
+        assert!(tree.apply_reply(
+            ItemId(0),
+            2,
+            MenuItem::submenu(0, "", vec![MenuItem::new(137, "Open")])
+        ));
+        assert_eq!(tree.revision(), 2);
+        assert!(tree.root().unwrap().find(ItemId(2)).is_none());
+    }
+
+    #[test]
+    fn a_followed_tree_takes_property_changes_and_says_whether_it_changed() {
+        let mut tree = MenuTree::default();
+        let label = vec![(2, props(vec![("label", "New _Tab".into())]))];
+        assert!(!tree.apply_properties(&label, &[]), "no tree yet");
+        tree.apply_reply(ItemId(0), 7, parse_layout(&sample()).unwrap());
+        assert!(tree.apply_properties(&label, &[]));
+        assert_eq!(
+            tree.root().unwrap().find(ItemId(2)).unwrap().label,
+            "New Tab"
+        );
+        assert!(!tree.apply_properties(&label, &[]), "the same again");
+        assert!(tree.apply_properties(&[], &[(6, vec!["enabled".to_string()])]));
+        assert!(tree.root().unwrap().find(ItemId(6)).unwrap().enabled);
+        let ghost = vec![(99, props(vec![("label", "ghost".into())]))];
+        assert!(!tree.apply_properties(&ghost, &[]));
     }
 
     #[test]

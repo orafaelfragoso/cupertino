@@ -224,7 +224,9 @@ impl Bar {
                             .unwrap();
                     }
                 }
-                Event::Layout { source, root } => self.shared.apply_layout(source, root.clone()),
+                Event::Layout { source, root } => {
+                    self.shared.apply_layout(source, (**root).clone())
+                }
                 _ => {}
             }
             if done(&event) {
@@ -287,7 +289,7 @@ impl Bar {
     fn layout(&mut self, menu: &KdeAppMenu) -> MenuItem {
         let source = MenuSource::Kde(menu.clone());
         match self.until(|e| matches!(e, Event::Layout { source: s, .. } if *s == source)) {
-            Event::Layout { root, .. } => root,
+            Event::Layout { root, .. } => *root,
             _ => unreachable!(),
         }
     }

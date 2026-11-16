@@ -382,6 +382,10 @@ pub trait StatusNotifierItem {
 
     #[zbus(signal)]
     fn new_status(&self, status: String) -> zbus::Result<()>;
+
+    /// The item's `Menu` names another object, or one for the first time.
+    #[zbus(signal)]
+    fn new_menu(&self) -> zbus::Result<()>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -631,7 +635,7 @@ pub async fn scroll_item(
         .await
 }
 
-/// Change notifications of one item (`NewIcon`, `NewTitle`, `NewStatus`, ...): refetch with
+/// Change notifications of one item (`NewIcon`, `NewTitle`, `NewStatus`, `NewMenu`, ...): refetch with
 /// [`fetch_item`] when one arrives.
 pub async fn item_changes(
     conn: &Connection,
@@ -644,8 +648,9 @@ pub async fn item_changes(
     let c = p.receive_new_status().await?.map(|_| ());
     let d = p.receive_new_attention_icon().await?.map(|_| ());
     let e = p.receive_new_tool_tip().await?.map(|_| ());
+    let f = p.receive_new_menu().await?.map(|_| ());
     let s = futures_util::stream::select(
-        futures_util::stream::select(a, b),
+        futures_util::stream::select(futures_util::stream::select(a, b), f),
         futures_util::stream::select(c, futures_util::stream::select(d, e)),
     );
     Ok(s.boxed())

@@ -3,12 +3,18 @@
 //! a new window on the home folder), `Open` opens a window on each folder, `ShowItems` selects each item in a window on
 //! its folder (one window a folder, a window already showing it when there is one) once a thread of its own has found
 //! which of them exist, so an item on a mount that does not answer never holds the windows still, and the actions show the progress
-//! window or open a new window. A click on the notice of a file operation's end shows the progress window with it, as
+//! window or open a new window. That thread resolves each `..` on the disk too (an `Open` of a folder spelled with one
+//! waits for it as well), and a call whose items are not all looked up within [`LOOK_UP_DEADLINE`] is answered with
+//! those that were. A click on the notice of a file operation's end shows the progress window with it, as
 //! `Activate` does when nothing is left to list. The window a call opens or brings forward is raised with the call's
 //! activation token once it is shown.
 
+use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cupertino_kit::prelude::*;
 
@@ -43,10 +49,13 @@ impl Model {
         commands
     }
 
-    /// Do what `call` asks and answer it; `ShowItems` is answered once its items are shown ([`Model::look_up`]).
+    /// Do what `call` asks and answer it; `ShowItems`, and `Open` of a folder spelled with `..`, are answered once
+    /// their items are looked up and shown ([`Model::look_up`]).
     fn remote_call(&mut self, call: Call) -> Vec<Command<Message>> {
-        if matches!(call.request, Request::ShowItems(_)) {
-            return self.look_up(call);
+        match &call.request {
+            Request::ShowItems(_) => return self.look_up(call),
+            Request::Open(targets) if targets.iter().any(goes_up) => return self.look_up(call),
+            _ => {}
         }
         let commands = self.take_call(&call);
         call.done();
@@ -57,22 +66,7 @@ impl Model {
         let token = call.token.clone();
         match &call.request {
             Request::Activate => self.activate(token),
-            Request::Open(targets) => {
-                let mut commands = Vec::new();
-                let mut last = None;
-                for target in targets {
-                    let Some(folder) = self.folder_of(target) else {
-                        continue;
-                    };
-                    if let Some((id, wake)) = self.open_window(folder) {
-                        commands.push(wake);
-                        last = Some(id);
-                    }
-                }
-                // a token raises one window: the last one opened, which the others open beneath
-                commands.extend(last.map(|id| raise(window_key(id), token)));
-                commands
-            }
+            Request::Open(targets) => self.open_targets(targets, token),
             Request::ShowItems(_) => Vec::new(),
             Request::Action(Action::NewWindow) => self.open_home(token),
             Request::Action(Action::ShowProgress) => {
@@ -80,6 +74,24 @@ impl Model {
                 self.show_progress(token).unwrap_or_default()
             }
         }
+    }
+
+    /// A window on each folder of `targets`, the last raised with `token`.
+    fn open_targets(&mut self, targets: &[Target], token: Option<String>) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        let mut last = None;
+        for target in targets {
+            let Some(folder) = self.folder_of(target) else {
+                continue;
+            };
+            if let Some((id, wake)) = self.open_window(folder) {
+                commands.push(wake);
+                last = Some(id);
+            }
+        }
+        // a token raises one window: the last one opened, which the others open beneath
+        commands.extend(last.map(|id| raise(window_key(id), token)));
+        commands
     }
 
     /// Bring Files forward: its most recently opened browser window; with none open, the progress window when it is
@@ -137,85 +149,79 @@ impl Model {
         }
     }
 
-    /// Find out on a thread of its own which items of the `ShowItems` call `call` exist, so an item on a mount that
-    /// does not answer holds no window still; the items are shown, and the call answered, once it is known
-    /// ([`Model::looked_up`]). Past [`MAX_LOOK_UPS`] such threads at once, the call is refused.
+    /// Find out on a thread of its own what the items of `call` are, each `..` resolved on the disk, and for
+    /// `ShowItems` which of them exist, so an item on a mount that does not answer holds no window still. The call is
+    /// answered once that is known, or with what is known by then [`LOOK_UP_DEADLINE`] after it came
+    /// ([`Model::looked_up`]).
     fn look_up(&mut self, call: Call) -> Vec<Command<Message>> {
-        let Request::ShowItems(targets) = &call.request else {
-            return Vec::new();
+        let (paths, exists) = match &call.request {
+            Request::ShowItems(targets) => (folder_paths(targets), true),
+            Request::Open(targets) => (folder_paths(targets), false),
+            _ => (Vec::new(), false),
         };
-        if self.look_ups.len() >= MAX_LOOK_UPS {
-            call.refuse("too many items are being looked up");
-            return Vec::new();
-        }
-        let paths: Vec<PathBuf> = targets
-            .iter()
-            .filter_map(|t| match t {
-                Target::Folder(path) => Some(path.clone()),
-                Target::Trash => None,
-            })
-            .collect();
-        let Some(found) = look_up_items(paths, |path| std::fs::symlink_metadata(path).map(drop))
-        else {
-            call.refuse("no thread could look the items up");
-            return Vec::new();
-        };
-        let id = self.next_look_up;
-        self.next_look_up += 1;
-        self.look_ups.insert(id, call);
-        vec![Command::Perform(Box::pin(async move {
-            Message::LookedUp(id, found.recv().await.unwrap_or_default())
-        }))]
+        self.look_ups.start(call, paths, exists)
     }
 
-    /// The items of the `ShowItems` call `id` were looked up (`found`, one a path it names, in order): show them, and
-    /// answer the call.
-    pub(super) fn looked_up(&mut self, id: u64, found: Vec<Found>) -> Vec<Command<Message>> {
-        let Some(call) = self.look_ups.remove(&id) else {
+    /// The items of the call `id` were looked up, or its deadline passed first: show or open what was found, and
+    /// answer the call. Nothing once it was answered.
+    pub(super) fn looked_up(&mut self, id: u64) -> Vec<Command<Message>> {
+        let Some((call, found)) = self.look_ups.take(id) else {
             return Vec::new();
         };
+        let token = call.token.clone();
         let commands = match &call.request {
-            Request::ShowItems(targets) => self.show_items(targets, &found, call.token.clone()),
+            Request::ShowItems(targets) => {
+                let targets = self.found(targets, &found);
+                self.show_items(&targets, token)
+            }
+            Request::Open(targets) => {
+                let targets = self.found(targets, &found);
+                self.open_targets(&targets, token)
+            }
             _ => Vec::new(),
         };
         call.done();
         commands
     }
 
+    /// `targets` with each path as its look-up found it (`found`, one a path in order): resolved, where it exists. One
+    /// that does not, or that was not looked up by the deadline (a path past the end of `found`), is a notice and is
+    /// left out.
+    fn found(&self, targets: &[Target], found: &[Found]) -> Vec<Target> {
+        let mut found = found.iter();
+        targets
+            .iter()
+            .filter_map(|target| {
+                let Target::Folder(item) = target else {
+                    return Some(target.clone());
+                };
+                let e = match found.next() {
+                    Some(Found::Here(path)) => return Some(Target::Folder(path.clone())),
+                    Some(Found::Missing(e)) => e.error(),
+                    None => io::Error::new(io::ErrorKind::TimedOut, "not looked up in time"),
+                };
+                self.session.failed(Failed::Open, &[item], &e);
+                None
+            })
+            .collect()
+    }
+
     /// Show each item of `targets` selected in a window on its folder, raised with `token`: the items of one folder in
     /// one window, the newest window that shows the folder (without a search) when there is one, else a new one; the
-    /// trash is opened itself, and the root shows itself. An item that does not exist (`found`, one a path in order;
-    /// a path past its end was not looked up) is a notice.
-    fn show_items(
-        &mut self,
-        targets: &[Target],
-        found: &[Found],
-        token: Option<String>,
-    ) -> Vec<Command<Message>> {
+    /// trash is opened itself, and the root shows itself.
+    fn show_items(&mut self, targets: &[Target], token: Option<String>) -> Vec<Command<Message>> {
         // each folder with its items, in the order the call names them
         let mut folders: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
-        let mut found = found.iter();
         for target in targets {
             let (folder, item) = match target {
                 Target::Trash => match self.folder_of(target) {
                     Some(folder) => (folder, None),
                     None => continue,
                 },
-                Target::Folder(item) => {
-                    let missing = match found.next() {
-                        Some(Found::Here) => None,
-                        Some(Found::Missing(e)) => Some(e.error()),
-                        None => Some(io::Error::new(io::ErrorKind::TimedOut, "not looked up")),
-                    };
-                    if let Some(e) = missing {
-                        self.session.failed(Failed::Open, &[item], &e);
-                        continue;
-                    }
-                    match item.parent() {
-                        Some(folder) => (folder.to_path_buf(), Some(item.clone())),
-                        None => (item.clone(), None),
-                    }
-                }
+                Target::Folder(item) => match item.parent() {
+                    Some(folder) => (folder.to_path_buf(), Some(item.clone())),
+                    None => (item.clone(), None),
+                },
             };
             match folders.iter_mut().find(|(f, _)| *f == folder) {
                 Some((_, items)) => items.extend(item),
@@ -267,14 +273,167 @@ impl Model {
     }
 }
 
-/// The most `ShowItems` calls whose items are looked up at once: each on a thread that a mount which does not answer
-/// can hold.
-pub(super) const MAX_LOOK_UPS: usize = 8;
+/// Whether `target` is a folder spelled with `..`, which only the disk resolves.
+fn goes_up(target: &Target) -> bool {
+    matches!(target, Target::Folder(path) if path.components().any(|c| c == Component::ParentDir))
+}
 
-/// Whether an item a `ShowItems` call names exists, as its thread found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The paths of the folders and items of `targets`, in order; the trash is none.
+fn folder_paths(targets: &[Target]) -> Vec<PathBuf> {
+    targets
+        .iter()
+        .filter_map(|t| match t {
+            Target::Folder(path) => Some(path.clone()),
+            Target::Trash => None,
+        })
+        .collect()
+}
+
+/// The most calls whose items are looked up at once.
+pub const MAX_LOOK_UPS: usize = 8;
+
+/// How long a call waits for its items to be looked up before it is answered with those found by then: a mount that
+/// does not answer holds the caller no longer.
+pub const LOOK_UP_DEADLINE: Duration = Duration::from_secs(4);
+
+/// The most look-up threads alive at once, those that a mount which does not answer still holds past their call's
+/// deadline among them; past it a call is refused until one of them ends.
+pub(super) const MAX_LOOK_UP_THREADS: usize = 32;
+
+/// What tells, on a look-up thread, whether the item at a path exists.
+pub type LookUp = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+
+/// Whether the item at `path` exists: its own status, a symlink's and not its target's.
+pub(super) fn look_up_item(path: &Path) -> io::Result<()> {
+    std::fs::symlink_metadata(path).map(drop)
+}
+
+/// The calls whose items are being looked up, each on a thread of its own, by the id their message carries.
+pub(super) struct LookUps {
+    waiting: BTreeMap<u64, Waiting>,
+    next: u64,
+    look_up: LookUp,
+    /// The look-up threads alive, those of calls already answered among them.
+    threads: Arc<AtomicUsize>,
+}
+
+/// A call waiting for its items, and what its thread found of them so far.
+struct Waiting {
+    call: Call,
+    found: Arc<Mutex<Vec<Found>>>,
+}
+
+impl LookUps {
+    pub(super) fn new(look_up: LookUp) -> LookUps {
+        LookUps {
+            waiting: BTreeMap::new(),
+            next: 0,
+            look_up,
+            threads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Whether no call waits for its items.
+    pub(super) fn is_empty(&self) -> bool {
+        self.waiting.is_empty()
+    }
+
+    /// Look the `paths` of `call` up on a thread of its own, each `..` resolved, and with `exists` whether each item
+    /// exists: the call's message comes once they are looked up, and at the latest [`LOOK_UP_DEADLINE`] later. Past
+    /// [`MAX_LOOK_UPS`] calls waiting, or [`MAX_LOOK_UP_THREADS`] threads alive, the call is refused.
+    fn start(&mut self, call: Call, paths: Vec<PathBuf>, exists: bool) -> Vec<Command<Message>> {
+        if self.waiting.len() >= MAX_LOOK_UPS {
+            call.refuse("too many items are being looked up");
+            return Vec::new();
+        }
+        let look = exists.then(|| Arc::clone(&self.look_up));
+        let looking = match look_up_items(paths, look, &self.threads) {
+            Ok(looking) => looking,
+            Err(why) => {
+                call.refuse(why);
+                return Vec::new();
+            }
+        };
+        let id = self.next;
+        self.next += 1;
+        self.waiting.insert(
+            id,
+            Waiting {
+                call,
+                found: looking.found,
+            },
+        );
+        let done = looking.done;
+        vec![
+            Command::Perform(Box::pin(async move {
+                let _ = done.recv().await;
+                Message::LookedUp(id)
+            })),
+            Command::After {
+                delay: LOOK_UP_DEADLINE,
+                message: Message::LookedUp(id),
+            },
+        ]
+    }
+
+    /// The call `id` and what was found of its items by now, one a path in order; none once it was taken.
+    fn take(&mut self, id: u64) -> Option<(Call, Vec<Found>)> {
+        let waiting = self.waiting.remove(&id)?;
+        let found = lock(&waiting.found).clone();
+        Some((waiting.call, found))
+    }
+}
+
+/// What a look-up thread found so far, and what closes once it is done.
+struct Looking {
+    found: Arc<Mutex<Vec<Found>>>,
+    done: async_channel::Receiver<()>,
+}
+
+/// One look-up thread alive, counted in the threads it holds until it ends.
+struct Held(Arc<AtomicUsize>);
+
+impl Held {
+    /// One more thread, unless [`MAX_LOOK_UP_THREADS`] are alive.
+    fn take(threads: &Arc<AtomicUsize>) -> Option<Held> {
+        threads
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |alive| {
+                (alive < MAX_LOOK_UP_THREADS).then_some(alive + 1)
+            })
+            .ok()?;
+        Some(Held(Arc::clone(threads)))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn lock(found: &Mutex<Vec<Found>>) -> std::sync::MutexGuard<'_, Vec<Found>> {
+    found
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// `path` with each `..` resolved on the disk, as opening it resolves it: the part up to its last `..` made
+/// canonical (the `..` of a symlinked folder is its target's parent), the rest kept as spelled. A path without `..`
+/// is kept as it is, without reading the disk.
+fn resolve(path: &Path) -> io::Result<PathBuf> {
+    let parts: Vec<Component> = path.components().collect();
+    let Some(last) = parts.iter().rposition(|c| *c == Component::ParentDir) else {
+        return Ok(path.to_path_buf());
+    };
+    let mut resolved = std::fs::canonicalize(parts[..=last].iter().collect::<PathBuf>())?;
+    resolved.extend(&parts[last + 1..]);
+    Ok(resolved)
+}
+
+/// An item a call names as its thread found it: where it is, each `..` resolved, or why it is not there.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Found {
-    Here,
+    Here(PathBuf),
     Missing(LookUpError),
 }
 
@@ -301,57 +460,160 @@ impl LookUpError {
     }
 }
 
-/// Look up each of `paths` with `look` on a thread of its own: what was found arrives on the channel once every path
-/// has been looked up, in order. `None` when no thread could be started.
+/// Resolve each of `paths` ([`resolve`]) and, given `look`, look it up with it, on a thread of its own counted in
+/// `threads`: what was found is added as each path is, in order, and the channel closes once every path was. Refused
+/// with why when [`MAX_LOOK_UP_THREADS`] are alive or no thread could be started.
 fn look_up_items(
     paths: Vec<PathBuf>,
-    look: impl Fn(&Path) -> io::Result<()> + Send + 'static,
-) -> Option<async_channel::Receiver<Vec<Found>>> {
-    let (sent, found) = async_channel::bounded(1);
+    look: Option<LookUp>,
+    threads: &Arc<AtomicUsize>,
+) -> Result<Looking, &'static str> {
+    let held = Held::take(threads).ok_or("too many items are held by mounts that do not answer")?;
+    let found = Arc::new(Mutex::new(Vec::with_capacity(paths.len())));
+    let (sent, done) = async_channel::bounded::<()>(1);
+    let into = Arc::clone(&found);
     std::thread::Builder::new()
         .name("files-look-up".into())
         .spawn(move || {
-            let looked = paths
-                .iter()
-                .map(|path| match look(path) {
-                    Ok(()) => Found::Here,
+            let _held = held;
+            for path in &paths {
+                let item = resolve(path).and_then(|resolved| {
+                    look.as_ref().map_or(Ok(()), |look| look(&resolved))?;
+                    Ok(resolved)
+                });
+                lock(&into).push(match item {
+                    Ok(path) => Found::Here(path),
                     Err(e) => Found::Missing(LookUpError::of(&e)),
-                })
-                .collect();
-            let _ = sent.try_send(looked);
+                });
+            }
+            drop(sent);
         })
-        .ok()?;
-    Some(found)
+        .map_err(|_| "no thread could look the items up")?;
+    Ok(Looking { found, done })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::sync::Condvar;
+
+    /// A gate the look-ups wait at, as at a mount that does not answer, until it is opened (or a minute passes, so a
+    /// failing test ends).
+    #[derive(Default)]
+    struct Gate {
+        open: Mutex<bool>,
+        opened: Condvar,
+    }
+
+    impl Gate {
+        fn wait(&self) {
+            let open = self.open.lock().unwrap();
+            let _open = self
+                .opened
+                .wait_timeout_while(open, Duration::from_secs(60), |open| !*open)
+                .unwrap();
+        }
+
+        fn release(&self) {
+            *self.open.lock().unwrap() = true;
+            self.opened.notify_all();
+        }
+    }
 
     #[test]
     fn items_are_looked_up_on_a_thread_of_their_own() {
-        let (release, held) = std::sync::mpsc::channel::<()>();
-        let held = std::sync::Mutex::new(held);
+        let gate = Arc::new(Gate::default());
+        let held = Arc::clone(&gate);
         // the first look-up does not answer until released, as a folder on a mount that hangs
-        let found = look_up_items(vec!["/here".into(), "/gone".into()], move |path| {
+        let look: LookUp = Arc::new(move |path| {
             if path == Path::new("/here") {
-                let _ = held.lock().unwrap().recv_timeout(Duration::from_secs(60));
+                held.wait();
                 Ok(())
             } else {
                 Err(io::Error::from_raw_os_error(libc::ENOENT))
             }
-        })
-        .expect("a thread");
+        });
+        let threads = Arc::new(AtomicUsize::new(0));
+        let looking = look_up_items(vec!["/here".into(), "/gone".into()], Some(look), &threads)
+            .expect("a thread");
         // the caller is back at once, with nothing found yet
-        assert!(found.try_recv().is_err());
-        release.send(()).unwrap();
-        let looked = zbus::block_on(found.recv()).expect("what was found");
-        assert_eq!(looked[0], Found::Here);
+        assert!(looking.done.try_recv().is_err());
+        assert!(lock(&looking.found).is_empty());
+        gate.release();
+        let _ = zbus::block_on(looking.done.recv());
+        let looked = lock(&looking.found).clone();
+        assert_eq!(looked[0], Found::Here("/here".into()));
         let Found::Missing(e) = looked[1] else {
             panic!("{looked:?}");
         };
         assert_eq!(e.error().raw_os_error(), Some(libc::ENOENT));
         assert_eq!(e.error().kind(), io::ErrorKind::NotFound);
+    }
+
+    /// A thread a mount holds past its call's deadline still counts: past [`MAX_LOOK_UP_THREADS`] of them a look-up is
+    /// refused, and once they end the next one starts.
+    #[test]
+    fn threads_held_by_a_mount_are_bounded_until_they_end() {
+        let gate = Arc::new(Gate::default());
+        let held = Arc::clone(&gate);
+        let look: LookUp = Arc::new(move |_: &Path| {
+            held.wait();
+            Ok(())
+        });
+        let threads = Arc::new(AtomicUsize::new(0));
+        let stuck: Vec<Looking> = (0..MAX_LOOK_UP_THREADS)
+            .map(|_| {
+                look_up_items(vec!["/hung".into()], Some(Arc::clone(&look)), &threads)
+                    .expect("a thread")
+            })
+            .collect();
+        assert!(
+            look_up_items(vec!["/hung".into()], Some(Arc::clone(&look)), &threads).is_err(),
+            "one more is refused"
+        );
+        gate.release();
+        for looking in &stuck {
+            let _ = zbus::block_on(looking.done.recv());
+        }
+        // a thread is counted out as it ends, after it closed its channel
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while threads.load(Ordering::Acquire) != 0 {
+            assert!(std::time::Instant::now() < deadline, "the threads ended");
+            std::thread::yield_now();
+        }
+        let looking =
+            look_up_items(vec!["/hung".into()], Some(look), &threads).expect("taken again");
+        let _ = zbus::block_on(looking.done.recv());
+        assert_eq!(*lock(&looking.found), [Found::Here("/hung".into())]);
+    }
+
+    /// The `..` of a symlinked folder is its target's parent, as opening the path finds it, not the folder the link is
+    /// in; a path without `..` is kept as spelled.
+    #[test]
+    fn a_parent_through_a_symlinked_folder_is_the_target_s_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("x/y")).unwrap();
+        std::fs::write(root.join("x/b"), b"x").unwrap();
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::os::unix::fs::symlink(root.join("x/y"), root.join("a/link")).unwrap();
+
+        let through = root.join("a/link/../b");
+        assert_eq!(resolve(&through).unwrap(), root.join("x/b"));
+        assert_eq!(
+            resolve(&root.join("a/link/../y/..")).unwrap(),
+            root.join("x")
+        );
+        let kept = root.join("a/link/c");
+        assert_eq!(resolve(&kept).unwrap(), kept, "no disk read without ..");
+        let e = resolve(&root.join("a/nowhere/../b")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+
+        // the look-up thread finds the item where opening it would
+        let threads = Arc::new(AtomicUsize::new(0));
+        let look: LookUp = Arc::new(look_up_item);
+        let looking = look_up_items(vec![through], Some(look), &threads).expect("a thread");
+        let _ = zbus::block_on(looking.done.recv());
+        assert_eq!(*lock(&looking.found), [Found::Here(root.join("x/b"))]);
     }
 }

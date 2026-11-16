@@ -7,8 +7,9 @@
 use crate::common;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,7 +18,7 @@ use cupertino_files::instance::{
     self, Launch, LaunchError, Request, Service, Target, BUS_NAME, FILE_MANAGER_INTERFACE,
     FILE_MANAGER_NAME, FILE_MANAGER_PATH, INTERFACE, OBJECT_PATH,
 };
-use cupertino_files::kit::Observer;
+use cupertino_files::kit::{LookUp, Observer, LOOK_UP_DEADLINE, MAX_LOOK_UPS};
 use cupertino_files::notice::Notices;
 use cupertino_files::places::PlaceKind;
 use cupertino_kit::core::{Key, WindowKey};
@@ -52,18 +53,73 @@ impl Gate {
             if let Some(reached) = reached.lock().unwrap().take() {
                 let _ = reached.send(());
             }
-            let open = gate.open.lock().unwrap();
-            let _open = gate
-                .opened
-                .wait_timeout_while(open, Duration::from_secs(20), |open| !*open)
-                .unwrap();
+            gate.wait();
         })
+    }
+
+    /// Wait until the gate is opened, or 20 seconds passed, so a failing test ends.
+    fn wait(&self) {
+        let open = self.open.lock().unwrap();
+        let _open = self
+            .opened
+            .wait_timeout_while(open, Duration::from_secs(20), |open| !*open)
+            .unwrap();
+    }
+
+    /// A look-up of the items a call names that waits at the gate, as on a mount that does not answer: it tells
+    /// `held` of each item it waits for, then wakes the runtime with the waker put in its [`Held`], and counts there
+    /// each item it no longer waits for.
+    fn look_up(gate: &Arc<Gate>, held: mpsc::Sender<PathBuf>) -> (LookUp, Arc<Held>) {
+        let gate = Arc::clone(gate);
+        let state = Arc::new(Held::default());
+        let shared = Arc::clone(&state);
+        let held = Mutex::new(held);
+        let look: LookUp = Arc::new(move |path| {
+            let _ = held.lock().unwrap().send(path.to_path_buf());
+            if let Some(waker) = &*shared.waker.lock().unwrap() {
+                waker.wake_by_ref();
+            }
+            gate.wait();
+            shared.ended.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        });
+        (look, state)
     }
 
     fn release(&self) {
         *self.open.lock().unwrap() = true;
         self.opened.notify_all();
     }
+}
+
+/// What [`Gate::look_up`] shares with its test: the runtime's waker, and how many items it stopped waiting for.
+#[derive(Default)]
+struct Held {
+    waker: Mutex<Option<std::task::Waker>>,
+    ended: AtomicUsize,
+}
+
+/// Turn Files until its look-up waits for `n` more items, which it tells `held` of, and give their paths.
+fn until_held(run: &mut Run, held: &mpsc::Receiver<PathBuf>, n: usize) -> Vec<PathBuf> {
+    let deadline = Instant::now() + HANG_GUARD;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    loop {
+        paths.extend(held.try_iter());
+        if paths.len() >= n {
+            return paths;
+        }
+        assert!(run.wait_for_progress(deadline), "the look-up never began");
+        run.settle();
+    }
+}
+
+/// Ask Files on `bus` to show `items` on a thread of its own, which sends the answer to `answered`.
+fn ask_to_show(bus: &PrivateBus, items: &[PathBuf], answered: &mpsc::Sender<zbus::Result<()>>) {
+    let call = file_manager(bus, "ShowItems", items.iter().map(|p| uri(p)).collect(), "");
+    let answered = answered.clone();
+    std::thread::spawn(move || {
+        let _ = answered.send(call());
+    });
 }
 
 /// Four chunks of a copy, so it can wait between two of them.
@@ -940,6 +996,120 @@ fn show_folders_opens_each_folder() {
         activations(&mut run, opened),
         [Some("folder-token".to_owned())]
     );
+}
+
+/// The `..` after a symlinked folder leads to its target's parent, as opening the path does: the item is shown there.
+#[test]
+fn show_items_follows_a_symlinked_folder_s_parent_as_the_disk_does() {
+    let Some(bus) = bus() else { return };
+    let mut run = files(&bus, |start| start);
+    let home = run.home();
+    let pictures = home.join("Pictures");
+    std::fs::create_dir_all(pictures.join("trips")).unwrap();
+    std::fs::write(pictures.join("a.png"), b"x").unwrap();
+    std::os::unix::fs::symlink(pictures.join("trips"), home.join("Documents/trips")).unwrap();
+    let through = format!("{}/Documents/trips/../a.png", home.display());
+    let show = file_manager(&bus, "ShowItems", vec![through], "");
+    while_turning(&mut run, show).expect("ShowItems is taken");
+    let opened = window(&run, "browser/1").expect("a window on the link's target's parent");
+    assert_eq!(title(&mut run, opened), "Pictures");
+    look_at(&mut run, opened, 2);
+    run.wait_until(|run| run.selected_rows() == ["a.png"]);
+
+    // a folder spelled so is opened where the disk finds it, too
+    let folder = format!("{}/Documents/trips/..", home.display());
+    let show = file_manager(&bus, "ShowFolders", vec![folder], "");
+    while_turning(&mut run, show).expect("ShowFolders is taken");
+    let opened = window(&run, "browser/2").expect("a window on the folder");
+    assert_eq!(title(&mut run, opened), "Pictures");
+}
+
+/// The window goes on answering while the items of a `ShowItems` call are looked up on a mount that does not answer;
+/// the call is answered, and its item selected, once the look-up ends.
+#[test]
+fn the_window_answers_while_the_items_of_a_call_are_looked_up() {
+    let Some(bus) = bus() else { return };
+    let gate = Gate::new();
+    let (to_held, held) = mpsc::channel();
+    let (look, state) = Gate::look_up(&gate, to_held);
+    let mut run = files(&bus, |start| start.with_look_up(look));
+    *state.waker.lock().unwrap() = Some(run.waker());
+    let first = run.window;
+    present(&mut run, first);
+    let big = run.home().join("Documents/big.bin");
+    let (answered, answer) = mpsc::channel();
+    ask_to_show(&bus, std::slice::from_ref(&big), &answered);
+    assert_eq!(until_held(&mut run, &held, 1), [big]);
+
+    // the look-up waits at the gate, and the window still takes a click and shows it
+    run.click_row("Notes");
+    assert_eq!(run.selected_rows(), ["Notes"]);
+    assert_eq!(
+        state.ended.load(Ordering::Acquire),
+        0,
+        "the look-up still waits"
+    );
+    assert!(answer.try_recv().is_err(), "the caller waits for it");
+
+    gate.release();
+    let answer = while_turning(&mut run, move || {
+        answer.recv_timeout(HANG_GUARD).expect("an answer")
+    });
+    answer.expect("ShowItems is taken");
+    run.wait_until(|run| run.selected_rows() == ["big.bin"]);
+}
+
+/// A look-up held by a mount that does not answer is answered at its deadline with what was found by then (here,
+/// nothing: each item is a notice), and gives its place back, though its thread still waits: a call past the places
+/// the held ones took is still looked up, and Files still exits once nothing is left open.
+#[test]
+fn a_look_up_a_mount_holds_is_answered_at_its_deadline_and_gives_its_place_back() {
+    let Some(bus) = bus() else { return };
+    let gate = Gate::new();
+    let (to_held, held) = mpsc::channel();
+    let (look, state) = Gate::look_up(&gate, to_held);
+    let mut run = files(&bus, |start| start.with_look_up(look));
+    *state.waker.lock().unwrap() = Some(run.waker());
+    let first = run.window;
+    let hung = run.home().join("hung");
+    let deadline = LOOK_UP_DEADLINE.as_millis() as u64;
+    let (answered, answers) = mpsc::channel();
+    let answer = || {
+        answers
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the caller is answered at the deadline")
+    };
+
+    // every place is taken by a call whose item does not answer
+    for i in 0..MAX_LOOK_UPS {
+        ask_to_show(&bus, &[hung.join(format!("{i}.txt"))], &answered);
+    }
+    until_held(&mut run, &held, MAX_LOOK_UPS);
+    assert!(answers.try_recv().is_err(), "no answer before the deadline");
+    run.frames(deadline - 500, 500);
+    assert!(answers.try_recv().is_err(), "no answer before the deadline");
+    run.frames(500, 500);
+    for _ in 0..MAX_LOOK_UPS {
+        answer().expect("answered with what was found");
+    }
+    assert_eq!(run.windows(), [first], "nothing found, nothing shown");
+
+    // the threads still wait, and the places are free again
+    ask_to_show(&bus, &[hung.join("next.txt")], &answered);
+    assert_eq!(until_held(&mut run, &held, 1), [hung.join("next.txt")]);
+    close(&mut run, first);
+    assert!(
+        !run.driver.runtime().exited(),
+        "it waits for the call's look-up"
+    );
+    run.frames(deadline, 500);
+    answer().expect("answered with what was found");
+    assert!(
+        run.driver.runtime().exited(),
+        "it exits once the call is answered"
+    );
+    assert_eq!(state.ended.load(Ordering::Acquire), 0, "the threads wait");
+    gate.release();
 }
 
 /// A notification server that hands over the summary of each notification.

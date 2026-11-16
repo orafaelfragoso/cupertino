@@ -509,26 +509,11 @@ fn items_of(uris: &[String]) -> Result<Vec<Target>, zbus::fdo::Error> {
         .collect()
 }
 
-/// `path` spelled plainly, without reading the disk: repeated and trailing slashes and `.` dropped, and each `..` taking
-/// the name before it away (none above the root), as a URI's dot segments are removed.
+/// `path` spelled plainly, without reading the disk: repeated and trailing slashes and `.` dropped. Each `..` is kept:
+/// only the disk knows the folder it leads to (that of a symlinked folder is its target's parent), and the window's
+/// thread reads no disk, so a thread of its own resolves it ([`crate::kit`]).
 fn plain_path(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut plain = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !plain.pop() && !plain.has_root() {
-                    plain.push(part);
-                }
-            }
-            Component::RootDir => {
-                plain.push(part);
-            }
-            Component::Prefix(_) | Component::Normal(_) => plain.push(part),
-        }
-    }
-    plain
+    path.components().collect()
 }
 
 /// The activation token of a call's startup id: none when it is empty; one too long refuses the call.
@@ -1065,9 +1050,10 @@ mod tests {
         for (spelled, wanted) in [
             ("/srv//a/./b/", "/srv/a/b"),
             ("file:///srv/a//b/", "/srv/a/b"),
-            ("file:///srv/a/../b/./c.txt", "/srv/b/c.txt"),
-            ("/srv/a/b/..", "/srv/a"),
-            ("/../srv", "/srv"),
+            // a `..` is left for the disk to resolve: through a symlinked folder it is not the name before it
+            ("file:///srv/a/../b/./c.txt", "/srv/a/../b/c.txt"),
+            ("/srv/a/b/..", "/srv/a/b/.."),
+            ("/../srv", "/../srv"),
             ("/", "/"),
         ] {
             assert_eq!(plain(spelled), OsString::from(wanted), "{spelled}");

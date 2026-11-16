@@ -35,6 +35,7 @@ pub use jobs::{JobEvent, PROGRESS_WINDOW_DELAY};
 pub use list::RowGrab;
 pub use peek::PeekEvent;
 pub use places::PlacesSource;
+pub use remote::{LookUp, LOOK_UP_DEADLINE, MAX_LOOK_UPS};
 pub use share_popover::ShareEvent;
 pub use tabs::TabEvent;
 pub use tag_editor::TagEvent;
@@ -122,6 +123,8 @@ pub struct Start {
     instance: Option<Service>,
     /// The activation token the process was started with, which raises the first window.
     activation: Option<String>,
+    /// What tells, on a look-up thread, whether an item a call names exists.
+    look_up: LookUp,
 }
 
 impl Start {
@@ -195,6 +198,7 @@ impl Start {
             clock: SystemTime::now,
             instance: None,
             activation: None,
+            look_up: Arc::new(remote::look_up_item),
         }
     }
 
@@ -303,6 +307,11 @@ impl Start {
         Start { instance, ..self }
     }
 
+    /// The items the calls name looked up with `look_up` (on a thread of their own), in place of reading their status.
+    pub fn with_look_up(self, look_up: LookUp) -> Start {
+        Start { look_up, ..self }
+    }
+
     /// The first window raised with `token`, the activation token Files was started with, once it is shown.
     pub fn with_activation_token(self, token: Option<String>) -> Start {
         Start {
@@ -364,9 +373,8 @@ pub struct Model {
     exiting: bool,
     /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
     awaiting_call: bool,
-    /// The `ShowItems` calls whose items are being looked up, by the id their message carries.
-    look_ups: BTreeMap<u64, crate::instance::Call>,
-    next_look_up: u64,
+    /// The calls whose items are being looked up, each on a thread of its own.
+    look_ups: remote::LookUps,
 }
 
 /// How long a Files started without a window ([`Start::idle`]) waits for the call it was started for before it exits.
@@ -535,8 +543,8 @@ pub enum Message {
     Job(JobEvent),
     /// Calls of later launches or of the desktop are waiting ([`crate::instance`]).
     Remote,
-    /// The items of a `ShowItems` call, by its id, were looked up: whether each path it names exists, in order.
-    LookedUp(u64, Vec<remote::Found>),
+    /// The items of a call, by its id, were looked up, or its [`LOOK_UP_DEADLINE`] passed first.
+    LookedUp(u64),
     /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
     Raise(WindowKey, Option<String>),
     /// A notice of a file operation's end was clicked; none once no click can come any more.
@@ -765,8 +773,7 @@ impl Application for Files {
             next_window: 0,
             exiting: false,
             awaiting_call: start.first.is_none(),
-            look_ups: BTreeMap::new(),
-            next_look_up: 0,
+            look_ups: remote::LookUps::new(start.look_up),
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
@@ -873,7 +880,7 @@ impl Model {
             Message::Job(event) => self.job_event(event),
             Message::Noticed(click) => self.noticed(click),
             Message::Remote => self.remote_calls(),
-            Message::LookedUp(id, found) => self.looked_up(id, found),
+            Message::LookedUp(id) => self.looked_up(id),
             Message::CallWaitOver => {
                 self.awaiting_call = false;
                 Vec::new()

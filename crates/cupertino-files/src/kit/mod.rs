@@ -476,6 +476,11 @@ struct BrowserWindow {
     confirm_empty: bool,
     /// The trash's folder, whose view has a strip with an Empty button.
     trash_dir: PathBuf,
+    /// The trash, to look at what the mounted volumes' hold.
+    trash: Trash,
+    /// While the window shows the trash: a mounted volume's trash holds something, which the Empty button deletes
+    /// too. Read with the free space.
+    volumes_hold_trash: bool,
     /// How the folder is shown.
     view: ViewMode,
     /// The context menu open in the window.
@@ -1026,6 +1031,8 @@ impl Model {
             unlock: None,
             confirm_empty: false,
             trash_dir: self.session.trash.home_trash().join("files"),
+            trash: self.session.trash.clone(),
+            volumes_hold_trash: false,
             view: prefs.view,
             context: None,
             pressed: None,
@@ -1895,17 +1902,8 @@ impl Model {
             return Vec::new();
         };
         window.confirm_empty = false;
-        let sources: Vec<PathBuf> = if window.in_trash() {
-            window
-                .browser
-                .entries()
-                .iter()
-                .map(|e| e.path.clone())
-                .collect()
-        } else {
-            // asked from another folder: the trash's own entries, listed again by the worker
-            self.session.trash.entries()
-        };
+        // what the home trash and the mounted volumes' hold now; the worker lists them again
+        let sources = self.session.trash.entries();
         if sources.is_empty() {
             return Vec::new();
         }
@@ -2475,6 +2473,7 @@ impl BrowserWindow {
         };
         // a folder whose file system cannot be read takes the changes, and their failures say why
         self.mounted_read_only = self.browser.read_only().unwrap_or(false);
+        self.volumes_hold_trash = self.in_trash() && self.trash.volumes_hold_items();
     }
 
     /// Whether the folder shown takes nothing new: its medium can't be written, or its file system is mounted
@@ -2636,13 +2635,11 @@ impl BrowserWindow {
         self.browser.dir() == self.trash_dir
     }
 
-    /// Put up the question before the trash is emptied, unless it holds nothing.
+    /// Put up the question before the trash is emptied, unless neither the home trash nor a mounted volume's holds
+    /// anything.
     fn ask_empty_trash(&mut self, session: &Session) {
-        let holds_items = if self.in_trash() {
-            !self.browser.entries().is_empty()
-        } else {
-            session.trash.holds_items()
-        };
+        let holds_items =
+            (self.in_trash() && !self.browser.entries().is_empty()) || session.trash.holds_items();
         self.context = None;
         self.confirm_empty = holds_items;
     }

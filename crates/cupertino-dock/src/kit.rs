@@ -246,6 +246,10 @@ pub enum AppAction {
 /// An `org.freedesktop.Application.Activate` call under way ([`Host::dbus_activate`]): whether it succeeded.
 pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
+/// The trash being emptied ([`Host::empty_trash`]): ends in what the alert says about the items that could not be
+/// deleted, or in `None` when everything went.
+pub type Emptying = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+
 /// A program the dock started ([`Host::spawn`]): ends when its process exits, in whether it failed (an unsuccessful
 /// exit status or a signal).
 pub type Exited = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
@@ -360,9 +364,9 @@ pub trait Host {
     fn window_closed(&mut self, id: u32);
     /// Whether the trash holds anything.
     fn trash_full(&mut self) -> bool;
-    /// Delete everything in the trash away from the model: what ends in whether it all went.
-    fn empty_trash(&mut self) -> BusCall {
-        Box::pin(async { false })
+    /// Delete everything in the trash, the home trash and the mounted volumes', away from the model.
+    fn empty_trash(&mut self) -> Emptying {
+        Box::pin(async { None })
     }
 }
 
@@ -411,8 +415,8 @@ pub enum Message {
         key: String,
         ok: bool,
     },
-    /// The trash was emptied ([`Host::empty_trash`]).
-    TrashEmptied,
+    /// The trash was emptied ([`Host::empty_trash`]); with what to say when something could not be deleted.
+    TrashEmptied(Option<String>),
     /// Something was put in the trash or taken out of it.
     TrashChanged,
     Wake(u64),
@@ -466,11 +470,6 @@ struct Pending {
     opening: Opening,
     /// When the token was asked for: past [`TOKEN_TIMEOUT`] the launch goes ahead without it.
     asked: f64,
-}
-
-/// The question the Empty Trash item asks before it deletes, open over the trash's tile.
-struct OpenConfirm {
-    tile: TileId,
 }
 
 /// A fan closing: when it began and how far out it was then.
@@ -556,7 +555,8 @@ pub struct Model {
     /// The tile whose menu closed last, its darkened icon and when the menu closed: it keeps the darkening while the
     /// menu fades out ([`MENU_FADE_OUT`]).
     menu_fade: Option<(TileId, IconSet, f64)>,
-    confirm: Option<OpenConfirm>,
+    /// The trash's alert that is up: the question before it is emptied, or what could not be deleted.
+    confirm: Option<view::confirm::Alert>,
     stack: Option<OpenStack>,
     /// The tile the left button is held on, and its icon darkened: the pressed tile shows it until the button comes up
     /// or the pointer leaves the tile.
@@ -1701,6 +1701,8 @@ impl Model {
             self.engaged = false;
         } else if key == view::force_quit::key() {
             self.force_quit = None;
+        } else if Some(&key) == self.output.map(view::confirm::key).as_ref() {
+            self.confirm = None;
         }
     }
 
@@ -2285,14 +2287,17 @@ impl Model {
     /// Advance the animations, carry out what is due and tell the host what changed; then schedule the next wake.
     fn changed(&mut self) -> Vec<Command<Message>> {
         let now = self.now();
-        // the locked session, the overview and the Force Quit dialog hold the keyboard while they are up: a Focus Dock
-        // meanwhile is dropped, not kept for when they go
-        if self.locked || self.force_quit.is_some() || self.overview_keyboard().is_some() {
+        // the locked session, the overview, the Force Quit dialog and the trash's alert hold the keyboard while they are
+        // up: a Focus Dock meanwhile is dropped, not kept for when they go
+        if self.locked
+            || self.force_quit.is_some()
+            || self.confirm.is_some()
+            || self.overview_keyboard().is_some()
+        {
             self.engaged = false;
         }
         // an auto-hidden bar shows while it has the keyboard or one of its menus or stacks is open
-        self.session.dock.keep_shown =
-            self.engaged || self.stack.is_some() || self.menu.is_some() || self.confirm.is_some();
+        self.session.dock.keep_shown = self.engaged || self.stack.is_some() || self.menu.is_some();
         if let Some(screen) = self.screen() {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
@@ -2622,6 +2627,10 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
         Message::Locked(locked) => {
             model.locked = locked;
             if locked {
+                // the question is not left for whoever unlocks; what could not be deleted stays to be read
+                if model.confirm == Some(view::confirm::Alert::Question) {
+                    model.confirm = None;
+                }
                 model.force_quit = None;
                 model.menu = None;
                 model.stack = None;
@@ -2666,8 +2675,16 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             Vec::new()
         }
         Message::BusActivated { key, ok } => model.bus_activated(key, ok),
-        Message::TrashEmptied | Message::TrashChanged => {
-            // the trash's icon follows what is left
+        Message::TrashEmptied(failed) => {
+            // the trash's icon follows what is left, and what could not be deleted is said
+            model.trash_checked = None;
+            if let Some(why) = failed {
+                model.engaged = false;
+                model.confirm = Some(view::confirm::Alert::Failed(why));
+            }
+            Vec::new()
+        }
+        Message::TrashChanged => {
             model.trash_checked = None;
             Vec::new()
         }
@@ -2718,9 +2735,9 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             model.menu = None;
             match (command, tile) {
                 // deleting for good asks first
-                (Some(MenuCommand::EmptyTrash), Some(tile)) => {
+                (Some(MenuCommand::EmptyTrash), Some(_)) => {
                     model.engaged = false;
-                    model.confirm = Some(OpenConfirm { tile });
+                    model.confirm = Some(view::confirm::Alert::Question);
                     Vec::new()
                 }
                 (Some(command), _) => model.run_menu_command(command),
@@ -2732,11 +2749,13 @@ fn input_message(model: &mut Model, input: Input) -> Vec<Command<Message>> {
             Vec::new()
         }
         Input::ConfirmDone => {
-            model.confirm = None;
+            // only the question empties: a press that comes after it closed deletes nothing
+            if model.confirm.take() != Some(view::confirm::Alert::Question) {
+                return Vec::new();
+            }
             let emptying = model.host.empty_trash();
             vec![Command::Perform(Box::pin(async move {
-                let _ = emptying.await;
-                Message::TrashEmptied
+                Message::TrashEmptied(emptying.await)
             }))]
         }
         Input::MenuClosed => {
@@ -2954,9 +2973,7 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
         let fan_anchor = fan_basis
             .as_ref()
             .and_then(|b| to_bottom(b.tile_cx - 0.5, b.tile_cy, 1.0));
-        // the tile's menu and the question it asks stand over the same point
-        let menu_tile =
-            (model.menu.as_ref().map(|m| m.tile)).or(model.confirm.as_ref().map(|c| c.tile));
+        let menu_tile = model.menu.as_ref().map(|m| m.tile);
         let menu_anchor = menu_tile.and_then(|tile| {
             let t = layout.tiles.iter().find(|t| t.id == tile)?;
             to_bottom(t.rect.x + t.rect.w / 2.0 - 0.5, layout.bar.y, 1.0)
@@ -3043,22 +3060,6 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 ));
             }
         }
-        if let Some(confirm) = &model.confirm {
-            if layout.tiles.iter().any(|t| t.id == confirm.tile) {
-                windows.push(view::confirm::window(
-                    view::confirm::ConfirmView {
-                        parent: key.clone(),
-                        tile: confirm.tile.0,
-                        orientation,
-                        title: EMPTY_TRASH_TITLE,
-                        message: EMPTY_TRASH_MESSAGE,
-                        cancel: CANCEL,
-                        confirm: EMPTY_TRASH,
-                    },
-                    message,
-                ));
-            }
-        }
         if let Some(menu) = &model.menu {
             if let Some(anchor) = layout.tiles.iter().find(|t| t.id == menu.tile) {
                 windows.extend(view::menu::windows(
@@ -3110,6 +3111,9 @@ pub fn view(model: &Model) -> Vec<Window<Message>> {
                 ));
             }
         }
+    }
+    if let (Some(alert), Some(output)) = (&model.confirm, model.output) {
+        windows.push(view::confirm::window(alert, output, message));
     }
     if let Some(open) = &model.force_quit {
         let rows = match &open.layout {

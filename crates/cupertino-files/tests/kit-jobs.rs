@@ -812,3 +812,117 @@ fn a_drop_of_the_windows_own_items_held_while_it_copies_does_not_make_other_drag
     assert_eq!(finished(&run, own), Some(Some(DropAction::Copy)));
     assert_eq!(names(&notes(&run)), ["big.bin"]);
 }
+
+/// Put an item named `name` with its record into the trash directory `dir`: a folder with a file in it.
+fn put_in_trash(dir: &Path, name: &str) -> PathBuf {
+    let item = dir.join("files").join(name);
+    std::fs::create_dir_all(&item).unwrap();
+    std::fs::create_dir_all(dir.join("info")).unwrap();
+    std::fs::write(item.join("inner"), "1").unwrap();
+    std::fs::write(
+        dir.join("info").join(format!("{name}.trashinfo")),
+        format!("[Trash Info]\nPath={name}\nDeletionDate=2026-01-02T03:04:05\n"),
+    )
+    .unwrap();
+    item
+}
+
+/// The whole of Empty Trash from the trash's window, over a home trash and the trash folders of two volumes (temporary
+/// folders given as mount points): the question is the shared alert, Cancel closes it and deletes nothing, its default
+/// button empties all three and nothing else, an item that cannot be deleted stays and is listed with its reason in
+/// the progress window, and the Empty button stays on while only a volume's trash holds something.
+#[test]
+fn emptying_the_trash_asks_first_takes_every_volume_and_lists_what_stayed() {
+    use cupertino_files::trash::{self, Trash};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let home = tempfile::tempdir().unwrap();
+    let uid = std::fs::metadata(home.path()).unwrap().uid();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let home_trash = home.path().join("Trash");
+    let (usb, disk) = (home.path().join("usb"), home.path().join("disk"));
+    let own = usb.join(format!(".Trash-{uid}"));
+    let shared = disk.join(".Trash");
+    let items = [
+        put_in_trash(&home_trash, "from home"),
+        put_in_trash(&own, "from usb"),
+        put_in_trash(&shared.join(uid.to_string()), "from disk"),
+    ];
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    std::fs::write(usb.join("kept.txt"), "1").unwrap();
+    let places = vec![
+        place("Documents", &documents, PlaceKind::Documents),
+        place("Trash", &home_trash.join("files"), PlaceKind::Trash),
+    ];
+    let preferences = ThemePreferences {
+        appearance: Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    let volumes = vec![usb.clone(), disk];
+    let mut run = Run::start_hosted(
+        home,
+        documents,
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        move |start| start.with_trash(Trash::with_home(home_trash).with_mounts(volumes)),
+        common::Host::default(),
+    );
+    run.click("place-Trash");
+    run.wait_until(|run| run.title() == "Trash" && run.rows() == ["from home"]);
+    let asked = |run: &Run| run.read_aloud().contains(&trash::EMPTY_TITLE.to_owned());
+
+    // the question, in the words the dock's has; cancelled once, nothing is deleted
+    run.click("empty-trash");
+    assert!(asked(&run));
+    assert!(run.read_aloud().contains(&trash::EMPTY_MESSAGE.to_owned()));
+    run.click_named(Role::Button, trash::CANCEL_BUTTON);
+    assert!(!asked(&run));
+    assert!(items.iter().all(|i| i.join("inner").exists()));
+
+    // confirmed: the home trash and both volumes' are empty, the volume's own file is untouched
+    run.click("empty-trash");
+    run.click_named(Role::Button, trash::EMPTY_BUTTON);
+    wait(&mut run, |_| items.iter().all(|i| !i.exists()));
+    run.wait_until(|run| run.rows().is_empty());
+    assert!(usb.join("kept.txt").exists());
+    assert!(progress(&run).is_none(), "nothing failed");
+
+    if uid == 0 {
+        // the superuser deletes from a read-only folder
+        return;
+    }
+    // an item holding a folder nothing can be taken from stays, and the progress window says so
+    let stuck = put_in_trash(&own, "stuck");
+    let sub = stuck.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("file"), "1").unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let goes = put_in_trash(&run.home().join("Trash"), "goes");
+    run.wait_until(|run| run.rows() == ["goes"]);
+    run.click("empty-trash");
+    run.click_named(Role::Button, trash::EMPTY_BUTTON);
+    wait(&mut run, |run| progress(run).is_some());
+    assert!(!goes.exists(), "what can be deleted is");
+    assert!(sub.join("file").exists());
+    let shown = progress(&run).unwrap();
+    let texts = named_in(&run, shown, Role::StaticText);
+    assert!(
+        texts.contains(&"Emptied 1 of 2 items".to_owned()),
+        "{texts:?}"
+    );
+    assert!(
+        texts.contains(&"Permission denied.".to_owned()),
+        "{texts:?}"
+    );
+
+    // the window's own trash is empty, the volume's is not: Empty still asks
+    run.wait_until(|run| run.rows().is_empty());
+    run.click("empty-trash");
+    assert!(asked(&run));
+    run.click_named(Role::Button, trash::CANCEL_BUTTON);
+    assert!(sub.join("file").exists());
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

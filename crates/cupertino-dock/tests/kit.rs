@@ -18,7 +18,8 @@ use cupertino_dock::kit::{
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::Session;
 use cupertino_dock::view::{
-    IconSet, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID, SWITCHER_APP_ID,
+    IconSet, ALERT_APP_ID, BAR_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID,
+    SWITCHER_APP_ID,
 };
 use cupertino_dock::{Dock, DockConfig};
 use cupertino_kit::controls::ImageSource;
@@ -78,6 +79,10 @@ thread_local! {
 /// What the fake host was asked, and its clock.
 #[derive(Default)]
 struct Record {
+    /// The trash the host looks at and empties; none is an empty one.
+    trash: Option<cupertino_trash::Trash>,
+    /// How often the host was asked to empty it.
+    emptyings: usize,
     now: f64,
     wake: Option<u64>,
     /// How long after each wake the model asked to be woken, in seconds.
@@ -121,6 +126,8 @@ thread_local! {
     static BACKGROUND: RefCell<Option<Vec<IconKey>>> = const { RefCell::new(None) };
     /// The next run's host shows these folders as stacks.
     static FOLDERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// The next run's host has this trash.
+    static TRASH: RefCell<Option<cupertino_trash::Trash>> = const { RefCell::new(None) };
     /// The next run's windows are read by this assistive technology.
     static READER: RefCell<Option<AssistiveTechnology>> = const { RefCell::new(None) };
 }
@@ -253,7 +260,17 @@ impl Host for FakeHost {
     fn window_icon(&mut self, _: [String; 2], _: kit::WindowIcon) {}
     fn window_closed(&mut self, _: u32) {}
     fn trash_full(&mut self) -> bool {
-        false
+        let record = self.0.borrow();
+        record.trash.as_ref().is_some_and(|t| t.holds_items())
+    }
+    fn empty_trash(&mut self) -> kit::Emptying {
+        let mut record = self.0.borrow_mut();
+        record.emptyings += 1;
+        let failed = record
+            .trash
+            .as_ref()
+            .and_then(|t| t.empty().failure_message());
+        Box::pin(std::future::ready(failed))
     }
 }
 
@@ -368,6 +385,7 @@ impl Run {
             background: leave_out.is_some(),
             leave_out: leave_out.unwrap_or_default(),
             folders: FOLDERS.take(),
+            trash: TRASH.take(),
             ..Record::default()
         }));
         let mut dock = Dock::new(DockConfig::default());
@@ -3456,7 +3474,7 @@ fn the_overview_takes_the_keyboard_and_sends_the_window_frames() {
 }
 
 /// With `CUPERTINO_LOOK_DIR` set, pictures of the dock as its model drives it, light and dark at 1x and 2x: the bar with
-/// a running application, a tile's menu, the switcher panel and the overview's chrome over three windows. The desktop
+/// a running application, a tile's menu, the question before the trash is emptied, the switcher panel and the overview's chrome over three windows. The desktop
 /// offers no materials here, so the windows show their opaque fills where the compositor would draw a material.
 #[test]
 fn look_captures() {
@@ -3466,6 +3484,9 @@ fn look_captures() {
     let dir = std::path::PathBuf::from(dir);
     let looks = [Appearance::Light, Appearance::Dark];
     for scale in [1.0, 2.0] {
+        let trash = tempfile::tempdir().unwrap();
+        put_in_trash(trash.path(), "item");
+        TRASH.set(Some(cupertino_trash::Trash::with_home(trash.path())));
         let mut run = Run::on(tokens(false), ActionMap::default(), false);
         let bar = run.bar();
         run.driver
@@ -3487,6 +3508,14 @@ fn look_captures() {
             .look_into(&dir, menu, "dock-menu", scale, &looks)
             .unwrap();
         run.key(menu, ESCAPE);
+
+        // the question before the trash is emptied, once it has popped in
+        let alert = ask_to_empty(&mut run);
+        run.advance(1.0);
+        run.driver
+            .look_into(&dir, alert, "dock-trash-alert", scale, &looks)
+            .unwrap();
+        run.key(alert, ESCAPE);
 
         run.message(Message::Dock {
             output: 1,
@@ -3565,4 +3594,143 @@ fn look_captures() {
             run.advance(0.1);
         }
     }
+}
+
+/// Put an item named `name` with its record into the trash directory `dir`: a folder with a file in it.
+fn put_in_trash(dir: &Path, name: &str) -> std::path::PathBuf {
+    let item = dir.join("files").join(name);
+    std::fs::create_dir_all(&item).unwrap();
+    std::fs::create_dir_all(dir.join("info")).unwrap();
+    std::fs::write(item.join("inner"), "1").unwrap();
+    std::fs::write(
+        dir.join("info").join(format!("{name}.trashinfo")),
+        format!("[Trash Info]\nPath={name}\nDeletionDate=2026-01-02T03:04:05\n"),
+    )
+    .unwrap();
+    item
+}
+
+/// Choose Empty Trash in the menu of the trash's tile; the alert that opens.
+fn ask_to_empty(run: &mut Run) -> WindowId {
+    let bar = run.bar();
+    let trash = centre(run.bounds(bar, Role::Button, kit::TRASH_NAME));
+    run.pointer(bar, PointerEvent::Enter { position: trash });
+    run.button(bar, trash, MouseButton::Right, true);
+    run.button(bar, trash, MouseButton::Right, false);
+    let menu = open_menu(run, bar).expect("the trash's menu opened");
+    let item = run.bounds(menu, Role::MenuItem, kit::EMPTY_TRASH);
+    run.click(menu, centre(item));
+    run.advance(MENU_FLASH);
+    let alert = run
+        .window(&format!("{ALERT_APP_ID}@1"))
+        .expect("the alert opened on the dock's output");
+    run.send_to(alert, WindowEvent::Focus(true));
+    alert
+}
+
+/// The trash's tile says it holds something.
+fn trash_says_full(run: &mut Run) -> bool {
+    let bar = run.bar();
+    run.nodes(bar)
+        .iter()
+        .any(|n| n.1 == kit::TRASH_NAME && n.2 == kit::TRASH_FULL)
+}
+
+/// The whole of Empty Trash from the tile's menu, over a home trash and the trash folders of two volumes (temporary
+/// folders given as mount points): the question is the shared alert, Escape cancels it and deletes nothing, Return
+/// empties all three and nothing else, and an item that cannot be deleted is named in a second alert and stays.
+#[test]
+fn emptying_the_trash_asks_first_takes_every_volume_and_says_what_stayed() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let d = tempfile::tempdir().unwrap();
+    let uid = std::fs::metadata(d.path()).unwrap().uid();
+    let home = d.path().join("share/Trash");
+    let (usb, disk) = (d.path().join("usb"), d.path().join("disk"));
+    let own = usb.join(format!(".Trash-{uid}"));
+    let shared = disk.join(".Trash");
+    let items = [
+        put_in_trash(&home, "from home"),
+        put_in_trash(&own, "from usb"),
+        put_in_trash(&shared.join(uid.to_string()), "from disk"),
+    ];
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    std::fs::write(usb.join("kept.txt"), "1").unwrap();
+    TRASH.set(Some(
+        cupertino_trash::Trash::with_home(&home).with_mounts(vec![usb.clone(), disk]),
+    ));
+    let mut run = Run::start();
+    assert!(trash_says_full(&mut run));
+
+    // the question, in the words the file manager's has
+    let alert = ask_to_empty(&mut run);
+    let nodes = run.nodes(alert);
+    for words in [
+        cupertino_trash::EMPTY_TITLE,
+        cupertino_trash::EMPTY_MESSAGE,
+        cupertino_trash::CANCEL_BUTTON,
+        cupertino_trash::EMPTY_BUTTON,
+    ] {
+        assert!(nodes.iter().any(|n| n.1 == words), "{words}: {nodes:?}");
+    }
+    // cancelled once: nothing is deleted
+    run.key(alert, ESCAPE);
+    assert!(run.window(&format!("{ALERT_APP_ID}@1")).is_none());
+    assert_eq!(run.record.borrow().emptyings, 0);
+    assert!(items.iter().all(|i| i.join("inner").exists()));
+
+    // confirmed: the home trash and both volumes' are empty, the volume's own file is untouched
+    let alert = ask_to_empty(&mut run);
+    run.key(alert, RETURN);
+    assert_eq!(run.record.borrow().emptyings, 1);
+    assert!(items.iter().all(|i| !i.exists()), "{items:?}");
+    assert!(usb.join("kept.txt").exists());
+    assert!(
+        run.window(&format!("{ALERT_APP_ID}@1")).is_none(),
+        "nothing to say when everything went"
+    );
+    run.advance(kit::TRASH_CHECK_EVERY);
+    assert!(!trash_says_full(&mut run));
+
+    if uid == 0 {
+        // the superuser deletes from a read-only folder
+        return;
+    }
+    // an item holding a folder nothing can be taken from stays, and the dock says so
+    let stuck = put_in_trash(&own, "stuck");
+    let sub = stuck.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("file"), "1").unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let gone = put_in_trash(&home, "goes");
+    run.advance(kit::TRASH_CHECK_EVERY);
+    assert!(trash_says_full(&mut run));
+    let alert = ask_to_empty(&mut run);
+    run.key(alert, RETURN);
+    assert!(!gone.exists(), "what can be deleted is");
+    assert!(sub.join("file").exists());
+    let alert = run
+        .window(&format!("{ALERT_APP_ID}@1"))
+        .expect("an alert says what stayed");
+    let nodes = run.nodes(alert);
+    assert!(
+        nodes.iter().any(|n| n.1 == cupertino_trash::FAILED_TITLE),
+        "{nodes:?}"
+    );
+    assert!(
+        nodes
+            .iter()
+            .any(|n| n.1.starts_with("“stuck” could not be deleted: ")),
+        "{nodes:?}"
+    );
+    run.send_to(alert, WindowEvent::Focus(true));
+    run.key(alert, RETURN);
+    assert!(run.window(&format!("{ALERT_APP_ID}@1")).is_none());
+    assert_eq!(
+        run.record.borrow().emptyings,
+        2,
+        "its button only closes it"
+    );
+    run.advance(kit::TRASH_CHECK_EVERY);
+    assert!(trash_says_full(&mut run), "the item is still in the trash");
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
 }

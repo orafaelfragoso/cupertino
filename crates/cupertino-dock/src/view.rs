@@ -1,5 +1,5 @@
 //! The dock's windows as CupertinoKit draws them: the bar, the tile held by the pointer, the context menus, the Force
-//! Quit dialog and the edge strips that move the dock to another display; the switcher's
+//! Quit dialog, the trash's alerts and the edge strips that move the dock to another display; the switcher's
 //! panel and the overview's chrome are [`crate::switcher_kit`] and [`crate::overview_kit`]. Each window is a pure
 //! function of what [`crate::kit::Model`] holds; the geometry is the model's (`Dock::layout`,
 //! `force_quit::Layout`), so a node is placed where the model put it and reports the pointer and the keys back as an
@@ -29,6 +29,7 @@ use crate::switcher_kit::SwitcherInput;
 pub const BAR_APP_ID: &str = "cupertino-dock";
 pub const DRAG_APP_ID: &str = "cupertino-dock-drag";
 pub const FORCE_QUIT_APP_ID: &str = "cupertino-force-quit";
+pub const ALERT_APP_ID: &str = "cupertino-dock-alert";
 pub const EDGE_APP_ID: &str = "cupertino-dock-edge";
 pub const SWITCHER_APP_ID: &str = crate::switcher_kit::APP_ID;
 pub const OVERVIEW_APP_ID: &str = crate::overview_kit::APP_ID;
@@ -105,9 +106,10 @@ pub enum Input {
     StackOpenFolder,
     /// The stack closed: Escape, or a press outside it.
     StackClosed,
-    /// The question of a tile's menu was answered yes: its button was pressed.
+    /// The question before the trash is emptied was answered yes: its default button, or Return.
     ConfirmDone,
-    /// The question closed: its other button, Escape, or a press outside it.
+    /// The trash's alert closed: the question's other button or Escape, or the button of the one that says what
+    /// stayed.
     ConfirmClosed,
     /// The compositor took the hovered tile's label down; the next pointer motion shows it again.
     LabelGone,

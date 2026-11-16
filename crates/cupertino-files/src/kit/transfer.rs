@@ -338,8 +338,9 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
             }
         }
         Work::EmptyTrash { sources, trash } => {
-            // each item deleted counts as one; the trash is read again here, so what was put in since goes too
-            let listed = trash.list();
+            // each item deleted counts as one; the trash, the home one and the mounted volumes', is read again here, so
+            // what was put in since goes too
+            let listed = trash.list_all();
             let items = match &listed {
                 Ok(items) => items.as_slice(),
                 Err(_) => &[],

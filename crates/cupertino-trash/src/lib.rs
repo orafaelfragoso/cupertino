@@ -9,6 +9,11 @@
 //! * `directorysizes` is maintained for trashed directories (size in bytes, mtime of the info file,
 //!   percent-encoded name).
 //!
+//! * Emptying takes the home trash and the user's trash of every mounted volume that can be written
+//!   ([`Trash::trash_dirs`]), and nothing else: a volume's shared `.Trash` counts only as a real directory with the
+//!   sticky bit, a trash directory only as a real directory the user owns, and a link found in a trash is deleted
+//!   itself, never followed.
+//!
 //! Absolute locations are injectable through [`Trash`] so tests can use temporary directories.
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
@@ -24,6 +29,59 @@ pub const EMPTY_MESSAGE: &str =
     "Everything in the Trash is deleted for good. This cannot be undone.";
 pub const EMPTY_BUTTON: &str = "Empty Trash";
 pub const CANCEL_BUTTON: &str = "Cancel";
+/// The name of the picture the question shows, and the alert after an emptying that left something: the full trash.
+pub const EMPTY_ICON: &str = "trash.full";
+/// What the alert after an emptying that could not delete everything says: its title and the label of its one
+/// button. Its message is [`Emptied::failure_message`].
+pub const FAILED_TITLE: &str = "The Trash could not be emptied completely.";
+pub const FAILED_BUTTON: &str = "OK";
+
+/// One item an emptying could not delete: where it lies in its trash, and why.
+#[derive(Debug)]
+pub struct Failure {
+    pub path: PathBuf,
+    pub error: io::Error,
+}
+
+/// What an emptying did, over every trash directory it took.
+#[derive(Debug, Default)]
+pub struct Emptied {
+    /// How many items went.
+    pub deleted: usize,
+    /// The items that are still there, back in their trash.
+    pub failures: Vec<Failure>,
+}
+
+impl Emptied {
+    /// What the alert says under [`FAILED_TITLE`], or `None` when everything went: the one item by name with its
+    /// reason, or how many items stayed with the first one's reason.
+    pub fn failure_message(&self) -> Option<String> {
+        failure_message(
+            self.failures
+                .iter()
+                .map(|f| (f.path.as_path(), f.error.to_string())),
+        )
+    }
+}
+
+/// [`Emptied::failure_message`] for any list of items that stayed and why.
+pub fn failure_message<'a>(
+    failures: impl IntoIterator<Item = (&'a Path, String)>,
+) -> Option<String> {
+    let mut failures = failures.into_iter();
+    let (path, reason) = failures.next()?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    Some(match failures.count() {
+        0 => format!("“{name}” could not be deleted: {reason}."),
+        more => format!(
+            "{} items could not be deleted. “{name}”: {reason}.",
+            more + 1
+        ),
+    })
+}
 
 /// Characters percent-encoded in `Path=` (everything but unreserved characters and `/`).
 const PATH_SET: &AsciiSet = &CONTROLS
@@ -136,8 +194,11 @@ impl TrashedItem {
 pub struct Trash {
     home_trash: PathBuf,
     uid: u32,
-    /// Mount points to consider for other devices (longest match wins). Empty means read `/proc/self/mountinfo`.
+    /// Mount points to consider for other devices (longest match wins). `None` means read `/proc/self/mountinfo`.
     mounts: Option<Vec<PathBuf>>,
+    /// Whether, with no mount points given, the volumes whose trash is emptied are the system's mounts. Only the
+    /// trash of the default location says so: one made at a location of its own never reaches for the real volumes.
+    system_volumes: bool,
 }
 
 pub fn encode_path(p: &str) -> String {
@@ -190,6 +251,98 @@ fn mount_points() -> Vec<PathBuf> {
         .collect()
 }
 
+/// File systems that hold no files of a person's: the kernel's own, and the automounter's, whose mount points mount
+/// what they stand for when looked at.
+const NOT_VOLUMES: [&str; 20] = [
+    "autofs",
+    "binfmt_misc",
+    "bpf",
+    "cgroup",
+    "cgroup2",
+    "configfs",
+    "debugfs",
+    "devpts",
+    "devtmpfs",
+    "efivarfs",
+    "fusectl",
+    "hugetlbfs",
+    "mqueue",
+    "nsfs",
+    "proc",
+    "pstore",
+    "rpc_pipefs",
+    "securityfs",
+    "sysfs",
+    "tracefs",
+];
+
+/// The mount points of `mountinfo` (the text of `/proc/self/mountinfo`) that can hold a trash: every one but those of
+/// [`NOT_VOLUMES`]. A line's fifth field is the mount point; its file system type follows the lone `-`.
+fn volumes_of(mountinfo: &str) -> Vec<PathBuf> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let point = fields.nth(4)?;
+            let kind = fields.skip_while(|f| *f != "-").nth(1)?;
+            (!NOT_VOLUMES.contains(&kind)).then(|| {
+                PathBuf::from(
+                    point
+                        .replace("\\040", " ")
+                        .replace("\\011", "\t")
+                        .replace("\\012", "\n")
+                        .replace("\\134", "\\"),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Whether `path` is a real directory (no link to one) that `uid` owns.
+fn own_dir(path: &Path, uid: u32) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir() && m.uid() == uid)
+}
+
+/// Whether the user may add to and take from the directory `path`; not so on a file system mounted read-only.
+fn writable(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c` is a NUL-terminated path that lives through the call
+    unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+}
+
+/// Delete `path` itself for good: a folder with everything in it, anything else (a link too, never what it points
+/// at) alone. Nothing there is no error.
+fn remove(path: &Path) -> io::Result<()> {
+    let gone = match fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) => Err(e),
+    };
+    match gone {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// A name for `name` that is free in the folder `files`: itself, or with a counter.
+fn free_name(files: &Path, name: &str) -> String {
+    let mut n = 1;
+    loop {
+        let candidate = if n == 1 {
+            name.to_owned()
+        } else {
+            with_counter(name, n)
+        };
+        if fs::symlink_metadata(files.join(&candidate)).is_err() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 impl Trash {
     /// Trash with the default home location and the current user id.
     pub fn new() -> Self {
@@ -201,14 +354,17 @@ impl Trash {
             home_trash: base.join("Trash"),
             uid: unsafe { libc::getuid() },
             mounts: None,
+            system_volumes: true,
         }
     }
 
+    /// A trash at a location of its own, for the current user id; it knows no volumes until it is given mount points.
     pub fn with_home(home_trash: impl Into<PathBuf>) -> Self {
         Trash {
             home_trash: home_trash.into(),
             uid: unsafe { libc::getuid() },
             mounts: None,
+            system_volumes: false,
         }
     }
 
@@ -259,6 +415,47 @@ impl Trash {
         perm.set_mode(0o700);
         fs::set_permissions(&d, perm)?;
         Ok((d, Some(top)))
+    }
+
+    /// The user's trash directories on the mounted volumes, where they exist and can be written: none for a trash at
+    /// a location of its own that was given no mount points ([`Trash::with_mounts`]); else, for each mount point,
+    /// `.Trash/$uid` when `.Trash` is a real directory with the sticky bit (never a link, which could lead
+    /// anywhere), and `.Trash-$uid`. Each counts only as a real directory the user owns.
+    pub fn volume_trash_dirs(&self) -> Vec<PathBuf> {
+        let mounts = match &self.mounts {
+            Some(mounts) => mounts.clone(),
+            None if self.system_volumes => fs::read_to_string("/proc/self/mountinfo")
+                .map(|s| volumes_of(&s))
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for top in mounts {
+            let shared = top.join(".Trash");
+            let shared_ok = fs::symlink_metadata(&shared)
+                .is_ok_and(|m| m.file_type().is_dir() && m.permissions().mode() & 0o1000 != 0);
+            let candidates = [
+                shared_ok.then(|| shared.join(self.uid.to_string())),
+                Some(top.join(format!(".Trash-{}", self.uid))),
+            ];
+            for dir in candidates.into_iter().flatten() {
+                if dir != self.home_trash
+                    && !dirs.contains(&dir)
+                    && own_dir(&dir, self.uid)
+                    && writable(&dir)
+                {
+                    dirs.push(dir);
+                }
+            }
+        }
+        dirs
+    }
+
+    /// Every trash directory an emptying takes: the home trash, then [`Trash::volume_trash_dirs`].
+    pub fn trash_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.home_trash.clone()];
+        dirs.extend(self.volume_trash_dirs());
+        dirs
     }
 
     /// Move `path` to the trash and return the record, a trashed folder's `directorysizes` line written.
@@ -398,17 +595,33 @@ impl Trash {
         self.list_dir(&self.home_trash)
     }
 
-    /// The entries of the home trash's `files` folder, without reading their `.trashinfo`: a quick look at what an
-    /// emptying would take (an entry without its `.trashinfo` too).
-    pub fn entries(&self) -> Vec<PathBuf> {
-        fs::read_dir(self.home_trash.join("files"))
-            .map(|entries| entries.flatten().map(|e| e.path()).collect())
-            .unwrap_or_default()
+    /// The items of every trash directory an emptying takes ([`Trash::trash_dirs`]), each directory's by name.
+    pub fn list_all(&self) -> Result<Vec<TrashedItem>, TrashError> {
+        let mut items = Vec::new();
+        for dir in self.trash_dirs() {
+            items.extend(self.list_dir(&dir)?);
+        }
+        Ok(items)
     }
 
-    /// Whether the home trash holds anything, from its `files` folder alone.
+    /// The entries of the `files` folders of every trash directory an emptying takes, without reading their
+    /// `.trashinfo`: a quick look at what it would delete (an entry without its `.trashinfo` too).
+    pub fn entries(&self) -> Vec<PathBuf> {
+        self.trash_dirs()
+            .iter()
+            .filter_map(|dir| fs::read_dir(dir.join("files")).ok())
+            .flat_map(|entries| entries.flatten().map(|e| e.path()))
+            .collect()
+    }
+
+    /// Whether the home trash or a volume's holds anything, from the `files` folders alone.
     pub fn holds_items(&self) -> bool {
-        fs::read_dir(self.home_trash.join("files")).is_ok_and(|mut e| e.next().is_some())
+        holds_items(&self.trash_dirs())
+    }
+
+    /// Whether a mounted volume's trash holds anything, whatever the home trash holds.
+    pub fn volumes_hold_items(&self) -> bool {
+        holds_items(&self.volume_trash_dirs())
     }
 
     /// Put a trashed item back at its original location (fails if the location exists).
@@ -431,75 +644,20 @@ impl Trash {
 
     /// Permanently delete one trashed item.
     pub fn delete(&self, item: &TrashedItem) -> Result<(), TrashError> {
-        let f = item.file_path();
-        match fs::symlink_metadata(&f) {
-            Ok(m) if m.is_dir() => fs::remove_dir_all(&f)?,
-            Ok(_) => fs::remove_file(&f)?,
-            Err(_) => {}
-        }
+        remove(&item.file_path())?;
         forget(item);
         Ok(())
     }
 
-    /// Empty the home trash and return how many items it held. The trash's `files` and `info` folders are swapped
-    /// for empty ones first, so the trash is empty at once (an entry without its `.trashinfo` goes too), and the old
-    /// ones are deleted after; what cannot be deleted is left in a hidden folder of the trash directory and tried again
-    /// at the next emptying. Where the swap is refused, the items are deleted one by one.
-    pub fn empty(&self) -> Result<usize, TrashError> {
-        let files = self.home_trash.join("files");
-        let info = self.home_trash.join("info");
-        let count = match fs::read_dir(&files) {
-            Ok(entries) => entries.count(),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(e.into()),
-        };
-        let expunged = self.home_trash.join(format!(
-            ".expunged-{}-{}",
-            std::process::id(),
-            now_unix_nanos()
-        ));
-        let swapped = {
-            let _held = sizes_lock();
-            fs::create_dir(&expunged)
-                .and_then(|()| fs::rename(&files, expunged.join("files")))
-                .and_then(|()| fs::create_dir(&files))
-                .and_then(|()| match fs::rename(&info, expunged.join("info")) {
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                    other => other,
-                })
-                .and_then(|()| fs::create_dir(&info))
-                .map(|()| {
-                    let _ = fs::remove_file(self.home_trash.join("directorysizes"));
-                })
-        };
-        if let Err(e) = swapped {
-            // put back whatever moved, then go item by item
-            if !files.exists() {
-                let _ = fs::rename(expunged.join("files"), &files);
-            }
-            if !info.exists() {
-                let _ = fs::rename(expunged.join("info"), &info);
-            }
-            let _ = fs::remove_dir_all(&expunged);
-            let items = self.list().map_err(|_| TrashError::from(e))?;
-            for i in &items {
-                self.delete(i)?;
-            }
-            return Ok(items.len());
+    /// Empty the home trash and the user's trash on every mounted volume that can be written
+    /// ([`Trash::trash_dirs`]), and touch nothing else. What could not be deleted is in the result's failures and
+    /// stays in its trash.
+    pub fn empty(&self) -> Emptied {
+        let mut emptied = Emptied::default();
+        for dir in self.trash_dirs() {
+            empty_dir(&dir, &mut emptied);
         }
-        // this emptying's folder, and any an earlier one could not finish
-        if let Ok(entries) = fs::read_dir(&self.home_trash) {
-            for entry in entries.flatten() {
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".expunged-")
-                {
-                    let _ = fs::remove_dir_all(entry.path());
-                }
-            }
-        }
-        Ok(count)
+        emptied
     }
 
     /// Delete items trashed more than `days` days ago (the "remove after 30 days" option, which the
@@ -516,6 +674,124 @@ impl Trash {
         }
         Ok(n)
     }
+}
+
+/// Whether the `files` folder of one of the trash directories `dirs` has an entry.
+fn holds_items(dirs: &[PathBuf]) -> bool {
+    dirs.iter()
+        .any(|dir| fs::read_dir(dir.join("files")).is_ok_and(|mut e| e.next().is_some()))
+}
+
+/// Empty the trash directory `dir` into `emptied`. Its `files` and `info` folders are swapped for empty ones first, so
+/// the trash is empty at once (an entry without its `.trashinfo` goes too), and the old ones are deleted after, entry
+/// by entry; an entry that cannot be deleted goes back into the trash with its `.trashinfo`, as a failure (one that
+/// cannot even be moved back stays in the hidden folder the old ones went to, for the next emptying). Where the
+/// swap is refused, the entries are deleted in place. A `files` that is a link is taken away itself, never followed.
+fn empty_dir(dir: &Path, emptied: &mut Emptied) {
+    let files = dir.join("files");
+    let info = dir.join("info");
+    match fs::symlink_metadata(&files) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => {
+            emptied.failures.push(Failure { path: files, error });
+            return;
+        }
+    }
+    let expunged = dir.join(format!(
+        ".expunged-{}-{}",
+        std::process::id(),
+        now_unix_nanos()
+    ));
+    let swapped = {
+        let _held = sizes_lock();
+        fs::create_dir(&expunged)
+            .and_then(|()| fs::rename(&files, expunged.join("files")))
+            .and_then(|()| fs::create_dir(&files))
+            .and_then(|()| match fs::rename(&info, expunged.join("info")) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            })
+            .and_then(|()| fs::create_dir(&info))
+            .map(|()| {
+                let _ = fs::remove_file(dir.join("directorysizes"));
+            })
+    };
+    if swapped.is_err() {
+        // put back whatever moved, then delete in place
+        if fs::symlink_metadata(&files).is_err() {
+            let _ = fs::rename(expunged.join("files"), &files);
+        }
+        if fs::symlink_metadata(&info).is_err() {
+            let _ = fs::rename(expunged.join("info"), &info);
+        }
+        let _ = fs::remove_dir_all(&expunged);
+        for (name, error) in delete_entries(&files, &info, emptied) {
+            emptied.failures.push(Failure {
+                path: files.join(name),
+                error,
+            });
+        }
+        return;
+    }
+    let (old_files, old_info) = (expunged.join("files"), expunged.join("info"));
+    // what stays goes back where the person can see it, under a free name when its own was taken meanwhile
+    for (name, error) in delete_entries(&old_files, &old_info, emptied) {
+        let back = free_name(&files, &name);
+        let path = match fs::rename(old_files.join(&name), files.join(&back)) {
+            Ok(()) => {
+                let _ = fs::rename(
+                    old_info.join(format!("{name}.trashinfo")),
+                    info.join(format!("{back}.trashinfo")),
+                );
+                files.join(back)
+            }
+            Err(_) => old_files.join(&name),
+        };
+        emptied.failures.push(Failure { path, error });
+    }
+    // this emptying's folder, and any an earlier one could not finish
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".expunged-")
+            {
+                let _ = remove(&entry.path());
+            }
+        }
+    }
+}
+
+/// Delete every entry of the folder `files` (itself taken away when it is no folder but a link or a file) and, with
+/// each entry that went, its `.trashinfo` in `info`; the count goes into `emptied`. Returns the names of the entries
+/// that stayed, each with why.
+fn delete_entries(files: &Path, info: &Path, emptied: &mut Emptied) -> Vec<(String, io::Error)> {
+    let mut stayed = Vec::new();
+    let entries = match fs::symlink_metadata(files) {
+        Ok(m) if m.file_type().is_dir() => fs::read_dir(files),
+        // no folder: whatever it leads to is not the trash's to delete
+        Ok(_) => {
+            let _ = fs::remove_file(files);
+            return stayed;
+        }
+        Err(e) => Err(e),
+    };
+    let Ok(entries) = entries else {
+        return stayed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match remove(&entry.path()) {
+            Ok(()) => {
+                emptied.deleted += 1;
+                let _ = fs::remove_file(info.join(format!("{name}.trashinfo")));
+            }
+            Err(error) => stayed.push((name, error)),
+        }
+    }
+    stayed
 }
 
 /// The trashed item `path` is, when it is an item of a trash directory's `files` folder that has its `.trashinfo`:
@@ -783,7 +1059,7 @@ mod tests {
         let f = d.path().join("c");
         fs::write(&f, b"1").unwrap();
         t.trash(&f).unwrap();
-        assert_eq!(t.empty().unwrap(), 1);
+        assert_eq!(t.empty().deleted, 1);
     }
 
     #[test]
@@ -799,7 +1075,8 @@ mod tests {
         // an entry without its .trashinfo, and what an earlier emptying left
         fs::write(home.join("files/orphan"), b"1").unwrap();
         fs::create_dir_all(home.join(".expunged-1-2/files")).unwrap();
-        assert_eq!(t.empty().unwrap(), 3);
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (3, 0));
         for folder in ["files", "info"] {
             assert_eq!(
                 fs::read_dir(home.join(folder)).unwrap().count(),
@@ -816,14 +1093,16 @@ mod tests {
             .collect();
         assert!(left.is_empty(), "{left:?}");
         assert!(t.list().unwrap().is_empty());
-        assert_eq!(t.empty().unwrap(), 0, "an empty trash empties to nothing");
+        assert_eq!(t.empty().deleted, 0, "an empty trash empties to nothing");
     }
 
     #[test]
     fn emptying_a_trash_that_was_never_made_is_nothing() {
         let d = tempfile::tempdir().unwrap();
         let t = Trash::with_home(d.path().join("Trash"));
-        assert_eq!(t.empty().unwrap(), 0);
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (0, 0));
+        assert!(!t.holds_items());
     }
 
     #[test]
@@ -849,6 +1128,262 @@ mod tests {
         assert_eq!((p.as_str(), d.as_str()), ("/a b", "2026-01-02T03:04:05"));
         assert!(parse_info("[Trash Info]\n").is_err());
         assert!(parse_local_time("2026-01-02T03:04:05").is_some());
+    }
+
+    /// Put an item named `name` with its `.trashinfo` into the trash directory `dir`, as a file or as a folder with
+    /// a file in it.
+    fn put(dir: &Path, name: &str, folder: bool) -> PathBuf {
+        fs::create_dir_all(dir.join("files")).unwrap();
+        fs::create_dir_all(dir.join("info")).unwrap();
+        let path = dir.join("files").join(name);
+        if folder {
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("inner"), b"1").unwrap();
+        } else {
+            fs::write(&path, b"1").unwrap();
+        }
+        fs::write(
+            dir.join("info").join(format!("{name}.trashinfo")),
+            format!("[Trash Info]\nPath={name}\nDeletionDate=2026-01-02T03:04:05\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    fn uid() -> u32 {
+        unsafe { libc::getuid() }
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn emptying_takes_the_trash_of_every_volume_and_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let (usb, disk) = (d.path().join("usb"), d.path().join("disk"));
+        // one volume with the user's own trash folder, one with the shared folder, sticky as it must be
+        let own = usb.join(format!(".Trash-{}", uid()));
+        let shared = disk.join(".Trash");
+        let in_shared = shared.join(uid().to_string());
+        put(&own, "from usb", true);
+        put(&in_shared, "from disk", false);
+        set_mode(&shared, 0o1777);
+        // what an emptying must leave: the volumes' files, another user's trash, a trash on no mount point
+        fs::write(usb.join("kept.txt"), b"1").unwrap();
+        fs::create_dir(disk.join("kept")).unwrap();
+        let another = put(&usb.join(format!(".Trash-{}", uid() + 1)), "theirs", false);
+        let elsewhere = put(
+            &d.path().join(format!("other/.Trash-{}", uid())),
+            "x",
+            false,
+        );
+        let t = Trash::with_home(d.path().join("share/Trash"))
+            .with_mounts(vec![usb.clone(), disk.clone()]);
+        let f = d.path().join("from home");
+        fs::write(&f, b"1").unwrap();
+        t.trash(&f).unwrap();
+
+        assert_eq!(
+            t.trash_dirs(),
+            [t.home_trash().to_path_buf(), own.clone(), in_shared.clone()]
+        );
+        assert!(t.holds_items());
+        assert_eq!(t.entries().len(), 3);
+        assert_eq!(t.list_all().unwrap().len(), 3);
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (3, 0));
+        assert!(!t.holds_items());
+        for dir in [t.home_trash(), &own, &in_shared] {
+            assert_eq!(names(dir), ["files", "info"], "{}", dir.display());
+            assert!(names(&dir.join("files")).is_empty());
+            assert!(names(&dir.join("info")).is_empty());
+        }
+        assert!(usb.join("kept.txt").exists() && disk.join("kept").is_dir());
+        assert!(another.exists() && elsewhere.exists());
+
+        // a volume that holds something makes the trash full with the home trash empty
+        put(&own, "again", false);
+        assert!(t.holds_items());
+        assert_eq!(t.empty().deleted, 1);
+    }
+
+    #[test]
+    fn a_trash_folder_that_is_a_link_or_not_the_users_is_never_emptied() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        let precious = put(&outside, "precious", true);
+        let me = uid();
+        // the user's own folder is a link out of the volume
+        let linked = d.path().join("linked");
+        fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(&outside, linked.join(format!(".Trash-{me}"))).unwrap();
+        // the shared folder is a link
+        let shared_link = d.path().join("shared-link");
+        fs::create_dir(&shared_link).unwrap();
+        let real = d.path().join("real-shared");
+        put(&real.join(me.to_string()), "a", false);
+        set_mode(&real, 0o1777);
+        std::os::unix::fs::symlink(&real, shared_link.join(".Trash")).unwrap();
+        // the shared folder has no sticky bit
+        let loose = d.path().join("loose");
+        let loose_item = put(&loose.join(".Trash").join(me.to_string()), "b", false);
+        // the user's folder inside a good shared folder is a link
+        let inner = d.path().join("inner");
+        fs::create_dir_all(inner.join(".Trash")).unwrap();
+        set_mode(&inner.join(".Trash"), 0o1777);
+        std::os::unix::fs::symlink(&outside, inner.join(".Trash").join(me.to_string())).unwrap();
+
+        let t = Trash::with_home(d.path().join("share/Trash")).with_mounts(vec![
+            linked,
+            shared_link,
+            loose,
+            inner,
+        ]);
+        assert_eq!(t.trash_dirs(), [t.home_trash().to_path_buf()]);
+        assert!(!t.holds_items());
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (0, 0));
+        assert!(precious.join("inner").exists());
+        assert!(real.join(me.to_string()).join("files/a").exists());
+        assert!(loose_item.exists());
+    }
+
+    #[test]
+    fn links_inside_a_trash_are_deleted_themselves_and_never_followed() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = d.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("precious"), b"1").unwrap();
+        let usb = d.path().join("usb");
+        let own = usb.join(format!(".Trash-{}", uid()));
+        // a trashed link to a folder, and a trashed folder holding one
+        let folder = put(&own, "folder", true);
+        std::os::unix::fs::symlink(&outside, folder.join("link")).unwrap();
+        std::os::unix::fs::symlink(&outside, own.join("files/link")).unwrap();
+        // a second volume whose files folder is itself a link out
+        let odd = d.path().join("odd");
+        let odd_own = odd.join(format!(".Trash-{}", uid()));
+        fs::create_dir_all(&odd_own).unwrap();
+        std::os::unix::fs::symlink(&outside, odd_own.join("files")).unwrap();
+
+        let t = Trash::with_home(d.path().join("share/Trash")).with_mounts(vec![usb, odd]);
+        let emptied = t.empty();
+        assert!(emptied.failures.is_empty(), "{:?}", emptied.failures);
+        assert_eq!(emptied.deleted, 2);
+        assert!(names(&own.join("files")).is_empty());
+        assert_eq!(names(&outside), ["precious"]);
+        assert!(
+            fs::symlink_metadata(odd_own.join("files"))
+                .unwrap()
+                .is_dir(),
+            "the link is replaced by a folder"
+        );
+    }
+
+    #[test]
+    fn an_item_that_cannot_be_deleted_is_reported_and_stays_in_its_trash() {
+        if uid() == 0 {
+            // the superuser deletes from a read-only folder
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let usb = d.path().join("usb");
+        let own = usb.join(format!(".Trash-{}", uid()));
+        let locked = put(&own, "locked", true);
+        put(&own, "free", false);
+        // a folder inside it that nothing can be taken from
+        let sub = locked.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("file"), b"1").unwrap();
+        set_mode(&sub, 0o555);
+        let t = Trash::with_home(d.path().join("share/Trash")).with_mounts(vec![usb]);
+        let f = d.path().join("home item");
+        fs::write(&f, b"1").unwrap();
+        t.trash(&f).unwrap();
+
+        let emptied = t.empty();
+        assert_eq!(emptied.deleted, 2, "the others went, on both volumes");
+        assert_eq!(emptied.failures.len(), 1);
+        assert_eq!(emptied.failures[0].path, locked);
+        assert_eq!(
+            emptied.failures[0].error.kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let message = emptied.failure_message().unwrap();
+        assert!(
+            message.starts_with("“locked” could not be deleted: "),
+            "{message}"
+        );
+        // back in its trash with its record, nothing hidden left behind
+        assert_eq!(names(&own), ["files", "info"]);
+        assert_eq!(names(&own.join("files")), ["locked"]);
+        assert_eq!(names(&own.join("info")), ["locked.trashinfo"]);
+        assert!(sub.join("file").exists());
+        assert!(t.holds_items());
+
+        set_mode(&sub, 0o755);
+        let emptied = t.empty();
+        assert_eq!((emptied.deleted, emptied.failures.len()), (1, 0));
+        assert!(!t.holds_items());
+    }
+
+    #[test]
+    fn the_failure_message_names_one_item_or_counts_them() {
+        assert_eq!(Emptied::default().failure_message(), None);
+        let failure = |name: &str| Failure {
+            path: PathBuf::from("/t/files").join(name),
+            error: io::Error::other("no"),
+        };
+        let mut emptied = Emptied {
+            deleted: 0,
+            failures: vec![failure("a")],
+        };
+        assert_eq!(
+            emptied.failure_message().unwrap(),
+            "“a” could not be deleted: no."
+        );
+        emptied.failures.push(failure("b"));
+        assert_eq!(
+            emptied.failure_message().unwrap(),
+            "2 items could not be deleted. “a”: no."
+        );
+    }
+
+    #[test]
+    fn a_trash_at_its_own_location_knows_no_volumes_until_told() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Trash::with_home(d.path().join("Trash"));
+        assert!(t.volume_trash_dirs().is_empty());
+    }
+
+    #[test]
+    fn the_volumes_are_the_mount_points_of_real_file_systems() {
+        let mountinfo = "\
+22 28 0:21 / /proc rw,nosuid shared:5 - proc proc rw
+28 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw
+40 28 0:35 / /proc/sys/fs/binfmt_misc rw shared:13 - autofs systemd-1 rw
+90 28 8:17 / /run/media/u/My\\040Disk rw,nosuid shared:50 master:1 - vfat /dev/sdb1 rw
+91 28 0:60 / /tmp rw - tmpfs tmpfs rw
+";
+        assert_eq!(
+            volumes_of(mountinfo),
+            [
+                PathBuf::from("/"),
+                PathBuf::from("/run/media/u/My Disk"),
+                PathBuf::from("/tmp")
+            ]
+        );
     }
 
     #[test]

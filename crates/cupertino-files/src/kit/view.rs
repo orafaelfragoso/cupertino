@@ -474,14 +474,12 @@ fn unlock_sheet(id: u64, unlock: &Unlock) -> Dialog<Message> {
     }
 }
 
-/// The name of the full trash can picture the empty-trash alert shows.
-const FULL_TRASH_ICON: &str = "trash.full";
-
-/// The question before the trash is emptied: an alert whose default button deletes everything for good.
+/// The question before the trash is emptied: an alert whose default button deletes everything for good. Its picture
+/// and its words are the trash's own, which the dock's question has too.
 fn empty_trash_alert(id: u64) -> Dialog<Message> {
     Dialog {
         kind: DialogKind::Alert,
-        icon: Some(FULL_TRASH_ICON.into()),
+        icon: Some(cupertino_trash::EMPTY_ICON.into()),
         title: cupertino_trash::EMPTY_TITLE.into(),
         message: cupertino_trash::EMPTY_MESSAGE.into(),
         body: None,
@@ -501,7 +499,7 @@ fn empty_trash_alert(id: u64) -> Dialog<Message> {
 }
 
 /// The strip under the toolbar in the trash: how many items it holds and the Empty button, which asks before it
-/// deletes and is off while there is nothing to delete.
+/// deletes and is off while there is nothing to delete, here or in a mounted volume's trash.
 fn trash_strip(id: u64, win: &BrowserWindow) -> Element<Message> {
     let items = win.browser.item_count();
     let label = match items {
@@ -546,7 +544,7 @@ fn trash_strip(id: u64, win: &BrowserWindow) -> Element<Message> {
                     Element::new(Spacer { min: 0.0 }),
                     Element::new(CompactButton {
                         label: "Empty".into(),
-                        enabled: items > 0,
+                        enabled: items > 0 || win.volumes_hold_trash,
                         on_press: Some(Message::Window(id, Event::AskEmptyTrash)),
                     })
                     .key("empty-trash"),

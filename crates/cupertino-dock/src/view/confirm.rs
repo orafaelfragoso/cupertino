@@ -1,124 +1,81 @@
-//! The question a tile's menu asks before it does something that cannot be undone, as a popup of the bar standing
-//! where the tile's menu stood: a title, a line saying what happens and two buttons. It takes the keyboard, so Tab moves
-//! between the buttons, Return chooses the one that is safe and Escape or a press outside closes it.
+//! The trash's alerts, as a window centred on the dock's output with the keyboard: the question the Empty Trash item
+//! asks before it deletes, and what could not be deleted after. Both are the toolkit's alert (the picture of the full
+//! trash, a title, a message and capsule buttons) with the words of `cupertino-trash`, so the file manager's
+//! question and the dock's are one. Return presses the default button, Escape the one that cancels, Tab moves between
+//! them.
 
-use cupertino_kit::controls::{Button, ButtonRole, ButtonStyle, Stack, Text, TextRole};
-use cupertino_kit::core::{
-    CommandRegistry, Element, Key, Popup, PopupAnchor, Window, WindowBackground, WindowKey,
-};
-use cupertino_kit::geometry::{Insets, Point, Size};
-use cupertino_kit::layout::{Align, Axis};
+use cupertino_kit::controls::{Dialog, DialogAction, DialogButton, DialogKind, Modal, Spacer};
+use cupertino_kit::core::{CommandRegistry, Element, Key, Window, WindowBackground, WindowKey};
+use cupertino_kit::geometry::Size;
 use cupertino_kit::platform::{DecorationMode, WindowSpec};
-use cupertino_kit::text::{AttributedText, TextStyle};
-use cupertino_kit::theme::Surface;
 
-use super::bar::MENU_ANCHOR;
-use super::menu::{PANEL_GAP, TAIL_FROM_EDGE};
-use super::Input;
-use crate::config::Orientation;
+use super::{Input, ALERT_APP_ID};
 
-/// The panel's corner radius, the space around its parts and between them, and how far it stands off its tile.
-const RADIUS: f64 = 14.5;
-const PADDING: f64 = 18.0;
-const SPACING: f64 = 10.0;
-const BUTTON_SPACING: f64 = 8.0;
-const GAP: f64 = 8.0;
-/// The most the panel takes.
-const MAX: Size = Size {
-    width: 300.0,
-    height: 220.0,
+/// The window: the alert hangs centred near its top, with room around it for its shadow and under it for a longer
+/// message. Nothing else of it is drawn.
+const WINDOW: Size = Size {
+    width: 340.0,
+    height: 400.0,
 };
 
-pub fn key() -> WindowKey {
-    WindowKey(Key::from("confirm"))
+/// The alert's window on the output with key `output`: a new key, a new surface, when the dock moves.
+pub fn key(output: u32) -> WindowKey {
+    WindowKey(Key::from(format!("confirm-{output}")))
 }
 
-/// What the question says.
-pub struct ConfirmView<'a> {
-    /// The bar's window, which the question is a popup of.
-    pub parent: WindowKey,
-    /// The tile it is about (`TileId.0`).
-    pub tile: u64,
-    pub orientation: Orientation,
-    pub title: &'a str,
-    pub message: &'a str,
-    /// The labels of the button that closes the question and of the one that goes ahead.
-    pub cancel: &'a str,
-    pub confirm: &'a str,
+/// What the alert says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Alert {
+    /// The question before the trash is emptied.
+    Question,
+    /// The emptying left something: why.
+    Failed(String),
 }
 
-fn text<M>(s: &str, role: TextRole, size: f32, secondary: bool, wrap: bool) -> Element<M>
-where
-    M: Clone + 'static,
-{
-    Element::new(Text {
-        content: AttributedText::plain(s, TextStyle::new(size)),
-        role,
-        wrap,
-        secondary,
-        selected: false,
-    })
+impl Alert {
+    pub fn title(&self) -> &'static str {
+        match self {
+            Alert::Question => cupertino_trash::EMPTY_TITLE,
+            Alert::Failed(_) => cupertino_trash::FAILED_TITLE,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Alert::Question => cupertino_trash::EMPTY_MESSAGE,
+            Alert::Failed(why) => why,
+        }
+    }
 }
 
-/// The question over tile `view.tile`; `confirmed` is sent when the second button is pressed, `closed` when the first
-/// is, and also on Escape and a press outside.
-pub fn window<M: Clone + 'static>(view: ConfirmView<'_>, input: fn(Input) -> M) -> Window<M> {
-    let anchor = Key::from(format!("tile-{}", view.tile));
-    let anchor = match view.orientation {
-        // above the bar where the tile's menu stood
-        Orientation::Bottom => PopupAnchor::Above {
-            key: Key::from(MENU_ANCHOR),
-            gap: PANEL_GAP,
-            dx: -TAIL_FROM_EDGE,
-        },
-        Orientation::Left | Orientation::Right => PopupAnchor::Beside {
-            key: anchor,
-            offset: Point::new(GAP, 0.0),
-        },
+/// The alert on the output with key `output`. The question sends `ConfirmDone` from its default button and
+/// `ConfirmClosed` from the other; the failure's one button, the default, sends `ConfirmClosed`.
+pub fn window<M: Clone + 'static>(alert: &Alert, output: u32, input: fn(Input) -> M) -> Window<M> {
+    let buttons = match alert {
+        Alert::Question => vec![
+            DialogButton {
+                label: cupertino_trash::CANCEL_BUTTON.into(),
+                action: DialogAction::Cancel,
+                on_press: input(Input::ConfirmClosed),
+            },
+            DialogButton {
+                label: cupertino_trash::EMPTY_BUTTON.into(),
+                action: DialogAction::Default,
+                on_press: input(Input::ConfirmDone),
+            },
+        ],
+        Alert::Failed(_) => vec![DialogButton {
+            label: cupertino_trash::FAILED_BUTTON.into(),
+            action: DialogAction::Default,
+            on_press: input(Input::ConfirmClosed),
+        }],
     };
-    let buttons = Element::new(Stack {
-        axis: Axis::Horizontal,
-        padding: Insets::ZERO,
-        spacing: BUTTON_SPACING,
-        align: Align::Center,
-        children: vec![
-            Element::new(Button {
-                label: view.cancel.to_owned(),
-                role: ButtonRole::Default,
-                style: ButtonStyle::Bordered,
-                enabled: true,
-                busy: false,
-                on_press: Some(input(Input::ConfirmClosed)),
-            })
-            .key("cancel"),
-            Element::new(Button {
-                label: view.confirm.to_owned(),
-                role: ButtonRole::Destructive,
-                style: ButtonStyle::Bordered,
-                enabled: true,
-                busy: false,
-                on_press: Some(input(Input::ConfirmDone)),
-            })
-            .key("confirm"),
-        ],
-    });
-    let content = Element::new(Stack {
-        axis: Axis::Vertical,
-        padding: Insets::uniform(PADDING),
-        spacing: SPACING,
-        align: Align::Start,
-        children: vec![
-            text(view.title, TextRole::Section, 13.0, false, false).key("title"),
-            text(view.message, TextRole::Body, 12.0, true, true).key("message"),
-            buttons.key("buttons"),
-        ],
-    });
     Window {
-        key: key(),
+        key: key(output),
         spec: WindowSpec {
-            title: view.title.to_owned(),
-            app_id: String::new(),
-            size: MAX,
+            title: alert.title().to_owned(),
+            app_id: format!("{ALERT_APP_ID}@{output}"),
+            size: WINDOW,
             min_size: None,
             max_size: None,
             decorations: DecorationMode::None,
@@ -126,19 +83,20 @@ pub fn window<M: Clone + 'static>(view: ConfirmView<'_>, input: fn(Input) -> M) 
             input_region: None,
         },
         shortcuts: CommandRegistry::new(),
-        on_close: None,
-        background: WindowBackground::Surface {
-            surface: Surface::Popover,
-            radius: RADIUS,
-            alpha: 1.0,
-        },
-        content,
-        popup: Some(Popup {
-            parent: view.parent,
-            anchor,
-            grab: true,
-            on_dismiss: input(Input::ConfirmClosed),
+        on_close: Some(input(Input::Closed(key(output)))),
+        background: WindowBackground::None,
+        content: Element::from(Modal {
+            content: Element::new(Spacer { min: 0.0 }),
+            dialog: Some(Dialog {
+                kind: DialogKind::Alert,
+                icon: Some(cupertino_trash::EMPTY_ICON.into()),
+                title: alert.title().to_owned(),
+                message: alert.message().to_owned(),
+                body: None,
+                buttons,
+            }),
         }),
+        popup: None,
         menus: None,
     }
 }

@@ -22,8 +22,8 @@ use cupertino_dock::kit::{
 use cupertino_dock::overview_ui::{Mode, Workspace};
 use cupertino_dock::session::{launch_command, Session};
 use cupertino_dock::view::{
-    edge, IconSet, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID, OVERVIEW_APP_ID,
-    SWITCHER_APP_ID,
+    edge, IconSet, ALERT_APP_ID, BAR_APP_ID, DRAG_APP_ID, EDGE_APP_ID, FORCE_QUIT_APP_ID,
+    OVERVIEW_APP_ID, SWITCHER_APP_ID,
 };
 use cupertino_dock::Dock;
 use cupertino_kit::controls::ImageSource;
@@ -46,6 +46,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -84,6 +85,7 @@ enum Kind {
     Edge,
     Drag,
     ForceQuit,
+    Alert,
     Switcher,
     Overview,
 }
@@ -97,6 +99,7 @@ impl Kind {
             EDGE_APP_ID => Kind::Edge,
             DRAG_APP_ID => Kind::Drag,
             FORCE_QUIT_APP_ID => Kind::ForceQuit,
+            ALERT_APP_ID => Kind::Alert,
             SWITCHER_APP_ID => Kind::Switcher,
             OVERVIEW_APP_ID => Kind::Overview,
             _ => return None,
@@ -207,7 +210,7 @@ impl DockRoles {
                 KeyboardInteractivity::None,
             ),
             // no anchor: the server centres the surface on the output, ignoring the zones
-            Kind::ForceQuit => (
+            Kind::ForceQuit | Kind::Alert => (
                 Layer::Overlay,
                 Anchor::empty(),
                 (whole(spec.size.width), whole(spec.size.height)),
@@ -238,6 +241,7 @@ impl DockRoles {
                 Kind::Edge => EDGE_APP_ID,
                 Kind::Drag => DRAG_APP_ID,
                 Kind::ForceQuit => FORCE_QUIT_APP_ID,
+                Kind::Alert => ALERT_APP_ID,
                 Kind::Switcher => SWITCHER_APP_ID,
                 Kind::Overview => OVERVIEW_APP_ID,
             }
@@ -545,6 +549,37 @@ struct AppHost {
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
     terminal: Option<String>,
+    trash: Arc<TrashLook>,
+}
+
+/// Whether the trash holds anything, in the home trash or on a mounted volume, as last looked: the look reads the
+/// mounted volumes' folders, which can take long on a slow one, so after the first it runs on a thread of its own and
+/// tells the model to look again when it found a change.
+struct TrashLook {
+    full: AtomicBool,
+    looked: AtomicBool,
+    looking: AtomicBool,
+    messages: async_channel::Sender<Message>,
+}
+
+impl TrashLook {
+    fn full(self: &Arc<Self>) -> bool {
+        if !self.looked.swap(true, Ordering::Relaxed) {
+            let full = cupertino_trash::Trash::new().holds_items();
+            self.full.store(full, Ordering::Relaxed);
+        } else if !self.looking.swap(true, Ordering::Relaxed) {
+            let look = self.clone();
+            std::thread::spawn(move || {
+                let full = cupertino_trash::Trash::new().holds_items();
+                let was = look.full.swap(full, Ordering::Relaxed);
+                look.looking.store(false, Ordering::Relaxed);
+                if was != full {
+                    let _ = look.messages.send_blocking(Message::TrashChanged);
+                }
+            });
+        }
+        self.full.load(Ordering::Relaxed)
+    }
 }
 
 impl AppHost {
@@ -846,17 +881,21 @@ impl Host for AppHost {
     }
 
     fn trash_full(&mut self) -> bool {
-        self.icons.trash_full()
+        self.trash.full()
     }
 
     /// Emptied on a thread of its own: a big trash takes a while to delete.
-    fn empty_trash(&mut self) -> kit::BusCall {
+    fn empty_trash(&mut self) -> kit::Emptying {
         let (sender, receiver) = async_channel::bounded(1);
+        let look = self.trash.clone();
         std::thread::spawn(move || {
-            let ok = cupertino_trash::Trash::new().empty().is_ok();
-            let _ = sender.send_blocking(ok);
+            let trash = cupertino_trash::Trash::new();
+            let failed = trash.empty().failure_message();
+            // what is left shows on the tile at the model's next look
+            look.full.store(trash.holds_items(), Ordering::Relaxed);
+            let _ = sender.send_blocking(failed);
         });
-        Box::pin(async move { receiver.recv().await.unwrap_or(false) })
+        Box::pin(async move { receiver.recv().await.unwrap_or(None) })
     }
 }
 
@@ -1129,6 +1168,12 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
     listen_badges(messages.clone());
+    let trash = Arc::new(TrashLook {
+        full: AtomicBool::new(false),
+        looked: AtomicBool::new(false),
+        looking: AtomicBool::new(false),
+        messages: messages.clone(),
+    });
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,
@@ -1149,6 +1194,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         preloader: Arc::default(),
         assets: assets.clone(),
         mime: Arc::default(),
+        trash,
         pins_path,
         conf_path,
         terminal: options.terminal.clone(),

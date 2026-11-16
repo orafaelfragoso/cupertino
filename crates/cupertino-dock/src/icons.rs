@@ -4,7 +4,6 @@
 //! panel of [`crate::switcher_kit`]).
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 
 use cupertino_assets::Assets;
 use cupertino_icons::{SystemIcons, ThemeIcons};
@@ -46,17 +45,6 @@ const FILLED_SHARE: f64 = 0.97;
 const MAX_FILL_SCALE: f64 = 4.0;
 /// A pixel at least this opaque is part of an icon's shape.
 const SHAPE_ALPHA: u8 = 8;
-
-/// Whether the home trash holds anything: `$XDG_DATA_HOME/Trash/files` (`~/.local/share` by default) has an entry.
-fn trash_is_full() -> bool {
-    let data_home = std::env::var_os("XDG_DATA_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
-    data_home.is_some_and(|d| {
-        std::fs::read_dir(d.join("Trash/files")).is_ok_and(|mut entries| entries.next().is_some())
-    })
-}
 
 /// Icon pixmaps by name and pixel size, loaded once: an application's own icon (an absolute path or the `hicolor`
 /// theme) and the system's icons from the asset directory; and the icons windows set for themselves.
@@ -368,11 +356,6 @@ impl Icons {
             IconSource::Window(id) => self.windows.get_mut(&id).expect("listed").at(px),
             IconSource::Generic => self.system_icon(GENERIC_APPLICATION_ICON, px),
         }
-    }
-
-    /// Whether the trash folder holds anything now; the model decides how often to ask.
-    pub fn trash_full(&mut self) -> bool {
-        trash_is_full()
     }
 
     /// The trash's icon, empty or full.

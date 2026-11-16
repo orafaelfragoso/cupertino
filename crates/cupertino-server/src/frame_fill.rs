@@ -92,7 +92,7 @@ pub fn opaque_frame(surface: &WlSurface, geometry: Rectangle<i32, Logical>, radi
     .unwrap_or(true)
 }
 
-/// How far from a corner of `g` the probes lie: past a corner of `radius` points, within the frame.
+/// How far from a corner of `g` the points looked at lie: past a corner of `radius` points, within the frame.
 fn reach(g: Rectangle<i32, Logical>, radius: f64) -> i32 {
     let past = radius.max(0.0).ceil() as i32 + 1;
     past.min((g.size.w - 1) / 2).min((g.size.h - 1) / 2).max(0)

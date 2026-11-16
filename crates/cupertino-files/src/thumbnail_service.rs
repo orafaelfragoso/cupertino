@@ -342,6 +342,15 @@ impl ThumbnailService {
         }
     }
 
+    /// Whether making the thumbnail of `path` at `edge` failed: none will come while a window wants it.
+    pub fn failed(&self, path: &Path, edge: u32) -> bool {
+        let key = Key {
+            path: path.to_path_buf(),
+            edge,
+        };
+        matches!(self.shared.lock().done.get(&key), Some(Done::Failed { .. }))
+    }
+
     /// The files waiting for a worker, the next first.
     pub fn queued(&self) -> Vec<PathBuf> {
         let state = self.shared.lock();

@@ -256,6 +256,24 @@ impl ItemIcons {
         Some(source(&thumbnail))
     }
 
+    /// The picture a preview shows of `entry` `points` square: `Some` with its thumbnail once made, `Some(None)` when
+    /// none will come (the file has none, or making it failed), `None` while it is being made.
+    pub(super) fn preview_picture(
+        &self,
+        entry: &Entry,
+        points: f64,
+    ) -> Option<Option<ImageSource>> {
+        let Some(service) = self.thumbnails.as_ref().filter(|_| shows_thumbnail(entry)) else {
+            return Some(None);
+        };
+        let edge = thumbnail_edge(points);
+        match service.get(&entry.path, edge) {
+            Some(thumbnail) => Some(Some(source(&thumbnail))),
+            None if service.failed(&entry.path, edge) => Some(None),
+            None => None,
+        }
+    }
+
     /// Window `window` previews `entries` `points` square, besides the items it shows: the preview column's and the
     /// preview window's pictures.
     pub(super) fn want_previews<'a>(

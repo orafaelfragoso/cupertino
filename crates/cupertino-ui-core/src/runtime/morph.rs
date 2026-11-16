@@ -5,7 +5,7 @@
 //! about that point frame by frame. Under Reduce Motion a popover shows at its full size at once and goes at once.
 
 use super::Runtime;
-use crate::Application;
+use crate::{Application, PopupAnchor};
 use cupertino_geometry::{Point, Rect};
 use cupertino_ui_platform::{MaterialRegion, Timestamp, WindowRequest, WindowSystem};
 use cupertino_ui_render::{DisplayList, Layer, Transform};
@@ -146,16 +146,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         {
             return;
         }
-        let placed = self
-            .windows
-            .iter()
-            .find(|p| p.key == popup.parent)
+        let parent = self.windows.iter().find(|p| p.key == popup.parent);
+        let placed = parent
             .and_then(|p| p.popups.iter().find(|(k, _)| *k == w.key))
             .map(|(_, rect)| *rect);
         // until the compositor says where it put the popover, the middle of its top edge, under its anchor
-        let at = placed.map_or(Point::new(w.size.width / 2.0, 0.0), |placed| {
-            origin(popup.placed.anchor_rect, placed)
-        });
+        let at = match (parent, placed) {
+            (Some(parent), Some(placed)) => origin(
+                super::grows_out_of(&self.tree, parent, &popup.anchor, &popup.placed),
+                placed,
+            ),
+            _ => Point::new(w.size.width / 2.0, 0.0),
+        };
         let reduce_motion = w.env.theme.preferences.reduce_motion;
         let (id, size) = (w.id, w.size);
         // a compositor that presents popups grows it on its clock, on the same spring: no frame is drawn for it
@@ -172,6 +174,36 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         } else {
             Grow::begin(now, at, reduce_motion)
         };
+    }
+
+    /// A popover that grows out of a node of its parent other than its anchor ([`PopupAnchor::Panel`]) follows that
+    /// node, so it shrinks back into wherever the node is when it closes.
+    pub(super) fn follow_grow_origins(&mut self) {
+        for i in 0..self.windows.len() {
+            let w = &self.windows[i];
+            let (Some(popup), Some(_)) = (&w.popup, w.grows_from) else {
+                continue;
+            };
+            if w.fade.is_some() || !matches!(popup.anchor, PopupAnchor::Panel { .. }) {
+                continue;
+            }
+            let Some(parent) = self.windows.iter().find(|p| p.key == popup.parent) else {
+                continue;
+            };
+            let Some(placed) = parent
+                .popups
+                .iter()
+                .find(|(k, _)| *k == w.key)
+                .map(|(_, rect)| *rect)
+            else {
+                continue;
+            };
+            let at = origin(
+                super::grows_out_of(&self.tree, parent, &popup.anchor, &popup.placed),
+                placed,
+            );
+            self.windows[i].grows_from = Some(at);
+        }
     }
 
     /// The growing popovers draw again at each frame, whole once they rest at their size.

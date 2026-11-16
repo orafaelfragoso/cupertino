@@ -1,14 +1,19 @@
 //! The preview window on CupertinoKit: Space, or File › Quick Preview, shows the selected items one at a time in a
-//! floating window of its own, without opening them.
+//! floating panel of their window, without opening them.
 //!
-//! The window has its own toolbar: a close button and a full screen button at its leading end, the item's name, and an
+//! The panel has its own toolbar: a close button and a full screen button at its leading end, the item's name, and an
 //! "Open with" button naming the application that opens the item. Under it a picture shows whole, the start of a text
 //! file in a fixed-pitch face, and anything else its large icon with its kind, size and dates
 //! ([`cupertino_kit::controls::FilePreview`]). With several items selected the arrows go from one to the next; with
 //! one, they move the window's selection, which the preview follows. Space or Escape closes it.
 //!
-//! The window grows out of its centre as it opens, fading in, and shrinks back as it closes
-//! ([`crate::preview::Motion`]); with Reduce Motion it only fades.
+//! The panel is a popup of its browser window, so the window keeps the keyboard and the desktop's menu bar keeps the
+//! window's menus while it is up. It lies centred over the folder, never above the window's top edge, on the window's
+//! display; it grows out of the item it shows as it opens and shrinks back into it as it closes, wherever that item
+//! is by then (out of the middle of the folder when the item is scrolled out of view). With Reduce Motion it shows and
+//! goes at once. It opens once what it shows is ready; a picture or a text that takes longer than
+//! [`file_preview::LOADING_DELAY`] opens it with the item's icon over a loading bar, and so does an item stepped to,
+//! which never shows the one before it. In full screen it is a window of its own that shows the browser window's menus.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,11 +22,14 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cupertino_apps::MimeApps;
-use cupertino_kit::controls::{FilePreview, PreviewStyle, Text, TextRole, WindowDragArea};
+use cupertino_kit::controls::{
+    FilePreview, PreviewContent, PreviewStyle, Progress, Text, TextRole,
+};
 use cupertino_kit::core::{
     Action, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Shortcut, Widget, WindowBackground,
 };
+use cupertino_kit::core::{Glass, Popup, PopupAnchor};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
@@ -33,10 +41,10 @@ use cupertino_kit::render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_kit::text::{AttributedText, FontWeight, TextStyle};
 use cupertino_kit::theme::{ColorRole, StateVariant, Surface};
 
-use super::columns::preview_content;
 use super::toolbar::focus_ring;
 use super::{BrowserWindow, Event as WindowEvent, Message, Session, Wake, NO_SCROLL};
-use crate::preview::{self as file_preview, Browse, Motion, MotionFrame, PreviewKind};
+use crate::preview::{self as file_preview, Browse, PreviewKind};
+use crate::window::ViewMode;
 use crate::Entry;
 
 /// The height of the window's toolbar.
@@ -49,12 +57,16 @@ const BUTTON: f64 = 22.0;
 const GLYPH: f64 = 14.0;
 /// The window's corner radius.
 const RADIUS: f64 = 12.0;
+/// The width of the panel's own edge, drawn where the desktop shows no glass under it.
+const EDGE: f64 = 1.0;
 /// The side of the pictures previewed, here and in the preview column, which draws them smaller.
 pub(super) const PICTURE: f64 = 512.0;
 /// The side of an icon in the window.
 const ICON: f64 = 256.0;
 /// The size of the window's title.
 const TITLE_SIZE: f32 = 13.0;
+/// The room around the loading bar of a preview whose item is still being made ready.
+const LOADING_INSET: f64 = 24.0;
 
 const SPACE: Keysym = Keysym(0x20);
 const ESCAPE: Keysym = Keysym(0xff1b);
@@ -134,6 +146,11 @@ impl Texts {
         }
     }
 
+    /// Whether the file at `path` was read: its text, or that it is not text, is known.
+    pub fn read(&self, path: &Path) -> bool {
+        self.read.contains_key(path)
+    }
+
     /// Take in the reads that ended: whether a text previewed now arrived.
     pub fn poll(&mut self) -> bool {
         let mut arrived = false;
@@ -153,35 +170,33 @@ impl Texts {
 /// The preview window of a browser window.
 pub(super) struct Peek {
     pub browse: Browse,
-    /// The window is closing: it shrinks away, then goes.
-    pub closing: bool,
-    /// When the motion's first frame came, in seconds, and the latest frame.
-    started: Option<f64>,
-    now: f64,
-    /// How far into its motion the window starts at its next frame: a close while still opening starts part way.
-    rewind: f64,
-    reduce: bool,
     pub scroll: ScrollState,
     pub full_screen: bool,
     /// The name of the application that opens the item shown, with the item it was read for.
     app: Option<(PathBuf, Option<String>)>,
     /// The session's associations, read once while the window is open: stepping through items reads none again.
     apps: Option<Option<MimeApps>>,
+    /// The window has shown something: it stays up, in its loading state, while the next item it shows is made ready.
+    shown: bool,
+    /// The item the window waits for, with the number of that wait; and whether it has waited past
+    /// [`file_preview::LOADING_DELAY`].
+    waiting: Option<(PathBuf, u64)>,
+    waits: u64,
+    slow: bool,
+    /// The size the window last showed an item at, which it keeps while it waits for the next.
+    size: (f64, f64),
 }
 
 /// What the preview window asks of its browser window.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeekEvent {
-    /// A frame of the window's motion at `now` seconds; `animate` is false with Reduce Motion.
-    Tick {
-        now: f64,
-        animate: bool,
-    },
+    /// The wait with this number ran past [`file_preview::LOADING_DELAY`].
+    Waited(u64),
     /// The previous item (-1) or the next (1).
     Step(isize),
-    /// Close the window: it shrinks away first.
+    /// Close the window: it shrinks back into its item.
     Close,
-    /// The window closed at once, as the compositor's close does.
+    /// The window closed at once, as the compositor's dismissal does.
     Closed,
     FullScreen,
     /// Open the item shown with its application.
@@ -193,67 +208,47 @@ impl Peek {
     pub fn new(browse: Browse) -> Peek {
         Peek {
             browse,
-            closing: false,
-            started: None,
-            now: 0.0,
-            rewind: 0.0,
-            reduce: false,
             scroll: NO_SCROLL,
             full_screen: false,
             app: None,
             apps: None,
+            shown: false,
+            waiting: None,
+            waits: 0,
+            slow: false,
+            size: file_preview::WINDOW_SIZE,
         }
     }
 
-    fn motion(&self, size: (f64, f64)) -> Motion {
-        Motion {
-            closing: self.closing,
-            reduce: self.reduce,
-            size,
+    /// The item shown is ready to show at `size` (`Some`), or is still being made ready: the number of a wait that
+    /// starts for it, which [`PeekEvent::Waited`] ends.
+    pub fn follow_ready(&mut self, size: Option<(f64, f64)>) -> Option<u64> {
+        if let Some(size) = size {
+            self.shown = true;
+            self.size = size;
+            self.slow = false;
+            self.waiting = None;
+            return None;
         }
-    }
-
-    fn elapsed(&self) -> f64 {
-        self.started
-            .map_or(self.rewind, |start| (self.now - start).max(0.0))
-    }
-
-    /// The window's motion moves.
-    fn animating(&self) -> bool {
-        self.started.is_none()
-            || !self
-                .motion(file_preview::WINDOW_SIZE)
-                .finished(self.elapsed())
-    }
-
-    /// The motion's frame now.
-    fn frame(&self, size: (f64, f64)) -> MotionFrame {
-        self.motion(size).at(self.elapsed())
-    }
-
-    /// Start closing: the window shrinks away from where its opening got to.
-    pub fn close(&mut self) {
-        if self.closing {
-            return;
+        let current = self.browse.current();
+        if self
+            .waiting
+            .as_ref()
+            .is_some_and(|(path, _)| path == current)
+        {
+            return None;
         }
-        // a window still opening closes from the size it reached
-        let reached = self.frame(file_preview::WINDOW_SIZE);
-        self.closing = true;
-        let duration = self.motion(file_preview::WINDOW_SIZE).duration();
-        self.rewind = duration * (1.0 - reached.alpha.clamp(0.0, 1.0));
-        // the close runs from its first frame
-        self.started = None;
+        self.waits += 1;
+        self.slow = false;
+        self.waiting = Some((current.to_path_buf(), self.waits));
+        Some(self.waits)
     }
 
-    /// A frame came at `now`: whether the window has finished closing.
-    pub fn tick(&mut self, now: f64, animate: bool) -> bool {
-        self.reduce = !animate;
-        self.now = now;
-        let started = *self.started.get_or_insert(now - self.rewind);
-        self.closing
-            && self
-                .motion(file_preview::WINDOW_SIZE)
-                .finished(now - started)
+    /// The wait numbered `wait` ran long: the window shows that it is loading, if it still waits for that item.
+    pub fn waited(&mut self, wait: u64) {
+        if self.waiting.as_ref().is_some_and(|(_, n)| *n == wait) {
+            self.slow = true;
+        }
     }
 
     /// The item shown changed to `path`: its application's name is read again, from `session`'s associations.
@@ -279,16 +274,68 @@ impl Peek {
     }
 }
 
-/// The key of the preview window of browser window `id`.
+/// The key of the preview window of browser window `id`, a popup of it.
 pub(super) fn window_key(id: u64) -> cupertino_kit::core::WindowKey {
     cupertino_kit::core::WindowKey(Key::from(format!("preview/{id}")))
+}
+
+/// The key of the preview window of browser window `id` in full screen, a window of its own.
+pub(super) fn full_screen_key(id: u64) -> cupertino_kit::core::WindowKey {
+    cupertino_kit::core::WindowKey(Key::from(format!("preview-full-screen/{id}")))
 }
 
 fn send(id: u64, event: PeekEvent) -> Message {
     Message::Window(id, WindowEvent::Peek(event))
 }
 
-/// The preview window of browser window `id`, when it has one and its item is listed.
+/// What the preview shows of `entry` once it is ready, and the size of the window then: `None` while its picture is
+/// made or its text read.
+pub(super) fn ready(
+    session: &Session,
+    texts: &Texts,
+    entry: &Entry,
+) -> Option<(PreviewContent, (f64, f64))> {
+    let icon = || PreviewContent::Icon(session.icons.icon(entry, ICON));
+    match file_preview::kind(entry) {
+        PreviewKind::Picture => {
+            let Some(picture) = session.icons.preview_picture(entry, PICTURE)? else {
+                return Some((icon(), file_preview::WINDOW_SIZE));
+            };
+            let size = file_preview::picture_window(
+                (picture.image.width, picture.image.height),
+                2.0,
+                TOOLBAR_HEIGHT,
+            );
+            Some((PreviewContent::Picture(picture), size))
+        }
+        PreviewKind::Text if !texts.read(&entry.path) => None,
+        PreviewKind::Text => {
+            let content = texts
+                .get(&entry.path)
+                .map_or_else(icon, PreviewContent::Text);
+            Some((content, file_preview::WINDOW_SIZE))
+        }
+        PreviewKind::Icon => Some((icon(), file_preview::WINDOW_SIZE)),
+    }
+}
+
+/// The key of the node of browser window `id` that shows `entry`, which the preview grows out of.
+fn item_key(id: u64, win: &BrowserWindow, entry: &Entry) -> Key {
+    match win.view {
+        ViewMode::Icons => {
+            let index = win
+                .browser
+                .entries()
+                .iter()
+                .position(|e| e.path == entry.path);
+            super::view::item_key(id, index.unwrap_or(usize::MAX))
+        }
+        _ => super::view::row_key(id, &entry.path),
+    }
+}
+
+/// The preview window of browser window `id`, when it has one, its item is listed and it has something to show: what
+/// the item shows once it is ready, or, once the wait for it ran long or the window has shown, its icon.
 pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Option<Window<Message>> {
     let look = win.peek.as_ref()?;
     let entry = win
@@ -296,15 +343,17 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Option<
         .entries()
         .iter()
         .find(|e| e.path == look.browse.current())?;
-    let content = preview_content(session, &win.texts, entry, PICTURE, ICON);
-    let size = match &content {
-        cupertino_kit::controls::PreviewContent::Picture(source) => file_preview::picture_window(
-            (source.image.width, source.image.height),
-            2.0,
-            TOOLBAR_HEIGHT,
-        ),
-        _ => file_preview::WINDOW_SIZE,
-    };
+    let ready = ready(session, &win.texts, entry);
+    if ready.is_none() && !look.shown && !look.slow {
+        return None;
+    }
+    let loading = ready.is_none() && look.slow;
+    let (content, size) = ready.unwrap_or_else(|| {
+        (
+            PreviewContent::Icon(session.icons.icon(entry, ICON)),
+            look.size,
+        )
+    });
     let preview = Element::from(FilePreview {
         content,
         text_family: session.text_family.clone(),
@@ -322,57 +371,85 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Option<
     .key("preview")
     .fill();
     let app = look.app.as_ref().and_then(|(_, name)| name.clone());
+    let mut children = vec![toolbar(id, look, entry, app), preview];
+    if loading {
+        children.push(loading_bar());
+    }
     let body = Element::new(Stack {
         axis: Axis::Vertical,
         padding: Insets::ZERO,
         spacing: 0.0,
         align: Align::Stretch,
-        children: vec![toolbar(id, look, entry, app), preview],
+        children,
     })
     .fill();
-    let frame = look.frame(size);
+    let content = Element::new(Sheet {
+        size,
+        children: vec![body],
+    })
+    .key("sheet");
+    let spec = WindowSpec {
+        title: entry.name.clone(),
+        app_id: super::APP_ID.into(),
+        size: Size::new(size.0, size.1),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: None,
+        decorations: DecorationMode::None,
+        foreign_parent: None,
+        input_region: None,
+    };
+    if look.full_screen {
+        // a window of its own, which the menu bar follows: it shows the browser window's menus
+        return Some(Window {
+            key: full_screen_key(id),
+            spec,
+            shortcuts: shortcuts(id),
+            on_close: Some(send(id, PeekEvent::Closed)),
+            background: WindowBackground::None,
+            popup: None,
+            menus: Some(super::view::menus(session, id, win)),
+            content,
+        });
+    }
     Some(Window {
         key: window_key(id),
-        spec: WindowSpec {
-            title: entry.name.clone(),
-            app_id: super::APP_ID.into(),
-            size: Size::new(size.0, size.1),
-            min_size: Some(Size::new(320.0, 240.0)),
-            max_size: None,
-            decorations: DecorationMode::None,
-            foreign_parent: None,
-            input_region: None,
-        },
-        shortcuts: shortcuts(id),
+        spec,
+        // the browser window keeps the keyboard, and takes the preview's keys
+        shortcuts: CommandRegistry::new(),
         on_close: Some(send(id, PeekEvent::Closed)),
         background: WindowBackground::None,
-        popup: None,
+        popup: Some(Popup {
+            parent: super::window_key(id),
+            anchor: PopupAnchor::Panel {
+                over: Key::from("folder"),
+                from: item_key(id, win, entry),
+            },
+            grab: false,
+            on_dismiss: send(id, PeekEvent::Closed),
+        }),
         menus: None,
-        content: Element::new(Reveal {
-            window: id,
-            animating: look.animating(),
-            size,
-            children: vec![Element::new(Panel {
-                alpha: frame.alpha,
-                full: !look.animating() || look.reduce,
-                size,
-                inset: inset(size, frame.scale),
-                children: vec![Element::new(Shift {
-                    full: !look.animating() || look.reduce,
-                    size,
-                    inset: inset(size, frame.scale),
-                    children: vec![body],
-                })],
-            })],
-        })
-        .key("reveal"),
+        content,
     })
 }
 
-/// How far each side of the window's panel is in at `scale`.
-fn inset(size: (f64, f64), scale: f64) -> (f64, f64) {
-    let scale = scale.clamp(0.0, 1.0);
-    ((1.0 - scale) * size.0 / 2.0, (1.0 - scale) * size.1 / 2.0)
+/// The bar under a preview whose item is still being made ready.
+fn loading_bar() -> Element<Message> {
+    Element::new(Stack {
+        axis: Axis::Horizontal,
+        padding: Insets {
+            top: 0.0,
+            left: LOADING_INSET,
+            bottom: LOADING_INSET,
+            right: LOADING_INSET,
+        },
+        spacing: 0.0,
+        align: Align::Center,
+        children: vec![Element::new(Progress {
+            label: "Loading".into(),
+            value: None,
+        })
+        .key("loading")],
+    })
 }
 
 /// Space and Escape close the window; the arrows go from one item to the next.
@@ -470,10 +547,8 @@ fn toolbar(id: u64, look: &Peek, entry: &Entry, app: Option<String>) -> Element<
         ],
     })
     .fill();
-    Element::from(WindowDragArea {
-        content: Element::new(Bar {
-            children: vec![row],
-        }),
+    Element::new(Bar {
+        children: vec![row],
     })
 }
 
@@ -749,181 +824,22 @@ impl Widget<Message> for GlyphButton {
     }
 }
 
-/// The window's motion: the frames it asks for while it moves, and the panel it reveals.
-struct Reveal {
-    window: u64,
-    animating: bool,
+/// The preview's panel: `size` points, or what of it the screen has room for, the popovers' glass under its content,
+/// its corners rounded. As the root of the popup it grows out of the item shown and shrinks back into it.
+struct Sheet {
     size: (f64, f64),
     children: Vec<Element<Message>>,
 }
 
-impl Widget<Message> for Reveal {
+impl Widget<Message> for Sheet {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
+            // the size the compositor gives it, which is `size` unless the panel had to shrink to fit the screen
             width: SizeSpec::Fill,
             height: SizeSpec::Fill,
-            flex: Flex::grow(1.0),
-            ..LayoutSpec::new(ContainerKind::Absolute)
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.animating && !old.animating {
-            Change::Paint
-        } else if self.size != old.size {
-            Change::Layout
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, Message>) -> Propagation {
-        if cx.phase() == Phase::Capture {
-            return Propagation::Continue;
-        }
-        if let Event::AnimationFrame(now) = *event {
-            if self.animating {
-                let animate = !cx.env().theme.motion.reduce;
-                cx.emit(send(
-                    self.window,
-                    PeekEvent::Tick {
-                        now: now.0 as f64 / 1e9,
-                        animate,
-                    },
-                ));
-                cx.request_animation_frame();
-            }
-        }
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if self.animating {
-            cx.request_animation_frame();
-        }
-    }
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// The window's surface, `inset` in from each side while it grows or shrinks, faded to `alpha`; its content keeps the
-/// window's full size meanwhile, so it is revealed rather than squeezed.
-struct Panel {
-    alpha: f64,
-    /// The motion ended: the panel and its content follow the window's size.
-    full: bool,
-    size: (f64, f64),
-    inset: (f64, f64),
-    children: Vec<Element<Message>>,
-}
-
-impl Widget<Message> for Panel {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        let (ix, iy) = self.inset;
-        let (width, height) = match self.full {
-            true => (SizeSpec::Fill, SizeSpec::Fill),
-            false => (
-                SizeSpec::Fixed((self.size.0 - 2.0 * ix).max(0.0)),
-                SizeSpec::Fixed((self.size.1 - 2.0 * iy).max(0.0)),
-            ),
-        };
-        LayoutSpec {
-            width,
-            height,
-            position: if self.full {
-                Point::ZERO
-            } else {
-                Point::new(ix, iy)
-            },
             overflow: Overflow::Clip,
-            ..LayoutSpec::new(ContainerKind::Absolute)
-        }
-    }
-
-    fn take_children(&mut self) -> Vec<Element<Message>> {
-        std::mem::take(&mut self.children)
-    }
-
-    fn state(&self) {}
-
-    fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.full, self.size, self.inset) != (old.full, old.size, old.inset) {
-            Change::Layout
-        } else if self.alpha != old.alpha {
-            Change::Paint
-        } else {
-            Change::None
-        }
-    }
-
-    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
-    }
-
-    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
-        Propagation::Continue
-    }
-
-    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        let alpha = self.alpha.clamp(0.0, 1.0);
-        if alpha < 1.0 {
-            cx.set_group(alpha as f32, Vec::new());
-        }
-        if !cx.material(Surface::Popover, RADIUS, alpha) {
-            let size = cx.size();
-            if let Some(fill) = cx.env().theme.surface(Surface::Popover).fill {
-                cx.push(PaintOp::Fill {
-                    shape: Shape::RoundedRect {
-                        rect: Rect::new(0.0, 0.0, size.width, size.height),
-                        radius: RADIUS,
-                    },
-                    paint: Paint::Solid(fill),
-                });
-            }
-        }
-    }
-
-    fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
-}
-
-/// The panel's content at the window's full size, moved back by the panel's inset so it stays where it will be.
-struct Shift {
-    full: bool,
-    size: (f64, f64),
-    inset: (f64, f64),
-    children: Vec<Element<Message>>,
-}
-
-impl Widget<Message> for Shift {
-    type State = ();
-
-    fn layout(&self) -> LayoutSpec {
-        let (width, height, position) = match self.full {
-            true => (SizeSpec::Fill, SizeSpec::Fill, Point::ZERO),
-            false => (
-                SizeSpec::Fixed(self.size.0),
-                SizeSpec::Fixed(self.size.1),
-                Point::new(-self.inset.0, -self.inset.1),
-            ),
-        };
-        LayoutSpec {
-            width,
-            height,
-            position,
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
                 spacing: 0.0,
@@ -940,7 +856,7 @@ impl Widget<Message> for Shift {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.full, self.size, self.inset) != (old.full, old.size, old.inset) {
+        if self.size != old.size {
             Change::Layout
         } else {
             Change::None
@@ -948,16 +864,55 @@ impl Widget<Message> for Shift {
     }
 
     fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
-        no_measure()
+        Measured {
+            size: Size::new(self.size.0, self.size.1),
+            baseline: None,
+        }
     }
 
     fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, Message>) -> Propagation {
         Propagation::Continue
     }
 
-    fn paint(&self, _: &(), _: &mut PaintCx<'_>) {}
+    /// The panel is the popovers' glass, which the compositor gives their outline and soft shadow; without it the panel
+    /// paints the opaque fill and its own edge.
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        if cx.glass(Glass::dense().radius(RADIUS)) {
+            return;
+        }
+        let size = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        if let Some(fill) = cx.env().theme.surface(Surface::Popover).fill {
+            cx.push(PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect,
+                    radius: RADIUS,
+                },
+                paint: Paint::Solid(fill),
+            });
+        }
+        let edge = cx
+            .env()
+            .theme
+            .colors
+            .get(ColorRole::Separator, StateVariant::NORMAL);
+        if let Some(edge) = edge {
+            cx.push(PaintOp::Stroke {
+                shape: Shape::RoundedRect {
+                    rect: rect.inset(Insets::uniform(EDGE / 2.0)),
+                    radius: RADIUS - EDGE / 2.0,
+                },
+                paint: Paint::Solid(edge),
+                width: EDGE,
+            });
+        }
+    }
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
+
+    fn grows_from_anchor(&self) -> bool {
+        true
+    }
 }
 
 /// The folder's items: Space there opens the preview, or closes it, before the scroll view under the items pages
@@ -965,6 +920,9 @@ impl Widget<Message> for Shift {
 /// select an item, where it is part of the name.
 pub(super) struct SpaceKey {
     pub message: Option<Message>,
+    /// The browser window whose preview steps through several items: the arrows go from one to the next there,
+    /// rather than moving the selection.
+    pub steps: Option<u64>,
     pub children: Vec<Element<Message>>,
 }
 
@@ -1022,6 +980,17 @@ impl Widget<Message> for SpaceKey {
         if cx.phase() != Phase::Capture || !key.pressed {
             return Propagation::Continue;
         }
+        if let Some(id) = self.steps.filter(|_| key.mods.is_empty()) {
+            let by = match key.keysym {
+                LEFT | UP => Some(-1),
+                RIGHT | DOWN => Some(1),
+                _ => None,
+            };
+            if let Some(by) = by {
+                cx.emit(send(id, PeekEvent::Step(by)));
+                return Propagation::Stop;
+            }
+        }
         let now = cx.now();
         let typed = typing.until.is_some_and(|until| now < until);
         let plain = !key.mods.contains(Mods::PRIMARY) && !key.mods.contains(Mods::CTRL);
@@ -1042,4 +1011,40 @@ impl Widget<Message> for SpaceKey {
     fn paint(&self, _: &Typing, _: &mut PaintCx<'_>) {}
 
     fn semantics(&self, _: &Typing, _: &mut SemanticsCx<'_>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peek(items: &[&str]) -> Peek {
+        let items = items.iter().map(PathBuf::from).collect();
+        Peek::new(Browse::new(items, 0).unwrap())
+    }
+
+    #[test]
+    fn a_preview_waits_for_its_item_out_of_sight_then_says_it_is_loading() {
+        let mut look = peek(&["a.png", "b.png"]);
+        // the first item is still being made ready: a wait starts, once, and the window stays out of sight
+        let wait = look.follow_ready(None).expect("a wait starts");
+        assert_eq!(look.follow_ready(None), None, "the same wait goes on");
+        assert!(!look.shown && !look.slow);
+        // a wait that ran long shows the window in its loading state
+        look.waited(wait);
+        assert!(look.slow);
+        // ready: the loading state ends, and the window keeps the item's size
+        assert_eq!(look.follow_ready(Some((300.0, 200.0))), None);
+        assert!(look.shown && !look.slow);
+        assert_eq!(look.size, (300.0, 200.0));
+
+        // the next item waits in the window as it was, a wait of its own; the end of an older one changes nothing
+        look.browse.step(1);
+        let next = look.follow_ready(None).expect("a wait for the next item");
+        assert_ne!(next, wait);
+        look.waited(wait);
+        assert!(!look.slow, "a wait for another item");
+        look.waited(next);
+        assert!(look.slow);
+        assert_eq!(look.size, (300.0, 200.0), "the size it last showed");
+    }
 }

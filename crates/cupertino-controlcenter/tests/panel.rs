@@ -1742,3 +1742,51 @@ fn the_editing_panel_can_be_looked_at() {
         run.driver.look(run.window, name).unwrap();
     }
 }
+
+/// The rims the tiles draw with Increase Contrast on a display of `scale`: each stroke's rectangle and width.
+fn contrast_rims(scale: f64) -> Vec<(Rect, f64)> {
+    use cupertino_kit::render::{PaintOp, Shape};
+    let mut run = Run::start(
+        tokens(Appearance::DarkHighContrast, false),
+        Presentation::SHOWN,
+    );
+    run.send(WindowEvent::Scale(scale));
+    run.settle();
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .filter_map(|op| match op {
+            PaintOp::Stroke {
+                shape: Shape::RoundedRect { rect, .. },
+                width,
+                ..
+            } => Some((*rect, *width)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// With Increase Contrast every tile's rim is one whole device pixel wide, lying on the outermost pixel of the tile: half
+/// a point where a point is two pixels, and a whole point where it is one, where half a point would cover half of each
+/// pixel and draw the line at half its strength.
+#[test]
+fn a_tile_s_contrast_rim_is_one_whole_device_pixel_at_one_and_at_two_pixels_a_point() {
+    for (scale, width) in [(1.0, 1.0), (2.0, 0.5)] {
+        let rims: Vec<(Rect, f64)> = contrast_rims(scale)
+            .into_iter()
+            .filter(|(rect, _)| rect.width() > 40.0)
+            .collect();
+        assert!(rims.len() >= 6, "{scale}: a rim a tile: {rims:?}");
+        for (rect, w) in rims {
+            assert_eq!(w, width, "{scale}: one device pixel");
+            assert_eq!(
+                (rect.min_x(), rect.min_y()),
+                (width / 2.0, width / 2.0),
+                "{scale}: centred on the tile's outermost pixel"
+            );
+        }
+    }
+}

@@ -84,6 +84,18 @@ const RT_TILE_LIGHT: Color = Color::new(0.96, 0.96, 0.96, 1.0);
 const IC_RIM_COLOR: Color = Color::new(0.341, 0.341, 0.341, 1.0);
 const IC_RIM_COLOR_LIGHT: Color = Color::new(0.45, 0.45, 0.45, 1.0);
 const IC_RIM: f64 = 0.5;
+
+/// The width in points of the Increase Contrast rim on a display of `scale`: [`IC_RIM`], and never less than one
+/// device pixel, so the line is drawn at its full strength where a point is one pixel instead of covering half of one
+/// at half its contrast.
+pub(crate) fn ic_rim_width(scale: f64) -> f64 {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    IC_RIM.max(1.0 / scale)
+}
 const FALLBACK: Color = Color::new(0.16, 0.16, 0.17, 0.92);
 const FALLBACK_LIGHT: Color = Color::new(0.93, 0.93, 0.94, 0.92);
 /// A switch that is on: a white disc behind its symbol, drawn in the accent colour.
@@ -1232,18 +1244,19 @@ impl<M: 'static> Widget<M> for GlassTile<M> {
         if increase_contrast(cx) {
             // the glass takes the contrast face; the tile marks its edge with a rim
             let rim_color = by_appearance(cx, IC_RIM_COLOR, IC_RIM_COLOR_LIGHT);
+            let width = ic_rim_width(cx.env().scale);
             let rim = Rect::new(
-                IC_RIM / 2.0,
-                IC_RIM / 2.0,
-                size.width - IC_RIM,
-                size.height - IC_RIM,
+                width / 2.0,
+                width / 2.0,
+                size.width - width,
+                size.height - width,
             );
             cx.push(PaintOp::Stroke {
                 shape: Shape::RoundedRect {
                     rect: rim,
-                    radius: (radius - IC_RIM / 2.0).max(0.0),
+                    radius: (radius - width / 2.0).max(0.0),
                 },
-                width: IC_RIM,
+                width,
                 paint: Paint::Solid(rim_color),
             });
         }

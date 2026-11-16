@@ -58,7 +58,9 @@ From version 4 a window has surface layers (`Capabilities::surface_layers`, `sur
 is a `wl_surface` made a `cupertino_layer_v1` of the window's surface, drawn from buffers of its own at the window's
 scale (shared memory, or dmabufs from the GPU renderer's texture as a window's are), its rect and look sent as the
 layer's values with the window's next commit, and `WindowRequest::Layer` changes sent as its requests (committed at once
-without a buffer when the window shows a frame, or with the layer's first values); their animations count for
+without a buffer when the window shows a frame, or with the layer's first values); while such an animation moves a
+layer's x, y, width or height, a frame that declares the layer's rect again sends none of the parts it moves (a value
+sent would replace the animation) and sends them with the first frame after it ended; their animations count for
 `presentation_settled`, and a window whose layers' last running animation ends hears `WindowEvent::LayersSettled` once,
 in the read that saw it end; a `LayerChange::through` goes as `animate_samples`. The `surface-layers` example is a window
 with one layer that fades on the compositor's clock while its content blur goes up and back down through samples, or

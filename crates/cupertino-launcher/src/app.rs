@@ -947,23 +947,49 @@ pub struct App {
     signals: async_channel::Receiver<Signal>,
 }
 
+impl Signal {
+    /// What the model is told of it.
+    fn message(self) -> Message {
+        match self {
+            Signal::Toggle => Message::Toggle,
+            Signal::Applications => Message::Browse,
+            Signal::Locked => Message::Locked,
+            Signal::Output(size) => Message::Output(size),
+            Signal::Outputs(any) => Message::Outputs(any),
+            Signal::ReduceMotion(on) => Message::ReduceMotion(on),
+            Signal::SteadyCaret(on) => Message::SteadyCaret(on),
+            Signal::Opened(launch, running) => Message::Opened(launch, running),
+            Signal::Installed(entries) => Message::Installed(entries),
+        }
+    }
+}
+
+/// Whether `message` is one a signal becomes ([`Signal::message`]): the one wait for the next signal ended with it,
+/// so the next wait starts as it is handled. A signal's message left out here would be the last signal heard: no
+/// toggle, lock or output after it would reach the model.
+fn signalled(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::Toggle
+            | Message::Browse
+            | Message::Locked
+            | Message::Output(_)
+            | Message::Outputs(_)
+            | Message::ReduceMotion(_)
+            | Message::SteadyCaret(_)
+            | Message::Opened(..)
+            | Message::Installed(_)
+    )
+}
+
+/// Waits for the next signal: one wait at a time, started again as its message is handled ([`signalled`]).
 fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
     let signals = signals.clone();
     Command::Perform(Box::pin(async move {
         signals
             .recv()
             .await
-            .map_or(Message::Unheard, |signal| match signal {
-                Signal::Toggle => Message::Toggle,
-                Signal::Applications => Message::Browse,
-                Signal::Locked => Message::Locked,
-                Signal::Output(size) => Message::Output(size),
-                Signal::Outputs(any) => Message::Outputs(any),
-                Signal::ReduceMotion(on) => Message::ReduceMotion(on),
-                Signal::SteadyCaret(on) => Message::SteadyCaret(on),
-                Signal::Opened(launch, running) => Message::Opened(launch, running),
-                Signal::Installed(entries) => Message::Installed(entries),
-            })
+            .map_or(Message::Unheard, Signal::message)
     }))
 }
 
@@ -980,17 +1006,7 @@ impl Application for App {
     }
 
     fn update(app: &mut App, message: Message) -> Vec<Command<Message>> {
-        let signalled = matches!(
-            message,
-            Message::Toggle
-                | Message::Browse
-                | Message::Locked
-                | Message::Output(_)
-                | Message::Outputs(_)
-                | Message::ReduceMotion(_)
-                | Message::SteadyCaret(_)
-                | Message::Opened(..)
-        );
+        let signalled = signalled(&message);
         let mut commands = kit::update(&mut app.model, message);
         if signalled {
             commands.push(listen(&app.signals));
@@ -1120,6 +1136,51 @@ mod tests {
             <App as Application>::RENDERER,
             cupertino_kit::core::RendererClass::Gpu
         );
+    }
+
+    /// One signal of every kind. A new kind does not compile here until it is listed.
+    fn every_signal() -> Vec<Signal> {
+        let all = vec![
+            Signal::Toggle,
+            Signal::Applications,
+            Signal::Locked,
+            Signal::Output(Size::new(1280.0, 800.0)),
+            Signal::Outputs(true),
+            Signal::ReduceMotion(true),
+            Signal::SteadyCaret(true),
+            Signal::Opened(1, Running::NotRunning),
+            Signal::Installed(Vec::new()),
+        ];
+        for signal in &all {
+            match signal {
+                Signal::Toggle
+                | Signal::Applications
+                | Signal::Locked
+                | Signal::Output(_)
+                | Signal::Outputs(_)
+                | Signal::ReduceMotion(_)
+                | Signal::SteadyCaret(_)
+                | Signal::Opened(..)
+                | Signal::Installed(_) => {}
+            }
+        }
+        all
+    }
+
+    /// The wait for the next signal starts again after every kind of signal: a report of the application folders is
+    /// not the last thing the launcher hears, so a toggle after it still opens the panel.
+    #[test]
+    fn the_next_signal_is_waited_for_after_every_kind_of_signal() {
+        for signal in every_signal() {
+            let told = format!("{signal:?}");
+            assert!(
+                signalled(&signal.message()),
+                "after {told} no signal is waited for"
+            );
+        }
+        // what the model tells itself starts no second wait
+        assert!(!signalled(&Message::OpenSettled));
+        assert!(!signalled(&Message::Unheard));
     }
 
     #[test]

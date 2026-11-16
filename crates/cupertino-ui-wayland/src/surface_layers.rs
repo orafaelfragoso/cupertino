@@ -33,6 +33,44 @@ fn wire(p: LayerProperty) -> Wire {
     }
 }
 
+/// Which part of a layer's place a property is: x, y, width or height, in that order; `None` for the others.
+fn place_index(p: LayerProperty) -> Option<usize> {
+    match p {
+        LayerProperty::X => Some(0),
+        LayerProperty::Y => Some(1),
+        LayerProperty::Width => Some(2),
+        LayerProperty::Height => Some(3),
+        _ => None,
+    }
+}
+
+/// A value as the wire carries it: in 256ths of a point, the nearest.
+fn on_wire(v: f64) -> i64 {
+    (v * 256.0).round() as i64
+}
+
+/// The parts of a layer's place to send now, for a layer declared at `place` (x, y, width, height): each part the
+/// compositor was not told at that value (`told`, as the wire carries it; `None` once an animation moved it), unless
+/// an animation the application sent still moves it (`moving`). A value sent while an animation runs replaces the
+/// animation, so the part an animation moves is left to it until it ends; it is sent with the first frame after.
+/// `told` then holds what the compositor has.
+fn place_to_send(
+    told: &mut [Option<i64>; 4],
+    moving: [bool; 4],
+    place: [f64; 4],
+) -> [Option<f64>; 4] {
+    let mut send = [None; 4];
+    for i in 0..4 {
+        if moving[i] {
+            told[i] = None;
+        } else if told[i] != Some(on_wire(place[i])) {
+            told[i] = Some(on_wire(place[i]));
+            send[i] = Some(place[i]);
+        }
+    }
+    send
+}
+
 fn protocol_error(e: impl std::fmt::Display) -> PlatformError {
     PlatformError::Protocol(e.to_string())
 }
@@ -61,6 +99,8 @@ pub(crate) struct Shown {
     pub(crate) surface: SurfaceId,
     layer: Layer,
     rect: Rect,
+    /// Its x, y, width and height as the compositor was last told them ([`place_to_send`]).
+    told: [Option<i64>; 4],
     look: SurfaceLayerLook,
     /// Damage of frames that were not shown, carried into the next.
     pub(crate) carried: Vec<PixelRect>,
@@ -84,6 +124,8 @@ pub(crate) struct SurfaceLayers {
     windows: HashMap<WindowId, Vec<Shown>>,
     pending: HashMap<(WindowId, u64), Vec<LayerChange>>,
     running: HashMap<LayerId, HashSet<u32>>,
+    /// The running animations that move a part of their layer's place (x, y, width or height, by index), by serial.
+    moving: HashMap<LayerId, HashMap<u32, usize>>,
     /// The window of each layer that ran an animation.
     owners: HashMap<LayerId, WindowId>,
     next_serial: u32,
@@ -112,6 +154,7 @@ impl SurfaceLayers {
                 gone.push(s.surface);
                 // what it ran goes with it, so it keeps its window from coming to rest no longer
                 self.running.remove(&s.layer.id());
+                self.moving.remove(&s.layer.id());
                 self.owners.remove(&s.layer.id());
             }
             keep
@@ -132,6 +175,7 @@ impl SurfaceLayers {
                         surface,
                         layer,
                         rect: Rect::ZERO,
+                        told: [None; 4],
                         look: SurfaceLayerLook {
                             radius: -1.0,
                             ..SurfaceLayerLook::default()
@@ -143,17 +187,25 @@ impl SurfaceLayers {
                 }
             };
             let s = &mut shown[i];
-            if s.rect != w.rect {
-                for (p, v) in [
-                    (Wire::X, w.rect.x()),
-                    (Wire::Y, w.rect.y()),
-                    (Wire::Width, w.rect.width().max(0.0)),
-                    (Wire::Height, w.rect.height().max(0.0)),
-                ] {
+            // an animation the application sent keeps the part of the place it moves: a value sent now would
+            // replace it
+            let moving = moving_parts(&self.moving, s.layer.id());
+            let place = [
+                w.rect.x(),
+                w.rect.y(),
+                w.rect.width().max(0.0),
+                w.rect.height().max(0.0),
+            ];
+            let parts = place_to_send(&mut s.told, moving, place);
+            for (p, v) in [Wire::X, Wire::Y, Wire::Width, Wire::Height]
+                .into_iter()
+                .zip(parts)
+            {
+                if let Some(v) = v {
                     s.layer.set(p, v).map_err(protocol_error)?;
                 }
-                s.rect = w.rect;
             }
+            s.rect = w.rect;
             if s.look != w.look {
                 let look = w.look;
                 if look.radius != s.look.radius {
@@ -185,7 +237,13 @@ impl SurfaceLayers {
             // the changes asked for before the layer was made go with its first values
             if let Some(changes) = self.pending.remove(&(window, w.key)) {
                 self.owners.insert(s.layer.id(), window);
-                send(&s.layer, &changes, &mut self.next_serial, &mut self.running)?;
+                send(
+                    &s.layer,
+                    &changes,
+                    &mut self.next_serial,
+                    &mut self.running,
+                    &mut self.moving,
+                )?;
             }
         }
         // the last layer still running went
@@ -211,8 +269,8 @@ impl SurfaceLayers {
     ) -> Result<bool, PlatformError> {
         let Some(s) = self
             .windows
-            .get(&window)
-            .and_then(|v| v.iter().find(|s| s.key == key))
+            .get_mut(&window)
+            .and_then(|v| v.iter_mut().find(|s| s.key == key))
         else {
             self.pending
                 .entry((window, key))
@@ -221,7 +279,19 @@ impl SurfaceLayers {
             return Ok(false);
         };
         self.owners.insert(s.layer.id(), window);
-        send(&s.layer, &changes, &mut self.next_serial, &mut self.running)?;
+        // a part of the place set here is what the compositor has now
+        for change in changes.iter().filter(|c| c.curve.is_none()) {
+            if let Some(i) = place_index(change.property) {
+                s.told[i] = Some(on_wire(change.to));
+            }
+        }
+        send(
+            &s.layer,
+            &changes,
+            &mut self.next_serial,
+            &mut self.running,
+            &mut self.moving,
+        )?;
         Ok(true)
     }
 
@@ -249,8 +319,14 @@ impl SurfaceLayers {
         match serial {
             Some(serial) => {
                 running.remove(&serial);
+                if let Some(moving) = self.moving.get_mut(&layer) {
+                    moving.remove(&serial);
+                }
             }
-            None => running.clear(),
+            None => {
+                running.clear();
+                self.moving.remove(&layer);
+            }
         }
         if let Some(window) = window.filter(|&w| !was && self.settled(w)) {
             self.came_to_rest.push(window);
@@ -269,6 +345,7 @@ impl SurfaceLayers {
         let gone = self.windows.remove(&window).unwrap_or_default();
         for s in &gone {
             self.running.remove(&s.layer.id());
+            self.moving.remove(&s.layer.id());
         }
         self.owners.retain(|_, w| *w != window);
         self.came_to_rest.retain(|w| *w != window);
@@ -276,11 +353,21 @@ impl SurfaceLayers {
     }
 }
 
+/// Which parts of `layer`'s place (x, y, width, height) an animation still moves.
+fn moving_parts(moving: &HashMap<LayerId, HashMap<u32, usize>>, layer: LayerId) -> [bool; 4] {
+    let mut parts = [false; 4];
+    for &i in moving.get(&layer).into_iter().flat_map(HashMap::values) {
+        parts[i] = true;
+    }
+    parts
+}
+
 fn send(
     layer: &Layer,
     changes: &[LayerChange],
     next_serial: &mut u32,
     running: &mut HashMap<LayerId, HashSet<u32>>,
+    moving: &mut HashMap<LayerId, HashMap<u32, usize>>,
 ) -> Result<(), PlatformError> {
     for change in changes {
         let property = wire(change.property);
@@ -289,6 +376,12 @@ fn send(
             (Some(curve), samples) => {
                 *next_serial = next_serial.wrapping_add(1);
                 running.entry(layer.id()).or_default().insert(*next_serial);
+                if let Some(i) = place_index(change.property) {
+                    moving
+                        .entry(layer.id())
+                        .or_default()
+                        .insert(*next_serial, i);
+                }
                 match (curve, samples) {
                     (cupertino_ui_platform::LayerCurve::Timed { duration, .. }, Some(values)) => {
                         layer.animate_samples(*next_serial, property, duration, values)
@@ -338,6 +431,68 @@ mod tests {
         assert!(layers.heard(&finished(elsewhere, 4)));
         layers.forget(other);
         assert!(layers.take_settled().is_empty(), "a window gone");
+    }
+
+    /// A layer declared again while an animation moves its place keeps the animation: the parts it moves are not
+    /// sent, as a value sent would replace it, the others are, and a part declared where the compositor has it (to
+    /// the wire's 256th of a point) is not sent again. Once the animation ended, or was replaced, the first frame
+    /// after sends what the layer is declared at.
+    #[test]
+    fn a_layer_declared_again_keeps_the_animation_that_moves_its_place() {
+        let mut layers = SurfaceLayers::default();
+        let glass = LayerId(10);
+        let mut told = [None; 4];
+        // made: every part is sent
+        let still = moving_parts(&layers.moving, glass);
+        assert_eq!(
+            place_to_send(&mut told, still, [164.0, 44.0, 512.0, 57.0]),
+            [Some(164.0), Some(44.0), Some(512.0), Some(57.0)]
+        );
+        // the same place, a rounding error apart: nothing
+        assert_eq!(
+            place_to_send(&mut told, still, [163.99999999, 44.0, 512.0, 57.0]),
+            [None; 4]
+        );
+        // the application animates x, width and height; the frame that follows declares the layer where the
+        // animation starts
+        layers
+            .moving
+            .insert(glass, HashMap::from([(1, 0), (2, 2), (3, 3)]));
+        let moving = moving_parts(&layers.moving, glass);
+        assert_eq!(moving, [true, false, true, true]);
+        assert_eq!(
+            place_to_send(&mut told, moving, [163.99999999, 48.0, 640.0, 57.0]),
+            [None, Some(48.0), None, None],
+            "only the part no animation moves"
+        );
+        // one ends: its part is sent with the next frame, though it is declared where it was before the animation
+        assert!(layers
+            .running
+            .insert(glass, HashSet::from([1, 2, 3]))
+            .is_none());
+        assert!(layers.heard(&AppEvent::LayerFinished {
+            layer: glass,
+            serial: 1
+        }));
+        let moving = moving_parts(&layers.moving, glass);
+        assert_eq!(moving, [false, false, true, true]);
+        assert_eq!(
+            place_to_send(&mut told, moving, [164.0, 48.0, 640.0, 57.0]),
+            [Some(164.0), None, None, None]
+        );
+        // the others are replaced or come to rest: the place the layer is declared at now is sent
+        assert!(layers.heard(&AppEvent::LayerSettled { layer: glass }));
+        let moving = moving_parts(&layers.moving, glass);
+        assert_eq!(moving, [false; 4]);
+        assert_eq!(
+            place_to_send(&mut told, moving, [62.0, 48.0, 844.0, 577.0]),
+            [Some(62.0), None, Some(844.0), Some(577.0)]
+        );
+        assert_eq!(
+            place_to_send(&mut told, moving, [62.0, 48.0, 844.0, 577.0]),
+            [None; 4],
+            "sent once"
+        );
     }
 
     #[test]

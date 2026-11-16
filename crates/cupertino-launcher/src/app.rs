@@ -4,7 +4,8 @@
 //! builds the file index on a thread, searches it on another, resizes the panel's surface, loads the results' and the
 //! applications' icons, reads what the preview shows of the selected file on a thread, and keeps the deadlines.
 
-use cupertino_apps::{MimeDatabase, XdgDirs};
+use cupertino_apps::catalogue::{ApplicationWatch, Catalogue, Change, Timing};
+use cupertino_apps::{DesktopEntry, MimeDatabase, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::terminal::DEFAULT_TERMINALS;
 use cupertino_icons::{SystemIcons, ThemeIcons};
@@ -29,7 +30,7 @@ use cupertino_launcher::view::{
     ICON_SIZE, PREVIEW_ICON_SIZE, PREVIEW_IMAGE, PREVIEW_TEXT_LINES, SEARCH_SYMBOL, SHADOW_TOP,
     TOP_FRACTION,
 };
-use cupertino_launcher::{Launcher, LauncherConfig};
+use cupertino_launcher::{Frecency, Launcher, LauncherConfig};
 use cupertino_modifiers::Profile;
 use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
@@ -131,7 +132,7 @@ struct LauncherRoles {
 }
 
 /// What reaches the model from outside the window system.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Signal {
     /// `org.cupertino.Launcher1.Toggle`.
     Toggle,
@@ -149,6 +150,8 @@ enum Signal {
     SteadyCaret(bool),
     /// The server's answer for the application opened as this launch.
     Opened(u64, Running),
+    /// The applications changed in the application folders: all of them, as they are now.
+    Installed(Vec<DesktopEntry>),
 }
 
 /// The top margin of the panel's window on an output `height` points tall: the panel at [`TOP_FRACTION`] of the
@@ -959,6 +962,7 @@ fn listen(signals: &async_channel::Receiver<Signal>) -> Command<Message> {
                 Signal::ReduceMotion(on) => Message::ReduceMotion(on),
                 Signal::SteadyCaret(on) => Message::SteadyCaret(on),
                 Signal::Opened(launch, running) => Message::Opened(launch, running),
+                Signal::Installed(entries) => Message::Installed(entries),
             })
     }))
 }
@@ -1039,6 +1043,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     }
     let no_output = !any_output(system.connection());
     let toggles = sender.clone();
+    let signals_in = sender.clone();
     let _control = control::serve(zbus::connection::Builder::session()?, move |call| {
         let _ = toggles.send_blocking(match call {
             Call::Toggle => Signal::Toggle,
@@ -1068,7 +1073,26 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         assets,
         session,
     };
-    let mut model = Model::new(Launcher::from_system(config), Box::new(host));
+    let catalogue = Catalogue::from_env();
+    let entries = catalogue.entries().to_vec();
+    let installed = signals_in.clone();
+    // the folders are read again on the watch's thread, never on the loop's
+    let _applications =
+        ApplicationWatch::start(catalogue, Timing::default(), move |change| match change {
+            Change::Applications(entries) => {
+                let _ = installed.send_blocking(Signal::Installed(entries));
+            }
+            Change::Error(e) => eprintln!("cupertino-launcher: watching the applications: {e}"),
+        })
+        .map_err(|e| {
+            eprintln!(
+                "cupertino-launcher: cannot watch the application folders: {e}; applications installed from now \
+                 on show after a restart"
+            );
+        })
+        .ok();
+    let launcher = Launcher::new(config, entries, Frecency::load_default());
+    let mut model = Model::new(launcher, Box::new(host));
     model.files = files;
     model.settled = cupertino_shell_client::test_clock::motion_settled();
     // started while the server has no output, the hidden window the server closes waits for one

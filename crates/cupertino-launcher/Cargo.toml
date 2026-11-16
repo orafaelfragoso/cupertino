@@ -16,6 +16,7 @@ app = [
     "dep:async-channel",
     "dep:async-io",
     "cupertino-apps/dbus",
+    "cupertino-apps/watch",
     "dep:cupertino-assets",
     "dep:cupertino-icons",
     "dep:cupertino-modifiers",

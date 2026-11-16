@@ -326,6 +326,15 @@ let mut model = Model::new(launcher, Box::new(host));
 // Message::Toggle shows or hides the panel
 ```
 
+**Applications installed while it runs.** The process does not index once: it reads the applications through
+`cupertino_apps::catalogue` and follows the XDG application folders (the person's and each system one, with their
+subfolders, and a folder that is made later) on a thread of its own. After a burst of file events goes quiet (250 ms, at
+most 2 s after its first event) that thread reads the folders again, with the same visibility rules and the person's
+entries over the system's, and when the applications differ it sends them all as `Message::Installed`. The model then
+swaps the index: the results of the query on screen are composed again with what the file search already found (the
+query and the selected result stay), the open browser takes the new list (its filter, selection and scroll stay), and
+the icon and preview of an application that changed are asked for again. Nothing is read from disk on the loop.
+
 * `Launcher::query(&self, text, unix_now) -> Results` is pure; run it wherever you like.
 * `Launcher::activate(&mut self, item, query, unix_now) -> Activation` records frecency
   (`app:<desktop id>[#action]`, `file:<path>`; calculator copies are not recorded) and returns

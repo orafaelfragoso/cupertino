@@ -15,3 +15,5 @@ mod screen_cast;
 mod screenshot;
 #[path = "settings.rs"]
 mod settings;
+#[path = "toolkits.rs"]
+mod toolkits;

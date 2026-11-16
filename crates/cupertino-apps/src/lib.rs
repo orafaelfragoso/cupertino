@@ -14,6 +14,7 @@
 
 #[cfg(feature = "dbus")]
 pub mod activate;
+pub mod chromium;
 pub mod entry;
 pub mod exec;
 pub mod frecency;

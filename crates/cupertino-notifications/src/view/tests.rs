@@ -600,6 +600,33 @@ fn a_group_expands_and_collapses_with_a_spring_and_at_once_under_reduce_motion()
     assert!(c.groups().is_empty());
 }
 
+/// A halo is kept off a neighbouring card only where the list shows that card: the part of a card under the header
+/// or past the list's bottom edge, and a card wholly past either, leave no unshadowed patch in the shape of a card.
+#[test]
+fn a_halo_is_kept_off_a_neighbour_only_where_the_list_shows_it() {
+    let card = |y: f64| Rect::new(112.0, y, 344.0, 58.0);
+    // the list from 68 to 624
+    assert_eq!(shown_in_list(card(200.0), 68.0, 556.0), Some(card(200.0)));
+    assert_eq!(
+        shown_in_list(card(48.0), 68.0, 556.0),
+        Some(Rect::new(112.0, 68.0, 344.0, 38.0)),
+        "cut at the list's top, as its glass is"
+    );
+    assert_eq!(
+        shown_in_list(card(600.0), 68.0, 556.0),
+        Some(Rect::new(112.0, 600.0, 344.0, 24.0)),
+        "cut at the list's bottom"
+    );
+    assert_eq!(shown_in_list(card(-10.0), 68.0, 556.0), None, "above");
+    assert_eq!(shown_in_list(card(10.0), 68.0, 556.0), None, "at the edge");
+    assert_eq!(shown_in_list(card(624.0), 68.0, 556.0), None, "below");
+    assert_eq!(
+        shown_in_list(card(-10.0), 68.0, 0.0),
+        Some(card(-10.0)),
+        "before the list was laid out"
+    );
+}
+
 /// A card fading in covers a neighbour's halo by as much as it is there: at the start of its fade the halo still shows
 /// over it almost whole, and only once it is opaque is the halo kept off it entirely.
 #[test]

@@ -1555,11 +1555,15 @@ fn centre_window<M: Clone + 'static>(
         let top = list_top + rect.y() - scroll.offset.y;
         Rect::new(rect.x() + slide, top, rect.width(), rect.height())
     };
-    let spots: Vec<(Rect, f64)> = cards
+    // each with the part of it the list shows: the scroll view cuts a card and its glass at the list's top and bottom
+    // edges, so past them there is nothing to keep a halo off
+    let spots: Vec<(Rect, Rect, f64)> = cards
         .iter()
         .filter_map(|piece| match piece {
             Piece::Card(c) | Piece::Sheet(c) if c.opacity > 0.0 => {
-                Some((in_layer(c.rect), c.opacity))
+                let rect = in_layer(c.rect);
+                let shown = shown_in_list(rect, list_top, scroll.viewport.height)?;
+                Some((rect, shown, c.opacity))
             }
             _ => None,
         })
@@ -1586,8 +1590,8 @@ fn centre_window<M: Clone + 'static>(
                 let reach = rect.outset(SHADOW_REACH);
                 let others = spots
                     .iter()
-                    .filter(|(r, _)| *r != rect && r.intersects(&reach))
-                    .map(|(r, opacity)| (r.translate(-rect.x(), -rect.y()), *opacity))
+                    .filter(|(whole, shown, _)| *whole != rect && shown.intersects(&reach))
+                    .map(|(_, shown, opacity)| (shown.translate(-rect.x(), -rect.y()), *opacity))
                     .collect();
                 Element::new(Halo {
                     rect,
@@ -2604,6 +2608,18 @@ fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow
     });
     cx.push(PaintOp::PopLayer);
     cx.push(PaintOp::PopClip);
+}
+
+/// The part of a card at `rect` in the centre's window that its list shows, the list starting at `list_top` and
+/// `viewport` tall: the list cuts its cards at its top and bottom edges. `None` when the card is wholly past an edge;
+/// the whole card before the list was first laid out (`viewport` 0).
+fn shown_in_list(rect: Rect, list_top: f64, viewport: f64) -> Option<Rect> {
+    if viewport <= 0.0 {
+        return Some(rect);
+    }
+    let top = rect.min_y().max(list_top);
+    let bottom = rect.max_y().min(list_top + viewport);
+    (bottom > top).then(|| Rect::new(rect.x(), top, rect.width(), bottom - top))
 }
 
 /// The halo of a card of the centre, in the layer under the whole list: the scroll view clips what it holds at its

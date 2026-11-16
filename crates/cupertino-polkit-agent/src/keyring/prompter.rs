@@ -305,14 +305,13 @@ pub fn send(bus: &Connection, effect: &Effect) -> zbus::Result<()> {
             let properties: HashMap<&str, Variant<'_>> = properties
                 .iter()
                 .map(|(name, v)| {
-                    (
-                        *name,
-                        match v {
-                            Value::Str(s) => Variant::from(s.as_str()),
-                            Value::Bool(b) => Variant::from(*b),
-                            Value::Int(i) => Variant::from(*i),
-                        },
-                    )
+                    let value = match v {
+                        Value::Str(s) => Variant::from(s.as_str()),
+                        Value::Bool(b) => Variant::from(*b),
+                        Value::Int(i) => Variant::from(*i),
+                    };
+                    // a caller reads a property's value out of a variant of its own, inside the dictionary's
+                    (*name, Variant::Value(Box::new(value)))
                 })
                 .collect();
             builder.build(&(reply.as_str(), properties, exchange.as_str()))?

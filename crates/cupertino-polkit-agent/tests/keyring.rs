@@ -233,12 +233,21 @@ impl Caller {
     }
 }
 
+/// A property the prompter sent back: its value is a variant of its own inside the dictionary's, which is where the
+/// keyring daemon reads it; a bare value there is one the daemon drops.
+fn sent<'a>(properties: &'a HashMap<String, OwnedValue>, name: &str) -> &'a Value<'a> {
+    match &*properties[name] {
+        Value::Value(inner) => inner,
+        bare => panic!("{name} goes back as a variant holding its value, not as {bare:?}"),
+    }
+}
+
 fn bool_of(properties: &HashMap<String, OwnedValue>, name: &str) -> bool {
-    bool::try_from(properties[name].clone()).unwrap()
+    sent(properties, name).downcast_ref().unwrap()
 }
 
 fn int_of(properties: &HashMap<String, OwnedValue>, name: &str) -> i32 {
-    i32::try_from(properties[name].clone()).unwrap()
+    sent(properties, name).downcast_ref().unwrap()
 }
 
 /// Until the prompter's model holds `done`, polled for at most [`WAIT`].

@@ -1,8 +1,9 @@
 //! The keyring prompter answering the keyring daemon the packages install (gnome-keyring's `secrets` component) on a
 //! private bus with no activatable services: a locked login keyring is unlocked with the password typed into the
-//! prompt, after a wrong one the daemon asks again with its warning, and a cancel leaves the keyring locked. Skipped,
-//! with the reason, when `gnome-keyring-daemon` is not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead.
+//! prompt, after a wrong one the daemon asks again with its warning, and a cancel leaves the keyring locked; a keyring an
+//! application asks for is made with the new password typed twice, and opens with it. Skipped, with the reason, when `gnome-keyring-daemon` is not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -176,31 +177,116 @@ pub(super) fn locked(conn: &Connection, collection: &str) -> bool {
         .unwrap()
 }
 
-/// Ask the daemon to unlock `collection` and run its prompt on a thread; the receiver gets whether it was dismissed.
-pub(super) fn unlock(conn: &Connection, collection: &str) -> std::sync::mpsc::Receiver<bool> {
-    let objects = vec![ObjectPath::try_from(collection).unwrap()];
-    let (unlocked, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) =
-        call(conn, SERVICE_PATH, SERVICE, "Unlock", &(objects,));
-    assert!(unlocked.is_empty());
+/// Run the daemon's `prompt` on a thread; the receiver gets whether it was dismissed, and its result.
+fn run_prompt(conn: &Connection, prompt: &str) -> std::sync::mpsc::Receiver<(bool, OwnedValue)> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface(PROMPT)
         .unwrap()
         .member("Completed")
         .unwrap()
-        .path(prompt.as_str().to_owned())
+        .path(prompt.to_owned())
         .unwrap()
         .build();
     let mut completions = MessageIterator::for_match_rule(rule, conn, None).unwrap();
     let (sent, completed) = channel();
     std::thread::spawn(move || {
         if let Some(Ok(message)) = completions.next() {
-            let (dismissed, _): (bool, OwnedValue) = message.body().deserialize().unwrap();
-            let _ = sent.send(dismissed);
+            let _ = sent.send(message.body().deserialize().unwrap());
         }
     });
-    let () = call(conn, prompt.as_str(), PROMPT, "Prompt", &("",));
+    let () = call(conn, prompt, PROMPT, "Prompt", &("",));
     completed
+}
+
+/// Ask the daemon to unlock `collection` and run its prompt on a thread; the receiver gets whether it was dismissed.
+pub(super) fn unlock(conn: &Connection, collection: &str) -> std::sync::mpsc::Receiver<bool> {
+    let objects = vec![ObjectPath::try_from(collection).unwrap()];
+    let (unlocked, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) =
+        call(conn, SERVICE_PATH, SERVICE, "Unlock", &(objects,));
+    assert!(unlocked.is_empty());
+    let completed = run_prompt(conn, prompt.as_str());
+    let (sent, dismissed) = channel();
+    std::thread::spawn(move || {
+        if let Ok((was_dismissed, _)) = completed.recv() {
+            let _ = sent.send(was_dismissed);
+        }
+    });
+    dismissed
+}
+
+/// Ask the daemon for a new keyring labelled `label`, as an application does, and run its prompt on a thread; the
+/// receiver gets whether it was dismissed, and the keyring's path.
+fn create(conn: &Connection, label: &str) -> std::sync::mpsc::Receiver<(bool, OwnedValue)> {
+    let properties: HashMap<&str, Value<'_>> = HashMap::from([(
+        "org.freedesktop.Secret.Collection.Label",
+        Value::from(label),
+    )]);
+    let (made, prompt): (OwnedObjectPath, OwnedObjectPath) = call(
+        conn,
+        SERVICE_PATH,
+        SERVICE,
+        "CreateCollection",
+        &(properties, ""),
+    );
+    assert_eq!(made.as_str(), "/", "a new keyring needs its password first");
+    run_prompt(conn, prompt.as_str())
+}
+
+/// The paths of the daemon's keyrings.
+fn collections(conn: &Connection) -> Vec<String> {
+    let all = zbus::blocking::fdo::PropertiesProxy::builder(conn)
+        .destination(SECRETS)
+        .unwrap()
+        .path(SERVICE_PATH)
+        .unwrap()
+        .build()
+        .unwrap()
+        .get(SERVICE.try_into().unwrap(), "Collections")
+        .unwrap();
+    Vec::<OwnedObjectPath>::try_from(all)
+        .unwrap()
+        .iter()
+        .map(|path| path.to_string())
+        .collect()
+}
+
+/// The prompter on the session's bus with its loop on a thread, as the program runs it.
+fn prompter(session: &Session) -> Arc<Mutex<Host>> {
+    let prompter = session.bus.connect();
+    let (to_loop, requests) = channel();
+    serve(&prompter, move |request| {
+        let _ = to_loop.send(request);
+    })
+    .unwrap();
+    let host = Arc::new(Mutex::new(Host::new(prompter)));
+    let looping = host.clone();
+    std::thread::spawn(move || {
+        for request in requests {
+            looping.lock().unwrap().request(request);
+        }
+    });
+    host
+}
+
+fn type_into(host: &Arc<Mutex<Host>>, field: Field, text: &str) {
+    let mut host = host.lock().unwrap();
+    for c in text.chars() {
+        host.model.key(field, Key::Char(c));
+    }
+}
+
+/// Wait for the daemon's question for a new keyring's password: a password with its confirmation.
+fn wait_for_new_password(host: &Arc<Mutex<Host>>) {
+    wait_for_question(host);
+    let host = host.lock().unwrap();
+    let prompt = host.model.shown().unwrap();
+    assert_eq!(prompt.kind, Kind::Password);
+    assert!(prompt.confirms(), "a new password is typed twice");
+    assert!(
+        !prompt.properties.heading().is_empty(),
+        "the daemon says what it asks"
+    );
 }
 
 pub(super) fn wait_for_question(host: &Arc<Mutex<Host>>) {
@@ -231,19 +317,7 @@ fn the_daemon_unlocks_its_keyring_with_the_password_typed_into_the_prompt() {
     let Some(session) = Session::start() else {
         return;
     };
-    let prompter = session.bus.connect();
-    let (to_loop, requests) = channel();
-    serve(&prompter, move |request| {
-        let _ = to_loop.send(request);
-    })
-    .unwrap();
-    let host = Arc::new(Mutex::new(Host::new(prompter)));
-    let looping = host.clone();
-    std::thread::spawn(move || {
-        for request in requests {
-            looping.lock().unwrap().request(request);
-        }
-    });
+    let host = prompter(&session);
 
     let client = session.bus.connect();
     let _: (OwnedValue, OwnedObjectPath) = call(
@@ -304,4 +378,114 @@ fn the_daemon_unlocks_its_keyring_with_the_password_typed_into_the_prompt() {
     wait_until("the daemon stops prompting", || {
         host.lock().unwrap().model.prompt().is_none()
     });
+}
+
+/// A password for the keyring the test makes: not the login's.
+const NEW_PASSWORD: &str = "battery staple 7f1a";
+
+#[test]
+fn the_daemon_makes_a_keyring_with_the_new_password_typed_twice_into_the_prompt() {
+    let Some(session) = Session::start() else {
+        return;
+    };
+    let host = prompter(&session);
+    let client = session.bus.connect();
+    let _: (OwnedValue, OwnedObjectPath) = call(
+        &client,
+        SERVICE_PATH,
+        SERVICE,
+        "OpenSession",
+        &("plain", Value::from("")),
+    );
+    let before = collections(&client);
+
+    // cancelled: no keyring is made
+    let completed = create(&client, "Cancelled");
+    wait_for_new_password(&host);
+    type_into(&host, Field::Password, NEW_PASSWORD);
+    type_into(&host, Field::Confirm, NEW_PASSWORD);
+    type_and(&host, "", true);
+    let (dismissed, _) = completed.recv_timeout(WAIT).unwrap();
+    assert!(dismissed, "a cancelled prompt completes dismissed");
+    assert_eq!(collections(&client), before);
+    wait_until("the daemon stops prompting", || {
+        host.lock().unwrap().model.prompt().is_none()
+    });
+
+    // a confirmation that differs is not sent: the question stays, says so, and the daemon hears nothing
+    let completed = create(&client, "Made");
+    wait_for_new_password(&host);
+    type_into(&host, Field::Confirm, "not the same");
+    type_and(&host, NEW_PASSWORD, false);
+    {
+        let host = host.lock().unwrap();
+        let prompt = host.model.shown().unwrap();
+        assert_eq!(prompt.phase, Phase::Asking);
+        assert_eq!(Status::of(prompt, false), [Status::Mismatch]);
+        assert_eq!(prompt.field_len(Field::Confirm), 0);
+    }
+    // only the password typed, as for an unlock, is a confirmation that differs too
+    type_and(&host, "", false);
+    assert!(host.lock().unwrap().model.shown().unwrap().mismatch);
+    assert!(completed.try_recv().is_err(), "nothing was answered");
+    assert_eq!(collections(&client), before);
+
+    // the same password twice makes the keyring, unlocked
+    type_into(&host, Field::Confirm, NEW_PASSWORD);
+    type_and(&host, "", false);
+    let (dismissed, made) = completed.recv_timeout(WAIT).unwrap();
+    assert!(!dismissed, "the prompt completes with the keyring");
+    let made = OwnedObjectPath::try_from(made).unwrap().to_string();
+    assert!(!before.contains(&made));
+    assert!(collections(&client).contains(&made));
+    assert!(!locked(&client, &made));
+    wait_until("the daemon stops prompting", || {
+        host.lock().unwrap().model.prompt().is_none()
+    });
+
+    // locked again, it opens with the password that was typed and with no other
+    let objects = vec![ObjectPath::try_from(made.as_str()).unwrap()];
+    let _: (Vec<OwnedObjectPath>, OwnedObjectPath) =
+        call(&client, SERVICE_PATH, SERVICE, "Lock", &(objects,));
+    assert!(locked(&client, &made));
+    let completed = unlock(&client, &made);
+    wait_for_question(&host);
+    assert!(!host.lock().unwrap().model.shown().unwrap().confirms());
+    type_and(&host, PASSWORD, false);
+    wait_until("the daemon asks again with its warning", || {
+        let host = host.lock().unwrap();
+        host.model.shown().is_some_and(|p| {
+            p.phase == Phase::Asking
+                && matches!(Status::of(p, false).first(), Some(Status::Warning(_)))
+        })
+    });
+    assert!(locked(&client, &made));
+    // the daemon offers to open this keyring with the login from now on: the choice, ticked, goes back to it
+    {
+        let mut host = host.lock().unwrap();
+        assert!(host.model.shown().unwrap().has_choice());
+        host.model.toggle_choice();
+    }
+    type_and(&host, NEW_PASSWORD, false);
+    assert!(
+        !completed.recv_timeout(WAIT).unwrap(),
+        "the prompt completes unlocked"
+    );
+    assert!(!locked(&client, &made));
+    wait_until("the daemon stops prompting", || {
+        host.lock().unwrap().model.prompt().is_none()
+    });
+
+    // so the next time it is locked, the daemon opens it without a question
+    let objects = vec![ObjectPath::try_from(made.as_str()).unwrap()];
+    let _: (Vec<OwnedObjectPath>, OwnedObjectPath) =
+        call(&client, SERVICE_PATH, SERVICE, "Lock", &(objects,));
+    assert!(locked(&client, &made));
+    let completed = unlock(&client, &made);
+    assert!(
+        !completed.recv_timeout(WAIT).unwrap(),
+        "the prompt completes unlocked with nothing typed"
+    );
+    assert!(!locked(&client, &made));
+    assert!(host.lock().unwrap().model.shown().is_none());
 }

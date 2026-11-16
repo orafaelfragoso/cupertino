@@ -105,7 +105,9 @@ The process hardens itself, zeroes what it frees and keeps its fields at their l
   eight. Only the active caller may ask (`PerformPrompt`, type `password` or `confirm`, with the properties it changed);
   another call is refused with `org.gnome.keyring.Prompter.InProgress`, a broken exchange with `…Failed`;
 - answers through the caller's `org.gnome.keyring.internal.Prompter.Callback`: `PromptReady("", {}, exchange)` once a
-  caller is active, `PromptReady("yes" | "no", {choice-chosen, password-strength}, exchange)` for each question, and
+  caller is active, `PromptReady("yes" | "no", {choice-chosen, password-strength}, exchange)` for each question (each
+  value in a variant of its own inside the dictionary's, which is where the daemon reads it: a bare value is dropped,
+  and the daemon then takes a new password for an empty one and the choice for not ticked), and
   `PromptDone()` when it ends a prompt itself (the session locks, or the server closes the panel: a `no` followed by
   `PromptDone` is the prompter's answer, not the person's). The reply to a call is always sent before its
   callback is called, even for an answer given at once: the loop sends the reply itself. A caller that leaves the bus (the bus daemon's `NameOwnerChanged`) loses its prompt;
@@ -182,8 +184,10 @@ audit; `tests/keyring.rs` the prompter on a private bus with a caller of the tes
 password from the exchange: a password round trip, a wrong password asked again with the warning, a new password with
 its confirmation and the choice, a confirmation, a cancel, one caller at a time, refusals, a locked session, and both
 names on one connection; `tests/keyring_daemon.rs` the installed gnome-keyring daemon on a private bus unlocking its
-login keyring with the password typed into the prompt, after a cancel and a wrong password (skipped when the daemon is
-not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
+login keyring with the password typed into the prompt, after a cancel and a wrong password, and making a keyring an
+application asks for (`CreateCollection`) with the new password typed twice: a cancel, a confirmation that differs,
+the keyring made and opening with that password only, and the ticked choice letting the daemon open it without a
+question afterwards (skipped when the daemon is not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
 
 The offer about the default keyring: `src/keyring/offer/tests.rs` the model without a bus: when the question is
 asked, accept, decline and its memory, a question taken away, a cancelled password, each failure of the move leaving

@@ -1,6 +1,6 @@
 //! What a preview of a file shows, without a toolkit: whether it is drawn as a picture, as text or as its icon with its
 //! details; the text, read with a bound; the items a preview steps through; the summary and details under it; and the
-//! motion of the preview window as it opens and closes.
+//! size of the preview window.
 //!
 //! Only what the file manager can already read is drawn: pictures the thumbnailer decodes (PNG, JPEG, WebP) and text
 //! files. Any other file (a PDF, a film, an archive) and a folder show their icon, their name and their details. A
@@ -14,7 +14,6 @@ use std::time::SystemTime;
 
 use crate::entry::Entry;
 use crate::format::{human_size, relative_date};
-use crate::metrics::timing::WINDOW_RESIZE_CAP;
 use crate::mime::{self, KindGroup};
 
 /// The most of a text file a preview reads.
@@ -193,14 +192,11 @@ pub const WINDOW_SIZE: (f64, f64) = (640.0, 680.0);
 /// The most the preview window takes when it shows a picture; a smaller picture shows at its own size, with room for the
 /// toolbar.
 pub const PICTURE_MAX: (f64, f64) = (800.0, 680.0);
-/// The side of the item the preview grows out of, as the icon view draws it.
-const SOURCE: f64 = 64.0;
-/// How fast a window's frame change moves, in points a second, in the duration rule of [`Motion::duration`].
-const VELOCITY: f64 = 1000.0;
-/// How long the fade that takes the zoom's place under Reduce Motion lasts, in seconds.
-const FADE: f64 = 0.2;
-/// The scale the panel starts its zoom from.
-const START_SCALE: f64 = SOURCE / WINDOW_SIZE.0;
+/// The narrowest a picture's preview window is: four times the side of an item as the icon view draws it.
+const NARROWEST: f64 = 4.0 * 64.0;
+/// How long a preview waits for what it shows (a picture to decode, a text to be read) before it says it is loading,
+/// in seconds: one that comes sooner shows at once, without a loading state in between.
+pub const LOADING_DELAY: f64 = 0.3;
 
 /// The size the preview window takes to show a picture of `pixels` at `scale` pixels a point below a toolbar `toolbar`
 /// points tall: its own size within [`PICTURE_MAX`], its sides kept in proportion.
@@ -215,77 +211,9 @@ pub fn picture_window(pixels: (u32, u32), scale: f64, toolbar: f64) -> (f64, f64
     let room = (PICTURE_MAX.0, PICTURE_MAX.1 - toolbar);
     let fit = (room.0 / w).min(room.1 / h).min(1.0);
     (
-        (w * fit).round().max(SOURCE * 4.0),
+        (w * fit).round().max(NARROWEST),
         (h * fit).round() + toolbar,
     )
-}
-
-/// How the preview window's panel looks at a moment of its opening or closing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MotionFrame {
-    /// The panel's size against its full size, about its centre.
-    pub scale: f64,
-    /// The panel's opacity.
-    pub alpha: f64,
-}
-
-/// The opening or closing of the preview window: the panel zooms out of an item-sized square to its size, eased in and
-/// out, and back on closing; under Reduce Motion it fades instead, at its full size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Motion {
-    pub closing: bool,
-    pub reduce: bool,
-    /// The window's size, in points.
-    pub size: (f64, f64),
-}
-
-impl Motion {
-    /// How long the motion lasts: a frame change takes `181 · ln(d / 100 + 1) / 1000` seconds for its largest change of
-    /// side `d`, at most 0.35 s; a fade [`FADE`].
-    pub fn duration(&self) -> f64 {
-        if self.reduce {
-            return FADE;
-        }
-        let d = (self.size.0 - SOURCE).max(self.size.1 - SOURCE).max(0.0);
-        (181.0 * (d / 100.0 + 1.0).ln() / VELOCITY).min(WINDOW_RESIZE_CAP)
-    }
-
-    /// The panel `elapsed` seconds into the motion.
-    pub fn at(&self, elapsed: f64) -> MotionFrame {
-        let duration = self.duration();
-        let t = if duration <= 0.0 {
-            1.0
-        } else {
-            (elapsed / duration).clamp(0.0, 1.0)
-        };
-        let p = ease_in_out(if self.closing { 1.0 - t } else { t });
-        if self.reduce {
-            return MotionFrame {
-                scale: 1.0,
-                alpha: p,
-            };
-        }
-        let start = (SOURCE / self.size.0.max(SOURCE)).clamp(START_SCALE.min(1.0), 1.0);
-        MotionFrame {
-            scale: start + (1.0 - start) * p,
-            alpha: p,
-        }
-    }
-
-    /// Whether the motion is over `elapsed` seconds in.
-    pub fn finished(&self, elapsed: f64) -> bool {
-        elapsed >= self.duration()
-    }
-}
-
-/// Cubic ease-in-out.
-pub fn ease_in_out(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
 }
 
 #[cfg(test)]
@@ -372,48 +300,6 @@ mod tests {
         assert!(b.step(1));
         assert!(b.step(5));
         assert_eq!((b.index(), b.current()), (2, Path::new("c")));
-    }
-
-    #[test]
-    fn the_panel_zooms_out_of_an_item_and_fades_under_reduce_motion() {
-        let open = Motion {
-            closing: false,
-            reduce: false,
-            size: WINDOW_SIZE,
-        };
-        let d = open.duration();
-        assert!(d > 0.3 && d <= WINDOW_RESIZE_CAP, "{d}");
-        let first = open.at(0.0);
-        assert_eq!(first.alpha, 0.0);
-        assert!((first.scale - 0.1).abs() < 1e-9, "{first:?}");
-        assert_eq!(
-            open.at(d),
-            MotionFrame {
-                scale: 1.0,
-                alpha: 1.0
-            }
-        );
-        let mid = open.at(d / 2.0);
-        assert!((mid.alpha - 0.5).abs() < 1e-9);
-        let close = Motion {
-            closing: true,
-            ..open
-        };
-        assert_eq!(
-            close.at(0.0),
-            MotionFrame {
-                scale: 1.0,
-                alpha: 1.0
-            }
-        );
-        assert!(close.finished(d));
-        let fade = Motion {
-            reduce: true,
-            ..open
-        };
-        assert_eq!(fade.duration(), FADE);
-        assert_eq!(fade.at(0.0).scale, 1.0);
-        assert_eq!(fade.at(FADE / 2.0).alpha, 0.5);
     }
 
     #[test]

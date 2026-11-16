@@ -175,6 +175,11 @@ pub enum PopupAnchor {
     /// Centred above the parent's node with this key, its bottom edge `gap` above the node's top edge, flipping below
     /// the node when there is no room above: a label over what it names.
     CentredAbove { key: Key, gap: f64 },
+    /// Centred over the parent's node `over`, its top edge never above the parent's, sliding to fit: a panel that
+    /// shows something of what lies under it. A popup whose root grows out of its anchor
+    /// ([`Widget::grows_from_anchor`]) grows out of the node `from` instead, and shrinks back into wherever that node
+    /// is when it closes: the part of it in view, or the middle of `over` while `from` is not laid out.
+    Panel { over: Key, from: Key },
 }
 
 /// What a window paints under its content.

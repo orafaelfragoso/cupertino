@@ -16,9 +16,11 @@ use cupertino_server::Cupertino;
 use cupertino_test_bus::PrivateBus;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
+use smithay::desktop::PopupManager;
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
@@ -334,32 +336,23 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     assert!(server.state.windows.is_empty());
 }
 
-/// The size of the buffer of the mapped window titled `title`; `None` until it has committed one.
-fn mapped_titled(state: &Cupertino, title: &str) -> Option<(i32, i32)> {
-    state.windows.iter().filter(|w| w.mapped).find_map(|entry| {
-        let surface = entry.surface();
-        let named = with_states(surface, |s| {
-            s.data_map
-                .get::<XdgToplevelSurfaceData>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .title
-                .clone()
-        });
-        if named.as_deref() != Some(title) {
-            return None;
-        }
-        let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
-        with_buffer_contents(&buffer, |_, _, data| (data.width, data.height)).ok()
+/// The preview popup of the browser window `entry` shows: its place against the window's surface and the size of the
+/// buffer it committed; `None` until it has committed one.
+fn preview_popup(state: &Cupertino) -> Option<(Point<i32, Logical>, (i32, i32))> {
+    let entry = state.windows.iter().find(|w| w.mapped)?;
+    PopupManager::popups_for_surface(entry.surface()).find_map(|(popup, at)| {
+        let buffer = with_renderer_surface_state(popup.wl_surface(), |s| s.buffer().cloned())??;
+        let size = with_buffer_contents(&buffer, |_, _, data| (data.width, data.height)).ok()?;
+        Some((at, size))
     })
 }
 
-/// Space on a selected picture opens its quick preview, which acknowledges its configure and commits its first frame
-/// over the browser window: made at the preview's default size and taking the picture's once it was read, the window
-/// never mapped while its buffers kept the first size.
+/// Space on a selected picture opens its quick preview as a panel of the browser window: it acknowledges its configure
+/// and commits its first frame over the window, no higher than the window's top and inside the window's output, while
+/// the window stays the key window, whose menus the menu bar keeps showing. Space again closes it, and the window is
+/// still the key window with the same menus.
 #[test]
-fn the_quick_preview_of_a_picture_maps_over_its_window() {
+fn the_quick_preview_of_a_picture_opens_over_its_window_and_leaves_it_the_menu_bar() {
     let scratch = TempDir::new("preview");
     let home = scratch.0.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -398,20 +391,46 @@ fn the_quick_preview_of_a_picture_maps_over_its_window() {
         .state
         .pointer_button(BTN_LEFT, ButtonState::Released, 0);
     server.settle();
+    let menus = server.state.menu_bars.address(id.0).cloned();
+    assert_eq!(server.state.wm.key_window(), Some(id));
     server.key(SPACE, true);
     server.key(SPACE, false);
-    server.wait_until("the preview to map", |s| {
-        mapped_titled(s, "sample.png").is_some()
-    });
-    // the preview's own size, or the picture's at half its pixels below its toolbar when it was read before the window
-    // was first configured
-    let size = mapped_titled(&server.state, "sample.png").unwrap();
+    server.wait_until("the preview to map", |s| preview_popup(s).is_some());
+    // the preview's own size, or the picture's at half its pixels below its toolbar
+    let (at, size) = preview_popup(&server.state).unwrap();
     assert!(
         matches!(size, (640, 680) | (460, 254)),
         "{size:?}: the preview's size or the picture's"
     );
+    assert!(at.y >= 0, "{at:?}: no higher than the window's top");
+    let (x, y) = (origin.x + f64::from(at.x), origin.y + f64::from(at.y));
+    assert!(
+        x >= 0.0
+            && y >= 0.0
+            && x + f64::from(size.0) <= f64::from(OUTPUT.0)
+            && y + f64::from(size.1) <= f64::from(OUTPUT.1),
+        "({x}, {y}) {size:?}: inside the output"
+    );
+    assert_eq!(
+        server.state.wm.key_window(),
+        Some(id),
+        "the browser window stays the key window, whose menus the bar shows"
+    );
+    assert_eq!(server.state.menu_bars.address(id.0).cloned(), menus);
     assert!(
         window(&server.state).is_some_and(|w| w.title == "home"),
         "the browser window stays"
+    );
+
+    // Space again: the preview shrinks away, and the window kept the keyboard and its menus
+    server.key(SPACE, true);
+    server.key(SPACE, false);
+    server.wait_until("the preview to go", |s| preview_popup(s).is_none());
+    assert_eq!(server.state.wm.key_window(), Some(id));
+    assert_eq!(server.state.menu_bars.address(id.0).cloned(), menus);
+    assert_eq!(
+        server.state.windows.len(),
+        1,
+        "no window of the preview's own"
     );
 }

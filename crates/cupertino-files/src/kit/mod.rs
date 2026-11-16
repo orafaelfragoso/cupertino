@@ -781,6 +781,7 @@ impl Application for Files {
             model.session.view_revision += 1;
         }
         let mut commands = model.handle(message);
+        commands.extend(model.follow_peeks());
         commands.extend(model.exit_when_done());
         commands
     }
@@ -840,6 +841,32 @@ impl Model {
                 commands
             }
         }
+    }
+
+    /// Each preview window follows whether its item is ready to show: one still waited for starts a wait that ends
+    /// [`file_preview::LOADING_DELAY`] later, when the window shows that it is loading.
+    fn follow_peeks(&mut self) -> Vec<Command<Message>> {
+        let mut commands = Vec::new();
+        for (&id, window) in &mut self.windows {
+            let Some(look) = window.peek.as_ref() else {
+                continue;
+            };
+            let entry = window
+                .browser
+                .entries()
+                .iter()
+                .find(|e| e.path == look.browse.current());
+            let Some(entry) = entry else { continue };
+            let size = peek::ready(&self.session, &window.texts, entry).map(|(_, size)| size);
+            let look = window.peek.as_mut().expect("checked above");
+            if let Some(wait) = look.follow_ready(size) {
+                commands.push(Command::After {
+                    delay: std::time::Duration::from_secs_f64(crate::preview::LOADING_DELAY),
+                    message: Message::Window(id, Event::Peek(PeekEvent::Waited(wait))),
+                });
+            }
+        }
+        commands
     }
 
     /// Exit once no browser window is open, no file operation runs and the progress window lists nothing, after the
@@ -1519,20 +1546,19 @@ impl Model {
             return Vec::new();
         };
         match event {
-            PeekEvent::Tick { now, animate } => {
-                if look.tick(now, animate) {
-                    window.peek = None;
-                }
-            }
-            PeekEvent::Close => look.close(),
-            PeekEvent::Closed => window.peek = None,
+            PeekEvent::Waited(wait) => look.waited(wait),
+            // the popup shrinks back into its item as the view stops declaring it
+            PeekEvent::Close | PeekEvent::Closed => window.peek = None,
             PeekEvent::Scroll(scroll) => look.scroll = scroll,
             PeekEvent::FullScreen => {
+                // in full screen the preview is a window of its own; back from it, the popup again
                 look.full_screen = !look.full_screen;
-                return vec![Command::Window(
-                    peek::window_key(id),
-                    WindowRequest::Fullscreen(look.full_screen),
-                )];
+                if look.full_screen {
+                    return vec![Command::Window(
+                        peek::full_screen_key(id),
+                        WindowRequest::Fullscreen(true),
+                    )];
+                }
             }
             PeekEvent::Open => {
                 let path = look.browse.current().to_path_buf();
@@ -2293,8 +2319,8 @@ impl BrowserWindow {
     /// Space, or File › Quick Preview: open the preview window on the selected items, or close it.
     fn toggle_peek(&mut self) {
         match self.peek.as_mut() {
-            Some(look) if !look.closing => look.close(),
-            _ => {
+            Some(_) => self.peek = None,
+            None => {
                 let selected = self.selected_paths();
                 self.peek = Browse::new(selected, 0).map(peek::Peek::new);
             }

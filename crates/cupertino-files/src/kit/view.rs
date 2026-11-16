@@ -85,11 +85,19 @@ const BAR_INSETS: Insets = Insets {
     right: metrics::PATH_BAR_INSET,
 };
 
+/// The menus of browser window `id`, which its preview shows in full screen too.
+pub(super) fn menus(session: &Session, id: u64, win: &BrowserWindow) -> Menus<Message> {
+    let state = win.menu_state(session);
+    Menus {
+        bar: crate::menu_bar::menu_bar(&state),
+        disabled: BrowserWindow::disabled(&state),
+        on_activate: send(id, Event::Menu),
+    }
+}
+
 pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<Message> {
     let title = win.title(session);
-    let state = win.menu_state(session);
-    let bar = crate::menu_bar::menu_bar(&state);
-    let disabled = BrowserWindow::disabled(&state);
+    let menus = menus(session, id, win);
     let (width, height) = window_metrics::DEFAULT_SIZE;
     Window {
         key: window_key(id),
@@ -103,16 +111,12 @@ pub(super) fn window(session: &Session, id: u64, win: &BrowserWindow) -> Window<
             foreign_parent: None,
             input_region: None,
         },
-        shortcuts: shortcuts(id, win, &bar, &disabled),
+        shortcuts: shortcuts(id, win, &menus.bar, &menus.disabled),
         on_close: Some(Message::Window(id, Event::Close)),
         // the sidebar window paints the sidebar's glass and the folder's background itself
         background: WindowBackground::None,
         popup: None,
-        menus: Some(Menus {
-            bar,
-            disabled,
-            on_activate: send(id, Event::Menu),
-        }),
+        menus: Some(menus),
         content: Element::from(Modal {
             content: Element::from(SidebarWindow {
                 label: "Sidebar".into(),
@@ -171,7 +175,7 @@ fn shortcuts(
         );
     }
     // Space opens the preview of the selection, or closes it; a field takes it first
-    let peek = win.peek.as_ref().is_some_and(|look| !look.closing);
+    let peek = win.peek.is_some();
     if win.rename.is_none() && (peek || !disabled.contains(&MenuAction::Peek.name())) {
         let space = Shortcut {
             mods: Mods::NONE,
@@ -596,8 +600,14 @@ fn content(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
     };
     // Space on the items opens their preview
     let peek = !disabled_peek(session, win);
+    let steps = win
+        .peek
+        .as_ref()
+        .is_some_and(|look| look.browse.len() > 1)
+        .then_some(id);
     let folder = Element::new(super::peek::SpaceKey {
         message: peek.then(|| Message::Window(id, Event::Menu(MenuAction::Peek.name()))),
+        steps,
         children: vec![folder.fill()],
     })
     .fill();
@@ -712,7 +722,7 @@ fn tab_bar(session: &Session, id: u64, win: &BrowserWindow) -> Element<Message> 
 
 /// Whether Space on the items does nothing: a name is edited, or nothing is selected and no preview is open.
 fn disabled_peek(session: &Session, win: &BrowserWindow) -> bool {
-    let open = win.peek.as_ref().is_some_and(|look| !look.closing);
+    let open = win.peek.is_some();
     let state = win.menu_state(session);
     let enabled = crate::menu_bar::enabled(&state).contains(&(MenuAction::Peek, true));
     win.rename.is_some() || !(open || enabled)

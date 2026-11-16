@@ -2260,6 +2260,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             }
         }
         self.follow_anchors();
+        self.follow_grow_origins();
         if !self.awaiting_anchor.is_empty() {
             self.awaiting_anchor.retain(|(_, asked)| !asked);
             for (_, asked) in &mut self.awaiting_anchor {
@@ -3087,7 +3088,8 @@ fn anchor_declared<M: 'static>(
     | PopupAnchor::Beside { key, .. }
     | PopupAnchor::Over { key, .. }
     | PopupAnchor::Above { key, .. }
-    | PopupAnchor::CentredAbove { key, .. }) = anchor
+    | PopupAnchor::CentredAbove { key, .. }
+    | PopupAnchor::Panel { over: key, .. }) = anchor
     else {
         return false;
     };
@@ -3098,6 +3100,32 @@ fn anchor_declared<M: 'static>(
         .into_iter()
         .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(key)))
         .is_some_and(|node| !parent.geometry.contains_key(&node))
+}
+
+/// The rectangle a popup of `parent` anchored at `anchor` and placed at `placed` grows out of and shrinks back into,
+/// in the parent's coordinates: the node a [`PopupAnchor::Panel`] grows from, the part of it its clips leave in view,
+/// where it is laid out and in view; else the anchor's rectangle.
+fn grows_out_of<M: 'static>(
+    tree: &Tree<M>,
+    parent: &WindowState<M>,
+    anchor: &PopupAnchor,
+    placed: &PopupSpec,
+) -> Rect {
+    let PopupAnchor::Panel { from, .. } = anchor else {
+        return placed.anchor_rect;
+    };
+    let shown = parent.root.and_then(|root| {
+        let node = tree
+            .preorder(root)
+            .into_iter()
+            .find(|&n| tree.get(n).is_some_and(|n| n.key.as_ref() == Some(from)))?;
+        let at = parent.geometry.get(&node)?;
+        match at.clip {
+            Some(clip) => at.rect.intersection(&clip),
+            None => Some(at.rect),
+        }
+    });
+    shown.unwrap_or(placed.anchor_rect)
 }
 
 /// Where a popup of `parent` opens, in the parent's coordinates; `None` while its anchor is not laid out.
@@ -3178,6 +3206,17 @@ fn place<M: 'static>(
             PopupEdge::BottomRight,
             *offset,
         ),
+        PopupAnchor::Panel { over, .. } => {
+            let rect = rect_of(over)?;
+            // centred on the node, or down to the parent's top edge where it is taller than the room above the middle
+            let top = (rect.height() - size.height) / 2.0;
+            (
+                rect,
+                PopupEdge::Top,
+                PopupEdge::Bottom,
+                Point::new(0.0, top.max(-rect.min_y())),
+            )
+        }
     };
     Some(PopupSpec {
         anchor_rect,
@@ -3187,7 +3226,7 @@ fn place<M: 'static>(
         size,
         constraint: ConstraintAdjust {
             slide: true,
-            flip: !matches!(anchor, PopupAnchor::Over { .. }),
+            flip: !matches!(anchor, PopupAnchor::Over { .. } | PopupAnchor::Panel { .. }),
             resize: false,
         },
         reactive: true,

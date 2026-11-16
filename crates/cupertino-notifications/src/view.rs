@@ -1591,11 +1591,18 @@ fn centre_window<M: Clone + 'static>(
                 let others = spots
                     .iter()
                     .filter(|(whole, shown, _)| *whole != rect && shown.intersects(&reach))
-                    .map(|(_, shown, opacity)| (shown.translate(-rect.x(), -rect.y()), *opacity))
+                    .map(|(whole, _, opacity)| (whole.translate(-rect.x(), -rect.y()), *opacity))
                     .collect();
+                // the list's edges from the card's top; none before the list was first laid out
+                let shown = if viewport > 0.0 {
+                    (list_top - top, list_top + viewport - top)
+                } else {
+                    (f64::NEG_INFINITY, f64::INFINITY)
+                };
                 Element::new(Halo {
                     rect,
                     opacity: visible,
+                    shown,
                     others,
                 })
                 .key(format!("halo-{}", c.id))
@@ -2590,10 +2597,18 @@ struct CardState {
     armed: bool,
 }
 
-/// A card's halo, drawn only outside `rect` (rounded by `radius`): from an opaque copy of its shape that the clip hides.
-fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow: Effect) {
+/// A card's halo, drawn only outside the card: from an opaque copy of its shape that the clip hides. The card lies in
+/// `rect` and `outline` is its shape, which `shape` fills.
+fn paint_halo(
+    cx: &mut PaintCx<'_>,
+    rect: Rect,
+    shape: Shape,
+    outline: Vec<PathVerb>,
+    fill: Color,
+    shadow: Effect,
+) {
     let mut ring = rounded_path(rect.outset(SHADOW_REACH), 0.0);
-    ring.extend(rounded_path(rect, radius));
+    ring.extend(outline);
     cx.push(PaintOp::PushClip(Shape::Path {
         verbs: ring,
         fill_rule: FillRule::EvenOdd,
@@ -2603,7 +2618,7 @@ fn paint_halo(cx: &mut PaintCx<'_>, rect: Rect, radius: f64, fill: Color, shadow
         effects: vec![shadow],
     });
     cx.push(PaintOp::Fill {
-        shape: Shape::RoundedRect { rect, radius },
+        shape,
         paint: Paint::Solid(fill),
     });
     cx.push(PaintOp::PopLayer);
@@ -2624,11 +2639,16 @@ fn shown_in_list(rect: Rect, list_top: f64, viewport: f64) -> Option<Rect> {
 
 /// The halo of a card of the centre, in the layer under the whole list: the scroll view clips what it holds at its
 /// edges, which would cut a halo at the list's top and bottom, while this layer is cut only by the surface.
+///
+/// A card the list cuts casts the halo of the part the list shows, as a card whose edge lies there would: the halo
+/// goes on along the list's edge over the part that is cut off, and is kept off the shown part alone.
 struct Halo {
     rect: Rect,
     opacity: f64,
-    /// The other cards and sheets within its reach, from its corner, with their opacity: it is kept off them as much
-    /// as they are there, as their glass lies under it.
+    /// Where the list's top and bottom edges lie, from the card's top: the list shows its cards between them.
+    shown: (f64, f64),
+    /// The other cards and sheets the list shows within its reach, from its corner, with their opacity: it is kept
+    /// off the part of each the list shows as much as they are there, as their glass lies under it.
     others: Vec<(Rect, f64)>,
 }
 
@@ -2682,7 +2702,10 @@ impl<M: 'static> Widget<M> for Halo {
     fn update(&self, old: &Self, _: &mut ()) -> Change {
         if self.rect != old.rect {
             Change::Layout
-        } else if self.opacity != old.opacity || self.others != old.others {
+        } else if self.opacity != old.opacity
+            || self.shown != old.shown
+            || self.others != old.others
+        {
             Change::Paint
         } else {
             Change::None
@@ -2704,14 +2727,16 @@ impl<M: 'static> Widget<M> for Halo {
         };
         let rect = Rect::new(0.0, 0.0, self.rect.width(), self.rect.height());
         cx.set_group(self.opacity.clamp(0.0, 1.0) as f32, Vec::new());
-        let radius_of = |r: &Rect| CORNER_RADIUS.min(r.height() / 2.0);
+        // a card's shape where the list shows it
+        let (from, to) = self.shown;
+        let shown = |r: Rect| cut_rounded_path(r, CORNER_RADIUS.min(r.height() / 2.0), from, to);
         let opacities: Vec<f64> = self.others.iter().map(|(_, o)| *o).collect();
         for pass in halo_passes(&opacities) {
             let mut clips = 0;
             if let Some(k) = pass.inside {
                 let other = self.others[k].0;
                 cx.push(PaintOp::PushClip(Shape::Path {
-                    verbs: rounded_path(other, radius_of(&other)),
+                    verbs: shown(other),
                     fill_rule: FillRule::NonZero,
                 }));
                 clips += 1;
@@ -2719,7 +2744,7 @@ impl<M: 'static> Widget<M> for Halo {
             for &j in &pass.cut {
                 let other = self.others[j].0;
                 let mut cut = rounded_path(rect.outset(SHADOW_REACH).union(&other), 0.0);
-                cut.extend(rounded_path(other, radius_of(&other)));
+                cut.extend(shown(other));
                 cx.push(PaintOp::PushClip(Shape::Path {
                     verbs: cut,
                     fill_rule: FillRule::EvenOdd,
@@ -2732,10 +2757,20 @@ impl<M: 'static> Widget<M> for Halo {
                     effects: Vec::new(),
                 });
             }
+            let radius = CORNER_RADIUS.min(rect.height() / 2.0);
+            let whole = from <= rect.min_y() && to >= rect.max_y();
             paint_halo(
                 cx,
                 rect,
-                CORNER_RADIUS.min(rect.height() / 2.0),
+                if whole {
+                    Shape::RoundedRect { rect, radius }
+                } else {
+                    Shape::Path {
+                        verbs: shown(rect),
+                        fill_rule: FillRule::NonZero,
+                    }
+                },
+                shown(rect),
                 fill,
                 Effect::DropShadow {
                     offset: Point::ZERO,
@@ -2789,6 +2824,82 @@ fn rounded_path(rect: Rect, radius: f64) -> Vec<PathVerb> {
         ),
         PathVerb::Close,
     ]
+}
+
+/// The part of `rect`, its corners rounded by `radius`, between the heights `top` and `bottom`: the rounded rectangle
+/// cut straight across at either, as a list cuts a card at its edges. The whole of it when neither cuts it, and
+/// nothing when they leave none of it.
+fn cut_rounded_path(rect: Rect, radius: f64, top: f64, bottom: f64) -> Vec<PathVerb> {
+    use std::f64::consts::PI;
+    let (l, t, r, b) = (rect.min_x(), rect.min_y(), rect.max_x(), rect.max_y());
+    if top <= t && bottom >= b {
+        return rounded_path(rect, radius);
+    }
+    let (top, bottom) = (top.max(t), bottom.min(b));
+    if bottom <= top {
+        return Vec::new();
+    }
+    // how far a side stands in from the rectangle's at a height, in a corner's curve
+    let inset = |y: f64| {
+        let into = (t + radius - y).max(y - (b - radius)).clamp(0.0, radius);
+        radius - (radius * radius - into * into).sqrt()
+    };
+    // the angle at which a corner's circle, centred at the height `cy`, is at the height `y`, kept to the corner's
+    // quarter (`low` to `high` as sines)
+    let angle = |y: f64, cy: f64, low: f64, high: f64| {
+        if radius > 0.0 {
+            ((y - cy) / radius).clamp(low, high).asin()
+        } else {
+            0.0
+        }
+    };
+    let mut verbs = vec![
+        PathVerb::MoveTo(Point::new(l + inset(top), top)),
+        PathVerb::LineTo(Point::new(r - inset(top), top)),
+    ];
+    // the arc of the circle at `centre` from the angle `from` to `to`, as one cubic
+    let arc = |centre: Point, from: f64, to: f64| {
+        if (to - from).abs() < 1e-9 {
+            return Vec::new();
+        }
+        let at = |a: f64| Point::new(centre.x + radius * a.cos(), centre.y + radius * a.sin());
+        let k = 4.0 / 3.0 * ((to - from) / 4.0).tan() * radius;
+        let (start, end) = (at(from), at(to));
+        vec![
+            PathVerb::LineTo(start),
+            PathVerb::CubicTo(
+                Point::new(start.x - k * from.sin(), start.y + k * from.cos()),
+                Point::new(end.x + k * to.sin(), end.y - k * to.cos()),
+                end,
+            ),
+        ]
+    };
+    let (upper, lower) = (t + radius, b - radius);
+    // down the right side, then up the left
+    verbs.extend(arc(
+        Point::new(r - radius, upper),
+        angle(top, upper, -1.0, 0.0),
+        angle(bottom, upper, -1.0, 0.0),
+    ));
+    verbs.extend(arc(
+        Point::new(r - radius, lower),
+        angle(top, lower, 0.0, 1.0),
+        angle(bottom, lower, 0.0, 1.0),
+    ));
+    verbs.push(PathVerb::LineTo(Point::new(r - inset(bottom), bottom)));
+    verbs.push(PathVerb::LineTo(Point::new(l + inset(bottom), bottom)));
+    verbs.extend(arc(
+        Point::new(l + radius, lower),
+        PI - angle(bottom, lower, 0.0, 1.0),
+        PI - angle(top, lower, 0.0, 1.0),
+    ));
+    verbs.extend(arc(
+        Point::new(l + radius, upper),
+        PI - angle(bottom, upper, -1.0, 0.0),
+        PI - angle(top, upper, -1.0, 0.0),
+    ));
+    verbs.push(PathVerb::Close);
+    verbs
 }
 
 impl<M: 'static> Widget<M> for Card<M> {
@@ -2971,7 +3082,14 @@ impl<M: 'static> Widget<M> for Card<M> {
             // opaque copy of its shape the clip hides, and the text casts none
             cx.set_group(opacity as f32, blur);
             if self.shadow {
-                paint_halo(cx, rect, radius, fill, shadow);
+                paint_halo(
+                    cx,
+                    rect,
+                    Shape::RoundedRect { rect, radius },
+                    rounded_path(rect, radius),
+                    fill,
+                    shadow,
+                );
             }
             // a sheet deeper in its group is a little darker
             if self.brightness < 0.0 {

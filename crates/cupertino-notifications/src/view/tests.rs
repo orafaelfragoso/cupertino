@@ -627,6 +627,124 @@ fn a_halo_is_kept_off_a_neighbour_only_where_the_list_shows_it() {
     );
 }
 
+/// The shape a cut card casts its halo from and keeps it off is the card's between the list's edges: the whole card
+/// when neither cuts it, a straight edge with square corners where one cuts it below its corners' curves, the rest of
+/// the curve where one cuts it inside them, and nothing when the card is past an edge.
+#[test]
+fn a_cut_card_s_shape_ends_straight_at_the_list_s_edge() {
+    let card = Rect::new(10.0, 100.0, 344.0, 58.0);
+    let radius = 18.0;
+    // every point of a path, its curves' control points included: the shape lies inside their box
+    let bounds = |verbs: &[PathVerb]| {
+        let mut points = Vec::new();
+        for verb in verbs {
+            match verb {
+                PathVerb::MoveTo(p) | PathVerb::LineTo(p) => points.push(*p),
+                PathVerb::CubicTo(a, b, c) => points.extend([*a, *b, *c]),
+                _ => {}
+            }
+        }
+        let fold = |f: fn(f64, f64) -> f64, start: f64, of: fn(&Point) -> f64| {
+            points.iter().map(of).fold(start, f)
+        };
+        (
+            fold(f64::min, f64::INFINITY, |p| p.x),
+            fold(f64::min, f64::INFINITY, |p| p.y),
+            fold(f64::max, f64::NEG_INFINITY, |p| p.x),
+            fold(f64::max, f64::NEG_INFINITY, |p| p.y),
+        )
+    };
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    // the points of a path at the height `y`, left to right
+    let at_height = |verbs: &[PathVerb], y: f64| {
+        let mut xs: Vec<f64> = verbs
+            .iter()
+            .filter_map(|verb| match verb {
+                PathVerb::MoveTo(p) | PathVerb::LineTo(p) | PathVerb::CubicTo(_, _, p) => Some(*p),
+                _ => None,
+            })
+            .filter(|p| near(p.y, y))
+            .map(|p| p.x)
+            .collect();
+        xs.sort_by(f64::total_cmp);
+        (xs[0], xs[xs.len() - 1])
+    };
+
+    // not cut: the card's own shape
+    assert_eq!(
+        cut_rounded_path(card, radius, 68.0, 624.0),
+        rounded_path(card, radius)
+    );
+    assert_eq!(
+        cut_rounded_path(card, radius, f64::NEG_INFINITY, f64::INFINITY),
+        rounded_path(card, radius)
+    );
+    // past either edge: nothing
+    assert!(cut_rounded_path(card, radius, 158.0, 624.0).is_empty());
+    assert!(cut_rounded_path(card, radius, 0.0, 100.0).is_empty());
+
+    // cut through its straight sides at the top: square corners on the edge, its lower corners round
+    let cut = cut_rounded_path(card, radius, 130.0, 624.0);
+    let (l, t, r, b) = bounds(&cut);
+    assert!(near(l, 10.0) && near(t, 130.0) && near(r, 354.0) && near(b, 158.0));
+    assert_eq!(at_height(&cut, 130.0), (10.0, 354.0), "{cut:?}");
+    let (left, right) = at_height(&cut, 158.0);
+    assert!(near(left, 28.0) && near(right, 336.0), "{cut:?}");
+    assert_eq!(
+        cut.iter()
+            .filter(|v| matches!(v, PathVerb::CubicTo(..)))
+            .count(),
+        2
+    );
+
+    // cut at the bottom: the same upside down
+    let cut = cut_rounded_path(card, radius, 68.0, 130.0);
+    let (_, t, _, b) = bounds(&cut);
+    assert!(near(t, 100.0) && near(b, 130.0), "{t} {b}: {cut:?}");
+    assert_eq!(at_height(&cut, 130.0), (10.0, 354.0), "{cut:?}");
+    let (left, right) = at_height(&cut, 100.0);
+    assert!(near(left, 28.0) && near(right, 336.0), "{cut:?}");
+
+    // cut inside its upper corners' curves, 9 points down: the edge ends on the curves, which go on below it
+    let cut = cut_rounded_path(card, radius, 109.0, 624.0);
+    let inset = radius - (radius * radius - 81.0_f64).sqrt();
+    let (left, right) = at_height(&cut, 109.0);
+    assert!(
+        near(left, 10.0 + inset) && near(right, 354.0 - inset),
+        "{left} {right} {inset}"
+    );
+    let (l, t, r, b) = bounds(&cut);
+    assert!(near(t, 109.0) && near(b, 158.0), "{t} {b}");
+    assert!(l >= 10.0 - 1e-6 && r <= 354.0 + 1e-6, "{l} {r}");
+    assert_eq!(
+        cut.iter()
+            .filter(|v| matches!(v, PathVerb::CubicTo(..)))
+            .count(),
+        4
+    );
+    // every curve of it stays on its corner's circle: half way along, a curve is the radius from the centre
+    let mut from = Point::ZERO;
+    for verb in &cut {
+        match verb {
+            PathVerb::MoveTo(p) | PathVerb::LineTo(p) => from = *p,
+            PathVerb::CubicTo(a, b, to) => {
+                let mid = Point::new(
+                    (from.x + 3.0 * a.x + 3.0 * b.x + to.x) / 8.0,
+                    (from.y + 3.0 * a.y + 3.0 * b.y + to.y) / 8.0,
+                );
+                let centre = Point::new(
+                    if mid.x < 182.0 { 28.0 } else { 336.0 },
+                    if mid.y < 129.0 { 118.0 } else { 140.0 },
+                );
+                let distance = (mid.x - centre.x).hypot(mid.y - centre.y);
+                assert!((distance - radius).abs() < 0.01, "{verb:?}: {distance}");
+                from = *to;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// A card fading in covers a neighbour's halo by as much as it is there: at the start of its fade the halo still shows
 /// over it almost whole, and only once it is opaque is the halo kept off it entirely.
 #[test]

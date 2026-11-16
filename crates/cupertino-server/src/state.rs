@@ -169,7 +169,8 @@ pub fn client_process(
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        log_disconnect(self, &client_id, &reason);
         self.acquire_waits.close();
         if let Some(gone) = self.gone.get() {
             gone.lock()
@@ -177,6 +178,51 @@ impl ClientData for ClientState {
                 .push(client_id);
         }
     }
+}
+
+/// Says why a client's connection ended, naming its process: a protocol error (the server's or the client's fault)
+/// with its object, code and message at WARN; a closed connection at INFO for a shell process the server started (the
+/// client closed it, or the server gave up on a client that read nothing for too long, [`CLIENT_EVENT_BUFFER`]), at
+/// DEBUG for any other client.
+fn log_disconnect(state: &ClientState, client: &ClientId, reason: &DisconnectReason) {
+    let process = state.process();
+    let pid = process.as_ref().map(|p| p.pid);
+    let program = process.as_ref().and_then(process_program);
+    let program = program.as_deref().unwrap_or("unknown");
+    match reason {
+        DisconnectReason::ProtocolError(error) => tracing::warn!(
+            ?client,
+            ?pid,
+            program,
+            interface = %error.object_interface,
+            object = error.object_id,
+            code = error.code,
+            message = %error.message,
+            "a client was disconnected for a protocol error"
+        ),
+        DisconnectReason::ConnectionClosed
+            if matches!(state.holder.get(), Some(Holder::Process(_))) =>
+        {
+            tracing::info!(
+                ?client,
+                ?pid,
+                program,
+                "a shell process's connection closed"
+            )
+        }
+        DisconnectReason::ConnectionClosed => {
+            tracing::debug!(?client, ?pid, program, "a client's connection closed")
+        }
+    }
+}
+
+/// The program name of `process` (`/proc/<pid>/exe`), while the descriptor still holds it.
+fn process_program(process: &cupertino_peer::ProcessHandle) -> Option<String> {
+    let exe = std::fs::read_link(format!("/proc/{}/exe", process.pid)).ok()?;
+    if process.has_exited() {
+        return None;
+    }
+    Some(exe.file_name()?.to_string_lossy().into_owned())
 }
 
 /// The window model's minimize and restore timing for the minimize effect of `effects`: the effect generators carry their
@@ -204,6 +250,12 @@ pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig
 /// `XDG_CURRENT_DESKTOP` of the clients and shell processes the server starts: the session's
 /// desktop-specific files (`cupertino-mimeapps.list`, `OnlyShowIn=Cupertino`) apply to them.
 pub const CURRENT_DESKTOP: &str = "Cupertino";
+
+/// The most bytes of events the server holds for a client that is not reading them, beyond what its socket holds, before
+/// it gives the client up and closes the connection. A client busy drawing a frame reads nothing meanwhile, and a
+/// pointer reporting a thousand times a second sends it some 30 KiB a second, so the socket alone (a few hundred
+/// messages) is full within half a second; this holds about half a minute of it.
+pub const CLIENT_EVENT_BUFFER: usize = 1 << 20;
 
 /// How long a global that went away can still be bound, for the clients that bind it before they hear that it is gone.
 pub const RETIRED_GLOBAL_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
@@ -749,6 +801,8 @@ impl Cupertino {
         assets: &Assets,
     ) -> Result<Self> {
         let dh = display.handle();
+        // before the first client: each connection takes the size as it is made
+        dh.set_default_max_buffer_size(CLIENT_EVENT_BUFFER);
         let clock = Clock::new();
 
         let socket_name = if listen_on_socket {

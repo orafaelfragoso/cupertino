@@ -244,6 +244,11 @@ enum Control {
         delete: (u32, u32),
         serial: Option<u32>,
     },
+    /// Read nothing for `after`, then raise a protocol error on the toplevel and close the connection, leaving what the
+    /// client sent meanwhile unread (its next write then fails as the socket was reset).
+    Fail {
+        after: Duration,
+    },
 }
 
 /// A request on the text input.
@@ -1716,6 +1721,13 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         handle.insert_client(stream, Arc::new(Data)).unwrap();
         loop {
             match control_rx.try_recv() {
+                Ok(Control::Fail { after }) => {
+                    std::thread::sleep(after);
+                    let (_, _, toplevel, _) = mock.toplevel.as_ref().expect("a toplevel");
+                    toplevel.post_error(xdg_toplevel::Error::InvalidSize, "the size is wrong");
+                    // the display and the socket go with the thread
+                    return;
+                }
                 Ok(control) => apply(&mut mock, &handle, control),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
@@ -2032,6 +2044,7 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             input.delete_surrounding_text(delete.0, delete.1);
             input.done(serial.unwrap_or(*commits));
         }
+        Control::Fail { .. } => unreachable!("the compositor's loop ends the connection itself"),
     }
 }
 
@@ -6114,5 +6127,38 @@ fn a_surface_drawn_with_a_window_presents_without_a_configure_at_the_window_s_sc
             Err(Error::NotConfigured)
         ),
         "a role drawn at its own scale waits for its configure"
+    );
+}
+
+/// The compositor raises a protocol error and closes the connection while requests of the client are still unread: the
+/// client's next write fails as the socket was reset, and the error it reports is the compositor's, not the reset.
+#[test]
+fn a_protocol_error_left_unread_behind_a_reset_socket_is_the_reported_disconnect() {
+    let (mut conn, control, seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control
+        .send(Control::Fail {
+            after: Duration::from_millis(200),
+        })
+        .unwrap();
+    // sent while the compositor reads nothing: unread when it closes
+    conn.set_title(w, "unread").unwrap();
+    // the compositor's thread ends with the connection
+    while seen.recv_timeout(Duration::from_secs(5)).is_ok() {}
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let error = loop {
+        assert!(Instant::now() < deadline, "the write never failed");
+        let sent = conn.set_title(w, "after the error");
+        match sent.and_then(|()| conn.wait(Some(Duration::from_millis(10))).map(drop)) {
+            Ok(()) => {}
+            Err(e) => break e,
+        }
+    };
+    let text = error.to_string();
+    assert!(
+        text.contains("the size is wrong") && text.contains("Protocol error 2"),
+        "{text}"
     );
 }

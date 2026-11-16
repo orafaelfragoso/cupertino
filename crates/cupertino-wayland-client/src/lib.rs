@@ -18,6 +18,7 @@ mod connection;
 mod cursor;
 mod error;
 mod input;
+mod last_word;
 mod output;
 mod presentation;
 mod scale;

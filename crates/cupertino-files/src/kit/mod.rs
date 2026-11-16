@@ -398,6 +398,11 @@ struct Session {
     /// Where a window on a file system that goes away goes.
     home: PathBuf,
     trash: Trash,
+    /// Whether the trash holds anything: the home trash as it is, the mounted volumes' as last looked at off the
+    /// windows' thread, which a volume that does not answer would hold up.
+    trash_look: Arc<cupertino_trash::Look>,
+    /// What wakes when the volumes' trash was found changed.
+    trash_woken: async_channel::Receiver<()>,
     /// How a new window shows its folder and which bars it shows: the last choice any window made.
     prefs: std::cell::Cell<WindowPrefs>,
     /// Where that choice is kept between launches.
@@ -476,10 +481,10 @@ struct BrowserWindow {
     confirm_empty: bool,
     /// The trash's folder, whose view has a strip with an Empty button.
     trash_dir: PathBuf,
-    /// The trash, to look at what the mounted volumes' hold.
-    trash: Trash,
-    /// While the window shows the trash: a mounted volume's trash holds something, which the Empty button deletes
-    /// too. Read with the free space.
+    /// The session's look at what the mounted volumes' trash holds.
+    trash_look: Arc<cupertino_trash::Look>,
+    /// While the window shows the trash: a mounted volume's trash holds something, as last looked, which the Empty
+    /// button deletes too. Read with the free space, and when a look finds it changed.
     volumes_hold_trash: bool,
     /// How the folder is shown.
     view: ViewMode,
@@ -542,6 +547,8 @@ pub enum Message {
     Places,
     /// A thumbnail was made.
     Thumbnails,
+    /// A look at the mounted volumes found their trash changed.
+    TrashLooked,
     /// An event of the window with this id.
     Window(u64, Event),
     /// A file operation, or the progress window.
@@ -765,6 +772,10 @@ impl Application for Files {
         let places_watch =
             places::PlacesWatch::start(start.places_folders, start.trash.home_trash());
         let (thumbnails_wake, thumbnails_woken) = wake_channel();
+        let (trash_wake, trash_woken) = wake_channel();
+        let trash_look = cupertino_trash::Look::new(start.trash.clone(), move || trash_wake());
+        // the first look is under way before a window or a menu asks what the volumes hold
+        trash_look.look();
         let file_icons = start.file_icons.unwrap_or_else(|| {
             let types = start.types.as_deref().cloned().unwrap_or_default();
             FileIcons::builtin(types, HashMap::new())
@@ -795,6 +806,8 @@ impl Application for Files {
                     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
                 }),
                 trash: start.trash,
+                trash_look,
+                trash_woken,
                 prefs: std::cell::Cell::new(start.prefs),
                 prefs_file: start.prefs_file,
                 pasteboard: Vec::new(),
@@ -814,7 +827,10 @@ impl Application for Files {
                 view_revision: 0,
             },
         };
-        let mut commands = vec![woken(&model.session.places_watch.woken, Message::Places)];
+        let mut commands = vec![
+            woken(&model.session.places_watch.woken, Message::Places),
+            woken(&model.session.trash_woken, Message::TrashLooked),
+        ];
         match start.first {
             Some((browser, woken, wake)) => {
                 let first = model.next_window;
@@ -897,6 +913,13 @@ impl Model {
             Message::Places => {
                 self.session.follow_places();
                 vec![woken(&self.session.places_watch.woken, Message::Places)]
+            }
+            Message::TrashLooked => {
+                let session = &self.session;
+                for window in self.windows.values_mut() {
+                    window.trash_looked(session);
+                }
+                vec![woken(&session.trash_woken, Message::TrashLooked)]
             }
             // the windows draw the thumbnails made
             Message::Thumbnails => {
@@ -1031,7 +1054,7 @@ impl Model {
             unlock: None,
             confirm_empty: false,
             trash_dir: self.session.trash.home_trash().join("files"),
-            trash: self.session.trash.clone(),
+            trash_look: self.session.trash_look.clone(),
             volumes_hold_trash: false,
             view: prefs.view,
             context: None,
@@ -1226,11 +1249,15 @@ impl Model {
         seen: bool,
     ) -> Vec<Command<Message>> {
         let jobs::Job {
-            transfer,
+            mut transfer,
             origin,
             drop,
             lasted,
         } = job;
+        let mut outcome = outcome;
+        if let Some(took) = outcome.took.take() {
+            transfer.took(took);
+        }
         let failures: Vec<_> = outcome.failures(transfer.sources()).collect();
         let stopped = outcome.stopped();
         let text = transfer.ended(stopped, failures.len());
@@ -1902,9 +1929,10 @@ impl Model {
             return Vec::new();
         };
         window.confirm_empty = false;
-        // what the home trash and the mounted volumes' hold now; the worker lists them again
-        let sources = self.session.trash.entries();
-        if sources.is_empty() {
+        // what the home trash holds now; the worker lists it again with the mounted volumes', which are not read
+        // on this thread, and says what it took
+        let sources = self.session.trash.home_entries();
+        if sources.is_empty() && !self.session.trash_look.volumes_held() {
             return Vec::new();
         }
         let work = transfer::Work::EmptyTrash {
@@ -2473,7 +2501,26 @@ impl BrowserWindow {
         };
         // a folder whose file system cannot be read takes the changes, and their failures say why
         self.mounted_read_only = self.browser.read_only().unwrap_or(false);
-        self.volumes_hold_trash = self.in_trash() && self.trash.volumes_hold_items();
+        self.volumes_hold_trash = self.in_trash() && self.trash_look.volumes_hold();
+    }
+
+    /// A look at the mounted volumes found their trash changed: the Empty button of a window on the trash, and the
+    /// Empty Trash row of the Trash place's menu when it is open, follow.
+    fn trash_looked(&mut self, session: &Session) {
+        self.volumes_hold_trash = self.in_trash() && session.trash_look.volumes_held();
+        if let Some(menu) = self.context.as_mut() {
+            if matches!(menu.ring, Some(context::Ringed::Place(_))) {
+                let full = session.trash.home_holds_items() || session.trash_look.volumes_held();
+                for item in &mut menu.items {
+                    if matches!(
+                        item.kind,
+                        crate::context_menu::ItemKind::Command(MenuCommand::EmptyTrash)
+                    ) {
+                        item.enabled = full;
+                    }
+                }
+            }
+        }
     }
 
     /// Whether the folder shown takes nothing new: its medium can't be written, or its file system is mounted
@@ -2639,7 +2686,7 @@ impl BrowserWindow {
     /// anything.
     fn ask_empty_trash(&mut self, session: &Session) {
         let holds_items =
-            (self.in_trash() && !self.browser.entries().is_empty()) || session.trash.holds_items();
+            (self.in_trash() && !self.browser.entries().is_empty()) || session.trash_look.full();
         self.context = None;
         self.confirm_empty = holds_items;
     }
@@ -2677,7 +2724,7 @@ impl BrowserWindow {
             items.push(crate::context_menu::MenuItem::command(
                 "Empty Trash",
                 MenuCommand::EmptyTrash,
-                session.trash.holds_items(),
+                session.trash_look.full(),
             ));
         }
         self.context = Some(context::OpenMenu {

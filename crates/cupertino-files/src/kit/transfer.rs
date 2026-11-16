@@ -36,7 +36,8 @@ pub(super) enum Work {
     NewFolderWith { dir: PathBuf, sources: Vec<PathBuf> },
     /// Move `sources` to `trash`: a drop on the Trash.
     Trash { sources: Vec<PathBuf>, trash: Trash },
-    /// Delete for good everything in `trash`; `sources` are the items it held when the work began.
+    /// Delete for good everything in `trash`, the home trash and the mounted volumes'; `sources` are the items the
+    /// home trash held when the work began, until the work says what it took ([`Outcome::took`]).
     EmptyTrash { sources: Vec<PathBuf>, trash: Trash },
 }
 
@@ -47,6 +48,8 @@ pub(super) struct Outcome {
     pub results: Vec<io::Result<PathBuf>>,
     /// The folder New Folder with Selection made.
     pub folder: Option<PathBuf>,
+    /// The sources, for a work that found them itself: what an emptying took from the home trash and the volumes.
+    pub took: Option<Vec<PathBuf>>,
 }
 
 impl Outcome {
@@ -160,6 +163,14 @@ impl Transfer {
     /// Stop the transfer: the item being copied is removed again, the others stay where they are.
     pub fn stop(&self) {
         self.cancel.cancel();
+    }
+
+    /// Take the sources the work found itself ([`Outcome::took`]), so its end is worded and its failures named by
+    /// what it took.
+    pub fn took(&mut self, took: Vec<PathBuf>) {
+        if let Work::EmptyTrash { sources, .. } = &mut self.work {
+            *sources = took;
+        }
     }
 
     pub fn sources(&self) -> &[PathBuf] {
@@ -290,15 +301,18 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
         } => Outcome {
             results: operations::transfer(&sources, &dest, action, cancel, report),
             folder: None,
+            took: None,
         },
         Work::Duplicate { sources } => Outcome {
             results: operations::duplicate_with(&sources, cancel, report),
             folder: None,
+            took: None,
         },
         Work::NewFolderWith { dir, sources } => match operations::new_folder(&dir) {
             Ok(folder) => Outcome {
                 results: operations::transfer(&sources, &folder, DropAction::Move, cancel, report),
                 folder: Some(folder),
+                took: None,
             },
             Err(e) => Outcome {
                 results: sources
@@ -306,6 +320,7 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
                     .map(|_| Err(io::Error::new(e.kind(), e.to_string())))
                     .collect(),
                 folder: None,
+                took: None,
             },
         },
         Work::Trash { sources, trash } => {
@@ -335,68 +350,124 @@ fn run(work: Work, cancel: &Cancel, report: &mut dyn FnMut(&Progress)) -> Outcom
             Outcome {
                 results,
                 folder: None,
+                took: None,
             }
         }
         Work::EmptyTrash { sources, trash } => {
-            // each item deleted counts as one; the trash, the home one and the mounted volumes', is read again here, so
-            // what was put in since goes too
-            let listed = trash.list_all();
-            let items = match &listed {
-                Ok(items) => items.as_slice(),
-                Err(_) => &[],
+            // each item deleted counts as one; the trash is read again here, so what was put in since goes too. The
+            // home trash goes first and whole: a mounted volume that is slow to answer holds up only the volumes'
+            let mut emptying = Emptying {
+                done: Progress {
+                    total_items: sources.len(),
+                    ..Progress::default()
+                },
+                results: Vec::new(),
+                took: Vec::new(),
             };
-            let mut done = Progress {
-                total_items: items.len().max(sources.len()),
-                ..Progress::default()
+            let home = emptying.take(
+                trash.list(),
+                || trash.home_entries(),
+                &trash,
+                cancel,
+                report,
+            );
+            let emptied = match home {
+                Ok(()) => emptying.take(
+                    trash.list_volumes(),
+                    || trash.volume_entries(),
+                    &trash,
+                    cancel,
+                    report,
+                ),
+                failed => failed,
             };
-            let mut results = Vec::with_capacity(items.len());
-            for item in items {
-                if cancel.is_cancelled() {
-                    results.push(Err(operations::stopped()));
-                    continue;
-                }
-                done.current = item
-                    .file_path()
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned());
-                report(&done);
-                results.push(
-                    trash
-                        .delete(item)
-                        .map(|()| item.file_path())
-                        .map_err(|e| io::Error::other(e.to_string())),
-                );
-                done.items += 1;
-                done.current = None;
-                report(&done);
-            }
-            // an entry without its .trashinfo is in no list, and would keep the trash looking full
-            if listed.is_ok() && !cancel.is_cancelled() {
-                for orphan in trash
-                    .entries()
-                    .into_iter()
-                    .filter(|p| cupertino_trash::trashed_item(p).is_none())
-                {
-                    let gone = match std::fs::symlink_metadata(&orphan) {
-                        Ok(m) if m.is_dir() => std::fs::remove_dir_all(&orphan),
-                        Ok(_) => std::fs::remove_file(&orphan),
-                        Err(_) => Ok(()),
+            let Emptying {
+                mut results,
+                mut took,
+                ..
+            } = emptying;
+            // a trash that cannot be listed fails as a whole, whatever it held: the home trash by the items it had
+            // when the work began, the volumes' as one more item that stayed
+            if let Err(e) = emptied {
+                if results.is_empty() {
+                    took = match sources.is_empty() {
+                        true => vec![trash.home_trash().join("files")],
+                        false => sources,
                     };
-                    results.push(gone.map(|()| orphan));
+                    results = took
+                        .iter()
+                        .map(|_| Err(io::Error::other(e.to_string())))
+                        .collect();
+                } else {
+                    took.push(trash.home_trash().to_path_buf());
+                    results.push(Err(io::Error::other(e.to_string())));
                 }
-            }
-            // a trash that cannot be listed fails as a whole, whatever it held
-            if let Err(e) = listed {
-                results = sources
-                    .iter()
-                    .map(|_| Err(io::Error::other(e.to_string())))
-                    .collect();
             }
             Outcome {
                 results,
                 folder: None,
+                took: Some(took),
             }
         }
+    }
+}
+
+/// An emptying of the trash under way: how far it came, and each item it took with what became of it.
+struct Emptying {
+    done: Progress,
+    results: Vec<io::Result<PathBuf>>,
+    took: Vec<PathBuf>,
+}
+
+impl Emptying {
+    /// Delete the items `listed`, then what `entries` still finds without a record, which is in no list and would
+    /// keep the trash looking full. Nothing is deleted from a part of the trash that cannot be listed.
+    fn take(
+        &mut self,
+        listed: Result<Vec<cupertino_trash::TrashedItem>, cupertino_trash::TrashError>,
+        entries: impl FnOnce() -> Vec<PathBuf>,
+        trash: &Trash,
+        cancel: &Cancel,
+        report: &mut dyn FnMut(&Progress),
+    ) -> Result<(), cupertino_trash::TrashError> {
+        let items = listed?;
+        self.done.total_items = self.done.total_items.max(self.done.items + items.len());
+        for item in &items {
+            self.took.push(item.file_path());
+            if cancel.is_cancelled() {
+                self.results.push(Err(operations::stopped()));
+                continue;
+            }
+            self.done.current = item
+                .file_path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
+            report(&self.done);
+            self.results.push(
+                trash
+                    .delete(item)
+                    .map(|()| item.file_path())
+                    .map_err(|e| io::Error::other(e.to_string())),
+            );
+            self.done.items += 1;
+            self.done.current = None;
+            report(&self.done);
+        }
+        if !cancel.is_cancelled() {
+            for orphan in entries()
+                .into_iter()
+                .filter(|p| cupertino_trash::trashed_item(p).is_none())
+            {
+                let gone = match std::fs::symlink_metadata(&orphan) {
+                    Ok(m) if m.is_dir() => std::fs::remove_dir_all(&orphan),
+                    Ok(_) => std::fs::remove_file(&orphan),
+                    Err(_) => Ok(()),
+                };
+                self.results.push(gone.map(|()| orphan.clone()));
+                self.took.push(orphan);
+            }
+        }
+        Ok(())
     }
 }
 

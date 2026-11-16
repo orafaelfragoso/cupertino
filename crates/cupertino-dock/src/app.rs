@@ -46,7 +46,6 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -549,37 +548,9 @@ struct AppHost {
     pins_path: Option<PathBuf>,
     conf_path: Option<PathBuf>,
     terminal: Option<String>,
-    trash: Arc<TrashLook>,
-}
-
-/// Whether the trash holds anything, in the home trash or on a mounted volume, as last looked: the look reads the
-/// mounted volumes' folders, which can take long on a slow one, so after the first it runs on a thread of its own and
-/// tells the model to look again when it found a change.
-struct TrashLook {
-    full: AtomicBool,
-    looked: AtomicBool,
-    looking: AtomicBool,
-    messages: async_channel::Sender<Message>,
-}
-
-impl TrashLook {
-    fn full(self: &Arc<Self>) -> bool {
-        if !self.looked.swap(true, Ordering::Relaxed) {
-            let full = cupertino_trash::Trash::new().holds_items();
-            self.full.store(full, Ordering::Relaxed);
-        } else if !self.looking.swap(true, Ordering::Relaxed) {
-            let look = self.clone();
-            std::thread::spawn(move || {
-                let full = cupertino_trash::Trash::new().holds_items();
-                let was = look.full.swap(full, Ordering::Relaxed);
-                look.looking.store(false, Ordering::Relaxed);
-                if was != full {
-                    let _ = look.messages.send_blocking(Message::TrashChanged);
-                }
-            });
-        }
-        self.full.load(Ordering::Relaxed)
-    }
+    /// Whether the trash holds anything: the home trash as it is, the mounted volumes' as last looked at off this
+    /// thread, which tells the model to look again when their answer changed.
+    trash: Arc<cupertino_trash::Look>,
 }
 
 impl AppHost {
@@ -902,10 +873,9 @@ impl Host for AppHost {
         let (sender, receiver) = async_channel::bounded(1);
         let look = self.trash.clone();
         std::thread::spawn(move || {
-            let trash = cupertino_trash::Trash::new();
-            let failed = trash.empty().failure_message();
+            let failed = look.trash().empty().failure_message();
             // what is left shows on the tile at the model's next look
-            look.full.store(trash.holds_items(), Ordering::Relaxed);
+            look.set_volumes_held(look.trash().volumes_hold_items());
             let _ = sender.send_blocking(failed);
         });
         Box::pin(async move { receiver.recv().await.unwrap_or(None) })
@@ -1181,12 +1151,12 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
     listen_badges(messages.clone());
-    let trash = Arc::new(TrashLook {
-        full: AtomicBool::new(false),
-        looked: AtomicBool::new(false),
-        looking: AtomicBool::new(false),
-        messages: messages.clone(),
-    });
+    let trash = {
+        let messages = messages.clone();
+        cupertino_trash::Look::new(cupertino_trash::Trash::new(), move || {
+            let _ = messages.send_blocking(Message::TrashChanged);
+        })
+    };
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,

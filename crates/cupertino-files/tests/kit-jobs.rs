@@ -827,6 +827,21 @@ fn put_in_trash(dir: &Path, name: &str) -> PathBuf {
     item
 }
 
+/// Press the Trash's Empty button until its question is up: with only a mounted volume's trash holding something,
+/// the button comes on when the look at the volumes, which runs on a thread of its own, has come back.
+fn press_empty_once_on(run: &mut Run) {
+    let title = cupertino_files::trash::EMPTY_TITLE.to_owned();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        run.click("empty-trash");
+        if run.read_aloud().contains(&title) {
+            break;
+        }
+        assert!(run.wait_for_progress(deadline), "Empty never came on");
+        run.settle();
+    }
+}
+
 /// The whole of Empty Trash from the trash's window, over a home trash and the trash folders of two volumes (temporary
 /// folders given as mount points): the question is the shared alert, Cancel closes it and deletes nothing, its default
 /// button empties all three and nothing else, an item that cannot be deleted stays and is listed with its reason in
@@ -920,9 +935,96 @@ fn emptying_the_trash_asks_first_takes_every_volume_and_lists_what_stayed() {
 
     // the window's own trash is empty, the volume's is not: Empty still asks
     run.wait_until(|run| run.rows().is_empty());
-    run.click("empty-trash");
-    assert!(asked(&run));
+    press_empty_once_on(&mut run);
     run.click_named(Role::Button, trash::CANCEL_BUTTON);
     assert!(sub.join("file").exists());
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A mounted volume that does not answer (a look at it that does not return until the test lets it) holds up no
+/// window: the Trash opens with Empty off while only the silent volume holds something, lists what is trashed
+/// meanwhile, asks, and empties the home trash while the volume is silent; once the volume answers its trash goes
+/// too, and what it holds later turns Empty on.
+#[test]
+fn a_volume_that_does_not_answer_holds_up_neither_the_trash_window_nor_its_emptying() {
+    use cupertino_files::trash::{self, Trash};
+    use std::os::unix::fs::MetadataExt;
+    let home = tempfile::tempdir().unwrap();
+    let uid = std::fs::metadata(home.path()).unwrap().uid();
+    let documents = home.path().join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let home_trash = home.path().join("Trash");
+    let usb = home.path().join("usb");
+    let own = usb.join(format!(".Trash-{uid}"));
+    std::fs::create_dir_all(home_trash.join("files")).unwrap();
+    let from_usb = put_in_trash(&own, "from usb");
+    let places = vec![
+        place("Documents", &documents, PlaceKind::Documents),
+        place("Trash", &home_trash.join("files"), PlaceKind::Trash),
+    ];
+    let preferences = ThemePreferences {
+        appearance: Appearance::Light,
+        reduce_transparency: false,
+        reduce_motion: false,
+    };
+    // whether the volume answers; a look at it waits here while it does not
+    let answers = Arc::new((Mutex::new(false), Condvar::new()));
+    let set = |answers: &(Mutex<bool>, Condvar), now: bool| {
+        *answers.0.lock().unwrap() = now;
+        answers.1.notify_all();
+    };
+    // the volume is given far longer than the test may take: anything that waited for it would hang the test
+    let trash = {
+        let answers = answers.clone();
+        Trash::with_home(home_trash)
+            .with_mounts(vec![usb])
+            .with_volume_wait(Duration::from_secs(600))
+            .with_volume_look(move |_| {
+                let mut now = answers.0.lock().unwrap();
+                while !*now {
+                    now = answers.1.wait(now).unwrap();
+                }
+            })
+    };
+    let mut run = Run::start_hosted(
+        home,
+        documents,
+        places,
+        Notices::start(None),
+        None,
+        preferences,
+        move |start| start.with_trash(trash),
+        common::Host::default(),
+    );
+    let asked = |run: &Run| run.read_aloud().contains(&trash::EMPTY_TITLE.to_owned());
+
+    run.click("place-Trash");
+    run.wait_until(|run| run.title() == "Trash");
+    assert!(run.rows().is_empty());
+    run.click("empty-trash");
+    assert!(!asked(&run), "the volume has not answered");
+
+    // an item trashed meanwhile is listed, and the home trash is emptied while the volume is silent
+    let from_home = put_in_trash(&run.home().join("Trash"), "from home");
+    run.wait_until(|run| run.rows() == ["from home"]);
+    run.click("empty-trash");
+    assert!(asked(&run), "the home trash holds something");
+    run.click_named(Role::Button, trash::EMPTY_BUTTON);
+    wait(&mut run, |_| !from_home.exists());
+    run.wait_until(|run| run.rows().is_empty());
+    assert!(from_usb.exists(), "the silent volume's trash is as it was");
+
+    // the volume answers: the emptying that waited for it takes its trash
+    set(&answers, true);
+    wait(&mut run, |_| !from_usb.exists());
+    assert!(progress(&run).is_none(), "nothing failed");
+
+    // what the volume holds later turns Empty on, with the home trash empty, once a look came back
+    put_in_trash(&own, "later");
+    run.click("place-Documents");
+    run.wait_until(|run| run.title() == "Documents");
+    run.click("place-Trash");
+    run.wait_until(|run| run.title() == "Trash");
+    press_empty_once_on(&mut run);
+    run.click_named(Role::Button, trash::CANCEL_BUTTON);
 }

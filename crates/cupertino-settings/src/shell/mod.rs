@@ -84,7 +84,7 @@ pub fn default_size(f: f64) -> Size {
 }
 
 /// The template symbols of the window's chrome; with the panes' ([`crate::pane::symbols`]) the process requires them.
-pub const CHROME_SYMBOLS: [&str; 7] = [
+pub const CHROME_SYMBOLS: [&str; 8] = [
     "symbol.chevron.left",
     "symbol.chevron.right",
     "symbol.search",
@@ -92,6 +92,7 @@ pub const CHROME_SYMBOLS: [&str; 7] = [
     "symbol.xmark.circle",
     "symbol.chevron.up.down",
     "symbol.checkmark",
+    form::NO_PICTURE_ICON,
 ];
 
 /// Every template symbol the window draws.
@@ -2326,5 +2327,98 @@ mod tests {
             queue_only, 1,
             "at rest, only the background queue's wait: {at_rest:?}"
         );
+    }
+
+    /// The Wallpaper pane's current picture whose file is gone says so in its place and its note; once its thumbnail
+    /// is made the picture shows there; a tile whose thumbnail cannot be made says why, unlike one still being made.
+    #[test]
+    fn the_current_picture_shows_and_a_picture_that_cannot_be_shown_says_why() {
+        let _turn = WINDOW.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone.jpg");
+        std::fs::write(
+            dir.path().join("compositor.json"),
+            format!("{{\"wallpaper\": {:?}}}", gone.display().to_string()),
+        )
+        .unwrap();
+        let services = Services::on(Bus::address(NOWHERE), Bus::address(NOWHERE));
+        let (mut driver, window) = start_state(dir.path(), PaneId::Wallpaper, services, |_| {});
+        let named = |driver: &TestDriver<SettingsApp>, name: &str| {
+            driver
+                .runtime()
+                .snapshot(window)
+                .unwrap()
+                .accessibility
+                .into_iter()
+                .filter(|(_, n)| n.name.as_deref() == Some(name))
+                .map(|(_, n)| n.role)
+                .collect::<Vec<_>>()
+        };
+        // the file is not there: the thumbnail thread says so
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .unreadable
+            .get(&gone)
+            == Some(&crate::controls::Unreadable::Missing)));
+        settle(&mut driver, window);
+        assert!(
+            !named(&driver, "Gone, Missing").is_empty(),
+            "the place says why"
+        );
+        assert!(!named(&driver, "The picture can\u{2019}t be found.").is_empty());
+        // its thumbnail made after all: the picture shows in its place
+        let notify = driver.runtime().model().state.notify.clone();
+        let pixels = cupertino_kit::controls::ImageSource {
+            id: cupertino_kit::core::next_resource_id(),
+            image: cupertino_kit::render::ImageResource {
+                revision: 1,
+                width: 4,
+                height: 4,
+                stride: 16,
+                format: cupertino_kit::render::PixelFormat::Rgba8Premultiplied,
+                pixels: Arc::from(vec![255u8; 64]),
+            },
+        };
+        notify(Background::Thumbnail {
+            image: gone.clone(),
+            thumbnail: dir.path().join("thumb.png"),
+            pixels: Some(pixels),
+        });
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .unreadable
+            .is_empty()));
+        settle(&mut driver, window);
+        assert!(
+            named(&driver, "Gone").contains(&Role::Image),
+            "the picture shows beside its name"
+        );
+        assert!(named(&driver, "Gone, Missing").is_empty());
+        assert!(named(&driver, "The picture can\u{2019}t be found.").is_empty());
+        // a picture whose file went away after its group was listed: its tile says so
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .loading
+            .is_empty()));
+        let lost = dir.path().join("lost.jpg");
+        notify(Background::Pictures {
+            key: state::ListingKey::Packs,
+            files: vec![cupertino_assets::WallpaperFile {
+                name: "lost".into(),
+                light: lost.clone(),
+                dark: None,
+                credit: None,
+            }],
+        });
+        assert!(until(&mut driver, |state| state
+            .live
+            .pictures
+            .unreadable
+            .contains_key(&lost)));
+        settle(&mut driver, window);
+        assert!(!named(&driver, "Missing").is_empty(), "the tile says why");
     }
 }

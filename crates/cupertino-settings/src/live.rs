@@ -74,6 +74,8 @@ pub struct Pictures {
     pub default: Option<std::path::PathBuf>,
     /// The groups (0 the packs', then each folder) whose listing has not come back yet.
     pub loading: std::collections::BTreeSet<usize>,
+    /// The pictures whose thumbnail could not be made, and why.
+    pub unreadable: std::collections::BTreeMap<std::path::PathBuf, crate::controls::Unreadable>,
 }
 
 /// A connected mouse and its resolution, as the server resolved it.

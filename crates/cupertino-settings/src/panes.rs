@@ -667,6 +667,7 @@ fn picture_section(
     loading: bool,
     settings: &Settings,
     default: Option<&Path>,
+    unreadable: &std::collections::BTreeMap<std::path::PathBuf, crate::controls::Unreadable>,
 ) -> Section {
     // with nothing stored the pack's default picture shows, whichever appearance files it has
     let stored = settings.compositor.wallpaper.as_deref().map(Path::new);
@@ -695,6 +696,7 @@ fn picture_section(
                         .map_or_else(|| picture_title(&f.name), |c| c.title.clone()),
                     image: f.light.clone(),
                     pair: f.dark.is_some(),
+                    unreadable: unreadable.get(&f.light).copied(),
                     credit: f.credit.as_ref().map(|c| c.author.clone()),
                 })
                 .collect(),
@@ -737,7 +739,10 @@ fn current_section(settings: &Settings, live: &Live) -> Section {
     };
     let pair = settings.compositor.wallpaper_dark.is_some()
         || (stored.is_none() && known.is_some_and(|f| f.dark.is_some()));
-    let note = if pair {
+    let unreadable = light.and_then(|light| pictures.unreadable.get(light).copied());
+    let note = if let Some(why) = unreadable {
+        Some(why.note().to_string())
+    } else if pair {
         Some("Light and dark: follows the appearance.".to_string())
     } else {
         known
@@ -754,6 +759,7 @@ fn current_section(settings: &Settings, live: &Live) -> Section {
                 image: light.map(Path::to_path_buf),
                 title,
                 note,
+                unreadable,
             },
             Backend::Key(File::Compositor, "wallpaper"),
         )],
@@ -785,6 +791,7 @@ fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             pictures.loading.contains(&0),
             settings,
             default,
+            &pictures.unreadable,
         ),
     ];
     for (i, (folder, files)) in pictures.folders.iter().enumerate() {
@@ -799,6 +806,7 @@ fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             pictures.loading.contains(&(i + 1)),
             settings,
             None,
+            &pictures.unreadable,
         ));
         sections.push(Section {
             header: None,
@@ -5208,7 +5216,10 @@ mod tests {
         settings.compositor.wallpaper_folders = Some(vec!["/home/u/Art".into(), "/mnt/x".into()]);
         let sections = sections(PaneId::Wallpaper, &settings, LIGHT, &live);
         assert_eq!(sections[0].header.as_deref(), Some("Current"));
-        let Control::Preview { image, title, note } = &sections[0].rows[0].control else {
+        let Control::Preview {
+            image, title, note, ..
+        } = &sections[0].rows[0].control
+        else {
             panic!("the preview");
         };
         assert_eq!(image.as_deref(), Some(Path::new("/pics/sunrise_bay.jpg")));
@@ -5306,6 +5317,58 @@ mod tests {
         let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
         assert!(matches!(sections[1].rows[0].control, Control::Tiles { .. }));
         assert!(matches!(sections[2].rows[0].control, Control::Tiles { .. }));
+    }
+
+    /// A picture whose thumbnail could not be made says why on its tile, while one still being made says nothing; the
+    /// current picture, missing or unreadable, says so in its note and keeps its name.
+    #[test]
+    fn an_unreadable_or_missing_picture_says_so_on_its_tile_and_as_the_current_one() {
+        use crate::controls::Unreadable;
+        let mut live = wallpaper_live();
+        live.pictures
+            .unreadable
+            .insert("/pics/sunrise_bay.jpg".into(), Unreadable::Damaged);
+        let mut settings = unset();
+        settings.compositor.wallpaper = Some("/home/u/Gone/beach.jpg".into());
+        let preview = |live: &Live, settings: &Settings| match &sections(
+            PaneId::Wallpaper,
+            settings,
+            LIGHT,
+            live,
+        )[0]
+        .rows[0]
+            .control
+        {
+            Control::Preview {
+                title,
+                note,
+                unreadable,
+                ..
+            } => (title.clone(), note.clone(), *unreadable),
+            other => panic!("the preview, got {other:?}"),
+        };
+        // its thumbnail not made yet: nothing to say
+        let (title, note, unreadable) = preview(&live, &settings);
+        assert_eq!((title.as_str(), note, unreadable), ("Beach", None, None));
+        live.pictures
+            .unreadable
+            .insert("/home/u/Gone/beach.jpg".into(), Unreadable::Missing);
+        let (title, note, unreadable) = preview(&live, &settings);
+        assert_eq!(title, "Beach", "a missing picture keeps its name");
+        assert_eq!(unreadable, Some(Unreadable::Missing));
+        assert_eq!(note.as_deref(), Some("The picture can\u{2019}t be found."));
+        settings.compositor.wallpaper = Some("/pics/sunrise_bay.jpg".into());
+        let (_, note, unreadable) = preview(&live, &settings);
+        assert_eq!(unreadable, Some(Unreadable::Damaged));
+        assert_eq!(note.as_deref(), Some("The picture can\u{2019}t be read."));
+        let sections = sections(PaneId::Wallpaper, &settings, LIGHT, &live);
+        let Control::Tiles { tiles, .. } = &sections[1].rows[0].control else {
+            panic!("the pack's tiles");
+        };
+        assert_eq!(tiles[0].unreadable, None, "still being made, or made");
+        assert_eq!(tiles[1].unreadable, Some(Unreadable::Damaged));
+        assert_eq!(Unreadable::Damaged.words(), "Can\u{2019}t Be Read");
+        assert_eq!(Unreadable::Missing.words(), "Missing");
     }
 
     #[test]

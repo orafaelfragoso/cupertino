@@ -65,6 +65,8 @@ pub enum Control {
         image: Option<std::path::PathBuf>,
         title: String,
         note: Option<String>,
+        /// Why the picture cannot be shown: its file is gone, or it cannot be read.
+        unreadable: Option<Unreadable>,
     },
     /// A grid of pictures; a press commits the index of the one hit.
     Tiles {
@@ -126,8 +128,37 @@ pub struct Tile {
     pub image: std::path::PathBuf,
     /// The tile is a light and a dark picture.
     pub pair: bool,
+    /// Why no thumbnail of the picture could be made; `None` while it is made or once it is.
+    pub unreadable: Option<Unreadable>,
     /// Who made the picture, shown under its title.
     pub credit: Option<String>,
+}
+
+/// Why a picture of the Wallpaper pane shows no thumbnail, as against one still being made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Unreadable {
+    /// Its file is not there.
+    Missing,
+    /// Its file is there but is no picture that can be read.
+    Damaged,
+}
+
+impl Unreadable {
+    /// What a thumbnail in its place says.
+    pub fn words(self) -> &'static str {
+        match self {
+            Unreadable::Missing => "Missing",
+            Unreadable::Damaged => "Can\u{2019}t Be Read",
+        }
+    }
+
+    /// The note of the current picture.
+    pub fn note(self) -> &'static str {
+        match self {
+            Unreadable::Missing => "The picture can\u{2019}t be found.",
+            Unreadable::Damaged => "The picture can\u{2019}t be read.",
+        }
+    }
 }
 
 /// The height under a picture of `tiles` for its title (and the photographer, when one is named).

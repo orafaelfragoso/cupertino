@@ -58,9 +58,14 @@ const SELECTION_TRAILING: f64 = 9.5;
 /// Between the sidebar's leading and trailing edges and the header.
 const HEADER_LEADING: f64 = 10.0;
 const HEADER_TRAILING: f64 = 9.0;
-/// Above the header, and between the header and the first row.
+/// Above the header.
 const HEADER_TOP: f64 = 9.0;
-const HEADER_GAP: f64 = 12.0;
+/// Between the header and the first row at rest: the band at the top of the list in which a row scrolling under the
+/// header fades out, whole at the band's bottom and gone at the header's edge, so no slice of a row shows there.
+pub const TILE_SIDEBAR_EDGE_FADE: f64 = 12.0;
+const EDGE_FADE: f64 = TILE_SIDEBAR_EDGE_FADE;
+/// The most layers a row passing through the fade is drawn in: each a step of the fade, a device pixel or more tall.
+const FADE_STEPS: usize = 12;
 /// The selection's corner radius.
 const SELECTION_RADIUS: f64 = 7.5;
 /// The tile: its side and its leading edge from the selection's.
@@ -81,6 +86,14 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
         let cursor = (count > 0).then(|| selected.unwrap_or(0));
         let on_select = sidebar.on_select.map(Rc::new);
         let mut keys = Vec::with_capacity(count);
+        // under a header the list starts with the band of the fade, which rows pass through as they scroll under it
+        let band = if sidebar.header.is_some() {
+            EDGE_FADE
+        } else {
+            0.0
+        };
+        let offset = sidebar.scroll.offset.y;
+        let mut y = band;
         let groups = sidebar
             .groups
             .into_iter()
@@ -91,16 +104,22 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
                         let index = keys.len();
                         let key = item.key.clone();
                         keys.push(key.clone());
+                        let height = row_height(&item);
+                        let edge = fade_edge(offset, y, band, height);
+                        y += height;
                         Element::new(TileRow {
                             index,
                             selected: selected == Some(index),
                             cursor: cursor == Some(index),
                             item,
+                            band,
+                            edge,
                             on_select: on_select.clone(),
                         })
                         .key(key)
                     })
                     .collect();
+                y += GROUP_GAP;
                 Element::new(column(Insets::ZERO, 0.0, rows))
             })
             .collect();
@@ -108,6 +127,7 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
             label: sidebar.label,
             keys,
             selected,
+            top: band,
             on_select,
             children: groups,
         };
@@ -122,10 +142,11 @@ impl<M: 'static> From<TileSidebar<M>> for Element<M> {
         if let Some(header) = sidebar.header {
             children.push(Element::new(Stack {
                 axis: Axis::Vertical,
+                // the gap under the header is the list's own band, where its rows fade
                 padding: Insets {
                     top: HEADER_TOP,
                     left: HEADER_LEADING,
-                    bottom: HEADER_GAP,
+                    bottom: 0.0,
                     right: HEADER_TRAILING,
                 },
                 spacing: 0.0,
@@ -173,6 +194,8 @@ struct Rows<M> {
     label: String,
     keys: Vec<Key>,
     selected: Option<usize>,
+    /// Above the first group: the fade's band under a header.
+    top: f64,
     on_select: Select<M>,
     children: Vec<Element<M>>,
 }
@@ -209,7 +232,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             insets: Insets {
-                top: 0.0,
+                top: self.top,
                 left: 0.0,
                 bottom: GROUP_GAP,
                 right: 0.0,
@@ -231,7 +254,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if self.keys.len() != old.keys.len() {
+        if self.keys.len() != old.keys.len() || self.top != old.top {
             Change::Layout
         } else {
             Change::None
@@ -266,7 +289,74 @@ struct TileRow<M> {
     selected: bool,
     /// The sidebar's one Tab stop.
     cursor: bool,
+    /// The height of the fade at the top of the list: a row the keyboard comes to is shown below it.
+    band: f64,
+    /// While the row passes through the fade, the list's scroll offset and the row's top in the list's content.
+    edge: Option<(f64, f64)>,
     on_select: Select<M>,
+}
+
+/// A row's height: the account row's, or the sidebar icon size's.
+fn row_height(item: &TileSidebarItem) -> f64 {
+    if item.account.is_some() {
+        ACCOUNT_ROW_HEIGHT
+    } else {
+        row_metrics().0
+    }
+}
+
+/// The list's scroll `offset` and the top `y` of a row `height` tall in its content while part of the row may show in
+/// the fade `band` tall at the list's top, with a point to spare for the offset drawn in whole device pixels; `None`
+/// while the row lies wholly below the fade or wholly above the list.
+fn fade_edge(offset: f64, y: f64, band: f64, height: f64) -> Option<(f64, f64)> {
+    let edge = offset - y;
+    (band > 0.0 && edge + band > -1.0 && edge < height + 1.0).then_some((offset, y))
+}
+
+/// How much of a row shows `depth` points below the top of the list, in a fade `band` tall: nothing at the top, all of
+/// it from the band's bottom down, easing in and out between.
+pub fn tile_sidebar_fade(depth: f64, band: f64) -> f64 {
+    if band <= 0.0 {
+        return if depth >= 0.0 { 1.0 } else { 0.0 };
+    }
+    let t = (depth / band).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The layers a row passing through the fade is drawn in, top (row coordinates) and opacity: each from its top down to
+/// the band's bottom, so the row shows in each step of the band at the fade's opacity there. The layers nest instead of
+/// meeting, so a step's edge that falls between device pixels blends the two steps instead of showing a seam, and the
+/// opaque parts of the row reach the fade's opacity exactly. Each step is a whole number of device pixels at `scale`.
+/// For a row `height` tall whose list top lies at `edge` in its coordinates, in a fade `band` tall.
+pub fn tile_sidebar_fade_layers(edge: f64, band: f64, height: f64, scale: f64) -> Vec<(f64, f32)> {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    if band <= 0.0 || !edge.is_finite() {
+        return Vec::new();
+    }
+    let pixels = (band * scale).round().max(1.0);
+    let steps = (pixels as usize).min(FADE_STEPS);
+    let step = (pixels / steps as f64).ceil() / scale;
+    let mut layers = Vec::with_capacity(steps);
+    // what the layers above have shown: each layer adds what takes the row from there to its own step's opacity
+    let mut shown = 0.0;
+    for i in 0..steps {
+        let top = edge + i as f64 * step;
+        if top >= edge + band || shown >= 1.0 {
+            break;
+        }
+        let depth = ((i as f64 + 0.5) * step).min(band);
+        let target = tile_sidebar_fade(depth, band);
+        let opacity = 1.0 - (1.0 - target) / (1.0 - shown);
+        shown = target;
+        if top < height && opacity > 0.0 {
+            layers.push((top, opacity as f32));
+        }
+    }
+    layers
 }
 
 fn label(cx: &PaintCx<'_>, text: &str, selected: bool) -> Option<ParagraphLayout> {
@@ -310,11 +400,7 @@ fn sized_label(cx: &PaintCx<'_>, text: &str, size: f32, weight: u16) -> Option<P
 
 impl<M: 'static> TileRow<M> {
     fn height(&self) -> f64 {
-        if self.item.account.is_some() {
-            ACCOUNT_ROW_HEIGHT
-        } else {
-            row_metrics().0
-        }
+        row_height(&self.item)
     }
 
     /// The account row's picture or initials disc, then the name over the second line.
@@ -436,8 +522,13 @@ impl<M: 'static> Widget<M> for TileRow<M> {
     fn state(&self) {}
 
     fn update(&self, old: &Self, _: &mut ()) -> Change {
-        if (self.index, &self.item, self.selected, self.cursor)
-            != (old.index, &old.item, old.selected, old.cursor)
+        if (
+            self.index,
+            &self.item,
+            self.selected,
+            self.cursor,
+            self.edge,
+        ) != (old.index, &old.item, old.selected, old.cursor, old.edge)
         {
             Change::Paint
         } else {
@@ -474,7 +565,19 @@ impl<M: 'static> Widget<M> for TileRow<M> {
                 select(&self.on_select, self.index, cx);
                 Propagation::Stop
             }
-            Event::Focus { .. } if cx.node() == cx.target() => {
+            Event::Focus { gained, visible } if cx.node() == cx.target() => {
+                // a row the keyboard comes to shows whole below the fade, never as a slice under the header
+                if let Some(bounds) = cx
+                    .bounds()
+                    .filter(|_| *gained && *visible && self.band > 0.0)
+                {
+                    cx.reveal(Rect::new(
+                        0.0,
+                        -self.band,
+                        bounds.width(),
+                        bounds.height() + self.band,
+                    ));
+                }
                 cx.request_paint();
                 Propagation::Continue
             }
@@ -483,6 +586,52 @@ impl<M: 'static> Widget<M> for TileRow<M> {
     }
 
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let size = cx.size();
+        let scale = cx.env().scale.max(1.0);
+        // the list's top in the row's coordinates, by the offset as it is drawn: in whole device pixels
+        let edge = self
+            .edge
+            .map(|(offset, y)| (offset * scale).round() / scale - y)
+            .filter(|edge| edge + self.band > 0.0 && *edge < size.height);
+        let Some(edge) = edge else {
+            return self.paint_row(cx);
+        };
+        let bottom = edge + self.band;
+        // a band across the row, with room at its sides for the focus ring
+        let across = |top: f64, bottom: f64| {
+            PaintOp::PushClip(Shape::Rect(Rect::new(
+                -size.width,
+                top,
+                3.0 * size.width,
+                (bottom - top).max(0.0),
+            )))
+        };
+        for (top, opacity) in tile_sidebar_fade_layers(edge, self.band, size.height, scale) {
+            // each layer reaches a device pixel past the band, under the row drawn whole there
+            cx.push(across(top, bottom + 1.0 / scale));
+            cx.push(PaintOp::PushLayer {
+                opacity,
+                effects: Vec::new(),
+            });
+            self.paint_row(cx);
+            cx.push(PaintOp::PopLayer);
+            cx.push(PaintOp::PopClip);
+        }
+        if bottom < size.height {
+            cx.push(across(bottom, 2.0 * size.height + self.band));
+            self.paint_row(cx);
+            cx.push(PaintOp::PopClip);
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        self.row_semantics(cx);
+    }
+}
+
+impl<M: 'static> TileRow<M> {
+    /// The row as it shows below the fade.
+    fn paint_row(&self, cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let rtl = cx.env().direction == LayoutDirection::Rtl;
         let chrome = Rect::new(
@@ -579,7 +728,7 @@ impl<M: 'static> Widget<M> for TileRow<M> {
         }
     }
 
-    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+    fn row_semantics(&self, cx: &mut SemanticsCx<'_>) {
         cx.role(Role::ListItem);
         cx.name(self.item.label.clone());
         cx.states(AccessibleStates {

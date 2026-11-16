@@ -71,7 +71,7 @@ pub enum ActiveClient {
     X11(u32),
 }
 
-/// How the server passes the person's chords to the active window (version 24).
+/// How the server passes the person's chords to the active window (version 25).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyClass {
     /// The window gets the control chord of each command-key chord.
@@ -188,7 +188,8 @@ pub struct MenuBarUpdate {
     pub shortcuts: Option<Shortcuts>,
     /// The process that shows the active window, from version 24 in every group with `window_state`.
     pub active_client: Option<ActiveClient>,
-    /// How the server passes chords to the active window, from version 24 with [`MenuBarUpdate::active_client`].
+    /// How the server passes chords to the active window, with [`MenuBarUpdate::active_client`]: from version 25 the
+    /// server's class, from a version 24 server the default.
     pub key_class: Option<KeyClass>,
 }
 
@@ -531,11 +532,13 @@ impl GroupBuilder {
                 })
             }
             Event::WindowFullScreen { full_screen } => self.full_screen = Some(full_screen != 0),
-            Event::ActiveClient { pid, kind, keys } => {
+            Event::ActiveClient { pid, kind } => {
                 self.update.active_client = Some(match kind {
                     WEnum::Value(ClientKind::X11) => ActiveClient::X11(pid),
                     WEnum::Value(_) | WEnum::Unknown(_) => ActiveClient::Wayland(pid),
                 });
+            }
+            Event::ActiveClientKeys { keys } => {
                 self.update.key_class = Some(match keys {
                     WEnum::Value(WireKeyClass::Toolkit) => KeyClass::Toolkit,
                     WEnum::Value(WireKeyClass::Terminal) => KeyClass::Terminal,
@@ -556,6 +559,10 @@ impl GroupBuilder {
                     (self.update.window_state.as_mut(), self.full_screen.take())
                 {
                     state.full_screen = full_screen;
+                }
+                // a version 24 server sends the process without the class of its keys: the default class
+                if self.update.active_client.is_some() {
+                    self.update.key_class.get_or_insert_default();
                 }
                 let update = std::mem::take(&mut self.update);
                 return (update != MenuBarUpdate::default()).then_some(update);
@@ -890,21 +897,30 @@ mod tests {
 
     #[test]
     fn the_process_behind_the_active_window_comes_in_its_group() {
-        let client = |pid, kind, keys| Event::ActiveClient {
+        let client = |pid, kind| Event::ActiveClient {
             pid,
             kind: WEnum::Value(kind),
+        };
+        let keys = |keys| Event::ActiveClientKeys {
             keys: WEnum::Value(keys),
         };
         let updates = feed(vec![
-            client(41, ClientKind::Wayland, WireKeyClass::Toolkit),
+            client(41, ClientKind::Wayland),
+            keys(WireKeyClass::Toolkit),
             Event::Done,
-            client(7, ClientKind::X11, WireKeyClass::Terminal),
+            client(7, ClientKind::X11),
+            keys(WireKeyClass::Terminal),
             Event::Done,
             Event::ActiveClient {
                 pid: 9,
                 kind: WEnum::Unknown(5),
+            },
+            Event::ActiveClientKeys {
                 keys: WEnum::Unknown(7),
             },
+            Event::Done,
+            // a version 24 server: the process alone
+            client(12, ClientKind::Wayland),
             Event::Done,
             window_state(),
             Event::Done,
@@ -915,6 +931,7 @@ mod tests {
                 Some(ActiveClient::Wayland(41)),
                 Some(ActiveClient::X11(7)),
                 Some(ActiveClient::Wayland(9)),
+                Some(ActiveClient::Wayland(12)),
                 None
             ],
             "a kind this bar does not know is the window's own process"
@@ -925,9 +942,11 @@ mod tests {
                 Some(KeyClass::Toolkit),
                 Some(KeyClass::Terminal),
                 Some(KeyClass::Other),
+                Some(KeyClass::Other),
                 None
             ],
-            "the server's class of the window's keys comes with it; one this bar does not know is the default"
+            "the server's class of the window's keys comes with it; one this bar does not know, or none from a \
+             version 24 server, is the default"
         );
     }
 

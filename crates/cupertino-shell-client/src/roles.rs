@@ -464,8 +464,8 @@ impl Shell {
         // version 17 the dock's window icons, version 18 the dock's engage event, version 19 its resident applications,
         // version 20 the session object's activate_app, version 21 the menu bar's backdrop bands, version 22 the dock's
         // pictures of minimized windows, version 23 the overview's window drag, drop and workspace pictures, version 24 the
-        // process behind the active window
-        conn.bind_extension(9..=24, Quiet).map(Shell)
+        // process behind the active window, version 25 how the server passes chords to it
+        conn.bind_extension(9..=25, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as

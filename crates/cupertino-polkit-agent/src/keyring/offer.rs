@@ -3,11 +3,13 @@
 //! own password in every session. Nothing is changed silently: once, the person is asked whether the default
 //! keyring's items should be copied into the login keyring and the login keyring made the default.
 //!
-//! - [`Flow`]: what happens after each answer. A decline is remembered for good, a finished move too; a question the
-//!   session took away, a cancelled password and a failure are not, and the question may come back at the next login.
+//! - [`Flow`]: what happens after each answer. A decline by the question's own button is remembered for good, a
+//!   finished move too; a question that went away without a button (Escape, or the session took it away), a cancelled
+//!   password and a failure are not, and the question may come back at the next login.
 //! - [`move_items`]: the move over a [`Store`]: every item copied and read back before the default changes, and
-//!   everything it made taken back when a step fails. Items the login keyring already holds are not copied again, so
-//!   a move that was interrupted can be repeated.
+//!   everything it made taken back when a step fails, unless the default may already be the login keyring: then the
+//!   copies stay. Items the login keyring already holds are not copied again, so a move that was interrupted can be
+//!   repeated.
 //!
 //! A secret's bytes are compared and carried, never printed: [`Record`]'s `Debug` and every error leave them out.
 
@@ -118,8 +120,10 @@ impl Offer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
     Yes,
+    /// The question's own "no" button.
     No,
-    /// The session took the question away (it was locked or left, or could not show it): no answer of the person's.
+    /// The question went away without a button: Escape, or the session took it away (it was locked or left, or could
+    /// not show it). Not now, and nothing to remember.
     Dismissed,
 }
 
@@ -181,6 +185,16 @@ impl Notice {
 
     /// The move failed at a step.
     pub fn of(error: &MoveError) -> Notice {
+        if error.step == FailedStep::Unconfirmed {
+            // the copies were kept: the default may be the login keyring, which must then hold the items
+            return Notice {
+                heading: "The move could not be confirmed".to_owned(),
+                description: format!(
+                    "{} The items are in both keyrings; nothing was removed.",
+                    error.step
+                ),
+            };
+        }
         let unchanged = if error.left == 0 {
             "Nothing was changed: both keyrings are as they were."
         } else {
@@ -393,7 +407,11 @@ pub enum FailedStep {
     Copy,
     /// A copy read back differs from its item.
     Verify,
+    /// The login collection did not become the default: the default is still the offered one.
     Default,
+    /// The default was changed, could not be read back and could not be put back: which keyring is the default now
+    /// is not known.
+    Unconfirmed,
 }
 
 impl fmt::Display for FailedStep {
@@ -404,17 +422,19 @@ impl fmt::Display for FailedStep {
             FailedStep::Copy => "An item could not be saved in the login keyring.",
             FailedStep::Verify => "A copy did not match its item.",
             FailedStep::Default => "The login keyring could not be made the default.",
+            FailedStep::Unconfirmed => "The login keyring may now be the default.",
         })
     }
 }
 
-/// Why nothing was moved.
+/// Why the move did not finish.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MoveError {
     pub step: FailedStep,
     /// The store's error, when a call failed.
     pub cause: Option<StoreError>,
-    /// Copies this run made and could not take back.
+    /// Copies this run made and could not take back. Not the copies kept on purpose after
+    /// [`FailedStep::Unconfirmed`].
     pub left: usize,
 }
 
@@ -436,15 +456,22 @@ impl std::error::Error for MoveError {}
 /// Copy every item of `from` into `to`, read every copy back, and only then make `to` the default collection. `from`
 /// keeps its items. An item `to` already holds identical (label, attributes, secret and content type) is not copied
 /// again; an item of `to` that differs is never replaced. When a step fails the copies this run made are deleted and
-/// the default stays `from`.
+/// the default stays as it was. The one exception is a default that was changed and can neither be read back nor put
+/// back ([`FailedStep::Unconfirmed`]): it may be `to`, so the copies stay, and `to` is never left the default without
+/// the items. A default that is already `to` (such a run, tried again) is a move to finish: what is missing is copied
+/// and the default is left alone.
 pub fn move_items(store: &mut impl Store, from: &str, to: &str) -> Result<Moved, MoveError> {
     let mut created = Vec::new();
     let result = copy_and_switch(store, from, to, &mut created);
     result.map_err(|(step, cause)| {
-        let left = created
-            .iter()
-            .filter(|item| store.delete(item).is_err())
-            .count();
+        let left = if step == FailedStep::Unconfirmed {
+            0
+        } else {
+            created
+                .iter()
+                .filter(|item| store.delete(item).is_err())
+                .count()
+        };
         MoveError { step, cause, left }
     })
 }
@@ -458,7 +485,8 @@ fn copy_and_switch(
     created: &mut Vec<String>,
 ) -> Result<Moved, Failure> {
     let read = |e| (FailedStep::Read, Some(e));
-    if store.default_collection().map_err(read)? != from {
+    let default = store.default_collection().map_err(read)?;
+    if default != from && default != to {
         return Err((FailedStep::Changed, None));
     }
     let mut sources = Vec::new();
@@ -506,7 +534,15 @@ fn copy_and_switch(
             return Err((FailedStep::Verify, None));
         }
     }
-    let copied = created.len();
+    let moved = Moved {
+        copied: created.len(),
+        already,
+    };
+    if default == to {
+        // an earlier run already made it the default
+        created.clear();
+        return Ok(moved);
+    }
     if let Err(error) = store.set_default(to) {
         return Err((FailedStep::Default, Some(error)));
     }
@@ -514,12 +550,17 @@ fn copy_and_switch(
         Ok(default) if default == to => {
             // the move stands: nothing of it is taken back
             created.clear();
-            Ok(Moved { copied, already })
+            Ok(moved)
         }
-        other => {
-            let _ = store.set_default(from);
-            Err((FailedStep::Default, other.err()))
-        }
+        // the store kept the old default: nothing changed, and the copies go
+        Ok(default) if default == from => Err((FailedStep::Default, None)),
+        // another keyring was made the default meanwhile: it is left alone, and the copies go
+        Ok(_) => Err((FailedStep::Changed, None)),
+        // the default was set and is not known: only with the old one back for certain do the copies go
+        Err(unread) => match store.set_default(from) {
+            Ok(()) => Err((FailedStep::Default, Some(unread))),
+            Err(_) => Err((FailedStep::Unconfirmed, Some(unread))),
+        },
     }
 }
 

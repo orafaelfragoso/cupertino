@@ -250,6 +250,7 @@ fn the_offer_to_move_a_default_keyring_and_its_failures_show_their_whole_text() 
         FailedStep::Copy,
         FailedStep::Verify,
         FailedStep::Default,
+        FailedStep::Unconfirmed,
     ] {
         for left in [0, 1] {
             let notice = Notice::of(&MoveError {
@@ -260,18 +261,27 @@ fn the_offer_to_move_a_default_keyring_and_its_failures_show_their_whole_text() 
             texts.push((notice.heading, notice.description));
         }
     }
+    texts.dedup();
     let mut painter = painter();
+    // one caller asks every text, each as its next question: a prompt of its own for each costs a key exchange
+    let (mut prompter, theirs) = asking(
+        Kind::Confirm,
+        vec![
+            ("continue-label", Value::Str(MOVE.into())),
+            ("cancel-label", Value::Str(KEEP.into())),
+        ],
+    );
+    let caller = prompter.prompt().unwrap().caller.clone();
     for (heading, description) in texts {
-        let prompter = asking(
-            Kind::Confirm,
-            vec![
-                ("message", Value::Str(heading.clone())),
-                ("description", Value::Str(description.clone())),
-                ("continue-label", Value::Str(MOVE.into())),
-                ("cancel-label", Value::Str(KEEP.into())),
-            ],
-        )
-        .0;
+        prompter.cancel();
+        let asked = [
+            ("message".to_owned(), Value::Str(heading.clone())),
+            ("description".to_owned(), Value::Str(description.clone())),
+        ];
+        assert_eq!(
+            prompter.perform(&caller, Kind::Confirm, asked, &theirs.begin()),
+            Ok(Vec::new())
+        );
         let layout = Layout::new(&mut painter, prompter.prompt().unwrap(), false);
         assert_eq!(layout.heading.join(" "), heading);
         assert_eq!(layout.description.join(" "), description);

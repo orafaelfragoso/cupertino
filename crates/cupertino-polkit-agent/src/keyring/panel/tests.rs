@@ -162,7 +162,7 @@ fn tab_walks_the_controls_return_continues_escape_cancels_and_space_acts_on_the_
     panel.key(PanelKey::Tab { back: true });
     assert_eq!(panel.focus, Control::Continue);
     assert_eq!(panel.key(PanelKey::Return), Some(Command::Continue));
-    assert_eq!(panel.key(PanelKey::Escape), Some(Command::Cancel));
+    assert_eq!(panel.key(PanelKey::Escape), Some(Command::Escape));
     assert_eq!(panel.click(Control::Choice), Command::ToggleChoice);
     assert_eq!(panel.focus, Control::Choice);
     assert_eq!(panel.click(Control::Password), Command::Focused);

@@ -108,7 +108,7 @@ The process hardens itself, zeroes what it frees and keeps its fields at their l
   caller is active, `PromptReady("yes" | "no", {choice-chosen, password-strength}, exchange)` for each question (each
   value in a variant of its own inside the dictionary's, which is where the daemon reads it: a bare value is dropped,
   and the daemon then takes a new password for an empty one and the choice for not ticked), and
-  `PromptDone()` when it ends a prompt itself (the session locks, or the server closes the panel: a `no` followed by
+  `PromptDone()` when it ends a prompt itself (the session locks, the server closes the panel, or Escape for a caller that set `escape-dismisses`: a `no` followed by
   `PromptDone` is the prompter's answer, not the person's). The reply to a call is always sent before its
   callback is called, even for an answer given at once: the loop sends the reply itself. A caller that leaves the bus (the bus daemon's `NameOwnerChanged`) loses its prompt;
 - returns the password only through the secret exchange (`sx-aes-1`): Diffie-Hellman in the 1536-bit MODP group of
@@ -145,7 +145,11 @@ changes keyrings silently: the prompter asks once whether that keyring's items s
   prompt), so it is the same alert, on a connection the server protects from capture and control, behind any prompt
   already waiting and never over a locked session. Its buttons are Move Items and Don't Move.
 - **Don't Move** is kept in `$XDG_STATE_HOME/cupertino/keyring-offer` (`declined`) and the question never comes back.
-  A question the session took away (it locked, or the alert could not be shown) is no answer: the next login asks.
+  Only the button, clicked or pressed from the keyboard while it has the focus, declines. Escape means not now, as
+  does a question the session took away (it locked, or the alert could not be shown): nothing is kept, this login
+  does not ask again and the next one does. The check asks for that with a property of its own, `escape-dismisses`,
+  on its questions: Escape then ends the prompt as the prompter itself does (`no`, then `PromptDone`). On the keyring
+  daemon's questions, which do not set it, Escape is the cancel button.
 - **Move Items** unlocks the old keyring through the daemon's own unlock prompt, which asks for its password once.
   Cancelling there is not a decline: the next login asks again. Then every item (label, attributes, secret, content
   type) is copied into the login collection beside what it holds, every copy is read back and compared, and only then
@@ -154,6 +158,12 @@ changes keyrings silently: the prompter asks once whether that keyring's items s
 - **A failure** at any step deletes the copies this run made and leaves the alias as it was; the alert says that
   nothing was moved and why (an item could not be read, saved or did not match, the default changed meanwhile or could
   not be changed) and offers Try Again and Not Now. Nothing is remembered, so the next login asks again.
+- **An alias that cannot be read back** after it was set is set to the old keyring again, and only when that call
+  succeeds are the copies deleted as after any failure. When it fails too, the default may be the login keyring, so
+  the copies stay (the login keyring is never left the default without the items) and the alert says so: the login
+  keyring may now be the default, and the items are in both keyrings. Try Again, or the next login when the default is
+  still the old keyring, finishes the move without copying an item twice; with the login keyring the default there
+  is nothing left to ask.
 - **A move that stopped halfway** (the process ended) can be repeated: an item the login keyring already holds
   identical is not copied again. An item of the login keyring with the same attributes and another secret is never
   replaced; the copy is stored beside it.
@@ -190,12 +200,14 @@ the keyring made and opening with that password only, and the ticked choice lett
 question afterwards (skipped when the daemon is not installed; `CUPERTINO_KEYRING_REQUIRED=1` fails instead).
 
 The offer about the default keyring: `src/keyring/offer/tests.rs` the model without a bus: when the question is
-asked, accept, decline and its memory, a question taken away, a cancelled password, each failure of the move leaving
-the default and both keyrings as they were, a move repeated after it stopped halfway, and no secret in what is
-printed; `src/keyring/render/tests.rs` the alert shows the question's and each failure's whole text;
+asked, accept, decline by the button and its memory, a question that went away without a button, a cancelled
+password, each failure of the move leaving the default and both keyrings as they were, a default that cannot be read
+back (put back, or the copies kept and the alert saying so) or reads back as the old or another keyring, a move
+repeated after it stopped halfway, and no secret in what is printed; `src/keyring/model/tests.rs` Escape as a cancel
+and, for a caller that asks for it, as the end of its prompt; `src/keyring/render/tests.rs` the alert shows the question's and each failure's whole text;
 `tests/keyring_offer.rs` the installed daemon on a private bus with a second, locked keyring as the default: nothing
-asked without a service, with the login keyring the default or locked; a cancelled password, a locked session and a
-decline leave everything as it was and only the decline is kept; accepting copies every item (read back over a
+asked without a service, with the login keyring the default or locked; a cancelled password, a locked session, Escape
+and a decline leave everything as it was and only the decline is kept; accepting copies every item (read back over a
 session of the test's own), skips the one already copied, keeps a differing item, changes the alias and keeps the old
 keyring.
 

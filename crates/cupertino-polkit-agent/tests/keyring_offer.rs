@@ -364,7 +364,22 @@ fn a_decline_is_kept_and_a_cancelled_password_or_a_question_taken_away_is_not() 
     }
     unchanged();
 
-    // the login after that: the person declines, and no later login asks
+    // the login after that: Escape on the question is no answer, in this login no second question, and nothing kept
+    let ana = setup(dir.path(), &name, "ana", "escape");
+    let ended = start(&session.bus, &ana);
+    wait_asking(&host, Kind::Confirm);
+    {
+        let mut host = host.lock().unwrap();
+        let effects = host.model.escape();
+        host.apply(effects);
+    }
+    assert_eq!(ends(&ended), Outcome::Left);
+    wait_idle(&host);
+    assert!(!ana.answer.exists(), "Escape is not a decline");
+    assert_eq!(ends(&start(&session.bus, &ana)), Outcome::Quiet);
+    unchanged();
+
+    // the login after that: the person declines with the button, and no later login asks
     let ana = setup(dir.path(), &name, "ana", "3");
     let ended = start(&session.bus, &ana);
     wait_asking(&host, Kind::Confirm);

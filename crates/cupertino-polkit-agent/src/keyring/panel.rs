@@ -189,7 +189,10 @@ pub enum Command {
     Type(Field, crate::keyring::model::Key),
     ToggleChoice,
     Continue,
+    /// The cancel button, clicked or pressed from the keyboard.
     Cancel,
+    /// Escape: a cancel, except to a caller that takes only the button as one.
+    Escape,
     /// Only the focus moved.
     Focused,
 }
@@ -235,7 +238,7 @@ impl Panel {
             _ => None,
         };
         let command = match (key, field) {
-            (PanelKey::Escape, _) => Command::Cancel,
+            (PanelKey::Escape, _) => Command::Escape,
             // Return in a new password's first field goes on to its confirmation
             (PanelKey::Return, Some(Field::Password)) if self.order.contains(&Control::Confirm) => {
                 self.focus = Control::Confirm;

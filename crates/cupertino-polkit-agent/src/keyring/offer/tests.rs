@@ -1,6 +1,7 @@
 use super::*;
 
 const OTHER: &str = "/org/freedesktop/secrets/collection/other";
+const THIRD: &str = "/org/freedesktop/secrets/collection/third";
 
 fn observed(default: Option<&str>, login_locked: Option<bool>) -> Observed {
     Observed {
@@ -42,6 +43,12 @@ struct Fake {
     corrupt: bool,
     /// The store accepts a new default and keeps the old one.
     ignore_default: bool,
+    /// The default cannot be read once it was set.
+    fail_read_back: bool,
+    /// The default can be set to the login keyring and to no other.
+    fail_revert: bool,
+    /// Every default the move asked for, in order.
+    sets: Vec<String>,
 }
 
 impl Fake {
@@ -86,11 +93,18 @@ impl Fake {
 impl Store for Fake {
     fn default_collection(&mut self) -> Result<String, StoreError> {
         self.check("default")?;
+        if self.fail_read_back && !self.sets.is_empty() {
+            return Err(StoreError::new("default", "org.test.Error.Failed"));
+        }
         Ok(self.default.clone())
     }
 
     fn set_default(&mut self, collection: &str) -> Result<(), StoreError> {
         self.check("set_default")?;
+        self.sets.push(collection.to_owned());
+        if self.fail_revert && collection != LOGIN {
+            return Err(StoreError::new("set_default", "org.test.Error.Failed"));
+        }
         if !self.ignore_default {
             self.default = collection.to_owned();
         }
@@ -260,7 +274,7 @@ fn accepting_unlocks_the_old_keyring_moves_and_remembers() {
 }
 
 #[test]
-fn declining_is_remembered_and_changes_nothing() {
+fn declining_by_the_button_is_remembered_and_changes_nothing() {
     let mut flow = asking();
     assert_eq!(
         flow.answered(Answer::No),
@@ -276,9 +290,16 @@ fn declining_is_remembered_and_changes_nothing() {
 }
 
 #[test]
-fn a_question_the_session_took_away_is_no_answer() {
+fn a_question_that_went_away_without_a_button_is_not_now_and_remembers_nothing() {
+    // Escape, or the session took the question away
     let mut flow = asking();
     assert_eq!(flow.answered(Answer::Dismissed), [Step::End(Outcome::Left)]);
+    assert!(flow.ended());
+    // nothing was remembered: this login, which asked, does not ask again, and the next login does
+    let (_, steps) = Flow::start(Remembered::Nothing, true);
+    assert_eq!(steps, [Step::End(Outcome::Quiet)]);
+    let (_, steps) = Flow::start(Remembered::Nothing, false);
+    assert_eq!(steps, [Step::Observe]);
 }
 
 #[test]
@@ -426,7 +447,7 @@ fn snapshot(store: &Fake) -> (String, Vec<(String, String, Record)>) {
 fn a_failure_at_any_step_leaves_the_default_and_both_keyrings_as_they_were() {
     type Break = fn(&mut Fake);
     let cases: [(Break, FailedStep); 8] = [
-        (|s| s.default = LOGIN.into(), FailedStep::Changed),
+        (|s| s.default = THIRD.into(), FailedStep::Changed),
         (|s| s.fail.push("default"), FailedStep::Read),
         (|s| s.fail.push("items"), FailedStep::Read),
         (|s| s.fail.push("read"), FailedStep::Read),
@@ -453,8 +474,110 @@ fn a_default_the_store_did_not_take_is_a_failure() {
     store.ignore_default = true;
     let before = snapshot(&store);
     let error = move_items(&mut store, OTHER, LOGIN).unwrap_err();
-    assert_eq!(error.step, FailedStep::Default);
+    assert_eq!((error.step, error.left), (FailedStep::Default, 0));
+    // the old default was read back: it is not set again
+    assert_eq!(store.sets, [LOGIN]);
     assert_eq!(snapshot(&store), before);
+    assert!(Notice::of(&error)
+        .description
+        .contains("Nothing was changed"));
+}
+
+#[test]
+fn a_default_that_cannot_be_read_back_is_put_back_and_the_copies_go() {
+    let mut store = Fake::new(&three(), &[record("Wi-Fi", "home", "s3cret-wifi")]);
+    store.fail_read_back = true;
+    let before = snapshot(&store);
+    let error = move_items(&mut store, OTHER, LOGIN).unwrap_err();
+    assert_eq!((error.step, error.left), (FailedStep::Default, 0));
+    assert_eq!(error.cause.as_ref().map(|c| c.call), Some("default"));
+    assert_eq!(store.sets, [LOGIN, OTHER]);
+    assert_eq!(snapshot(&store), before);
+    let notice = Notice::of(&error);
+    assert!(
+        notice.description.contains("Nothing was changed"),
+        "{notice:?}"
+    );
+}
+
+#[test]
+fn a_default_that_can_be_neither_read_back_nor_put_back_keeps_the_copies_and_says_so() {
+    let mine = record("Wi-Fi", "home", "s3cret-wifi");
+    let mut store = Fake::new(&three(), std::slice::from_ref(&mine));
+    store.fail_read_back = true;
+    store.fail_revert = true;
+    let error = move_items(&mut store, OTHER, LOGIN).unwrap_err();
+    assert_eq!((error.step, error.left), (FailedStep::Unconfirmed, 0));
+    assert_eq!(store.sets, [LOGIN, OTHER]);
+    // the login keyring is the default here, and it holds every item; the old keyring keeps its own
+    assert_eq!(store.default, LOGIN);
+    let mut login = vec![mine];
+    login.extend(three());
+    assert_eq!(store.records(LOGIN), login);
+    assert_eq!(store.records(OTHER), three());
+    // the notice claims neither that nothing changed nor that the move is done
+    let notice = Notice::of(&error);
+    assert_eq!(notice.heading, "The move could not be confirmed");
+    assert!(notice.description.contains("may now be the default"));
+    assert!(notice.description.contains("in both keyrings"));
+    assert!(!notice.description.contains("Nothing was changed"));
+    assert!(!notice.description.contains("unchanged"));
+    // it is told like any failure, and nothing is remembered
+    let mut flow = asking();
+    flow.answered(Answer::Yes);
+    flow.unlocked(Unlocked::Yes);
+    assert_eq!(flow.moved(Err(error)), [Step::Tell(notice)]);
+    assert_eq!(flow.answered(Answer::No), [Step::End(Outcome::Failed)]);
+
+    // tried again once the store answers: the move is finished without a second copy or another change
+    store.fail_read_back = false;
+    store.fail_revert = false;
+    store.sets.clear();
+    assert_eq!(
+        move_items(&mut store, OTHER, LOGIN),
+        Ok(Moved {
+            copied: 0,
+            already: 3
+        })
+    );
+    assert!(store.sets.is_empty());
+    assert_eq!(store.default, LOGIN);
+    assert_eq!(store.records(LOGIN), login);
+}
+
+#[test]
+fn a_default_read_back_as_another_keyring_is_left_alone_and_the_copies_go() {
+    // the store takes the call and makes a third keyring the default
+    struct Elsewhere(Fake);
+    impl Store for Elsewhere {
+        fn default_collection(&mut self) -> Result<String, StoreError> {
+            self.0.default_collection()
+        }
+        fn set_default(&mut self, _: &str) -> Result<(), StoreError> {
+            self.0.set_default(THIRD)
+        }
+        fn items(&mut self, collection: &str) -> Result<Vec<String>, StoreError> {
+            self.0.items(collection)
+        }
+        fn attributes(&mut self, item: &str) -> Result<BTreeMap<String, String>, StoreError> {
+            self.0.attributes(item)
+        }
+        fn read(&mut self, item: &str) -> Result<Record, StoreError> {
+            self.0.read(item)
+        }
+        fn create(&mut self, collection: &str, record: &Record) -> Result<String, StoreError> {
+            self.0.create(collection, record)
+        }
+        fn delete(&mut self, item: &str) -> Result<(), StoreError> {
+            self.0.delete(item)
+        }
+    }
+    let mut store = Elsewhere(Fake::new(&three(), &[]));
+    let items = store.0.items.clone();
+    let error = move_items(&mut store, OTHER, LOGIN).unwrap_err();
+    assert_eq!((error.step, error.left), (FailedStep::Changed, 0));
+    assert_eq!(store.0.sets, [THIRD], "the default is set once");
+    assert_eq!(store.0.items, items);
 }
 
 #[test]

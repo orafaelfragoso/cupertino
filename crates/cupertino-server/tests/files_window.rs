@@ -434,3 +434,80 @@ fn the_quick_preview_of_a_picture_opens_over_its_window_and_leaves_it_the_menu_b
         "no window of the preview's own"
     );
 }
+
+/// A preview taller than the room the menu bar and the dock leave on the output stays inside that room: the text
+/// preview, 680 points tall, opens from a window whose output keeps only 500 points under the menu bar, and shrinks to
+/// fit between the two instead of running under the dock.
+#[test]
+fn a_tall_quick_preview_stays_clear_of_the_menu_bar_and_the_dock() {
+    let scratch = TempDir::new("preview-room");
+    let home = scratch.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("notes.txt"), "a note\n").unwrap();
+    let data_dirs = scratch.0.join("share");
+    std::fs::create_dir_all(&data_dirs).unwrap();
+    let Some(bus) = PrivateBus::start() else {
+        return;
+    };
+    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs, &bus)]) else {
+        return;
+    };
+    server.wait_until("the window to map", |s| window(s).is_some());
+    server.settle();
+    // a menu bar 24 points tall and a dock reserving the bottom 376 points of the output
+    let output = server.state.wm.outputs()[0].id;
+    let room = cupertino_wm::Rect::new(0.0, 24.0, f64::from(OUTPUT.0), 500.0);
+    let now = server.state.now();
+    let fx = server.state.wm.handle(
+        cupertino_wm::Command::SetUsableArea {
+            output,
+            usable: room,
+        },
+        now,
+    );
+    server.state.apply_effects(fx);
+    server.settle();
+    // the window comes to rest where the room put it, so the preview is placed against where it stays
+    let id = server.state.windows[0].id;
+    server.wait_until("the window to come to rest", |s| {
+        let now = s.now();
+        let rest = s.wm.window(id).map(|w| w.geometry());
+        s.wm.presentation(id, now).map(|p| p.frame) == rest
+    });
+
+    let f = server.state.wm.window(id).unwrap().geometry();
+    let (_, _, origin) = server
+        .state
+        .window_surface_under((f.x + f.w / 2.0, f.y + f.h / 2.0).into())
+        .expect("the window's content is under its centre");
+    server.state.pointer_moved_to(
+        (origin.x + FIRST_ICON.0, origin.y + FIRST_ICON.1).into(),
+        0,
+        None,
+    );
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    server.step();
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    server.settle();
+    server.key(SPACE, true);
+    server.key(SPACE, false);
+    server.wait_until("the preview to map", |s| preview_popup(s).is_some());
+    server.settle();
+    let (at, size) = preview_popup(&server.state).unwrap();
+    let (x, y) = (origin.x + f64::from(at.x), origin.y + f64::from(at.y));
+    let (w, h) = (f64::from(size.0), f64::from(size.1));
+    // within the rounding of the window's fractional place to whole points, which the popup's place is counted in
+    let near = 1.5;
+    assert!(
+        x >= room.x - near
+            && y >= room.y - near
+            && x + w <= room.x + room.w + near
+            && y + h <= room.y + room.h + near,
+        "({x}, {y}) {size:?}: inside the room {room:?}"
+    );
+    assert!(h < 680.0, "{size:?}: it shrank to fit");
+}

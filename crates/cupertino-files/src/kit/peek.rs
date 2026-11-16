@@ -29,7 +29,7 @@ use cupertino_kit::core::{
     Action, Change, CommandRegistry, Element, Event, EventCx, Key, MeasureCx, PaintCx, Phase,
     Propagation, Role, SemanticsCx, Shortcut, Widget, WindowBackground,
 };
-use cupertino_kit::core::{Popup, PopupAnchor};
+use cupertino_kit::core::{Glass, Popup, PopupAnchor};
 use cupertino_kit::geometry::{Insets, Point, Rect, Size};
 use cupertino_kit::layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
@@ -57,6 +57,8 @@ const BUTTON: f64 = 22.0;
 const GLYPH: f64 = 14.0;
 /// The window's corner radius.
 const RADIUS: f64 = 12.0;
+/// The width of the panel's own edge, drawn where the desktop shows no glass under it.
+const EDGE: f64 = 1.0;
 /// The side of the pictures previewed, here and in the preview column, which draws them smaller.
 pub(super) const PICTURE: f64 = 512.0;
 /// The side of an icon in the window.
@@ -822,8 +824,8 @@ impl Widget<Message> for GlyphButton {
     }
 }
 
-/// The preview's panel: `size` points, the popover material under its content, its corners rounded. As the root of the
-/// popup it grows out of the item shown and shrinks back into it.
+/// The preview's panel: `size` points, or what of it the screen has room for, the popovers' glass under its content,
+/// its corners rounded. As the root of the popup it grows out of the item shown and shrinks back into it.
 struct Sheet {
     size: (f64, f64),
     children: Vec<Element<Message>>,
@@ -834,8 +836,9 @@ impl Widget<Message> for Sheet {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            width: SizeSpec::Fixed(self.size.0),
-            height: SizeSpec::Fixed(self.size.1),
+            // the size the compositor gives it, which is `size` unless the panel had to shrink to fit the screen
+            width: SizeSpec::Fill,
+            height: SizeSpec::Fill,
             overflow: Overflow::Clip,
             ..LayoutSpec::new(ContainerKind::Stack {
                 axis: Axis::Vertical,
@@ -871,18 +874,37 @@ impl Widget<Message> for Sheet {
         Propagation::Continue
     }
 
+    /// The panel is the popovers' glass, which the compositor gives their outline and soft shadow; without it the panel
+    /// paints the opaque fill and its own edge.
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
-        if !cx.material(Surface::Popover, RADIUS, 1.0) {
-            let size = cx.size();
-            if let Some(fill) = cx.env().theme.surface(Surface::Popover).fill {
-                cx.push(PaintOp::Fill {
-                    shape: Shape::RoundedRect {
-                        rect: Rect::new(0.0, 0.0, size.width, size.height),
-                        radius: RADIUS,
-                    },
-                    paint: Paint::Solid(fill),
-                });
-            }
+        if cx.glass(Glass::dense().radius(RADIUS)) {
+            return;
+        }
+        let size = cx.size();
+        let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        if let Some(fill) = cx.env().theme.surface(Surface::Popover).fill {
+            cx.push(PaintOp::Fill {
+                shape: Shape::RoundedRect {
+                    rect,
+                    radius: RADIUS,
+                },
+                paint: Paint::Solid(fill),
+            });
+        }
+        let edge = cx
+            .env()
+            .theme
+            .colors
+            .get(ColorRole::Separator, StateVariant::NORMAL);
+        if let Some(edge) = edge {
+            cx.push(PaintOp::Stroke {
+                shape: Shape::RoundedRect {
+                    rect: rect.inset(Insets::uniform(EDGE / 2.0)),
+                    radius: RADIUS - EDGE / 2.0,
+                },
+                paint: Paint::Solid(edge),
+                width: EDGE,
+            });
         }
     }
 

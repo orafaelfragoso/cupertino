@@ -3227,7 +3227,8 @@ fn place<M: 'static>(
         constraint: ConstraintAdjust {
             slide: true,
             flip: !matches!(anchor, PopupAnchor::Over { .. } | PopupAnchor::Panel { .. }),
-            resize: false,
+            // a panel taller or wider than the room shrinks to fit it
+            resize: matches!(anchor, PopupAnchor::Panel { .. }),
         },
         reactive: true,
         grab,

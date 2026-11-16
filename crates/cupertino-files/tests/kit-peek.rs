@@ -311,6 +311,41 @@ fn the_arrows_go_through_a_selection_of_several_and_move_a_single_one() {
 }
 
 #[test]
+fn a_preview_the_screen_has_no_room_for_shows_whole_at_the_smaller_size_it_is_given() {
+    let mut run = run(false);
+    run.click_row("c.bin");
+    run.key(SPACE, Some(' '));
+    let window = preview(&run).expect("an item shown by its icon is ready at once");
+    // the compositor shrinks the panel to the room left between the menu bar and the dock
+    let room = cupertino_kit::geometry::Size::new(500.0, 400.0);
+    run.driver
+        .window_system_mut()
+        .configure(window, Some(room), WindowStates::default())
+        .unwrap();
+    run.frames(500, 16);
+    let runtime = run.driver.runtime();
+    let snapshot = runtime.snapshot(window).unwrap();
+    let sheet = runtime.find(window, &Key::from("sheet")).unwrap();
+    let rect = snapshot.nodes.iter().find(|n| n.id == sheet).unwrap().rect;
+    assert_eq!((rect.width(), rect.height()), (500.0, 400.0));
+    // its toolbar and its item's name are still there, inside it
+    let close = run_bounds(&run, window, Role::Button, "Close");
+    assert!(close.max_y() <= 400.0 && close.min_x() >= 0.0, "{close:?}");
+    assert!(preview_texts(&run).iter().any(|t| t == "c.bin"));
+}
+
+/// The bounds of the accessible node of `window` with `role` and `name`.
+fn run_bounds(run: &Run, window: WindowId, role: Role, name: &str) -> Rect {
+    let snapshot = run.driver.runtime().snapshot(window).unwrap();
+    snapshot
+        .accessibility
+        .iter()
+        .find(|(_, n)| n.role == role && n.name.as_deref() == Some(name))
+        .map(|(_, n)| n.bounds)
+        .unwrap_or_else(|| panic!("no {role:?} {name:?}"))
+}
+
+#[test]
 fn reduce_motion_shows_and_takes_the_preview_away_at_once() {
     let mut run = run(true);
     run.click_row("c.bin");
@@ -379,7 +414,10 @@ fn grows_out_of_and_back_into(run: &mut Run, item: Rect) {
     );
     let top = spec.anchor_rect.min_y() + spec.offset.y;
     assert!(top >= 0.0, "never above the window's top edge: {spec:?}");
-    assert!(spec.constraint.slide && !spec.constraint.flip, "{spec:?}");
+    assert!(
+        spec.constraint.slide && spec.constraint.resize && !spec.constraint.flip,
+        "it slides, and shrinks where sliding is not enough, to fit the room the screen has: {spec:?}"
+    );
     // as the compositor places it, centred on the middle of the folder's top edge
     let placed = Rect::new(
         spec.anchor_rect.min_x() + spec.anchor_rect.width() / 2.0 - spec.size.width / 2.0,
@@ -389,7 +427,7 @@ fn grows_out_of_and_back_into(run: &mut Run, item: Rect) {
     );
     // no frame of it yet: nothing asked of its presentation before its first buffer
     assert!(presents(run, window).is_empty());
-    run.frames(400, 16);
+    run.frames(400, 100);
     assert!(
         presents(run, window).is_empty(),
         "the motion waits for the first configure"
@@ -438,7 +476,7 @@ fn the_preview_grows_out_of_an_item_near_the_bottom_of_a_scrolled_list() {
             Timestamp(0),
         ));
     }
-    run.frames(1500, 16);
+    run.frames(1500, 100);
     let rows = run.listed();
     let (name, _, _) = rows
         .iter()

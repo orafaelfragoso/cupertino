@@ -1248,6 +1248,8 @@ impl Cupertino {
         }
     }
 
+    /// A popup of a window is kept inside the usable area of the window's output, flipped, slid or shrunk as its
+    /// positioner allows: clear of the menu bar and of the dock that reserves its room, as the window's own frame is.
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let kind = PopupKind::Xdg(popup.clone());
         let Ok(root) = find_popup_root_surface(&kind) else {
@@ -1266,7 +1268,7 @@ impl Cupertino {
             .wm
             .window(id)
             .and_then(|w| self.wm.output(w.output))
-            .map(|o| o.rect)
+            .map(|o| o.usable)
             .unwrap_or(pres.frame);
         let geo = entry.window.geometry();
         let mut target: Rectangle<i32, Logical> = Self::rect_to_logical(out);

@@ -873,6 +873,13 @@ fn show_items_selects_the_items_of_one_folder_in_the_window_that_shows_it() {
         activations(&mut run, first),
         [Some("show-token".to_owned()), None]
     );
+
+    // the folder spelled otherwise is the same folder: its window is used again
+    let spelled = format!("{}//./Notes/../big.bin", documents.display());
+    let again = file_manager(&bus, "ShowItems", vec![spelled], "");
+    while_turning(&mut run, again).expect("ShowItems is taken");
+    assert_eq!(run.windows().len(), 1, "no second window on the folder");
+    assert_eq!(run.selected_rows(), ["big.bin"]);
 }
 
 #[test]

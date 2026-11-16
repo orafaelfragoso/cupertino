@@ -364,6 +364,9 @@ pub struct Model {
     exiting: bool,
     /// Files started without a window and waits for the first call it serves, until [`CALL_WAIT`] passes.
     awaiting_call: bool,
+    /// The `ShowItems` calls whose items are being looked up, by the id their message carries.
+    look_ups: BTreeMap<u64, crate::instance::Call>,
+    next_look_up: u64,
 }
 
 /// How long a Files started without a window ([`Start::idle`]) waits for the call it was started for before it exits.
@@ -532,6 +535,8 @@ pub enum Message {
     Job(JobEvent),
     /// Calls of later launches or of the desktop are waiting ([`crate::instance`]).
     Remote,
+    /// The items of a `ShowItems` call, by its id, were looked up: whether each path it names exists, in order.
+    LookedUp(u64, Vec<remote::Found>),
     /// The window with this key is shown: raise it, with the activation token of the launch that asked for it.
     Raise(WindowKey, Option<String>),
     /// A notice of a file operation's end was clicked; none once no click can come any more.
@@ -760,6 +765,8 @@ impl Application for Files {
             next_window: 0,
             exiting: false,
             awaiting_call: start.first.is_none(),
+            look_ups: BTreeMap::new(),
+            next_look_up: 0,
             session: Session {
                 standard_places: start.places.len(),
                 places: start.places,
@@ -861,6 +868,7 @@ impl Model {
             Message::Job(event) => self.job_event(event),
             Message::Noticed(click) => self.noticed(click),
             Message::Remote => self.remote_calls(),
+            Message::LookedUp(id, found) => self.looked_up(id, found),
             Message::CallWaitOver => {
                 self.awaiting_call = false;
                 Vec::new()
@@ -925,6 +933,7 @@ impl Model {
         let jobs = &self.session.jobs;
         if self.exiting
             || self.awaiting_call
+            || !self.look_ups.is_empty()
             || !self.windows.is_empty()
             || !jobs.running.is_empty()
             || jobs.visible()

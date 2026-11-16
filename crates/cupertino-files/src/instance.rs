@@ -204,13 +204,18 @@ pub enum Request {
 pub struct Call {
     pub request: Request,
     pub token: Option<String>,
-    reply: async_channel::Sender<()>,
+    reply: async_channel::Sender<Result<(), String>>,
 }
 
 impl Call {
     /// Answer the caller: the request was taken.
     pub fn done(self) {
-        let _ = self.reply.try_send(());
+        let _ = self.reply.try_send(Ok(()));
+    }
+
+    /// Answer the caller that the request was not taken, because too much is already under way.
+    pub fn refuse(self, why: &str) {
+        let _ = self.reply.try_send(Err(why.to_owned()));
     }
 }
 
@@ -413,7 +418,8 @@ impl Application {
         replied
             .recv()
             .await
-            .map_err(|_| zbus::fdo::Error::Disconnected("Files is quitting".into()))
+            .map_err(|_| zbus::fdo::Error::Disconnected("Files is quitting".into()))?
+            .map_err(zbus::fdo::Error::LimitsExceeded)
     }
 }
 
@@ -478,8 +484,9 @@ impl FileManager {
     }
 }
 
-/// What the URIs of a file manager call name, as [`Target::of_uri`] reads them, an absolute path taken as it is; no
-/// URI is no item, and one URI that names no local item refuses them all.
+/// What the URIs of a file manager call name, as [`Target::of_uri`] reads them, an absolute path taken as it is, each
+/// path spelled plainly ([`plain_path`]) so it finds the window that shows its folder; no URI is no item, and one URI
+/// that names no local item refuses them all.
 fn items_of(uris: &[String]) -> Result<Vec<Target>, zbus::fdo::Error> {
     if uris.len() > MAX_URIS {
         return Err(zbus::fdo::Error::InvalidArgs(format!(
@@ -494,8 +501,34 @@ fn items_of(uris: &[String]) -> Result<Vec<Target>, zbus::fdo::Error> {
             true => Ok(Target::Folder(PathBuf::from(uri))),
             false => Target::of_uri(uri),
         })
-        .map(|item| item.map_err(zbus::fdo::Error::InvalidArgs))
+        .map(|item| match item {
+            Ok(Target::Folder(path)) => Ok(Target::Folder(plain_path(&path))),
+            Ok(other) => Ok(other),
+            Err(e) => Err(zbus::fdo::Error::InvalidArgs(e)),
+        })
         .collect()
+}
+
+/// `path` spelled plainly, without reading the disk: repeated and trailing slashes and `.` dropped, and each `..` taking
+/// the name before it away (none above the root), as a URI's dot segments are removed.
+fn plain_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut plain = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !plain.pop() && !plain.has_root() {
+                    plain.push(part);
+                }
+            }
+            Component::RootDir => {
+                plain.push(part);
+            }
+            Component::Prefix(_) | Component::Normal(_) => plain.push(part),
+        }
+    }
+    plain
 }
 
 /// The activation token of a call's startup id: none when it is empty; one too long refuses the call.
@@ -1021,6 +1054,70 @@ mod tests {
         let odd = Target::Folder(PathBuf::from(OsString::from_vec(b"/tmp/\xff\x01".to_vec())));
         assert_eq!(Target::of_uri(&odd.uri()), Ok(odd));
         assert_eq!(Target::Trash.uri(), "trash:///");
+    }
+
+    #[test]
+    fn a_file_manager_call_spells_its_paths_plainly() {
+        let plain = |uri: &str| match items_of(&[uri.to_owned()]).as_deref() {
+            Ok([Target::Folder(path)]) => path.as_os_str().to_owned(),
+            other => panic!("{uri}: {other:?}"),
+        };
+        for (spelled, wanted) in [
+            ("/srv//a/./b/", "/srv/a/b"),
+            ("file:///srv/a//b/", "/srv/a/b"),
+            ("file:///srv/a/../b/./c.txt", "/srv/b/c.txt"),
+            ("/srv/a/b/..", "/srv/a"),
+            ("/../srv", "/srv"),
+            ("/", "/"),
+        ] {
+            assert_eq!(plain(spelled), OsString::from(wanted), "{spelled}");
+        }
+    }
+
+    /// Every method of the file manager object lets in only a process of this user: a caller the bus says runs as
+    /// another user is refused before anything reaches the window.
+    #[test]
+    fn a_file_manager_call_from_another_user_is_refused() {
+        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
+            return;
+        };
+        let (calls_in, calls) = async_channel::bounded(MAX_WAITING);
+        // nothing takes a call: one let through is answered that Files is quitting, never refused as another user's
+        drop(calls);
+        let (wake, _woken) = async_channel::bounded(1);
+        let object = Application {
+            calls: calls_in,
+            wake,
+            own_uid: own_uid().wrapping_add(1),
+        };
+        let server = zbus::block_on(async {
+            bus.builder()
+                .serve_at(FILE_MANAGER_PATH, FileManager(object))?
+                .build()
+                .await
+        })
+        .expect("serving the file manager object");
+        let name = server.unique_name().expect("a unique name").to_string();
+        let caller = bus.connect();
+        for method in ["ShowFolders", "ShowItems", "ShowItemProperties"] {
+            let refused = caller
+                .call_method(
+                    Some(name.as_str()),
+                    FILE_MANAGER_PATH,
+                    Some(FILE_MANAGER_INTERFACE),
+                    method,
+                    &(vec!["file:///tmp"], ""),
+                )
+                .expect_err("refused");
+            match refused {
+                zbus::Error::MethodError(error, ..) => assert_eq!(
+                    error.as_str(),
+                    "org.freedesktop.DBus.Error.AccessDenied",
+                    "{method}"
+                ),
+                other => panic!("{method}: refused as another user's, not {other:?}"),
+            }
+        }
     }
 
     #[test]

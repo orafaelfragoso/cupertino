@@ -1146,8 +1146,9 @@ fn window_popup_elements(
     out
 }
 
-/// Elements of one window, front to back: decorations, content (masked to the plan's corner radius, rescaled), its
-/// backdrops, outline and shadow. Its popups are apart ([`window_popup_elements`]).
+/// Elements of one window, front to back: the inner rim of a styled window its client decorates, decorations, content
+/// (masked to the plan's corner radius, rescaled), its backdrops, outline and shadow. Its popups are apart
+/// ([`window_popup_elements`]).
 fn window_elements(
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
@@ -1289,7 +1290,9 @@ fn window_elements(
     out.extend(backdrops);
     if shadow && styled {
         // the fine outline just outside the frame, over the shadow, fading with it (none on a full-screen window);
-        // around the device pixels the content and its mask cover, so it meets them at every scale and position
+        // around the device pixels the content and its mask cover, so it meets them at every scale and position. A
+        // window its client decorates gets the light rim just inside the frame too, over everything of the window, as
+        // the rim of the compositor's decorations lies over a decorated one
         let edge = p.decor.edge(active);
         let frame = smithay::utils::Rectangle::<f64, Logical>::new(
             (
@@ -1303,19 +1306,69 @@ fn window_elements(
             )
                 .into(),
         );
-        out.extend(outline_item(
-            SceneKind::Outline,
-            entry.id.0,
+        let lines = WindowEdgeLines {
+            index: entry.id.0,
             frame,
             radius,
-            style.continuous_corners,
-            &edge,
-            p.scale,
-            alpha * plan.shadow as f32,
-        ));
+            continuous: style.continuous_corners,
+            scale: p.scale,
+            alpha: alpha * plan.shadow as f32,
+        };
+        // the rim of the compositor's decorations is that of an active window whatever the window's state
+        let rim = (!entry.server_side).then(|| p.decor.edge(true));
+        lines.add(&mut out, &edge, rim.as_ref());
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
     out
+}
+
+/// Where the lines of a styled window's edge lie: around its `frame` (output points) with corners of `radius`, at
+/// `scale`, faded to `alpha`.
+struct WindowEdgeLines {
+    index: u64,
+    frame: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    scale: f64,
+    alpha: f32,
+}
+
+impl WindowEdgeLines {
+    /// Add to `out` (the window's pieces, front to back) the outline of `edge` behind them and, given `rim` (the edge of
+    /// a window its client decorates), its inner rim in front of them all; a decorated window has its rim in the
+    /// decorations' rim buffer, so it gets none here.
+    fn add(
+        &self,
+        out: &mut Vec<Piece>,
+        edge: &cupertino_decorations::Edge,
+        rim: Option<&cupertino_decorations::Edge>,
+    ) {
+        let rim = rim.and_then(|rim| {
+            inner_rim_item(
+                SceneKind::WindowRim,
+                self.index,
+                self.frame,
+                self.radius,
+                self.continuous,
+                rim,
+                self.scale,
+                self.alpha,
+            )
+        });
+        if let Some(rim) = rim {
+            out.insert(0, rim);
+        }
+        out.extend(outline_item(
+            SceneKind::Outline,
+            self.index,
+            self.frame,
+            self.radius,
+            self.continuous,
+            edge,
+            self.scale,
+            self.alpha,
+        ));
+    }
 }
 
 /// Backdrops of a window's surface or popup moved and scaled with the window's plan about its visual origin.
@@ -3561,6 +3614,83 @@ mod tests {
             None,
             1.0,
         )
+    }
+
+    fn kinds(pieces: &[Piece]) -> Vec<SceneKind> {
+        pieces
+            .iter()
+            .map(|piece| match piece {
+                Piece::Item(item) => item.id.kind,
+                _ => panic!("an item"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_client_decorated_styled_window_has_the_inner_rim_over_its_content_a_decorated_one_none() {
+        use cupertino_decorations::edge::{edge, EdgeKind};
+        let lines = WindowEdgeLines {
+            index: 7,
+            frame: smithay::utils::Rectangle::new((10.0, 10.0).into(), (400.0, 300.0).into()),
+            radius: 16.0,
+            continuous: true,
+            scale: 1.5,
+            alpha: 1.0,
+        };
+        let window =
+            |dark, active, contrast| edge(EdgeKind::Window, dark, active, contrast, [1.0; 4]);
+        let content = || vec![marker(SceneKind::WindowContent)];
+        for dark in [false, true] {
+            for contrast in [false, true] {
+                // a window its client decorates: the rim in front of its content, the outline behind it
+                let mut out = content();
+                lines.add(
+                    &mut out,
+                    &window(dark, false, contrast),
+                    Some(&window(dark, true, contrast)),
+                );
+                assert_eq!(
+                    kinds(&out),
+                    [
+                        SceneKind::WindowRim,
+                        SceneKind::WindowContent,
+                        SceneKind::Outline
+                    ],
+                    "dark {dark}, increased contrast {contrast}"
+                );
+                let Piece::Item(rim) = &out[0] else {
+                    unreachable!()
+                };
+                let cupertino_scene::Source::RoundedRect(ring) = &rim.source else {
+                    panic!("the rim is a rounded rectangle: {:?}", rim.source);
+                };
+                let (width, color) = ring.border.expect("the rim is a border");
+                let (px, expected) = window(dark, true, contrast).inner.unwrap().device(1.5);
+                assert_eq!(width, f64::from(px) / 1.5);
+                assert_eq!(color, expected, "the light rim of an active window");
+                // inside the frame: the ring's rectangle is the frame itself
+                assert_eq!(
+                    ring.rect.0,
+                    cupertino_geometry::Rect::new(10.0, 10.0, 400.0, 300.0)
+                );
+                // a decorated window has its rim in its decorations: the scene adds none
+                let mut out = content();
+                lines.add(&mut out, &window(dark, true, contrast), None);
+                assert_eq!(kinds(&out), [SceneKind::WindowContent, SceneKind::Outline]);
+            }
+        }
+        // faded out with the shadow (a full-screen window): no line at all
+        let faded = WindowEdgeLines {
+            alpha: 0.0,
+            ..lines
+        };
+        let mut out = content();
+        faded.add(
+            &mut out,
+            &window(true, true, false),
+            Some(&window(true, true, false)),
+        );
+        assert_eq!(kinds(&out), [SceneKind::WindowContent]);
     }
 
     #[test]

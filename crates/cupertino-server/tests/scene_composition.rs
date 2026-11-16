@@ -159,8 +159,8 @@ fn a_capture_of_a_locked_output_holds_only_the_lock_surface_and_black() {
     d.state.backend = Some(backend);
 }
 
-/// What the windows layer holds for the window: the clip of its content, and whether it has a shadow, a title bar and a
-/// rim.
+/// What the windows layer holds for the window: the clip of its content, and whether it has a shadow, a title bar, the
+/// rim of the compositor's decorations and the light rim of a window its client decorates.
 #[derive(Debug)]
 struct Framed {
     clip: cupertino_scene::Clip,
@@ -169,6 +169,8 @@ struct Framed {
     outline: bool,
     titlebar: bool,
     rim: bool,
+    /// The light rim just inside the frame of a window its client decorates, in front of the window's content.
+    window_rim: bool,
 }
 
 fn framed(d: &mut Desktop) -> Framed {
@@ -187,6 +189,10 @@ fn framed(d: &mut Desktop) -> Framed {
         .expect("render resources");
     d.state.backend = Some(backend);
     let has = |kind: SceneKind| items.iter().any(|(k, _)| *k == kind);
+    let at = |kind: SceneKind| items.iter().position(|(k, _)| *k == kind);
+    if let (Some(rim), Some(content)) = (at(SceneKind::WindowRim), at(SceneKind::WindowContent)) {
+        assert!(rim < content, "the rim lies over the content: {items:?}");
+    }
     Framed {
         clip: items
             .iter()
@@ -197,6 +203,7 @@ fn framed(d: &mut Desktop) -> Framed {
         outline: has(SceneKind::Outline),
         titlebar: has(SceneKind::TitleBar),
         rim: has(SceneKind::Rim),
+        window_rim: has(SceneKind::WindowRim),
     }
 }
 
@@ -293,15 +300,20 @@ fn a_zoomed_or_filled_window_keeps_its_rounded_corners_and_shadow_and_a_full_scr
             if state == "full screen" {
                 assert!(!rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
                 assert!(
-                    !(frame.shadow || frame.outline || frame.titlebar || frame.rim),
+                    !(frame.shadow
+                        || frame.outline
+                        || frame.titlebar
+                        || frame.rim
+                        || frame.window_rim),
                     "{mode:?} {state}: {frame:?}"
                 );
             } else {
                 assert!(rounded(&frame.clip), "{mode:?} {state}: {frame:?}");
                 assert!(frame.shadow && frame.outline, "{mode:?} {state}: {frame:?}");
+                // one light rim inside the frame: the decorations' own, or the scene's for a client's frame
                 assert_eq!(
-                    (frame.titlebar, frame.rim),
-                    (decorated, decorated),
+                    (frame.titlebar, frame.rim, frame.window_rim),
+                    (decorated, decorated, !decorated),
                     "{mode:?} {state}"
                 );
             }
@@ -456,8 +468,8 @@ fn an_opaque_client_drawn_frame_is_rounded_and_a_transparent_shaped_one_is_left_
         let shown = framed(&mut d);
         assert_eq!(rounded(&shown.clip), styled, "{frame:?}: {shown:?}");
         assert_eq!(
-            (shown.shadow, shown.outline),
-            (styled, styled),
+            (shown.shadow, shown.outline, shown.window_rim),
+            (styled, styled, styled),
             "{frame:?}: {shown:?}"
         );
         assert!(!shown.titlebar, "{frame:?}: {shown:?}");

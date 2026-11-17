@@ -49,8 +49,8 @@ use crate::wallpaper::Source;
 pub use widgets::Access;
 use widgets::{
     Adornment, AlertBody, Avatar, Backdrop, Fade, FieldFrame, FieldMaterial, FieldTint, GlassText,
-    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Pressable, Shift, Slot, StatusItem,
-    StatusKind, StatusRow, ESCAPE, OPTION_RETURN, WHITE,
+    Glyph, GlyphKind, Ground, Label, Look, NoticeCard, Place, Prepare, Pressable, Shift, Slot,
+    StatusItem, StatusKind, StatusRow, ESCAPE, OPTION_RETURN, WHITE,
 };
 
 /// The `app_id` of a lock surface's window, followed by `.` and the output's registry name: the surface roles give it
@@ -232,7 +232,8 @@ pub enum Input {
     SubmitName,
     /// The pointer came to a picker tile.
     Select(usize),
-    /// The focus came to a picker tile: its focus ring shows, the selection only once it shows.
+    /// The focus came to a picker tile without the keyboard (as the window opens): Return starts from it, and nothing
+    /// shows on it. The keyboard bringing the focus to a tile selects it ([`Input::Select`]).
     Focused(usize),
     /// A picker tile was clicked, or Return or Space chose it.
     Choose(usize),
@@ -502,7 +503,7 @@ fn power_item<M: Clone + 'static>(
         children: Vec::new(),
     })
     .key(POWER_KEY);
-    Element::new(Fade::new(rect, opacity, vec![item]))
+    Element::new(Fade::new(rect, opacity, vec![item])).key(POWER_PART)
 }
 
 /// The element key of the power item, which the menu hangs under.
@@ -564,7 +565,7 @@ fn status_bar<M: Clone + 'static>(
             children: Vec::new(),
         })
         .key(ACCESS_KEY);
-        parts.push(Element::new(Fade::new(rect, opacity, vec![item])));
+        parts.push(Element::new(Fade::new(rect, opacity, vec![item])).key(ACCESS_PART));
     }
     let items = status.items;
     let item = |kind: StatusKind, label: String| {
@@ -608,14 +609,17 @@ fn status_bar<M: Clone + 'static>(
             first.max_x()
         };
         let bar = Rect::new(0.0, 0.0, width, STATUS_BAR_HEIGHT);
-        parts.push(Element::new(Fade::new(
-            bar,
-            opacity,
-            vec![Element::new(StatusRow {
-                rect: Rect::new(0.0, 0.0, end.max(0.0), STATUS_BAR_HEIGHT),
-                children: row,
-            })],
-        )));
+        parts.push(
+            Element::new(Fade::new(
+                bar,
+                opacity,
+                vec![Element::new(StatusRow {
+                    rect: Rect::new(0.0, 0.0, end.max(0.0), STATUS_BAR_HEIGHT),
+                    children: row,
+                })],
+            ))
+            .key(STATUS_PART),
+        );
     }
     parts
 }
@@ -735,6 +739,30 @@ fn clock<M: 'static>(
             }),
         ],
     ))
+    .key(CLOCK_PART)
+}
+
+/// The keys of the parts every full screen shares (the clock, the power item, the accessibility item, the row of status
+/// items), so a switch between the picker and the password screen keeps each part as it is, with the pixels it drew.
+const CLOCK_PART: &str = "clock-part";
+const POWER_PART: &str = "power-part";
+const ACCESS_PART: &str = "access-part";
+const STATUS_PART: &str = "status-part";
+const NOTICES_PART: &str = "notices-part";
+const LOCK_MESSAGE_PART: &str = "lock-message-part";
+/// The key of the picker's tiles, a part of their own, and of what makes the password screen's material ahead of it.
+const TILES_PART: &str = "tiles-part";
+const PREPARE_PART: &str = "prepare-part";
+
+/// The strip of the screen whose control material a field or button at `rect` stands on: as wide as the shake takes it,
+/// so the material is made once for the control at rest and is the screen's under it wherever it is.
+fn strip_of(rect: Rect) -> Rect {
+    rect.inset(Insets {
+        top: 0.0,
+        left: -SHAKE_AMPLITUDE,
+        bottom: 0.0,
+        right: -SHAKE_AMPLITUDE,
+    })
 }
 
 /// The ground of a screen of `size` on `wallpaper` with its dimming at `dim`.
@@ -942,6 +970,8 @@ pub fn screen<M: Clone + 'static>(
     let name_first = screen.name.is_some_and(|name| name.text.is_empty());
     let round_button =
         |button: Rect, look: Look, label: &str, on_press: Input, kind: GlyphKind, key: &str| {
+            // the material is made once for the button at rest, wide enough for the shake, and laid where it is
+            let rest = button;
             let button = button.translate(shake, 0.0);
             let local = Rect::new(0.0, 0.0, button.width(), button.height());
             Element::new(Pressable {
@@ -959,12 +989,7 @@ pub fn screen<M: Clone + 'static>(
                         insets: Insets::ZERO,
                         material: Some(FieldMaterial {
                             ground: ground.clone(),
-                            strip: button.inset(Insets {
-                                top: 0.0,
-                                left: -SHAKE_AMPLITUDE,
-                                bottom: 0.0,
-                                right: -SHAKE_AMPLITUDE,
-                            }),
+                            strip: strip_of(rest),
                             origin: button.origin,
                         }),
                         tint: FieldTint::of(screen.access, false),
@@ -992,15 +1017,6 @@ pub fn screen<M: Clone + 'static>(
             "back",
         ));
     }
-    // the material is the screen's under the field wherever the shake takes it
-    let strip_of = |rect: Rect| {
-        rect.inset(Insets {
-            top: 0.0,
-            left: -SHAKE_AMPLITUDE,
-            bottom: 0.0,
-            right: -SHAKE_AMPLITUDE,
-        })
-    };
     if let Some(name) = screen.name {
         let name_rect = name_box.translate(shake, 0.0);
         children.push(
@@ -1133,21 +1149,24 @@ pub fn screen<M: Clone + 'static>(
             LOCK_MESSAGE_SIZE,
             1.0,
         );
-        parts.push(Element::new(Fade::new(
-            line,
-            screen.opacity,
-            vec![Element::new(Label {
-                wrap: false,
-                ..label(
-                    message,
-                    LOCK_MESSAGE_SIZE,
-                    FontWeight::REGULAR,
-                    within(line, line.origin),
-                    metrics,
-                )
-            })
-            .key("lock-message")],
-        )));
+        parts.push(
+            Element::new(Fade::new(
+                line,
+                screen.opacity,
+                vec![Element::new(Label {
+                    wrap: false,
+                    ..label(
+                        message,
+                        LOCK_MESSAGE_SIZE,
+                        FontWeight::REGULAR,
+                        within(line, line.origin),
+                        metrics,
+                    )
+                })
+                .key("lock-message")],
+            ))
+            .key(LOCK_MESSAGE_PART),
+        );
     }
     if let Some(menu) = screen.power {
         parts.push(power_item(menu, &layout, screen.opacity, map));
@@ -1245,7 +1264,7 @@ fn notice_cards<M: 'static>(
         children,
     ))
     .key("notices");
-    Some(Element::new(Fade::new(column, opacity, vec![place])))
+    Some(Element::new(Fade::new(column, opacity, vec![place])).key(NOTICES_PART))
 }
 
 /// Everything the user picker shows.
@@ -1367,10 +1386,21 @@ pub fn picker<M: Clone + 'static>(screen: &PickerScreen<'_>, map: fn(Input) -> M
         }
         tiles.push(Element::new(tile).key(tile_key(index)));
     }
-    parts.push(Element::new(Fade {
-        initial: true,
-        ..Fade::new(area, screen.opacity * screen.block, tiles)
-    }));
+    parts.push(
+        Element::new(Fade {
+            initial: true,
+            ..Fade::new(area, screen.opacity * screen.block, tiles)
+        })
+        .key(TILES_PART),
+    );
+    // the password screen's field and back button stand on material made while the picker rests
+    parts.push(
+        Element::new(Prepare {
+            ground: ground.clone(),
+            strips: vec![strip_of(layout.pill), strip_of(layout.back_button)],
+        })
+        .key(PREPARE_PART),
+    );
     if let Some(menu) = screen.power {
         parts.push(power_item(menu, &layout, screen.opacity, map));
     }

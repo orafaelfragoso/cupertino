@@ -617,7 +617,9 @@ impl<M: Clone + 'static> Widget<M> for Backdrop<M> {
     }
 
     fn event(&self, _: &mut (), event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
-        if cx.phase() != Phase::Capture {
+        // on the way to what has the focus, or as the target itself when nothing under it has the focus (the picker
+        // just back from the password screen)
+        if !matches!(cx.phase(), Phase::Capture | Phase::Target) {
             return Propagation::Continue;
         }
         let activity = |cx: &mut EventCx<'_, M>| {
@@ -1476,6 +1478,59 @@ pub(crate) struct FieldMaterial {
     pub origin: Point,
 }
 
+/// Draws nothing: makes and keeps the control material of `ground` over each of `strips` (screen points) while the
+/// screen rests, so the screen that needs it next (the password screen after the picker) does not make it in the first
+/// frame of its switch.
+pub(crate) struct Prepare {
+    pub ground: Ground,
+    pub strips: Vec<Rect>,
+}
+
+impl<M: 'static> Widget<M> for Prepare {
+    type State = ();
+
+    fn layout(&self) -> LayoutSpec {
+        LayoutSpec {
+            width: SizeSpec::Fixed(0.0),
+            height: SizeSpec::Fixed(0.0),
+            ..LayoutSpec::new(ContainerKind::Leaf)
+        }
+    }
+
+    fn state(&self) {}
+
+    fn update(&self, old: &Self, _: &mut ()) -> Change {
+        // the material comes from the picture with its dimming in, whatever the dimming shows now
+        if self.ground.source.key() != old.ground.source.key()
+            || self.ground.size != old.ground.size
+            || self.strips != old.strips
+        {
+            Change::Paint
+        } else {
+            Change::None
+        }
+    }
+
+    fn measure(&self, _: &(), _: Constraints, _: &mut MeasureCx<'_>) -> Measured {
+        no_measure()
+    }
+
+    fn event(&self, _: &mut (), _: &Event, _: &mut EventCx<'_, M>) -> Propagation {
+        Propagation::Continue
+    }
+
+    fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
+        let scale = cx.env().scale;
+        for &strip in &self.strips {
+            material(&self.ground, scale, strip);
+        }
+    }
+
+    fn semantics(&self, _: &(), cx: &mut SemanticsCx<'_>) {
+        cx.hidden();
+    }
+}
+
 /// The capsule of a field or a button at `rect` with continuous corners, on the control material: its field (if any)
 /// inside it by `insets`, and for a field (`initial`) the stop its scope gives the focus to as it opens.
 pub(crate) struct FieldFrame<M> {
@@ -1545,7 +1600,16 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
     fn paint(&self, _: &(), cx: &mut PaintCx<'_>) {
         let size = cx.size();
         let radius = PILL_RADIUS.min(size.height / 2.0);
-        let capsule = continuous(Rect::new(0.0, 0.0, size.width, size.height), radius);
+        // a button as wide as it is tall is a circle, as the ring of its glyph is; continuous corners of half its side
+        // would make it a rounded square
+        let capsule = if size.width <= size.height {
+            circle(
+                Point::new(size.width / 2.0, size.height / 2.0),
+                size.width / 2.0,
+            )
+        } else {
+            continuous(Rect::new(0.0, 0.0, size.width, size.height), radius)
+        };
         let scale = cx.env().scale;
         let laid = self
             .material
@@ -1586,20 +1650,18 @@ impl<M: 'static> Widget<M> for FieldFrame<M> {
     }
 }
 
-/// The selection's border along the inside of a tile of `size`.
+/// The selection's border along the inside of a tile of `size`: whole device pixels wide (at least one), so its straight
+/// edges cover whole pixels and stay sharp at any scale.
 fn selection_border(cx: &mut PaintCx<'_>, size: Size) {
-    let half = SELECTION_BORDER_WIDTH / 2.0;
+    let scale = cx.env().scale.max(f64::MIN_POSITIVE);
+    let width = (SELECTION_BORDER_WIDTH * scale).round().max(1.0) / scale;
+    let half = width / 2.0;
     cx.push(PaintOp::Stroke {
         shape: continuous(
-            Rect::new(
-                half,
-                half,
-                size.width - SELECTION_BORDER_WIDTH,
-                size.height - SELECTION_BORDER_WIDTH,
-            ),
+            Rect::new(half, half, size.width - width, size.height - width),
             SELECTION_RADIUS - half,
         ),
-        width: SELECTION_BORDER_WIDTH,
+        width,
         paint: Paint::Solid(Color::new(1.0, 1.0, 1.0, SELECTION_BORDER_ALPHA)),
     });
 }
@@ -2044,10 +2106,15 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
             return Propagation::Continue;
         }
         match event {
-            Event::Focus { gained, .. } => {
+            Event::Focus { gained, visible } => {
                 state.focused = *gained;
                 cx.request_paint();
-                if let (true, Some(message)) = (*gained, &self.on_focus) {
+                // a picker tile draws no focus ring: the keyboard bringing the focus to it selects it, which shows
+                let message = match self.look {
+                    Look::Tile { .. } if *visible => self.on_hover.as_ref(),
+                    _ => self.on_focus.as_ref(),
+                };
+                if let (true, Some(message)) = (*gained, message) {
                     cx.emit(message.clone());
                 }
                 Propagation::Continue
@@ -2114,9 +2181,9 @@ impl<M: Clone + 'static> Widget<M> for Pressable<M> {
                 }
                 access_glyph(cx, Point::new(size.width / 2.0, size.height / 2.0));
             }
-            // the selection is the row's frame outlined, with no fill and no shadow
+            // the selection is the row's frame outlined, with no fill and no shadow, and the only mark a tile shows
             Look::Tile { selected } => {
-                if selected || (state.focused && cx.focus_visible()) {
+                if selected {
                     selection_border(cx, size);
                 }
             }

@@ -3,7 +3,9 @@
 //!
 //! Surfaces: `lock` (the lock screen), `picker` (the login screen's accounts) and `password` (the login screen asking
 //! the chosen account's password). `--field empty|typed|help` shows the password field empty, with a password typed
-//! (its dots and the submit button), or after failed attempts (the help button pressed, its line shown). Each screen
+//! (its dots and the submit button), or after failed attempts (the help button pressed, its line shown). On the picker,
+//! `--selection none|shown` shows no selection (as it opens) or the first tile selected (after an arrow key or the
+//! pointer), and `--users three|one` three accounts and "Other…", or one account alone. Each screen
 //! stands on a wallpaper made for the capture, lighter for the light appearance; the accounts, the clock and the
 //! dimming are fixed, so a command gives the same pixels on every run. The fonts, symbols and theme are the system's,
 //! as an application's.
@@ -71,6 +73,10 @@ enum FieldState {
 struct Shot {
     surface: Surface,
     field: FieldState,
+    /// The picker's first tile shows as selected.
+    selected: bool,
+    /// The picker offers one account alone.
+    one_user: bool,
     size: Size,
 }
 
@@ -79,6 +85,8 @@ thread_local! {
         Cell::new(Shot {
             surface: Surface::Lock,
             field: FieldState::Empty,
+            selected: false,
+            one_user: false,
             size: OUTPUT,
         })
     };
@@ -124,7 +132,15 @@ impl Application for Shown {
             user("grace", "Grace Hopper"),
             user("alan", "Alan Turing"),
         ];
-        let picker = Picker::new(users.clone(), true).expect("accounts to offer");
+        let accounts = if shot.one_user {
+            users[..1].to_vec()
+        } else {
+            users.clone()
+        };
+        let mut picker = Picker::new(accounts, !shot.one_user).expect("accounts to offer");
+        if shot.selected {
+            picker.select(0);
+        }
         let model = Model {
             shot,
             screen,
@@ -267,7 +283,7 @@ fn state(request: &Request<'_>) -> Result<FieldState, String> {
 
 impl App for Login {
     const NAME: &'static str = "login";
-    const STATE_FLAGS: &'static [&'static str] = &["field"];
+    const STATE_FLAGS: &'static [&'static str] = &["field", "selection", "users"];
 
     fn surfaces(&self) -> Vec<String> {
         ["lock", "picker", "password"].map(String::from).to_vec()
@@ -275,7 +291,9 @@ impl App for Login {
 
     fn sheet_states(&self, surface: &str) -> Vec<State> {
         if surface == "picker" {
-            return vec![State::new()];
+            return ["none", "shown"]
+                .map(|v| vec![("selection".to_string(), v.to_string())])
+                .to_vec();
         }
         ["empty", "typed", "help"]
             .map(|v| vec![("field".to_string(), v.to_string())])
@@ -292,6 +310,19 @@ impl App for Login {
         if surface == Surface::Picker && field != FieldState::Empty {
             return Err("login/picker has no password field".into());
         }
+        let picked = |flag: &str, values: [&str; 2]| -> Result<bool, String> {
+            match request.state.iter().find(|(f, _)| f == flag) {
+                None => Ok(false),
+                Some(_) if surface != Surface::Picker => {
+                    Err(format!("--{flag} is a state of login/picker"))
+                }
+                Some((_, v)) if v == values[0] => Ok(false),
+                Some((_, v)) if v == values[1] => Ok(true),
+                Some((_, v)) => Err(format!("--{flag} {v}: {} or {}", values[0], values[1])),
+            }
+        };
+        let selected = picked("selection", ["none", "shown"])?;
+        let one_user = picked("users", ["three", "one"])?;
         let size = request.size.map_or(OUTPUT, |(w, h)| Size::new(w, h));
         let dark = request.look.dark;
         let wallpaper = self.wallpapers[usize::from(dark)]
@@ -306,6 +337,8 @@ impl App for Login {
         SHOT.set(Shot {
             surface,
             field,
+            selected,
+            one_user,
             size,
         });
         draw(request.look, request.scale, wallpaper, field)

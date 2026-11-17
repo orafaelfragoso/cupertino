@@ -10,9 +10,10 @@
 
 use crate::app::listen;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
-use crate::screen::{self, Result, Timer, FRAME};
+use crate::screen::{self, Result, Timer};
 use cupertino_defaults::login::ScreenSettings;
-use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
+use cupertino_kit::controls::FrameClock;
+use cupertino_kit::core::{Application, Command, Element, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::manager::{Connection, Message as ManagerMessage, SOCKET_VARIABLE};
@@ -50,6 +51,10 @@ const CONNECT_INTERVAL: Duration = Duration::from_secs(1);
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
 const WELCOME_POLL: Duration = Duration::from_millis(10);
 
+/// The longest the screens wait for the first user's wallpaper before they show on the fallback colour, seconds
+/// (approximate, ours): until then nothing is shown, and the display stays as black as the server starts it.
+const WALLPAPER_WAIT: f64 = 1.0;
+
 /// The screen the greeter shows.
 enum Stage {
     /// The tiles of the picker.
@@ -79,6 +84,9 @@ pub enum Message {
     Heard(Heard),
     Input(Input),
     Timer(u64),
+    /// The compositor gave a window a frame while something moves by itself (the dimming coming in, the switch between
+    /// the screens, a fade, the shake or the spinner): the next step is drawn.
+    Frame,
     /// The server closed a greeter surface.
     Closed,
     Unheard(&'static str),
@@ -118,6 +126,8 @@ pub struct GreeterApp {
     wallpapers: HashMap<u32, PathBuf>,
     pictures: Pictures,
     wallpaper: Source,
+    /// The screens show nothing yet: the first user's wallpaper is being read, for at most [`WALLPAPER_WAIT`].
+    waiting: bool,
     /// For the threads that read a wallpaper.
     sender: async_channel::Sender<Message>,
     /// When the screens first showed (their dimming comes in), and when the picker and the password screen last
@@ -403,6 +413,7 @@ pub fn run() -> Result<std::convert::Infallible> {
             wallpapers: wallpapers(&welcome.users),
             pictures: Pictures::default(),
             wallpaper: Source::Solid(cupertino_login::wallpaper::LOGIN_FALLBACK),
+            waiting: true,
             sender: wallpaper_sender,
             shown: (!cupertino_shell_client::test_clock::motion_settled()).then_some(0.0),
             switched: None,
@@ -418,6 +429,9 @@ pub fn run() -> Result<std::convert::Infallible> {
         if app.settings.show_full_name {
             app.stage = app.credentials(0.0);
         }
+        // the first user's wallpaper is read before anything shows: the screens appear on it, not on the fallback
+        let now = app.now();
+        app.follow_wallpaper(now);
         // the status items, read on a thread of their own; the screen goes on without them
         if let Err(e) = status::poll(
             app.settings.host_info,
@@ -426,7 +440,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         ) {
             eprintln!("cupertino-login: the status items: {e}");
         }
-        let commands = vec![
+        let mut commands = vec![
             listen(
                 &app.manager,
                 std::convert::identity,
@@ -438,6 +452,9 @@ pub fn run() -> Result<std::convert::Infallible> {
                 Message::Unheard("the surface roles"),
             ),
         ];
+        // the end of the wait for the wallpaper, if nothing else comes first
+        let wait = app.next_wakeup(now);
+        commands.extend(app.timer.schedule(now, wait, Message::Timer));
         (app, commands)
     })?;
     let reason = failure.borrow_mut().take();
@@ -511,6 +528,7 @@ impl Application for GreeterApp {
                 app.timer.fired(id);
                 Ok(())
             }
+            Message::Frame => Ok(()),
             Message::Closed => Err("the server closed a surface of the greeter".into()),
             Message::Unheard(what) => Err(format!("{what} stopped").into()),
         };
@@ -519,7 +537,11 @@ impl Application for GreeterApp {
                 screen.tick(now);
             }
             app.clock = screen::clock(app.hours)?;
-            app.follow_wallpaper();
+            app.follow_wallpaper(now);
+            if app.waiting && now >= WALLPAPER_WAIT {
+                eprintln!("cupertino-login: the wallpaper was not read in time; the screens show without it");
+                app.appear(now);
+            }
             Ok(())
         });
         match result {
@@ -536,8 +558,14 @@ impl Application for GreeterApp {
     }
 
     fn view(app: &GreeterApp) -> Vec<Window<Message>> {
+        // no surface until the first wallpaper is in: the screens appear on it whole
+        if app.waiting {
+            return Vec::new();
+        }
         let now = app.now();
         let mut windows = Vec::new();
+        // what moves by itself steps once per frame the compositor gives the screens, not on a timer between them
+        let on_frame = app.animating(now).then_some(Message::Frame);
         let dim = app.shown.map_or(1.0, |at| wallpaper::dimming_at(now - at));
         // with Reduce Motion the switch is at once
         let block = app
@@ -639,6 +667,11 @@ impl Application for GreeterApp {
                     Message::Input,
                 ),
             };
+            let content = Element::from(FrameClock {
+                content,
+                on_frame: on_frame.clone(),
+                on_layers_settled: None,
+            });
             windows.push(view::full_screen(
                 key.clone(),
                 format!("{GREETER_APP_ID}.{output}"),
@@ -670,38 +703,51 @@ impl GreeterApp {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// Seconds until the screen next changes by itself: a frame of the password screen's fades, shake or spinner, its
-    /// next change, or the clock's minute.
-    fn next_wakeup(&self, now: f64) -> Option<f64> {
-        let minute = screen::to_next_minute().unwrap_or(60.0);
-        // the dimming coming in and the switch between the screens draw a frame per refresh
+    /// Whether something on the screens moves by itself at `now`, a step each frame: the dimming coming in, the switch
+    /// between the screens, and the password screen's fades, shake or spinner.
+    fn animating(&self, now: f64) -> bool {
         let dimming = self.shown.is_some_and(|at| now - at < wallpaper::DIM_FADE);
         let switching = self
             .switched
             .is_some_and(|at| now - at < picker::SWITCH_DURATION);
-        let minute = if dimming || switching {
-            minute.min(FRAME)
-        } else {
-            minute
+        let moving = match &self.stage {
+            Stage::Picking => false,
+            Stage::Password { screen, .. } => {
+                let opacity = screen.opacity(now);
+                (opacity > 0.0 && opacity < 1.0)
+                    || matches!(screen.phase(), Phase::Failed { .. } | Phase::Unlocking)
+                    || screen.spinner(now).is_some()
+            }
         };
-        let Stage::Password { screen, .. } = &self.stage else {
-            return Some(minute);
-        };
-        let opacity = screen.opacity(now);
-        let moving = (opacity > 0.0 && opacity < 1.0)
-            || matches!(screen.phase(), Phase::Failed { .. } | Phase::Unlocking)
-            || screen.spinner(now).is_some();
-        let by_screen = screen.next_wakeup(now).map_or(minute, |w| w.min(minute));
-        Some(if moving {
-            by_screen.min(FRAME)
-        } else {
-            by_screen
-        })
+        dimming || switching || moving
+    }
+
+    /// Seconds until the screen next changes by itself, besides the frames of what moves ([`Self::animating`]): the
+    /// password screen's next change, the clock's minute, or the end of the wait for the first wallpaper.
+    fn next_wakeup(&self, now: f64) -> Option<f64> {
+        let mut wait = screen::to_next_minute().unwrap_or(60.0);
+        if self.waiting {
+            wait = wait.min((WALLPAPER_WAIT - now).max(0.0));
+        }
+        if let Stage::Password { screen, .. } = &self.stage {
+            if let Some(next) = screen.next_wakeup(now) {
+                wait = wait.min(next);
+            }
+        }
+        Some(wait)
+    }
+
+    /// The screens show from `now`, their dimming coming in: the first wallpaper is in, or the wait for it is over.
+    fn appear(&mut self, now: f64) {
+        self.waiting = false;
+        if self.shown.is_some() {
+            self.shown = Some(now);
+        }
     }
 
     /// Show the selected user's wallpaper: read it on a thread of its own when it is not read yet, and keep showing the
-    /// last one until it is in.
-    fn follow_wallpaper(&mut self) {
+    /// last one until it is in. The screens appear once the first one is in, or at once when there is none to read.
+    fn follow_wallpaper(&mut self, now: f64) {
         let uid = match &self.stage {
             Stage::Picking => match self.picker.selected() {
                 Tile::Account(user) => user.uid,
@@ -711,7 +757,12 @@ impl GreeterApp {
         };
         let path = uid.and_then(|uid| self.wallpapers.get(&uid));
         match self.pictures.want(path.map(PathBuf::as_path)) {
-            Want::Ready(source) => self.wallpaper = source,
+            Want::Ready(source) => {
+                self.wallpaper = source;
+                if self.waiting {
+                    self.appear(now);
+                }
+            }
             Want::Reading => {}
             Want::Read(path, stamp) => {
                 let sender = self.sender.clone();
@@ -944,18 +995,11 @@ impl GreeterApp {
     /// Act on the selected tile: the password screen of its account, or the name screen of "Other…".
     fn choose(&mut self, now: f64) {
         let to = match self.picker.selected() {
-            Tile::Account(user) => {
-                let mut screen = LockScreen::new(now, HIDE_AFTER);
-                screen.set_reduce_motion(self.reduce_motion);
-                if cupertino_shell_client::test_clock::motion_settled() {
-                    screen.settle_interface();
-                }
-                Stage::Password {
-                    user: user.clone(),
-                    screen: Box::new(screen),
-                    name: None,
-                }
-            }
+            Tile::Account(user) => Stage::Password {
+                user: user.clone(),
+                screen: Box::new(self.password_screen(now)),
+                name: None,
+            },
             Tile::Other => self.credentials(now),
         };
         self.switch(now, to);
@@ -963,16 +1007,20 @@ impl GreeterApp {
 
     /// The screen with a name and a password field.
     fn credentials(&self, now: f64) -> Stage {
-        let mut screen = LockScreen::new(now, HIDE_AFTER);
-        screen.set_reduce_motion(self.reduce_motion);
-        if cupertino_shell_client::test_clock::motion_settled() {
-            screen.settle_interface();
-        }
         Stage::Password {
             user: User::typed(String::new()),
-            screen: Box::new(screen),
+            screen: Box::new(self.password_screen(now)),
             name: Some(NameEntry::default()),
         }
+    }
+
+    /// The state of a password screen that starts at `now`. Its interface (the clock, the status bar, the power item)
+    /// is shown from the start: the screens it replaces showed it, and the switch fades in only the block that changes.
+    fn password_screen(&self, now: f64) -> LockScreen {
+        let mut screen = LockScreen::new(now, HIDE_AFTER);
+        screen.set_reduce_motion(self.reduce_motion);
+        screen.settle_interface();
+        screen
     }
 
     /// The screen the greeter starts on and goes back to: the picker, or the name and password screen with

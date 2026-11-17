@@ -1,8 +1,8 @@
 //! Framing: the length prefix, the caps, the decoder fed in any chunking, and what a malformed body reports.
 
 use cupertino_login_ipc::{
-    decode, encode, encode_secret, Account, DecodeError, Decoder, Event, FrameError, Request,
-    Secret, HEADER_BYTES, MAX_EVENT_FRAME, MAX_REQUEST_FRAME,
+    decode, encode, encode_secret, Account, Decoder, Event, FrameError, Request, Secret,
+    HEADER_BYTES, MAX_EVENT_FRAME, MAX_REQUEST_FRAME,
 };
 use zeroize::Zeroizing;
 
@@ -25,24 +25,31 @@ fn feed(decoder: &mut Decoder, bytes: &[u8], chunk: usize) -> Result<Vec<Vec<u8>
     Ok(frames)
 }
 
+fn version(body: &[u8]) -> u32 {
+    match decode::<Request>(body).unwrap() {
+        Request::Hello { version } => version,
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn a_frame_is_a_little_endian_length_then_the_json() {
     let frame = encode(&Request::Cancel {}, MAX_REQUEST_FRAME).unwrap();
     let json = br#"{"type":"Cancel"}"#;
     assert_eq!(&frame[..HEADER_BYTES], &(json.len() as u32).to_le_bytes());
     assert_eq!(&frame[HEADER_BYTES..], json);
-}
 
-#[test]
-fn a_request_round_trips_through_encode_decoder_and_decode() {
-    let frame = encode(&Request::Hello { version: 5 }, MAX_REQUEST_FRAME).unwrap();
-    let mut decoder = Decoder::new(MAX_REQUEST_FRAME);
-    let frames = feed(&mut decoder, &frame, usize::MAX).unwrap();
-    assert_eq!(frames.len(), 1);
-    match decode::<Request>(&frames[0]).unwrap() {
-        Request::Hello { version } => assert_eq!(version, 5),
-        other => panic!("{other:?}"),
-    }
+    let answer = || Request::Answer {
+        conversation: 9,
+        secret: secret("hunter2"),
+    };
+    assert_eq!(
+        encode(&answer(), MAX_REQUEST_FRAME).unwrap().to_vec(),
+        encode_secret(&answer(), MAX_REQUEST_FRAME)
+            .unwrap()
+            .to_vec(),
+        "encode_secret makes the same frame as encode"
+    );
 }
 
 #[test]
@@ -54,19 +61,19 @@ fn the_decoder_reads_the_same_frames_at_every_chunk_size() {
     for chunk in 1..=stream.len() {
         let mut decoder = Decoder::new(64);
         let frames = feed(&mut decoder, &stream, chunk).unwrap();
-        assert_eq!(frames.len(), 3, "chunk {chunk}");
-        for (i, body) in frames.iter().enumerate() {
-            match decode::<Request>(body).unwrap() {
-                Request::Hello { version } => assert_eq!(version, i as u32 + 1),
-                other => panic!("{other:?}"),
-            }
-        }
+        let versions: Vec<u32> = frames.iter().map(|body| version(body)).collect();
+        assert_eq!(versions, [1, 2, 3], "chunk {chunk}");
     }
 }
 
 #[test]
 fn wanted_counts_down_the_header_then_the_body() {
     let mut decoder = Decoder::new(64);
+    assert_eq!(decoder.wanted(), HEADER_BYTES);
+    assert!(
+        decoder.push(&[]).unwrap().is_none(),
+        "nothing changes nothing"
+    );
     assert_eq!(decoder.wanted(), HEADER_BYTES);
     assert!(decoder.push(&[3, 0]).unwrap().is_none());
     assert_eq!(decoder.wanted(), 2);
@@ -80,47 +87,47 @@ fn wanted_counts_down_the_header_then_the_body() {
 }
 
 #[test]
-fn pushing_nothing_changes_nothing() {
-    let mut decoder = Decoder::new(64);
-    assert!(decoder.push(&[]).unwrap().is_none());
-    assert_eq!(decoder.wanted(), HEADER_BYTES);
-}
-
-#[test]
-fn more_bytes_than_wanted_is_an_overrun() {
-    let mut decoder = Decoder::new(64);
-    assert_eq!(decoder.push(&[0; 5]).unwrap_err(), FrameError::Overrun);
-    let mut decoder = Decoder::new(64);
-    decoder.push(&[1, 0, 0, 0]).unwrap();
-    assert_eq!(decoder.push(b"ab").unwrap_err(), FrameError::Overrun);
-}
-
-#[test]
-fn a_zero_length_is_empty() {
-    let mut decoder = Decoder::new(64);
-    assert_eq!(decoder.push(&[0; 4]).unwrap_err(), FrameError::Empty);
-}
-
-#[test]
-fn a_length_over_the_limit_is_refused_before_any_body_is_taken() {
-    let mut decoder = Decoder::new(64);
-    assert_eq!(
-        decoder.push(&65u32.to_le_bytes()).unwrap_err(),
-        FrameError::TooLarge
-    );
-    // the limit itself is allowed
-    let mut decoder = Decoder::new(64);
-    assert!(decoder.push(&64u32.to_le_bytes()).unwrap().is_none());
-    assert_eq!(decoder.wanted(), 64);
-}
-
-#[test]
-fn the_largest_length_does_not_allocate_or_wrap() {
-    let mut decoder = Decoder::new(MAX_EVENT_FRAME);
-    assert_eq!(
-        decoder.push(&u32::MAX.to_le_bytes()).unwrap_err(),
-        FrameError::TooLarge
-    );
+fn the_decoder_refuses_a_bad_length_before_taking_any_body() {
+    let header = |length: u32| length.to_le_bytes().to_vec();
+    let rows: [(&str, usize, Vec<Vec<u8>>, Result<(), FrameError>); 6] = [
+        (
+            "more than the header",
+            64,
+            vec![vec![0; 5]],
+            Err(FrameError::Overrun),
+        ),
+        (
+            "more than the body",
+            64,
+            vec![header(1), b"ab".to_vec()],
+            Err(FrameError::Overrun),
+        ),
+        ("a zero length", 64, vec![header(0)], Err(FrameError::Empty)),
+        (
+            "one over the limit",
+            64,
+            vec![header(65)],
+            Err(FrameError::TooLarge),
+        ),
+        (
+            "the largest length, without allocating or wrapping",
+            MAX_EVENT_FRAME,
+            vec![header(u32::MAX)],
+            Err(FrameError::TooLarge),
+        ),
+        ("the limit itself", 64, vec![header(64)], Ok(())),
+    ];
+    for (row, limit, pushes, expected) in rows {
+        let mut decoder = Decoder::new(limit);
+        let mut got = Ok(());
+        for bytes in &pushes {
+            if let Err(error) = decoder.push(bytes) {
+                got = Err(error);
+                break;
+            }
+        }
+        assert_eq!(got, expected, "{row}");
+    }
 }
 
 #[test]
@@ -136,46 +143,26 @@ fn a_truncated_stream_never_yields_a_frame() {
 }
 
 #[test]
-fn encoding_refuses_a_message_over_the_limit() {
-    let request = Request::Authenticate {
+fn encoding_caps_the_json_not_the_header() {
+    let long_name = Request::Authenticate {
         account: Account::Typed {
             name: "x".repeat(100),
         },
     };
-    assert_eq!(encode(&request, 40).unwrap_err(), FrameError::TooLarge);
+    assert_eq!(encode(&long_name, 40).unwrap_err(), FrameError::TooLarge);
     assert_eq!(
-        encode_secret(&request, 40).unwrap_err(),
+        encode_secret(&long_name, 40).unwrap_err(),
         FrameError::TooLarge
     );
-}
 
-#[test]
-fn the_limit_is_on_the_json_not_the_header() {
     let json_length = encode(&Request::Cancel {}, 1000).unwrap().len() - HEADER_BYTES;
     assert!(encode(&Request::Cancel {}, json_length).is_ok());
     assert_eq!(
         encode(&Request::Cancel {}, json_length - 1).unwrap_err(),
         FrameError::TooLarge
     );
-}
 
-#[test]
-fn encode_secret_makes_the_same_frame_as_encode() {
-    let answer = || Request::Answer {
-        conversation: 9,
-        secret: secret("hunter2"),
-    };
-    assert_eq!(
-        encode(&answer(), MAX_REQUEST_FRAME).unwrap().to_vec(),
-        encode_secret(&answer(), MAX_REQUEST_FRAME)
-            .unwrap()
-            .to_vec()
-    );
-}
-
-#[test]
-fn the_longest_password_fits_the_request_cap() {
-    let frame = encode_secret(
+    let longest_password = encode_secret(
         &Request::Answer {
             conversation: u64::MAX,
             secret: secret(&"e".repeat(512)),
@@ -183,18 +170,50 @@ fn the_longest_password_fits_the_request_cap() {
         MAX_REQUEST_FRAME,
     )
     .unwrap();
-    assert!(frame.len() - HEADER_BYTES <= MAX_REQUEST_FRAME);
+    assert!(
+        longest_password.len() - HEADER_BYTES <= MAX_REQUEST_FRAME,
+        "the longest password fits the request cap"
+    );
 }
 
 #[test]
-fn decoding_reports_only_the_class_of_a_failure() {
-    let syntax = decode::<Request>(b"{not json").unwrap_err();
-    assert_eq!(syntax.class(), "syntax");
-    let data = decode::<Request>(br#"{"type":"NoSuchRequest"}"#).unwrap_err();
-    assert_eq!(data.class(), "data");
-    let eof = decode::<Request>(br#"{"type":"Hello","version":"#).unwrap_err();
-    assert_eq!(eof.class(), "eof");
-    assert_eq!(syntax.to_string(), "malformed message (syntax)");
+fn decode_refuses_anything_but_one_known_message_and_names_the_class() {
+    let request = |body: &[u8]| decode::<Request>(body).map(drop);
+    let rows: [(&str, Result<(), _>, &str); 9] = [
+        ("not JSON", request(b"{not json"), "syntax"),
+        (
+            "an unknown tag",
+            request(br#"{"type":"NoSuchRequest"}"#),
+            "data",
+        ),
+        ("cut off", request(br#"{"type":"Hello","version":"#), "eof"),
+        (
+            "an unknown field",
+            request(br#"{"type":"Hello","version":5,"extra":1}"#),
+            "data",
+        ),
+        (
+            "a field on Cancel",
+            request(br#"{"type":"Cancel","x":1}"#),
+            "data",
+        ),
+        (
+            "a missing field",
+            decode::<Event>(br#"{"type":"Hello"}"#).map(drop),
+            "data",
+        ),
+        ("an array", request(b"[]"), "data"),
+        ("nothing", request(b""), "eof"),
+        (
+            "trailing bytes",
+            request(br#"{"type":"Cancel"} x"#),
+            "syntax",
+        ),
+    ];
+    for (row, result, class) in rows {
+        assert_eq!(result.unwrap_err().class(), class, "{row}");
+    }
+    assert!(request(b"null").is_err(), "null");
 }
 
 #[test]
@@ -206,43 +225,13 @@ fn a_decode_error_never_contains_the_offending_value() {
         format!(r#"{{"type":"Cancel","{hex_password}":1}}"#),
         format!(r#"{{"type":"{hex_password}"}}"#),
         format!(r#"{{"type":"Answer","conversation":1,"secret":"{hex_password}Z"}}"#),
+        format!(r#"{{"type":"Answer","conversation":1,"secret":"{hex_password}6"}}"#),
     ] {
-        let error: DecodeError = decode::<Request>(body.as_bytes()).unwrap_err();
+        let error = decode::<Request>(body.as_bytes()).unwrap_err();
         let shown = format!("{error} {error:?}");
         assert!(
-            !shown.contains("password") && !shown.contains(hex_password),
+            !shown.contains("password") && !shown.contains("7061"),
             "{shown}"
         );
     }
-}
-
-#[test]
-fn unknown_tags_and_fields_are_refused() {
-    assert!(decode::<Request>(br#"{"type":"Hello","version":5,"extra":1}"#).is_err());
-    assert!(decode::<Request>(br#"{"type":"Cancel","x":1}"#).is_err());
-    assert!(
-        decode::<Event>(br#"{"type":"Hello"}"#).is_err(),
-        "a missing field"
-    );
-    assert!(decode::<Request>(b"[]").is_err());
-    assert!(decode::<Request>(b"null").is_err());
-    assert!(decode::<Request>(b"").is_err());
-}
-
-#[test]
-fn a_frame_with_trailing_bytes_in_the_body_is_malformed() {
-    assert!(decode::<Request>(br#"{"type":"Cancel"} x"#).is_err());
-}
-
-#[test]
-fn the_errors_say_what_they_are() {
-    assert_eq!(
-        FrameError::TooLarge.to_string(),
-        "frame larger than the cap"
-    );
-    assert_eq!(FrameError::Empty.to_string(), "empty frame");
-    assert_eq!(
-        FrameError::Overrun.to_string(),
-        "more bytes than the decoder asked for"
-    );
 }

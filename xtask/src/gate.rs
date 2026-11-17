@@ -224,7 +224,7 @@ static SCANNER_XML: LazyLock<Regex> = LazyLock::new(|| {
 });
 static INCLUDED: LazyLock<Regex> = LazyLock::new(|| regex(r#"\binclude_bytes!\s*\(\s*"([^"]+)""#));
 
-fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     let hash = Sha256::digest(bytes);
     let mut text = String::with_capacity(64);
     for byte in hash {
@@ -414,7 +414,7 @@ fn suffix(rel: &str) -> String {
 }
 
 /// The paths git would track under `root`: tracked plus untracked-not-ignored.
-fn visible_paths(root: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn visible_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     let text = crate::plan::output(
         root,
         "git",

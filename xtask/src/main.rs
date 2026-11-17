@@ -1,5 +1,5 @@
-//! Repository tasks. One command: `cargo xtask ci`, which works out what a change touches and runs the checks the
-//! chosen profile asks for on it.
+//! Repository tasks. `cargo xtask ci` works out what a change touches and runs the checks the chosen profile asks for
+//! on it; `cargo xtask vendored` runs only its check of the vendored trees' patch series.
 
 mod config;
 mod gate;
@@ -7,6 +7,7 @@ mod glob;
 mod licences;
 mod plan;
 mod run;
+mod vendored;
 
 use std::process::ExitCode;
 
@@ -15,6 +16,7 @@ use config::Scope;
 const USAGE: &str = "\
 usage: cargo xtask ci [--scope changed|affected|all] [--base <git-ref>] [--profile agent|integration|pr|full]
                       [--format text|json] [--dry-run]
+       cargo xtask vendored
 
 Plans the checks a change needs from .config/validation.toml and runs them.
   --scope    changed: the packages whose files changed; affected: those and every package depending on them;
@@ -24,6 +26,8 @@ Plans the checks a change needs from .config/validation.toml and runs them.
   --profile  which checks run (default agent).
   --format   text (a summary) or json (the report); the report is also written to target/xtask/ci-latest.json.
   --dry-run  print the plan and its commands and run nothing.
+`vendored` reverses each vendored tree's patches in memory and compares the result with its UPSTREAM.sha256; `ci`
+runs it in the profiles with the gate and whenever a vendored tree changed.
 Exit status: 0 every check passed, 1 a check failed, 2 the plan could not be made.";
 
 /// Options of `cargo xtask ci`.
@@ -48,10 +52,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
         Some("ci") => {}
         Some(other) => {
             return Err(format!(
-                "unknown command `{other}`; the only command is `ci`"
+                "unknown command `{other}`; the commands are `ci` and `vendored`"
             ))
         }
-        None => return Err("a command is required; the only command is `ci`".to_owned()),
+        None => return Err("a command is required: `ci` or `vendored`".to_owned()),
     }
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -97,6 +101,24 @@ fn main() -> ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
+    }
+    if args.first().map(String::as_str) == Some("vendored") {
+        if args.len() > 1 {
+            eprintln!("xtask: `vendored` takes no options\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+        let root = match plan::repository_root() {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("xtask: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        return if run::run_vendored(&root) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     let options = match parse(&args) {
         Ok(options) => options,

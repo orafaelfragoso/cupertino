@@ -1,0 +1,29 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -23,6 +23,9 @@
+ Remove four unused tracing imports, cast the SIGBUS handler through a pointer before its integer representation,
+ and advance swapchain buffer ages with compare/exchange instead of deprecated `fetch_update`. Age zero and overflow
+ handling and sequentially consistent ordering are preserved without raising the declared Rust version.
++
++A `wl_shm` buffer committed without damage keeps the texture its surface already holds instead of being uploaded
++whole again, so a client presenting an unchanged frame costs no upload.
+ 
+ Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
+ client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
+diff --git a/src/backend/renderer/gles/mod.rs b/src/backend/renderer/gles/mod.rs
+--- a/src/backend/renderer/gles/mod.rs
++++ b/src/backend/renderer/gles/mod.rs
+@@ -862,7 +862,11 @@
+                 self.gl
+                     .PixelStorei(ffi::UNPACK_ROW_LENGTH, stride / pixelsize as i32);
+ 
+-                if upload_full || damage.is_empty() {
++                if !upload_full && damage.is_empty() {
++                    // nothing changed since the texture was last filled: the texture of this surface already holds
++                    // what the buffer shows, so a buffer committed without damage costs no upload
++                    trace!("Keeping shm texture, no damage");
++                } else if upload_full {
+                     trace!("Uploading shm texture");
+                     self.gl.TexImage2D(
+                         ffi::TEXTURE_2D,

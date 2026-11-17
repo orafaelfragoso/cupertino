@@ -28,7 +28,7 @@ These never start from the development folder:
 - data-control clients and the system daemons (network, Bluetooth, power).
 
 Work on them nested or headless: `cupertino desktop start --backend nested --spawn foot` from inside the session, or
-the integration tests and `crates/cupertino-server/scripts/capture.sh` for offscreen captures. Their changes reach the
+`cargo run -p cupertino-server -- --headless --screenshot out.png --exit-after-screenshot` for an offscreen capture. Their changes reach the
 installed desktop through a package update, which the person decides on. After it, a process the server supervises
 (`login`, `portal`, `polkit-agent`, `desktop-control`) runs the new program from `cupertino shell restart NAME`:
 

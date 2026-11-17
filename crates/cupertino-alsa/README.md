@@ -13,8 +13,7 @@ dependency is `rustix` (`fs`). 64-bit kernels only. Layer: `platform`.
 | `card` | `Card`: open a control device, `info`, `elements`, `read_values`, `write_values`, `db_curve`, `subscribe`, `read_events` |
 | `master` | `select_master`, `find_switch`, `Master`: the playback master volume and its mute switch |
 
-Every function that opens a device takes the device directory (`/dev/snd` in production), and every parser takes bytes, so
-the tests run on literal byte layouts.
+Every function that opens a device takes the device directory (`/dev/snd` in production), and every parser takes bytes.
 
 ## How it works
 
@@ -33,9 +32,8 @@ the tests run on literal byte layouts.
 - **Structure sizes** (asserted in the tests): card info 376, element id 64, list 80, info 272, value 1224, event 72, TLV
   header 8.
 
-## Tests
+## Examples
 
 ```
-cargo test -p cupertino-alsa
 cargo run -p cupertino-alsa --example list   # opt-in, read-only: this machine's cards, controls and master candidate
 ```

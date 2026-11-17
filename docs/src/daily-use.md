@@ -10,7 +10,7 @@ A short guide for the first days on a machine that uses Cupertino as its session
 - **Lock.** `Super+Ctrl+Q`.
 - **Leave at once.** `Ctrl+Alt+Backspace` ends the compositor. `Ctrl+Alt+F1` to `F12` switch to a text console. Both are reserved: no application can take them over.
 - **Bound the first login.** Write a whole number of seconds into `~/.config/cupertino/session-limit`, for example `echo 600 > ~/.config/cupertino/session-limit`. The compositor stops after that long. Remove the file for a normal session.
-- **From a checkout, without GDM.** On a free text console, `./run-cupertino.sh`; see [Building and running](building.md).
+- **From a checkout, without GDM.** On a free text console, start the checkout's server; see [Building and running](building.md).
 
 Not verified: how GDM treats the session on a real machine (the virtual console, and the restart after a crash). The first login on the hardware is the test.
 
@@ -108,7 +108,7 @@ lists the errors the desktop recorded, and `cupertino diagnose export --output F
 |---|---|
 | `~/.local/state/cupertino/session.log` | one line per session start and end: a normal end, the exit status, the signal that ended the compositor, or the watchdog. When the compositor ends with an error, the end line also has the reason: a panic on its main thread or a lost rendering context for which the server could not make a new renderer. A GPU reset that the server survives is one line of its own (see [A GPU reset](#a-gpu-reset)), and so is a session that has only a software renderer (see [No GPU acceleration](displays-and-gpus.md)). An abort or a fault (SIGABRT, SIGSEGV) is named as the reason, and `server.log` has its backtrace, as it has a panic's. Other signals leave no reason; the line names the signal. |
 | `~/.local/state/cupertino/server.log` | everything the compositor logs, including the GPU, the driver, the kernel and any panic. The previous run is `server.log.1`. An error that stops the start is its last line, `the server stopped: ...`. |
-| `~/cupertino-tty.log` | what the processes print when started with `run-cupertino.sh`, including a start that fails before `server.log` opens. |
+| `~/cupertino-tty.log` | what the processes print when a checkout is started from a text console, including a start that fails before `server.log` opens. |
 
 `RUST_LOG` changes the log filter, and `CUPERTINO_LOG_FILE` moves `server.log`. After a panic, or a lost rendering context for which the server could not make a new renderer, the teardown may take 2 s, then the server exits.
 
@@ -126,7 +126,7 @@ The outcome is `renderer remade, the clients stayed connected` or `renderer not 
 
 The limits: a fourth reset within 60 s, or a renderer that cannot be made, ends the session. The login screen comes back, as after any lost rendering context. A client's buffer that the reset lost shows what the driver left in it until the client draws again.
 
-Not verified on hardware: the new renderer has run only through the offscreen test hook (`tests/gpu-reset.rs`), not against a real reset.
+Not verified on hardware: the new renderer has run only through the offscreen reset hook, not against a real reset.
 
 To investigate a reset with an AI assistant:
 

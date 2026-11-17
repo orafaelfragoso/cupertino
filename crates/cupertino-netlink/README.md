@@ -44,15 +44,10 @@ parser is a pure function of bytes. Not audited: the current versions of `netlin
 - **Writes** (`set_link_up`, address and route changes, rfkill) need `CAP_NET_ADMIN` or write access to `/dev/rfkill`;
   all reads are unprivileged. The packet socket needs `CAP_NET_RAW`.
 - **One `unsafe` block**: the `sockaddr_ll` of `PacketSocket` implements `rustix`'s `SocketAddrArg`. The struct is built
-  whole and a test checks its length.
+  whole.
 - **Constants.** The 5 s read timeout of a request, the 64 KiB receive buffer and the 4 KiB frame buffer are approximate.
 
-## Tests
+## Examples
 
-`cargo test -p cupertino-netlink`. `tests/recorded.rs` runs the parsers on real kernel replies in `tests/fixtures/` (its
-README says how they were recorded and scrubbed): link names and flags, the LAN address and the default route, the
-`nl80211` family, the station, and the scan list (28 access points: open, WPA, WPA2 and the transition mode). Unit tests
-build the cases a room does not have, byte by byte: WPA3 (SAE), OWE, WEP, enterprise, an unknown suite, truncated
-elements, and the netlink framing errors. `examples/record-netlink.rs` records the fixtures. It only dumps (it never triggers a
-scan) and refuses to write a file that still holds a real address.
-
+`examples/record-netlink.rs` records real kernel replies. It only dumps (it never triggers a scan) and refuses to write a
+file that still holds a real address.

@@ -25,7 +25,7 @@ It exits with failure on any problem, in both modes, except that `--graph` does 
 `--graph` prints a DOT graph with one cluster per layer. Comment lines above it give the crate count per layer, every
 forbidden edge with its kind and its exception (tracking, area, reason) or `violation`, stale exceptions and denied
 paths. Build and dev edges are labelled, exceptions drawn orange and dashed, violations red. `graph/layers.dot` is a committed
-snapshot. The check without `--graph`, `cupertino dev layers` and `tests/graph-snapshots.rs` all fail when it differs
+snapshot. The check without `--graph`, and `cupertino dev layers` fail when it differs
 from the workspace, with the problem `stale_graph`; regenerate it after a dependency or layer change:
 
 ```sh
@@ -44,7 +44,7 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 
 | Layer | May depend on | Crates |
 |---|---|---|
-| `foundation` | `foundation` | animation, apps, assets, build-info, defaults, diagnostic-events, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, test-bus, test-pam, test-pam-shim, theme, thumbnails, typeahead, xkbcommon |
+| `foundation` | `foundation` | animation, apps, assets, build-info, defaults, diagnostic-events, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, theme, thumbnails, typeahead, xkbcommon |
 | `models` | `foundation`, `models` | displays, effects, input, overview, render-api, scene, stage, wm |
 | `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
 | `protocol` | `foundation`, `protocol` | app-protocols, login-ipc, protocols |
@@ -55,7 +55,7 @@ All rules are constants in `src/lib.rs`; nothing is read from a configuration fi
 | `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
 | `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
 | `apps` | `foundation`, `models`, `protocol`, `transport`, `ui` | files, settings |
-| `tools` | all but `core`, `shell`, `services`, `apps` | cli, diagnostics, layers, testclient |
+| `tools` | all but `core`, `shell`, `services`, `apps` | cli, diagnostics, layers |
 
 Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the icon loader are `foundation`, so the toolkit can use them.
 
@@ -97,12 +97,3 @@ edges, the layer, path and workspace licence `problems`, and the `closure` probl
 `is_clean()`, `all_problems()`, `summary()`, `dot()` and `by_layer()`. A Cargo that cannot start, a `cargo metadata`
 that fails and a crate without a layer are a `LayersError` (`Cargo`, `Metadata`, `Manifest`), never a panic. The
 binary is this call on the working directory.
-
-## Tests
-
-```sh
-cargo test -p cupertino-layers
-```
-
-`tests/workspace.rs` builds fixture workspaces with `cargo generate-lockfile --offline`: a clean one, one with an edge
-the rules deny, one whose MPL-2.0 crate depends on a GPL crate outside the members, and the errors.

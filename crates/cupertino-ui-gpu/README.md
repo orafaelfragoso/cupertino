@@ -2,7 +2,7 @@
 
 CupertinoKit's GPU renderer: `GpuRenderer` implements `UiRenderer` over a `cupertino-gpu` device and draws a window's
 `DisplayList` into a texture the presenter hands to the compositor. MPL-2.0. It keeps the CPU renderer's results: the
-CPU renderer is the standard it is tested against (every golden scene within 2/255 per channel) and the fallback.
+CPU renderer is the standard it follows (every scene within 2/255 per channel) and the fallback.
 
 What it draws, and how:
 
@@ -42,9 +42,8 @@ A window draws with `WindowRenderer`, a `UiRenderer` whose frames are `CpuFrame`
 presenter on the same device copies into its buffers and anything else reads back (`CpuFrame::in_memory`). The
 programs (`GpuPrograms`) are made once per device and shared by every renderer on it (`GpuRenderer::with_programs`).
 
-The tests (`tests/`) draw the golden scenes against the CPU renderer's baselines, and generated scenes of each
-primitive group on both renderers at scales 1, 1.5 and 2 on odd sizes, whole and repainting damage, and scroll layers
-scrolled frame by frame against the same frames drawn whole. They need an EGL
-device: the first render node, or the surfaceless platform; `CUPERTINO_GPU_REQUIRED=1` makes a missing or software
-device a failure (the local GPU tier: `scripts/test --slow` and `scripts/done` set it when the machine's render node
-opens), `CUPERTINO_EGL_REQUIRED=1` a missing one (CI, which runs them on Mesa's software rasteriser).
+Both renderers are meant to agree on the reference scenes and on generated scenes of each primitive group at scales
+1, 1.5 and 2 on odd sizes, whole and repainting damage, and with scroll layers scrolled frame by frame against the
+same frames drawn whole. The GPU renderer needs an EGL device: the first render node, or the surfaceless platform;
+`CUPERTINO_GPU_REQUIRED=1` makes a missing or software device a failure, `CUPERTINO_EGL_REQUIRED=1` a missing one (a
+run on Mesa's software rasteriser).

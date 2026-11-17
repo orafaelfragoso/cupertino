@@ -41,10 +41,7 @@ funnel / scale at 11 progress values), `warp_wireframe.png`, `warp_directions.pn
 right and left dock), `warp_interrupted_at_270ms.png` (minimize reversed after 270 ms) and `transitions_contact_sheet.png`
 (open, workspace slide, overview zoom, show desktop).
 
-## Tests
+## Benchmarks
 
-`cargo test -p cupertino-effects` and `cargo bench -p cupertino-effects`. Tests cover mesh endpoints (window at `t = 0`,
-slot at `t = 1` for every kind and direction), monotonic approach of the texture corners, no NaN, vertex budgets (warp ≤
-800, funnel ≤ 400, scale 4), reversal and interruption continuity, spring velocity retention, the verified durations, and
-rendered-pixel checks through the CPU rasteriser. The bench prints ns per mesh: warp ≈ 2.6 µs, funnel ≈ 2.8–5.3 µs, scale
-≈ 20 ns on the development host.
+`cargo bench -p cupertino-effects` prints ns per mesh: warp ≈ 2.6 µs, funnel ≈ 2.8–5.3 µs, scale ≈ 20 ns on the
+development host.

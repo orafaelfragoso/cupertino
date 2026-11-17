@@ -5,10 +5,12 @@ writes and the contact sheet. MPL-2.0; a dev-dependency of `cupertino-files`, `c
 whose `examples/<app>_capture.rs` draw their surfaces with their own painters on sample data.
 
 ```
-ci/capture.sh APP/SURFACE [--scale N] [--appearance light|dark|both] [--increase-contrast] [--reduce-transparency]
-              [--size WxH] [--out DIR] [--sheet] [--STATE-FLAG VALUE]...
-ci/capture.sh APP          # lists the surfaces of APP
+cargo run -p CRATE --example APP_capture -- APP/SURFACE [--scale N] [--appearance light|dark|both]
+              [--increase-contrast] [--reduce-transparency] [--size WxH] [--out DIR] [--sheet] [--STATE-FLAG VALUE]...
+cargo run -p CRATE --example APP_capture -- APP    # lists the surfaces of APP
 ```
+
+`CRATE` is `cupertino-files`, `cupertino-kit` or `cupertino-login`; `APP` is `files`, `kit` or `login`.
 
 | Flag | Effect |
 |---|---|
@@ -16,7 +18,7 @@ ci/capture.sh APP          # lists the surfaces of APP
 | `--appearance` | `light`, `dark` or `both` (default) |
 | `--increase-contrast`, `--reduce-transparency` | the session's display options |
 | `--size WxH` | the window size in points instead of the surface's default |
-| `--out DIR` | where the PNGs go (created); `ci/capture.sh` defaults to `captures` in `$CARGO_TARGET_DIR`, else in the workspace's `target` |
+| `--out DIR` | where the PNGs go (created); the default is `captures` in `$CARGO_TARGET_DIR`, else in the workspace's `target` |
 | `--sheet` | every state the app lists for the surface, and one contact sheet: states as columns, appearances as rows; refused with a state flag |
 | `--STATE-FLAG VALUE` | a state of the surface; each app names its own (`--login saving`, `--view list`) |
 
@@ -34,7 +36,6 @@ alone does not show the surfaces as they look.
 | `kit/scroll` (an overlay scroll view: at rest, pulled past its top edge, its bar shown, fading and hidden after a wheel step) | `--direction ltr\|rtl`, `--phase rest\|stretch\|shown\|fading\|hidden` |
 | `kit/under-toolbar` (a page that scrolls under a toolbar row drawn in a layer over it, set off by the scroll edge: at rest, just after a wheel step and after the bar has faded) | `--direction ltr\|rtl`, `--phase rest\|shown\|hidden` |
 | `login/lock`, `login/picker`, `login/password` (the lock screen, and the login screen's accounts and password screen, at 2560 x 1440 points unless `--size` says otherwise, on a wallpaper made for the capture) | `--field empty\|typed\|help` (not the picker: the password typed shows its dots and the submit button; help, after failed attempts, the help button, its line and the message); the picker: `--selection none\|shown` (no selection as it opens, or the first tile selected), `--users three\|one` (three accounts and "Other…", or one account alone) |
-| `overview/all` (the server headless with test windows, `ci/capture-overview.sh`; no `--sheet`) | `--windows N` (1 to 6, default 2) |
 
 The sidebar material is the server's, so a flat fill of the window background stands in for it. The home folder and
 the pictures are example data, not the machine's. Files draws at a fixed clock (2026-01-01 15:00

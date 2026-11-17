@@ -21,7 +21,7 @@
 //! them; `--backdrop flat|busy` draws them over the window's background or over hard-edged colour bands. Its sheet
 //! shows each state.
 //!
-//! `ci/capture.sh kit/controls --scale 2` (the flags are `cupertino-capture`'s)
+//! `cargo run -p cupertino-kit --example kit_capture -- kit/controls --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! The fonts, symbols and theme are the system's, as an application's ([`cupertino_kit::app::options`]). The clock
 //! stands still, so every control shows its resting look, but for the gallery's held states.

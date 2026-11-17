@@ -42,9 +42,8 @@ buffer follow.
   stable `FontId`; `FontIndex::shape` shapes one run with `harfrust` (visual order, byte clusters, advances in points).
   `set_system_fonts` gives it the installed fonts: `InstalledFonts` asks Fontconfig, loaded at run time, so the
   font configuration picks the face per script and language; without the library only the registered faces draw.
-  A run that must not depend on the machine's fonts sets `FONTCONFIG_FILE` to a configuration of its own, as
-  `tests/fontconfig.rs` does; Kit's golden tests build their own font index and never see installed fonts.
-  Kit apps set it. `tests/installed.rs` shapes Arabic, Devanagari and Hebrew with Noto Sans subsets (OFL-1.1).
+  A run that must not depend on the machine's fonts sets `FONTCONFIG_FILE` to a configuration of its own; a font index built from registered faces alone never sees installed fonts.
+  Kit apps set it.
 - `TextSystem` is the shared entry point (`&self` methods, one `Arc` for measuring and painting): `paragraph` shapes an
   `AttributedText` per style run and hard line and caches the result, `measure` lays it out for a size. A family
   no face matches is looked up among the installed fonts, else falls back to the first registered face. A character
@@ -72,9 +71,7 @@ buffer follow.
   the paragraph's level so they hang past its end edge. `Start` and `End` follow the base direction; `Left` and
   `Right` hold in either. Positions stay logical: a downstream caret sits at the start edge of the character after it and an upstream one at the end edge of
   the character before it, `index_at` returns the side a click lands on, and a selection across a direction change can
-  be several rectangles on one line. `tests/corpus.rs` pins the caret stops,
-  glyph order, wrap points and hit testing of Latin, combining marks, Hebrew, Arabic, Devanagari, ZWJ emoji, flags and
-  digits inside right-to-left text.
+  be several rectangles on one line.
 - `GlyphRaster` implements `GlyphRasterizer` over a `TextSystem`'s fonts with `swash` and `cupertino-glyph`: unhinted
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of
@@ -82,7 +79,7 @@ buffer follow.
   every `GlyphRaster` on it within `SHARED_RASTER_BYTES` (2 MiB, the least recently used quarter let go when full), so
   a window made again, whose renderer is new, finds its glyphs instead of drawing them
   (`TextSystem::shared_rasters` tells what they hold and did).
-- Timing, release, medians of 15 (`cargo test --release -p cupertino-ui-text -- --ignored --nocapture timing`; the
+- Timing, release, medians of 15 (the
   shape figure is cold and includes loading the font and the break data, and the grouping of glyphs into clusters
   that every layout reuses): 200 characters shape 85-105 us, reflow 4-5 us; 5000 characters shape 940-980 us, reflow
   87-90 us; a cache hit costs under 1 us. A caret move lays out only the caret's hard line and the lines on either

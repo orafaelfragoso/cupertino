@@ -290,6 +290,4 @@ D-Bus error names are recorded as they are; a path in an error's text is recorde
   `PickColor`) and GlobalShortcuts from this backend only; Secret from gnome-keyring; every other interface from the GTK backend
 
 The packages ship the binary, `cupertino.portal` and the same routing file as
-`packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`. `tests/portals_conf.rs` reads the packaged file
-and checks it against the D-Bus names of the interfaces this crate implements: each is routed here first, nothing else
-is, `cupertino.portal` lists exactly those, and the crate's copy is the same file.
+`packaging/files/usr/share/xdg-desktop-portal/cupertino-portals.conf`. Each interface this crate implements is routed here first, nothing else is, `cupertino.portal` lists exactly those, and the crate's copy is the same file.

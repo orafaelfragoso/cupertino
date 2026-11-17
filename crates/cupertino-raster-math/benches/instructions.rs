@@ -1,8 +1,6 @@
 //! Instruction counts of the drawing maths a frame spends its time in: the blur's plan and kernel for a 4K-sized
 //! region and the blur of one, the coverage of a continuous-corner rounded rectangle over every pixel of a panel at 2x,
 //! and the dithered store of a gradient over the same pixels.
-//!
-//! `scripts/dev/microbench cupertino-raster-math`
 
 use cupertino_geometry::CornerStyle;
 use cupertino_raster_math::blur::{self, BlurPlan, Edge, Image, Precision};

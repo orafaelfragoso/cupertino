@@ -29,8 +29,3 @@ Using the preferred minimum height to choose the row count is.
 The swap and slide springs are the window manager's generic frame spring, damping ratio 1.0 and response 0.38 s; a swap's alpha and corner-radius springs (`alpha_curve`,
 `corner_curve`) are its alpha and corner-radius property springs, damping ratio 1.0 and responses 0.30 s and 0.20 s. No strip-specific spring exists, so their use for the strip is. The vertical padding and alignment, the thumbnail padding and the hide dwell remain approximate and are
 configurable.
-
-## Tests
-
-Integration tests in `tests/stage.rs` cover enabling, grouping, rows, slots, swaps and interruption, closing, drag-add,
-strip hide and peek, icons, thumbnails, resting placements, fitting and desktop behaviour.

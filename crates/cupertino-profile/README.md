@@ -47,7 +47,7 @@ rebuilds every crate:
 
 ```sh
 RUSTFLAGS="--cfg cupertino_tracy" cargo build --release --workspace --all-features --bins --target-dir target/tracy
-BIN_DIR=target/tracy/release CUPERTINO_PROFILE=tracy crates/cupertino-server/scripts/session.sh --spawn cupertino-files
+BIN_DIR=target/tracy/release CUPERTINO_PROFILE=tracy target/tracy/release/cupertino-server --headless --spawn cupertino-files
 ```
 
 The client collects only while a profiler is connected, is reachable from this machine alone, and installs no handler

@@ -4,17 +4,16 @@ What is left of `docs/plans/gpu-rendering.md` once the owner's checks are deferr
 Each task is one change with its own tests, in the crates it names; tasks that share a crate run one after the other.
 The boxes here are ticked together with their items in the GPU plan.
 
+The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci` (`AGENTS.md`), and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
+
 ## Rules
 
-- One task per implementer, about an hour of work. Each implementer runs the tests of its own change only, plus
-  `cargo fmt`, clippy on its crates, `ci/gate.py` and `ci/test_suite.py --check`; no benchmark, no `scripts/done`, no
-  slow tier.
+- One task per implementer, about an hour of work. Each implementer validates its own crates only
+  (`cargo xtask ci --profile agent`); no benchmark, no workspace-wide validation.
 - At most three implementers at a time, never two in the same crate.
-- A change that adds a test tier clause to `.config/nextest.toml` adds it as the first clause of both filters, and
-  `scripts/test -p cupertino-ui-abi` proves the file still parses.
 - No `sleep` or `pgrep` loops waiting on another process. A long command runs in the background, and its notice is
   waited for.
-- The full gates (`scripts/done`, `scripts/test --slow`, the slow tier with `CUPERTINO_GPU_REQUIRED=1`) and every
+- The full validation (`cargo xtask ci --profile full`, with `CUPERTINO_GPU_REQUIRED=1`) and every
   benchmark run once, in the last wave, on merged `main`.
 
 ## Wave 1: independent pieces (in parallel)
@@ -90,9 +89,9 @@ The boxes here are ticked together with their items in the GPU plan.
 - [x] A draw-into frame that finds no free buffer marks its damage again, so kept scroll images are repainted where
       that frame would have drawn. Test: a frame skipped for want of a buffer, then the next frame, shows the change.
 
-### 2c. Tests and scripts (`scripts/`, the server's and `cupertino-ui-gpu`'s GPU tests)
+### 2c. Tests and tooling (the server's and `cupertino-ui-gpu`'s GPU tests)
 
-- [x] `scripts/test --slow` and `scripts/done` set `CUPERTINO_GPU_REQUIRED=1` when the machine has a render node, so
+- [x] the full validation set `CUPERTINO_GPU_REQUIRED=1` when the machine has a render node, so
       the render-node tests cannot skip there; without one they skip as before.
 - [x] `gpu_slice`'s missed-refresh count leaves out the frames a synchronous screenshot stalls, and counts by frames,
       not a fixed three seconds.
@@ -103,7 +102,7 @@ The boxes here are ticked together with their items in the GPU plan.
       timer query), not wall-clock time with other GPU users in it. The damaged frame takes about 0.05 ms on the GPU
       here. The test's other check, a whole frame recorded and issued within 4 ms of the thread's CPU time, holds an
       optimized build (2.4 to 2.6 ms of CPU time, at the commit that set the budget and now); the unoptimized build the
-      test scripts run takes 5.6 to 6.2 ms at both, so it was never a slowdown, and that build is held to 10 ms instead,
+      test run takes 5.6 to 6.2 ms at both, so it was never a slowdown, and that build is held to 10 ms instead,
       the optimized budget scaled by its measured cost. The damaged frame's figures do not depend on the build (0.05 ms
       on the GPU in both; without timer queries 0.18 ms of CPU time optimized and 0.5 ms not, well within 4 ms).
 
@@ -285,9 +284,9 @@ The boxes here are ticked together with their items in the GPU plan.
 
 ## Wave 4: the lead's gates and measurements (merged `main`)
 
-- [x] `scripts/done`, `scripts/test --slow` and the slow tier with `CUPERTINO_GPU_REQUIRED=1`. The fast tier 7606 of
-      7606 and the slow tier 274 of 274 (the render node required, as the scripts now set it); 15 compositor tests over
-      the fast tier's 2 s (2.0 to 3.2 s) moved to the slow tier.
+- [x] The full validation with `CUPERTINO_GPU_REQUIRED=1`. The quick group 7606 of
+      7606 and the long-running group 274 of 274 (the render node required); 15 compositor tests over
+      the quick group's 2 s (2.0 to 3.2 s) moved to the long-running group.
 - [ ] The benchmarks, run once, each of the GPU plan's "measured at the end" figures recorded where it stands:
   - Files' scroll and layout (step 4);
   - the control panel's opening frames and the memory per process (step 7);

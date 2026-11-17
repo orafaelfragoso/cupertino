@@ -1,7 +1,7 @@
 //! Records this machine's rtnetlink and nl80211 replies as binary fixtures.
 //!
 //! ```text
-//! cargo run -p cupertino-netlink --example record-netlink -- crates/cupertino-netlink/tests/fixtures
+//! cargo run -p cupertino-netlink --example record-netlink -- DIR
 //! ```
 //!
 //! Only dumps are requested (read-only, no capability needed); no scan is triggered. Before a

@@ -125,7 +125,7 @@ pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
 }
 
 /// The longest a main loop sleeps with nothing due. Every piece of time-driven work names its deadline (the tick's calls
-/// are audited for it, `tests/loop_wakeups.rs`), and events, frames and the end of a run wake the loop themselves, so on
+/// are audited for it), and events, frames and the end of a run wake the loop themselves, so on
 /// a desktop where nothing happens the loop sleeps; this is only a backstop against a deadline left unnamed, which then
 /// runs a minute late instead of never.
 pub(crate) const REST_WAIT: std::time::Duration = std::time::Duration::from_secs(60);

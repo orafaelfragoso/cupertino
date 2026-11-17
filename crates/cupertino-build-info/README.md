@@ -20,8 +20,7 @@ character after it, a later line for the same key wins, and an empty value count
 
 ## Where the commit comes from
 
-`build.rs` takes the first source that knows the commit (`build/commit.rs`; `tests/commit-source.rs` runs the order on
-temporary trees):
+`build.rs` takes the first source that knows the commit (`build/commit.rs`):
 
 1. `CUPERTINO_BUILD_COMMIT` from the environment, for a build that knows its commit otherwise. It must be a full
    hash, 40 hexadecimal digits (or 64 for a repository with sha256 object names); any other value fails the build,

@@ -38,23 +38,13 @@ kernel's `sockaddr_hci` and `sockaddr_l2` into stack arrays. Everything else is 
   Device Found with RSSI 127 means "not available" and decodes to `None`.
 - **Load Link Keys** always sends `Debug_Keys` as 0.
 
-## Tests
+## Examples
 
 ```
-cargo test -p cupertino-bluetooth
 cargo run -p cupertino-bluetooth --example record-bluetooth -- [--listen SECONDS] > capture.txt
 ```
 
-`tests/commands.rs` checks the exact bytes of every command, written field by field from the document, and the decoding of
-the replies. `tests/events.rs` decodes every event to literal values and checks the failures (wrong length, truncated
-field). `tests/recorded.rs` with `tests/fixtures/recorded-mgmt.txt` checks that the codec reproduces three recorded
-commands byte for byte (Read Version, Read Index List, Read Controller Info) and decodes the three replies.
-
-The recording comes from the real controller of the development machine, with the address replaced by
-`AA:BB:CC:DD:EE:01` and the name by `cupertino-test` (management version 1.23, one controller, Bluetooth version 12,
-manufacturer 0x5D, class of device `0x7c0104`). Every other fixture (all events, all other commands, the EIR cases) is built by hand from the document. No pairing or
-discovery traffic was recorded, because that needs privilege and a device. `examples/record-bluetooth.rs` is read-only and refuses
-to record events that could carry an address or a key. A 3 s listen on the unprivileged socket produced no events.
+`examples/record-bluetooth.rs` is read-only and refuses to record events that could carry an address or a key.
 
 ## Open issues
 

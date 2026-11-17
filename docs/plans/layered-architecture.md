@@ -85,7 +85,7 @@ the [decision log](#decision-log), never changed silently in a task.
 | D26 | Components never depend on each other's crates; inside the host they talk through the host's message bus (typed, serialisable messages in `cupertino-kit-shell`, no blocking replies); a component in a host of its own (D18) is on the same bus through a socket the shared host serves in `$XDG_RUNTIME_DIR`; other processes are reached through the compositor's protocols or the session bus. | A component can be restarted, stopped or run alone. | | Plan |
 | D27 | `cupertino-defaults` stays one crate in the `system` layer. | Its coupling is to the settings schema, which a split would not change. | | Plan |
 | D28 | Licences are not a constraint on this work. Every licence check that could refuse a merge of this plan is removed in W0.2 (the toolkit's MPL closure, the GPL-dependency check); the check that each crate declares a licence stays. Licences are redefined later. | Owner. | Merges may cross today's licence boundaries; declared licences are reconciled when they are redefined. | Owner |
-| D29 | Tests exercise public boundaries only. At the end no source file holds test code: every test is in a crate's `tests/` and uses only its public API, or is a program test (whole processes: headless sessions, `scenarios/`). Tests of internals are removed in the crate's `T` task; one that guarded a behaviour no other test covers is replaced by a public or program test before it goes. No item is made more visible and no feature is added to keep a test; Kit's `test` feature, for program tests, is the only test feature. The performance gates (frame timings, instruction counts) and a new memory gate (per-process PSS in the bench scenarios) are part of the acceptance bar. Behaviour this plan adds (restarts, hangs, holds, transactions, deadlines) is proven by program tests in the slow tier. | Behaviour and performance are what count; tests of internals are what make refactoring expensive, and behaviour tests are the refactor's safety net. | A `T` task per crate in every wave; `cupertino-session-tests` holds tests that start programs from more than one crate. | Owner |
+| D29 | Tests exercise public boundaries only. At the end no source file holds test code: every test is in a crate's `tests/` and uses only its public API, or is a program test (whole processes: headless sessions). Tests of internals are removed in the crate's `T` task; one that guarded a behaviour no other test covers is replaced by a public or program test before it goes. No item is made more visible and no feature is added to keep a test; Kit's `test` feature, for program tests, is the only test feature. Frame timings, instruction counts and per-process PSS (profiled by hand) are part of the acceptance bar. Behaviour this plan adds (restarts, hangs, holds, transactions, deadlines) is proven by program tests. | Behaviour and performance are what count; tests of internals are what make refactoring expensive, and behaviour tests are the refactor's safety net. | A `T` task per crate in every wave; `cupertino-session-tests` holds tests that start programs from more than one crate. | Owner |
 | D30 | `third-party/smithay` stays vendored, kept as the upstream release plus a documented patch series: `third-party/smithay/patches/` holds one patch file per change, `PATCHES.md` lists each (what, why, files), `UPSTREAM.sha256` records every file of the upstream release, and a check reverses the patches on a copy of the tree and compares the result with those hashes. Offering the patches upstream, so they can leave the tree, is later work outside this plan. | Smithay is the right foundation; an undocumented fork is not. | W0.3. | Owner (upstream later), plan (form) |
 | D31 | Keyboard layouts come from libxkbcommon through the `xkbcommon` crate. `cupertino-xkbcommon` and `third-party/xkbcommon-rs` are deleted. The server keeps the last working layout when one does not compile. | The vendored pure-Rust port follows an old release of the C library, has had no release since February 2025, and a panic in it was already fixed here; a panic compiling a layout ends the session. Layout data and the library are maintained together upstream. | Packaging depends on libxkbcommon (W1.7). | Owner |
 | D32 | A crate exists for one of four reasons only: (1) it builds a program or a loadable library; (2) it is a facade (D23); (3) two or more crates need it that do not, and must not, depend on each other; (4) it would otherwise pass about 25k lines and splits along an interface (D25, the toolkit's crates). Code with one user and none of these reasons is a module of that user. A component is always a crate of its own (D26). A crate added later names its reason in the [decision log](#decision-log). | Every crate costs a manifest, a layer line, a README, a public API and the tests of that API; a crate with one user adds a boundary nobody else crosses. | Thirteen merges beyond today's obvious ones, listed in the [crate map](#crate-map). | Plan |
@@ -311,10 +311,6 @@ Every crate that exists today, and where it goes. "Keep" means it stays a crate 
 | `cupertino-settings` | apps | keep | apps | W5.9, W7.2 |
 | `cupertino-shell-client` | transport | keep; reached only through `cupertino-kit-shell` or by services | transport | W3.3 |
 | `cupertino-stage` | models | merged into `cupertino-wm` | — | W2.1 |
-| `cupertino-test-bus` | foundation | keep | testing | W1.4 |
-| `cupertino-test-pam` | foundation | keep | testing | W1.4 |
-| `cupertino-test-pam-shim` | foundation | keep | testing | W1.4 |
-| `cupertino-testclient` | tools | merged into `cupertino-session-tests` as its binary target `cupertino-testclient` (D32) | — | W1.4 |
 | `cupertino-theme` | foundation | keep; absorbs `cupertino-ui-theme`; parses the specification it is given | foundation | W1.2 |
 | `cupertino-thumbnails` | foundation | merged into `cupertino-icons` (D32) | — | W1.3 |
 | `cupertino-trash` | foundation | keep | system | W1.3 |
@@ -341,7 +337,7 @@ New crates:
 
 | Crate | Layer | Task |
 |---|---|---|
-| `cupertino-session-tests` | testing; absorbs `cupertino-testclient` | W1.4 |
+| `cupertino-session-tests` | testing | W1.4 |
 | `cupertino-kit-shell` | shellkit | W5.10 |
 | `cupertino-audiod` | services; absorbs `cupertino-alsa` and `cupertino-pipewire` | W5.9, W6.16 |
 | `cupertino-server-backend` | core | W5.6 |
@@ -354,7 +350,7 @@ New crates:
 | `cupertino-shell-dialogs` | shell | W6.11 |
 | `cupertino-prompts` | shell | W6.14 |
 
-Count: 94 crates today, 31 merged away or deleted, 12 new: 75 at the end. Every crate left meets one of D32's reasons.
+Count: 90 crates today (the four test crates are already gone), 30 merged away or deleted, 12 new: 72 at the end. Every crate left meets one of D32's reasons.
 
 ## Rules for implementers
 
@@ -366,9 +362,8 @@ These apply to every task. A task's own text can narrow them, never widen them.
   may make only mechanical edits: `use` paths, `Cargo.toml` dependency lines, the layer line, test module names.
 - A move task moves code: item bodies stay as they are; only paths, visibility and imports change. No renames, no
   reformatting, no fixes on the way, no behaviour change. A task that changes behaviour says so in its title.
-- Every task may also update, as mechanical edits: `source` and `test_owner` paths in
-  `docs/architecture/contracts.yaml`, and the test registry `ci/test_suite.py --write` maintains.
-- A merge, move or deleted binary is searched for in the whole repository (`rg -n '<old name>'`, `scripts/`, `ci/`,
+- Every task may also update, as mechanical edits: `source` paths in `docs/architecture/contracts.yaml`.
+- A merge, move or deleted binary is searched for in the whole repository (`rg -n '<old name>'`, `xtask/`, `.config/`,
   `packaging/` and `docs/` included), and every mention is updated in the same task.
 - Each task has a size (S: hours, M: a day, L: several days). L tasks are split into numbered steps; do them in order,
   one commit per step.
@@ -387,12 +382,10 @@ These apply to every task. A task's own text can narrow them, never widen them.
 
 ### Tests (D29)
 
-- Tests move with their code. A test that only uses the public API goes to `tests/`; run `ci/test_suite.py --write`
-  after.
+- Tests move with their code. A test that only uses the public API goes to `tests/`.
 - In a `T` task: every `#[cfg(test)]` module in `src/` goes. A test that uses only the public API moves to `tests/`.
   A test of internals is removed; before removing it, check whether a public or program test covers its behaviour, and
   if none does, write that test first. List removed tests by the behaviour they covered.
-- Commits that only move code carry `NO_TEST_REASON=move only`.
 
 ### Stop and report instead of deciding
 
@@ -408,20 +401,15 @@ Stop, change nothing more, and report when:
 Only for what you changed; the lead runs the full gates when a wave closes.
 
 ```bash
-scripts/test
-cargo clippy -p <each crate you own> --all-targets
-cargo fmt --check
-python3 -I ci/gate.py .
-python3 -I ci/contracts.py .
-python3 ci/test_suite.py --check
+cargo xtask ci --profile agent         # fmt, clippy and the tests of the crates you changed, and the gate
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 cargo run -q -p cupertino-layers -- --write-remaining
 cargo run -q -p cupertino-layers
-cargo test -p <crate> --test <file>   # each slow-tier test your task adds or moves, by name
 ```
 
-Commit the regenerated graph and remaining-work list with your change. No benchmarks, no `scripts/done`, not the whole
-slow tier, no `sleep` or `pgrep` loops.
+
+Commit the regenerated graph and remaining-work list with your change. No benchmarks, no workspace-wide validation, no
+`sleep` or `pgrep` loops.
 
 ### Report
 
@@ -448,9 +436,9 @@ Each task: **Owns**, **Touches** (mechanical edits only), **After**, size, and a
 
 - [ ] Per-process PSS (from `/proc/<pid>/smaps_rollup`) of the server, every shell and built-in process, Files and
       Settings, and
-      frame timings (`scripts/dev/profile --scenario <name>`), for each bench scenario that starts the shell, installed
+      frame timings (`CUPERTINO_PROFILE` timelines), for each interaction that starts the shell, installed
       packages. Recorded in [Measurements](#measurements).
-- [ ] The memory gate: `scripts/dev/perf-gate` also compares per-process PSS against this machine's baseline.
+- [ ] The memory baseline: per-process PSS is compared against this machine's baseline by hand (heaptrack and `smaps_rollup`).
 
 #### W0.2 `cupertino-layers` checks the target rules (M)
 
@@ -477,7 +465,7 @@ Each task: **Owns**, **Touches** (mechanical edits only), **After**, size, and a
       Unreleased section of its changelog; `patches/` holds each change as a patch file.
 - [ ] `UPSTREAM.sha256` records each file of the upstream release (from its published package).
 - [ ] The check fetches nothing: on a copy of the tree it reverses the patches in order and compares every file with
-      `UPSTREAM.sha256`, failing on any other difference. Run by `scripts/done`.
+      `UPSTREAM.sha256`, failing on any other difference. Run by `cargo xtask ci`.
 
 #### W0.T Tests of `cupertino-layers`
 
@@ -485,7 +473,7 @@ As in W1.T.
 
 #### W0.close (lead)
 
-- [ ] `scripts/done` passes; `remaining.txt` committed.
+- [ ] `cargo xtask ci --profile integration` passes; `remaining.txt` committed.
 
 ### Wave 1: foundation, system, testing
 
@@ -525,17 +513,14 @@ login osd portal screenshot`. **After** W1.3.
 
 #### W1.4 The `testing` layer and `cupertino-session-tests` (M)
 
-**Owns** layer lines of `test-bus test-pam test-pam-shim capture`; new `cupertino-session-tests`; `testclient`; the
-tests that start programs from more than one crate: the menu bar's tests that open the apps' menus, and every test
-under `crates/*/tests/` that starts another crate's program (`rg -l 'bin_dir\(|shell::process\('`; listed by file in
-the report). **Touches** `menubar server` (dev-dependencies), `ci/soak.py`, `ci/test-build-test-fixtures.py`,
-`contracts.yaml`. **After** W0.close.
+**Owns** the layer line of `capture`; new `cupertino-session-tests`, the home of tests that start programs from more
+than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml`. **After** W0.close.
 
-- [ ] The four crates declare `layer = "testing"`; nothing has a normal or build dependency on them.
-- [ ] The listed tests run from `cupertino-session-tests`, unchanged apart from paths; `cupertino-menubar` no longer
-      depends on `cupertino-files` or `cupertino-settings`; `cupertino-server`'s tests start no other crate's program.
-- [ ] `cupertino-testclient` is a binary target of `cupertino-session-tests` under the same program name; the harness
-      builds it from there.
+- [ ] `capture` and `cupertino-session-tests` declare `layer = "testing"`; nothing has a normal or build dependency on
+      them.
+- [ ] Any test that starts programs from more than one crate lives in `cupertino-session-tests`;
+      `cupertino-menubar` no longer depends on `cupertino-files` or `cupertino-settings`; `cupertino-server`'s tests start
+      no other crate's program.
 
 #### W1.5 `cupertino-ui-controls` absorbs `cupertino-typeahead` and `cupertino-filepicker` (S)
 
@@ -563,13 +548,12 @@ compile, packaging dependencies and `packaging/release.py`'s licence files. **To
       null), activity of an unknown layout or LED, empty options, keysym names. Listed in the report.
 - [ ] The `xkbcommon` patch entry and both directories are gone; Smithay, the client transport and the portal use the
       `xkbcommon` crate over libxkbcommon; packaging depends on libxkbcommon; `docs/src/architecture.md` says so.
-- [ ] A layout that does not compile leaves the last working layout in place and logs the failure. Program test in the
-      slow tier.
+- [ ] A layout that does not compile leaves the last working layout in place and logs the failure. Program test.
 
 #### W1.T Tests of wave 1's crates
 
 One task per crate, after its structural task: `keyboard theme apps assets defaults diagnostic-events icons peer
-radios trash animation geometry menu-model test-bus test-pam`. (`glyph` is tested with `raster-math` in W2.T, `capture`
+radios trash animation geometry menu-model`. (`glyph` is tested with `raster-math` in W2.T, `capture`
 with `kit` in W4.T.)
 
 - [ ] The crate follows [Tests](#tests-d29): no `#[cfg(test)]` left in `src/`, removed tests listed by behaviour,
@@ -580,7 +564,7 @@ with `kit` in W4.T.)
 - [ ] `ENFORCED` gains `Foundation`, `System`, `Testing`.
 - [ ] `docs/src/architecture.md`'s layer table, the layer rule in the repository's agent instructions and the READMEs of
       absorbing crates match.
-- [ ] `scripts/done` and `scripts/test --slow` pass on merged `main`.
+- [ ] `cargo xtask ci --profile integration` passes on merged `main`.
 
 ### Wave 2: graphics, models, platform
 
@@ -683,7 +667,7 @@ ui-wayland`. **After** W4.2.
        interface's registry). `cupertino-apps`' launch starts no thread; the child is reaped by its caller.
 2. [ ] Font, glyph and icon caches in D5's forms.
 3. [ ] `kit::task` and the bus integration of D6; `kit::time` for local time.
-4. [ ] Program test (slow tier): two Kit instances in one process draw and take input independently; a panic in one
+4. [ ] Program test: two Kit instances in one process draw and take input independently; a panic in one
        leaves the other drawing.
 
 #### W4.6 One render thread per process (L, behaviour change)
@@ -695,7 +679,7 @@ ui-wayland`. **After** W4.2.
 2. [ ] Presenting and committing move to the render thread in D4's order; UI threads hand over recorded display lists
        with their configure serials; CPU surfaces are rasterised on the CPU pool; the heartbeat reaches the watchdog.
 3. [ ] Device loss handled once per process.
-4. [ ] Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead runs `perf-gate`).
+4. [ ] Frame timings and per-process PSS of Files and Settings no worse than W0.1 (lead compares with a profile).
 
 #### W4.7 Kit's public API (L, design then code)
 
@@ -758,8 +742,7 @@ W4.7 step 1 (its approved types).
 
 #### W4.close (lead)
 
-- [ ] `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close, plus `scripts/dev/review-sheet` and
-      `scripts/dev/perf-gate`.
+- [ ] `ENFORCED` gains `Render`, `Ui`. Docs and gates as in W1.close.
 
 ### Wave 5: compositor, services, the shell toolkit
 
@@ -772,10 +755,10 @@ on a server crate.
 **Owns** `server`. **After** W4.close.
 
 - [ ] A stall recorder: with `CUPERTINO_PROFILE`, any turn of the compositor's loop longer than 4 ms is logged with what
-      it ran. Recorded in the report over every bench scenario, before and after.
+      it ran. Recorded in the report over the common interactions, before and after.
 - [ ] Every wait found by the recorder, and by `rg -n 'recv\(|join\(|wait\(|block_on|blocking::|std::fs::'
       crates/cupertino-server/src` on the loop's thread, has a deadline and a fallback or moves off the thread.
-- [ ] Program test (slow tier): a client and a shell component that stop answering do not delay the compositor's frames.
+- [ ] Program test: a client and a shell component that stop answering do not delay the compositor's frames.
 
 #### W5.2 Host protocol, server side (L, behaviour change)
 
@@ -785,7 +768,7 @@ on a server crate.
 2. [ ] Bus identity per component (D20); `cupertino-peer` resolves callers to components.
 3. [ ] Busy, unresponsive and lost handling (D17); restart counts kept by the server (D16).
 4. [ ] Holds (D19).
-5. [ ] Program tests (slow tier) with a stand-in host: a dropped component keeps the menu bar's space and picture; a
+5. [ ] Program test with a stand-in host: a dropped component keeps the menu bar's space and picture; a
        transient surface is dismissed and focus returns; an unresponsive component gets no input.
 
 #### W5.3 Transactions, server side (L, behaviour change)
@@ -839,7 +822,7 @@ then the modules move to the crate. A module that does not fit its group is repo
 **Owns** `server`, `seat` (W5.6 only) and the new crate. **After** W5.5, then each the one before.
 
 - [ ] `rg -n 'crate::state|Cupertino\b'` finds nothing in the moved modules.
-- [ ] Frame timings unchanged within noise (lead runs `perf-gate` after merge).
+- [ ] Frame timings unchanged within noise (lead compares with a profile after merge).
 
 #### W5.9 `cupertino-audiod` (M, behaviour change)
 
@@ -897,9 +880,9 @@ Every component task has this shape:
 - [ ] No thread started, no `block_on`, no file or bus call on its UI thread; Clippy's `disallowed-methods` passes.
 - [ ] Its bus names are owned on its own connection; `contracts.yaml` names `cupertino-shell` as the binary.
 - [ ] Its README says what a restart loses (D21).
-- [ ] Program tests (slow tier): a panic injected mid-paint, mid-dispatch and on a helper thread restarts it alone while
+- [ ] Program test: a panic injected mid-paint, mid-dispatch and on a helper thread restarts it alone while
       the others keep drawing; host memory is stable after 50 such restarts.
-- [ ] Where `scripts/dev/review-sheet` shows it, its crops match before and after, light and dark.
+- [ ] Its drawing matches before and after, light and dark, checked in captures.
 
 #### W6.1 `cupertino-shell`, the host (L)
 
@@ -973,8 +956,7 @@ At most three at a time, in this order:
 
 #### W6.15 Everything that names the old shell binaries (M)
 
-**Owns** `cli` (`shell.rs`, `dev_folder.rs`), `diagnostics` (`dev_builds.rs`), `scripts/dev/perf-gate`, the bench tests,
-`ci/vm/*.py`, `docs/src/building.md`, the tests in `cupertino-session-tests`. **After** each component as it lands.
+**Owns** `cli` (`shell.rs`, `dev_folder.rs`), `diagnostics` (`dev_builds.rs`), `docs/src/building.md`, the tests in `cupertino-session-tests`. **After** each component as it lands.
 
 - [ ] Each names the host and its components; `cupertino shell list` and `restart` act on components.
 
@@ -1023,7 +1005,7 @@ Every crate of wave 6, as in W1.T.
 - [ ] `ENFORCED` lists every layer; `remaining.txt` is empty and deleted with its check.
 - [ ] `docs/src/architecture.md`, the repository's agent instructions, `CONTRIBUTING.md`, `cupertino-layers/README.md`
       and every touched crate's README describe the result.
-- [ ] `scripts/done`, `scripts/test --slow`, `scripts/dev/review-sheet`, `scripts/dev/perf-gate` pass on merged `main`.
+- [ ] `cargo xtask ci --profile full` passes on merged `main`.
 
 ## Measurements
 
@@ -1059,7 +1041,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   per component (D19), identity per component (D20), remaining-work list (D22).
 - 2026-11-17: owner: licences are not a constraint (D28); tests at public boundaries only, everything else removed
   (D29); keyboard layouts from libxkbcommon (D31); Smithay patches documented now, offered upstream later (D30).
-- 2026-11-17: when a crate may exist (D32); thirteen more merges, 75 crates at the end.
+- 2026-11-17: when a crate may exist (D32); thirteen more merges, 75 crates at the end (72 once the test crates were deleted).
 - 2026-11-17: second independent review: statics allowed under D3, render-thread commits and CPU drawing (D4), two
   pools and a structural ban on blocking calls (D6), file operations in Kit (D8), the session agent's and the
   portal's dialogs placed (D9, D10, D11, D13), audio started on use (D15), self-restart and hang hand-back (D16, D17),

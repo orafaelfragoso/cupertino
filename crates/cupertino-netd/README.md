@@ -115,22 +115,3 @@ before anything else. An SSID is recorded only as its salted hash (`ssid#` and e
 ## Open issues
 
 `zbus` stays on 5.x like the other services; 6.x exists.
-
-## Tests
-
-```
-cargo test -p cupertino-netd --features app
-```
-
-Unit tests cover the DHCP codec (a DISCOVER byte for byte, an OFFER built byte by byte) and state machine with injected time (full lease,
-foreign transaction, backoff and giving up, NAK, T1 renewal, T2 rebinding, expiry, server-set T1 and T2, infinite lease,
-release), the `model` (deduplication and order, the radio switch, success, a wrong passphrase, losing the access point,
-switching, roaming), and the `engine` against a fake machine and supplicant. `tests/dbus.rs` runs on a private
-`dbus-daemon` (skipped when missing): the NetworkManager values, `StateChanged`, `PropertiesChanged`, `WirelessEnabled`
-written by an authorised caller (the request reaches the engine) and refused for one outside the active session (nothing reaches the engine), `GetNetworks` after a fake scan, `Connect`
-arguments, errors named on the bus, `ConnectionFailed` once, a second daemon refused, and, on a bus with the system bus's
-limits, 3000 calls sent at once while the authorizer is held (a slow logind) not making the bus daemon refuse another
-caller: it gets the daemon's own answer.
-
-Not covered: a real DHCP exchange (no `dnsmasq` on the development machine), the real `LogindAuthorizer` (covered in
-`cupertino-powerd`), iwd, and the packet socket on a wire.

@@ -1,6 +1,6 @@
 //! The clock the shell processes show, which a debug build lets a test fix: with `CUPERTINO_TEST_CLOCK` set to a decimal
 //! number of Unix seconds, [`display_unix_seconds`] returns it, [`display_now`] stays at the process's first reading and
-//! [`motion_settled`] is true, so a scene settles (the goldens). Only for what is drawn: never for authentication, back-off, locks or IPC deadlines.
+//! [`motion_settled`] is true, so a scene settles. Only for what is drawn: never for authentication, back-off, locks or IPC deadlines.
 //! The override exists only with `debug_assertions`, which every release profile turns off: a packaged binary neither
 //! reads the variable nor contains its name (the release build checks that with `strings`).
 

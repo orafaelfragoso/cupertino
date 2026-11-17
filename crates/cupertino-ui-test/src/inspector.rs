@@ -3,7 +3,7 @@ use cupertino_ui_core::{AccessibilityNode, AccessibleValue, FrameSnapshot};
 use cupertino_ui_render::PaintOp;
 use std::fmt::Write;
 
-/// Deterministic text dumps of a runtime's layout, accessibility tree and display lists, for golden tests.
+/// Deterministic text dumps of a runtime's layout, accessibility tree and display lists, for tests.
 ///
 /// A dump has four sections, in this order: pending work and focus, layout, semantics, display list. A protected
 /// value shows as `<protected>`, and glyph runs show their count and position but not which glyphs they hold, so a

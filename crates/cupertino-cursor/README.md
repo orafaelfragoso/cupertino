@@ -92,16 +92,6 @@ hotspot, in points (transparent margin included):
 At a nominal size `N` an image is the canvas times `N / base_size` and its hotspot the point times the same scale, so
 1x, 2x and 4x images (24, 48, 96) put the hotspot on the same logical point.
 
-## Tests
-
-`cargo test -p cupertino-cursor` covers:
-
-* XCursor writer/parser round trips, shadow maths and the name table (no duplicates, required names covered, every
-  procedural cursor mapped);
-* the procedural theme (every required name present and parseable, symlinks, sizes, hotspot scaling, spinner frames,
-  the shadow inside the canvas, overwrite protection) and the CLI options;
-* each role's canvas and hotspot at 1x, 2x and 4x, with the shape drawn by its hotspot.
-
 ## Open issues
 
 The hyprcursor output is not validated against hyprcursor itself.

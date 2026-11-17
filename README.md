@@ -46,13 +46,13 @@ It aims for a desktop that feels finished: translucent materials, soft shadows, 
 ## Highlights
 
 - **A whole desktop, one codebase.** Compositor, shell, toolkit, apps, login and session manager, system daemons, installer and packaging live in one Rust workspace and share one design.
-- **Materials on the GPU.** The compositor draws backdrop blur and glass with OpenGL ES. Apps built with the toolkit, CupertinoKit, draw on the GPU too, with a CPU renderer that they are tested against and fall back to.
+- **Materials on the GPU.** The compositor draws backdrop blur and glass with OpenGL ES. Apps built with the toolkit, CupertinoKit, draw on the GPU too, with a CPU renderer that they fall back to.
 - **Crash isolation.** The dock, menu bar, launcher and the other shell parts are separate processes. If one crashes, the compositor restarts it and your windows stay put.
 - **Updates you can undo.** Releases are signed pacman packages. `cupertino-rollback` puts an earlier release back ([Signed updates and rollback](docs/src/updates-and-rollback.md)).
 - **Runs your apps.** Cupertino serves Wayland clients natively, runs X11 programs through [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite), shows the menus of Electron apps in the menu bar and provides an xdg-desktop-portal backend for file choosers, screen sharing and screenshots.
 - **Swappable look.** Fonts, icons, cursors and wallpapers come from asset packs you can replace without rebuilding ([Asset packs](docs/src/asset-packs.md)).
 - **Made for agents, with consent.** `cupertino-control` lets local AI agents see and operate the desktop through an MCP server. Each app is asked once and can be turned off at any moment in Settings › Privacy.
-- **Tested.** More than 8,000 tests, headless screenshot tests of the whole desktop, and a layering check that keeps every crate depending only on the layers below it.
+- **Checked.** One validation command, `cargo xtask ci`, runs formatting, clippy and the tests the change needs, and a layering check keeps every crate depending only on the layers below it.
 
 ## Status
 
@@ -70,16 +70,16 @@ cd cupertino
 cargo run --release -p cupertino-server -- --winit --spawn rio
 ```
 
-You need a current stable Rust toolchain, OpenGL ES drivers (Mesa or your GPU vendor's) and a terminal such as [Rio](https://github.com/raphamorim/rio). `Super+Return` opens your terminal: the one `xdg-terminal-exec` or `$TERMINAL` names, else a common one that is installed. `Ctrl+Alt+Backspace` quits.
+You need Rust 1.100.0 (`rust-toolchain.toml` pins it), OpenGL ES drivers (Mesa or your GPU vendor's) and a terminal such as [Rio](https://github.com/raphamorim/rio). `Super+Return` opens your terminal: the one `xdg-terminal-exec` or `$TERMINAL` names, else a common one that is installed. `Ctrl+Alt+Backspace` quits.
 
-To run the full desktop from a text console (`Ctrl+Alt+F3`), use `./run-cupertino.sh`. It builds the release binaries, starts the compositor and the shell with a fresh session bus, and writes `~/cupertino-tty.log`. It installs nothing and enables no service. `Ctrl+Alt+F<n>` returns to the console you came from.
+To run the full desktop from a text console (`Ctrl+Alt+F3`), build the programs with `cargo build-programs` and start the server on a fresh session bus; [Building and running](docs/src/building.md#the-whole-desktop-on-a-tty) has the command. `Ctrl+Alt+F<n>` returns to the console you came from.
 
 See [Building and running](docs/src/building.md) for every option.
 
 ## Install
 
 - **From a USB stick:** the live ISO installs Cupertino as a full distribution. See [Install from a USB stick](docs/src/install-usb.md).
-- **On an existing Arch Linux system:** `scripts/package-local.sh` builds the `cupertino`, `cupertino-data` and `cupertino-kit` packages of your checkout. Install them with `sudo pacman -U ~/.cache/cupertino-pkg/*.pkg.tar.zst` ([details](docs/src/building.md#installing-a-local-build)).
+- **On an existing Arch Linux system:** `makepkg -si` in `packaging/arch/cupertino` builds the `cupertino`, `cupertino-data` and `cupertino-kit` packages of your checkout and installs them ([details](docs/src/building.md#installing-a-local-build)).
 
 X11 programs need `xwayland-satellite` and `xorg-xwayland`. The live image ships both, and the `cupertino` package lists them as optional.
 
@@ -119,7 +119,7 @@ Cupertino is a set of small processes around one compositor.
 | `cupertino-netd`, `cupertino-btd`, `cupertino-powerd` | network, Bluetooth and power daemons |
 | `cupertino` | the command line ([The cupertino command](docs/src/cupertino-command.md)) |
 
-The 94 crates of the workspace are layered (`foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui`, `core`, `shell`, `services`, `apps`, `tools`). Model crates are pure logic, tested without a display, and `cargo run -p cupertino-layers` checks that no crate reaches above its layer. [Architecture](docs/src/architecture.md) describes the design.
+The 90 crates of the workspace are layered (`foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui`, `core`, `shell`, `services`, `apps`, `tools`). Model crates are pure logic, tested without a display, and `cargo run -p cupertino-layers` checks that no crate reaches above its layer. [Architecture](docs/src/architecture.md) describes the design.
 
 Apps can be written in Rust with CupertinoKit ([Getting started with Kit](docs/src/kit-getting-started.md)). A C SDK is in progress.
 

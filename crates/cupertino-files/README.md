@@ -7,11 +7,10 @@ logic and layout metrics a native file manager (and a desktop-icon layer) needs.
 ## Usage
 
 ```sh
-cargo test -p cupertino-files --features app                    # 210+ unit tests; the Kit window run headless: 38 window, 16 accessibility, 16 context menu, 7 damage, 5 search, 5 item icon, 7 drag, 9 drop, 12 spring-loaded folder, 9 file operation and 4 type-to-select and band tests; 19 removable media tests (a fake udisks2 on a private bus), 11 single-instance tests (a private bus), 2 workflow, 3 session handler and 2 error notice tests
 cargo run -p cupertino-files --features app -- [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]  # the window (default $HOME), in a running session
 cargo clippy -p cupertino-files --all-targets
-ci/capture.sh files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
-ci/capture.sh files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
+cargo run -p cupertino-files --example files_capture -- files/window --view list   # a window or its sidebar on a sample home folder (crates/cupertino-capture)
+cargo run -p cupertino-files --example files_capture -- files/sidebar --devices removable --scale 2   # the sidebar with a mounted, a busy and an unmounted device
 cargo bench -p cupertino-files --bench directory                # 50k entries
 ```
 
@@ -208,8 +207,7 @@ going first; a window showing more keeps them all rather than making them again.
 file, not the worker, and quitting does not wait for a decode that hangs (a stalled network mount). When a picture changes on disk, the watcher's new modification time and size make it wanted
 again; the old thumbnail shows until the new one is made, and a file that failed is tried again once it changes.
 `Start::with_file_icons` and `Start::with_thumbnails` give a window the session's icons and cache (`main.rs` does);
-without them every icon is the built-in placeholder and no thumbnail is made, which is what the tests use unless they
-pass a fixture pack and a temporary cache.
+without them every icon is the built-in placeholder and no thumbnail is made.
 
 The sidebar lists the design's default Favorites, headed by the home folder (a house and the user's name), then
 Applications, Desktop, Documents and Downloads (the nearby-sharing item has no counterpart), those that exist; the
@@ -354,7 +352,7 @@ cut at 256 characters and escaped, because the body is markup. Without a session
 is written to stderr instead, with the reason. Failures that only explain the window (an entry that can't be read, the
 free space, the default applications) stay on stderr. The wording is approximate.
 
-**Accessibility** (`tests/kit-accessibility.rs`). Every control reads its role, name and state and does its default
+**Accessibility**. Every control reads its role, name and state and does its default
 action when assistive technology asks: the places and their eject buttons, back and forward, the view modes (radio buttons, the
 shown one on), the View, Tags and Action pop-up buttons (each says whether its menu is open), share (disabled), the search field, the path bar's folders, the icon view's cells, the column view's lists and preview, the gallery's strip and large picture, the tab bar's tabs, the tags popover's rows (check boxes), the preview window's toolbar, the list's rows (selected, open or
 closed, with their level and position; Click selects a row alone, Expand and Collapse open and close a folder), the
@@ -371,8 +369,7 @@ again (a second copy of the same file) are heard again; a rubber band says its c
 transfer's progress is not announced. A selected row's text, its secondary columns included, is
 drawn in the selected control text colour on the accent. The focus ring shows on the toolbar buttons, the path bar's
 folders and the rows under Increase Contrast. Over AT-SPI the list is a multiselectable table whose rows carry their
-selected state. The tests listen through `cupertino-ui-test`'s stand-in screen reader (`AssistiveTechnology`), and every
-settle of the test window runs the shared accessibility audit over each window open, with nothing left out.
+selected state.
 
 **Removable media** come from udisks2 on the system bus (`udisks`): after Trash, Locations lists every file system of a
 drive that udisks neither hides (`HintIgnore`) nor counts as the system's (`HintSystem`), with usage `filesystem`, and
@@ -412,7 +409,7 @@ other `trash:` paths are refused) under the title "Trash". `data/applications/cu
 default of `inode/directory` and `x-scheme-handler/trash` for the desktop `Cupertino` only (the server sets
 `XDG_CURRENT_DESKTOP=Cupertino` for its clients): in that session it comes before the host's `mimeapps.list` of the same or a
 later data directory, other desktops are not affected, and a default the user set in `~/.config/mimeapps.list` still wins
-(`tests/session-handlers.rs`). The entry's `Icon=application.file-manager` names the asset directory's file manager icon,
+. The entry's `Icon=application.file-manager` names the asset directory's file manager icon,
 which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 
 | Input | Action |
@@ -512,36 +509,16 @@ Values live in `metrics.rs`.
 * The collation fold table, date bucket boundaries, thumbnail-size choice and disclosure width are approximate and
   labelled so in the source.
 * Only `SettingsStore`, `Trash`, `Thumbnailer`, `operations` and the tag functions write files, into caller-supplied
-  locations (tests use temporary directories).
+  locations.
 
 ### Frame time
-
-`tests/kit-damage.rs` pins what each interaction repaints, from the damage of each presented frame: an arrow key
-repaints the row the selection left and the row it reached, the caret's blink repaints only the search field, the
-search field's animation repaints only the toolbar, a hover repaints no row, a wheel step repaints only the listing,
-and a window kept up to date from damage alone has, after each of these, the pixels of the window drawn whole (at
-scale 1.5), give or take the few levels by which the renderer's partial redraw blends an edge.
 
 The icon grid shapes the names of the cells about to be built in the window's idle time, between frames: the cells
 within 200 pt past those it builds, in the direction of the last scroll, nearest first and 64 at most, each as its
 cell's name shapes it, into the text system's cache. Its paint asks for the time whenever cells cross the edges of
-what it builds or the scroll turns. `tests/kit-idle.rs` pins that a scroll whose frames build new rows shapes no
-name inside a frame once that work ran, and that every frame has the pixels of the same scroll without it.
+what it builds or the scroll turns.
 
-`tests/kit-repaint.rs` holds `repaint_budget_report`, `#[ignore]`d because it measures wall time. In a generated folder of
-1500 files and with the window filling a 3840×2160 display at scales 2, 1.5 and 1, it times every frame of opening the
-folder, arrow-key selection among the rows in view and past them, hover, wheel scrolling, the search field opening
-and closing, the caret's blink, typing a search and typing a new name, and gives p50, p95, p99, maximum, the frames
-over 8 ms and the damaged share of the window. It uses the application's renderer and node limit and keeps no copy of
-the frames. Run it in the release profile:
-
-```sh
-cargo test --release -p cupertino-files --features app --test suite -- --ignored --nocapture --exact kit_repaint::repaint_budget_report
-```
-
-`CUPERTINO_REPAINT_DIR=DIR` also writes `files-<scale>x.md` and `files-<scale>x.csv` (one line per frame) there, and
-`CUPERTINO_REPAINT_SCALES=2,1` measures other scales. Build with `--no-run` to get the test binary and run it directly: `CUPERTINO_REPAINT_DIR=DIR BINARY --ignored --nocapture --exact repaint_budget_report`.
-[What runs on CupertinoKit](../../docs/src/apps-on-kit.md#frame-time) has the last results.
+[What runs on CupertinoKit](../../docs/src/apps-on-kit.md#frame-time) has the last frame times.
 
 ## Open issues
 

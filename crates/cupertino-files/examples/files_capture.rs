@@ -4,7 +4,7 @@
 //! into Documents. The window is the Kit window ([`cupertino_files::kit`]) drawn on the headless window system with the
 //! CPU renderer.
 //!
-//! `ci/capture.sh files/window --view list --scale 2` (the flags are `cupertino-capture`'s)
+//! `cargo run -p cupertino-files --example files_capture -- files/window --view list --scale 2` (the flags are `cupertino-capture`'s)
 //!
 //! State flags: `--view icon|list|columns` (default icon), `--selected PATH` (the item, selected: a path under the home
 //! folder, its folders shown on the way in the column view) and `--devices removable`

@@ -1,5 +1,5 @@
-// Where the build script finds the source commit. `build.rs` and `tests/commit-source.rs` both include this file, so
-// the order is tested without running Cargo.
+// Where the build script finds the source commit. `build.rs` includes this file, so
+// the order stays apart from running Cargo.
 
 use std::ffi::OsStr;
 use std::path::Path;

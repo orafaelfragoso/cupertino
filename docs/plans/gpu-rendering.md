@@ -5,13 +5,15 @@ The design is in `docs/src/gpu-rendering.md` (in the book: "GPU rendering") and 
 done. Tick a box only when the item is on `main`; tick a step's gate only when its "done when" holds. Record
 measurements under "Measurements" with the commit they were taken at.
 
+The repository has since dropped its scripts, its golden images and the test suite. Where this plan names a script, a golden, a test tier or a benchmark run, it records what was done at the time; validation is now `cargo xtask ci` (`AGENTS.md`), and profiling is `samply`, `perf`, `heaptrack` and `CUPERTINO_PROFILE`.
+
 Target machine for every measured gate: NVIDIA (proprietary driver), 3840 x 2160 at 60 Hz, session scale 1.5.
 Headless numbers are also recorded at scale 2 for comparison.
 
 ## Rules for every step
 
-- The CPU path stays green: `scripts/done` and `scripts/test --slow` pass at every commit.
-- After the look freeze (step 1), goldens are re-recorded only by a change that names the pixels it changes, with a
+- The CPU path stays green: the full validation pass at every commit.
+- After the look freeze (step 1), pixels change only with a change that names the pixels it changes, with a
   before/after sheet.
 - A step that adds a GPU path keeps the fallback rule working and is covered by the local GPU tier
   (`CUPERTINO_GPU_REQUIRED=1`).
@@ -24,13 +26,13 @@ Nothing is optimised before it is measured on the target machine, and no gate ma
 
 Instruments:
 
-- [x] `scripts/dev/bench` takes size and scale as arguments.
+- [x] the frame bench takes size and scale as arguments.
 - [x] Bench scenarios: idle, window drag over glass, title-bar hover, live resize, the control panel opened, launcher
       typing (the Files two-finger scroll exists).
 - [x] Toolkit processes write per-phase frame timings (update, view, layout, paint, raster, copy, commit) to a file
       named by an environment variable; bench collects them per process.
 - [x] Bench counts client frames longer than one refresh, per process, besides the compositor's missed refreshes.
-- [x] `scripts/dev/measure` reports private dirty memory besides Pss and Rss.
+- [x] the memory measurement reports private dirty memory besides Pss and Rss.
 - [x] Counters in the frame statistics for decoration and HUD rasters and uploads, and for blur passes.
 - [x] The DRM backend logs, on request, which presentation-time branch it takes (`flip-timestamp` or `own-clock`), missed
       flips, plane assignment (cursor plane, direct scanout) and input-to-flip latency.
@@ -132,7 +134,7 @@ review:
 
 Dithering changes pixels, so it waited for the look freeze: `cupertino_raster_math::dither::BY_DEFAULT` is now
 `true`, and the compositor compiles its blur (into 8-bit levels only), material, glass and shadow programs with it;
-`CUPERTINO_DITHER=0` turns it off and `=1` on, to compare. The GL tests (`dither::` in the server's suite, slow tier)
+`CUPERTINO_DITHER=0` turns it off and `=1` on, to compare. The GL tests (`dither::` in the server's suite, long-running group)
 draw the shader's matrix and dithered stores and the dithered shadow against the definition.
 
 ### The look freeze
@@ -184,7 +186,7 @@ Step 2's work merged before the re-recording (reduced copies and the minificatio
 blurs again) changes no golden past the comparison's tolerance. A gradient with more than eight stops draws nothing, so the scroll
 edge's veil, the one gradient that had nine, now has eight; its opacity is linear down the band, so it draws the same.
 Revealing a scrolled target (the caret, a focused row) measures it by the offset itself, not by its whole-pixel place.
-The GL test `coverage_gl::` (server suite, slow tier) draws the compositor's rounded rectangles, a continuous corner
+The GL test `coverage_gl::` (server suite, long-running group) draws the compositor's rounded rectangles, a continuous corner
 and an inside border at scales 1, 1.5 and 2 and compares every pixel with the shared coverage.
 
 Gate:
@@ -522,7 +524,7 @@ Presenter and process:
 - [x] `cupertino-diagnose` and the frame statistics report the renderer per process.
 - [x] Local GPU tier, presenter: dmabuf import, syncobj, injected loss and purge, CPU↔GPU switch, failed-import
       fallback, resize storm, fence soak on the NVIDIA GPU.
-- [x] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`): `cupertino-ui-gpu`'s suite, slow tier.
+- [x] Local GPU tier: goldens on the NVIDIA GPU (with `GpuRenderer`): `cupertino-ui-gpu`'s suite, long-running group.
 - [x] Renderer selection wired with every process on the CPU by default: the single switch `GPU_BY_DEFAULT`
       (`crates/cupertino-ui-wayland/src/renderer.rs`), which step 7 turns on.
 - [x] Parity at scales 1, 1.5 and 2 with odd sizes, whole frames and frames repainting damage.
@@ -556,7 +558,7 @@ Presenter and process:
 Gate:
 
 - [x] Every golden passes on both renderers, the local tier passes on the target machine, client GPU time and the
-      first-frame budget are met. At `c30025ef`: the fast tier (7393 tests) and the slow tier (226) pass with and
+      first-frame budget are met. At `c30025ef`: the quick group (7393 tests) and the long-running group (226) pass with and
       without `CUPERTINO_GPU_REQUIRED=1`; the GPU timing test's whole-frame budget failed once at 5.7 ms while other
       builds ran (the CPU renderer's frame beside it took 38 ms against its usual 11) and passes at 2.5 ms on its own.
       The GPU's share of a frame is under 0.1 ms; the first frame goes out on the CPU in 30 ms while the device warms.
@@ -712,7 +714,7 @@ rings) and strokes (the rim, the rings). Split (open at the end of step 10's thi
       ("Measurements", step 10: 0.2 to 0.3 ms of compose work at p50 today). The device notes the groups of state its
       calls change and `Device::pause` puts back only those, without reading; `Device::resume` enters on what the
       frame's first enter read.
-- [x] `scripts/dev/bench`'s hover finds the window buttons in every run: in two of three runs, with either build,
+- [x] the frame bench's hover finds the window buttons in every run: in two of three runs, with either build,
       it reports that the hover drew no title bar (the window's place differs between runs), so its median counts
       none. The baseline from the run that hit them, before step 8: 36 decoration rasters and 36 uploads, 12 MiB.
       The hover now moves relative to Settings' frame (`--pointer-on`), wherever the session placed it.
@@ -1236,7 +1238,7 @@ runs smoothly in daily use); each is ready to run as written under "Measurements
 3. The vertical slice for an hour beside a shared-memory control (step 3): `cupertino-gpu-slice --minutes 60
    --control-shm` ("The live session and the one-hour gate").
 4. A week without a fallback to the CPU (step 7): `cupertino diagnose events --since 7d` lists none.
-5. Output timing (step 11): two traced one-hour sessions and `scripts/dev/drm-trace-summary` ("The step 11 gate").
+5. Output timing (step 11): two traced one-hour sessions and the trace summary ("The step 11 gate").
 
 ## Documentation
 
@@ -1258,7 +1260,7 @@ desktop session running beside the runs.
 
 **Where the instruments are.**
 
-- `scripts/dev/bench` (headless sessions, every process measured; its tests: `python3 -I scripts/dev/test_bench.py`).
+- the frame bench (headless sessions, every process measured).
 - `CUPERTINO_FRAME_TIMING=PATH`: every toolkit process appends one JSON line a presented frame with its phases
   (update, view, layout, paint, raster, copy, commit, total). Without the variable no clock is read
   (`runtime::tests::a_presented_frame_is_timed_phase_by_phase_and_nothing_is_timed_without_a_sink`).
@@ -1273,7 +1275,7 @@ desktop session running beside the runs.
   periods late, the plane assignment when it changes (direct scanout, cursor plane, overlays) and the input-to-flip
   latency of each output (keys and pointer alike, an input whose flip was dropped reported at the output's next flip).
   Without the variable nothing is kept.
-- `scripts/dev/measure` reports private dirty memory beside Pss and Rss.
+- the memory measurement reports private dirty memory beside Pss and Rss.
 - The probes live in `tools/gpu-probes`, a crate with a workspace of its own: never built by the workspace, never in
   the packages. Build: `cargo build --release --offline --manifest-path tools/gpu-probes/Cargo.toml --target-dir
   target/gpu-probes`; `target/gpu-probes/release/gpu-probes --help` lists the probes. Each probe runs its
@@ -1282,10 +1284,7 @@ desktop session running beside the runs.
 **The baseline in one command.** The baseline runs (every scenario five times at scale 1.5 and at scale 2, on the
 target display's size) are:
 
-```sh
-scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 5 --idle-seconds 60 --out baseline-1.5.json
-scripts/dev/bench --size 3840x2160 --scale 2 --runs 5 --idle-seconds 60 --out baseline-2.json
-```
+The frame bench, with `--size 3840x2160 --runs 5 --idle-seconds 60`, at `--scale 1.5` and at `--scale 2`, one JSON file each.
 
 Each JSON holds every run and, per scenario, the median of the runs with their spread (max - min, the noise):
 compositor frame interval p50/p99, missed refreshes, work and GPU time p50/p99, compositor CPU time, slow client frames
@@ -1606,7 +1605,7 @@ frame lays 24 overlapping rectangles in colours never shown at rest, then one fl
 The headless session offers explicit sync when its device has a render node and the kernel waits on timeline points
 through an eventfd; `--no-explicit-sync` withholds it.
 
-**Headless session tests** (`gpu_slice::`, the slow tier but the first two; on the NVIDIA GPU with
+**Headless session tests** (`gpu_slice::`, the long-running group but the first two; on the NVIDIA GPU with
 `CUPERTINO_GPU_REQUIRED=1`, which turns every skip into a failure):
 
 | Test | What it shows |
@@ -1709,7 +1708,7 @@ hold (one 3840 x 2160 RGBA target alone is 32 MiB) is refused with `Error::OverB
 is the renderer's own, not the pool's.
 
 **Tests.** The device tests (`cupertino-gpu::suite` and the borrowed-context test in the library) run in the slow
-tier; the models of the atlases, the pool and the binding names, and the generator's tests, in the fast tier.
+tier; the models of the atlases, the pool and the binding names, and the generator's tests, in the quick group.
 
 | Where | What ran | Result |
 |---|---|---|
@@ -1738,7 +1737,7 @@ Taken on the target machine's GPU (GeForce RTX 3060, proprietary driver 615.78.0
   `LossHistory`), the switch `GPU_BY_DEFAULT` (off), `CUPERTINO_RENDERER`, the process's current renderer and why
   (`active`), logged as `renderer: <cpu|gpu> (<reason>)` on every change and recorded in
   `$XDG_RUNTIME_DIR/cupertino/renderers/<pid>` for `cupertino-diagnose` (`gpu.client_renderers`). The frame
-  statistics carry `renderer` on every line and `scripts/dev/bench` lists each program's renderers.
+  statistics carry `renderer` on every line and the frame bench lists each program's renderers.
 - `cupertino-ui-wayland::gpu_path`: the warm-up thread (device on the feedback's render node, saved programs, the blit
   program, one draw with each of the renderers' programs so the driver finishes them before the first frame,
   `GpuPrograms::prime`; the context released and taken over by the main thread), the switch (`PlatformEvent::RendererChanged`,
@@ -1773,7 +1772,7 @@ With the renderer's programs made in the warm-up too (`118b31cd`, the presenter'
 29.8–30.5 ms; empty cache, GPU ready after 233–237 ms (context 64–69 ms, programs 168–169 ms, once per driver and
 cache); filled cache 69–78 ms (context 65–74 ms, programs 4 ms).
 
-**Tests.** The presenter's GPU tier is `cupertino-server`'s `gpu_presenter` (slow tier) with
+**Tests.** The presenter's GPU tier is `cupertino-server`'s `gpu_presenter` (long-running group) with
 `cupertino-ui-wayland`'s `gpu-window` as its client; the rule, the size steps, the reuse, the records and the switch
 in the runtime are fast tests.
 
@@ -1793,7 +1792,7 @@ in the runtime are fast tests.
 ### Step 6: Files on the GPU path
 
 Taken at `999c46f2` on the target machine (GeForce RTX 3060, proprietary driver), release builds,
-`CUPERTINO_RENDERER=gpu scripts/dev/bench --size 3840x2160 --scale S --scenario files-full-scroll --runs 3`, other
+`CUPERTINO_RENDERER=gpu`, the frame bench with `--size 3840x2160 --scale S --scenario files-full-scroll --runs 3`, other
 checkouts building beside it (load 5 to 9). Every Files frame counted was drawn by `GpuRenderer` (the frame lines'
 `renderer`). Medians of the three runs, the range of the runs after them; the phases are the Files client's own. The
 CPU column is the CPU path in the same hour at `68ff5660` (one run, load over 10).
@@ -1871,7 +1870,7 @@ move.
 ### Step 7: turn it on
 
 Taken on the target machine (GeForce RTX 3060, proprietary driver), release builds, headless at 3840 x 2160 and 60
-Hz, `scripts/dev/bench --runs 3`; medians of the three runs, their range after them; client frame times are each
+Hz, the frame bench (`--runs 3`); medians of the three runs, their range after them; client frame times are each
 process's own. "Both renderers" is the merge before this step (`1fa757fe`) with `CUPERTINO_RENDERER=gpu` and with
 `cpu`; "classes" is this step at `d3b7846b`, no override, each process on its class's renderer. The load average (1, 5
 and 15 minutes) before and after each run is given.
@@ -1914,7 +1913,7 @@ once the large windows come as dmabufs.
 none in the third (no minute turned). Wakeups a minute over each process's threads: menu bar 44 (0–56), notifications
 16 (0–30), the control panel 4, the server 2, the bus daemon 18, all the clock's minute; the GPU-class processes 0.
 
-**A full session** (`crates/cupertino-server/scripts/session.sh --scale 1.5`, Files and Settings opened, then the
+**A full session** (the headless session at scale 1.5, Files and Settings opened, then the
 launcher with two letters typed, the control panel opened and closed, the volume raised and lowered, the screenshot
 toolbar, a banner; load 0.5 / 2.6 / 4.2 to 0.3 / 2.1 / 3.9, and 0.7 / 1.4 / 2.8 to 0.5 / 1.2 / 2.6 for the same
 session with `CUPERTINO_RENDERER=cpu`). The renderer records:
@@ -1958,7 +1957,7 @@ opening of a process 5.0 ms).
 
 ### Step 8: the compositor's own drawing
 
-`scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 3 --scenario drag,hover`, release builds, NVIDIA RTX 3060,
+the frame bench (`--size 3840x2160 --scale 1.5 --runs 3 --scenario drag,hover`), release builds, NVIDIA RTX 3060,
 medians of three sessions. The baseline is a release build of main before step 8 (`37c9d374c`); its hover cannot run
 with the bench of this step (it moves the pointer with `--pointer-on`, which that server does not know), so its hover
 row is the run that found the window buttons before step 8 (above). Load averages (1, 5, 15 minutes) at the start
@@ -2079,7 +2078,7 @@ frame per frame callback through the close, about 6 at 60 Hz.
 
 ### Step 1: the look freeze
 
-`scripts/dev/bench --size 3840x2160 --scale 1.5 --runs 3 --idle-seconds 30`, the base commit's programs and then the
+the frame bench (`--size 3840x2160 --scale 1.5 --runs 3 --idle-seconds 30`), the base commit's programs and then the
 freeze's, one after the other on the same machine (other builds ran beside them; drag and idle were measured again
 after a run the machine disturbed, whose spread was 0.6 and 0.8 ms). Client frame p99 ms, median of the three runs
 (spread):
@@ -2102,8 +2101,8 @@ the same bytes, brought it to 21 ms at the widest and less below it, and a drop 
 
 ### Step 2: compositor wins
 
-Taken on the target machine's GPU, release builds, `scripts/dev/bench --scenario drag --size 3840x2160 --scale 1.5
---runs 3`, no build running. Before is `2b119fa4` with only the counter of texels the blurs write added; after is the
+Taken on the target machine's GPU, release builds, the frame bench (`--scenario drag --size 3840x2160 --scale 1.5
+--runs 3`), no build running. Before is `2b119fa4` with only the counter of texels the blurs write added; after is the
 step's last commit. Medians of the three runs, spread in brackets where it is not zero.
 
 | Drag over glass | Before | After |
@@ -2293,7 +2292,7 @@ What would let the drag keep the glass's texels, for the lead to choose:
 Either is a change of its own, then the grid capture and its goldens. No golden changes in this round, so none is
 listed for re-recording and there is no before and after sheet.
 
-Goldens (`ci/goldens.sh`): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
+Goldens (the golden run): the overview (561 027 pixels over tolerance, the dimmed wallpaper behind it lighter) and
 the launcher's structure (its panel 176 to 177 rows) fail, and fail the same way at `2b119fa4`; no golden shows a
 window drawn below half its size. Nothing is re-recorded.
 
@@ -2361,7 +2360,7 @@ links every compositor program, generated and hand-written, dithered and not, on
 that a window's sidebar glass and content material were drawn by their passes (`MaterialStats::glass_composites`
 and `composites`), not by the fallback fill.
 
-Cost (`scripts/dev/bench`, 3840 x 2160 at 1.5, 3 runs, the same machine, `main` before the change against this one):
+Cost (the frame bench, 3840 x 2160 at 1.5, 3 runs, the same machine, `main` before the change against this one):
 compose work p50 1.12 to 1.38 ms and p99 1.98 to 2.24 ms in the hover scenario, p50 1.45 to 1.57 ms and p99 2.48 to
 3.38 ms in the drag, compose CPU p99 2.40 to 2.97 ms in the drag (over its 2 ms budget before the change too). Each
 pass draw enters and leaves the borrowed device, which reads and puts back the context's state (about 80 queries) for
@@ -2401,8 +2400,7 @@ only flips so late their clients were called back without them); `start-delay ou
 changes by a millisecond or more; `pointer-to-flip output=… latency_us=…` beside `input-to-flip`, from pointer motion
 alone; `count flips=… missed_total=…` every 3600 flips, so a summary has the rate of missed refreshes. The server
 logs at start whether the late start is on (`late_latch=`) and the depth asked for, and for each display the format
-its primary plane got (`output initialised … format=… bits=…`). `scripts/dev/drm-trace-summary` reads a log (its
-tests: `python3 -I scripts/dev/test_drm_trace_summary.py`).
+its primary plane got (`output initialised … format=… bits=…`). the trace summary reads a log.
 
 **Turning 10 bits off.** 10 bits are the default, decided by the owner (2026-11-15) without waiting on the step 0
 probe (`tools/gpu-probes/depth.sh`, above): `Depth::from_setting` in `crates/cupertino-server/src/output_depth.rs`
@@ -2416,11 +2414,11 @@ read back in the server to an 8-bit format). A display on a second card shows th
 its plane's depth.
 
 **The step 11 gate.** DEFERRED by the owner (2026-11-15): it needs the desktop session, two hours of it. Install a package built
-from `main` (`scripts/package-local.sh`, then `pacman -U`), log out, switch to a text console (Ctrl+Alt+F3), log in,
+from `main` (`makepkg -si` in `packaging/arch/cupertino`, then `pacman -U`), log out, switch to a text console (Ctrl+Alt+F3), log in,
 and from the checkout run:
 
 ```sh
-CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 CUPERTINO_LATE_LATCH=0 cupertino-session; CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 cupertino-session; scripts/dev/drm-trace-summary --baseline ~/.local/state/cupertino/server.log.1 ~/.local/state/cupertino/server.log
+CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 CUPERTINO_LATE_LATCH=0 cupertino-session; CUPERTINO_DRM_TRACE=1 CUPERTINO_SESSION_LIMIT=3600 cupertino-session; the trace summary on ~/.local/state/cupertino/server.log.1 (baseline) and ~/.local/state/cupertino/server.log
 ```
 
 The first session is the baseline (frames start at once), the second has the late start; each ends after an hour.
@@ -2432,8 +2430,8 @@ the late start never engaged and the gate cannot pass on this driver.
 
 ### Step 4: retained layers
 
-Taken on the target machine, release builds, CPU renderer, `scripts/dev/bench --size 3840x2160 --scale S --scenario
-files-full-scroll --runs 3`, other checkouts building beside it. Before is `6e9ab377`; after is `e4c989bc`. The
+Taken on the target machine, release builds, CPU renderer, the frame bench (`--size 3840x2160 --scale S --scenario
+files-full-scroll --runs 3`), other checkouts building beside it. Before is `6e9ab377`; after is `e4c989bc`. The
 step's commits are `96c21721`, `0059c4cb`, `89f790a7`, `e4c989bc`, `a6d1ec27` (a layer new to a frame, which no scroll
 frame has) and `1a070506`. Medians of the three runs; the phases are the Files client's own.
 

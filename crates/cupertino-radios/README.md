@@ -37,14 +37,3 @@ point's properties in one call and the saved connections read once: one network 
 point, the security from the access point's flags, the signal as dBm. An SSID that is not text keeps
 a key of its own (`nm::ssid_key`), so a Join reaches the network chosen. On BlueZ the adapter is the first by path and
 a device's id is its object path; a call naming any other path is refused before it is sent.
-
-## Tests
-
-```
-cargo test -p cupertino-radios --all-features
-```
-
-| Test | Proves |
-|---|---|
-| Unit tests | The security and signal names, SSID keys, the link's network, the match rules (each names its sender and one object or name), the radio a signal is about, the changes of the Bluetooth stack that make a reading out of date and those that do not, and a call that is not answered failing after its wait. |
-| `tests/services.rs` (feature `fake`) | On a private bus: detection on an empty bus, with NetworkManager and BlueZ, and the Cupertino daemons first; the NetworkManager link enabled, disabled, connected, disconnected and failed, and absent without a Wi-Fi device; networks listed, joined (saved, open, with a passphrase, out of range), left and scanned; the BlueZ adapter powered and off, devices connecting, disconnecting and refusing, and no adapter; the follower called with the radio when a service starts, changes or stops, and not for a burst of a device's signal strength; services that never answer failing each reading and switch after the bounded wait. |

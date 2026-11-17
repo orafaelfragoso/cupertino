@@ -1,7 +1,5 @@
 //! Instruction counts of the CPU model of one glass sample ([`Container::shade`]): inside the face, on the straight
 //! edge, in a continuous corner and in the neck between two shapes of a joined container, each one call.
-//!
-//! `scripts/dev/microbench cupertino-glass`
 
 use cupertino_glass::glass::{Container, GlassMode, GlassShape, Rgb};
 use gungraun::prelude::*;

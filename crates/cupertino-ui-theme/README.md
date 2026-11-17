@@ -31,7 +31,7 @@ or more against the surface they sit on in every palette, light and dark, as is,
 Reduce Transparency, in every enabled state: `SliderTrack` against the window and a text background (a mid grey, 128,
 in light and dark; 118 and 150 in high contrast), `PanelTrack` against a module, the group fill over the window
 background (118 in light, 145 in dark; 110 and 165 in high contrast). The thumb colour, which is a slider's knob and a
-panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has its own colour, the enabled track faded towards the module (185 in light, 95 in dark; 160 and 110 in high contrast): still apart from the module, fainter than the enabled track. `tests/slider-track.rs` checks the resolved colours.
+panel slider's fill, stands 3:1 against both tracks. A disabled `PanelTrack` has its own colour, the enabled track faded towards the module (185 in light, 95 in dark; 160 and 110 in high contrast): still apart from the module, fainter than the enabled track.
 
 Menus, popovers and the Dock (`Surface::Menu`, `Surface::Popover`, `Surface::Dock`) are glass (`GLASS_MATERIAL`, `CLEAR_GLASS_MATERIAL`): `ThemeTokens::surface` keeps asking for it with Reduce Transparency and in high contrast, where the compositor draws the glass recipe of those options; the Dock asks for its own `Dock` body with Reduce Transparency. The application grid (`Surface::AppGrid`) keeps its `AppGrid` material too, whose recipe has variants of its own for those options, and a window's background drawn by the compositor (`Surface::WindowBackground`, `WindowBackground`) is opaque, so it is kept as well. The Dock's running dot (`Surface::DockIndicator`) asks for `RunningIndicator`, which lightens what lies behind it, in the dark appearance only (not in high contrast); elsewhere it asks for nothing and the dot paints itself. The other surfaces ask for no material with Reduce Transparency or in high contrast and paint their opaque fill.
 
@@ -50,7 +50,7 @@ dark.
 
 Selection. The selected fills of every control (a sidebar's, a list's, a table's or an outline's selected row in an
 active window, a menu's highlighted item, the default button, an on switch) are the theme's accent token itself, on a
-window and on glass: no role lightens, fades, saturates or tints it (`tests/selection-roles.rs`). A sidebar's neutral
+window and on glass: no role lightens, fades, saturates or tints it. A sidebar's neutral
 selection (`SidebarSelection`) is a grey laid over the sidebar's material, so it lifts each of the material's channels
 evenly and keeps its hue: white at 34/255 in dark (each channel of a navy material up by about 29), black at 25/255 in
 light. A file browser's places draw their selected row with it in an active window, and every sidebar draws it for its
@@ -127,8 +127,7 @@ is glass of that style (`cupertino-theme`'s `GlassParams`); a `Surface::…` is 
 | Accent popup | `crates/cupertino-server/src/kbd_ui.rs` | `SceneKind::AccentMaterial` | kept | kept |
 
 Solid by design, so not in the table: a sheet, a tooltip, the Force Quit window and the pills of a fanned stack.
-`tests/material-inventory.rs` reads this table: every row's file still holds the row's call, a row that draws a theme
-surface says what `ThemeTokens::surface` does with each option in light and dark, and every theme surface is in a row.
+
 
 Approximate: every state colour, the disabled fills and borders, the opaque thumb, the dark white role text and the
 dark tooltip in the Cupertino light and dark palettes; all neutral and high-contrast values.

@@ -44,9 +44,8 @@ gives `n ≈ 3.26`. For `n > 2` curvature is zero where the corner meets the str
 The maximum deviation of `path from the design distance field at radius 100 with 4 segments is 0.004 px. Run
 `cargo run --release -p cupertino-geometry --example accuracy` to reproduce it.
 
-## Tests
+## Benchmarks
 
 ```
-cargo test -p cupertino-geometry
 cargo bench -p cupertino-geometry
 ```

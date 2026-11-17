@@ -128,7 +128,7 @@ pub struct Cli {
     /// Headless: the refresh rate of the display, in Hz (default 60).
     #[arg(long, value_name = "HZ", requires = "headless")]
     pub refresh: Option<f64>,
-    /// Headless: write one line of timings per frame shown to this file (`scripts/dev/bench` reads it). The GPU is
+    /// Headless: write one line of timings per frame shown to this file. The GPU is
     /// waited for after each frame and around each glass pass, so frames take as long as their work.
     #[arg(long, value_name = "PATH", requires = "headless")]
     pub frame_stats: Option<PathBuf>,
@@ -145,7 +145,7 @@ pub struct Cli {
     #[arg(long = "shot", value_name = "SECONDS:PATH", value_parser = parse_timed_shot)]
     pub shots: Vec<(f64, PathBuf)>,
     /// Headless: write the windows at a time, `SECONDS:PATH`, as JSON, one object a line: the application, the title
-    /// and the frame (title bar included) in logical points (`scripts/dev/bench` places its pointer paths by them);
+    /// and the frame (title bar included) in logical points;
     /// repeatable.
     #[arg(long = "window-list", value_name = "SECONDS:PATH", value_parser = parse_timed_shot, requires = "headless")]
     pub window_lists: Vec<(f64, PathBuf)>,

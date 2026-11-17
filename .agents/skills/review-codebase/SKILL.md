@@ -19,7 +19,7 @@ Choose the mode without asking the user to configure the workflow:
 | Review this branch, diff or my changes | Incremental | The diff from its base plus affected callers, dependent crates, protocols, configuration and tests. |
 | Review security, architecture, a named crate or subsystem | Focused | That concern or crate and its boundaries. |
 
-Record `git rev-parse HEAD`, the branch and `git status --short`. For incremental mode, take the base from the user or the pull request; otherwise use `git merge-base main HEAD` and say so. Include uncommitted changes, deletions and renames (`git diff --find-renames BASE`). `python3 -I ci/affected.py select BASE HEAD` lists the changed crates and their dependents, and `python3 -I ci/affected.py gates BASE HEAD` the repository-wide checks CI would run; both compare commits only, so add uncommitted changes by hand. When `select` reports that a shared input changed, it returns the whole workspace; narrow the review to the crates the diff actually reaches. If the diff is unavailable or incomplete, state that and review the accessible scope.
+Record `git rev-parse HEAD`, the branch and `git status --short`. For incremental mode, take the base from the user or the pull request; otherwise use `git merge-base main HEAD` and say so. Include uncommitted changes, deletions and renames (`git diff --find-renames BASE`). `cargo xtask ci --profile integration --base BASE --dry-run` prints the changed crates, their reverse dependencies and the checks CI would run; it plans from git, uncommitted changes included. When it selects the whole workspace because a shared input changed, narrow the review to the crates the diff actually reaches. If the diff is unavailable or incomplete, state that and review the accessible scope.
 
 ## Keep the default inexpensive
 
@@ -27,7 +27,7 @@ Record `git rev-parse HEAD`, the branch and `git status --short`. For incrementa
 - Reserve roughly the last 20% of the budget for verification and reporting. Finish earlier when the scope is assessed. At the limit, report remaining work instead of silently expanding.
 - Report measured usage only; never claim exact tokens, cost or elapsed time without instrumentation.
 - Search with `rg`, then open bounded line ranges. Do not load whole large files, logs or images repeatedly.
-- Leave out of ordinary reading: `target/`, `third-party/` (vendored crates patched in by the root manifest), golden images and other binary fixtures, generated output and the body of `Cargo.lock`. Keep manifests, the `Cargo.lock` diff, `deny.toml`, `docs/architecture/contracts.yaml`, build scripts, protocol XML, tests, `ci/` and `packaging/` eligible. Open an excluded path when a concrete issue requires it.
+- Leave out of ordinary reading: `target/`, `third-party/` (vendored crates patched in by the root manifest), images and other binary fixtures, generated output and the body of `Cargo.lock`. Keep manifests, the `Cargo.lock` diff, `deny.toml`, `docs/architecture/contracts.yaml`, build scripts, protocol XML, tests, `xtask/` and `packaging/` eligible. Open an excluded path when a concrete issue requires it.
 - Prefer one pass per flow across several categories. Delegate only a clearly bounded, independent question, within the same total budget; never a separate whole-repository pass per category.
 
 ### Checks
@@ -35,8 +35,7 @@ Record `git rev-parse HEAD`, the branch and `git status --short`. For incrementa
 Builds are expensive: a dev target is about 29 GiB and the workspace has many crates. Default to checks that need no compilation, and reuse CI results when they match the reviewed revision and configuration (`gh run list --commit SHA` when available):
 
 ```bash
-python3 -I ci/gate.py .         # source policy: forbidden files, names and wording
-python3 -I ci/contracts.py .    # D-Bus names, sockets, binaries and C libraries against the registry
+cargo xtask ci --profile integration --base BASE --dry-run   # the plan: what would run
 cargo fmt --check
 git diff --check BASE
 ```
@@ -47,7 +46,7 @@ Compile only when a check settles a finding or the user asks, scoped to the affe
 export PATH=$HOME/.cargo/bin:$PATH
 cargo run -p cupertino-layers
 cargo clippy -p CRATE --all-targets
-python3 ci/build-test-fixtures.py --locked -- cargo nextest run --locked -p CRATE --all-features -E 'test(NAME)'
+cargo xtask ci --profile agent
 ```
 
 `cargo-deny` is the dependency gate in CI; report it as not run when it is not installed rather than installing it. Set command timeouts within the remaining budget. A test that skips because a host tool is absent is not a pass; separate environment failures from defects. Never run anything that installs, deploys, restarts the running compositor or session, touches the real session bus, or captures with the real `HOME`.

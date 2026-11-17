@@ -16,7 +16,7 @@
 //! * blur, drop shadow and inner shadow: the shared pyramid of 2x halvings and the Gaussian in float levels, read
 //!   back at every pixel and stored as the CPU renderer stores them.
 //!
-//! Both renderers agree within 2/255 per channel at every pixel; the tests compare them on the goldens and on
+//! Both renderers agree within 2/255 per channel at every pixel; the tests compare them on fixed scenes and on
 //! random scenes at scales 1, 1.5 and 2.
 //!
 //! A frame repaints the rectangle around the request's damage (or everything), so pixels outside it keep the last

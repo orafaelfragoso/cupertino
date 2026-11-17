@@ -2,7 +2,7 @@
 //! as a person types it (one letter, a word start, a whole word, two words, initials, nothing that matches), and the
 //! scorer alone over every name.
 //!
-//! `scripts/dev/microbench cupertino-launcher`; the wall-clock bench beside it (`cargo bench -p cupertino-launcher
+//! The wall-clock bench beside it (`cargo bench -p cupertino-launcher
 //! --bench matching`) times the same queries.
 
 use cupertino_launcher::matcher::{self, Candidate, CandidateField, Query, Weights};

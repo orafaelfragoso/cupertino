@@ -1,8 +1,6 @@
 //! Instruction counts of the text a file manager shows: 64 file names in 13-point text, as a list shows them (one line
 //! each, cut with an ellipsis to a 220-point column) and as an icon grid does (up to two lines wrapped at 84 points).
 //! Shaped and laid out (none of them in the paragraph cache), and laid out again at another width from the shaping kept.
-//!
-//! `scripts/dev/microbench cupertino-ui-text`
 
 use cupertino_ui_text::{
     AttributedText, FontIndex, FontStyle, FontWeight, Paragraph, ParagraphLayout, ParagraphStyle,

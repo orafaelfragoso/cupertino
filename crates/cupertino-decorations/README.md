@@ -108,8 +108,8 @@ cargo run -p cupertino-decorations --release --example render_samples
 writes to `output/`: `window_states_light.png` /
 `window_states_dark.png` (active, inactive, hover-group, pressed close, disabled zoom), `styles_unified_and_small.png`,
 `buttons_closeup.png` (8× close-ups of every state) and `shadow_profiles.png` (standard active/inactive, panel, tooltip,
-light and dark). The samples and every test that draws text need `CUPERTINO_ASSET_DIR` (see `cupertino-assets`); without it they
-draw with the built-in font and the pixel expectations of the tests fail.
+light and dark). The samples need `CUPERTINO_ASSET_DIR` (see `cupertino-assets`); without it they
+draw with the built-in font.
 
 ## Open issues
 
@@ -128,19 +128,11 @@ draw with the built-in font and the pixel expectations of the tests fail.
   pair fails the stem-preserving test (m1 0.94, m2 2.44), where the design uses a two-segment fallback that is not
   known; the "round" pair passes (m2 1.01). How the evaluator picks the pair and the fallback map are open in.
 
-## Tests
+## Benchmarks
 
 ```
-cargo test -p cupertino-decorations
 cargo bench -p cupertino-decorations
 ```
 
-Tests cover layout, hit tests, button
-colours and glyphs per state, the edge (outline strength by appearance, activity and Increase Contrast, the side
-fall-off of a menu's outline, the inner rim and its device pixels), titlebar fills, shadow fall-off and peak density (0.40 light, 0.70 dark), nine-slice
-equals direct render at 1× and 2×, GPU parameters, and title centring, truncation, tracking, the weight scale, ink growth with weight and the optical size. The same title bar
-at 1, 1.25, 1.5, 1.75 and 2 is painted throughout, has each button's ink centred on its laid-out point within half a
-device pixel (in the dark appearance too: a colour change moves no control), has an inked title and a rim on whole device
-pixels, and after other scales draws the same bytes at 2 again. The bench prints, on the
-development host, titlebar rasterisation (≈0.3 ms), nine-slice shadow expansion (≈2 ms at 1×, ≈11 ms at 2× for a 1600×900
-window) and the direct render (≈31 ms).
+The bench prints, on the development host, titlebar rasterisation (≈0.3 ms), nine-slice shadow expansion (≈2 ms at 1×,
+≈11 ms at 2× for a 1600×900 window) and the direct render (≈31 ms).

@@ -8,8 +8,8 @@
 //!   security from the RSN and WPA elements, and scan, connect and disconnect events.
 //! - [`rfkill`]: the Wi-Fi kill switch and its events.
 //!
-//! Every decoder takes bytes, so the tests run on replies recorded from a real kernel
-//! (`tests/fixtures`, see its README) and on messages built byte by byte.
+//! Every decoder takes bytes, so it can run on replies recorded from a real kernel
+//! (`examples/record-netlink.rs`) and on messages built byte by byte.
 
 pub mod attr;
 pub mod error;

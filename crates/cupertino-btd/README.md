@@ -165,26 +165,4 @@ Out of scope: the link is paired, bonded and connected, but no profile runs on i
 - **Resolvable private addresses.** A bonded low-energy device that changes its address is not recognised, and the
   Identity Resolving Key is neither requested nor stored.
 - **Legacy PIN pairing**, **discoverable mode** and **adapter name** are not supported.
-- **A running system.** Nothing ran against a real pairing (see Tests).
-
-## Tests
-
-```
-cargo test -p cupertino-btd --features app
-```
-
-`tests/model.rs` covers discovery merge (names, RSSI, class, appearance, UUIDs, icons, expiry), bring-up, powering,
-discovery rounds, connecting, unpairing, the reply timeout and a controller that disappears. `tests/pairing.rs` covers
-numeric comparison accepted and rejected, passkey entry and display, a timeout, a remote failure, a missing agent, a
-pairing started by the other side, PIN refusal and powering off mid-pairing. `tests/keys.rs` covers the documented text, a
-round trip with modes `0600` and `0700`, refusal of a corrupt file and of one readable by others, and every deviation
-naming its line. `tests/dbus.rs` runs on a private `dbus-daemon` (skipped when missing) with a fake management interface
-(`tests/common/controller.rs`): `Powered` toggled by an authorised and a refused caller, `StartDiscovery` producing devices
-and `DeviceAdded`, a pairing that calls the registered agent and stores the key, an agent that refuses, a pairing with no
-agent, and agent registration (live and dead owners).
-
-The controller and every management packet are written by hand from `doc/mgmt-protocol.rst`; the only recorded traffic is
-in `cupertino-bluetooth` (three read commands and their replies). The binary was also started on a private `dbus-daemon` with
-`--session-bus --no-auth --read-only` against this machine's real management socket: `Available` and `Powered` read `true` (the adapter's actual state), `Devices` was empty,
-and `StartDiscovery` failed with `the daemon runs read-only`. No command that changes anything was sent to the real
-adapter, and no real device was paired.
+- **A running system.** Nothing ran against a real pairing.

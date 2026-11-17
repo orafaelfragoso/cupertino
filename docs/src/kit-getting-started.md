@@ -21,16 +21,11 @@ checkout and was run on the commit this page was written against.
   CUPERTINO_SPEC_DIR="$(mktemp -d)" cargo run -p cupertino-kit --example counter
   ```
 
-  The window opens and stderr shows `cupertino-kit: no Cupertino theme (…); using the neutral theme`. The `examples`
-  test starts the Counter this way and compares it with `tests/goldens/counter-neutral.txt`:
-
-  ```bash
-  cargo test -p cupertino-kit --test suite examples::the_counter_starts_on_the_neutral_theme
-  ```
+  The window opens and stderr shows `cupertino-kit: no Cupertino theme (…); using the neutral theme`.
 
 - Fonts and icons come from an asset pack when one is installed (`CUPERTINO_ASSET_DIR`, else the user or system
   pack). The kit falls back to its built-in Inter font. Headless captures of the controls sheet need a pack
-  (`ci/capture.sh` says so in its header).
+  (`kit_capture` says so).
 - The renderer follows the application's class, `Application::RENDERER`. An application that declares none
   (`RendererClass::ByUse`) starts on the CPU: the kit rasterizes each window there (`cupertino-ui-render`), repainting
   only what changed and keeping scrolled content as an image it moves, and hands it to the compositor in shared memory
@@ -88,11 +83,6 @@ Run them in a nested Cupertino session, on another compositor, or on the host's 
 [Building and running](building.md) for the nested server. On a Wayland session, Counter and Forms run until you close
 them.
 
-## Check the examples without a display
-
-`cargo test -p cupertino-kit` drives the examples with input on the headless window system and compares their traces and
-tree dumps with files in `crates/cupertino-kit/tests/goldens/`. `CUPERTINO_UPDATE_GOLDENS=1` rewrites them. The timing matrix is ignored in a normal run; run it with `--release --ignored --nocapture`. Test counts change as the toolkit grows; use the command output for the checked-out commit.
-
 ## From C
 
 The C SDK is the `cupertino-kit` package: the library `libcupertinokit.so.1`, the header
@@ -117,8 +107,7 @@ thread that created it; other threads only post to it through a waker (`ck_runti
 runtime's thread reads the posts with `ck_poll_events`.
 
 `cupertino sdk new --lang rust NAME` starts a Rust project on the `cupertino-kit` crate of the same release instead
-(`--source CHECKOUT` takes it from a Cupertino checkout, offline or before the release is tagged). The samples in `crates/cupertino-ui-abi/examples/c` build with `make` the same way. From a checkout, `python3
-ci/c-sdk.py` builds the SDK into a staging directory and runs all of the above against it.
+(`--source CHECKOUT` takes it from a Cupertino checkout, offline or before the release is tagged). The samples in `crates/cupertino-ui-abi/examples/c` build with `make` the same way.
 
 ## Accessibility
 
@@ -149,22 +138,7 @@ Not done:
 - An application on another toolkit keeps publishing its tree while the session is locked: only Kit applications
   hide theirs.
 
-Commands behind these statements:
-
-```bash
-cargo test -p cupertino-ui-atspi
-cargo test -p cupertino-kit --test suite assistive_technology::
-cargo test -p cupertino-kit --test suite control_fixtures::
-```
-
-The first runs the mapping and filter tests, tests of the live-region rules and of the hidden windows while the session is locked, and, when
-`dbus-daemon` is installed, tests on a private bus with a fake AT-SPI registry, one of them following a text field's
-caret and selection (without `dbus-daemon` the bus tests print `SKIPPED`).
-The second changes a form value and moves focus through assistive-technology requests. The third audits every
-control in each state, appearance and direction, checks that the keyboard focus shows in each appearance, high contrast
-included, and asks for every action each control offers, which must reach the application or change what a screen
-reader reads. No screen reader was
-run against the examples for this page, so how a screen reader reads them is not documented here.
+No screen reader was run against the examples for this page, so how a screen reader reads them is not documented here.
 
 ## Right to left
 
@@ -174,12 +148,12 @@ What exists:
   Insets are physical and do not mirror.
 - Text follows UAX 9: the base direction comes from the paragraph style or the first strong character, runs are shaped in
   their direction, lines are reordered for display, and carets, hit testing and selection rectangles work across
-  direction changes. Tests cover Latin, Hebrew, Arabic, Devanagari, emoji and digits inside right-to-left text.
+  direction changes, for Latin, Hebrew, Arabic, Devanagari, emoji and digits inside right-to-left text.
 - In the toolkit's text editing (`cupertino-ui-text`), the arrow keys move on screen through right-to-left text.
 - The toolkit's controls sheet draws mirrored:
 
   ```bash
-  ci/capture.sh kit/controls --direction rtl
+  cargo run -p cupertino-kit --example kit_capture -- kit/controls --direction rtl
   ```
 
   This writes light and dark PNGs under the build directory's `captures/`. `kit/icons` takes the same flag; chevrons
@@ -188,8 +162,8 @@ What exists:
   draw them over a busy backdrop:
 
   ```bash
-  ci/capture.sh kit/gallery --state held-switch --control-size large --backdrop busy --scale 2
-  ci/capture.sh kit/gallery --sheet
+  cargo run -p cupertino-kit --example kit_capture -- kit/gallery --state held-switch --control-size large --backdrop busy --scale 2
+  cargo run -p cupertino-kit --example kit_capture -- kit/gallery --sheet
   ```
 
   The sheet puts the resting, held and disabled states side by side.
@@ -198,11 +172,3 @@ Limits:
 
 - `app::run` always lays out left to right; it has no option to change that yet. The kit does not choose the direction
   from the locale or the session.
-
-Commands behind these statements:
-
-```bash
-cargo test -p cupertino-ui-layout --test suite layout::right_to_left
-cargo test -p cupertino-ui-text
-cargo test -p cupertino-ui-layout --test suite properties::
-```

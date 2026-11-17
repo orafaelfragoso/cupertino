@@ -99,7 +99,7 @@ snapping preview timing are the values of the table above; a window that refuses
 
 ### Focus on map
 
-A window that maps (`MapParams.activation`) takes the keyboard when the compositor asks for it unconditionally (`Activation::Always`: shell windows, tests) or, with `Activation::Policy(MapFocus)`, when: nothing is focused, it is a sheet or dialog of the key window, its application is the front one, its client presented a valid grant (`Grant`: made by the compositor or for an input event of the focused client) at most 10 s old that passes `token_accepted`, or it is the first window of a client the person has not left since it connected and is not typing (`first_of_client`, not `input_elsewhere`, and no key or button press in the last `TYPING_QUIET` = 1 s). Any other window maps just below the key window and `Effect::AppAttention` bounces its application's tile. Tests: `tests/focus_on_map.rs`.
+A window that maps (`MapParams.activation`) takes the keyboard when the compositor asks for it unconditionally (`Activation::Always`: shell windows, tests) or, with `Activation::Policy(MapFocus)`, when: nothing is focused, it is a sheet or dialog of the key window, its application is the front one, its client presented a valid grant (`Grant`: made by the compositor or for an input event of the focused client) at most 10 s old that passes `token_accepted`, or it is the first window of a client the person has not left since it connected and is not typing (`first_of_client`, not `input_elsewhere`, and no key or button press in the last `TYPING_QUIET` = 1 s). Any other window maps just below the key window and `Effect::AppAttention` bounces its application's tile.
 
 ### Application switcher and activation
 
@@ -114,10 +114,3 @@ A window that maps (`MapParams.activation`) takes the keyboard when the composit
 | Alt disables snapping | on |
 | resize hit zones | 3 pt inside, 4 pt outside, corners 12 pt, bottom-right 15 pt |
 | resize snapping | dragged edges snap to other windows, not for child windows |
-
-## Tests
-
-Unit tests per module, plus integration tests in `tests/` that drive the public command API: lifecycle, focus (switcher keys, the hidden counter, Q and H, the activation rule, attention), interaction
-(size snapping), magnetic edges, workspaces, transitions (`tests/transitions.rs`: restore geometry through each transition and nested ones, a refused full screen,
-closing the last window, key versus main), and window kinds (`tests/kinds.rs`: sheets, modal panels and their cascade,
-plain and utility children, window levels, sheet dimming).

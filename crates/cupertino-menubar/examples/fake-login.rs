@@ -1,6 +1,6 @@
 //! A stand-in for the session agent's `org.cupertino.Login1` on the session bus, for captures and manual tries of the
 //! system menu: the properties it reads (`Locked`, `UserName`, `Capabilities`) and the calls it takes, which it
-//! only prints. Start it as a client of a capture: `capture.sh out.png --spawn target/release/examples/fake-login`.
+//! only prints. Start it as a client of a headless server: `cupertino-server --headless --screenshot out.png --exit-after-screenshot --spawn target/release/examples/fake-login`.
 
 use std::collections::HashMap;
 

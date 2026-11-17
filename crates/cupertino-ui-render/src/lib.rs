@@ -11,6 +11,7 @@ pub mod gpu;
 mod image_cache;
 mod layers;
 mod raster;
+pub mod render_thread;
 mod spans;
 mod stats;
 mod validate;

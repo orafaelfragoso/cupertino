@@ -137,25 +137,27 @@ losses it counts); a change is logged as `renderer: <cpu|gpu> (<reason>)` and re
 `renderer: fell back to the CPU (<scope>): <why>` and records the diagnostic event `toolkit.renderer.fallback`,
 which `cupertino diagnose events` lists for the last fortnight.
 
-`gpu_path::GpuPath`, owned by the window system, makes the device on the feedback's render node and links the
-presenter's and the GPU renderer's programs on a worker thread (saved per driver in
-`$XDG_CACHE_HOME/cupertino/programs`) while the first frames go out in shared memory, then takes the device over and
-reports `PlatformEvent::RendererChanged`: the runtime drops every window's renderer (the CPU renderer's frame, layers
-and caches go with it) and draws whole frames with a new one. The new ones come from `GpuRenderers`
-(`WaylandWindowSystem::gpu_renderers`), which the kit's renderer factory holds: while the process is on the GPU it
-makes a `cupertino_ui_render::gpu::WindowRenderer` on the presenter's device (shared through an `Rc`) with the programs made
-in the warm-up, and the CPU renderer otherwise. Dropping the path stops the warm-up thread after the step it is in and
-joins it (one still inside `Device::new` is waited for 5 s at exit and then left); a thread inside `Device::new` for
-10 s (`DEVICE_HANG`) is given up as a fallback, the run loop waking at that deadline to notice. On a loss it frees
-every surface's buffers (the lost device's images and buffer objects with them), reports the
-change back to the CPU and warms up again (or stays on the CPU after the third reset). `buffers_lost` from the
-compositor checks the device and makes every surface's next upload whole.
+`gpu_path::GpuPath`, owned by the window system, asks the process's render thread
+(`cupertino_ui_render::render_thread`) for the process's one device, on the feedback's render node, with the GPU
+renderer's programs saved per driver in `$XDG_CACHE_HOME/cupertino/programs`, while the first frames go out in shared
+memory; a second window system of the process finds it made or being made. Once it is ready the path makes its
+presenter's programs on it, takes it over and reports `PlatformEvent::RendererChanged`: the runtime drops every
+window's renderer (the CPU renderer's frame, layers and caches go with it) and draws whole frames with a new one. The
+new ones come from `GpuRenderers` (`WaylandWindowSystem::gpu_renderers`), which the kit's renderer factory holds:
+while the window system is on the GPU it makes a `cupertino_ui_render::gpu::WindowRenderer` on the render thread, and
+the CPU renderer otherwise. The path holds a `Claim` on the device; the last window system going lets it go. A warm-up
+inside `Device::new` for 10 s (`DEVICE_HANG`) is given up as a fallback, the run loop waking at that deadline to
+notice. On a loss it frees every surface's buffers (the lost device's images and buffer objects with them), has the
+render thread let the device go (once for the process; another window system meeting the same loss finds it gone),
+reports the change back to the CPU and asks for a new device (or stays on the CPU after the third reset).
+`buffers_lost` from the compositor checks the device and makes every surface's next upload whole.
 
 `gpu_present::GpuSurface` keeps one surface's dmabufs, allocated in `SIZE_STEP` (128 pixel) steps and cropped by the
-viewport, in a modifier the compositor offers and the driver renders to. A frame the GPU renderer drew on the same
-device carries its texture (`CpuFrame::device`) and is copied from it into a free buffer texel for texel
-(`blit_texels`), nothing uploaded; a CPU frame has its damage uploaded into a staging texture and drawn into a free
-buffer. The raised layer's subsurface has buffers of its own and is presented as its window is. A surface that falls
+viewport, in a modifier the compositor offers and the driver renders to: their textures, the staging texture and the
+drawing are the render thread's, their protocol objects, sync points and commits the window system's. A frame the GPU
+renderer drew carries its texture (`CpuFrame::device`, a `WindowFrame`) and is copied from it into a free buffer
+texel for texel (`blit_texels`), nothing uploaded; a CPU frame has its damage uploaded into a staging texture and drawn
+into a free buffer. The raised layer's subsurface has buffers of its own and is presented as its window is. A surface that falls
 back to shared memory and a drag image read a GPU frame back (`CpuFrame::in_memory`). With
 `linux-drm-syncobj-v1` the frame's native fence is the buffer's
 acquire point and its release point is waited for through an eventfd (two buffers); without it the commit waits for

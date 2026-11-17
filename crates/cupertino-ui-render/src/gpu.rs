@@ -31,6 +31,7 @@ mod record;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::render_thread::{self, RenderThread, Resident};
 use crate::{
     damage_rects, CpuFrame, DamageRegion, DeviceFrame, DeviceFrameRef, Layer, PaintNodeId,
     PixelFormat, PixelRect, RenderError, RenderFrameId, RenderRequest, ResourceId, UiRenderer,
@@ -905,38 +906,68 @@ impl<R> GpuRenderer<R> {
     }
 }
 
-/// A [`GpuRenderer`] as a window's renderer: its frames are [`CpuFrame`]s whose image stays on the device
-/// ([`CpuFrame::device`] holds the [`WindowTexture`]) and whose `pixels` are empty. A presenter on the same device
-/// draws from the texture; anything else reads it back ([`CpuFrame::in_memory`]).
-pub struct WindowRenderer<R> {
-    inner: GpuRenderer<R>,
+/// A [`GpuRenderer`] on the process's render thread ([`crate::render_thread`]) as a window's renderer: it draws there,
+/// and its frames are [`CpuFrame`]s whose image stays on the device ([`CpuFrame::device`] holds a [`WindowFrame`]) and
+/// whose `pixels` are empty. A presenter on the same device draws from the frame's texture; anything else reads it
+/// back ([`CpuFrame::in_memory`]).
+pub struct WindowRenderer<R: 'static> {
+    inner: Resident<GpuRenderer<R>>,
     frame: Option<CpuFrame>,
 }
 
-impl<R> WindowRenderer<R> {
-    pub fn new(inner: GpuRenderer<R>) -> WindowRenderer<R> {
+impl<R: 'static> WindowRenderer<R> {
+    /// The window's renderer drawing with `inner`, made on the render thread.
+    pub fn new(inner: Resident<GpuRenderer<R>>) -> WindowRenderer<R> {
         WindowRenderer { inner, frame: None }
-    }
-
-    /// The renderer that draws the frames.
-    pub fn renderer(&self) -> &GpuRenderer<R> {
-        &self.inner
     }
 }
 
-impl<R: GlyphRasterizer> UiRenderer for WindowRenderer<R> {
+/// A frame of a [`WindowRenderer`]: the renderer's [`WindowTexture`], kept on the render thread while the frame is.
+pub struct WindowFrame {
+    texture: Resident<Rc<WindowTexture>>,
+    size: (u32, u32),
+}
+
+impl WindowFrame {
+    /// The texture holding the frame, on the render thread.
+    pub fn texture<'a>(&'a self, on: &'a RenderThread) -> &'a WindowTexture {
+        self.texture.get(on)
+    }
+
+    /// Its size in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+}
+
+impl DeviceFrame for WindowFrame {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn read_pixels(&self) -> Result<Vec<u8>, RenderError> {
+        let texture = &self.texture;
+        render_thread::run(|on| texture.get(on).read_pixels())
+    }
+}
+
+impl<R: GlyphRasterizer + 'static> UiRenderer for WindowRenderer<R> {
     type Frame = CpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
         // the last frame lets go of its texture first, so a resize frees it before the next is made
         self.frame = None;
-        let id = self.inner.render(request)?;
-        let damage = self.inner.frame(id)?.damage.clone();
-        let window = self
-            .inner
-            .window_texture()
-            .ok_or(RenderError::UnknownFrame(id))?;
-        let (width, height) = window.size();
+        let inner = &mut self.inner;
+        let (id, damage, texture, (width, height)) = render_thread::run(|on| {
+            let renderer = inner.get_mut(on);
+            let id = renderer.render(request)?;
+            let damage = renderer.frame(id)?.damage.clone();
+            let window = renderer
+                .window_texture()
+                .ok_or(RenderError::UnknownFrame(id))?;
+            let size = window.size();
+            Ok::<_, RenderError>((id, damage, Resident::new(on, window), size))
+        })?;
         self.frame = Some(CpuFrame {
             id,
             width,
@@ -945,7 +976,10 @@ impl<R: GlyphRasterizer> UiRenderer for WindowRenderer<R> {
             format: PixelFormat::Rgba8Premultiplied,
             pixels: Vec::new(),
             damage,
-            device: Some(DeviceFrameRef(window)),
+            device: Some(DeviceFrameRef(Rc::new(WindowFrame {
+                texture,
+                size: (width, height),
+            }))),
         });
         Ok(id)
     }
@@ -958,6 +992,7 @@ impl<R: GlyphRasterizer> UiRenderer for WindowRenderer<R> {
     }
 
     fn drop_layers(&mut self) {
-        self.inner.trim();
+        let inner = &mut self.inner;
+        render_thread::run(|on| inner.get_mut(on).trim());
     }
 }

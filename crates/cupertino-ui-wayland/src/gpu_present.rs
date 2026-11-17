@@ -9,10 +9,12 @@
 //! once a frame. A buffer uses only a modifier the compositor offers and the driver renders to; linear is never added
 //! on a hardware driver ([`usable_modifiers`]).
 //!
-//! The drawing itself: a frame drawn on the same device ([`cupertino_ui_render::gpu::WindowRenderer`]) is copied from its
-//! texture into the buffer, texel for texel from the first pixel (the buffer may be larger by the size step), and
-//! nothing is uploaded. A frame of the CPU renderer has its pixels uploaded into a texture of the buffer's size, only
-//! what the frame changed, and drawn over the buffer; a frame drawn on another device is read back first.
+//! The drawing itself happens on the process's render thread ([`render_thread`]), which holds the buffers' textures;
+//! the window system's thread keeps the buffers' protocol objects and sync points and commits. A frame a window's
+//! renderer drew there ([`cupertino_ui_render::gpu::WindowRenderer`]) is copied from its texture into the buffer, texel
+//! for texel from the first pixel (the buffer may be larger by the size step), and nothing is uploaded. A frame of the
+//! CPU renderer has its pixels uploaded into a texture of the buffer's size, only what the frame changed, and drawn
+//! over the buffer; a frame drawn on another device is read back first.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::rc::Rc;
@@ -21,11 +23,12 @@ use std::time::Duration;
 use cupertino_gpu::syncobj::{self, SyncNode, Timeline};
 use cupertino_gpu::{
     shaders, AddressMode, BindGroupEntry, BindGroupLayout, BindingKind, BindingLayout,
-    BindingResource, Blend, Device, DmabufDesc, Error as GpuError, ExternalImage, Filter, LoadOp,
+    BindingResource, Blend, Device, DeviceInfo, DmabufDesc, Error as GpuError, Filter, LoadOp,
     Loss, Pipeline, PipelineDesc, Region, Sampler, SamplerDesc, Texture, TextureDesc,
     TextureFormat, TextureUsage, Topology, FOURCC_ARGB8888, MODIFIER_INVALID, MODIFIER_LINEAR,
 };
-use cupertino_ui_render::gpu::{GpuPrograms, WindowTexture};
+use cupertino_ui_render::gpu::WindowFrame;
+use cupertino_ui_render::render_thread::{self, Ready, Resident};
 use cupertino_ui_render::CpuFrame;
 use cupertino_wayland_client::{
     Connection, DmabufAttributes, DmabufPlaneRef, Error as WlError, GpuBufferId, GpuFrame,
@@ -189,36 +192,32 @@ fn gpu_error(e: GpuError) -> PresentError {
     }
 }
 
-/// The process's GPU device and what every surface draws with. The device is shared with the windows' renderers.
+/// The process's GPU device as a window system presents with it: the device itself is the render thread's
+/// ([`render_thread`]), shared with the windows' renderers; this keeps which one it is, what the window system learnt
+/// of it, and the programs its surfaces draw with there.
 pub struct GpuDevice {
-    pub device: Rc<Device>,
+    generation: u64,
+    info: DeviceInfo,
     /// The render node's syncobj requests, when explicit sync is used.
     sync: Option<SyncNode>,
     /// The modifiers buffers may use.
     modifiers: Vec<u64>,
-    blit: Pipeline,
-    layout: BindGroupLayout,
-    sampler: Sampler,
-    texels: Pipeline,
-    texels_layout: BindGroupLayout,
-    /// The windows' renderers' programs.
-    pub ui: Rc<GpuPrograms>,
+    programs: Resident<Programs>,
 }
 
-/// The programs a surface draws with and those of the windows' renderers, made when the device is (on the warm-up
-/// thread).
+/// The programs a surface draws with, on the render thread; freed with the last of them.
 pub struct Programs {
-    pub blit: Pipeline,
-    pub layout: BindGroupLayout,
-    pub sampler: Sampler,
+    device: Rc<Device>,
+    blit: Option<Pipeline>,
+    layout: BindGroupLayout,
+    sampler: Option<Sampler>,
     /// A renderer's texture copied into a buffer texel for texel.
-    pub texels: Pipeline,
-    pub texels_layout: BindGroupLayout,
-    pub ui: GpuPrograms,
+    texels: Option<Pipeline>,
+    texels_layout: BindGroupLayout,
 }
 
 impl Programs {
-    pub fn new(device: &Device) -> Result<Programs, GpuError> {
+    pub fn new(device: &Rc<Device>) -> Result<Programs, GpuError> {
         let layout = device.create_bind_group_layout(&[
             BindingLayout {
                 binding: 1,
@@ -252,47 +251,76 @@ impl Programs {
             topology: Topology::TriangleList,
         })?;
         Ok(Programs {
-            blit,
+            device: Rc::clone(device),
+            blit: Some(blit),
             layout,
-            sampler,
-            texels,
+            sampler: Some(sampler),
+            texels: Some(texels),
             texels_layout,
-            ui: GpuPrograms::new(device)?,
         })
+    }
+
+    fn blit(&self) -> &Pipeline {
+        self.blit.as_ref().expect("held until dropped")
+    }
+
+    fn texels(&self) -> &Pipeline {
+        self.texels.as_ref().expect("held until dropped")
+    }
+
+    fn sampler(&self) -> &Sampler {
+        self.sampler.as_ref().expect("held until dropped")
+    }
+}
+
+impl Drop for Programs {
+    fn drop(&mut self) {
+        for pipeline in self.blit.take().into_iter().chain(self.texels.take()) {
+            self.device.destroy_pipeline(pipeline);
+        }
+        if let Some(sampler) = self.sampler.take() {
+            self.device.destroy_sampler(sampler);
+        }
     }
 }
 
 impl GpuDevice {
-    /// The process's device with its programs, presenting buffers in modifiers of `offered` (ARGB8888's in the
-    /// compositor's feedback), with explicit sync through `sync` when given.
+    /// The process's device `ready` names, presenting buffers in modifiers of `offered` (ARGB8888's in the
+    /// compositor's feedback), with explicit sync through `sync` when given; its surfaces' programs are made now, on
+    /// the render thread.
     pub fn new(
-        device: Device,
-        programs: Programs,
+        ready: &Ready,
         offered: &[u64],
         sync: Option<SyncNode>,
-    ) -> GpuDevice {
-        let info = device.info().clone();
+    ) -> Result<GpuDevice, GpuError> {
+        let generation = ready.generation;
+        let programs = render_thread::run(move |on| {
+            let programs = Programs::new(on.device_of(generation)?)?;
+            Ok::<_, GpuError>(Resident::new(on, programs))
+        })?;
+        let info = ready.info.clone();
         let modifiers = match info.allocator {
             // the export allocator takes the driver's layout, which the offer must hold
             Some(cupertino_gpu::Allocator::Export) => offered.to_vec(),
-            _ => usable_modifiers(
-                offered,
-                &device.renderable_modifiers(FOURCC_ARGB8888),
-                info.software,
-            ),
+            _ => usable_modifiers(offered, &ready.renderable, info.software),
         };
         let sync = sync.filter(|_| info.native_fences);
-        GpuDevice {
-            device: Rc::new(device),
+        Ok(GpuDevice {
+            generation,
+            info,
             sync,
             modifiers,
-            blit: programs.blit,
-            layout: programs.layout,
-            sampler: programs.sampler,
-            texels: programs.texels,
-            texels_layout: programs.texels_layout,
-            ui: Rc::new(programs.ui),
-        }
+            programs,
+        })
+    }
+
+    /// Which of the process's devices it is ([`Ready::generation`]).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn info(&self) -> &DeviceInfo {
+        &self.info
     }
 
     /// Whether buffers are synchronised through syncobj timelines.
@@ -303,10 +331,28 @@ impl GpuDevice {
     pub fn modifiers(&self) -> &[u64] {
         &self.modifiers
     }
+
+    /// Whether the device still works: `Lost` once it was reset or purged, or let go for a loss another window system
+    /// of the process saw.
+    pub fn status(&self) -> Result<(), GpuError> {
+        let generation = self.generation;
+        render_thread::run(move |on| on.device_of(generation).map(|_| ()))
+    }
+
+    /// Test hook: the device's next status check reads `loss` instead of the driver's own.
+    pub fn inject_loss(&self, loss: Loss) {
+        let generation = self.generation;
+        render_thread::run(move |on| {
+            if on.generation() == Some(generation) {
+                if let Some(device) = on.device() {
+                    device.inject_loss(loss);
+                }
+            }
+        });
+    }
 }
 
 struct Slot {
-    image: ExternalImage,
     buffer: GpuBufferId,
     timeline: Option<(Timeline, TimelineId)>,
     uses: u64,
@@ -331,11 +377,45 @@ pub struct SurfaceStats {
     pub modifier: u64,
 }
 
+/// The textures of a surface's buffers, one per slot, and its staging texture, on the render thread; freed with them
+/// on the device they were made on, which a loss leaves their images and buffer objects to.
+struct Images {
+    device: Rc<Device>,
+    buffers: Vec<Texture>,
+    staging: Option<Texture>,
+}
+
+impl Images {
+    /// Free the texture of the buffer allocated last.
+    fn free_last(&mut self) {
+        if let Some(texture) = self.buffers.pop() {
+            self.device.destroy_texture(texture);
+        }
+    }
+}
+
+impl Drop for Images {
+    fn drop(&mut self) {
+        for texture in self.buffers.drain(..).chain(self.staging.take()) {
+            self.device.destroy_texture(texture);
+        }
+    }
+}
+
+/// How a frame drawn into a buffer is finished before its commit.
+#[derive(Clone, Copy)]
+enum Submit {
+    /// With the frame's native fence.
+    Fence,
+    /// Waiting for the GPU to finish it: a driver without native fences.
+    Finish,
+}
+
 /// The GPU buffers of one surface.
 #[derive(Default)]
 pub struct GpuSurface {
     slots: Vec<Slot>,
-    staging: Option<Texture>,
+    images: Option<Resident<Images>>,
     allocated: Option<(u32, u32)>,
     commits: u64,
     /// The staging texture no longer holds the last frame: the next upload is whole.
@@ -388,7 +468,7 @@ impl GpuSurface {
         self.stale = true;
     }
 
-    /// Free every buffer, texture and timeline.
+    /// Free every buffer, texture and timeline; the textures go on the render thread.
     pub fn free(&mut self, gpu: Option<&GpuDevice>, conn: &mut Connection) {
         for slot in self.slots.drain(..) {
             conn.destroy_gpu_buffer(slot.buffer);
@@ -398,14 +478,8 @@ impl GpuSurface {
                     sync.destroy(timeline);
                 }
             }
-            if let Some(gpu) = gpu {
-                gpu.device.destroy_texture(slot.image.texture);
-            }
         }
-        if let (Some(t), Some(gpu)) = (self.staging.take(), gpu) {
-            gpu.device.destroy_texture(t);
-        }
-        self.staging = None;
+        self.images = None;
         self.allocated = None;
     }
 
@@ -415,16 +489,30 @@ impl GpuSurface {
         conn: &mut Connection,
         size: (u32, u32),
     ) -> Result<(), PresentError> {
-        let image = gpu
-            .device
-            .allocate_dmabuf(&DmabufDesc {
+        let (generation, modifiers) = (gpu.generation, gpu.modifiers.clone());
+        let images = &mut self.images;
+        let dmabuf = render_thread::run(move |on| {
+            let device = on.device_of(generation)?;
+            let image = device.allocate_dmabuf(&DmabufDesc {
                 size,
                 fourcc: FOURCC_ARGB8888,
-                modifiers: gpu.modifiers.clone(),
-            })
-            .map_err(gpu_error)?;
-        let planes = image
-            .dmabuf
+                modifiers,
+            })?;
+            let images = images.get_or_insert_with(|| {
+                Resident::new(
+                    on,
+                    Images {
+                        device: Rc::clone(device),
+                        buffers: Vec::new(),
+                        staging: None,
+                    },
+                )
+            });
+            images.get_mut(on).buffers.push(image.texture);
+            Ok(image.dmabuf)
+        })
+        .map_err(gpu_error)?;
+        let planes = dmabuf
             .planes
             .iter()
             .map(|p| DmabufPlaneRef {
@@ -435,14 +523,14 @@ impl GpuSurface {
             .collect();
         let made = conn.create_dmabuf_buffer(&DmabufAttributes {
             size,
-            fourcc: image.dmabuf.fourcc,
-            modifier: image.dmabuf.modifier,
+            fourcc: dmabuf.fourcc,
+            modifier: dmabuf.modifier,
             planes,
         });
         let buffer = match made {
             Ok(b) => b,
             Err(e) => {
-                gpu.device.destroy_texture(image.texture);
+                self.free_last();
                 return Err(match e {
                     WlError::BufferRejected | WlError::Unsupported(_) => {
                         PresentError::Fallback(e.to_string())
@@ -460,7 +548,7 @@ impl GpuSurface {
                     Ok((t, fd)) => Some((t, conn.import_timeline(fd.as_fd())?)),
                     Err(e) => {
                         conn.destroy_gpu_buffer(buffer);
-                        gpu.device.destroy_texture(image.texture);
+                        self.free_last();
                         return Err(PresentError::Fallback(format!("syncobj: {e}")));
                     }
                 }
@@ -468,9 +556,8 @@ impl GpuSurface {
             None => None,
         };
         self.stats.allocations += 1;
-        self.stats.modifier = image.dmabuf.modifier;
+        self.stats.modifier = dmabuf.modifier;
         self.slots.push(Slot {
-            image,
             buffer,
             timeline,
             uses: 0,
@@ -480,8 +567,15 @@ impl GpuSurface {
         Ok(())
     }
 
+    /// Free the texture of the buffer allocated last, whose `wl_buffer` could not be made.
+    fn free_last(&mut self) {
+        if let Some(images) = &mut self.images {
+            render_thread::run(|on| images.get_mut(on).free_last());
+        }
+    }
+
     /// Show `frame` on `surface`: copied from its renderer's texture on this device, or its `damage` (pixels;
-    /// everything when `whole`) uploaded, drawn into a free buffer, synchronised and committed.
+    /// everything when `whole`) uploaded, drawn into a free buffer on the render thread, synchronised and committed.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &mut self,
@@ -493,21 +587,20 @@ impl GpuSurface {
         damage: &[PixelRect],
         whole: bool,
     ) -> Result<(), PresentError> {
-        gpu.device.status().map_err(gpu_error)?;
         let size = conn.frame_size(surface, preferred)?;
         let pixels = (frame.width, frame.height);
         if (size.width, size.height) != pixels {
             return Err(PresentError::Resized);
         }
-        // a frame drawn on this device is copied from its texture; one drawn on another is read back
+        // a frame a window's renderer drew on the render thread is copied from its texture there; any other has its
+        // pixels uploaded, read back first when they stayed on another device
         let source = frame
             .device
             .as_ref()
-            .and_then(|d| d.0.as_any().downcast_ref::<WindowTexture>())
-            .filter(|w| Rc::ptr_eq(w.device(), &gpu.device) && w.size() == pixels);
+            .and_then(|d| d.0.as_any().downcast_ref::<WindowFrame>())
+            .filter(|w| w.size() == pixels);
         let read_back;
         let frame = if source.is_none() && frame.pixels.is_empty() {
-            // a frame of a device given up (a loss) is not shown: the next comes from a renderer of this one
             read_back = frame.in_memory().map_err(|_| PresentError::Resized)?;
             &*read_back
         } else {
@@ -519,7 +612,7 @@ impl GpuSurface {
         let mut whole = whole || self.stale;
         if !self.allocated.is_some_and(|a| serves(a, pixels, can_crop)) {
             self.free(Some(gpu), conn);
-            let max = gpu.device.info().max_texture_size;
+            let max = gpu.info.max_texture_size;
             self.allocated = Some(allocation(pixels, can_crop, max));
             whole = true;
             shown_whole = true;
@@ -538,9 +631,93 @@ impl GpuSurface {
             Next::Busy => return Err(PresentError::Busy),
         };
         drop(leasing);
-        if let Some(source) = source {
-            tracing::trace_span!("wl.copy", from = "texture")
-                .in_scope(|| self.draw_from(gpu, index, source.texture()))?;
+        let submit = if gpu.sync.is_some() || gpu.info.native_fences {
+            Submit::Fence
+        } else {
+            Submit::Finish
+        };
+        let generation = gpu.generation;
+        let programs = &gpu.programs;
+        let images = self
+            .images
+            .as_mut()
+            .expect("a surface with buffers has their images");
+        let (width, height, stride) = (frame.width, frame.height, frame.stride as usize);
+        let frame_pixels: &[u8] = &frame.pixels;
+        let drawn = render_thread::run(|on| {
+            let device = on.device_of(generation).map_err(gpu_error)?;
+            let programs = programs.get(on);
+            let images = images.get_mut(on);
+            match source {
+                Some(source) => {
+                    let texture = source.texture(on);
+                    // a frame of a device given up (a loss) is not shown: the next comes from a renderer of this one
+                    if !Rc::ptr_eq(texture.device(), device) {
+                        return Err(PresentError::Resized);
+                    }
+                    tracing::trace_span!("wl.copy", from = "texture").in_scope(|| {
+                        draw_from(device, programs, &images.buffers[index], texture.texture())
+                    })?;
+                }
+                None => {
+                    if images.staging.is_none() {
+                        images.staging = Some(
+                            device
+                                .create_texture(&TextureDesc {
+                                    size: allocated,
+                                    format: TextureFormat::Rgba8,
+                                    usage: TextureUsage::SAMPLED,
+                                })
+                                .map_err(gpu_error)?,
+                        );
+                        whole = true;
+                    }
+                    let staging = images.staging.as_ref().expect("made above");
+                    let full = [PixelRect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    }];
+                    let uploads: &[PixelRect] = if whole { &full } else { damage };
+                    let _copying =
+                        tracing::trace_span!("wl.copy", from = "memory", rects = uploads.len())
+                            .entered();
+                    let mut packed = Vec::new();
+                    for r in uploads {
+                        let Some(r) = clip(*r, width, height) else {
+                            continue;
+                        };
+                        pack(frame_pixels, stride, r, &mut packed);
+                        device
+                            .write_texture(
+                                staging,
+                                Region::new(r.x, r.y, r.width, r.height),
+                                &packed,
+                            )
+                            .map_err(gpu_error)?;
+                    }
+                    blit(device, programs, &images.buffers[index], staging)?;
+                }
+            }
+            let fence = match submit {
+                Submit::Fence => {
+                    let (fence, file) = tracing::trace_span!("wl.submit")
+                        .in_scope(|| device.submit_exported())
+                        .map_err(gpu_error)?;
+                    device.destroy_fence(fence);
+                    Some(file)
+                }
+                Submit::Finish => {
+                    tracing::trace_span!("wl.finish")
+                        .in_scope(|| device.finish())
+                        .map_err(gpu_error)?;
+                    None
+                }
+            };
+            Ok(fence)
+        })?;
+        if source.is_some() {
             self.stats.from_texture += 1;
             // the staging texture missed this frame
             self.stale = true;
@@ -549,76 +726,18 @@ impl GpuSurface {
                 conn,
                 surface,
                 index,
+                drawn,
                 (pixels, preferred),
                 damage,
                 shown_whole,
             );
         }
-        if self.staging.is_none() {
-            self.staging = Some(
-                gpu.device
-                    .create_texture(&TextureDesc {
-                        size: allocated,
-                        format: TextureFormat::Rgba8,
-                        usage: TextureUsage::SAMPLED,
-                    })
-                    .map_err(gpu_error)?,
-            );
-            whole = true;
-        }
-        let staging = self.staging.as_ref().expect("made above");
-        let full = [PixelRect {
-            x: 0,
-            y: 0,
-            width: frame.width,
-            height: frame.height,
-        }];
-        let uploads: &[PixelRect] = if whole { &full } else { damage };
-        let copying =
-            tracing::trace_span!("wl.copy", from = "memory", rects = uploads.len()).entered();
-        let mut packed = Vec::new();
-        for r in uploads {
-            let Some(r) = clip(*r, frame.width, frame.height) else {
-                continue;
-            };
-            pack(frame, r, &mut packed);
-            gpu.device
-                .write_texture(staging, Region::new(r.x, r.y, r.width, r.height), &packed)
-                .map_err(gpu_error)?;
-        }
-        let slot = &self.slots[index];
-        let group = gpu
-            .device
-            .create_bind_group(
-                &gpu.layout,
-                &[
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::Texture(staging),
-                    },
-                    BindGroupEntry {
-                        binding: 2,
-                        resource: BindingResource::Sampler(&gpu.sampler),
-                    },
-                ],
-            )
-            .map_err(gpu_error)?;
-        {
-            let mut pass = gpu
-                .device
-                .begin_pass(&slot.image.texture, LoadOp::Clear([0.0; 4]))
-                .map_err(gpu_error)?;
-            pass.set_pipeline(&gpu.blit);
-            pass.set_bind_group(0, &group).map_err(gpu_error)?;
-            pass.draw(0..3, 1).map_err(gpu_error)?;
-            pass.end();
-        }
-        drop(copying);
         self.commit(
             gpu,
             conn,
             surface,
             index,
+            drawn,
             (pixels, preferred),
             damage,
             whole,
@@ -627,36 +746,8 @@ impl GpuSurface {
         Ok(())
     }
 
-    /// Draws `texture` (a renderer's frame) into the buffer of slot `index`, texel for texel.
-    fn draw_from(
-        &self,
-        gpu: &GpuDevice,
-        index: usize,
-        texture: &Texture,
-    ) -> Result<(), PresentError> {
-        let group = gpu
-            .device
-            .create_bind_group(
-                &gpu.texels_layout,
-                &[BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Texture(texture),
-                }],
-            )
-            .map_err(gpu_error)?;
-        let mut pass = gpu
-            .device
-            .begin_pass(&self.slots[index].image.texture, LoadOp::Clear([0.0; 4]))
-            .map_err(gpu_error)?;
-        pass.set_pipeline(&gpu.texels);
-        pass.set_bind_group(0, &group).map_err(gpu_error)?;
-        pass.draw(0..3, 1).map_err(gpu_error)?;
-        pass.end();
-        Ok(())
-    }
-
-    /// Synchronises the buffer of slot `index`, drawn with a frame of `pixels`, and commits it with `damage` (or
-    /// whole).
+    /// Synchronises the buffer of slot `index`, drawn with a frame of `pixels` and finished with `fence` (the frame's
+    /// native fence, `None` once the GPU finished it), and commits it with `damage` (or whole).
     #[allow(clippy::too_many_arguments)]
     fn commit(
         &mut self,
@@ -664,18 +755,15 @@ impl GpuSurface {
         conn: &mut Connection,
         surface: SurfaceId,
         index: usize,
+        fence: Option<OwnedFd>,
         (pixels, preferred): ((u32, u32), (u32, u32)),
         damage: &[PixelRect],
         whole: bool,
     ) -> Result<(), PresentError> {
         let _commit = tracing::trace_span!("wl.commit", gpu = true).entered();
         let slot = &mut self.slots[index];
-        let sync = match (&gpu.sync, &slot.timeline) {
-            (Some(sync), Some((timeline, id))) => {
-                let (fence, file) = tracing::trace_span!("wl.submit")
-                    .in_scope(|| gpu.device.submit_exported())
-                    .map_err(gpu_error)?;
-                gpu.device.destroy_fence(fence);
+        let sync = match (&gpu.sync, &slot.timeline, fence) {
+            (Some(sync), Some((timeline, id)), Some(file)) => {
                 slot.uses += 1;
                 let (acquire, release) = (2 * slot.uses - 1, 2 * slot.uses);
                 sync.signal_with(timeline, file.as_fd(), acquire)
@@ -687,19 +775,11 @@ impl GpuSurface {
                 slot.reuse = Reuse::ReleasePoint;
                 Some((*id, acquire, release))
             }
-            _ => {
+            (_, _, fence) => {
                 // without explicit sync the compositor must not read a buffer still being drawn
-                if gpu.device.info().native_fences {
-                    let (fence, file) = tracing::trace_span!("wl.submit")
-                        .in_scope(|| gpu.device.submit_exported())
-                        .map_err(gpu_error)?;
-                    gpu.device.destroy_fence(fence);
+                if let Some(file) = fence {
                     tracing::trace_span!("wl.fence_wait")
                         .in_scope(|| cupertino_gpu::wait_sync_file(&file, FENCE_WAIT));
-                } else {
-                    tracing::trace_span!("wl.finish")
-                        .in_scope(|| gpu.device.finish())
-                        .map_err(gpu_error)?;
                 }
                 self.stats.fence_waits += 1;
                 slot.reuse = Reuse::Release;
@@ -723,6 +803,64 @@ impl GpuSurface {
     }
 }
 
+/// Draws `texture` (a renderer's frame) into `target`, a buffer's texture, texel for texel.
+fn draw_from(
+    device: &Device,
+    programs: &Programs,
+    target: &Texture,
+    texture: &Texture,
+) -> Result<(), PresentError> {
+    let group = device
+        .create_bind_group(
+            &programs.texels_layout,
+            &[BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Texture(texture),
+            }],
+        )
+        .map_err(gpu_error)?;
+    let mut pass = device
+        .begin_pass(target, LoadOp::Clear([0.0; 4]))
+        .map_err(gpu_error)?;
+    pass.set_pipeline(programs.texels());
+    pass.set_bind_group(0, &group).map_err(gpu_error)?;
+    pass.draw(0..3, 1).map_err(gpu_error)?;
+    pass.end();
+    Ok(())
+}
+
+/// Draws `staging` (uploaded pixels) into `target`, a buffer's texture.
+fn blit(
+    device: &Device,
+    programs: &Programs,
+    target: &Texture,
+    staging: &Texture,
+) -> Result<(), PresentError> {
+    let group = device
+        .create_bind_group(
+            &programs.layout,
+            &[
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Texture(staging),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Sampler(programs.sampler()),
+                },
+            ],
+        )
+        .map_err(gpu_error)?;
+    let mut pass = device
+        .begin_pass(target, LoadOp::Clear([0.0; 4]))
+        .map_err(gpu_error)?;
+    pass.set_pipeline(programs.blit());
+    pass.set_bind_group(0, &group).map_err(gpu_error)?;
+    pass.draw(0..3, 1).map_err(gpu_error)?;
+    pass.end();
+    Ok(())
+}
+
 /// `r` cut to a `width` × `height` frame; `None` when nothing is left.
 fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
     let (x1, y1) = (
@@ -737,13 +875,13 @@ fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
     })
 }
 
-/// The pixels of `r` (inside the frame) of `frame`, rows packed one after the other, into `out`.
-fn pack(frame: &CpuFrame, r: PixelRect, out: &mut Vec<u8>) {
+/// The pixels of `r` (inside the frame) of a frame's `pixels` with rows `stride` bytes apart, rows packed one after
+/// the other, into `out`.
+fn pack(pixels: &[u8], stride: usize, r: PixelRect, out: &mut Vec<u8>) {
     out.clear();
-    let stride = frame.stride as usize;
     let (start, len) = (r.x as usize * 4, r.width as usize * 4);
     for row in r.y..r.y + r.height {
         let at = row as usize * stride + start;
-        out.extend_from_slice(&frame.pixels[at..at + len]);
+        out.extend_from_slice(&pixels[at..at + len]);
     }
 }

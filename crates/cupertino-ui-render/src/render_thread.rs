@@ -16,6 +16,7 @@
 //! on it draws on the lender's thread, as before.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -366,16 +367,20 @@ pub fn request(
     claim
 }
 
-/// The device of `generation` was lost by `loss` (reset or purged): the render thread lets it go (once, however many
-/// instances saw the loss), and the next [`request`] makes another. What was made on it goes as its owners drop it.
-pub fn lost(generation: u64, loss: Loss) {
+/// The device of `generation` was lost by `loss` (reset or purged): the render thread lets it go and counts the loss
+/// (once, however many instances saw it), and the next [`request`] makes another. What was made on it goes as its
+/// owners drop it. Whether the process has lost too many devices to ask for another ([`losses_exceeded`]).
+pub fn lost(generation: u64, loss: Loss) -> bool {
     let thread = handle();
     {
         let mut state = lock(&thread.shared.state);
         match &state.phase {
             Phase::Ready(ready) if ready.generation == generation => state.phase = Phase::Idle,
-            _ => return,
+            _ => return state.losses.exceeded(Instant::now()),
         }
+        state
+            .losses
+            .record(loss.counts_as_failure(), Instant::now());
     }
     thread.send(job(move |on| {
         if on.generation() == Some(generation) {
@@ -383,6 +388,44 @@ pub fn lost(generation: u64, loss: Loss) {
             on.lost = Some((generation, loss));
         }
     }));
+    losses_exceeded()
+}
+
+/// Whether the process's devices were reset [`LOSS_LIMIT`] times within [`LOSS_WINDOW`]: it draws on the CPU from
+/// then on. Purges (suspend, a VT switch, a mode set) never count.
+pub fn losses_exceeded() -> bool {
+    lock(&handle().shared.state).losses.exceeded(Instant::now())
+}
+
+/// Resets within [`LOSS_WINDOW`] after which a process stays on the CPU.
+pub const LOSS_LIMIT: usize = 3;
+
+/// The time [`LOSS_LIMIT`] resets are counted over.
+pub const LOSS_WINDOW: Duration = Duration::from_secs(60);
+
+/// The device resets of the process, the latest [`LOSS_WINDOW`] of them.
+#[derive(Debug, Default)]
+struct LossHistory {
+    resets: VecDeque<Instant>,
+}
+
+impl LossHistory {
+    fn record(&mut self, counts: bool, now: Instant) {
+        if counts {
+            self.resets.push_back(now);
+        }
+    }
+
+    fn exceeded(&mut self, now: Instant) -> bool {
+        while self
+            .resets
+            .front()
+            .is_some_and(|&at| now.saturating_duration_since(at) >= LOSS_WINDOW)
+        {
+            self.resets.pop_front();
+        }
+        self.resets.len() >= LOSS_LIMIT
+    }
 }
 
 /// A hold on the process's device ([`request`]); the last one going lets the device go.
@@ -467,6 +510,7 @@ fn handle() -> &'static Handle {
                     wakes: Vec::new(),
                     claims: 0,
                     warm_up: None,
+                    losses: LossHistory::default(),
                 }),
                 changed: Condvar::new(),
             },
@@ -510,6 +554,8 @@ struct SharedState {
     wakes: Vec<Box<dyn FnOnce() + Send>>,
     claims: usize,
     warm_up: Option<WarmUp>,
+    /// The devices' resets, counted once each.
+    losses: LossHistory,
 }
 
 enum Phase {

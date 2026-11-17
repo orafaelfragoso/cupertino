@@ -149,7 +149,8 @@ the CPU renderer otherwise. The path holds a `Claim` on the device; the last win
 inside `Device::new` for 10 s (`DEVICE_HANG`) is given up as a fallback, the run loop waking at that deadline to
 notice. On a loss it frees every surface's buffers (the lost device's images and buffer objects with them), has the
 render thread let the device go (once for the process; another window system meeting the same loss finds it gone),
-reports the change back to the CPU and asks for a new device (or stays on the CPU after the third reset).
+reports the change back to the CPU and asks for a new device, or stays on the CPU once the process's devices were
+reset three times within a minute (`render_thread::losses_exceeded`, counted once per loss for the whole process).
 `buffers_lost` from the compositor checks the device and makes every surface's next upload whole.
 
 `gpu_present::GpuSurface` keeps one surface's dmabufs, allocated in `SIZE_STEP` (128 pixel) steps and cropped by the

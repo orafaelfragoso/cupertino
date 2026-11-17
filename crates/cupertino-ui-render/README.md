@@ -172,6 +172,8 @@ warming since when and whether `Device::new` returned, ready with the device's g
 and the modifiers it renders ARGB8888 to, or failed); a warm-up inside `Device::new` for `DEVICE_HANG` (10 s) is a
 driver that hangs, and its callers give the GPU up. A `Claim` holds the device; the last one going stops a warm-up
 after its step, lets the device go, and waits up to 5 s for both. `lost` lets a reset or purged device go once
-however many instances saw it, and `RenderThread::device_of` reads a device let go as lost by the same loss. A
+however many instances saw it, and counts it (resets only, never purges): after `LOSS_LIMIT` (3) resets within
+`LOSS_WINDOW` (60 s) `lost` and `losses_exceeded` tell every window system of the process to stay on the CPU.
+`RenderThread::device_of` reads a device let go as lost by the same loss. A
 `GpuRenderer` made on a device someone else lends (`Device::borrow`, the server's) draws on the lender's thread and
 never meets the render thread.

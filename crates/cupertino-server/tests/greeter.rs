@@ -95,6 +95,7 @@ fn serve_screen(mut stream: UnixStream, heard: &Shared) {
                         display_name: "A Person".into(),
                         picture: None,
                         logged_in: false,
+                        wallpaper: None,
                     }],
                     show_other: false,
                     power: PowerMenu {

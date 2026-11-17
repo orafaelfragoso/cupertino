@@ -94,6 +94,16 @@ impl LogOut {
         Some(app)
     }
 
+    /// The user chose Try Again on the interrupt panel: ask the applications to quit again, from the one most recently
+    /// used, which is the one that stopped the log out unless the person used another since.
+    pub fn try_again(&mut self) -> Option<Do> {
+        let Step::Interrupted { .. } = &self.step else {
+            return None;
+        };
+        self.step = Step::Asking;
+        Some(Do::AskNext)
+    }
+
     pub fn tick(&mut self, now: f64) -> Option<Do> {
         match &self.step {
             Step::Next { at } if now >= *at => {
@@ -155,6 +165,26 @@ mod tests {
         assert_eq!(l.force_quit(60.0), None, "only from the panel");
         assert_eq!(l.quit(60.5, "org.example.editor"), None);
         assert_eq!(l.tick(60.6), Some(Do::AskNext));
+    }
+
+    #[test]
+    fn try_again_asks_the_applications_to_quit_again_from_the_panel_only() {
+        let (mut l, _) = LogOut::start();
+        assert_eq!(l.try_again(), None, "only from the panel");
+        l.answered(0.0, "org.example.editor", 1);
+        assert_eq!(l.try_again(), None);
+        assert_eq!(
+            l.tick(45.0),
+            Some(Do::Interrupt("org.example.editor".into()))
+        );
+        assert_eq!(l.try_again(), Some(Do::AskNext));
+        assert_eq!(l.try_again(), None);
+        assert_eq!(l.answered(46.0, "org.example.editor", 1), None);
+        assert_eq!(
+            l.next_wakeup(46.0),
+            Some(45.0),
+            "a full timeout again before the panel comes back"
+        );
     }
 
     #[test]

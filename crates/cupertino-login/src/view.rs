@@ -8,6 +8,7 @@
 //! [`LockScreen::field`](crate::model::LockScreen::field): a submission or Escape makes a new field, so the old one's
 //! buffer is dropped and zeroed, and the new one takes the focus on every output.
 
+mod panel_parts;
 #[cfg(test)]
 mod tests;
 mod widgets;
@@ -32,7 +33,7 @@ use cupertino_kit::text::{
 };
 use cupertino_kit::theme::Color;
 
-use crate::interrupt::{self, Choice};
+use crate::interrupt::{self, Choice, Reason, Stage};
 use crate::layout::{
     Layout, BUTTON_SIZE, HINT_LINES, HINT_SIZE, HINT_WIDTH, LOCK_MESSAGE_SIZE, LOCK_MESSAGE_WIDTH,
     NAME_MAX_WIDTH, NAME_SIZE, STATUS_BAR_HEIGHT, SUBMIT_GAP, SUB_HINT_SIZE, SUB_HINT_WIDTH,
@@ -57,7 +58,8 @@ use widgets::{
 pub const LOCK_APP_ID: &str = "cupertino-login.lock";
 /// The `app_id` of a greeter window, followed by `.` and the output's registry name: a full-output layer surface.
 pub const GREETER_APP_ID: &str = "cupertino-login.greeter";
-/// The `app_id` of the confirmation panel's and of the interrupt panel's window: a centred layer surface.
+/// The `app_id` of the confirmation panel's and of the interrupt panel's window: a layer surface above the windows,
+/// centred when it appears, that moves when its background is dragged and takes the keyboard while it is used.
 pub const PANEL_APP_ID: &str = "cupertino-login.panel";
 pub const INTERRUPT_APP_ID: &str = "cupertino-login.interrupt";
 
@@ -128,9 +130,6 @@ const PANEL_ICON_FILL: Color = Color::new(0.60, 0.62, 0.66, 1.0);
 const PANEL_TITLE_SIZE: f32 = 13.0;
 /// Corner radius of the alert of the confirmation and interrupt panels.
 const PANEL_ALERT_RADIUS: f64 = 26.0;
-/// The room a check box's box and the gap after it take before its label: where the label of the confirmation panel's
-/// checkbox wraps.
-const CHECKBOX_LABEL_INSET: f64 = 22.0;
 
 /// Ascent and descent of the interface font as fractions of the em: what places text by its baseline; and the
 /// password field's placeholder's width in points, which the field grows to hold.
@@ -257,12 +256,14 @@ pub enum Input {
     Power(usize),
     /// A button or key of the confirmation panel.
     Decide(Decision),
-    /// The confirmation panel's "Reopen windows" checkbox was set to this, by a click, Space or assistive technology.
+    /// The confirmation panel's "Open my windows again" checkbox was set to this, by a click, Space or assistive technology.
     Reopen(bool),
     /// A choice on the native desktop-control consent panel.
     DesktopControl(ControlChoice),
     /// A button or key of the interrupt panel.
     Interrupt(Choice),
+    /// The background of a session panel was dragged: move the panel by this many points.
+    MovePanel(Point),
 }
 
 /// The clock text the screens show.
@@ -1533,56 +1534,72 @@ pub fn full_screen<M: Clone>(
     }
 }
 
-/// How many lines `text` takes at `size` and `weight`, wrapped at `width`.
-fn lines(text_system: &TextSystem, text: &str, size: f32, weight: FontWeight, width: f64) -> u32 {
-    let content = AttributedText::plain(
-        text,
-        TextStyle {
-            weight,
-            ..TextStyle::new(size)
+/// The style the panels' title, lines and checkbox label are measured in; a countdown also sets its digits at one width
+/// each (`tnum`), so the line keeps its length and does not shift as the number changes.
+fn panel_style(weight: FontWeight, tabular: bool) -> TextStyle {
+    TextStyle {
+        weight,
+        features: if tabular {
+            vec![cupertino_kit::text::FontFeature {
+                tag: *b"tnum",
+                value: 1,
+            }]
+        } else {
+            Vec::new()
         },
-    );
-    let style = cupertino_kit::text::ParagraphStyle {
+        ..TextStyle::new(PANEL_TITLE_SIZE)
+    }
+}
+
+/// How many lines `text` takes in `style`, wrapped at `width`.
+fn lines_in(text_system: &TextSystem, text: &str, style: TextStyle, width: f64) -> u32 {
+    let content = AttributedText::plain(text, style);
+    let paragraph = cupertino_kit::text::ParagraphStyle {
         wrap: cupertino_kit::text::Wrap::Word,
         ..Default::default()
     };
-    text_system.paragraph(&content, &style).map_or(1, |p| {
+    text_system.paragraph(&content, &paragraph).map_or(1, |p| {
         p.layout(Some(width as f32)).lines().len().max(1) as u32
     })
 }
 
-/// The confirmation panel's frames for `kind`, its title, info line and checkbox label measured with `text_system`: the
-/// info line takes as many lines as its longest countdown message.
+/// How wide `text` is on one line in `style`.
+fn line_width(text_system: &TextSystem, text: &str, style: TextStyle) -> f64 {
+    let content = AttributedText::plain(text, style);
+    text_system
+        .paragraph(&content, &Default::default())
+        .map_or(0.0, |p| p.layout(None).size().width)
+}
+
+/// The confirmation panel's frames for `kind`, its checkbox label, title and info line measured with `text_system`:
+/// the panel as wide as its checkbox row needs, and the info line as many lines as its longest countdown message.
 pub fn panel_frames(kind: Kind, text_system: &TextSystem) -> Frames {
-    let wrap = crate::panel::wrap_width(kind);
-    let title = lines(
+    let label = line_width(
+        text_system,
+        crate::panel::REOPEN_LABEL,
+        panel_style(FontWeight::REGULAR, false),
+    );
+    let width = crate::panel::width_for(label);
+    let wrap = crate::panel::wrap_width(width);
+    let title = lines_in(
         text_system,
         kind.text().title,
-        PANEL_TITLE_SIZE,
-        FontWeight::BOLD,
+        panel_style(FontWeight::BOLD, false),
         wrap,
     );
     let info = (0..=crate::panel::COUNTDOWN_SECONDS as u32)
         .filter_map(|seconds| kind.countdown_message(seconds))
         .map(|message| {
-            lines(
+            lines_in(
                 text_system,
                 &message,
-                PANEL_TITLE_SIZE,
-                FontWeight::REGULAR,
+                panel_style(FontWeight::REGULAR, true),
                 wrap,
             )
         })
         .max()
         .unwrap_or(1);
-    let checkbox = lines(
-        text_system,
-        crate::panel::REOPEN_LABEL,
-        PANEL_TITLE_SIZE,
-        FontWeight::REGULAR,
-        wrap - CHECKBOX_LABEL_INSET,
-    );
-    kind.frames(title, info, checkbox)
+    kind.frames(width, title, info)
 }
 
 /// What the panels' keys mean: the model's keys, by keysym.
@@ -1600,14 +1617,17 @@ fn panel_text<M: 'static>(
     weight: FontWeight,
     secondary: bool,
 ) -> Element<M> {
+    styled_panel_text(text, role, panel_style(weight, false), secondary)
+}
+
+fn styled_panel_text<M: 'static>(
+    text: &str,
+    role: TextRole,
+    style: TextStyle,
+    secondary: bool,
+) -> Element<M> {
     Element::new(Text {
-        content: AttributedText::plain(
-            text,
-            TextStyle {
-                weight,
-                ..TextStyle::new(PANEL_TITLE_SIZE)
-            },
-        ),
+        content: AttributedText::plain(text, style),
         role,
         wrap: true,
         secondary,
@@ -1636,9 +1656,28 @@ fn icon_disc<M: 'static>(rect: Rect) -> Element<M> {
     ))
 }
 
-/// The confirmation panel, an alert on glass with no icon: its title, the countdown line, the "Reopen windows" checkbox
-/// at `reopen` (log out, restart and shut down), and its buttons as capsules, the default one focused. Return does the
-/// default action, Escape cancels, Space flips the checkbox, and the power-button panel's letters choose.
+/// The picture `icon` of a session panel at `rect`: our own glyph on a grey disc.
+fn panel_icon<M: 'static>(rect: Rect, icon: crate::panel::Icon) -> Element<M> {
+    Element::new(Place::new(
+        rect,
+        vec![Element::new(Canvas {
+            size: Some(rect.size),
+            label: String::new(),
+            paint: Box::new(move |cx| {
+                for op in panel_parts::icon_ops(icon, rect.width()) {
+                    cx.push(op);
+                }
+            }),
+            children: Vec::new(),
+        })],
+    ))
+}
+
+/// The confirmation panel, an alert on glass: the picture of its action, its title, the countdown line (its digits
+/// of one width), the "Open my windows again" checkbox at `reopen`, which has the focus, and its buttons as capsules. Return
+/// does the default action, Escape cancels, Space flips the checkbox, and the power-button panel's letters choose. A
+/// press on its background that no control takes drags it ([`Input::MovePanel`]); it is no modal dialog, so the rest
+/// of the session stays usable while it counts down.
 pub fn panel<M: Clone + 'static>(
     key: WindowKey,
     kind: Kind,
@@ -1657,6 +1696,7 @@ pub fn panel<M: Clone + 'static>(
             padding: Insets::ZERO,
             children: Vec::new(),
         }),
+        panel_icon(frames.icon, kind.icon()),
         Element::new(Place::text(
             frames.title,
             vec![panel_text(
@@ -1673,18 +1713,20 @@ pub fn panel<M: Clone + 'static>(
     ) {
         children.push(Element::new(Place::text(
             frame,
-            vec![panel_text(
+            vec![styled_panel_text(
                 &info,
                 TextRole::Body,
-                FontWeight::REGULAR,
+                panel_style(FontWeight::REGULAR, true),
                 false,
             )],
         )));
     }
-    if let Some(checkbox) = frames.checkbox {
-        children.push(
-            // against the text column's leading edge, its label wrapping in the column
-            Element::new(Place::text(
+    let checkbox = frames.checkbox;
+    children.push(
+        // against the text column's leading edge; it has the focus when the panel appears
+        Element::new(Place {
+            initial: true,
+            ..Place::text(
                 checkbox.frame,
                 vec![Element::new(CheckBox {
                     label: checkbox.label.to_owned(),
@@ -1696,31 +1738,28 @@ pub fn panel<M: Clone + 'static>(
                     enabled: true,
                     on_toggle: Some(Box::new(move |on| map(Input::Reopen(on)))),
                 })],
-            ))
-            .key("reopen"),
-        );
-    }
+            )
+        })
+        .key("reopen"),
+    );
     let default = Decision::Do(kind.default_action());
     for button in &frames.buttons {
         children.push(
-            Element::new(Place {
-                initial: button.decision == kind.focused(),
-                ..Place::filled(
-                    button.frame,
-                    vec![Element::new(Button {
-                        label: button.label.to_owned(),
-                        role: if button.decision == default {
-                            ButtonRole::Default
-                        } else {
-                            ButtonRole::Normal
-                        },
-                        style: ButtonStyle::Pill,
-                        enabled: true,
-                        busy: false,
-                        on_press: Some(map(Input::Decide(button.decision))),
-                    })],
-                )
-            })
+            Element::new(Place::filled(
+                button.frame,
+                vec![Element::new(Button {
+                    label: button.label.to_owned(),
+                    role: if button.decision == default {
+                        ButtonRole::Default
+                    } else {
+                        ButtonRole::Normal
+                    },
+                    style: ButtonStyle::Pill,
+                    enabled: true,
+                    busy: false,
+                    on_press: Some(map(Input::Decide(button.decision))),
+                })],
+            ))
             .key(button.label),
         );
     }
@@ -1741,8 +1780,11 @@ pub fn panel<M: Clone + 'static>(
         label: text.title.to_owned(),
         description: None,
         role: Role::AlertDialog,
-        modal: true,
-        children,
+        modal: false,
+        children: vec![Element::new(panel_parts::Movable {
+            on_move: Box::new(move |by| map(Input::MovePanel(by))),
+            children,
+        })],
     });
     Window {
         background: WindowBackground::None,
@@ -2065,21 +2107,80 @@ pub fn desktop_control<M: Clone + 'static>(
     }
 }
 
-/// The interrupt panel for the application `app`, on the glass of the confirmation it interrupts: Cancel and Force
-/// Quit as capsules, Cancel focused. Neither is the default:
-/// Return does nothing, so a key held from typing does not kill the application.
-pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -> M) -> Window<M> {
-    let frames = interrupt::Frames::new();
-    let title = interrupt::title(app);
+/// What the interrupt panel shows: the application, why it is still there, the question asked and what it stops, and
+/// the text system its words are measured with.
+#[derive(Clone, Copy)]
+pub struct InterruptView<'a> {
+    pub app: &'a str,
+    pub reason: Reason,
+    pub stage: Stage,
+    pub action: crate::panel::Action,
+    pub text: &'a TextSystem,
+}
+
+/// The interrupt panel's frames, its title and info line wrapped in its text column as `text` lays them out.
+pub fn interrupt_frames(shown: &InterruptView<'_>) -> interrupt::Frames {
+    let InterruptView {
+        app,
+        reason,
+        stage,
+        action,
+        text,
+    } = *shown;
+    let lines = |words: &str, weight| {
+        lines_in(
+            text,
+            words,
+            panel_style(weight, false),
+            interrupt::WRAP_WIDTH,
+        )
+    };
+    interrupt::Frames::new(
+        reason,
+        stage,
+        lines(
+            &interrupt::title(reason, stage, action, app),
+            FontWeight::BOLD,
+        ),
+        lines(
+            &interrupt::info(reason, stage, action, app),
+            FontWeight::REGULAR,
+        ),
+    )
+}
+
+/// The interrupt panel, on the glass of the confirmation it interrupts: the picture of what it stops, why, and its
+/// buttons as capsules: Try Again (the default), Cancel and, for an application that failed or hangs, Force Quit, which
+/// asks again before it kills. On that second question neither button is the default and Cancel has the focus, so a
+/// Return held from typing kills nothing. It moves when its background is dragged and is no modal dialog.
+pub fn interrupt<M: Clone + 'static>(
+    key: WindowKey,
+    shown: InterruptView<'_>,
+    map: fn(Input) -> M,
+) -> Window<M> {
+    let frames = interrupt_frames(&shown);
+    let InterruptView {
+        app,
+        reason,
+        stage,
+        action,
+        ..
+    } = shown;
+    let title = interrupt::title(reason, stage, action, app);
+    let icon = match action {
+        crate::panel::Action::Restart => crate::panel::Icon::Restart,
+        crate::panel::Action::ShutDown => crate::panel::Icon::Power,
+        crate::panel::Action::LogOut | crate::panel::Action::Sleep => crate::panel::Icon::LogOut,
+    };
     let mut children = vec![
         Element::new(AlertBody {
             width: interrupt::WIDTH,
-            height: Some(interrupt::HEIGHT),
+            height: Some(frames.height),
             radius: PANEL_ALERT_RADIUS,
             padding: Insets::ZERO,
             children: Vec::new(),
         }),
-        icon_disc(frames.icon),
+        panel_icon(frames.icon, icon),
         Element::new(Place::text(
             frames.title,
             vec![panel_text(&title, TextRole::Body, FontWeight::BOLD, false)],
@@ -2087,22 +2188,34 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
         Element::new(Place::text(
             frames.info,
             vec![panel_text(
-                &interrupt::info(app),
+                &interrupt::info(reason, stage, action, app),
                 TextRole::Caption,
                 FontWeight::REGULAR,
                 true,
             )],
         )),
     ];
+    // the first question focuses its default button; the force quit question focuses Cancel
+    let focused = frames
+        .buttons
+        .iter()
+        .find(|b| b.default)
+        .or_else(|| frames.buttons.iter().find(|b| b.choice == Choice::Back))
+        .map(|b| b.choice);
+    let mut question = Vec::new();
     for button in &frames.buttons {
-        children.push(
+        question.push(
             Element::new(Place {
-                initial: button.choice == Choice::Cancel,
+                initial: Some(button.choice) == focused,
                 ..Place::filled(
                     button.frame,
                     vec![Element::new(Button {
                         label: button.label.to_owned(),
-                        role: ButtonRole::Normal,
+                        role: if button.default {
+                            ButtonRole::Default
+                        } else {
+                            ButtonRole::Normal
+                        },
                         style: ButtonStyle::Pill,
                         enabled: true,
                         busy: false,
@@ -2110,23 +2223,30 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
                     })],
                 )
             })
-            .key(button.label),
+            .key(format!("{stage:?}-{}", button.label)),
         );
     }
+    // each question its own focus scope, so the second one starts at its Cancel and the first one's focus comes back
+    // after it
+    children
+        .push(Element::new(panel_parts::Question { children: question }).key(format!("{stage:?}")));
     let content = Element::new(Backdrop {
         ground: None,
         hidden: false,
         on_activity: None,
         keys: Box::new(move |keysym, text| {
             panel_key(keysym, text)
-                .and_then(interrupt::press)
+                .and_then(|key| interrupt::press(stage, key))
                 .map(|choice| map(Input::Interrupt(choice)))
         }),
         label: title.clone(),
         description: None,
         role: Role::AlertDialog,
-        modal: true,
-        children,
+        modal: false,
+        children: vec![Element::new(panel_parts::Movable {
+            on_move: Box::new(move |by| map(Input::MovePanel(by))),
+            children,
+        })],
     });
     Window {
         background: WindowBackground::None,
@@ -2134,9 +2254,12 @@ pub fn interrupt<M: Clone + 'static>(key: WindowKey, app: &str, map: fn(Input) -
             key,
             INTERRUPT_APP_ID.to_owned(),
             &title,
-            Size::new(interrupt::WIDTH, interrupt::HEIGHT),
+            Size::new(interrupt::WIDTH, frames.height),
             content,
-            Some(map(Input::Interrupt(Choice::Cancel))),
+            Some(map(Input::Interrupt(match stage {
+                Stage::Ask => Choice::Cancel,
+                Stage::ConfirmForceQuit => Choice::Back,
+            }))),
         )
     }
 }

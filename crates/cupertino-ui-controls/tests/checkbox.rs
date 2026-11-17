@@ -135,7 +135,7 @@ fn a_disabled_box_ignores_activation() {
 /// A check box whose label is longer than the column it stands in.
 struct Narrow;
 
-const LONG: &str = "Reopen windows when logging back in";
+const LONG: &str = "Open my windows again after I log in";
 const COLUMN: f64 = 150.0;
 
 impl Application for Narrow {

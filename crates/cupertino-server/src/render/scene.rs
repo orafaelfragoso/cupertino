@@ -551,6 +551,8 @@ pub struct SceneParams<'a> {
     /// Pointer position in the global logical space.
     pub pointer: Point<f64, Logical>,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
+    /// The surface that has the keyboard: a session panel there casts an active alert's shadow.
+    pub keyboard_focus: Option<WlSurface>,
     pub lock: LockView,
     /// Black overlays over everything, front to back: the activation fade, then the power dimming.
     pub session_overlays: [Option<SessionOverlay>; 2],
@@ -2247,15 +2249,29 @@ fn layer_elements(
         if look.is_some() {
             out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
         } else {
-            out.extend(backdrop_elements(
-                p,
-                &backdrops,
-                opacity,
-                WindowState::Active,
-            ));
+            let mut pieces = backdrop_elements(p, &backdrops, opacity, WindowState::Active);
+            if surface.namespace() == crate::state::SESSION_PANEL_NAMESPACE {
+                // a session panel is an alert: its glass casts an alert's shadow, deep while it has the keyboard
+                let active = p.keyboard_focus.as_ref() == Some(surface.wl_surface());
+                lift_as_alert(&mut pieces, active, p.config.is_dark());
+            }
+            out.extend(pieces);
         }
     }
     out
+}
+
+/// The glass among `pieces` with an alert's drop shadow shown ([`cupertino_theme::glass::GlassShadow::alert`]): the deep
+/// one while the alert has the keyboard (`active`), the shallow one while another surface has it.
+fn lift_as_alert(pieces: &mut [Piece], active: bool, dark: bool) {
+    for piece in pieces {
+        if let Piece::Glass(g) = piece {
+            let mut gc = (*g.glass).clone();
+            gc.container.params.shadow = gc.container.params.shadow.alert(active, dark);
+            gc.key = Sig::new().u(gc.key).u(1 + u64::from(active)).finish();
+            g.glass = Rc::new(gc);
+        }
+    }
 }
 
 /// The presentation of `popup` (its surface's origin at `origin`, output-local points) as shown now, and its opacity;
@@ -4104,6 +4120,65 @@ mod tests {
             0,
             "a dark card keeps light text"
         );
+    }
+
+    /// A session panel's glass casts the alert's shadow: 24 points of blur 10 below at 0.7 (0.8 dark) while it has the
+    /// keyboard, 16 points 4 below at 0.55 (0.65 dark) while it does not, and the two draw apart.
+    #[test]
+    fn a_session_panel_s_glass_casts_an_alert_s_shadow_by_whether_it_has_the_keyboard() {
+        use cupertino_theme::{GlassMode, GlassStyle};
+        let lifted = |active: bool, dark: bool| {
+            let container = GlassContainer::new(Container::new(
+                vec![GlassShape::new([100.0, 100.0, 267.0, 314.0], 26.0)],
+                0.0,
+                GlassMode {
+                    dark,
+                    style: GlassStyle::Regular,
+                    ..GlassMode::default()
+                },
+            ));
+            let plain = container.key;
+            let mut pieces = vec![Piece::Glass(Box::new(super::super::compose::Glass {
+                glass: Rc::new(container),
+                kind: SceneKind::Backdrop,
+                index: 1,
+                opacity: 1.0,
+            }))];
+            lift_as_alert(&mut pieces, active, dark);
+            let Piece::Glass(g) = &pieces[0] else {
+                unreachable!()
+            };
+            assert_ne!(g.glass.key, plain, "a new shadow is a new picture");
+            (g.glass.key, g.glass.container.params.shadow)
+        };
+        for dark in [false, true] {
+            let (active_key, active) = lifted(true, dark);
+            let (inactive_key, inactive) = lifted(false, dark);
+            let values = |s: cupertino_theme::glass::GlassShadow| {
+                (s.height, s.offset, s.fill, s.amount * s.opacity / 100.0)
+            };
+            assert_eq!(
+                values(active),
+                (
+                    24.0,
+                    [0.0, 10.0],
+                    [0.0, 0.0, 0.0, if dark { 0.8 } else { 0.7 }],
+                    1.0
+                ),
+                "{dark}"
+            );
+            assert_eq!(
+                values(inactive),
+                (
+                    16.0,
+                    [0.0, 4.0],
+                    [0.0, 0.0, 0.0, if dark { 0.65 } else { 0.55 }],
+                    1.0
+                ),
+                "{dark}"
+            );
+            assert_ne!(active_key, inactive_key);
+        }
     }
 
     #[test]

@@ -142,6 +142,8 @@ pub enum Action {
     QuitCompositor,
     /// Ask the login process whether to log out of the session.
     LogOut,
+    /// Have the login process log out at once, without its confirmation panel.
+    LogOutNow,
     /// Open the login process's power panel.
     PowerDialog,
     /// Give the keys and the pointer back to the system while an application holds them.
@@ -271,6 +273,7 @@ const NAMES: &[(&str, Action)] = &[
     ("lock", Action::Lock),
     ("power-key", Action::PowerKey),
     ("log-out", Action::LogOut),
+    ("log-out-now", Action::LogOutNow),
     ("power-dialog", Action::PowerDialog),
     ("release-shortcuts", Action::ReleaseShortcuts),
     ("input-source-previous", Action::InputSourcePrevious),
@@ -412,6 +415,7 @@ impl Action {
             | Action::SpawnTerminal
             | Action::Screenshot(_)
             | Action::LogOut
+            | Action::LogOutNow
             | Action::ShowDesktop
             | Action::AppGrid
             | Action::ForceQuit
@@ -573,6 +577,7 @@ impl KeyBindings {
             I::InputSourcePrevious => Action::InputSourcePrevious,
             I::InputSourceNext => Action::InputSourceNext,
             I::Logout => Action::LogOut,
+            I::LogoutNow => Action::LogOutNow,
             I::PowerDialog => Action::PowerDialog,
             I::ReleaseShortcuts => Action::ReleaseShortcuts,
             I::Screenshot(r) => Action::Screenshot(*r),
@@ -796,6 +801,8 @@ pub enum ShellOp {
     Lock,
     /// Ask the login process whether to log out.
     LogOut,
+    /// Have the login process log out without asking.
+    LogOutNow,
     /// Open the login process's power panel.
     PowerDialog,
     /// End what an application holds of the keys and the pointer.
@@ -1012,6 +1019,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::Lock => plan.ops.push(ShellOp::Lock),
         Action::PowerKey => plan.ops.push(ShellOp::PowerKey { pressed: true }),
         Action::LogOut => plan.ops.push(ShellOp::LogOut),
+        Action::LogOutNow => plan.ops.push(ShellOp::LogOutNow),
         Action::PowerDialog => plan.ops.push(ShellOp::PowerDialog),
         Action::ReleaseShortcuts => plan.ops.push(ShellOp::ReleaseShortcuts),
         Action::Exec(i) => plan.ops.push(ShellOp::Exec(i)),
@@ -1175,8 +1183,9 @@ impl KeyRouter {
 
     /// Desktop controllers cannot trigger reserved session actions or log out through a binding.
     pub fn control_reserved(&self, event: &KeyEvent) -> bool {
-        self.lookup(event)
-            .is_some_and(|action| action.is_reserved() || matches!(action, Action::LogOut))
+        self.lookup(event).is_some_and(|action| {
+            action.is_reserved() || matches!(action, Action::LogOut | Action::LogOutNow)
+        })
     }
 
     /// Route a key press or release.
@@ -2217,10 +2226,16 @@ mod tests {
     }
 
     #[test]
-    fn log_out_and_the_power_dialog_are_bound_and_ask_the_login_process() {
+    fn log_out_log_out_now_and_the_power_dialog_are_bound_and_ask_the_login_process() {
         let b = Config::default().keybindings;
         for (chord, action, name, op) in [
             ("Super+Shift+q", Action::LogOut, "log-out", ShellOp::LogOut),
+            (
+                "Super+Alt+Shift+q",
+                Action::LogOutNow,
+                "log-out-now",
+                ShellOp::LogOutNow,
+            ),
             (
                 "Ctrl+XF86PowerOff",
                 Action::PowerDialog,
@@ -2594,6 +2609,7 @@ mod tests {
             Action::CloseWindow,
             Action::Lock,
             Action::LogOut,
+            Action::LogOutNow,
             Action::PowerDialog,
             Action::PowerKey,
             Action::Osd {

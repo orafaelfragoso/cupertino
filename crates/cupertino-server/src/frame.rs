@@ -109,6 +109,7 @@ impl Cupertino {
         let pointer: Point<f64, Logical> = self.pointer.current_location();
         let now = self.scene_time(idx);
         let drag_icon = self.drag_icon.clone();
+        let keyboard_focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         let lock = self.lock_view(idx);
         let session_overlays = [
             self.activation_overlay_alpha().map(|alpha| SessionOverlay {
@@ -168,6 +169,7 @@ impl Cupertino {
             cursor,
             pointer,
             drag_icon,
+            keyboard_focus,
             lock,
             session_overlays,
             for_capture: false,

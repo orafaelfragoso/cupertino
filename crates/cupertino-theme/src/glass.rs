@@ -1103,6 +1103,50 @@ pub const LARGE_PANEL_SHADOW_BLUR: f32 = 24.0;
 pub const LARGE_PANEL_SHADOW_DARK: f32 = 0.5;
 pub const LARGE_PANEL_SHADOW_LIGHT: f32 = 0.40;
 
+/// The drop shadow of an alert's regular glass: its blur radius and how far below the alert it falls in points, and its
+/// black's opacity in the light and the dark appearance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AlertShadow {
+    pub blur: f32,
+    pub offset: f32,
+    pub light: f32,
+    pub dark: f32,
+}
+
+/// The alert's shadow while it has the keyboard, and the shallower, fainter one while another window has it.
+pub const ALERT_SHADOW_ACTIVE: AlertShadow = AlertShadow {
+    blur: 24.0,
+    offset: 10.0,
+    light: 0.7,
+    dark: 0.8,
+};
+pub const ALERT_SHADOW_INACTIVE: AlertShadow = AlertShadow {
+    blur: 16.0,
+    offset: 4.0,
+    light: 0.55,
+    dark: 0.65,
+};
+
+impl GlassShadow {
+    /// This shadow with an alert's drop shadow shown, for an alert that has the keyboard (`active`) or not, in the dark
+    /// appearance or the light one; the ring and the lines along the edge are kept.
+    pub fn alert(self, active: bool, dark: bool) -> GlassShadow {
+        let s = if active {
+            ALERT_SHADOW_ACTIVE
+        } else {
+            ALERT_SHADOW_INACTIVE
+        };
+        GlassShadow {
+            offset: [0.0, s.offset],
+            amount: 100.0,
+            height: s.blur,
+            fill: [0.0, 0.0, 0.0, if dark { s.dark } else { s.light }],
+            opacity: 1.0,
+            ..self
+        }
+    }
+}
+
 /// Linear interpolation through `table` (sorted by side), flat outside it.
 fn by_side(table: &[(f32, f32)], side: f32) -> f32 {
     let (first, last) = (table[0], table[table.len() - 1]);
@@ -2198,6 +2242,36 @@ mod tests {
             },
             100.0,
         )
+    }
+
+    #[test]
+    fn an_alert_shadow_is_deep_while_the_alert_has_the_keyboard_and_shallow_while_it_does_not() {
+        for dark in [false, true] {
+            let regular = with(dark, GlassStyle::Regular, false, false, false).shadow;
+            let shown = |active| {
+                let s = regular.alert(active, dark);
+                (s.height, s.offset, s.fill[3], s.amount, s.opacity)
+            };
+            let (active, inactive) = if dark { (0.8, 0.65) } else { (0.7, 0.55) };
+            assert_eq!(
+                shown(true),
+                (24.0, [0.0, 10.0], active, 100.0, 1.0),
+                "{dark}"
+            );
+            assert_eq!(
+                shown(false),
+                (16.0, [0.0, 4.0], inactive, 100.0, 1.0),
+                "{dark}"
+            );
+            let s = regular.alert(true, dark);
+            assert_eq!(
+                (&s.fill[..3], s.edge_line, s.ring_opacity),
+                (&[0.0; 3][..], regular.edge_line, regular.ring_opacity),
+                "black, and the edge of the regular glass kept"
+            );
+            // the regular glass draws no shadow of its own
+            assert_eq!(regular.opacity * regular.amount, 0.0);
+        }
     }
 
     #[test]

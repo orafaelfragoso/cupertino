@@ -39,6 +39,21 @@ pub fn force_quit_application(session: &Connection, app_id: &str) -> zbus::Resul
         .deserialize()
 }
 
+/// Why `app_id`, asked to quit, is still there: `kept-windows` (it answers and keeps every window it was asked to
+/// close, nothing else open), `closing` (it answers but has not finished), `not-responding`, or `gone`.
+pub fn quit_status(session: &Connection, app_id: &str) -> zbus::Result<String> {
+    session
+        .call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "QuitStatus",
+            &app_id,
+        )?
+        .body()
+        .deserialize()
+}
+
 /// Pass each `ApplicationQuit` to `notify` from a reader thread; it gets an error once when the stream breaks, and
 /// nothing after that.
 pub fn watch_quit(

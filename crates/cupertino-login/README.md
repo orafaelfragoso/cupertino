@@ -165,8 +165,8 @@ until the authenticator answers (`LockScreen::checking`), and its entry is inval
 invalid, so over AT-SPI the denial's words carry it). The denial and the notices are
 assertive live regions, announced once when they appear; the clock, the user's name, the Caps Lock badge and the spinner are
 text nodes. The greeter's tiles are buttons (the arrows move the selection, Home, End, Page Up and Page Down jump, Return
-or Space chooses, Tab moves the focus), the power item is a button that opens a Kit menu, and the panels are modal alert
-dialogs (below).
+or Space chooses, Tab moves the focus), the power item is a button that opens a Kit menu, and the panels are alert dialogs
+that are not modal (below).
 
 ### Notifications
 
@@ -262,6 +262,7 @@ happens. The properties stay readable by every caller.
 | `Lock | Lock the session (the display slept, logind asked). |
 | `LockNow | Lock the session because the person asked for it (the lock shortcut); the interface hides after 5 s without input. |
 | `RequestLogOut`, `RequestRestart`, `RequestShutDown | Show the confirmation panel and return at once. Fail with `org.freedesktop.DBus.Error.Failed` while the session is locked. |
+| `LogOutNow | Log out without the panel (the server's `Super+Alt+Shift+q`): the applications quit first as after a confirmed log out, with the "Open my windows again" choice last stored. An open panel closes as cancelled; ignored while a log out is under way. Fails while the session is locked. |
 | `Sleep | Lock and put the computer to sleep, without a panel (the sleep preparation locks first). Fails while the session is locked. |
 | `RefreshCapabilities | Read logind's policy and the session manager again; returns at once and `PropertiesChanged` for `Capabilities` follows when something changed. The menu calls it when it opens. Allowed on a locked session. |
 | `RequestPowerDialog | Show the power panel (Restart, Sleep, Cancel, Shut Down), the one a held power button shows. Fails while the session is locked. |
@@ -286,17 +287,24 @@ own. The manager copies the file for the login screen when it lists the users (s
 
 ### Confirmation panel
 
-A layer-shell surface on the overlay layer of the first output, without anchors so the server centres it, with exclusive
-keyboard. The panel is an alert on glass, 260 pt wide on every kind, with 26 pt corners and no icon; the countdown is 60 s.
-The height follows the vertical chain: 22 pt, the title (bold 13 on 16 pt lines, wrapped at the 216 pt text column 22 pt
-from either edge), 10 pt, the info line (13 on 16 pt lines), 12 pt, the "Reopen windows when logging back in" checkbox (an
-18 pt row, or 16 pt per line when its label wraps in the column), 16 pt, the buttons, 16 pt. Each element sits at the
-previous one's bottom edge, using the line counts the theme's text system measures (`view::panel_frames`; the info line at
-the most lines it takes while counting down, so the size stays put). The buttons are 28 pt capsules 8 pt apart: Cancel and
-the confirming button side by side, 110 pt each between the 16 pt side padding. The panel is a Kit window (`view::panel`):
-a modal alert dialog on regular glass (the popover surface's fill where the desktop shows none), Kit capsule buttons at the
-frames (the default one with the accent and the focus, except on the power-button panel, where Cancel has the focus so that
-Space, which presses the focused button, shuts nothing down), and Kit's `CheckBox` in the checkbox row.
+A layer-shell surface on the overlay layer, anchored at the top-left corner of the first output and placed by its margins:
+centred when it shows, with exclusive keyboard. Pressing on its background (not on a control) and dragging moves it, the
+margins following the pointer and kept on the output. It is no modal dialog: a press outside it gives the keyboard back
+to what was under the press, and the panel then takes the keyboard on demand, when it is pressed again. The server draws
+the glass's shadow deeper while the panel has the keyboard (24 pt blur, 10 pt down, black at 0.7, 0.8 in the dark
+appearance) than while it does not (16 pt, 4 pt down, 0.55 and 0.65). The countdown is 60 s.
+
+The panel is an alert on glass with 26 pt corners, as wide as its checkbox row needs on one line (the label, its 22 pt
+box and gap, and the 22 pt text inset on either side) and at least 260 pt. The height follows the vertical chain: 20 pt,
+the 64 pt icon (drawn by the panel: a power symbol, a circling arrow for restart, a door with an arrow for log out) at the
+text column's leading edge, 16 pt, the title (bold 13 on 16 pt lines, wrapped in the text column), 10 pt, the info line
+(13 on 16 pt lines, tabular figures), 16 pt, the "Open my windows again after I log in" checkbox (a 16 pt row), 16 pt, the
+buttons, 16 pt. Each element sits at the previous one's bottom edge, using the line counts the theme's text system
+measures (`view::panel_frames`; the info line at the most lines it takes while counting down, so the size stays put). The
+buttons are 28 pt capsules: Cancel and the confirming button side by side 8 pt apart, sharing the row between the 16 pt
+side padding. The panel is a Kit window (`view::panel`): an alert dialog on regular glass (the popover surface's fill
+where the desktop shows none), Kit capsule buttons at the frames (the default one with the accent), and Kit's `CheckBox`
+in the checkbox row, which has the focus when the panel shows.
 
 - A second request replaces the open panel, and a lock closes it.
 - Return does the default action, Escape cancels, a button click does that button's, and the end of the countdown does the
@@ -309,13 +317,13 @@ Space, which presses the focused button, shuts nothing down), and Kit's `CheckBo
   manager. The manager refuses a restart or shut down while another user's session is open and the caller is no administrator
   (`OtherUsersLoggedIn`), and while a program holds a block inhibitor (`Inhibited`): the agent logs the refusal and the session
   goes on. Any other failed call ends the process.
-- The words are the design strings of, in `panel::Kind::text`. The countdown is `panel::format_countdown`:
-  full units, at most two ("1 minute" at the start, "59 seconds" a second later).
+- The words are in `panel::Kind::text`. The countdown is `panel::format_countdown`: seconds up to a minute ("60 seconds"),
+  above that full units, at most two, with a no-break space between each number and its unit.
 
-**Power-button panel.** `panel::Kind::PowerButton`, the same alert, no checkbox (its restart and shut down follow the choice
-last confirmed on the other panels), four capsules stacked full width 8 pt apart, 16 pt under the title, the default on top:
-Shut Down (Return), Cancel (Escape), Sleep (`s`) and Restart (`r`). The title is the Shut Down panel's. There is no info line
-and no countdown, so the panel waits for an answer.
+**Power-button panel.** `panel::Kind::PowerButton`, the same alert with the power icon and the checkbox, four capsules
+stacked full width 6 pt apart, 16 pt under the checkbox: Shut Down (the default, Return), Restart (`r`), Sleep (`s`) and
+Cancel (Escape) last. The title is the Shut Down panel's. There is no info line and no countdown, so the panel waits for
+an answer.
 
 ### Quit sequence
 
@@ -326,12 +334,20 @@ each of its windows to close, and emits `ApplicationQuit(app_id) when the last o
 `("", 0).
 
 An application still there after 45 s brings the interrupt panel (`interrupt`), on the same regular glass with 26 pt
-corners as the confirmation it interrupts: content 413 x 128 pt, a 64 pt icon at (20, 13),
-the title (bold 13) at (102, 13) and the info line (10 pt) at (102, 55), both wrapping at 293 pt, the buttons on y 83
-(frames); Cancel and Force Quit as 28 pt capsules 8 pt apart.
+corners as the confirmation it interrupts: content 413 pt wide and at least 128 high, a 64 pt icon at (20, 13), the
+title (bold 13) at (102, 13) and the info line 10 pt under it, both wrapping at 293 pt in 16 pt lines, the buttons 12 pt
+under the info line (y 83 at the least) as 28 pt capsules 8 pt apart, ending at the text column's end. Like the
+confirmation panels it moves when its background is dragged and is no modal dialog. The agent asks the server why the
+application is still there (`QuitStatus(app_id)`) and words the panel by the answer:
 
+- `kept-windows`: the application cancelled the log out. Try Again (the default) and Cancel.
+- `closing` (or no answer): it did not finish quitting. Force Quit, Cancel and Try Again.
+- `not-responding`: it does not respond. Force Quit, Cancel and Try Again.
+
+- Try Again or Return asks the applications to quit again, from the one still there.
 - Cancel or Escape ends the sequence and the session goes on. The applications that quit stay closed.
-- Force Quit calls `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows) and gives it another 45 s.
+- Force Quit asks first (Cancel, focused, goes back; Return presses nothing); its Force Quit calls
+  `ForceQuitApplication(app_id)` (SIGKILL to the processes of its windows) and gives it another 45 s.
 - An application that quits while its panel is up closes the panel. A lock while the panel is up cancels the log out.
 - Without `org.cupertino.Session1` on the bus (another compositor) the agent logs it and goes straight to the call.
 
@@ -382,7 +398,7 @@ greeter has no session agent and takes no inhibitor, so a hold there shows nothi
 
 ## Reopening applications
 
-With "Reopen windows when logging back in" on, the applications open at a log out, restart or shut down start again at the
+With "Open my windows again after I log in" on, the applications open at a log out, restart or shut down start again at the
 next login (`restore`).
 
 **What is saved.** The identities the quit sequence recorded, in that order, each resolved to an installed desktop entry of
@@ -643,8 +659,8 @@ cargo test -p cupertino-login --features app
 |---|---|
 | Shake, fade, state machine | The shake curve (peaks of 14 pt, zero outside), the linear fade, typing and the byte limit, wrong password, PAM error and success paths, a result with no attempt in flight, the hide after 30 s, the layout of a 1920 x 1080 output. |
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
-| Panels and power key | Countdown, keys, button and checkbox frames, the checkbox's start state and Space, the power-button panel's four buttons, its keys and its lack of a countdown and checkbox; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
-| Views (`view`, Kit's headless window system) | While a password is typed the field is a `PasswordInput` named "Password" with a protected value, and neither the Inspector dump, the published tree, the updates nor the messages' `Debug` hold it; Return submits it once and a new empty field takes the focus; Escape empties the field; a wrong password is said in an assertive live region and outlined until the next edit; the field is busy while a held attempt is checked and invalid from its refusal until the next edit, and the refusal is said once; a key past the 512-byte limit is no edit and changes nothing assistive technology reads of the field, and the submission holds 512 bytes; the lock window is modal with the field as its only control; the "Reopen windows" checkbox starts at the saved choice and a click, Space or an assistive technology click flips it without deciding; the default button has the focus, Return, Escape, a click and an assistive technology click decide; Tab reaches the checkbox and the buttons; the power-button panel has no checkbox, its letters choose and Space presses its focused Cancel, not Shut Down; the interrupt panel focuses Cancel and Return does not force quit; the picker offers each account and "Other…" and the arrows step; the lock screen shows and says only what the daemon listed (a redacted notice draws only its application and "Notification"), the field stays the only control with the focus, a notice arriving while locked is said once and the rest are counted, the cards sit at the top right as tall as their text. With `CUPERTINO_LOOK_DIR` set, `pictures_for_review` writes each surface in light and dark at 1× and 2×. |
+| Panels and power key | Countdown, keys, button and checkbox frames, the checkbox's start state and Space, the power-button panel's four buttons, its keys, its checkbox and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
+| Views (`view`, Kit's headless window system) | While a password is typed the field is a `PasswordInput` named "Password" with a protected value, and neither the Inspector dump, the published tree, the updates nor the messages' `Debug` hold it; Return submits it once and a new empty field takes the focus; Escape empties the field; a wrong password is said in an assertive live region and outlined until the next edit; the field is busy while a held attempt is checked and invalid from its refusal until the next edit, and the refusal is said once; a key past the 512-byte limit is no edit and changes nothing assistive technology reads of the field, and the submission holds 512 bytes; the lock window is modal with the field as its only control; the "Open my windows again" checkbox starts at the saved choice and a click, Space or an assistive technology click flips it without deciding; the checkbox has the focus, Return, Escape, a click and an assistive technology click decide; Tab reaches the checkbox and the buttons; the power-button panel shows the checkbox and its letters choose; a drag on a panel's background moves it; the interrupt panel focuses Try Again, and its force quit question focuses Cancel and Return there kills nothing; the picker offers each account and "Other…" and the arrows step; the lock screen shows and says only what the daemon listed (a redacted notice draws only its application and "Notification"), the field stays the only control with the focus, a notice arriving while locked is said once and the rest are counted, the cards sit at the top right as tall as their text. With `CUPERTINO_LOOK_DIR` set, `pictures_for_review` writes each surface in light and dark at 1× and 2×. |
 | `tests/lock_atspi.rs` | The Kit lock screen with the lock screen's AT-SPI adapter on a private bus with a stand-in registry: while a password is typed, no node of the tree (name, description, text) holds it, the field is password text named "Password" whose text is empty, no message on the bus and no line of the process's diagnostics (each message's `Debug`, the Inspector dumps, the model) holds it, and no key reaches the registry; every answer to an attempt is announced once and assertively; while an attempt is checked the field's AT-SPI state is busy and nothing is said, and the answer ends busy (one `StateChanged` `busy` 0 on the field) and says a wrong password once. |
 | Saved state (`restore`) | The file round-trips with IDs only, mode 0600; a missing file is the choice on; malformed lines, other versions, invalid IDs, duplicates and the 64 cap; identities resolve by ID then `StartupWMClass`; shell programs, terminal entries and bad `Exec` lines are refused; the list is emptied on disk before it is handed out and only once, dropped when saved in the same boot and session or with the choice off, and not handed out when it cannot be emptied; launching skips removed entries, duplicates, login items and failed starts. |
 | `tests/restore.rs` | A stand-in `org.cupertino.Session1` on a private `dbus-daemon` names the applications as they quit; the saved list in a fixture home holds only their desktop file IDs, and the next login starts the one still installed once through its `Exec`; a failed start leaves the rest going. |

@@ -1,4 +1,4 @@
-use crate::{allows, exception, Dep, Edge, Exception, Kind, Layer, Rules};
+use crate::{allows_edge, matches, Edge, Kind, Layer, Problem, Rules};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
@@ -17,90 +17,99 @@ pub fn without_counts(graph: &str) -> String {
         .collect()
 }
 
-/// For every crate in a `denied` source layer, the shortest dependency chain to each crate of a layer it must not
-/// reach, as crate names from source to target.
-pub fn denied_paths(edges: &[Edge], denied: &[(Layer, &[Layer])]) -> Vec<Vec<String>> {
+/// Follows `parent` back from `end` to `start`: the chain from `start` to `end`.
+fn path_to(parent: &BTreeMap<&str, &str>, start: &str, end: &str) -> Vec<String> {
+    let mut path = vec![end.to_owned()];
+    let mut at = end;
+    while at != start {
+        at = parent[at];
+        path.push(at.to_owned());
+    }
+    path.reverse();
+    path
+}
+
+/// A problem for every crate that a workspace crate reaches through a chain of two or more dependencies and that sits
+/// in a higher layer, `testing` aside: the crate's own dependencies of every kind, then the normal and build
+/// dependencies of those, which are what building the crate and its tests builds. The shortest chain, by name order
+/// among equals, is the problem's path.
+pub fn reaches_up(edges: &[Edge]) -> Vec<Problem> {
+    let mut layers: BTreeMap<&str, Layer> = BTreeMap::new();
+    for e in edges {
+        layers.insert(&e.from, e.from_layer);
+        layers.insert(&e.to, e.to_layer);
+    }
     let mut out = Vec::new();
-    for &(from_layer, to_layers) in denied {
-        let starts: BTreeSet<&str> = edges
+    for (&start, &from_layer) in &layers {
+        let direct: BTreeSet<&str> = edges
             .iter()
-            .filter(|e| e.from_layer == from_layer)
-            .map(|e| e.from.as_str())
+            .filter(|e| e.from == start)
+            .map(|e| e.to.as_str())
             .collect();
-        for start in starts {
-            let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
-            let mut queue = VecDeque::from([start]);
-            while let Some(node) = queue.pop_front() {
-                for e in edges.iter().filter(|e| e.from == node) {
-                    if e.to == start || parent.contains_key(e.to.as_str()) {
-                        continue;
-                    }
-                    parent.insert(&e.to, node);
-                    if !to_layers.contains(&e.to_layer) {
-                        queue.push_back(&e.to);
-                        continue;
-                    }
-                    let mut path = vec![e.to.clone()];
-                    let mut at = node;
-                    while at != start {
-                        path.push(at.to_owned());
-                        at = parent[at];
-                    }
-                    path.push(start.to_owned());
-                    path.reverse();
-                    out.push(path);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// For every source crate in `denied`, the shortest chain of normal dependencies in `deps` to each crate it must not
-/// reach, as crate names from source to target.
-pub fn denied_crate_paths(deps: &BTreeSet<Dep>, denied: &[(&str, &[&str])]) -> Vec<Vec<String>> {
-    let mut out = Vec::new();
-    for &(start, targets) in denied {
         let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
-        let mut queue = VecDeque::from([start]);
+        let mut queue: VecDeque<&str> = VecDeque::new();
+        for &to in &direct {
+            if to != start {
+                parent.insert(to, start);
+                queue.push_back(to);
+            }
+        }
         while let Some(node) = queue.pop_front() {
-            for (_, to, _) in deps
+            for e in edges
                 .iter()
-                .filter(|(from, _, kind)| from == node && *kind == Kind::Normal)
+                .filter(|e| e.from == node && e.kind != Kind::Dev)
             {
-                if to == start || parent.contains_key(to.as_str()) {
+                if e.to == start || parent.contains_key(e.to.as_str()) {
                     continue;
                 }
-                parent.insert(to, node);
-                if !targets.contains(&to.as_str()) {
-                    queue.push_back(to);
-                    continue;
-                }
-                let mut path = vec![to.clone()];
-                let mut at = node;
-                while at != start {
-                    path.push(at.to_owned());
-                    at = parent[at];
-                }
-                path.push(start.to_owned());
-                path.reverse();
-                out.push(path);
+                parent.insert(&e.to, node);
+                queue.push_back(&e.to);
+            }
+        }
+        for &reached in parent.keys() {
+            let to_layer = layers[reached];
+            if direct.contains(reached) || to_layer <= from_layer || to_layer == Layer::Testing {
+                continue;
+            }
+            out.push(Problem::ReachesUp {
+                path: path_to(&parent, start, reached),
+                from_layer,
+                to_layer,
+            });
+        }
+    }
+    out
+}
+
+/// The shortest chain in `deps` (each crate's dependencies by name) from `start` to each crate that one of `targets`
+/// names, as crate names from `start`.
+pub fn crate_paths(
+    deps: &BTreeMap<String, BTreeSet<String>>,
+    start: &str,
+    targets: &[&str],
+) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut queue = VecDeque::from([start]);
+    while let Some(node) = queue.pop_front() {
+        for to in deps.get(node).into_iter().flatten() {
+            if to == start || parent.contains_key(to.as_str()) {
+                continue;
+            }
+            parent.insert(to, node);
+            if targets.iter().any(|t| matches(t, to)) {
+                out.push(path_to(&parent, start, to));
+            } else {
+                queue.push_back(to);
             }
         }
     }
     out
 }
 
-/// A DOT graph of `edges`, one cluster per layer, preceded by comment lines with the crate count per layer, every
-/// edge `rules` forbid with its kind and exception status, stale exceptions and denied paths.
-pub fn dot(
-    title: &str,
-    rules: Rules,
-    layers: &BTreeMap<String, Layer>,
-    edges: &[Edge],
-    exceptions: &[Exception],
-    denied: &[(Layer, &[Layer])],
-) -> String {
+/// A DOT graph of `edges`, one cluster per layer, preceded by comment lines with the crate count per layer and every
+/// edge `rules` forbid with its kind.
+pub fn dot(title: &str, rules: Rules, layers: &BTreeMap<String, Layer>, edges: &[Edge]) -> String {
     let mut by_layer: BTreeMap<Layer, Vec<&str>> = BTreeMap::new();
     for (name, layer) in layers {
         by_layer.entry(*layer).or_default().push(name);
@@ -120,40 +129,16 @@ pub fn dot(
         .collect();
     let _ = writeln!(s, "// per layer: {}", counts.join(", "));
 
-    let forbidden: Vec<&Edge> = edges
-        .iter()
-        .filter(|e| !allows(rules, e.from_layer, e.to_layer))
-        .collect();
+    let forbidden: Vec<&Edge> = edges.iter().filter(|e| !allows_edge(rules, e)).collect();
     if forbidden.is_empty() {
         let _ = writeln!(s, "// forbidden edges: none");
     }
     for e in &forbidden {
-        let status = match exception(exceptions, e) {
-            Some(x) => format!("{} exception ({}): {}", x.tracking, x.area, x.reason),
-            None => "violation".to_owned(),
-        };
         let _ = writeln!(
             s,
-            "// forbidden {} edge {} ({}) -> {} ({}), {status}",
+            "// forbidden {} edge {} ({}) -> {} ({})",
             e.kind, e.from, e.from_layer, e.to, e.to_layer
         );
-    }
-    for x in exceptions {
-        if !edges.iter().any(|e| x.matches(e)) {
-            let _ = writeln!(s, "// stale {} exception {} -> {}", x.kind, x.from, x.to);
-        }
-    }
-    for (from, to_layers) in denied {
-        let to: Vec<&str> = to_layers.iter().map(|l| l.name()).collect();
-        let _ = write!(s, "// denied paths {from} -> {}:", to.join(", "));
-        let paths = denied_paths(edges, &[(*from, to_layers)]);
-        if paths.is_empty() {
-            s.push_str(" none");
-        }
-        s.push('\n');
-        for p in paths {
-            let _ = writeln!(s, "//   {}, violation", p.join(" -> "));
-        }
     }
 
     let _ = writeln!(s, "digraph \"{title}\" {{");
@@ -171,11 +156,8 @@ pub fn dot(
         if e.kind != Kind::Normal {
             attrs.push(format!("label=\"{}\"", e.kind));
         }
-        if !allows(rules, e.from_layer, e.to_layer) {
-            match exception(exceptions, e) {
-                Some(_) => attrs.push("color=orange, style=dashed".to_owned()),
-                None => attrs.push("color=red".to_owned()),
-            }
+        if !allows_edge(rules, e) {
+            attrs.push("color=red".to_owned());
         }
         let attrs = if attrs.is_empty() {
             String::new()

@@ -1,38 +1,56 @@
-//! Every check on a checkout: `cargo metadata` read into layers, dependencies and licences, then the layer rules, the
-//! denied paths and crates, the workspace licences and the external licence closure of the MPL-2.0 crates.
+//! Every check on a checkout: `cargo metadata` read into layers, dependencies and licences, the sources of the pure
+//! layers and the `clippy.toml` files read, then every rule checked and compared with the remaining-work file and the
+//! graph snapshot.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
 use crate::{
-    check, closure, denied_crate_paths, dot, edges, licence_problems, without_counts, Dep, Edge,
-    Exception, Kind, Layer, Problem, Rules, DENIED_CRATES, DENIED_PATHS, EXCEPTIONS,
-    GRAPH_SNAPSHOT, RULES,
+    check, clippy_toml, crate_paths, dot, edges, external_problems, is_licence, matches, sources,
+    without_counts, Dep, Edge, External, Facade, Kind, Layer, Problem, Rules, DISALLOWED_METHODS,
+    ENFORCED, EXTERNAL_CRATES, FACADES, GRAPH_SNAPSHOT, IMPURE, PURE_LAYERS, REMAINING, RULES,
+    WINDOW_SYSTEM,
 };
 
 /// What a workspace is checked against.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
     pub rules: Rules,
-    pub exceptions: &'static [Exception],
-    pub denied_paths: &'static [(Layer, &'static [Layer])],
-    pub denied_crates: &'static [(&'static str, &'static [&'static str])],
-    /// Crates that must be in the workspace under MPL-2.0.
-    pub mpl_roots: &'static [&'static str],
+    /// The closed layers, whose problems the remaining-work file may not list.
+    pub enforced: &'static [Layer],
+    pub facades: &'static [Facade],
+    pub window_system: &'static [(&'static str, &'static [&'static str])],
+    pub external_crates: &'static [External],
+    /// The layers whose sources must be pure, and the standard library modules they must not use.
+    pub pure_layers: &'static [Layer],
+    pub impure: &'static [&'static str],
+    /// What the `clippy.toml` of each `shell` and `apps` crate disallows.
+    pub disallowed_methods: &'static [(&'static str, &'static str)],
 }
 
 /// The rules of this repository.
 pub const POLICY: Policy = Policy {
     rules: RULES,
-    exceptions: EXCEPTIONS,
-    denied_paths: DENIED_PATHS,
-    denied_crates: DENIED_CRATES,
-    mpl_roots: closure::REQUIRED_MPL_ROOTS,
+    enforced: ENFORCED,
+    facades: FACADES,
+    window_system: WINDOW_SYSTEM,
+    external_crates: EXTERNAL_CRATES,
+    pure_layers: PURE_LAYERS,
+    impure: IMPURE,
+    disallowed_methods: DISALLOWED_METHODS,
 };
+
+/// The layers whose crates hold the generated `clippy.toml`.
+const CLIPPY_LAYERS: &[Layer] = &[Layer::Shell, Layer::Apps];
+
+const REMAINING_HEADER: &str = "\
+# The target layer rules that crates still break, one problem per line: <layer> <rule> <crate> ...
+# Written by `cargo run -q -p cupertino-layers -- --write-remaining`; never edit by hand. Lines only leave.
+";
 
 /// Why a workspace could not be checked.
 #[derive(Debug)]
@@ -63,16 +81,22 @@ impl std::error::Error for LayersError {}
 #[derive(Debug)]
 pub struct Findings {
     pub policy: Policy,
+    /// The workspace root.
+    pub root: PathBuf,
     /// Each workspace crate's declared layer.
     pub layers: BTreeMap<String, Layer>,
     /// The dependencies between workspace crates, one per kind.
     pub edges: Vec<Edge>,
-    /// The layer, path and workspace licence problems, in the order the binary prints them.
+    /// Every problem of the rules, sorted by its line, listed or not.
     pub problems: Vec<Problem>,
-    /// The licence closure problems of the MPL-2.0 crates, sorted.
-    pub closure: Vec<Problem>,
+    /// The lines of the committed remaining-work file (none when the workspace has none).
+    pub remaining: Vec<String>,
+    /// [`Problem::StaleRemaining`] and [`Problem::EnforcedRemaining`] for lines of the file.
+    pub listing: Vec<Problem>,
     /// [`Problem::StaleGraph`] when the workspace has a committed graph snapshot that no longer matches it.
     pub snapshot: Vec<Problem>,
+    /// The `clippy.toml` of each `shell` and `apps` crate, by crate, as absolute paths.
+    pub clippy_files: BTreeMap<String, PathBuf>,
 }
 
 impl Findings {
@@ -80,40 +104,94 @@ impl Findings {
         self.all_problems().next().is_none()
     }
 
-    /// Every problem: [`Findings::problems`], [`Findings::closure`], then [`Findings::snapshot`].
+    /// The problems of the rules that the remaining-work file does not excuse: those it does not list, and every one
+    /// of an enforced layer.
+    pub fn unlisted(&self) -> impl Iterator<Item = &Problem> {
+        let listed: BTreeSet<&str> = self.remaining.iter().map(String::as_str).collect();
+        self.problems.iter().filter(move |p| {
+            p.layer().is_some_and(|l| self.policy.enforced.contains(&l))
+                || p.line().is_none_or(|line| !listed.contains(line.as_str()))
+        })
+    }
+
+    /// Every problem: [`Findings::unlisted`], [`Findings::listing`], then [`Findings::snapshot`].
     pub fn all_problems(&self) -> impl Iterator<Item = &Problem> {
-        self.problems
-            .iter()
-            .chain(&self.closure)
-            .chain(&self.snapshot)
+        self.unlisted().chain(&self.listing).chain(&self.snapshot)
     }
 
     /// The problems of a run that prints the graph: every one but an out-of-date snapshot, which that run makes again.
     pub fn problems_printing_the_graph(&self) -> impl Iterator<Item = &Problem> {
-        self.problems.iter().chain(&self.closure)
+        self.all_problems()
+            .filter(|p| !matches!(p, Problem::StaleGraph(_)))
     }
 
-    /// `80 crates, 378 internal dependencies, 5 exceptions, 0 problems`
+    /// The problems of a run that writes the remaining-work file and so makes its lines again: those of enforced
+    /// layers, which it cannot list.
+    pub fn problems_writing_the_remaining_work(&self) -> impl Iterator<Item = &Problem> {
+        self.problems
+            .iter()
+            .filter(|p| p.layer().is_some_and(|l| self.policy.enforced.contains(&l)))
+    }
+
+    /// `91 crates, 390 internal dependencies, 120 listed, 0 problems`
     pub fn summary(&self) -> String {
         format!(
-            "{} crates, {} internal dependencies, {} exceptions, {} problems",
+            "{} crates, {} internal dependencies, {} listed, {} problems",
             self.layers.len(),
             self.edges.len(),
-            self.policy.exceptions.len(),
+            self.remaining.len(),
             self.all_problems().count()
         )
     }
 
     /// The DOT graph of the layers, as `cupertino-layers --graph` prints it.
     pub fn dot(&self) -> String {
-        dot(
-            "layers",
-            self.policy.rules,
-            &self.layers,
-            &self.edges,
-            self.policy.exceptions,
-            self.policy.denied_paths,
-        )
+        dot("layers", self.policy.rules, &self.layers, &self.edges)
+    }
+
+    /// The remaining-work file for the problems found: every line of a layer that is not enforced, sorted.
+    pub fn remaining_file(&self) -> String {
+        let lines: BTreeSet<String> = self
+            .problems
+            .iter()
+            .filter(|p| !p.layer().is_some_and(|l| self.policy.enforced.contains(&l)))
+            .filter_map(Problem::line)
+            .collect();
+        let mut s = REMAINING_HEADER.to_owned();
+        for line in lines {
+            s.push_str(&line);
+            s.push('\n');
+        }
+        s
+    }
+
+    /// Writes [`Findings::remaining_file`] to the workspace's remaining-work file.
+    pub fn write_remaining(&self) -> std::io::Result<()> {
+        std::fs::write(self.root.join(REMAINING), self.remaining_file())
+    }
+
+    /// Writes the `clippy.toml` of the `shell` and `apps` crates in `crates`, or of all of them when `crates` is
+    /// empty, where the file differs from the list, and returns the files written. A name that is not a `shell` or
+    /// `apps` crate is an [`std::io::ErrorKind::InvalidInput`] error, and nothing is written.
+    pub fn write_clippy(&self, crates: &[&str]) -> std::io::Result<Vec<&Path>> {
+        if let Some(unknown) = crates.iter().find(|c| !self.clippy_files.contains_key(**c)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{unknown} is not a shell or apps crate of the workspace"),
+            ));
+        }
+        let content = clippy_toml(self.policy.disallowed_methods);
+        let mut written = Vec::new();
+        for (name, path) in &self.clippy_files {
+            if !crates.is_empty() && !crates.contains(&name.as_str()) {
+                continue;
+            }
+            if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
+                std::fs::write(path, &content)?;
+                written.push(path.as_path());
+            }
+        }
+        Ok(written)
     }
 
     /// The crates of each layer, in layer order and by name.
@@ -140,32 +218,115 @@ pub fn check_workspace_with(
     policy: &Policy,
 ) -> Result<Findings, LayersError> {
     let members = metadata(root, cargo, &["--no-deps"])?;
-    let (layers, deps, licences) = read_workspace(&members, policy.rules)?;
-    let edges = edges(&layers, &deps);
-    let mut problems = check(policy.rules, &edges, policy.exceptions, policy.denied_paths);
-    problems.extend(
-        denied_crate_paths(&deps, policy.denied_crates)
-            .into_iter()
-            .map(Problem::DeniedPath),
-    );
-    problems.extend(licence_problems(&licences.licences, &deps, |name| {
-        licences.has_text.get(name).copied().unwrap_or(false)
-    }));
+    let workspace_root =
+        PathBuf::from(members["workspace_root"].as_str().ok_or_else(|| {
+            LayersError::Manifest("cargo metadata has no workspace root".to_owned())
+        })?);
+    let crates = read_workspace(&members, policy.rules)?;
+    let edges = edges(&crates.layers, &crates.deps);
+    let mut problems = check(policy.rules, &edges, policy.facades);
+    problems.extend(external_problems(
+        &crates.layers,
+        &crates.deps,
+        policy.external_crates,
+    ));
     let resolved = metadata(root, cargo, &["--all-features", "--locked", "--offline"])?;
-    let closure =
-        closure::check_roots(&resolved, policy.mpl_roots).map_err(LayersError::Manifest)?;
+    let normal = normal_dependencies(&resolved)?;
+    for (start, layer) in &crates.layers {
+        for (source, targets) in policy.window_system {
+            if matches(source, start) {
+                problems.extend(
+                    crate_paths(&normal, start, targets)
+                        .into_iter()
+                        .map(|path| Problem::WindowSystem {
+                            from_layer: *layer,
+                            path,
+                        }),
+                );
+            }
+        }
+    }
+    for (name, dir) in &crates.dirs {
+        let layer = crates.layers[name];
+        if policy.pure_layers.contains(&layer) {
+            for file in sources::rust_files(dir, dir) {
+                let src = std::fs::read_to_string(dir.join(&file)).unwrap_or_default();
+                for what in sources::impurities(&src, policy.impure) {
+                    problems.push(Problem::Impure {
+                        krate: name.clone(),
+                        layer,
+                        file: file.clone(),
+                        what,
+                    });
+                }
+            }
+        }
+        let licence = &crates.licences[name];
+        if !licence.as_deref().is_some_and(is_licence) {
+            problems.push(Problem::UndeclaredLicence {
+                krate: name.clone(),
+                layer,
+                licence: licence.clone().unwrap_or_default(),
+            });
+        }
+    }
+    let clippy_files: BTreeMap<String, PathBuf> = crates
+        .dirs
+        .iter()
+        .filter(|(name, _)| CLIPPY_LAYERS.contains(&crates.layers[*name]))
+        .map(|(name, dir)| (name.clone(), dir.join("clippy.toml")))
+        .collect();
+    let content = clippy_toml(policy.disallowed_methods);
+    for (name, path) in &clippy_files {
+        if std::fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
+            problems.push(Problem::DisallowedMethods {
+                krate: name.clone(),
+                layer: crates.layers[name],
+            });
+        }
+    }
+    let mut sorted: BTreeMap<String, Problem> = BTreeMap::new();
+    for p in problems {
+        sorted
+            .entry(p.line().unwrap_or_else(|| p.to_string()))
+            .or_insert(p);
+    }
+    let problems: Vec<Problem> = sorted.into_values().collect();
+
+    let remaining: Vec<String> = std::fs::read_to_string(workspace_root.join(REMAINING))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .collect();
+    let lines: BTreeSet<String> = problems.iter().filter_map(Problem::line).collect();
+    let listing = remaining
+        .iter()
+        .filter_map(|line| {
+            let layer = line.split(' ').next().and_then(Layer::from_name);
+            if layer.is_some_and(|l| policy.enforced.contains(&l)) {
+                Some(Problem::EnforcedRemaining(line.clone()))
+            } else if !lines.contains(line) {
+                Some(Problem::StaleRemaining(line.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let mut findings = Findings {
         policy: *policy,
-        layers,
+        root: workspace_root,
+        layers: crates.layers,
         edges,
         problems,
-        closure,
+        remaining,
+        listing,
         snapshot: Vec::new(),
+        clippy_files,
     };
     // a workspace without the snapshot (another checkout's layout, a test workspace) has nothing to keep current
-    let committed = members["workspace_root"]
-        .as_str()
-        .and_then(|r| std::fs::read_to_string(Path::new(r).join(GRAPH_SNAPSHOT)).ok());
+    let committed = std::fs::read_to_string(findings.root.join(GRAPH_SNAPSHOT)).ok();
     if committed.is_some_and(|c| without_counts(&c) != without_counts(&findings.dot())) {
         findings
             .snapshot
@@ -191,22 +352,24 @@ fn metadata(root: &Path, cargo: &dyn Fn() -> Command, args: &[&str]) -> Result<V
         .map_err(|e| LayersError::Manifest(format!("cargo metadata did not print JSON: {e}")))
 }
 
-/// The licence of each workspace crate, and whether a `LICENSE` file with the MPL-2.0 text sits next to its manifest.
-struct Licences {
-    licences: BTreeMap<String, String>,
-    has_text: BTreeMap<String, bool>,
+/// The workspace crates as their manifests declare them.
+struct Crates {
+    layers: BTreeMap<String, Layer>,
+    /// Every dependency (normal, build, dev) of a workspace crate, on workspace and external crates.
+    deps: BTreeSet<Dep>,
+    /// The directory of each crate's manifest.
+    dirs: BTreeMap<String, PathBuf>,
+    /// The `license` of each crate, or `license-file` when it names one instead.
+    licences: BTreeMap<String, Option<String>>,
 }
 
-type Workspace = (BTreeMap<String, Layer>, BTreeSet<Dep>, Licences);
-
-/// Each workspace crate's declared layer, every dependency (normal, build, dev) of a workspace crate, and its licence.
-fn read_workspace(meta: &Value, rules: Rules) -> Result<Workspace, LayersError> {
+fn read_workspace(meta: &Value, rules: Rules) -> Result<Crates, LayersError> {
     let bad = |what: &str| LayersError::Manifest(format!("cargo metadata has no {what}"));
-    let mut layers = BTreeMap::new();
-    let mut deps = BTreeSet::new();
-    let mut licences = Licences {
+    let mut crates = Crates {
+        layers: BTreeMap::new(),
+        deps: BTreeSet::new(),
+        dirs: BTreeMap::new(),
         licences: BTreeMap::new(),
-        has_text: BTreeMap::new(),
     };
     for p in meta["packages"].as_array().ok_or_else(|| bad("packages"))? {
         let name = p["name"].as_str().ok_or_else(|| bad("package name"))?;
@@ -222,22 +385,20 @@ fn read_workspace(meta: &Value, rules: Rules) -> Result<Workspace, LayersError> 
             .ok_or_else(|| {
                 LayersError::Manifest(format!("{name}: `{layer}` is not a layer in RULES"))
             })?;
-        layers.insert(name.to_owned(), layer);
-        licences.licences.insert(
-            name.to_owned(),
-            p["license"].as_str().unwrap_or_default().to_owned(),
-        );
+        crates.layers.insert(name.to_owned(), layer);
+        let licence = p["license"].as_str().map(str::to_owned).or_else(|| {
+            p["license_file"]
+                .as_str()
+                .map(|_| "LicenseRef-file".to_owned())
+        });
+        crates.licences.insert(name.to_owned(), licence);
         let manifest = Path::new(
             p["manifest_path"]
                 .as_str()
                 .ok_or_else(|| bad("manifest path"))?,
         );
-        let text = std::fs::read_to_string(manifest.with_file_name("LICENSE")).unwrap_or_default();
-        licences.has_text.insert(
-            name.to_owned(),
-            text.trim_start()
-                .starts_with("Mozilla Public License Version 2.0"),
-        );
+        let dir = manifest.parent().ok_or_else(|| bad("manifest directory"))?;
+        crates.dirs.insert(name.to_owned(), dir.to_path_buf());
         for d in p["dependencies"]
             .as_array()
             .ok_or_else(|| bad("dependencies"))?
@@ -249,8 +410,49 @@ fn read_workspace(meta: &Value, rules: Rules) -> Result<Workspace, LayersError> 
                     d["kind"]
                 ))
             })?;
-            deps.insert((name.to_owned(), to.to_owned(), kind));
+            crates.deps.insert((name.to_owned(), to.to_owned(), kind));
         }
     }
-    Ok((layers, deps, licences))
+    Ok(crates)
+}
+
+/// The normal dependencies of every resolved package, by name, from the full `cargo metadata`.
+fn normal_dependencies(meta: &Value) -> Result<BTreeMap<String, BTreeSet<String>>, LayersError> {
+    let bad = |what: &str| LayersError::Manifest(format!("resolved cargo metadata has no {what}"));
+    let mut names: BTreeMap<&str, &str> = BTreeMap::new();
+    for p in meta["packages"].as_array().ok_or_else(|| bad("packages"))? {
+        names.insert(
+            p["id"].as_str().ok_or_else(|| bad("package id"))?,
+            p["name"].as_str().ok_or_else(|| bad("package name"))?,
+        );
+    }
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in meta["resolve"]["nodes"]
+        .as_array()
+        .ok_or_else(|| bad("resolved nodes"))?
+    {
+        let from = node["id"]
+            .as_str()
+            .and_then(|id| names.get(id))
+            .ok_or_else(|| bad("known node id"))?;
+        let deps = out.entry((*from).to_owned()).or_default();
+        for dep in node["deps"]
+            .as_array()
+            .ok_or_else(|| bad("node dependencies"))?
+        {
+            let normal = dep["dep_kinds"]
+                .as_array()
+                .ok_or_else(|| bad("dependency kinds"))?
+                .iter()
+                .any(|k| k["kind"].is_null());
+            if normal {
+                let to = dep["pkg"]
+                    .as_str()
+                    .and_then(|id| names.get(id))
+                    .ok_or_else(|| bad("known dependency id"))?;
+                deps.insert((*to).to_owned());
+            }
+        }
+    }
+    Ok(out)
 }

@@ -51,7 +51,7 @@ sudo cupertino dev-folder disable           # stop that
 | `dev-folder disable` | Preview, as root. Removes the `dev_folder` key, keeping everything else; the folder and its files stay. Without the key it changes nothing. |
 | `version` | One entry per part: `cli`, `runtime-package`, `data-package`, `compositor-running`, `c-abi`, `theme`, `asset-pack`, the output schemas, `os-image` and `kernel`, each with `name`, `version`, `source`, `status` (`ok`, `not_installed`, `unreadable`, `not_running`), `detail` and `commit`. A part that is not there never fails the command. |
 | `completions SHELL` | Prints the completion script of `bash`, `zsh` or `fish`, generated from the registry. |
-| `dev layers [--root DIR] [--graph]` | Preview. Checks that the crates of a source checkout depend on each other as the layer rules allow and that the licences the MPL-2.0 crates link are accepted. Outside a checkout it exits with 3 (`no_checkout`), without Cargo with 3 (`no_cargo`), on problems with 5 (`layer_violations`, each problem in `data.problems`). |
+| `dev layers [--root DIR] [--graph]` | Preview. Checks that the crates of a source checkout follow the layer rules, against the checkout's list of remaining work, as `cargo run -p cupertino-layers` does. Outside a checkout it exits with 3 (`no_checkout`), without Cargo with 3 (`no_cargo`), on problems with 5 (`layer_violations`, each problem in `data.problems`). |
 | `dev manual DIR` | Preview. Writes the manual pages into `DIR`, dated by `SOURCE_DATE_EPOCH` or a fixed date, so two runs write the same bytes. |
 
 [Checking a machine](diagnose.md#diagnostic-events) describes the events, their limits, what they never contain and journal access.

@@ -1,99 +1,151 @@
 # cupertino-layers
 
-Checks that dependencies between workspace crates follow the layer rules below. A crate's
-layer is declared in its manifest, `[package.metadata.cupertino] layer = "<layer>"`; in this tree crates live in
-`crates/<crate>`. Layer: `tools`.
+Checks that the workspace crates follow the layer rules below. A crate's layer is declared in its manifest,
+`[package.metadata.cupertino] layer = "<layer>"`; in this tree crates live in `crates/<crate>`. Layer: `tools`.
 
 ## Usage
 
 ```sh
-cargo run -p cupertino-layers               # from anywhere inside the repository
-cargo run -p cupertino-layers -- --graph    # DOT graph of the declared layers
+cargo run -p cupertino-layers                     # the check, from anywhere inside the repository
+cargo run -p cupertino-layers -- --graph          # DOT graph of the declared layers
+cargo run -p cupertino-layers -- --write-remaining  # write remaining.txt from the problems found
+cargo run -p cupertino-layers -- --write-clippy [CRATE...]  # write the clippy.toml of these shell and apps crates
 ```
 
-The binary runs `cargo metadata`, collects every dependency between workspace crates (normal, build and
-dev, one edge per kind), and prints one line per problem to stderr. `cupertino dev layers` runs the same checks from
-the library and reports them in the `cupertino` command's forms. Without `--graph` the last line is a summary:
+The binary runs `cargo metadata`, without the dependencies and then resolved (`--all-features --locked --offline`),
+reads the sources of the pure layers and the `clippy.toml` of the `shell` and `apps` crates, and prints one line per problem to stderr. `cupertino dev layers` runs the same
+checks from the library and reports them in the `cupertino` command's forms. The check's last line is a summary:
 
 ```
-71 crates, 291 internal dependencies, 3 exceptions, 0 problems
+91 crates, 390 internal dependencies, 234 listed, 0 problems
 ```
 
-It exits with failure on any problem, in both modes, except that `--graph` does not fail on an out-of-date snapshot
-(below), since its output is how the snapshot is made again. It is one of the checks to run before finishing a change.
+It exits with failure on any problem. It is one of the checks to run before finishing a change; `cargo xtask ci` runs
+it in the profiles that have `layers = true`.
 
-`--graph` prints a DOT graph with one cluster per layer. Comment lines above it give the crate count per layer, every
-forbidden edge with its kind and its exception (tracking, area, reason) or `violation`, stale exceptions and denied
-paths. Build and dev edges are labelled, exceptions drawn orange and dashed, violations red. `graph/layers.dot` is a committed
-snapshot. The check without `--graph`, and `cupertino dev layers` fail when it differs
-from the workspace, with the problem `stale_graph`; regenerate it after a dependency or layer change:
+## The rules
+
+All rules are constants in `src/lib.rs`; nothing is read from a configuration file.
+
+`RULES` is the layer table, from the bottom. A crate depends only on the layers its row allows, in normal, build and
+dev dependencies. Every crate may also have `testing` crates as dev-dependencies, and only dev-dependencies point at a
+`testing` crate.
+
+| Layer | May depend on |
+|---|---|
+| `foundation` | `foundation` |
+| `graphics` | `foundation`, `graphics` |
+| `models` | `foundation`, `models` |
+| `system` | `foundation`, `system` |
+| `platform` | `foundation`, `platform` |
+| `protocol` | `foundation`, `protocol` |
+| `transport` | `foundation`, `system`, `platform`, `protocol`, `transport` |
+| `render` | `foundation`, `graphics`, `system`, `platform`, `render` |
+| `ui` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
+| `shellkit` | `foundation`, `system`, `protocol`, `transport`, `ui` |
+| `core` | `foundation`, `graphics`, `models`, `system`, `platform`, `protocol`, `render`, `core` |
+| `services` | `foundation`, `models`, `system`, `platform`, `protocol`, `transport`, `services` |
+| `shell` | `foundation`, `models`, `system`, `protocol`, `ui`, `shellkit`, `shell` |
+| `apps` | `foundation`, `models`, `system`, `protocol`, `ui` |
+| `tools` | every layer except `core`, `shell`, `services`, `apps`, `testing` |
+| `testing` | every layer |
+
+The further rules, each a check with its own problem kind:
+
+- `reaches_up`: no crate reaches a crate of a higher layer (later in the table, `testing` aside) through a chain of two
+  or more dependencies: its own dependencies of every kind, then their normal and build dependencies. So no layer
+  reaches up through `tools` or `testing` either.
+- `impure_source`: the Rust files of `foundation` and `models` crates (`PURE_LAYERS`), except `tests/`, the build
+  script and its `build/` directory, use none of `IMPURE` (`std::fs`, `std::net`, `std::process`, `std::env`,
+  `std::thread`, by path or in a `use std::{…}` group), no `unsafe` and no FFI (`extern` blocks and ABIs, `no_mangle`,
+  `export_name`, `link`, `link_name`). Comments and literals do not count. One problem per file and item.
+- `components_apart`: a `shell` crate never depends on another `shell` crate, except `SHELL_HOST` (`cupertino-shell`)
+  on the components; `SEPARATE_PROGRAMS` (`cupertino-login`, `cupertino-prompts`, `cupertino-screenshot`) are not
+  components.
+- `window_system`: `WINDOW_SYSTEM` lists crates that never reach other crates through any chain of normal
+  dependencies, external crates included (a name ending in `*` stands for every crate it starts):
+  `cupertino-wayland-client` never reaches `cupertino-protocols` or the wlr, misc and plasma protocol crates;
+  `cupertino-app-protocols` never reaches `cupertino-protocols`; `cupertino-kit` and `cupertino-ui-*` never reach
+  `cupertino-protocols` or `cupertino-shell-client`; `cupertino-ui-render` never reaches `cupertino-ui-wayland` or
+  `cupertino-wayland-client`.
+- `facade`: `FACADES`. A `shell` or `apps` crate never depends on the toolkit's crates below `cupertino-kit`
+  (`cupertino-ui-*`, `cupertino-theme`, `cupertino-animation`, `cupertino-raster-math`, `cupertino-gpu`,
+  `cupertino-wayland-client`, `cupertino-app-protocols`), nor on `cupertino-shell-client` or `cupertino-protocols`,
+  which `shell` crates reach through `cupertino-kit-shell`.
+- `external_crate`: `EXTERNAL_CRATES` says which layers may depend directly on `smithay` and `smithay-*` (`core`), the
+  image crates (`tiny-skia`, `resvg`, `usvg`, `image`, `png`), the Wayland client crates, `xkbcommon`,
+  `wayland-server`, `zbus`, and the system-call crates (`libc`, `rustix`, `nix`, `inotify`, `notify`), and in which
+  layers they are allowed as dev-dependencies only. Other external crates are not restricted.
+- `undeclared_licence`: every crate declares a `license` that is a licence expression, or a `license-file`.
+- `disallowed_methods`: every `shell` and `apps` crate holds the generated `clippy.toml` (below).
+
+Test placement (no test code in a crate's `src/`) is checked by the gate of `cargo xtask ci`, not here.
+
+A crate without a declared layer, or with a layer that has no row in `RULES`, stops the check.
+
+## The remaining-work list
+
+Today's crates still declare today's layers and break some of the rules. `remaining.txt` lists each such problem on
+one line, `<layer> <rule> <crate> …` (the layer the crate declares), sorted, under a two-line `#` header:
+
+```
+shell facade cupertino-dock -> cupertino-ui-wayland normal
+foundation impure_source cupertino-trash src/lib.rs std::fs
+```
+
+A line names only what the problem is about (crates, kind of dependency, file and item; never a line number or a
+chain), so it changes only when the problem does. The check fails on a problem the file does not list
+(`forbidden_edge`, `reaches_up`, …) and on a line that is no longer a problem (`stale_remaining`): the list only
+shrinks. After fixing a problem, or after a change that moves a crate to another layer, write it again:
+
+```sh
+cargo run -q -p cupertino-layers -- --write-remaining
+```
+
+`ENFORCED` lists the closed layers. Their problems are never excused by the file, `--write-remaining` leaves them out
+and fails while they remain, and a line of an enforced layer in the file is a problem (`enforced_remaining`). It is
+empty until the first layer closes.
+
+## The clippy.toml of shell and apps crates
+
+`DISALLOWED_METHODS` (`src/clippy.rs`) is Clippy's `disallowed-methods` for every `shell` and `apps` crate: starting
+threads (`std::thread::spawn`, `std::thread::Builder::spawn`), `block_on` of the executors in use, the functions of
+`std::fs`, and the blocking bus calls of `zbus::blocking`, so that a UI thread has no blocking call within reach. Files
+and bus calls go through the toolkit's task API and its async bus API instead. Blocking proxies generated by zbus's
+`proxy` macro are not on the list; their constructors and calls go through the listed `zbus::blocking` items.
+
+A `shell` or `apps` crate whose `clippy.toml`, next to its manifest, is missing or differs from the list is a problem
+of the rules like the others, with the line `<layer> disallowed_methods <crate> clippy.toml` in the remaining-work
+list. Once a crate's banned calls are gone, `--write-clippy <crate>` writes its file and `--write-remaining` drops its
+line; without crate names, `--write-clippy` writes the file of every `shell` and `apps` crate. A name that is not a
+`shell` or `apps` crate fails and writes nothing.
+
+## The graph
+
+`--graph` prints a DOT graph with one cluster per layer. Comment lines above it give the crate count per layer and every
+edge the layer table forbids, with its kind. Build and dev edges are labelled and forbidden edges drawn red.
+`graph/layers.dot` is a committed snapshot. The check, without `--graph`, and `cupertino dev layers` fail when it
+differs from the workspace, with the problem `stale_graph`; regenerate it after a dependency or layer change:
 
 ```sh
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
 ```
 
-The comparison leaves out the two count lines (`// N crates, M internal dependencies` and `// per layer: ...`). A branch
-keeps main's count lines as they are, and the merge queue regenerates the snapshot after each merge, so two branches
-that each add a crate do not conflict on them.
+The comparison leaves out the two count lines (`// N crates, M internal dependencies` and `// per layer: ...`), so two
+branches that each add a crate do not conflict on them.
 
-## Design
+## Library
 
-All rules are constants in `src/lib.rs`; nothing is read from a configuration file.
-
-`RULES` has twelve layers. The crates that declare each layer (names without the `cupertino-` prefix):
-
-| Layer | May depend on | Crates |
-|---|---|---|
-| `foundation` | `foundation` | animation, apps, assets, build-info, defaults, diagnostic-events, filepicker, geometry, glyph, icons, key-bindings, keyboard, menu-model, modifiers, theme, thumbnails, typeahead, xkbcommon |
-| `models` | `foundation`, `models` | displays, effects, input, overview, render-api, scene, stage, wm |
-| `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
-| `protocol` | `foundation`, `protocol` | app-protocols, login-ipc, protocols |
-| `transport` | `foundation`, `platform`, `protocol`, `transport` | protocol-app, shell-client, wayland-client |
-| `render` | `foundation`, `platform`, `render` | cursor, decorations, glass |
-| `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
-| `core` | `foundation`, `models`, `platform`, `protocol`, `render` | server |
-| `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
-| `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
-| `apps` | `foundation`, `models`, `protocol`, `transport`, `ui` | files, settings |
-| `tools` | all but `core`, `shell`, `services`, `apps` | cli, diagnostics, layers |
-
-Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the icon loader are `foundation`, so the toolkit can use them.
-
-`DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
-check even when exceptions excuse its edges. The licence check requires a crate whose `license` starts with `MPL-2.0`
-to have a `LICENSE` file with the MPL-2.0 text, and rejects normal dependencies on workspace crates under GPL or AGPL.
-It also follows resolved normal and build dependencies through external crates and requires an accepted SPDX licence expression.
-An `OR` expression passes if at least one option is accepted; every term of an `AND` expression must be accepted.
-Missing or unrecognised external licences fail, except for the vendored xkbcommon licence text identified by its hash.
-Dev dependencies do not count in these checks. Required toolkit and transport roots must be present and licensed under MPL-2.0.
-
-`DENIED_CRATES` forbids any chain of normal dependencies, external crates
-included, from `cupertino-wayland-client` to `cupertino-protocols` or another compositor's protocol crates: the public
-transport speaks standard protocols only. Every toolkit crate is also denied `cupertino-protocols` and
-`cupertino-shell-client`.
-
-`EXCEPTIONS` holds `Exception` values: `from`, `to`, the
-dependency `kind` it excuses, an owner `area` (compositor, rendering, design, apps, services, packaging), a `reason`
-and a `tracking`:
-
-- `Permanent`: a reviewed edge that stays, such as a dev-only edge for tests or an approved render primitive. Today:
-  none.
-- `Issue(n)`: migration debt the issue removes. Today: #21 settings → alsa.
-
-An entry that no longer matches an edge of its kind is an error, so the list only shrinks. A crate without a declared
-layer, or with a layer that has no row in `RULES`, stops the check.
-
-Library: `Layer` (`ALL`, `name`, `from_name`), `Kind`, `allows(rules, from, to)`, `Edge`, `edges(layers, deps)`,
-`Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
-`exception(exceptions, edge)`, `Problem` (with `kind()`, a stable snake_case name, `from()` and `to()`),
-`denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `licence_problems(licences, deps, has_text)`,
-`is_mpl`, `is_gpl`, `dot(…)`, `REQUIRED_MPL_ROOTS`.
+`Layer` (`ALL`, `name`, `from_name`, ordered from the bottom), `Kind`, `RULES`, `allows(rules, from, to)`,
+`allows_edge(rules, edge)`, `Edge`, `edges(layers, deps)`, `check(rules, edges, facades)`,
+`external_problems(layers, deps, externals)`, `reaches_up(edges)`, `crate_paths(deps, start, targets)`, `matches`,
+`is_licence`, `Facade`, `External`, `Problem` (with `kind()`, a stable snake_case name, `from()`, `to()`, `layer()` and
+`line()`, its line in the remaining-work file), `dot(…)`, `clippy_toml(methods)`, and the constants above.
 
 The whole check of a checkout is `check_workspace(root)`, or `check_workspace_with(root, cargo, policy)` with the
-command that runs Cargo (its environment is the caller's) and a `Policy` (`rules`, `exceptions`, `denied_paths`,
-`denied_crates`, `mpl_roots`; `POLICY` is this repository's). It runs `cargo metadata` in `root`, without the
-dependencies and then resolved (`--all-features --locked --offline`), and returns `Findings`: each crate's layer, the
-edges, the layer, path and workspace licence `problems`, and the `closure` problems of the MPL-2.0 crates, with
-`is_clean()`, `all_problems()`, `summary()`, `dot()` and `by_layer()`. A Cargo that cannot start, a `cargo metadata`
-that fails and a crate without a layer are a `LayersError` (`Cargo`, `Metadata`, `Manifest`), never a panic. The
-binary is this call on the working directory.
+command that runs Cargo (its environment is the caller's) and a `Policy` (`POLICY` is this repository's). It returns
+`Findings`: the workspace root, each crate's layer, the edges, every problem of the rules, the lines of the
+remaining-work file, the problems of those lines and of the snapshots, with `unlisted()`, `all_problems()`,
+`is_clean()`, `summary()`, `dot()`, `by_layer()`, `remaining_file()`, `write_remaining()` and `write_clippy(crates)`. A Cargo
+that cannot start, a `cargo metadata` that fails and a crate without a layer are a `LayersError` (`Cargo`, `Metadata`,
+`Manifest`), never a panic. The binary is this call on the working directory.

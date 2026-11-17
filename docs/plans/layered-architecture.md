@@ -15,8 +15,8 @@ Updated by the lead at every merge.
 
 | | |
 |---|---|
-| Current wave | 4 (not started) |
-| Running tasks | none |
+| Current wave | 4 |
+| Running tasks | W4.2–W4.4 (one implementer, in order), W4.T for `cursor decorations glass` |
 | Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (134 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -675,6 +675,9 @@ The toolkit is the foundation everything above stands on; its runtime and API ar
 #### W4.1 Conformance of `render` (S)
 
 **Owns** layer lines and dependencies of `cursor decorations glass`. **After** W3.close.
+
+- [x] (414c83ac9) No `render` line was left in `remaining.txt`; the one edge to `cupertino-decorations` is from
+      `cupertino-polkit-agent`, a `shell` crate, and goes with W6. No change was needed.
 
 #### W4.2 `cupertino-ui-core` absorbs `cupertino-ui-layout` and `cupertino-ui-platform` (M)
 

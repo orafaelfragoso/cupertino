@@ -13,3 +13,6 @@ cupertino-keyboard = { path = "../cupertino-keyboard" }
 libc = "0.2"
 inotify = { version = "0.11", default-features = false }
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

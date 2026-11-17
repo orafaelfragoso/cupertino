@@ -1027,6 +1027,7 @@ dependencies = [
  "inotify",
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1045,6 +1046,7 @@ dependencies = [
  "rustix 1.1.6",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "tracing-tracy",
@@ -1211,6 +1213,7 @@ dependencies = [
  "png",
  "resvg",
  "rustix 1.1.6",
+ "tempfile",
  "tiny-skia",
 ]
 

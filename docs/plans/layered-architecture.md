@@ -512,7 +512,7 @@ login osd portal screenshot`. **After** W1.3.
 - [x] (50a18e5bd) `cupertino-theme` parses a specification it is given; `cupertino-assets` finds the files
       (`CUPERTINO_THEME_DIR`, `CUPERTINO_SPEC_DIR`, the installed path) and offers theme loading that composes both;
       callers of `Theme::load` and `Theme::from_dir` use it.
-- [ ] Durations, curves and springs of the design are named in `cupertino-theme`; `cupertino-animation` holds the maths. The timing presets moved in 50a18e5bd; the five cubic-bezier constants and the default spring move in W1.6.
+- [x] (7ecd5785a) Durations, curves and springs of the design are named in `cupertino-theme`; `cupertino-animation` holds the maths. The timing presets moved in 50a18e5bd; the five cubic-bezier constants and the default spring move in W1.6.
 
 #### W1.3 The `system` layer (S)
 
@@ -548,7 +548,7 @@ than one crate. **Touches** `menubar server` (dev-dependencies), `contracts.yaml
 
 **Owns** `animation geometry glyph menu-model keyboard theme`. **After** W1.1, W1.2. (`glyph` joins `graphics` in W2.4.)
 
-- [ ] Each passes the purity check; whatever does not moves to its caller or to a `system` crate, listed in the report.
+- [x] (7ecd5785a) Each passes the purity check; whatever does not moves to its caller or to a `system` crate, listed in the report.
 
 #### W1.7 Keyboard layouts from libxkbcommon (M, behaviour change)
 

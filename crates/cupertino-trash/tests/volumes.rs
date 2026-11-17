@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 const SHORT: Duration = Duration::from_millis(150);
@@ -55,12 +56,26 @@ fn wait_until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
+/// A look at the volumes of `trash` on a thread of the test's, which waits on the silent volume until it is released;
+/// returned once it does.
+fn look_out(trash: &Trash, calls: &AtomicUsize) -> JoinHandle<()> {
+    let out = trash.clone();
+    let looking = std::thread::spawn(move || {
+        out.silent_volumes();
+    });
+    wait_until("the look never reached the volume", || {
+        calls.load(Ordering::SeqCst) == 1
+    });
+    looking
+}
+
 #[test]
 fn a_volume_that_does_not_answer_is_named_holds_nothing_and_is_not_asked_again_while_out() {
     let t = Tree::new();
     let silent = volume_with_item(&t, "silent");
     let trash = t.trash().with_mounts(vec![silent.clone()]);
     let (trash, release, calls) = with_silent_volume(trash, silent.clone());
+    let out = look_out(&trash, &calls);
     assert_eq!(trash.silent_volumes(), std::slice::from_ref(&silent));
     assert_eq!(trash.silent_volumes(), std::slice::from_ref(&silent));
     assert!(trash.volume_trash_dirs().is_empty());
@@ -69,9 +84,8 @@ fn a_volume_that_does_not_answer_is_named_holds_nothing_and_is_not_asked_again_w
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // the volume answers after all; the look that was out ends and gives the mount point back
     drop(release);
-    wait_until("the volume never came back", || {
-        trash.silent_volumes().is_empty()
-    });
+    out.join().unwrap();
+    assert!(trash.silent_volumes().is_empty());
 }
 
 #[test]
@@ -80,13 +94,15 @@ fn the_volumes_after_a_silent_one_still_answer_and_list() {
     let silent = volume_with_item(&t, "silent");
     let live = volume_with_item(&t, "live");
     let trash = t.trash().with_mounts(vec![silent.clone(), live.clone()]);
-    let (trash, release, _) = with_silent_volume(trash, silent.clone());
+    let (trash, release, calls) = with_silent_volume(trash, silent.clone());
+    let out = look_out(&trash, &calls);
     assert_eq!(trash.silent_volumes(), [silent]);
     assert_eq!(trash.volume_trash_dirs(), [own_trash(&live)]);
     assert!(trash.volumes_hold_items());
     assert_eq!(trash.volume_entries().len(), 1);
     assert_eq!(trash.list_volumes().unwrap().len(), 1);
     drop(release);
+    out.join().unwrap();
 }
 
 #[test]
@@ -94,7 +110,8 @@ fn emptying_reports_a_silent_volume_by_its_mount_point_and_still_empties_the_hom
     let t = Tree::new();
     let silent = volume_with_item(&t, "silent");
     let trash = t.trash().with_mounts(vec![silent.clone()]);
-    let (trash, release, _) = with_silent_volume(trash, silent.clone());
+    let (trash, release, calls) = with_silent_volume(trash, silent.clone());
+    let out = look_out(&trash, &calls);
     let home = trash.trash(&t.file("a.txt", "x")).unwrap();
     let emptied = trash.empty();
     assert_eq!(emptied.deleted, 1);
@@ -107,6 +124,7 @@ fn emptying_reports_a_silent_volume_by_its_mount_point_and_still_empties_the_hom
     assert!(!home.file_path().exists());
     assert!(own_trash(&silent).join("files/v.txt").exists());
     drop(release);
+    out.join().unwrap();
 }
 
 #[test]
@@ -174,20 +192,12 @@ fn the_entries_and_the_list_are_the_home_trashs_then_the_volumes() {
     assert!(trash.list_all().is_err());
 }
 
-fn watched(trash: Trash) -> (Arc<Look>, Receiver<()>) {
-    let (changed, rx) = mpsc::channel();
-    let changed = Mutex::new(changed);
-    let look = Look::new(trash, move || {
-        let _ = changed.lock().unwrap().send(());
-    });
-    (look, rx)
-}
-
 #[test]
 fn a_look_answers_from_the_home_trash_at_once() {
     let t = Tree::new();
-    let (look, _) = watched(t.trash());
+    let look = Look::new(t.trash());
     assert_eq!(look.trash().home_trash(), t.home_trash());
+    assert!(look.next().is_none(), "nothing asked for a look");
     assert!(!look.looking());
     assert!(!look.volumes_held());
     assert!(!look.full());
@@ -196,18 +206,22 @@ fn a_look_answers_from_the_home_trash_at_once() {
 }
 
 #[test]
-fn a_look_reports_a_change_of_the_volumes_answer_and_then_answers_from_it() {
+fn a_look_says_whether_the_volumes_answer_changed_and_is_then_answered_from() {
     let t = Tree::new();
     let live = volume_with_item(&t, "live");
-    let (look, changed) = watched(t.trash().with_mounts(vec![live.clone()]));
+    let look = Look::new(t.trash().with_mounts(vec![live.clone()]));
     // nothing is known until the first look has come back
     assert!(!look.full());
-    changed.recv_timeout(LONG).unwrap();
+    let first = look.next().expect("the look full asked for");
+    assert!(look.looking());
+    assert!(first(), "the volume holds an item");
     assert!(look.volumes_held());
+    assert!(look.full());
+    assert!(!look.next().unwrap()(), "the same answer");
     // the volume is emptied; the next look says so
     std::fs::remove_file(own_trash(&live).join("files/v.txt")).unwrap();
-    look.look();
-    changed.recv_timeout(LONG).unwrap();
+    assert!(look.volumes_hold());
+    assert!(look.next().unwrap()());
     assert!(!look.volumes_held());
     assert!(!look.looking());
 }
@@ -215,26 +229,35 @@ fn a_look_reports_a_change_of_the_volumes_answer_and_then_answers_from_it() {
 #[test]
 fn what_an_emptying_knows_can_be_set_without_a_look() {
     let t = Tree::new();
-    let (look, _) = watched(t.trash());
+    let look = Look::new(t.trash());
     for held in [true, false] {
         look.set_volumes_held(held);
         assert_eq!(look.volumes_held(), held);
         assert!(!look.looking());
+        assert!(look.next().is_none());
     }
 }
 
 #[test]
-fn a_look_at_a_silent_volume_is_not_started_twice() {
+fn a_look_at_a_silent_volume_is_not_handed_out_twice() {
     let t = Tree::new();
     let silent = volume_with_item(&t, "silent");
     let trash = t.trash().with_mounts(vec![silent.clone()]);
     let (trash, release, calls) = with_silent_volume(trash, silent);
-    let (look, _) = watched(trash);
+    let look = Look::new(trash);
     look.look();
+    let first = look.next().expect("the look asked for");
+    let out = std::thread::spawn(first);
+    wait_until("the look never reached the volume", || {
+        calls.load(Ordering::SeqCst) == 1
+    });
     look.look();
+    assert!(look.next().is_none(), "a look is out");
     assert!(look.looking());
     drop(release);
-    // the look ends once the volume answers
-    wait_until("the look never ended", || !look.looking());
+    // the look ends once the volume answers; the one asked for meanwhile is handed out then
+    assert!(out.join().unwrap(), "the volume holds an item");
+    assert!(!look.looking());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(look.next().is_some());
 }

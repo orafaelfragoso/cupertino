@@ -875,6 +875,14 @@ impl Host for AppHost {
         self.trash.full()
     }
 
+    fn look_at_trash(&mut self) -> Option<kit::TrashLook> {
+        let look = self.trash.next()?;
+        match cupertino_kit::task::io(cupertino_trash::LOOK_DEADLINE, look, |changed| changed) {
+            Command::Perform(look) => Some(look),
+            _ => None,
+        }
+    }
+
     /// Emptied on a thread of its own: a big trash takes a while to delete.
     fn empty_trash(&mut self) -> kit::Emptying {
         let (sender, receiver) = async_channel::bounded(1);
@@ -1158,12 +1166,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let _conf_watch = watch_conf(conf_path.as_ref(), messages.clone());
     let _trash_watch = watch_trash(messages.clone());
     listen_badges(messages.clone());
-    let trash = {
-        let messages = messages.clone();
-        cupertino_trash::Look::new(cupertino_trash::Trash::new(), move || {
-            let _ = messages.send_blocking(Message::TrashChanged);
-        })
-    };
+    let trash = cupertino_trash::Look::new(cupertino_trash::Trash::new());
     let surfaces = Rc::new(RefCell::new(Surfaces::default()));
     let initial = (
         observed.dark,

@@ -252,6 +252,9 @@ pub enum AppAction {
 /// An `org.freedesktop.Application.Activate` call under way ([`Host::dbus_activate`]): whether it succeeded.
 pub type BusCall = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
 
+/// A look at the mounted volumes' trash under way ([`Host::look_at_trash`]): ends in whether their answer changed.
+pub type TrashLook = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+
 /// The trash being emptied ([`Host::empty_trash`]): ends in what the alert says about the items that could not be
 /// deleted, or in `None` when everything went.
 pub type Emptying = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
@@ -372,8 +375,13 @@ pub trait Host {
     /// A window set its own icon, or removed it; `apps` are its application id and the dock's key for it.
     fn window_icon(&mut self, apps: [String; 2], icon: WindowIcon);
     fn window_closed(&mut self, id: u32);
-    /// Whether the trash holds anything.
+    /// Whether the trash holds anything, as far as is known now.
     fn trash_full(&mut self) -> bool;
+    /// The next look at the mounted volumes' trash, away from the model, unless one is still out or none was asked
+    /// for; the model asks [`Host::trash_full`] again when it ends in a change.
+    fn look_at_trash(&mut self) -> Option<TrashLook> {
+        None
+    }
     /// Delete everything in the trash, the home trash and the mounted volumes', away from the model.
     fn empty_trash(&mut self) -> Emptying {
         Box::pin(async { None })
@@ -429,6 +437,8 @@ pub enum Message {
     TrashEmptied(Option<String>),
     /// Something was put in the trash or taken out of it.
     TrashChanged,
+    /// A look at the mounted volumes' trash ([`Host::look_at_trash`]) ended; whether their answer changed.
+    TrashLooked(bool),
     Wake(u64),
     /// `dock.conf` changed on disk.
     ConfChanged,
@@ -2363,6 +2373,7 @@ impl Model {
             self.session.dock.pointer_moved(self.pointer, screen, now);
         }
         self.session.dock.tick(now);
+        let mut trash_look = None;
         if self
             .trash_checked
             .is_none_or(|at| now - at >= TRASH_CHECK_EVERY)
@@ -2370,6 +2381,7 @@ impl Model {
             self.trash_checked = Some(now);
             self.trash_full = self.host.trash_full();
             self.session.dock.set_trash_full(self.trash_full);
+            trash_look = self.host.look_at_trash();
         }
         // a press held in place on a tile opens its menu; the press is then neither a click nor a drag
         if let Some(id) = self
@@ -2399,6 +2411,9 @@ impl Model {
             }
         }
         let mut commands = self.expire_tokens(now);
+        commands.extend(trash_look.map(|look| {
+            Command::Perform(Box::pin(async move { Message::TrashLooked(look.await) }))
+        }));
         self.ask_folders();
         if self
             .stack
@@ -2747,10 +2762,11 @@ pub fn update(model: &mut Model, message: Message) -> Vec<Command<Message>> {
             }
             Vec::new()
         }
-        Message::TrashChanged => {
+        Message::TrashChanged | Message::TrashLooked(true) => {
             model.trash_checked = None;
             Vec::new()
         }
+        Message::TrashLooked(false) => Vec::new(),
         Message::Wake(generation) => {
             if generation == model.wake_generation {
                 model.wake_at = None;

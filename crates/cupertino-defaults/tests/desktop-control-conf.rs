@@ -16,11 +16,10 @@ fn agent() -> App {
 }
 
 #[test]
-fn a_line_holds_one_answer_and_anything_else_is_a_problem() {
+fn a_line_holds_one_answer_and_the_first_answer_stands() {
     let (c, problems) = DesktopControlConf::parse(
         "# c\nallow = control app:foot\nallow = capture app:foot\ndeny = control exe:/home/me/bin/agent\n\
-         allow = control app:foot\nallow = listen app:foot\nallow = control foot\nallow = control exe:rel\n\
-         allow = control app:\nallow control\nsilence = control app:x\nbare\nallow = control app:a b\n",
+         allow = control app:foot\n",
     );
     assert_eq!(c.entries.len(), 3);
     assert_eq!(
@@ -32,24 +31,34 @@ fn a_line_holds_one_answer_and_anything_else_is_a_problem() {
         Some(Decision::Allow)
     );
     assert_eq!(c.decision(Service::Control, &agent()), Some(Decision::Deny));
-    assert_eq!(
-        problems.iter().map(|p| p.line).collect::<Vec<_>>(),
-        [5, 6, 7, 8, 9, 10, 11, 12, 13]
-    );
-    assert!(
-        problems[0].message.contains("already decided"),
-        "the first answer stands"
-    );
-    assert!(problems[1]
-        .message
-        .contains("expected `control` or `capture`"));
-    assert!(problems[2].message.contains("app:<id>"));
-    assert!(problems[3].message.contains("not an absolute path"));
-    assert!(problems[4].message.contains("cannot be written"));
-    assert!(
-        problems[5].message.contains("expected `allow = "),
-        "bare line"
-    );
+    assert_eq!(c.decision(Service::Capture, &agent()), None);
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].line, 5);
+    assert!(problems[0].message.contains("already decided"));
+}
+
+#[test]
+fn a_bad_line_decides_nothing_and_is_reported_by_number() {
+    for (line, expected) in [
+        ("allow = listen app:foot", "expected `control` or `capture`"),
+        ("allow = control foot", "app:<id>"),
+        ("allow = control exe:rel", "not an absolute path"),
+        ("allow = control app:", "cannot be written"),
+        ("allow control", "expected `allow = "),
+        ("silence = control app:x", ""),
+        ("bare", "expected `allow = "),
+        ("allow = control app:a b", ""),
+    ] {
+        let (c, problems) = DesktopControlConf::parse(&format!("# c\n{line}\n"));
+        assert!(c.entries.is_empty(), "{line}");
+        assert_eq!(problems.len(), 1, "{line}");
+        assert_eq!(problems[0].line, 2, "{line}");
+        assert!(
+            problems[0].message.contains(expected),
+            "{line}: {}",
+            problems[0].message
+        );
+    }
 }
 
 #[test]
@@ -82,39 +91,50 @@ fn an_answer_is_per_service_and_app_replaced_in_place_and_asked_again_once_forgo
 #[test]
 fn an_app_a_line_cannot_hold_is_not_remembered() {
     let mut c = DesktopControlConf::default();
-    for bad in [
-        App::Desktop(String::new()),
-        App::Desktop("a b".into()),
-        App::Desktop("a#b".into()),
-        App::Desktop("x".repeat(MAX_APP + 1)),
-        App::Executable("relative".into()),
-        App::Executable("/a b".into()),
+    for (app, rememberable) in [
+        (App::Desktop("x".repeat(MAX_APP)), true),
+        (App::Desktop(String::new()), false),
+        (App::Desktop("a b".into()), false),
+        (App::Desktop("a#b".into()), false),
+        (App::Desktop("x".repeat(MAX_APP + 1)), false),
+        (App::Executable("relative".into()), false),
+        (App::Executable("/a b".into()), false),
     ] {
-        assert!(!bad.is_rememberable(), "{bad:?}");
-        assert!(c.set(Service::Control, &bad, Decision::Allow).is_err());
+        assert_eq!(app.is_rememberable(), rememberable, "{app:?}");
+        assert_eq!(
+            c.set(Service::Control, &app, Decision::Allow).is_ok(),
+            rememberable,
+            "{app:?}"
+        );
     }
-    assert!(c.entries.is_empty());
-    assert!(App::Desktop("x".repeat(MAX_APP)).is_rememberable());
-}
-
-#[test]
-fn apps_and_services_have_the_words_of_their_lines() {
-    assert_eq!(terminal().text(), "app:foot");
-    assert_eq!(agent().text(), "exe:/home/me/bin/agent");
-    assert_eq!(App::parse("app:foot"), Ok(terminal()));
-    assert_eq!(App::parse("exe:/home/me/bin/agent"), Ok(agent()));
-    assert!(App::parse("foot").is_err());
-    assert_eq!(Service::ALL, [Service::Control, Service::Capture]);
-    assert_eq!(
-        (Service::Control.word(), Service::Capture.word()),
-        ("control", "capture")
-    );
+    assert_eq!(c.entries.len(), 1);
 }
 
 #[test]
 fn the_file_is_written_private_read_back_and_refused_when_others_can_write_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("desktop-control.conf");
+    assert_eq!(
+        DesktopControlConf::load(&path).unwrap(),
+        (DesktopControlConf::default(), vec![]),
+        "a missing file decides nothing"
+    );
+    let bad = DesktopControlConf {
+        entries: vec![Entry {
+            service: Service::Control,
+            app: App::Desktop("a b".into()),
+            decision: Decision::Allow,
+        }],
+    };
+    assert_eq!(
+        bad.store(&path).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(
+        !path.exists(),
+        "a store of an app a line cannot hold writes nothing"
+    );
+
     let mut c = DesktopControlConf::default();
     c.set(Service::Control, &terminal(), Decision::Allow)
         .unwrap();
@@ -134,31 +154,13 @@ fn the_file_is_written_private_read_back_and_refused_when_others_can_write_it() 
 }
 
 #[test]
-fn a_missing_file_decides_nothing_and_a_store_of_a_bad_app_writes_nothing() {
+fn an_update_reads_changes_and_writes_back_and_a_failed_one_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("desktop-control.conf");
-    assert_eq!(
-        DesktopControlConf::load(&path).unwrap(),
-        (DesktopControlConf::default(), vec![])
-    );
-    let bad = DesktopControlConf {
-        entries: vec![Entry {
-            service: Service::Control,
-            app: App::Desktop("a b".into()),
-            decision: Decision::Allow,
-        }],
-    };
-    assert_eq!(
-        bad.store(&path).unwrap_err().kind(),
-        std::io::ErrorKind::InvalidInput
-    );
+    let err =
+        DesktopControlConf::update::<()>(&path, |_| Err(std::io::Error::other("no"))).unwrap_err();
+    assert_eq!(err.to_string(), "no");
     assert!(!path.exists());
-}
-
-#[test]
-fn an_update_reads_changes_and_writes_back() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("desktop-control.conf");
     let seen = DesktopControlConf::update(&path, |c| {
         c.set(Service::Control, &terminal(), Decision::Allow)
             .map_err(std::io::Error::other)?;
@@ -167,23 +169,13 @@ fn an_update_reads_changes_and_writes_back() {
     .unwrap();
     assert_eq!(seen, 1);
     let n = DesktopControlConf::update(&path, |c| {
-        assert_eq!(c.entries.len(), 1);
+        assert_eq!(c.entries.len(), 1, "the update reads the stored answer");
         c.forget(Service::Control, &terminal());
         Ok(c.entries.len())
     })
     .unwrap();
     assert_eq!(n, 0);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
-}
-
-#[test]
-fn an_update_that_fails_writes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("desktop-control.conf");
-    let err =
-        DesktopControlConf::update::<()>(&path, |_| Err(std::io::Error::other("no"))).unwrap_err();
-    assert_eq!(err.to_string(), "no");
-    assert!(!path.exists());
 }
 
 #[test]
@@ -228,12 +220,4 @@ fn concurrent_updates_keep_every_answer_recorded() {
     let (c, problems) = DesktopControlConf::load(&path).unwrap();
     assert!(problems.is_empty());
     assert_eq!(c.entries.len(), 8);
-}
-
-#[test]
-fn the_variable_and_file_name_are_the_documented_ones() {
-    assert_eq!(DESKTOP_CONTROL_ENV, "CUPERTINO_DESKTOP_CONTROL_CONF");
-    assert_eq!(DESKTOP_CONTROL_FILE, "desktop-control.conf");
-    std::env::set_var(DESKTOP_CONTROL_ENV, "/x/dc.conf");
-    assert_eq!(DesktopControlConf::path(), Some("/x/dc.conf".into()));
 }

@@ -1,0 +1,44 @@
+name: Arch job setup
+description: >-
+  In a container job of the CI image, after the checkout: optionally free the runner's unused SDKs, give the build user
+  `ci` the uid of the runner's own user (so the files the runner passes to steps stay writable), hand it the checkout,
+  the toolchain, the cargo home and the compile cache that root steps wrote, and give it a runtime directory. Safe to
+  repeat after another root step (a cache restore). Runs as root; the job's `run` steps then run as `ci`.
+inputs:
+  free-disk:
+    description: Remove the runner VM's SDKs mounted under /host (the job must mount them)
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      if: inputs.free-disk == 'true'
+      shell: bash
+      run: |
+        df -h "$GITHUB_WORKSPACE"
+        find /host -mindepth 2 -maxdepth 2 -exec rm -rf {} +
+        df -h "$GITHUB_WORKSPACE"
+    - name: The build user
+      shell: bash
+      run: |
+        set -euo pipefail
+        uid=$(stat -c %u "$RUNNER_TEMP")
+        gid=$(stat -c %g "$RUNNER_TEMP")
+        if [ "$uid" = 0 ]; then
+          echo "::error::$RUNNER_TEMP is owned by root; the build cannot run as root"
+          exit 1
+        fi
+        if ! getent group "$gid" >/dev/null; then groupadd --gid "$gid" ci-runner; fi
+        if [ "$(id -u ci)" != "$uid" ]; then usermod --uid "$uid" ci; fi
+        if [ "$(id -g ci)" != "$gid" ]; then usermod --gid "$gid" ci; fi
+        mkdir -p /var/cache/sccache
+        # actions/checkout and the cache restores run as root in the container; the build writes in all of these.
+        chown -R ci:"$gid" "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME" /var/cache/sccache /home/ci
+        safe=$(runuser -u ci -- git config --global --get-all safe.directory || true)
+        if ! printf '%s\n' "$safe" | grep -qxF "$GITHUB_WORKSPACE"; then
+          runuser -u ci -- git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        fi
+        # The compositor tests open a Wayland socket in the runtime directory; a container has none of its own.
+        install -d -m 700 -o ci -g "$gid" "/run/user/$uid"
+        echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+        id ci

@@ -1405,6 +1405,18 @@ impl SessionApp {
         }
     }
 
+    /// End the session: the session manager shows the login screen first and then ends it, so the session's picture goes
+    /// straight to the login screen. A session the manager did not start (or an older manager) is ended through logind.
+    fn log_out(&mut self) -> Result<()> {
+        match self.manager.log_out() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("cupertino-login: the session manager did not log out: {e}; asking logind to end the session");
+                Ok(self.logind.terminate_session()?)
+            }
+        }
+    }
+
     /// Ask the session manager to restart, shut down or sleep. A refusal (another user's session is open, an inhibitor) is
     /// reported and the session goes on; any other failure ends the process, which the server restarts.
     fn request_power(&mut self, action: Power) -> Result<()> {
@@ -1489,7 +1501,7 @@ impl SessionApp {
                     eprintln!("cupertino-login: no application left: {}", then.log_name());
                     self.save_open_applications(reopen, &quit);
                     match then {
-                        Action::LogOut => self.logind.terminate_session()?,
+                        Action::LogOut => self.log_out()?,
                         Action::Restart => self.request_power(Power::Restart)?,
                         Action::ShutDown => self.request_power(Power::ShutDown)?,
                         Action::Sleep => unreachable!("sleep does not quit the applications"),

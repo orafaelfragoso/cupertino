@@ -276,6 +276,17 @@ impl LoginManager {
                 source: Box::new(source),
             })
     }
+
+    /// End this session, whose applications have quit (`LogOut`): the manager shows the login screen first, then ends it.
+    pub fn log_out(&self) -> Result<(), Error> {
+        self.connection
+            .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "LogOut", &())
+            .map(drop)
+            .map_err(|source| Error {
+                what: "logging out",
+                source: Box::new(source),
+            })
+    }
 }
 
 #[cfg(test)]

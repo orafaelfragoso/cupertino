@@ -172,7 +172,7 @@ fn input_while_dimmed_ramps_back_to_full_brightness() {
 }
 
 /// While another console has the seat nothing dims or sleeps, however long; back in front the display is on, with
-/// fresh countdowns, and fades in from black. A display that slept before the switch is on again at the return.
+/// fresh countdowns, at full brightness. A display that slept before the switch is on again at the return.
 #[test]
 fn a_session_in_the_background_never_dims_or_sleeps_and_comes_back_awake() {
     let Some(mut h) = Harness::new(short_timers()) else {
@@ -197,7 +197,7 @@ fn a_session_in_the_background_never_dims_or_sleeps_and_comes_back_awake() {
     let shown = h.brightness("after-resume");
     assert!(
         (shown - lit).abs() < 0.5,
-        "faded in to full brightness: {shown} against {lit}"
+        "at full brightness: {shown} against {lit}"
     );
 
     // asleep when the console went elsewhere: on again at the return, without input

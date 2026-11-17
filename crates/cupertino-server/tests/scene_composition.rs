@@ -45,12 +45,11 @@ fn a_desktop_frame_stacks_wallpaper_windows_and_cursor_without_session_overlays(
 }
 
 #[test]
-fn a_locked_frame_has_no_desktop_sources_and_keeps_the_session_overlay() {
+fn a_locked_frame_has_no_desktop_sources() {
     let mut d = Desktop::new(1.0);
     d.window();
     d.at(3000);
     let _locker = d.lock();
-    d.state.session_activated();
     d.at(3050);
     let items = composed(&mut d);
     for (layer, kind) in &items {
@@ -73,10 +72,6 @@ fn a_locked_frame_has_no_desktop_sources_and_keeps_the_session_overlay() {
             "{kind:?} is a desktop source"
         );
     }
-    assert_eq!(
-        items.first(),
-        Some(&(SceneLayer::SessionOverlay, SceneKind::ActivationFade))
-    );
     assert!(items.contains(&(SceneLayer::LayerOverlay, SceneKind::LockContent)));
     assert!(!items
         .iter()

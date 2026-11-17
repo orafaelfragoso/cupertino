@@ -115,7 +115,7 @@ The lines go to stderr, and the QEMU check matches them. The greeter logs the sa
 | `cupertino-login: application did not quit: <app_id> | 45 s passed; interrupt panel shows. |
 | `cupertino-login: force quit: <app_id> (<n> processes) | Force Quit pressed. |
 | `cupertino-login: <log-out\|restart\|shut-down> cancelled while quitting the applications` | Cancel, Escape or a lock on the interrupt panel. |
-| `cupertino-login: no application left: <log-out\|restart\|shut-down> | logind's `TerminateSession` (log out) or the manager's `RequestPower` follows. |
+| `cupertino-login: no application left: <log-out\|restart\|shut-down> | the manager's `LogOut` (log out; logind's `TerminateSession` when the manager does not take it) or `RequestPower` follows. |
 | `cupertino-login: applications not quit before the <action>: <error> | `org.cupertino.Session1` did not answer; the call follows. |
 | `cupertino-login: low battery: <Low\|Critical> at <p> %, notification <id> | Warning posted. |
 | `cupertino-login: low battery cleared, notification <id> withdrawn` | Level back to none. |
@@ -314,7 +314,9 @@ in the checkbox row, which has the focus when the panel shows.
   click from assistive technology (a `CheckBox` node with its checked state) flips it; the countdown goes on. Confirming
   remembers the choice, cancelling forgets a change. See [Reopening applications](#reopening-applications).
 - Sleep asks the session manager at once (`RequestPower`, see below). Without a session manager on the bus (a session another display manager such as GDM or SDDM started) restart, shut down and sleep call logind's `Reboot`, `PowerOff` and `Suspend` instead (not interactive: what the person may not do, or what an inhibitor blocks, is refused and logged like the manager's refusals). Log out, restart and shut down first quit the applications
-  (below); then log out calls logind's `TerminateSession` with this process's session id, and restart and shut down ask the
+  (below); then log out asks the manager (`LogOut`: the login screen takes the console first, then the session ends, so the
+  desktop goes straight to the login screen), or calls logind's `TerminateSession` with this process's session id when the
+  manager does not take it (no manager, or one that did not start the session), and restart and shut down ask the
   manager. The manager refuses a restart or shut down while another user's session is open and the caller is no administrator
   (`OtherUsersLoggedIn`), and while a program holds a block inhibitor (`Inhibited`): the agent logs the refusal and the session
   goes on. Any other failed call ends the process.

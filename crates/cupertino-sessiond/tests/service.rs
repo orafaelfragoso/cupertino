@@ -552,6 +552,8 @@ fn the_packaged_bus_policy_lets_users_call_the_managers_methods_and_nothing_else
         ("RequestPower", Some(ACCESS_DENIED)),
         ("SwitchToLoginWindow", Some(ACCESS_DENIED)),
         ("SessionReady", Some(ACCESS_DENIED)),
+        ("SessionPrepared", Some(ACCESS_DENIED)),
+        ("LogOut", Some(ACCESS_DENIED)),
         ("SetSystemAccessibility", Some(ACCESS_DENIED)),
         ("CanSetSystemAccessibility", None),
     ] {

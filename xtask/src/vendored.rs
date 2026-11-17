@@ -3,13 +3,18 @@
 //! Each tree holds `PATCHES.md`, which lists the series in order, `patches/` with one unified diff per change, and
 //! `UPSTREAM.sha256`, the sha256 of every file of the upstream release in `sha256sum` format. The check reads the tree
 //! as git would track it into memory, reverses the patches from the last to the first, and compares the result with
-//! the recorded hashes. It fetches nothing and writes nothing.
+//! the recorded hashes, whose own sha256 is pinned in [`TREES`]. It fetches nothing and writes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// The vendored trees, relative to the repository root.
-pub const TREES: [&str; 1] = ["third-party/smithay"];
+/// The vendored trees, relative to the repository root, each with the sha256 of its `UPSTREAM.sha256`, so that a
+/// file and its recorded hash cannot be changed together. A new upstream release changes the tree's constant here in
+/// the same commit as its `UPSTREAM.sha256`.
+pub const TREES: [(&str, &str); 1] = [(
+    "third-party/smithay",
+    "da8143355b4e881d4885d524ce8842d158da01c5af6624ca6494e1355d7d0e3f",
+)];
 
 /// The series' own files in a tree, which are not part of the upstream release.
 const LIST: &str = "PATCHES.md";
@@ -18,7 +23,7 @@ const PATCH_DIRECTORY: &str = "patches/";
 
 /// Whether a change to `path` (relative to the repository root) needs the check.
 pub fn touches(path: &str) -> bool {
-    TREES.iter().any(|tree| {
+    TREES.iter().any(|(tree, _)| {
         path.strip_prefix(tree)
             .is_some_and(|rest| rest.starts_with('/'))
     })
@@ -28,9 +33,9 @@ pub fn touches(path: &str) -> bool {
 pub fn problems(root: &Path) -> Result<Vec<String>, String> {
     let visible = crate::gate::visible_paths(root)?;
     let mut problems = Vec::new();
-    for tree in TREES {
+    for (tree, pin) in TREES {
         problems.extend(
-            tree_problems(root, tree, &visible)
+            tree_problems(root, tree, pin, &visible)
                 .unwrap_or_else(|error| vec![format!("{tree}: {error}")]),
         );
     }
@@ -49,6 +54,7 @@ pub fn summary(problems: &[String]) -> String {
 fn tree_problems(
     root: &Path,
     tree: &str,
+    pin: &str,
     visible: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let prefix = format!("{tree}/");
@@ -105,6 +111,14 @@ fn tree_problems(
 
     let hashes = std::fs::read_to_string(root.join(tree).join(HASHES))
         .map_err(|error| format!("{HASHES}: {error}"))?;
+    let digest = crate::gate::digest(hashes.as_bytes());
+    if digest != pin {
+        problems.push(format!(
+            "{tree}/{HASHES}: its sha256 is {digest}, but xtask/src/vendored.rs pins {pin}: the recorded hashes of \
+             the upstream release change only with a new upstream release, whose commit changes the constant in \
+             TREES too"
+        ));
+    }
     let expected = parse_hashes(&hashes).map_err(|error| format!("{HASHES}: {error}"))?;
     for (rel, hash) in &expected {
         match files.get(rel) {

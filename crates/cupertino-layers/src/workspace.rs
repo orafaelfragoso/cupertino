@@ -13,7 +13,7 @@ use crate::{
     check, clippy_toml, crate_paths, dot, edges, external_problems, is_licence, matches, sources,
     without_counts, Dep, Edge, External, Facade, Kind, Layer, Problem, Rules, DISALLOWED_METHODS,
     ENFORCED, EXTERNAL_CRATES, FACADES, GRAPH_SNAPSHOT, IMPURE, PURE_LAYERS, REMAINING, RULES,
-    WINDOW_SYSTEM,
+    THREADLESS_LAYERS, WINDOW_SYSTEM,
 };
 
 /// What a workspace is checked against.
@@ -28,6 +28,8 @@ pub struct Policy {
     /// The layers whose sources must be pure, and the standard library modules they must not use.
     pub pure_layers: &'static [Layer],
     pub impure: &'static [&'static str],
+    /// The layers whose crates start no threads in their `src/`.
+    pub threadless_layers: &'static [Layer],
     /// What the `clippy.toml` of each `shell` and `apps` crate disallows.
     pub disallowed_methods: &'static [(&'static str, &'static str)],
 }
@@ -41,6 +43,7 @@ pub const POLICY: Policy = Policy {
     external_crates: EXTERNAL_CRATES,
     pure_layers: PURE_LAYERS,
     impure: IMPURE,
+    threadless_layers: THREADLESS_LAYERS,
     disallowed_methods: DISALLOWED_METHODS,
 };
 
@@ -257,6 +260,19 @@ pub fn check_workspace_with(
                         layer,
                         file: file.clone(),
                         what,
+                    });
+                }
+            }
+        }
+        if policy.threadless_layers.contains(&layer) {
+            for file in sources::rust_files(dir, &dir.join("src")) {
+                let src = std::fs::read_to_string(dir.join(&file)).unwrap_or_default();
+                for call in sources::thread_starts(&src) {
+                    problems.push(Problem::StartsThread {
+                        krate: name.clone(),
+                        layer,
+                        file: file.clone(),
+                        call,
                     });
                 }
             }

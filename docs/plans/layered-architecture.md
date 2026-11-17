@@ -16,7 +16,7 @@ Updated by the lead at every merge.
 | | |
 |---|---|
 | Current wave | 4 |
-| Running tasks | W4.2–W4.4 (one implementer, in order), W4.T for `cursor decorations glass` |
+| Running tasks | W4.5 |
 | Enforced layers | foundation, graphics, models, protocol, transport, testing; system after W4.5 (134 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 3 |
@@ -684,16 +684,23 @@ The toolkit is the foundation everything above stands on; its runtime and API ar
 **Owns** `ui-core ui-layout ui-platform`. **Touches** `kit ui-controls ui-test ui-atspi ui-wayland polkit-agent`.
 **After** W3.close.
 
+- [x] (bb146d298) `cupertino-ui-layout` and `cupertino-ui-platform` are `cupertino_ui_core::{layout, platform}`; their
+      directories are gone.
+
 #### W4.3 `cupertino-ui-render` absorbs `cupertino-ui-gpu` (S)
 
 **Owns** `ui-render ui-gpu`, the `cupertino-ui-gpu` entry in the root `Cargo.toml` profiles. **Touches** `kit
 ui-wayland`. **After** W4.2.
 
-- [ ] The two renderers are modules of one crate; their agreement tests still run.
+- [x] (bb146d298) The two renderers are modules of one crate (`cupertino_ui_render::gpu`). Neither had agreement tests
+      left after the suite restart; W4.T writes them.
 
 #### W4.4 `cupertino-ui-wayland` absorbs `cupertino-ui-menus` and `cupertino-ui-atspi` (S)
 
 **Owns** `ui-wayland ui-menus ui-atspi`. **Touches** `kit files login polkit-agent menubar`. **After** W4.3.
+
+- [x] (bb146d298) `cupertino-ui-menus` and `cupertino-ui-atspi` are `cupertino_ui_wayland::{menus, atspi}`; their
+      directories are gone.
 
 #### W4.5 Kit runtime: re-entrant, tasks, shared caches (L)
 
@@ -779,6 +786,9 @@ W4.7 step 1 (its approved types).
 #### W4.T Tests of wave 4's crates
 
 `cursor decorations glass kit ui-core ui-controls ui-text ui-render ui-wayland ui-test ui-abi`, as in W1.T.
+
+- [x] (1d306b71b) `cursor decorations glass`: 47 public tests; the crates had none in `src/`.
+- [ ] The `ui` crates and `kit`, once W4.8 is merged; `ui-render` gains the agreement test of its two renderers.
 
 #### W4.close (lead)
 

@@ -102,6 +102,6 @@ fn the_device_agrees_with_the_cpu_reference() {
     let quality = psnr(&device, &reference);
     assert!(
         quality > 40.0,
-        "the device differs from the reference: {quality} dB"
+        "the device differs from the CPU renderer: {quality} dB"
     );
 }

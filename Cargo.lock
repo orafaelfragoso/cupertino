@@ -1242,7 +1242,9 @@ dependencies = [
  "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
+ "libc",
  "tiny-skia",
+ "zbus",
 ]
 
 [[package]]

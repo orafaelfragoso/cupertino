@@ -189,6 +189,7 @@ Every id, where it comes from, and how. The table matches `grep -rn 'diag::event
 | `power.suspend.failed` | error | `cupertino-server`, `cupertino-sessiond` | a sleep did not happen: the idle policy's (`reason`), or the login screen's that logind failed |
 | `power.inhibit.failed` | warn | `cupertino-server` | logind gave no sleep delay inhibitor |
 | `toolkit.renderer.fallback` | warn | any toolkit process | a process or surface that wanted the GPU draws on the CPU (`program`, `scope`: `process`, `surface` or `loss`, `reason`); a purge is not one |
+| `toolkit.task.overdue` | warn | any toolkit process | an I/O task ran past the deadline its caller named (`instance`, `deadline` in milliseconds, `site`), once a task |
 | `login.power.failed` | error | `cupertino-sessiond` | logind failed to restart or shut down (`action`) |
 | `login.auth.failed` | warn | `cupertino-sessiond` | PAM refused an authentication (`service`, `stage`, `error`, `outcome`, `failures`); never the account |
 | `login.session.start_failed` | error | `cupertino-sessiond` | a session could not be started at `stage` |

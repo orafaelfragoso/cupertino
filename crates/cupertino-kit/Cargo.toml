@@ -21,6 +21,8 @@ cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
+libc = "0.2"
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 [dev-dependencies]
 cupertino-capture = { path = "../cupertino-capture" }

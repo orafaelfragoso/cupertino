@@ -1,11 +1,12 @@
 //! Kit instances: the parts of a process that each run Kit on a UI thread of their own, as the components of a shell
 //! host do. What differs between instances is theirs, never the process's: a thread records its diagnostic events in
-//! the scope of the instance it runs for.
+//! the scope of the instance it runs for, and the work it hands to [`task`](crate::task) runs for that instance too.
 
 use cupertino_diagnostic_events as diag;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 thread_local! {
@@ -21,6 +22,8 @@ struct Shared {
     name: Box<str>,
     /// Where its diagnostic events go; `None` records them as the process's.
     diag: Option<diag::Scope>,
+    /// Its tasks running on the I/O pool now, changed only under the pool's lock.
+    io_running: AtomicUsize,
 }
 
 impl fmt::Debug for Instance {
@@ -44,6 +47,7 @@ impl Instance {
         Instance(Arc::new(Shared {
             name: area.into(),
             diag: Some(diag::Scope::new(area)),
+            io_running: AtomicUsize::new(0),
         }))
     }
 
@@ -52,6 +56,7 @@ impl Instance {
         Instance(Arc::new(Shared {
             name: diag::profile::program().into(),
             diag: None,
+            io_running: AtomicUsize::new(0),
         }))
     }
 
@@ -76,6 +81,11 @@ impl Instance {
 
     pub fn name(&self) -> &str {
         &self.0.name
+    }
+
+    /// Its tasks running on the I/O pool now.
+    pub(crate) fn io_running(&self) -> &AtomicUsize {
+        &self.0.io_running
     }
 }
 

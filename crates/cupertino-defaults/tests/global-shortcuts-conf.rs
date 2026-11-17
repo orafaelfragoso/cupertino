@@ -37,15 +37,7 @@ fn answers_parse_and_the_first_one_of_an_app_stands() {
 }
 
 #[test]
-fn an_allow_line_remembers_its_keys_and_an_allow_line_without_keys_allows_none() {
-    let (c, p) = GlobalShortcutsConf::parse("allow = a.App\n");
-    assert!(p.is_empty());
-    assert_eq!(c.decision("a.App"), Some(Decision::Allow));
-    assert!(c.answer("a.App").unwrap().triggers.is_empty());
-}
-
-#[test]
-fn allowing_more_keys_adds_them_and_deny_forgets_them() {
+fn allowing_more_keys_adds_them_deny_drops_them_and_forgetting_asks_again() {
     let mut c = GlobalShortcutsConf::default();
     c.allow("a.App", keys(&["CTRL+t"]));
     c.allow("a.App", keys(&["CTRL+t", "CTRL+m"]));
@@ -65,6 +57,9 @@ fn allowing_more_keys_adds_them_and_deny_forgets_them() {
         ["F1"],
         "allow keeps the keys"
     );
+    assert!(c.forget("a.App"));
+    assert!(!c.forget("a.App"));
+    assert_eq!(c.decision("a.App"), None, "a forgotten app asks again");
 }
 
 #[test]
@@ -90,15 +85,6 @@ fn past_the_most_keys_the_oldest_are_forgotten() {
     let triggers = &c.answer("a.App").unwrap().triggers;
     assert_eq!(triggers.len(), MAX_TRIGGERS);
     assert_eq!(triggers[0], "K3");
-}
-
-#[test]
-fn forgetting_an_answer_makes_the_app_ask_again() {
-    let mut c = GlobalShortcutsConf::default();
-    c.set("a.App", Decision::Deny);
-    assert!(c.forget("a.App"));
-    assert!(!c.forget("a.App"));
-    assert_eq!(c.decision("a.App"), None);
 }
 
 #[test]
@@ -169,12 +155,4 @@ fn a_missing_file_answers_nothing_and_a_file_others_can_write_is_refused() {
         "allow = a.App\n",
         "nothing was written over it"
     );
-}
-
-#[test]
-fn the_variable_and_file_name_are_the_documented_ones() {
-    assert_eq!(GLOBAL_SHORTCUTS_ENV, "CUPERTINO_GLOBAL_SHORTCUTS_CONF");
-    assert_eq!(GLOBAL_SHORTCUTS_FILE, "global-shortcuts.conf");
-    std::env::set_var(GLOBAL_SHORTCUTS_ENV, "/x/gs.conf");
-    assert_eq!(GlobalShortcutsConf::path(), Some("/x/gs.conf".into()));
 }

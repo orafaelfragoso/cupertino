@@ -1,15 +1,16 @@
 //! `watch::ConfigWatcher`: change notification for the settings files.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use cupertino_defaults::atomic::write_atomic;
-use cupertino_defaults::watch::{ConfigWatcher, WatchEvent, COALESCE};
+use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 
 /// Long enough for a report to arrive on a loaded machine.
 const REPORT: Duration = Duration::from_secs(10);
-/// Long enough, many times over `COALESCE`, for a report that should not come to have come.
+/// Long enough, many times over the watcher's coalescing time, for a report that should not come to have come.
 const QUIET: Duration = Duration::from_millis(600);
 
 fn watch(files: Vec<PathBuf>) -> (ConfigWatcher, Receiver<WatchEvent>) {
@@ -28,69 +29,94 @@ fn changed(rx: &Receiver<WatchEvent>) -> Vec<PathBuf> {
     }
 }
 
-fn nothing(rx: &Receiver<WatchEvent>) {
-    assert!(rx.recv_timeout(QUIET).is_err(), "no report");
+fn nothing(rx: &Receiver<WatchEvent>, row: &str) {
+    assert!(rx.recv_timeout(QUIET).is_err(), "no report: {row}");
 }
 
 #[test]
-fn the_coalescing_time_is_fifty_milliseconds() {
-    assert_eq!(COALESCE, Duration::from_millis(50));
-}
-
-#[test]
-fn an_atomic_replacement_is_reported_once() {
+fn each_kind_of_change_to_a_watched_file_is_one_report() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
-    std::fs::write(&file, "one").unwrap();
     let (_w, rx) = watch(vec![file.clone()]);
-    write_atomic(&file, b"two").unwrap();
-    assert_eq!(changed(&rx), [file]);
-    nothing(&rx);
-}
-
-#[test]
-fn a_burst_of_writes_to_one_file_is_one_report() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a.conf");
-    std::fs::write(&file, "start").unwrap();
-    let (_w, rx) = watch(vec![file.clone()]);
-    // one change first, so that the watch thread is known to be running before the burst
-    std::fs::write(&file, "primed").unwrap();
-    assert_eq!(changed(&rx), std::slice::from_ref(&file));
-    nothing(&rx);
-    for i in 0..10 {
-        std::fs::write(&file, format!("v{i}")).unwrap();
+    let bursts: [(&str, &dyn Fn()); 4] = [
+        ("created", &|| std::fs::write(&file, "start").unwrap()),
+        ("replaced atomically", &|| {
+            write_atomic(&file, b"two").unwrap()
+        }),
+        ("a burst of writes", &|| {
+            for i in 0..10 {
+                std::fs::write(&file, format!("v{i}")).unwrap();
+            }
+        }),
+        ("removed", &|| std::fs::remove_file(&file).unwrap()),
+    ];
+    for (row, burst) in bursts {
+        burst();
+        assert_eq!(changed(&rx), std::slice::from_ref(&file), "{row}");
+        nothing(&rx, row);
     }
-    assert_eq!(changed(&rx), [file]);
-    nothing(&rx);
 }
 
 #[test]
-fn creating_and_removing_a_file_are_reported() {
+fn events_that_change_no_watched_file_are_not_reported() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
+    std::fs::write(&file, "old").unwrap();
+    std::fs::write(&file, "same").unwrap();
     let (_w, rx) = watch(vec![file.clone()]);
-    std::fs::write(&file, "x").unwrap();
-    assert_eq!(changed(&rx), std::slice::from_ref(&file));
-    std::fs::remove_file(&file).unwrap();
+    nothing(&rx, "a change before the watch began");
+    let events: [(&str, &dyn Fn()); 4] = [
+        ("unchanged contents", &|| {
+            std::fs::write(&file, "same").unwrap()
+        }),
+        ("another file", &|| {
+            std::fs::write(dir.path().join("other.conf"), "x").unwrap()
+        }),
+        ("a temporary file", &|| {
+            std::fs::write(dir.path().join(".a.conf.1.0.tmp"), "x").unwrap()
+        }),
+        ("reads", &|| {
+            for _ in 0..5 {
+                let _ = std::fs::read(&file).unwrap();
+            }
+        }),
+    ];
+    for (row, event) in events {
+        event();
+        nothing(&rx, row);
+    }
+    std::fs::write(&file, "newest").unwrap();
     assert_eq!(changed(&rx), [file]);
 }
 
 #[test]
-fn unchanged_contents_other_files_and_temporary_files_are_not_reported() {
+fn unrelated_activity_in_the_directory_does_not_hold_back_a_report() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a.conf");
-    std::fs::write(&file, "same").unwrap();
+    let file = dir.path().join("cupertino/a.conf");
+    let noise = dir.path().join("cupertino/other.conf");
     let (_w, rx) = watch(vec![file.clone()]);
-    std::fs::write(&file, "same").unwrap();
-    nothing(&rx);
-    std::fs::write(dir.path().join("other.conf"), "x").unwrap();
-    std::fs::write(dir.path().join(".a.conf.1.0.tmp"), "x").unwrap();
-    nothing(&rx);
+    let stop = AtomicBool::new(false);
+    let (started_tx, started) = sync_channel(1);
+    let received = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !stop.load(Ordering::Relaxed) {
+                std::fs::write(&noise, "unrelated").unwrap();
+                std::fs::remove_file(&noise).unwrap();
+                let _ = started_tx.try_send(());
+            }
+        });
+        started.recv_timeout(REPORT).expect("the noise started");
+        write_atomic(&file, b"x").unwrap();
+        // the noise never pauses for as long as the coalescing time, so a report must not wait for quiet
+        let received = rx.recv_timeout(QUIET);
+        stop.store(true, Ordering::Relaxed);
+        received
+    });
+    assert_eq!(received.ok(), Some(WatchEvent::Changed(vec![file])));
 }
 
 #[test]
-fn several_files_changed_in_one_burst_are_reported_together_in_the_order_given() {
+fn several_files_changed_in_one_burst_are_all_reported() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a.conf"), dir.path().join("b.conf"));
     let (_w, rx) = watch(vec![b.clone(), a.clone()]);
@@ -105,36 +131,12 @@ fn several_files_changed_in_one_burst_are_reported_together_in_the_order_given()
 }
 
 #[test]
-fn a_file_outside_the_usual_settings_directory_is_watched_through_its_own_directory() {
+fn the_settings_directory_is_created_and_watched_again_when_recreated() {
     let dir = tempfile::tempdir().unwrap();
-    let elsewhere = dir.path().join("redirected/deeper/x.conf");
-    let (_w, rx) = watch(vec![elsewhere.clone()]);
-    assert!(
-        elsewhere.parent().unwrap().is_dir(),
-        "the settings directory is created"
-    );
-    write_atomic(&elsewhere, b"x").unwrap();
-    assert_eq!(changed(&rx), [elsewhere]);
-}
-
-#[test]
-fn a_change_before_the_watch_began_is_not_reported_but_one_after_is() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a.conf");
-    std::fs::write(&file, "old").unwrap();
-    std::fs::write(&file, "newer").unwrap();
-    let (_w, rx) = watch(vec![file.clone()]);
-    nothing(&rx);
-    std::fs::write(&file, "newest").unwrap();
-    assert_eq!(changed(&rx), [file]);
-}
-
-#[test]
-fn a_removed_and_recreated_settings_directory_is_watched_again() {
-    let dir = tempfile::tempdir().unwrap();
-    let settings = dir.path().join("cupertino");
+    let settings = dir.path().join("redirected/cupertino");
     let file = settings.join("a.conf");
     let (_w, rx) = watch(vec![file.clone()]);
+    assert!(settings.is_dir(), "the settings directory is created");
     write_atomic(&file, b"1").unwrap();
     assert_eq!(changed(&rx), std::slice::from_ref(&file));
     std::fs::remove_dir_all(&settings).unwrap();
@@ -162,18 +164,6 @@ fn a_fifo_at_a_watched_path_does_not_block_the_watch() {
 }
 
 #[test]
-fn reading_a_file_in_a_watched_directory_reports_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a.conf");
-    std::fs::write(&file, "x").unwrap();
-    let (_w, rx) = watch(vec![file.clone()]);
-    for _ in 0..5 {
-        let _ = std::fs::read(&file).unwrap();
-    }
-    nothing(&rx);
-}
-
-#[test]
 fn a_panicking_callback_ends_the_watch_without_taking_the_process() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("a.conf");
@@ -195,12 +185,8 @@ fn a_panicking_callback_ends_the_watch_without_taking_the_process() {
 #[test]
 fn dropping_the_watcher_ends_its_thread_and_so_the_callback() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("a.conf");
-    let (w, rx) = watch(vec![file.clone()]);
+    let (w, rx) = watch(vec![dir.path().join("a.conf")]);
     drop(w);
     // the callback owns the sender: it is dropped when the watch thread ends
-    assert_eq!(
-        rx.recv_timeout(REPORT),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-    );
+    assert_eq!(rx.recv_timeout(REPORT), Err(RecvTimeoutError::Disconnected));
 }

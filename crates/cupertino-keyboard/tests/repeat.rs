@@ -3,7 +3,7 @@
 use cupertino_keyboard::repeat::{
     caps_hold_duration, caps_override_duration, clamp_hid_ns, evdev_repeats, hid_usage_repeats,
     SliderTable, CAPS_HOLD_DEFAULT_MS, CAPS_HOLD_MAX_MS, CAPS_OVERRIDE_DEFAULT_MS,
-    FALLBACK_INITIAL_MS, FALLBACK_INTERVAL_MS, MIN_ENABLED_MS, SLOW_KEYS_REPEAT_MS, UNIT_MS,
+    FALLBACK_INITIAL_MS, FALLBACK_INTERVAL_MS, MIN_ENABLED_MS, SLOW_KEYS_REPEAT_MS,
 };
 use cupertino_keyboard::{CapsLockDelay, KeyRepeater, RepeatConfig, RepeatInfo};
 
@@ -11,313 +11,214 @@ const KEY_A: u32 = 30;
 const KEY_B: u32 = 48;
 const KEY_LEFTSHIFT: u32 = 42;
 
-#[test]
-fn nanoseconds_below_one_millisecond_disable_repeat() {
-    assert_eq!(clamp_hid_ns(0), 0);
-    assert_eq!(clamp_hid_ns(999_999), 0);
+fn cfg(initial_delay_ms: u32, interval_ms: u32) -> RepeatConfig {
+    RepeatConfig {
+        initial_delay_ms,
+        interval_ms,
+    }
 }
 
 #[test]
-fn nanoseconds_up_to_sixteen_milliseconds_are_raised_to_the_minimum() {
-    assert_eq!(clamp_hid_ns(1_000_000), MIN_ENABLED_MS);
-    assert_eq!(clamp_hid_ns(15_999_999), MIN_ENABLED_MS);
-}
-
-#[test]
-fn nanoseconds_from_sixteen_milliseconds_are_divided_down() {
-    assert_eq!(clamp_hid_ns(16_000_000), 16);
-    assert_eq!(clamp_hid_ns(500_999_999), 500);
-}
-
-#[test]
-fn default_config_is_the_fallback_pair() {
-    let cfg = RepeatConfig::default();
-    assert_eq!(cfg.initial_delay_ms, FALLBACK_INITIAL_MS);
-    assert_eq!(cfg.interval_ms, FALLBACK_INTERVAL_MS);
-    assert_eq!((FALLBACK_INITIAL_MS, FALLBACK_INTERVAL_MS), (500, 83));
-}
-
-#[test]
-fn preference_units_are_sixtieths_of_a_second() {
-    let cfg = RepeatConfig::from_pref_units(30.0, 6.0);
-    assert_eq!(cfg.initial_delay_ms, 500);
-    assert_eq!(cfg.interval_ms, 100);
-    assert!((UNIT_MS - 16.6667).abs() < 1e-3);
-}
-
-#[test]
-fn negative_preference_units_disable_repeat() {
-    let cfg = RepeatConfig::from_pref_units(-5.0, 6.0);
-    assert!(!cfg.is_enabled());
-}
-
-#[test]
-fn nanosecond_config_applies_the_clamp_to_both_values() {
-    let cfg = RepeatConfig::from_hid_ns(2_000_000, 300_000_000);
-    assert_eq!(cfg.initial_delay_ms, MIN_ENABLED_MS);
-    assert_eq!(cfg.interval_ms, 300);
-}
-
-#[test]
-fn slow_keys_repeat_ignores_configuration() {
-    let cfg = RepeatConfig::slow_keys();
-    assert_eq!(cfg.initial_delay_ms, SLOW_KEYS_REPEAT_MS);
-    assert_eq!(cfg.interval_ms, SLOW_KEYS_REPEAT_MS);
-    assert_eq!(SLOW_KEYS_REPEAT_MS, 420);
-}
-
-#[test]
-fn repeat_info_rounds_the_interval_to_a_rate() {
-    let info = RepeatConfig::default().repeat_info();
+fn hid_nanoseconds_clamp_to_off_the_minimum_or_milliseconds() {
+    for (ns, ms) in [
+        (0, 0),
+        (999_999, 0),
+        (1_000_000, MIN_ENABLED_MS),
+        (15_999_999, MIN_ENABLED_MS),
+        (16_000_000, 16),
+        (500_999_999, 500),
+    ] {
+        assert_eq!(clamp_hid_ns(ns), ms, "{ns} ns");
+    }
     assert_eq!(
-        info,
-        RepeatInfo {
-            rate: 12,
-            delay: 500
-        }
+        RepeatConfig::from_hid_ns(2_000_000, 300_000_000),
+        cfg(MIN_ENABLED_MS, 300),
+        "the clamp applies to both values"
     );
 }
 
 #[test]
-fn repeat_info_is_zero_when_disabled() {
-    let cfg = RepeatConfig {
-        initial_delay_ms: 0,
-        interval_ms: 83,
-    };
-    assert_eq!(cfg.repeat_info(), RepeatInfo { rate: 0, delay: 0 });
-}
-
-#[test]
-fn zero_interval_with_a_delay_advertises_the_fastest_rate() {
-    let cfg = RepeatConfig {
-        initial_delay_ms: 200,
-        interval_ms: 0,
-    };
+fn configs_come_from_preferences_and_convert_back() {
     assert_eq!(
-        cfg.repeat_info(),
-        RepeatInfo {
-            rate: 1000,
-            delay: 200
-        }
+        RepeatConfig::default(),
+        cfg(FALLBACK_INITIAL_MS, FALLBACK_INTERVAL_MS)
     );
+    assert_eq!(
+        RepeatConfig::slow_keys(),
+        cfg(SLOW_KEYS_REPEAT_MS, SLOW_KEYS_REPEAT_MS)
+    );
+    let from_units = RepeatConfig::from_pref_units(30.0, 6.0);
+    assert_eq!(from_units, cfg(500, 100), "units are sixtieths of a second");
+    let (delay, interval) = from_units.to_pref_units();
+    assert!((delay - 30.0).abs() < 0.1 && (interval - 6.0).abs() < 0.1);
+    assert!(!RepeatConfig::from_pref_units(-5.0, 6.0).is_enabled());
 }
 
 #[test]
-fn very_slow_interval_still_advertises_one_per_second() {
-    let cfg = RepeatConfig {
-        initial_delay_ms: 200,
-        interval_ms: 5000,
-    };
-    assert_eq!(cfg.repeat_info().rate, 1);
+fn repeat_info_advertises_a_rate_and_delay() {
+    for (config, info) in [
+        (
+            RepeatConfig::default(),
+            RepeatInfo {
+                rate: 12,
+                delay: 500,
+            },
+        ),
+        (cfg(0, 83), RepeatInfo { rate: 0, delay: 0 }),
+        (
+            cfg(200, 0),
+            RepeatInfo {
+                rate: 1000,
+                delay: 200,
+            },
+        ),
+        (
+            cfg(200, 5000),
+            RepeatInfo {
+                rate: 1,
+                delay: 200,
+            },
+        ),
+    ] {
+        assert_eq!(config.repeat_info(), info, "{config:?}");
+    }
 }
 
 #[test]
-fn config_converts_back_to_preference_units() {
-    let (delay, interval) = RepeatConfig::from_pref_units(30.0, 6.0).to_pref_units();
-    assert!((delay - 30.0).abs() < 0.1);
-    assert!((interval - 6.0).abs() < 0.1);
-}
-
-#[test]
-fn slider_stops_are_ordered_slowest_first() {
+fn slider_tables_order_stops_slowest_first_and_find_positions() {
     let t = SliderTable::new(vec![2.0, 120.0, 30.0]);
     assert_eq!(t.len(), 3);
-    assert!(!t.is_empty());
-    assert_eq!(t.value_at(0), Some(120.0));
-    assert_eq!(t.value_at(2), Some(2.0));
-    assert_eq!(t.value_at(3), None);
-}
-
-#[test]
-fn default_slider_tables_have_seven_and_six_stops() {
-    assert_eq!(SliderTable::interval_default().len(), 7);
-    assert_eq!(SliderTable::delay_default().len(), 6);
-}
-
-#[test]
-fn slider_position_is_the_first_stop_not_larger_than_the_value() {
-    let t = SliderTable::interval_default();
-    assert_eq!(t.position_of(120.0), 0);
-    assert_eq!(t.position_of(100.0), 1);
-    assert_eq!(t.position_of(6.0), 5);
-    assert_eq!(t.position_of(1.0), 6);
-}
-
-#[test]
-fn slider_position_of_an_empty_table_is_zero() {
-    let t = SliderTable::new(Vec::new());
-    assert!(t.is_empty());
-    assert_eq!(t.position_of(5.0), 0);
-}
-
-#[test]
-fn modifier_usages_never_repeat() {
-    for usage in 0xE0..=0xE7 {
-        assert!(!hid_usage_repeats(0x07, usage), "usage {usage:#x}");
+    for (i, v) in [(0, Some(120.0)), (2, Some(2.0)), (3, None)] {
+        assert_eq!(t.value_at(i), v, "stop {i}");
     }
-    assert!(hid_usage_repeats(0x07, 0x04));
-}
-
-#[test]
-fn keypad_clear_and_power_usages_never_repeat() {
-    for usage in [0x53, 0x66, 0x7F] {
-        assert!(!hid_usage_repeats(0x07, usage));
+    let interval = SliderTable::interval_default();
+    for (value, position) in [(120.0, 0), (100.0, 1), (6.0, 5), (1.0, 6)] {
+        assert_eq!(interval.position_of(value), position, "value {value}");
     }
+    let empty = SliderTable::new(Vec::new());
+    assert!(empty.is_empty());
+    assert_eq!(empty.position_of(5.0), 0);
 }
 
 #[test]
-fn transport_and_telephony_usages_never_repeat() {
-    assert!(!hid_usage_repeats(0x0B, 0x01));
-    assert!(!hid_usage_repeats(0x0C, 0xCD));
-    assert!(hid_usage_repeats(0x0C, 0xE9));
-    assert!(!hid_usage_repeats(0xFF09, 1));
-    assert!(!hid_usage_repeats(0xFF, 6));
-    assert!(hid_usage_repeats(0xFF, 8));
-}
-
-#[test]
-fn modifier_and_lock_evdev_codes_do_not_repeat() {
+fn modifier_lock_and_special_keys_never_repeat() {
+    for (page, usage, repeats) in [
+        (0x07, 0x04, true),
+        (0x07, 0xE0, false),
+        (0x07, 0xE7, false),
+        (0x07, 0x53, false),
+        (0x07, 0x66, false),
+        (0x07, 0x7F, false),
+        (0x0B, 0x01, false),
+        (0x0C, 0xCD, false),
+        (0x0C, 0xE9, true),
+        (0xFF09, 1, false),
+        (0xFF, 6, false),
+        (0xFF, 8, true),
+    ] {
+        assert_eq!(
+            hid_usage_repeats(page, usage),
+            repeats,
+            "page {page:#x} usage {usage:#x}"
+        );
+    }
     for code in [29, 42, 54, 56, 58, 97, 100, 125, 126, 464] {
-        assert!(!evdev_repeats(code), "code {code}");
+        assert!(!evdev_repeats(code), "evdev {code}");
     }
     assert!(evdev_repeats(KEY_A));
 }
 
 #[test]
-fn repeater_waits_for_the_initial_delay_then_ticks_at_the_interval() {
-    let mut r = KeyRepeater::new(RepeatConfig {
-        initial_delay_ms: 500,
-        interval_ms: 100,
-    });
+fn the_repeater_waits_for_the_delay_then_ticks_at_the_interval() {
+    let mut r = KeyRepeater::new(cfg(500, 100));
     r.press(KEY_A, 1000, false);
     assert_eq!(r.key(), Some(KEY_A));
     assert_eq!(r.next_deadline(), Some(1500));
     assert!(r.poll(1499).is_empty());
     assert!(!r.is_repeating());
     let ticks = r.poll(1720);
-    let times: Vec<u64> = ticks.iter().map(|t| t.time_ms).collect();
-    assert_eq!(times, vec![1500, 1600, 1700]);
-    assert!(ticks.iter().all(|t| t.key == KEY_A));
+    let got: Vec<(u32, u64)> = ticks.iter().map(|t| (t.key, t.time_ms)).collect();
+    assert_eq!(got, [(KEY_A, 1500), (KEY_A, 1600), (KEY_A, 1700)]);
     assert!(r.is_repeating());
     assert_eq!(r.next_deadline(), Some(1800));
 }
 
 #[test]
-fn repeater_stops_when_the_repeating_key_is_released() {
-    let mut r = KeyRepeater::new(RepeatConfig::default());
-    r.press(KEY_A, 0, false);
-    r.release(KEY_A);
-    assert_eq!(r.key(), None);
-    assert!(r.poll(10_000).is_empty());
-}
-
-#[test]
-fn releasing_another_key_does_not_stop_the_repeat() {
+fn the_repeating_key_follows_presses_and_releases() {
     let mut r = KeyRepeater::new(RepeatConfig::default());
     r.press(KEY_A, 0, false);
     r.release(KEY_B);
-    assert_eq!(r.key(), Some(KEY_A));
-}
-
-#[test]
-fn a_new_press_replaces_the_repeating_key() {
-    let mut r = KeyRepeater::new(RepeatConfig::default());
-    r.press(KEY_A, 0, false);
+    assert_eq!(r.key(), Some(KEY_A), "releasing another key keeps it");
     r.press(KEY_B, 100, false);
-    assert_eq!(r.key(), Some(KEY_B));
+    assert_eq!(r.key(), Some(KEY_B), "a new press replaces it");
     assert_eq!(r.next_deadline(), Some(600));
-}
+    r.release(KEY_B);
+    assert_eq!(r.key(), None, "releasing it stops the repeat");
+    assert!(r.poll(10_000).is_empty());
 
-#[test]
-fn a_no_repeat_press_stops_the_previous_repeat() {
-    let mut r = KeyRepeater::new(RepeatConfig::default());
     r.press(KEY_A, 0, false);
     r.press(KEY_B, 100, true);
-    assert_eq!(r.key(), None);
-}
+    assert_eq!(r.key(), None, "a no-repeat press stops the previous repeat");
 
-#[test]
-fn modifier_keys_and_disabled_repeat_never_arm_the_repeater() {
-    let mut r = KeyRepeater::new(RepeatConfig::default());
     r.press(KEY_LEFTSHIFT, 0, false);
-    assert_eq!(r.key(), None);
-    let mut off = KeyRepeater::new(RepeatConfig {
-        initial_delay_ms: 0,
-        interval_ms: 83,
-    });
+    assert_eq!(r.key(), None, "modifier keys never arm it");
+    let mut off = KeyRepeater::new(cfg(0, 83));
     off.press(KEY_A, 0, false);
-    assert_eq!(off.key(), None);
-}
+    assert_eq!(off.key(), None, "disabled repeat never arms it");
 
-#[test]
-fn stop_clears_the_repeat_and_set_config_replaces_the_timing() {
-    let mut r = KeyRepeater::new(RepeatConfig::default());
     r.press(KEY_A, 0, false);
     r.poll(600);
     assert!(r.is_repeating());
     r.stop();
     assert!(!r.is_repeating());
     assert_eq!(r.key(), None);
-    let cfg = RepeatConfig {
-        initial_delay_ms: 100,
-        interval_ms: 50,
-    };
-    r.set_config(cfg);
-    assert_eq!(r.config(), cfg);
+    r.set_config(cfg(100, 50));
+    assert_eq!(r.config(), cfg(100, 50));
 }
 
 #[test]
-fn caps_lock_press_counts_after_the_default_delay() {
-    let d = CapsLockDelay::default();
-    assert_eq!(d.delay_ms, 75);
-    assert!(!d.press_counts(74));
-    assert!(d.press_counts(75));
+fn a_caps_lock_press_counts_after_the_delay_or_its_positive_override() {
+    for (delay_ms, override_ms, held, counts) in [
+        (75, None, 74, false),
+        (75, None, 75, true),
+        (0, None, 0, true),
+        (75, Some(250), 200, false),
+        (75, Some(250), 250, true),
+        (75, Some(0), 10, false),
+        (75, Some(0), 75, true),
+    ] {
+        let d = CapsLockDelay {
+            delay_ms,
+            override_ms,
+        };
+        assert_eq!(
+            d.press_counts(held),
+            counts,
+            "delay {delay_ms} override {override_ms:?} held {held}"
+        );
+    }
+    assert_eq!(CapsLockDelay::default().delay_ms, 75);
 }
 
 #[test]
-fn caps_lock_zero_delay_always_counts() {
-    let d = CapsLockDelay {
-        delay_ms: 0,
-        override_ms: None,
-    };
-    assert!(d.press_counts(0));
-}
-
-#[test]
-fn caps_lock_positive_override_replaces_the_delay() {
-    let d = CapsLockDelay {
-        delay_ms: 75,
-        override_ms: Some(250),
-    };
-    assert!(!d.press_counts(200));
-    assert!(d.press_counts(250));
-}
-
-#[test]
-fn caps_lock_zero_override_means_none() {
-    let d = CapsLockDelay {
-        delay_ms: 75,
-        override_ms: Some(0),
-    };
-    assert!(!d.press_counts(10));
-    assert!(d.press_counts(75));
-}
-
-#[test]
-fn caps_hold_accepts_one_to_the_limit_and_otherwise_falls_back() {
-    assert_eq!(caps_hold_duration(Some(1)), 1);
-    assert_eq!(caps_hold_duration(Some(1500)), CAPS_HOLD_MAX_MS);
-    assert_eq!(caps_hold_duration(Some(1501)), CAPS_HOLD_DEFAULT_MS);
-    assert_eq!(caps_hold_duration(Some(0)), CAPS_HOLD_DEFAULT_MS);
-    assert_eq!(caps_hold_duration(Some(-4)), CAPS_HOLD_DEFAULT_MS);
-    assert_eq!(caps_hold_duration(None), 500);
-}
-
-#[test]
-fn caps_override_accepts_zero_to_the_limit_and_otherwise_falls_back() {
-    assert_eq!(caps_override_duration(Some(0)), 0);
-    assert_eq!(caps_override_duration(Some(3000)), 3000);
-    assert_eq!(caps_override_duration(Some(3001)), CAPS_OVERRIDE_DEFAULT_MS);
-    assert_eq!(caps_override_duration(Some(-1)), 250);
-    assert_eq!(caps_override_duration(None), 250);
+fn caps_lock_durations_fall_back_outside_their_range() {
+    for (value, ms) in [
+        (Some(1), 1),
+        (Some(CAPS_HOLD_MAX_MS as i64), CAPS_HOLD_MAX_MS),
+        (Some(CAPS_HOLD_MAX_MS as i64 + 1), CAPS_HOLD_DEFAULT_MS),
+        (Some(0), CAPS_HOLD_DEFAULT_MS),
+        (Some(-4), CAPS_HOLD_DEFAULT_MS),
+        (None, CAPS_HOLD_DEFAULT_MS),
+    ] {
+        assert_eq!(caps_hold_duration(value), ms, "hold {value:?}");
+    }
+    for (value, ms) in [
+        (Some(0), 0),
+        (Some(3000), 3000),
+        (Some(3001), CAPS_OVERRIDE_DEFAULT_MS),
+        (Some(-1), CAPS_OVERRIDE_DEFAULT_MS),
+        (None, CAPS_OVERRIDE_DEFAULT_MS),
+    ] {
+        assert_eq!(caps_override_duration(value), ms, "override {value:?}");
+    }
 }

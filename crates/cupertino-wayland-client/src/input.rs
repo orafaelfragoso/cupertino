@@ -407,10 +407,24 @@ fn compose_table() -> Option<&'static ComposeTable> {
 }
 
 impl Translator {
-    /// Load the keymap the compositor sent over a file descriptor of `size` bytes (NUL included).
+    /// Load the keymap the compositor sent over a file descriptor of `size` bytes (NUL included). A size of 0, or one
+    /// larger than the file, is refused before the file is mapped: the text is the first `size - 1` bytes, and a
+    /// mapping past the end of the file faults when it is read.
     pub(crate) fn from_fd(fd: OwnedFd, size: usize) -> Result<Self, Error> {
+        if size == 0 {
+            return Err(Error::Protocol(
+                "the keymap size leaves no room for its terminating NUL",
+            ));
+        }
+        let file = std::fs::File::from(fd);
+        let length = file.metadata().map_err(Error::Io)?.len();
+        if u64::try_from(size).map_or(true, |size| size > length) {
+            return Err(Error::Protocol("the keymap size is larger than its file"));
+        }
+        let fd = OwnedFd::from(file);
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        // SAFETY: the descriptor is the compositor's keymap file, mapped privately and read only
+        // SAFETY: the descriptor is the compositor's keymap file, at least `size` bytes long, mapped privately and
+        // read only
         let keymap = unsafe {
             xkb::Keymap::new_from_fd(
                 &context,

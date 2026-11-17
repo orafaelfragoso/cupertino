@@ -199,8 +199,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     the field only change its text where they edit it. The caret is 2 pt wide and fades in and out as every text field's does, and a text wider than the field is not
     scrolled.
   - Known limit: dead keys and the Compose key do not compose in the field. The field gets the character of each key
-    press as the bar's keymap translates it (`cupertino-wayland-client`), and the keyboard library of the project
-    (`cupertino-xkbcommon`, pure Rust) has no compose support: a dead key types nothing and the next letter comes
+    press as the bar's keymap translates it (`cupertino-wayland-client`), without compose sequences: a dead key types
+    nothing and the next letter comes
     unaccented, so "é" cannot be typed through a dead key (a layout that has the character on a key of its own types
     it). There is no input method in the bar.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on

@@ -1143,17 +1143,11 @@ fn kit_source(source: &str, cx: &Context) -> Result<String, Failure> {
     let not_checkout = || {
         Failure::usage(
             "invalid_value",
-            format!(
-                "--source {source}: not a Cupertino checkout (it needs crates/cupertino-kit and \
-                 crates/cupertino-xkbcommon)"
-            ),
+            format!("--source {source}: not a Cupertino checkout (it needs crates/cupertino-kit)"),
         )
     };
     let path = fs::canonicalize(&path).map_err(|_| not_checkout())?;
-    if !["crates/cupertino-kit", "crates/cupertino-xkbcommon"]
-        .iter()
-        .all(|c| path.join(c).join("Cargo.toml").is_file())
-    {
+    if !path.join("crates/cupertino-kit/Cargo.toml").is_file() {
         return Err(not_checkout());
     }
     path.to_str().map(str::to_owned).ok_or_else(|| {
@@ -1298,37 +1292,29 @@ fn new(args: &Args, cx: &Context) -> Result<Reply, Failure> {
         _ => (RUST_FILES, "rust"),
     };
     let version = env!("CARGO_PKG_VERSION");
-    // a Rust project's two dependencies on the repository: the release's tag, or the checkout's crates by path
-    let (kit, kit_dependency, xkbcommon_dependency, kit_origin) = match &source {
-        None => {
-            let git = format!("{{ git = \"{REPOSITORY}\", tag = \"v{version}\" }}");
-            (
-                serde_json::json!({ "git": REPOSITORY, "tag": format!("v{version}") }),
-                git.clone(),
-                git,
-                format!("the git tag v{version} of {REPOSITORY}"),
-            )
-        }
+    // a Rust project's dependency on the repository: the release's tag, or the checkout's crate by path
+    let (kit, kit_dependency, kit_origin) = match &source {
+        None => (
+            serde_json::json!({ "git": REPOSITORY, "tag": format!("v{version}") }),
+            format!("{{ git = \"{REPOSITORY}\", tag = \"v{version}\" }}"),
+            format!("the git tag v{version} of {REPOSITORY}"),
+        ),
         Some(checkout) => {
+            let at = format!("{checkout}/crates/cupertino-kit");
             // a JSON string is a TOML basic string: quotes, backslashes and controls are escaped the same way
-            let path = |krate: &str| {
-                let at = format!("{checkout}/crates/{krate}");
-                format!(
-                    "{{ path = {} }}",
-                    serde_json::to_string(&at).expect("a string serializes")
-                )
-            };
+            let dependency = format!(
+                "{{ path = {} }}",
+                serde_json::to_string(&at).expect("a string serializes")
+            );
             (
-                serde_json::json!({ "path": format!("{checkout}/crates/cupertino-kit") }),
-                path("cupertino-kit"),
-                path("cupertino-xkbcommon"),
+                serde_json::json!({ "path": at }),
+                dependency,
                 format!("the checkout {checkout}"),
             )
         }
     };
     let fill = |text: &str| {
         text.replace("{{kit_dependency}}", &kit_dependency)
-            .replace("{{xkbcommon_dependency}}", &xkbcommon_dependency)
             .replace("{{kit_origin}}", &kit_origin)
             .replace("{{name}}", name)
             .replace("{{app_id}}", name)

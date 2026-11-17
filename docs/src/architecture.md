@@ -60,7 +60,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-theme`, `xkbcommon` | `foundation` |
+| `foundation` (values, maths and data models with no I/O) | `cupertino-animation`, `cupertino-geometry`, `cupertino-glyph`, `cupertino-keyboard`, `cupertino-menu-model`, `cupertino-theme` | `foundation` |
 | `graphics` (the one definition of the drawing maths, and the GPU device) | `cupertino-gpu`, `cupertino-raster-math` | `foundation`, `graphics` |
 | `models` (desktop policy as pure logic) | `cupertino-control-model`, `cupertino-displays`, `cupertino-effects`, `cupertino-input`, `cupertino-overview`, `cupertino-render-api`, `cupertino-scene`, `cupertino-stage`, `cupertino-wm` | `foundation`, `models` |
 | `system` (user-space operating-system access) | `cupertino-apps`, `cupertino-assets`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-icons`, `cupertino-peer`, `cupertino-radios`, `cupertino-trash` | `foundation`, `system` |
@@ -99,8 +99,9 @@ Further rules:
 `crates/cupertino-layers/remaining.txt`: the check fails on a problem the list does not hold and on a line that is no
 longer a problem, so the list only shrinks, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again.
 The layers in `ENFORCED` in `cupertino-layers` are closed: none of their problems may be listed. Test code outside a
-crate's `tests/` is refused by the gate of `cargo xtask ci`. The `xkbcommon` package of the workspace is
-`cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
+crate's `tests/` is refused by the gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon
+through the registry `xkbcommon` crate, the one Smithay uses too; the server keeps the last keymap that compiled when a
+new layout does not.
 `crates/cupertino-layers/graph/layers.dot` is a DOT snapshot of the layers (`cargo run -p cupertino-layers -- --graph`
 writes it).
 
@@ -117,7 +118,6 @@ The registry records the state of the code; it does not grant access. It covers 
 | libudev | `cupertino-devices` | `NETLINK_KOBJECT_UEVENT`, `/sys` |
 | libinput | `cupertino-evdev` and `cupertino-input` | evdev |
 | libseat, logind client | `cupertino-seat` | logind's D-Bus protocol (`TakeControl`, `TakeDevice`, pause and resume, VT switch) |
-| xkbcommon | `cupertino-xkbcommon` over `xkbcommon-rs` (vendored in `third-party/`) | none |
 | alsa-lib | `cupertino-alsa` | `/dev/snd/controlC*` ioctls |
 | UPower, backlight helpers | `cupertino-powerd` | `/sys/class/power_supply`, `/sys/class/backlight`, lid switch over evdev |
 | NetworkManager (development alternative) | `cupertino-netd` | rtnetlink, nl80211; iwd for authentication |

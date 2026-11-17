@@ -91,7 +91,8 @@ impl Trigger {
         for part in parts {
             modifiers |= modifier_named(part.trim())?;
         }
-        if key.is_empty() {
+        // keysym names are C strings: a NUL names no key
+        if key.is_empty() || key.contains('\0') {
             return None;
         }
         let key = key_alias(key).unwrap_or(key);

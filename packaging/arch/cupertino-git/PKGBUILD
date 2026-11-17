@@ -9,7 +9,7 @@ pkgdesc='Wayland desktop shell and compositor'
 arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'OFL-1.1' 'LGPL-2.1-or-later' 'MIT-CMU' 'BSD-3-Clause')
-makedepends=('git' 'cargo' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
+makedepends=('git' 'cargo' 'mesa' 'libglvnd' 'pam' 'gcc-libs' 'systemd' 'dbus' 'libxkbcommon' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'clang' 'libpipewire')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No
 # split debug package: it is ~0.9 GB of debug info for the sixteen binaries.
 # The manual pages ship uncompressed, as the built command writes them.
@@ -89,9 +89,8 @@ _install_tree() {
 package_cupertino-git() {
   provides=('cupertino')
   conflicts=('cupertino')
-  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus>=1.16' 'polkit' 'gnome-keyring' 'libsecret' 'pipewire>=1:1.4' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
+  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus>=1.16' 'polkit' 'gnome-keyring' 'libsecret' 'pipewire>=1:1.4' 'xdg-desktop-portal' 'xdg-desktop-portal-gtk' 'libxkbcommon' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' 'cupertino-data')
   optdepends=('wayland: nested session inside another Wayland desktop'
-              'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'
               'iwd: wireless backend when cupertino-netd is enabled'
               'xwayland-satellite>=0.8: X11 app support'
@@ -127,8 +126,6 @@ package_cupertino-git() {
   install -Dm644 -t "$pkgdir/etc/pam.d" packaging/pam/arch/cupertino-{login,session,greeter,autologin}
   install -Dm644 LICENSE "$lic/LICENSE"
   install -Dm644 crates/cupertino-geometry/LICENSE "$lic/MPL-2.0"
-  install -Dm644 crates/cupertino-xkbcommon/LICENSE "$lic/MIT"
-  install -Dm644 third-party/xkbcommon-rs/LICENSE "$lic/libxkbcommon"
   install -Dm644 third-party/smithay/LICENSE.txt "$lic/smithay"
   install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
   install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
@@ -136,12 +133,12 @@ package_cupertino-git() {
 }
 
 # The C SDK: libcupertinokit.so.<major>.<minor>.0 with its soname links, header and pkg-config file. It links the
-# toolkit statically and the C and GCC runtimes dynamically; the theme and the asset pack are read at run time when
+# toolkit statically and the C and GCC runtimes and libxkbcommon dynamically; the theme and the asset pack are read at run time when
 # installed, else the toolkit uses its built-in fallbacks.
 package_cupertino-kit-git() {
   pkgdesc='CupertinoKit C SDK: the libcupertinokit shared library, its header and pkg-config file'
   license=('MPL-2.0' 'MIT' 'OFL-1.1')
-  depends=('glibc' 'gcc-libs')
+  depends=('glibc' 'gcc-libs' 'libxkbcommon')
   optdepends=('cupertino-data: the fonts and icons of the desktop'
               'cupertino: the desktop theme')
   provides=('cupertino-kit' 'libcupertinokit.so')
@@ -160,8 +157,6 @@ package_cupertino-kit-git() {
   chmod 644 "$pkgdir/usr/lib/pkgconfig/cupertinokit.pc"
   _build_record cupertino-kit cupertino-server "$pkgdir/usr/share/cupertino-kit/build-info.json"
   install -Dm644 crates/cupertino-ui-abi/LICENSE "$lic/MPL-2.0"
-  install -Dm644 crates/cupertino-xkbcommon/LICENSE "$lic/MIT"
-  install -Dm644 third-party/xkbcommon-rs/LICENSE "$lic/libxkbcommon"
   install -Dm644 crates/cupertino-assets/fonts/OFL.txt "$lic/OFL.txt"
   install -Dm644 packaging/licenses/THIRD-PARTY-LICENSES "$lic/THIRD-PARTY-LICENSES"
   install -Dm644 packaging/licenses/THIRD-PARTY-NOTICES "$lic/THIRD-PARTY-NOTICES"

@@ -96,7 +96,12 @@ pub fn parse_chord_for(text: &str, profile: &str) -> Result<Chord, String> {
             "alt" | "mod1" | "option" => mods.alt = true,
             "shift" => mods.shift = true,
             _ => {
-                let s = xkb::keysym_from_name(tok, xkb::KEYSYM_CASE_INSENSITIVE);
+                // keysym names are C strings: a NUL names no key
+                let s = if tok.contains('\0') {
+                    xkb::Keysym::new(keysyms::KEY_NoSymbol)
+                } else {
+                    xkb::keysym_from_name(tok, xkb::KEYSYM_CASE_INSENSITIVE)
+                };
                 if s.raw() == keysyms::KEY_NoSymbol {
                     return Err(format!("unknown key {tok:?} in {text:?}"));
                 }

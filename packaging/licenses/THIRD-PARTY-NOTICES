@@ -4,7 +4,7 @@ crates compile in, and the texts of licences only these notices name. Kept by ha
 
 NOTICES
 ==============================================================================
---- cfg_aliases 0.1.1, cfg_aliases 0.2.2
+--- cfg_aliases 0.2.2
 # 3rd Party Notices
 
 The `cfg_aliases!` macro uses a lot of the code from [`tectonic_cfg_support::target_cfg!`] macro which is under the following license:

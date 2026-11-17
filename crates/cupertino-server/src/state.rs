@@ -826,6 +826,16 @@ fn listening_socket() -> Result<ListeningSocketSource> {
 /// How many names of its own a server tries once the `wayland-N` names are gone.
 const OWN_NAME_TRIES: u32 = 1024;
 
+/// The keymap the seat starts with when the default layout does not compile: the US layout with every name given,
+/// options too, so nothing of the environment reaches it.
+const FALLBACK_KEYMAP: XkbConfig<'static> = XkbConfig {
+    rules: "evdev",
+    model: "pc105",
+    layout: "us",
+    variant: "",
+    options: Some(String::new()),
+};
+
 impl Cupertino {
     pub fn new(
         display: Display<Cupertino>,
@@ -932,8 +942,13 @@ impl Cupertino {
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         let pointer = seat.add_pointer();
         let repeat = config.keyboard.repeat_info();
-        seat.add_keyboard(XkbConfig::default(), repeat.delay, repeat.rate)
-            .map_err(|e| anyhow::anyhow!("initialising the keyboard: {e:?}"))?;
+        // the default names are the environment's (`XKB_DEFAULT_*`); a layout there that does not compile leaves the
+        // seat with the fallback keymap
+        if let Err(e) = seat.add_keyboard(XkbConfig::default(), repeat.delay, repeat.rate) {
+            tracing::error!(error = ?e, "the default keyboard layout does not compile; the seat starts with the fallback keymap");
+            seat.add_keyboard(FALLBACK_KEYMAP, repeat.delay, repeat.rate)
+                .map_err(|e| anyhow::anyhow!("initialising the keyboard: {e:?}"))?;
+        }
 
         let mut wm_config = WmConfig::default();
         set_minimize_timing(&mut wm_config, config.effects);

@@ -1,6 +1,6 @@
 // cupertino-layers --graph
-// 85 crates, 370 internal dependencies
-// per layer: foundation 7, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 14, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
+// 84 crates, 368 internal dependencies
+// per layer: foundation 6, graphics 2, models 9, system 8, platform 8, protocol 4, transport 3, render 3, ui 14, shellkit 0, core 1, services 4, shell 12, apps 2, tools 6, testing 2
 // forbidden normal edge cupertino-control (shell) -> cupertino-shell-client (transport)
 // forbidden normal edge cupertino-control (shell) -> cupertino-wayland-client (transport)
 // forbidden normal edge cupertino-controlcenter (shell) -> cupertino-alsa (platform)
@@ -44,14 +44,13 @@
 digraph "layers" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (7)";
+    label="foundation (6)";
     "cupertino-animation";
     "cupertino-geometry";
     "cupertino-glyph";
     "cupertino-keyboard";
     "cupertino-menu-model";
     "cupertino-theme";
-    "xkbcommon";
   }
   subgraph "cluster_graphics" {
     label="graphics (2)";
@@ -381,7 +380,6 @@ digraph "layers" {
   "cupertino-portal" -> "cupertino-shell-client" [color=red];
   "cupertino-portal" -> "cupertino-ui-wayland";
   "cupertino-portal" -> "cupertino-wayland-client" [color=red];
-  "cupertino-portal" -> "xkbcommon";
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-diagnostic-events";
   "cupertino-powerd" -> "cupertino-evdev";
@@ -534,7 +532,6 @@ digraph "layers" {
   "cupertino-ui-wayland" -> "cupertino-ui-text";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";
-  "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";
   "cupertino-windowmanager" -> "cupertino-diagnostic-events";
   "cupertino-windowmanager" -> "cupertino-protocols";

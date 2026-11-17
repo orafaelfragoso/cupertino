@@ -132,6 +132,24 @@ fn call(id: u64, epoch: u64) -> ActionCall {
 
 const EPOCH: u64 = (7 << 32) | 9;
 
+fn wait_for_requests(s: &mut Setup) -> Vec<cupertino_wayland_client::app::SemanticRequest> {
+    for _ in 0..100 {
+        let requests = s.surface.requests();
+        if !requests.is_empty() {
+            return requests;
+        }
+        s.conn.wait(Some(Duration::from_millis(50))).unwrap();
+    }
+    panic!("no action arrived within 5 s");
+}
+
+/// Lets the connection take what the server sent, without the application looking.
+fn settle(s: &mut Setup) {
+    for _ in 0..10 {
+        s.conn.wait(Some(Duration::from_millis(20))).unwrap();
+    }
+}
+
 #[test]
 fn a_server_without_the_global_gives_none() {
     let (_server, mut conn) = Harness::start(Offer::NONE);
@@ -139,45 +157,29 @@ fn a_server_without_the_global_gives_none() {
 }
 
 #[test]
-fn a_surface_is_inactive_until_the_server_shows_interest() {
+fn a_snapshot_is_published_sealed_only_while_the_server_is_interested_once_per_revision_and_epoch()
+{
     let mut s = setup();
     assert!(!s.surface.active());
     s.surface.publish(&snapshot(1));
-    assert!(s.sent().is_empty());
+    assert!(s.sent().is_empty(), "nothing before interest");
     assert!(s.server.publications.lock().unwrap().is_empty());
-}
 
-#[test]
-fn an_interested_server_gets_the_snapshot_sealed_with_its_epoch() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.surface.publish(&snapshot(1));
-    s.sent();
-    s.server.wait_for("publish", 1);
-    let published = s.server.publications.lock().unwrap().clone();
-    assert_eq!(published.len(), 1);
-    assert_eq!(published[0].0, EPOCH);
-    assert_eq!(published[0].1.as_ref().unwrap(), &snapshot(1));
-}
-
-#[test]
-fn a_revision_is_published_once_per_epoch() {
-    let mut s = setup();
     s.interest(EPOCH, true);
     s.surface.publish(&snapshot(1));
     s.surface.publish(&snapshot(1));
     s.surface.publish(&snapshot(2));
     s.surface.publish(&snapshot(2));
     s.sent();
-    let revisions: Vec<_> = s
-        .server
-        .publications
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(_, p)| p.as_ref().unwrap().revision)
-        .collect();
-    assert_eq!(revisions, [1, 2]);
+    s.server.wait_for("publish", 2);
+    {
+        let published = s.server.publications.lock().unwrap();
+        let got: Vec<_> = published
+            .iter()
+            .map(|(epoch, p)| (*epoch, p.as_ref().unwrap().clone()))
+            .collect();
+        assert_eq!(got, [(EPOCH, snapshot(1)), (EPOCH, snapshot(2))]);
+    }
 
     // a new epoch asks for the current revision again
     s.interest(EPOCH + 1, true);
@@ -192,165 +194,114 @@ fn a_revision_is_published_once_per_epoch() {
         .map(|(e, _)| *e)
         .collect();
     assert_eq!(epochs, [EPOCH, EPOCH, EPOCH + 1]);
+
+    let before = s.sent().len();
+    s.interest(EPOCH + 1, false);
+    s.surface.publish(&snapshot(3));
+    assert_eq!(s.sent().len(), before, "losing interest stops publication");
 }
 
 #[test]
-fn losing_interest_stops_publication() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.interest(EPOCH, false);
-    s.surface.publish(&snapshot(1));
-    assert!(s.sent().is_empty());
-}
-
-#[test]
-fn a_snapshot_that_does_not_validate_is_reported_unavailable() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
+fn a_snapshot_that_cannot_be_published_is_reported_unavailable() {
     let mut broken = snapshot(1);
     broken.root = 99;
     assert!(broken.validate().is_err());
-    s.surface.publish(&broken);
-    assert_eq!(s.sent(), [format!("unavailable {EPOCH}")]);
-    assert!(s.server.publications.lock().unwrap().is_empty());
-}
-
-#[test]
-fn a_snapshot_over_the_frame_limit_is_reported_unavailable() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
     let mut big = snapshot(1);
     big.nodes[0].name = Some("x".repeat(MAX_FRAME + 1));
-    s.surface.publish(&big);
-    assert_eq!(s.sent(), [format!("unavailable {EPOCH}")]);
-}
-
-#[test]
-fn an_action_wakes_the_application_loop() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.perform(&call(1, EPOCH), None);
-    let mut woken = false;
-    for _ in 0..100 {
-        woken = s
-            .conn
-            .wait(Some(Duration::from_millis(50)))
-            .unwrap()
-            .iter()
-            .any(
-                |e| matches!(e, Event::Extension(x) if x.downcast_ref::<SemanticWake>().is_some()),
-            );
-        if woken {
-            break;
-        }
+    for (row, snapshot) in [("invalid", broken), ("over the frame limit", big)] {
+        let mut s = setup();
+        s.interest(EPOCH, true);
+        s.surface.publish(&snapshot);
+        assert_eq!(s.sent(), [format!("unavailable {EPOCH}")], "{row}");
+        assert!(s.server.publications.lock().unwrap().is_empty(), "{row}");
     }
-    assert!(woken);
 }
 
 #[test]
-fn requests_are_taken_by_the_application() {
+fn an_action_wakes_the_application_which_takes_it() {
     let mut s = setup();
     s.interest(EPOCH, true);
     s.perform(&call(1, EPOCH), None);
+    s.woken();
     let requests = wait_for_requests(&mut s);
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].call, call(1, EPOCH));
     assert_eq!(requests[0].grab_serial, None);
-    assert!(s.surface.requests().is_empty());
+    assert!(s.surface.requests().is_empty(), "taken once");
 }
 
-fn wait_for_requests(s: &mut Setup) -> Vec<cupertino_wayland_client::app::SemanticRequest> {
-    for _ in 0..100 {
-        let requests = s.surface.requests();
-        if !requests.is_empty() {
-            return requests;
-        }
-        s.conn.wait(Some(Duration::from_millis(50))).unwrap();
+#[test]
+fn an_action_of_another_epoch_or_that_is_not_a_call_is_dropped() {
+    type Send = fn(&mut Setup);
+    let rows: [(&str, Send); 2] = [
+        ("another epoch", |s| s.perform(&call(1, EPOCH + 1), None)),
+        ("not a call", |s| {
+            s.server.run(|server| {
+                let (file, len) = seal(&snapshot(1), MAX_FRAME).unwrap();
+                server.semantic_surfaces[0].perform(file.as_fd(), len);
+            })
+        }),
+    ];
+    for (row, send) in rows {
+        let mut s = setup();
+        s.interest(EPOCH, true);
+        send(&mut s);
+        s.perform(&call(2, EPOCH), None);
+        let ids: Vec<_> = wait_for_requests(&mut s)
+            .iter()
+            .map(|r| r.call.id)
+            .collect();
+        assert_eq!(ids, [2], "{row}");
     }
-    panic!("no action arrived within 5 s");
 }
 
 #[test]
-fn an_action_of_another_epoch_is_dropped() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.perform(&call(1, EPOCH + 1), None);
-    s.perform(&call(2, EPOCH), None);
-    let requests = wait_for_requests(&mut s);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].call.id, 2);
-}
-
-#[test]
-fn a_second_action_is_dropped_while_one_waits() {
+fn one_action_waits_at_a_time_and_a_change_of_interest_discards_it() {
     let mut s = setup();
     s.interest(EPOCH, true);
     s.perform(&call(1, EPOCH), None);
     s.perform(&call(2, EPOCH), None);
-    // let the connection take both before the application looks
-    for _ in 0..10 {
-        s.conn.wait(Some(Duration::from_millis(20))).unwrap();
-    }
-    let requests = s.surface.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].call.id, 1);
-    // once taken, the next is accepted
+    settle(&mut s);
+    let ids: Vec<_> = s.surface.requests().iter().map(|r| r.call.id).collect();
+    assert_eq!(ids, [1], "the second is dropped while the first waits");
     s.perform(&call(3, EPOCH), None);
-    assert_eq!(wait_for_requests(&mut s)[0].call.id, 3);
+    assert_eq!(
+        wait_for_requests(&mut s)[0].call.id,
+        3,
+        "once taken, the next is accepted"
+    );
+
+    s.perform(&call(4, EPOCH), None);
+    settle(&mut s);
+    s.interest(EPOCH, false);
+    assert!(s.surface.requests().is_empty());
 }
 
 #[test]
-fn a_grab_serial_belongs_to_the_action_right_after_it() {
+fn a_grab_serial_belongs_to_the_action_right_after_it_even_a_dropped_one() {
     let mut s = setup();
     s.interest(EPOCH, true);
     s.perform(&call(1, EPOCH), Some(41));
-    let first = wait_for_requests(&mut s);
-    assert_eq!(first[0].grab_serial, Some(41));
+    assert_eq!(wait_for_requests(&mut s)[0].grab_serial, Some(41));
     s.perform(&call(2, EPOCH), None);
-    let second = wait_for_requests(&mut s);
-    assert_eq!(second[0].grab_serial, None);
-}
+    assert_eq!(wait_for_requests(&mut s)[0].grab_serial, None);
 
-#[test]
-fn a_grab_serial_is_spent_by_an_action_that_is_dropped() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.perform(&call(1, EPOCH + 5), Some(41));
-    s.perform(&call(2, EPOCH), None);
+    s.perform(&call(3, EPOCH + 5), Some(42));
+    s.perform(&call(4, EPOCH), None);
     let requests = wait_for_requests(&mut s);
-    assert_eq!(requests[0].call.id, 2);
-    assert_eq!(requests[0].grab_serial, None);
-}
-
-#[test]
-fn an_action_that_is_not_a_call_is_dropped() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.server.run(|server| {
-        let (file, len) = seal(&snapshot(1), MAX_FRAME).unwrap();
-        server.semantic_surfaces[0].perform(file.as_fd(), len);
-    });
-    s.perform(&call(2, EPOCH), None);
-    let requests = wait_for_requests(&mut s);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].call.id, 2);
-}
-
-#[test]
-fn a_change_of_interest_discards_waiting_actions() {
-    let mut s = setup();
-    s.interest(EPOCH, true);
-    s.perform(&call(1, EPOCH), None);
-    for _ in 0..5 {
-        s.conn.wait(Some(Duration::from_millis(20))).unwrap();
-    }
-    s.interest(EPOCH, false);
-    assert!(s.surface.requests().is_empty());
+    assert_eq!(requests[0].call.id, 4);
+    assert_eq!(
+        requests[0].grab_serial, None,
+        "the dropped action spent the serial"
+    );
 }
 
 #[test]
 fn a_completion_is_sent_for_the_current_epoch_only() {
     let mut s = setup();
+    s.surface.complete(&call(1, 0), Outcome::Denied, 1);
+    assert!(s.sent().is_empty(), "nothing is completed while inactive");
+
     s.interest(EPOCH, true);
     s.surface.complete(&call(1, EPOCH), Outcome::Applied, 4);
     s.surface.complete(&call(2, EPOCH + 1), Outcome::Applied, 4);
@@ -365,13 +316,6 @@ fn a_completion_is_sent_for_the_current_epoch_only() {
         "{}",
         replies[0]
     );
-}
-
-#[test]
-fn nothing_is_completed_while_inactive() {
-    let mut s = setup();
-    s.surface.complete(&call(1, 0), Outcome::Denied, 1);
-    assert!(s.sent().is_empty());
 }
 
 #[test]

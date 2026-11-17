@@ -733,11 +733,17 @@ impl Host for AppHost {
     }
 
     fn dbus_activate(&mut self, bus_name: &str, token: Option<String>) -> Option<kit::BusCall> {
-        Some(Box::pin(cupertino_dock::activate::activate_in_thread(
-            PROCESS,
-            bus_name.to_owned(),
-            token,
-        )))
+        use cupertino_dock::activate::{activate_on_session, ACTIVATE_DEADLINE};
+        let id = bus_name.to_owned();
+        let asked = cupertino_kit::task::io(
+            ACTIVATE_DEADLINE,
+            move || activate_on_session(PROCESS, &id, token.as_deref()),
+            |ok| ok,
+        );
+        match asked {
+            Command::Perform(call) => Some(call),
+            _ => None,
+        }
     }
 
     fn icon(&mut self, desktop: &DesktopIndex, icon: &IconKey, side: f64) -> IconSet {

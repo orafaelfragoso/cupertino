@@ -933,11 +933,17 @@ impl Host for AppHost {
         if !source.is_some_and(cupertino_apps::entry::dbus_activatable_file) {
             return None;
         }
-        Some(Box::pin(cupertino_apps::activate::activate_in_thread(
-            "cupertino-launcher",
-            bus_name.to_owned(),
-            token,
-        )))
+        use cupertino_apps::activate::{activate_on_session, ACTIVATE_DEADLINE};
+        let id = bus_name.to_owned();
+        let asked = cupertino_kit::task::io(
+            ACTIVATE_DEADLINE,
+            move || activate_on_session("cupertino-launcher", &id, token.as_deref()),
+            |ok| ok,
+        );
+        match asked {
+            Command::Perform(call) => Some(call),
+            _ => None,
+        }
     }
 }
 

@@ -894,7 +894,6 @@ dependencies = [
 name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
- "async-channel",
  "async-io",
  "notify",
  "percent-encoding",

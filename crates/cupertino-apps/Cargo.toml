@@ -11,12 +11,11 @@ layer = "system"
 [features]
 default = []
 # `activate`: `org.freedesktop.Application.Activate` on the session bus
-dbus = ["dep:async-channel", "dep:async-io", "dep:zbus"]
+dbus = ["dep:async-io", "dep:zbus"]
 # `catalogue::ApplicationWatch`: following the application folders on a thread
 watch = ["dep:notify"]
 
 [dependencies]
-async-channel = { version = "2", optional = true }
 async-io = { version = "2", optional = true }
 notify = { version = "8", optional = true }
 percent-encoding = "2"

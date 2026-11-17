@@ -55,31 +55,22 @@ pub async fn activate(conn: &zbus::Connection, id: &str, token: Option<&str>) ->
     .map(|_| ())
 }
 
-/// [`activate`] on the session bus, on a thread of its own so the caller's loop does not wait for the application, and
-/// bounded by [`ACTIVATE_TIMEOUT`]: the future ends in whether the call succeeded. A failure is reported on standard
-/// error, prefixed with `process`.
-pub fn activate_in_thread(
-    process: &'static str,
-    id: String,
-    token: Option<String>,
-) -> impl std::future::Future<Output = bool> + Send + 'static {
-    let (done, result) = async_channel::bounded(1);
-    let spawned = std::thread::Builder::new()
-        .name("dbus-activate".into())
-        .spawn(move || {
-            let outcome = async_io::block_on(async {
-                let conn = bounded(zbus::connection::Builder::session()?, ACTIVATE_TIMEOUT)
-                    .build()
-                    .await?;
-                activate(&conn, &id, token.as_deref()).await
-            });
-            if let Err(e) = &outcome {
-                eprintln!("{process}: cannot ask {id} for a window: {e}");
-            }
-            let _ = done.send_blocking(outcome.is_ok());
-        });
-    if let Err(e) = spawned {
-        eprintln!("{process}: cannot start the activation thread: {e}");
+/// How long [`activate_on_session`] should take: [`ACTIVATE_TIMEOUT`] for the answer and a second for connecting to the
+/// session bus. The deadline its callers give the task that runs it.
+pub const ACTIVATE_DEADLINE: Duration = Duration::from_secs(4);
+
+/// [`activate`] on a connection of its own to the session bus, bounded by [`ACTIVATE_TIMEOUT`], waiting for the answer:
+/// whether the call succeeded. A failure is reported on standard error, prefixed with `process`. It blocks; a program's
+/// loop runs it as a task.
+pub fn activate_on_session(process: &str, id: &str, token: Option<&str>) -> bool {
+    let outcome = async_io::block_on(async {
+        let conn = bounded(zbus::connection::Builder::session()?, ACTIVATE_TIMEOUT)
+            .build()
+            .await?;
+        activate(&conn, id, token).await
+    });
+    if let Err(e) = &outcome {
+        eprintln!("{process}: cannot ask {id} for a window: {e}");
     }
-    async move { result.recv().await.unwrap_or(false) }
+    outcome.is_ok()
 }

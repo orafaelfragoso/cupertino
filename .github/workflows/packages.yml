@@ -167,7 +167,6 @@ jobs:
               [ "$state" = disabled ] || [ "$state" = static ]
           done
           for b in /usr/bin/cupertino /usr/bin/cupertino-*; do
-              [ "$b" = /usr/bin/cupertino-session ] && continue
               if ldd "$b" | grep -q 'not found'; then ldd "$b"; exit 1; fi
           done
           echo 'all binaries resolve their libraries'

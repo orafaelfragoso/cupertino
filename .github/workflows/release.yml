@@ -93,7 +93,6 @@ jobs:
   #   repo/      the packages of this release with their .sig, cupertino.db and cupertino.files with their .sig
   #   archive/   the packages of this release with their .sig
   #   cupertino.conf             the [cupertino] section for pacman.conf, Server = URL/repo
-  #   cupertino-rollback.conf    archive=URL/archive
   #   SHA256SUMS                 every file of the tree, with its detached signature SHA256SUMS.sig
   #
   # With the ISO, also a detached signature NAME.iso.sha256.sig of each NAME.iso.sha256, so that the ISO, the trust
@@ -182,7 +181,6 @@ jobs:
           gpg --batch --verify "$out/repo/cupertino.db.tar.zst.sig" "$out/repo/cupertino.db.tar.zst" >/dev/null 2>&1 \
             || die 'the database signature does not verify'
           printf '[cupertino]\nSigLevel = Required DatabaseRequired TrustedOnly\nServer = %s/repo\n' "$url" > "$out/cupertino.conf"
-          printf 'archive=%s/archive\n' "$url" > "$out/cupertino-rollback.conf"
           (cd "$out" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig | sort | xargs sha256sum > SHA256SUMS)
           gpg --batch --yes --detach-sign -u "$key!" -o "$out/SHA256SUMS.sig" "$out/SHA256SUMS" || die 'signing SHA256SUMS failed'
           gpg --batch --verify "$out/SHA256SUMS.sig" "$out/SHA256SUMS" >/dev/null 2>&1 \

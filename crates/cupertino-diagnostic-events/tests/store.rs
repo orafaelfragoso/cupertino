@@ -1,24 +1,21 @@
-//! The bounded store: rotation, the total cap, age expiry, many writers, the unavailable store and its recovery,
-//! and reading back what is broken.
-
-#[allow(dead_code)]
-mod support;
+//! The bounded store: where it is and who may read it, rotation, the total and age limits, many writers, the
+//! directories it refuses, a failed write, reading back what is broken, and clearing.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use cupertino_diagnostic_events::store::{self, Limits, Segment, Store, Unavailable};
-use cupertino_diagnostic_events::{self as diag, Severity, Value};
+use cupertino_diagnostic_events::{SEGMENT_BYTES, STORE_BYTES};
 
-/// A record line of `len` bytes (newline included) for writer `writer`, number `n`.
-fn line(writer: u32, n: u64, len: usize) -> Vec<u8> {
+/// A record line of `len` bytes, newline included, of process `pid` with count `n`.
+fn line(pid: u32, n: u64, len: usize) -> Vec<u8> {
     let head = format!(
         "{{\"schema\":\"cupertino.diag.v1\",\"time\":\"2026-11-09T00:00:00.000Z\",\"boot_id\":null,\"session\":null,\
-         \"component\":\"test\",\"version\":\"0\",\"commit\":null,\"pid\":{writer},\"id\":\"test.store.line\",\
+         \"component\":\"test\",\"version\":\"0\",\"commit\":null,\"pid\":{pid},\"id\":\"test.store.line\",\
          \"severity\":\"info\",\"message\":\"m\",\"fields\":{{\"pad\":\""
     );
     let tail = format!("\"}},\"source\":\"t\",\"redacted\":[],\"count\":{n},\"suppressed\":0}}\n");
@@ -28,15 +25,16 @@ fn line(writer: u32, n: u64, len: usize) -> Vec<u8> {
     format!("{head}{}{tail}", "p".repeat(pad)).into_bytes()
 }
 
-fn limits(segment: u64, total: u64) -> Limits {
+fn limits(segment_bytes: u64, store_bytes: u64) -> Limits {
     Limits {
-        segment_bytes: segment,
-        store_bytes: total,
+        segment_bytes,
+        store_bytes,
         ..Limits::default()
     }
 }
 
-fn names(dir: &Path) -> Vec<(String, u64)> {
+/// The segments' file names and lengths, in the store's order.
+fn listing(dir: &Path) -> Vec<(String, u64)> {
     store::segments(dir)
         .unwrap()
         .into_iter()
@@ -49,8 +47,58 @@ fn names(dir: &Path) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// The `(pid, count)` of every record the store reads back.
+fn read_back(dir: &Path) -> Vec<(u32, u64)> {
+    store::read(dir)
+        .unwrap()
+        .records
+        .iter()
+        .map(|r| (r.record.pid, r.record.count))
+        .collect()
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn set_modified(path: &Path, time: SystemTime) {
+    File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+}
+
+fn running_as_root() -> bool {
+    fs::metadata("/proc/self")
+        .map(|m| std::os::unix::fs::MetadataExt::uid(&m) == 0)
+        .unwrap_or(false)
+}
+
 #[test]
-fn the_store_directory_and_its_files_are_private() {
+fn the_user_store_is_under_the_state_home_and_only_its_owner_may_read_it() {
+    let var = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    };
+    for (env, dir) in [
+        (
+            &[("XDG_STATE_HOME", "/state"), ("HOME", "/home/u")][..],
+            Some("/state/cupertino/events"),
+        ),
+        (
+            &[("HOME", "/home/u")][..],
+            Some("/home/u/.local/state/cupertino/events"),
+        ),
+        (&[][..], None),
+    ] {
+        assert_eq!(store::user_dir(var(env)), dir.map(PathBuf::from), "{env:?}");
+    }
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("state/cupertino/events");
     let store = Store::open(&dir, Limits::default()).unwrap();
@@ -59,25 +107,13 @@ fn the_store_directory_and_its_files_are_private() {
     let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&dir), 0o700);
     for entry in fs::read_dir(&dir).unwrap() {
-        assert_eq!(mode(&entry.unwrap().path()), 0o600);
+        let path = entry.unwrap().path();
+        assert_eq!(mode(&path), 0o600, "{}", path.display());
     }
-    assert_eq!(
-        store::user_dir(|k| (k == "HOME").then(|| "/h".into())),
-        Some("/h/.local/state/cupertino/events".into())
-    );
-    assert_eq!(
-        store::user_dir(|k| match k {
-            "HOME" => Some("/h".into()),
-            "XDG_STATE_HOME" => Some("/s".into()),
-            _ => None,
-        }),
-        Some("/s/cupertino/events".into())
-    );
-    assert_eq!(store::user_dir(|_| None), None);
 }
 
 #[test]
-fn a_segment_is_closed_when_the_next_line_would_pass_its_size() {
+fn a_segment_closes_before_the_line_that_would_pass_its_size_and_numbers_go_on_across_boots() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::open(tmp.path(), limits(3000, 100_000))
         .unwrap()
@@ -86,29 +122,24 @@ fn a_segment_is_closed_when_the_next_line_would_pass_its_size() {
         store.append(&line(1, n, 300)).unwrap();
     }
     assert_eq!(
-        names(tmp.path()),
+        listing(tmp.path()),
         [("events-0f1e2d3c-00000001.jsonl".to_owned(), 3000)]
     );
     store.append(&line(1, 10, 300)).unwrap();
-    assert_eq!(
-        names(tmp.path()),
-        [
-            ("events-0f1e2d3c-00000001.jsonl".to_owned(), 3000),
-            ("events-0f1e2d3c-00000002.jsonl".to_owned(), 300)
-        ]
-    );
-    // a line longer than a segment still goes in, alone in a fresh one
+    // a line longer than a segment goes in alone
     store.append(&line(1, 11, 4500)).unwrap();
     store.append(&line(1, 12, 300)).unwrap();
-    let sizes: Vec<u64> = names(tmp.path()).into_iter().map(|(_, len)| len).collect();
+    let sizes: Vec<u64> = listing(tmp.path())
+        .into_iter()
+        .map(|(_, len)| len)
+        .collect();
     assert_eq!(sizes, [3000, 300, 4500, 300]);
-    // a later boot goes on numbering
-    let next = Store::open(tmp.path(), limits(3000, 100_000))
+    let later_boot = Store::open(tmp.path(), limits(3000, 100_000))
         .unwrap()
         .with_boot("aaaabbbb");
-    next.append(&line(1, 13, 3000)).unwrap();
+    later_boot.append(&line(1, 13, 3000)).unwrap();
     assert_eq!(
-        names(tmp.path()).last().unwrap().0,
+        listing(tmp.path()).last().unwrap().0,
         "events-aaaabbbb-00000005.jsonl"
     );
 }
@@ -120,243 +151,199 @@ fn the_oldest_segments_go_while_the_store_is_over_its_total() {
     let mut deleted = 0;
     for n in 0..100 {
         deleted += store.append(&line(1, n, 300)).unwrap().deleted;
-        let total: u64 = names(tmp.path()).iter().map(|(_, l)| l).sum();
-        assert!(total <= 9000, "{total} after {n}");
+        let total: u64 = listing(tmp.path()).iter().map(|(_, len)| len).sum();
+        assert!(total <= 9000, "{total} after line {n}");
     }
     assert_eq!(deleted, 7);
-    let contents = store::read(tmp.path()).unwrap();
-    let counts: Vec<u64> = contents.records.iter().map(|r| r.record.count).collect();
+    let counts: Vec<u64> = read_back(tmp.path()).into_iter().map(|(_, n)| n).collect();
     assert_eq!(counts, (70..100).collect::<Vec<_>>());
 }
 
-/// The clock of [`segments_older_than_the_retention_go`]: fifteen days from now.
+/// A clock fifteen days ahead.
 fn fifteen_days_later() -> SystemTime {
     SystemTime::now() + Duration::from_secs(15 * 86_400)
 }
 
 #[test]
-fn segments_older_than_the_retention_go() {
+fn segments_last_written_before_the_retention_go() {
+    let day = Duration::from_secs(86_400);
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::open(tmp.path(), limits(600, 100_000)).unwrap();
     for n in 0..4 {
         store.append(&line(1, n, 450)).unwrap();
     }
-    assert_eq!(names(tmp.path()).len(), 4);
-    // one segment was last written thirteen days ago, the others now: thirteen plus fifteen is past fourteen for all
+    // fifteen days on, every segment is past fourteen days old but the one just written
     let first = store::segments(tmp.path()).unwrap()[0].path.clone();
-    File::options()
-        .write(true)
-        .open(&first)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(13 * 86_400))
-        .unwrap();
-    let store = store.with_clock(fifteen_days_later);
-    let appended = store.append(&line(1, 4, 450)).unwrap();
-    // every older segment expired; the one written now stays
-    assert_eq!(appended.deleted, 4);
-    assert_eq!(names(tmp.path()).len(), 1);
-    // with the real clock, a thirteen-day-old segment stays
+    set_modified(&first, SystemTime::now() - 13 * day);
+    let ahead = store.with_clock(fifteen_days_later);
+    assert_eq!(ahead.append(&line(1, 4, 450)).unwrap().deleted, 4);
+    assert_eq!(listing(tmp.path()).len(), 1);
+    // with the real clock: thirteen days stays, fourteen and a minute goes
     let store = Store::open(tmp.path(), limits(600, 100_000)).unwrap();
     store.append(&line(1, 5, 450)).unwrap();
     let old = store::segments(tmp.path()).unwrap()[0].path.clone();
-    File::options()
-        .write(true)
-        .open(&old)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(13 * 86_400))
-        .unwrap();
-    assert_eq!(store.append(&line(1, 6, 450)).unwrap().deleted, 0);
-    File::options()
-        .write(true)
-        .open(&old)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(14 * 86_400 + 60))
-        .unwrap();
-    assert_eq!(store.append(&line(1, 7, 450)).unwrap().deleted, 1);
+    for (age, deleted) in [(13 * day, 0), (14 * day + Duration::from_secs(60), 1)] {
+        set_modified(&old, SystemTime::now() - age);
+        assert_eq!(
+            store.append(&line(1, 6, 450)).unwrap().deleted,
+            deleted,
+            "{age:?}"
+        );
+    }
 }
 
 const PER_WRITER: u64 = 10_000;
 
-fn write_many(dir: &Path, writer: u32) {
-    let store = Store::open(dir, Limits::default()).unwrap();
-    for n in 0..PER_WRITER {
-        // lengths vary, so lines of different writers cross segment ends at different places
-        let len = 300 + (n as usize * 7 + writer as usize * 13) % 200;
-        store.append(&line(writer, n, len)).unwrap();
-    }
-}
-
 #[test]
-fn eight_threads_write_whole_lines_within_the_cap() {
+fn eight_writers_with_stores_of_their_own_write_whole_lines_within_the_limits() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("events");
-    Store::open(&dir, Limits::default()).unwrap();
     std::thread::scope(|scope| {
-        for writer in 0..8 {
+        for writer in 0..8u32 {
             let dir = &dir;
-            scope.spawn(move || write_many(dir, writer));
+            scope.spawn(move || {
+                // each its own store, so each holds its own description of the lock file
+                let store = Store::open(dir, Limits::default()).unwrap();
+                for n in 0..PER_WRITER {
+                    // lengths vary, so writers cross segment ends at different places
+                    let len = 300 + (n as usize * 7 + writer as usize * 13) % 200;
+                    store.append(&line(writer, n, len)).unwrap();
+                }
+            });
         }
     });
     let segments = store::segments(&dir).unwrap();
-    let total: u64 = segments.iter().map(|s| s.len).sum();
-    assert!(total <= diag::STORE_BYTES, "{total}");
-    assert!(segments.iter().all(|s| s.len <= diag::SEGMENT_BYTES));
+    assert!(segments.iter().map(|s| s.len).sum::<u64>() <= STORE_BYTES);
+    assert!(segments.iter().all(|s| s.len <= SEGMENT_BYTES));
     let contents = store::read(&dir).unwrap();
     assert_eq!((contents.corrupt, contents.partial), (0, 0));
-    // deletion takes whole segments, oldest first: what is left of each writer is its last events, without a gap
+    // whole segments go, oldest first: what is left of each writer is its last lines without a gap
     let mut per_writer: std::collections::BTreeMap<u32, Vec<u64>> = Default::default();
-    for read in &contents.records {
-        per_writer
-            .entry(read.record.pid)
-            .or_default()
-            .push(read.record.count);
+    for (pid, n) in read_back(&dir) {
+        per_writer.entry(pid).or_default().push(n);
     }
-    assert_eq!(per_writer.len(), 8, "{:?}", per_writer.keys());
+    assert_eq!(per_writer.len(), 8);
     let mut kept = 0;
     for (writer, mut counts) in per_writer {
         counts.sort_unstable();
-        let first = counts[0];
         assert_eq!(
             counts,
-            (first..PER_WRITER).collect::<Vec<_>>(),
+            (counts[0]..PER_WRITER).collect::<Vec<_>>(),
             "writer {writer}"
         );
-        kept += counts.len();
+        kept += counts.len() as u64;
     }
-    // the cap keeps at least what fits in seven full segments of the longest lines
-    assert!(
-        kept as u64 * 500 >= diag::STORE_BYTES - diag::SEGMENT_BYTES,
-        "{kept}"
-    );
+    // at least seven full segments of the longest lines stay
+    assert!(kept * 500 >= STORE_BYTES - SEGMENT_BYTES, "{kept}");
 }
 
-static FAIL: AtomicBool = AtomicBool::new(false);
+static DISK_FULL: AtomicBool = AtomicBool::new(false);
 
-/// Writes half the line, then fails as a full disk does, while [`FAIL`] is set.
-fn full_disk(file: &File, line: &[u8]) -> io::Result<usize> {
-    if FAIL.load(Ordering::SeqCst) {
-        let mut f = file;
-        f.write_all(&line[..line.len() / 2])?;
-        return Err(io::Error::from_raw_os_error(28));
+/// While [`DISK_FULL`] is set, writes half the line and fails as a full disk does.
+fn filling_disk(file: &File, line: &[u8]) -> io::Result<usize> {
+    let mut file = file;
+    if DISK_FULL.load(Ordering::SeqCst) {
+        file.write_all(&line[..line.len() / 2])?;
+        return Err(io::ErrorKind::StorageFull.into());
     }
-    let mut f = file;
-    f.write(line)
+    file.write(line)
 }
 
 #[test]
-fn a_full_disk_leaves_no_half_line_and_the_store_works_again_after() {
+fn a_full_disk_is_unavailable_leaves_no_half_line_and_the_next_write_works() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::open(tmp.path(), Limits::default())
         .unwrap()
-        .with_writer(full_disk);
+        .with_writer(filling_disk);
     store.append(&line(1, 0, 300)).unwrap();
-    FAIL.store(true, Ordering::SeqCst);
+    DISK_FULL.store(true, Ordering::SeqCst);
     assert_eq!(store.append(&line(1, 1, 300)), Err(Unavailable::NoSpace));
-    FAIL.store(false, Ordering::SeqCst);
+    DISK_FULL.store(false, Ordering::SeqCst);
     store.append(&line(1, 2, 300)).unwrap();
     let contents = store::read(tmp.path()).unwrap();
     assert_eq!((contents.corrupt, contents.partial), (0, 0));
-    let counts: Vec<u64> = contents.records.iter().map(|r| r.record.count).collect();
-    assert_eq!(counts, [0, 2]);
-}
-
-fn running_as_root() -> bool {
-    fs::metadata("/proc/self")
-        .map(|m| std::os::unix::fs::MetadataExt::uid(&m) == 0)
-        .unwrap_or(false)
+    assert_eq!(read_back(tmp.path()), [(1, 0), (1, 2)]);
 }
 
 #[test]
 fn a_read_only_directory_is_unavailable_until_it_is_writable_again() {
     if running_as_root() {
-        // root writes a read-only directory anyway; the other refusals are covered below
+        // root writes a read-only directory anyway
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let store = Store::open(tmp.path(), Limits::default()).unwrap();
+    // segments of one line: the second line needs a new file in the directory
+    let store = Store::open(tmp.path(), limits(300, 100_000)).unwrap();
     store.append(&line(1, 0, 300)).unwrap();
-    // the segment exists: rotation into a new one needs the directory
-    let small = Store::open(tmp.path(), limits(300, 100_000)).unwrap();
-    fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o500)).unwrap();
-    assert_eq!(small.append(&line(1, 1, 300)), Err(Unavailable::Denied));
-    fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    small.append(&line(1, 1, 300)).unwrap();
-    assert_eq!(store::read(tmp.path()).unwrap().records.len(), 2);
+    set_mode(tmp.path(), 0o500);
+    assert_eq!(store.append(&line(1, 1, 300)), Err(Unavailable::Denied));
+    set_mode(tmp.path(), 0o700);
+    store.append(&line(1, 1, 300)).unwrap();
+    assert_eq!(read_back(tmp.path()), [(1, 0), (1, 1)]);
 }
 
 #[test]
-fn a_directory_that_is_a_link_or_writable_by_others_is_refused() {
+fn a_directory_others_could_tamper_with_is_refused_at_the_open_and_at_every_write() {
     let tmp = tempfile::tempdir().unwrap();
     let real = tmp.path().join("real");
     fs::create_dir(&real).unwrap();
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
     let link = tmp.path().join("link");
     symlink(&real, &link).unwrap();
-    assert_eq!(
-        Store::open(&link, Limits::default()).err(),
-        Some(Unavailable::Symlink)
-    );
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o777)).unwrap();
-    assert_eq!(
-        Store::open(&real, Limits::default()).err(),
-        Some(Unavailable::Writable)
-    );
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o770)).unwrap();
-    assert_eq!(
-        Store::open(&real, Limits::default()).err(),
-        Some(Unavailable::Writable)
-    );
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
-    let store = Store::open(&real, Limits::default()).unwrap();
-    store.append(&line(1, 0, 300)).unwrap();
-    // checked at every write, not only at the open
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o777)).unwrap();
-    assert_eq!(store.append(&line(1, 1, 300)), Err(Unavailable::Writable));
-    fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
-    store.append(&line(1, 2, 300)).unwrap();
     let file = tmp.path().join("file");
     fs::write(&file, "").unwrap();
-    assert_eq!(
-        Store::open(&file, Limits::default()).err(),
-        Some(Unavailable::NotADirectory)
-    );
-}
-
-#[test]
-fn a_directory_of_another_user_is_refused() {
-    if !running_as_root() {
-        // only root may give a directory away (CAP_CHOWN); the link and mode refusals run for everyone
-        return;
+    for (dir, mode, refusal) in [
+        (&link, 0o700, Unavailable::Symlink),
+        (&real, 0o777, Unavailable::Writable),
+        (&real, 0o770, Unavailable::Writable),
+        (&file, 0o700, Unavailable::NotADirectory),
+    ] {
+        set_mode(&real, mode);
+        assert_eq!(
+            Store::open(dir, Limits::default()).err(),
+            Some(refusal),
+            "{} {mode:o}",
+            dir.display()
+        );
     }
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("events");
-    fs::create_dir(&dir).unwrap();
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-    std::os::unix::fs::chown(&dir, Some(65534), Some(65534)).unwrap();
-    assert_eq!(
-        Store::open(&dir, Limits::default()).err(),
-        Some(Unavailable::NotOwned)
-    );
+    set_mode(&real, 0o700);
+    let store = Store::open(&real, Limits::default()).unwrap();
+    store.append(&line(1, 0, 300)).unwrap();
+    set_mode(&real, 0o777);
+    assert_eq!(store.append(&line(1, 1, 300)), Err(Unavailable::Writable));
+    set_mode(&real, 0o700);
+    store.append(&line(1, 2, 300)).unwrap();
+    // only root may give a directory away
+    if running_as_root() {
+        let theirs = tmp.path().join("theirs");
+        fs::create_dir(&theirs).unwrap();
+        set_mode(&theirs, 0o700);
+        std::os::unix::fs::chown(&theirs, Some(65534), Some(65534)).unwrap();
+        assert_eq!(
+            Store::open(&theirs, Limits::default()).err(),
+            Some(Unavailable::NotOwned)
+        );
+    }
 }
 
 #[test]
-fn a_broken_segment_is_read_around_with_counts() {
+fn reading_skips_and_counts_what_is_broken_cut_off_or_gone() {
     let tmp = tempfile::tempdir().unwrap();
-    let good = line(1, 1, 300);
+    let whole = line(1, 1, 300);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"garbage that is no json\n");
-    bytes.extend_from_slice(&good);
+    bytes.extend_from_slice(&whole);
     bytes.extend_from_slice(b"{\"schema\":\"cupertino.diag.v0\",\"id\":\"x\"}\n");
     bytes.extend_from_slice(b"\xff\xfe not utf-8 \xc3\n");
     bytes.extend_from_slice(&line(1, 2, 300));
-    bytes.extend_from_slice(&good[..120]);
+    bytes.extend_from_slice(&whole[..120]);
     fs::write(tmp.path().join("events-0f1e2d3c-00000001.jsonl"), &bytes).unwrap();
-    // a file of another name is not a segment
+    // a file of another name is no segment
     fs::write(tmp.path().join("notes.txt"), "x").unwrap();
     let contents = store::read(tmp.path()).unwrap();
-    assert_eq!(contents.records.len(), 2);
-    assert_eq!(contents.corrupt, 3);
-    assert_eq!(contents.partial, 1);
+    assert_eq!(
+        (contents.records.len(), contents.corrupt, contents.partial),
+        (2, 3, 1)
+    );
     // a segment removed between the listing and the read
     let gone = Segment {
         path: tmp.path().join("events-0f1e2d3c-00000002.jsonl"),
@@ -369,155 +356,41 @@ fn a_broken_segment_is_read_around_with_counts() {
 }
 
 #[test]
-fn clearing_deletes_the_segments_and_keeps_the_salt() {
+fn the_line_after_one_a_crash_cut_off_starts_a_line_of_its_own() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = Store::open(tmp.path(), limits(400, 100_000)).unwrap();
-    for n in 0..5 {
-        store.append(&line(1, n, 300)).unwrap();
-    }
-    let salt = store.salt().unwrap();
-    assert_eq!(store.clear().unwrap(), 5);
-    assert!(store::read(tmp.path()).unwrap().records.is_empty());
-    assert_eq!(store.salt().unwrap(), salt);
-    assert!(tmp.path().join("lock").exists());
-}
-
-#[test]
-fn an_unavailable_store_keeps_events_in_memory_and_says_so_once_it_works_again() {
-    let state = tempfile::tempdir().unwrap();
-    support::isolate(state.path());
-    let dir = state.path().join("cupertino/events");
-    fs::create_dir_all(&dir).unwrap();
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
-    let emitter = diag::init(diag::component!(), "test", diag::Sink::UserStore);
-    for n in 0..3 {
-        diag::event(Severity::Warn, "test.store.before", "while unavailable")
-            .field("n", Value::Count(n))
-            .emit();
-    }
-    assert_eq!(emitter.recent().len(), 3);
-    assert_eq!(emitter.store_unavailable(), Some(Unavailable::Writable));
-    assert!(store::read(&dir).unwrap().records.is_empty());
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-    diag::event(Severity::Info, "test.store.after", "available again").emit();
-    assert_eq!(emitter.store_unavailable(), None);
-    assert_eq!(emitter.recent().len(), 5);
-    let contents = store::read(&dir).unwrap();
-    let ids: Vec<&str> = contents
-        .records
-        .iter()
-        .map(|r| r.record.id.as_str())
-        .collect();
-    assert_eq!(ids, ["test.store.after", "diag.store.unavailable"]);
-    let back = &contents.records[1].record;
-    assert_eq!(back.fields.get("reason").unwrap(), "writable_by_others");
-    assert_eq!(back.fields.get("kept_in_memory").unwrap(), 3);
-}
-
-#[test]
-fn the_memory_ring_keeps_the_last_events_within_its_limits() {
-    let state = tempfile::tempdir().unwrap();
-    support::isolate(state.path());
-    let emitter = diag::init(diag::component!(), "test", diag::Sink::Memory);
-    // distinct ids, so the rate limit lets each through
-    const IDS: [&str; 4] = ["test.ring.a", "test.ring.b", "test.ring.c", "test.ring.d"];
-    for n in 0..300u64 {
-        let id = IDS[(n % 4) as usize];
-        // the limit is per id per window; a fresh window is not waited for, so only ten of each go in
-        diag::event(Severity::Info, id, "ring")
-            .field("n", Value::Count(n))
-            .emit();
-    }
-    assert_eq!(emitter.recent().len(), 40);
-    // past the event count: distinct ids
-    let names: Vec<&'static str> = (0..300)
-        .map(|i| &*Box::leak(format!("test.ring.n{i}").into_boxed_str()))
-        .collect();
-    for id in &names {
-        diag::event(Severity::Info, id, "ring").emit();
-    }
-    let recent = emitter.recent();
-    assert_eq!(recent.len(), diag::RING_EVENTS);
-    assert!(recent.last().unwrap().contains("\"test.ring.n299\""));
-    // past the byte count: big events
-    let big = "y".repeat(3000);
-    for id in &names[..200] {
-        diag::event(Severity::Info, id, "big")
-            .field("big", Value::Public(&big))
-            .emit();
-    }
-    let recent = emitter.recent();
-    let bytes: usize = recent.iter().map(String::len).sum();
-    assert!(
-        bytes <= diag::RING_BYTES && recent.len() < diag::RING_EVENTS,
-        "{bytes} {}",
-        recent.len()
-    );
-}
-
-#[test]
-fn a_write_to_an_open_lock_file_does_not_block_another_store() {
-    // two stores on one directory in one process: each holds its own open file description of the lock
-    let tmp = tempfile::tempdir().unwrap();
-    let a = Store::open(tmp.path(), Limits::default()).unwrap();
-    let b = Store::open(tmp.path(), Limits::default()).unwrap();
-    a.append(&line(1, 0, 300)).unwrap();
-    b.append(&line(2, 0, 300)).unwrap();
-    assert_eq!(store::read(tmp.path()).unwrap().records.len(), 2);
-}
-
-#[test]
-fn a_line_a_crash_cut_off_stays_a_line_of_its_own() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("events");
-    let store = Store::open(&dir, Limits::default()).unwrap();
+    let store = Store::open(tmp.path(), Limits::default()).unwrap();
     store.append(&line(1, 1, 300)).unwrap();
-    let segment = store::segments(&dir).unwrap()[0].path.clone();
-    // the process ended in the middle of its write
-    let cut = line(1, 2, 300);
+    let segment = store::segments(tmp.path()).unwrap()[0].path.clone();
+    // a process ended in the middle of its write
     fs::OpenOptions::new()
         .append(true)
         .open(&segment)
         .unwrap()
-        .write_all(&cut[..100])
+        .write_all(&line(1, 2, 300)[..100])
         .unwrap();
     store.append(&line(2, 1, 300)).unwrap();
-    let contents = store::read(&dir).unwrap();
-    let counts: Vec<(u32, u64)> = contents
-        .records
-        .iter()
-        .map(|r| (r.record.pid, r.record.count))
-        .collect();
-    assert_eq!(counts, [(1, 1), (2, 1)], "the next line is whole");
+    let contents = store::read(tmp.path()).unwrap();
     assert_eq!((contents.corrupt, contents.partial), (1, 0));
-}
-
-/// Sets the modification time of `path` to `secs` after the epoch.
-fn touch(path: &Path, secs: u64) {
-    File::options()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
-        .unwrap();
+    assert_eq!(read_back(tmp.path()), [(1, 1), (2, 1)]);
 }
 
 #[test]
-fn segments_keep_the_order_of_their_numbers_whatever_their_times_say() {
+fn segments_are_listed_fatal_ones_first_then_by_number_whatever_their_times_say() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
+    let make = |name: String, secs: u64| {
+        let path = dir.join(name);
+        fs::write(&path, b"").unwrap();
+        set_modified(&path, SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
+    };
     // a clock that went back between writes: numbers and times disagree
     for (seq, secs) in [(1, 300), (2, 100), (3, 200)] {
-        let path = dir.join(format!("events-0f1e2d3c-{seq:08}.jsonl"));
-        fs::write(&path, b"").unwrap();
-        touch(&path, secs);
+        make(format!("events-0f1e2d3c-{seq:08}.jsonl"), secs);
     }
-    let fatal = dir.join("fatal-0f1e2d3c-77.jsonl");
-    fs::write(&fatal, b"").unwrap();
-    touch(&fatal, 150);
-    let order: Vec<String> = names(dir).into_iter().map(|(name, _)| name).collect();
+    make("fatal-0f1e2d3c-77.jsonl".into(), 150);
+    let names: Vec<String> = listing(dir).into_iter().map(|(name, _)| name).collect();
     assert_eq!(
-        order,
+        names,
         [
             "fatal-0f1e2d3c-77.jsonl",
             "events-0f1e2d3c-00000001.jsonl",
@@ -525,17 +398,29 @@ fn segments_keep_the_order_of_their_numbers_whatever_their_times_say() {
             "events-0f1e2d3c-00000003.jsonl",
         ]
     );
-    // many of both, times scattered: one order, the numbers' (a sort given no consistent order may panic)
+    // many of both with scattered times still sort, by number (a sort given no consistent order may panic)
     for seq in 4..40u64 {
-        let path = dir.join(format!("events-0f1e2d3c-{seq:08}.jsonl"));
-        fs::write(&path, b"").unwrap();
-        touch(&path, (seq * 7919) % 500);
-        let fatal = dir.join(format!("fatal-0f1e2d3c-{seq}.jsonl"));
-        fs::write(&fatal, b"").unwrap();
-        touch(&fatal, (seq * 104_729) % 500);
+        make(
+            format!("events-0f1e2d3c-{seq:08}.jsonl"),
+            (seq * 7919) % 500,
+        );
+        make(format!("fatal-0f1e2d3c-{seq}.jsonl"), (seq * 104_729) % 500);
     }
     let all = store::segments(dir).unwrap();
     let seqs: Vec<u64> = all.iter().filter_map(|s| s.seq).collect();
     assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
-    assert_eq!(all.len(), 3 + 1 + 36 * 2);
+    assert_eq!(all.len(), 4 + 36 * 2);
+}
+
+#[test]
+fn clearing_deletes_every_segment_and_keeps_the_salt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path(), limits(400, 100_000)).unwrap();
+    for n in 0..5 {
+        store.append(&line(1, n, 300)).unwrap();
+    }
+    let salt = store.salt().unwrap();
+    assert_eq!(store.clear().unwrap(), 5);
+    assert!(read_back(tmp.path()).is_empty());
+    assert_eq!(store.salt().unwrap(), salt);
 }

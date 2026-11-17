@@ -1093,3 +1093,9 @@ One line per change to a decision or approval of a design: date, number, what, w
   layers (a facade re-export ahead of its API, a direct external crate ahead of its service) are expected, not owner
   decisions. `cargo xtask remaining` reports added lines and passes (`GROWTH_FAILS` in `xtask/src/remaining.rs`); the
   last wave sets it and the list only shrinks from then. D22 amended.
+- 2026-11-17: lead, after the review of wave 2: the evdev framer undoes a discarded partial frame's key and switch
+  transitions, so a resync reports what consumers missed (a behaviour change); the pipewire tests' stand-in program is a
+  Rust example, not shell; `TableCurve::new` refuses empty or non-positive entries, `mask_bounds` inverted corners; the
+  font tests of `glyph` live in `cupertino-ui-text`. Left: `cupertino-effects`' sample-image example writes files, which
+  the purity check does not see while the helper lives in `tests/common`; test file names mix kebab-case and
+  snake_case; the shake test's slope check depends on orientation (to compare with the research before any change).

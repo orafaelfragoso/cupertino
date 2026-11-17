@@ -17,7 +17,7 @@ Updated by the lead at every merge.
 |---|---|
 | Current wave | 2 (not started) |
 | Running tasks | none |
-| Enforced layers | foundation, system, testing (133 remaining-work lines) |
+| Enforced layers | foundation, testing; system after W4.5 (141 remaining-work lines) |
 | Waiting on the owner | nothing |
 | Last closed wave | 1 |
 
@@ -1070,8 +1070,10 @@ One line per change to a decision or approval of a design: date, number, what, w
   are `cupertino_theme::ui`.
 - 2026-11-17: lead, after the review of waves 0 and 1: `standard::menu_bar` leaves out the groups an application's
   features leave empty (found by W1.T; no consumer depended on them). D6's rule that `system` crates start no threads
-  becomes a check; the nine thread starts found are remaining-work lines, so `system` leaves `ENFORCED` until W4.5
-  moves them onto Kit's task API and closes it again. The remaining-work list may only lose lines against the base.
+  becomes a check; the eight thread starts found (the radios and peer watchers hand work to the bus connection's
+  executor, which D6 removes with W4.5's bus integration) are remaining-work lines, so `system` leaves `ENFORCED` until W4.5
+  moves them onto Kit's task API and closes it again. The remaining-work list may only lose lines against the base
+  (`cargo xtask remaining`), except lines of a rule the base's check did not have.
 - 2026-11-17: second independent review: statics allowed under D3, render-thread commits and CPU drawing (D4), two
   pools and a structural ban on blocking calls (D6), file operations in Kit (D8), the session agent's and the
   portal's dialogs placed (D9, D10, D11, D13), audio started on use (D15), self-restart and hang hand-back (D16, D17),

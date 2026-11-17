@@ -92,4 +92,5 @@ A change to a file of the release is a new patch at the end of the list (or an e
 lines), with its entry here and in the changelog's Unreleased section. To write one, diff a copy of the tree before
 the change against the tree after it, with paths relative to this directory, and run `cargo xtask vendored`.
 Updating to a new upstream release replaces the files and `UPSTREAM.sha256` with the new package's and rebases each
-patch onto it, dropping those the release already contains.
+patch onto it, dropping those the release already contains; the same commit changes the digest of `UPSTREAM.sha256`
+that `xtask/src/vendored.rs` pins.

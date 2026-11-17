@@ -37,49 +37,81 @@ fn wpa(akms: &[u8]) -> Vec<u8> {
     )
 }
 
-fn security(elements: &[u8], capability: u16) -> Security {
-    ssid_and_security(elements, capability).unwrap().1
+#[test]
+fn the_ssid_is_the_names_bytes_and_a_name_of_nothing_or_nul_bytes_is_hidden() {
+    for (name, elements, bytes, text, hidden) in [
+        ("no elements", vec![], &[][..], "", true),
+        ("a name", ssid("Cafe Wifi"), b"Cafe Wifi", "Cafe Wifi", false),
+        (
+            "not UTF-8",
+            element(0, &[b'a', 0xFF, b'b']),
+            &[b'a', 0xFF, b'b'],
+            "a\u{FFFD}b",
+            false,
+        ),
+        (
+            "among other elements",
+            [element(1, &[0x82, 0x84]), ssid("home"), element(3, &[6])].concat(),
+            b"home",
+            "home",
+            false,
+        ),
+        ("nul bytes", element(0, &[0, 0, 0]), &[0, 0, 0], "\0\0\0", true),
+        ("a nul and a letter", element(0, &[0, b'x']), &[0, b'x'], "\0x", false),
+    ] {
+        let (ssid, _) = ssid_and_security(&elements, 0).unwrap();
+        assert_eq!(ssid, Ssid(bytes.to_vec()), "{name}");
+        assert_eq!(ssid.as_bytes(), bytes, "{name}");
+        assert_eq!(ssid.to_text(), text, "{name}");
+        assert_eq!(ssid.is_hidden(), hidden, "{name}");
+    }
 }
 
 #[test]
-fn no_elements_are_an_open_network_with_an_empty_name() {
-    let (name, security) = ssid_and_security(&[], 0).unwrap();
-    assert_eq!(name, Ssid(Vec::new()));
-    assert!(name.is_hidden());
-    assert_eq!(security, Security::Open);
-}
-
-#[test]
-fn the_ssid_element_gives_the_name_as_bytes() {
-    let (name, _) = ssid_and_security(&ssid("Cafe Wifi"), 0).unwrap();
-    assert_eq!(name.as_bytes(), b"Cafe Wifi");
-    assert_eq!(name.to_text(), "Cafe Wifi");
-    assert!(!name.is_hidden());
-}
-
-#[test]
-fn a_name_that_is_not_utf8_keeps_its_bytes_and_shows_replacement_characters() {
-    let elements = element(0, &[b'a', 0xFF, b'b']);
-    let (name, _) = ssid_and_security(&elements, 0).unwrap();
-    assert_eq!(name.as_bytes(), [b'a', 0xFF, b'b']);
-    assert_eq!(name.to_text(), "a\u{FFFD}b");
-}
-
-#[test]
-fn a_network_that_hides_its_name_announces_nothing_or_nul_bytes() {
-    assert!(Ssid(Vec::new()).is_hidden());
-    assert!(Ssid(vec![0, 0, 0]).is_hidden());
-    assert!(!Ssid(vec![0, b'x']).is_hidden());
-}
-
-#[test]
-fn the_privacy_bit_without_a_security_element_is_wep() {
-    assert_eq!(security(&ssid("old"), CAPABILITY_PRIVACY), Security::Wep);
-    assert_eq!(security(&ssid("old"), 0x0001), Security::Open);
-}
-
-#[test]
-fn key_management_suites_map_to_the_security_they_allow() {
+fn the_security_follows_the_key_management_of_the_rsn_then_the_wpa_element_then_the_privacy_bit() {
+    let mut other_oui = body(IEEE, &[]);
+    other_oui[2 + 4 + 2 + 4] = 1;
+    other_oui.extend([0x00, 0x50, 0xF2, 2]);
+    let other_vendor = element(221, &[0x00, 0x10, 0x18, 0x02, 0, 0]);
+    let mut rows: Vec<(String, Vec<u8>, u16, Security)> = vec![
+        ("no elements".into(), vec![], 0, Security::Open),
+        ("privacy alone is WEP".into(), ssid("old"), CAPABILITY_PRIVACY, Security::Wep),
+        ("another capability bit".into(), ssid("old"), 0x0001, Security::Open),
+        (
+            "a suite of another OUI".into(),
+            element(48, &other_oui),
+            CAPABILITY_PRIVACY,
+            Security::Unsupported,
+        ),
+        ("WPA".into(), wpa(&[2]), CAPABILITY_PRIVACY, Security::Wpa),
+        ("WPA enterprise".into(), wpa(&[1]), CAPABILITY_PRIVACY, Security::Enterprise),
+        ("WPA unknown".into(), wpa(&[9]), CAPABILITY_PRIVACY, Security::Unsupported),
+        (
+            "RSN after WPA wins".into(),
+            [wpa(&[2]), rsn(&[2])].concat(),
+            CAPABILITY_PRIVACY,
+            Security::Wpa2,
+        ),
+        (
+            "RSN before WPA wins".into(),
+            [rsn(&[8]), wpa(&[2])].concat(),
+            CAPABILITY_PRIVACY,
+            Security::Wpa3,
+        ),
+        ("another vendor element".into(), other_vendor.clone(), 0, Security::Open),
+        (
+            "another vendor element with privacy".into(),
+            other_vendor,
+            CAPABILITY_PRIVACY,
+            Security::Wep,
+        ),
+        (
+            "RSN among other elements".into(),
+            [element(1, &[0x82, 0x84]), ssid("home"), element(3, &[6]), rsn(&[2])].concat(),
+            CAPABILITY_PRIVACY,
+            Security::Wpa2,
+        ),
+    ];
     for (akms, expected) in [
         (&[2u8][..], Security::Wpa2),
         (&[4], Security::Wpa2),
@@ -101,94 +133,37 @@ fn key_management_suites_map_to_the_security_they_allow() {
         (&[99], Security::Unsupported),
         (&[], Security::Unsupported),
     ] {
+        rows.push((format!("RSN {akms:?}"), rsn(akms), CAPABILITY_PRIVACY, expected));
+    }
+    for (name, elements, capability, expected) in rows {
         assert_eq!(
-            security(&rsn(akms), CAPABILITY_PRIVACY),
-            expected,
-            "{akms:?}"
+            ssid_and_security(&elements, capability).map(|(_, s)| s),
+            Ok(expected),
+            "{name}"
         );
     }
 }
 
 #[test]
-fn a_suite_of_another_oui_is_ignored() {
-    let mut data = body(IEEE, &[]);
-    let count_at = 2 + 4 + 2 + 4;
-    data[count_at] = 1;
-    data.extend([0x00, 0x50, 0xF2, 2]);
-    assert_eq!(
-        security(&element(48, &data), CAPABILITY_PRIVACY),
-        Security::Unsupported
-    );
-}
-
-#[test]
-fn the_wpa_element_gives_wpa_or_enterprise() {
-    assert_eq!(security(&wpa(&[2]), CAPABILITY_PRIVACY), Security::Wpa);
-    assert_eq!(
-        security(&wpa(&[1]), CAPABILITY_PRIVACY),
-        Security::Enterprise
-    );
-    assert_eq!(
-        security(&wpa(&[9]), CAPABILITY_PRIVACY),
-        Security::Unsupported
-    );
-}
-
-#[test]
-fn an_rsn_element_wins_over_a_wpa_element_in_either_order() {
-    let both = [wpa(&[2]), rsn(&[2])].concat();
-    assert_eq!(security(&both, CAPABILITY_PRIVACY), Security::Wpa2);
-    let both = [rsn(&[8]), wpa(&[2])].concat();
-    assert_eq!(security(&both, CAPABILITY_PRIVACY), Security::Wpa3);
-}
-
-#[test]
-fn a_vendor_element_that_is_not_wpa_does_not_count() {
-    let other = element(221, &[0x00, 0x10, 0x18, 0x02, 0, 0]);
-    assert_eq!(security(&other, 0), Security::Open);
-    assert_eq!(security(&other, CAPABILITY_PRIVACY), Security::Wep);
-}
-
-#[test]
-fn elements_around_the_interesting_ones_are_skipped() {
-    let all = [
-        element(1, &[0x82, 0x84]),
-        ssid("home"),
-        element(3, &[6]),
-        rsn(&[2]),
-    ]
-    .concat();
-    let (name, security) = ssid_and_security(&all, CAPABILITY_PRIVACY).unwrap();
-    assert_eq!(name.to_text(), "home");
-    assert_eq!(security, Security::Wpa2);
-}
-
-#[test]
-fn a_cut_element_header_is_truncated() {
-    assert_eq!(
-        ssid_and_security(&[0], 0),
-        Err(ParseError::Truncated {
-            what: "information element header",
-            needed: 2,
-            have: 1
-        })
-    );
-}
-
-#[test]
-fn an_element_longer_than_the_list_is_refused() {
-    assert_eq!(
-        ssid_and_security(&[0, 9, b'a'], 0),
-        Err(ParseError::InformationElement {
-            id: 0,
-            length: 9,
-            available: 1
-        })
-    );
-}
-
-#[test]
-fn an_rsn_element_that_ends_early_names_the_missing_field() {
+fn a_cut_or_overlong_element_or_an_rsn_element_that_ends_early_is_refused() {
+    let mut rows = vec![
+        (
+            vec![0],
+            ParseError::Truncated {
+                what: "information element header",
+                needed: 2,
+                have: 1,
+            },
+        ),
+        (
+            vec![0, 9, b'a'],
+            ParseError::InformationElement {
+                id: 0,
+                length: 9,
+                available: 1,
+            },
+        ),
+    ];
     for (data, what) in [
         (vec![1], "version"),
         (vec![1, 0, 0, 0xF, 0xAC], "group cipher suite"),
@@ -203,10 +178,13 @@ fn an_rsn_element_that_ends_early_names_the_missing_field() {
             "AKM suites",
         ),
     ] {
+        rows.push((element(48, &data), ParseError::SecurityElement { what }));
+    }
+    for (elements, expected) in rows {
         assert_eq!(
-            ssid_and_security(&element(48, &data), 0),
-            Err(ParseError::SecurityElement { what }),
-            "{what}"
+            ssid_and_security(&elements, 0).map(drop),
+            Err(expected.clone()),
+            "{expected:?}"
         );
     }
 }

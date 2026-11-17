@@ -59,6 +59,8 @@ pub enum Kind {
     Gate,
     /// The vendored trees reverse to their upstream releases (`crate::vendored`).
     Vendored,
+    /// The remaining-work list of the layers check holds no line the merge base does not (`crate::remaining`).
+    Remaining,
 }
 
 /// The whole plan of a run.
@@ -574,16 +576,21 @@ pub fn checks(
     }
 
     if profile.layers {
-        let command = cargo(&["run", "--locked", "-q", "-p", "cupertino-layers"]);
-        if plan.scope_empty {
-            list.push(skip(
-                "layers".to_owned(),
-                command,
-                Kind::Cargo,
-                "scope empty",
-            ));
-        } else {
-            list.push(run("layers".to_owned(), command, Kind::Cargo));
+        let layers = cargo(&["run", "--locked", "-q", "-p", "cupertino-layers"]);
+        let remaining = vec![
+            "xtask".to_owned(),
+            "remaining".to_owned(),
+            plan.git.merge_base.clone(),
+        ];
+        for (name, command, kind) in [
+            ("layers", layers, Kind::Cargo),
+            ("remaining", remaining, Kind::Remaining),
+        ] {
+            if plan.scope_empty {
+                list.push(skip(name.to_owned(), command, kind, "scope empty"));
+            } else {
+                list.push(run(name.to_owned(), command, kind));
+            }
         }
     }
     plan.feature_configs = profile.features.clone();

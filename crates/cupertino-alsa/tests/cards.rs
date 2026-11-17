@@ -69,10 +69,7 @@ fn a_missing_directory_or_card_is_reported_as_what_is_missing() {
 
     let dir = directory("nocard");
     for (name, result) in [
-        (
-            "a card",
-            Card::open(&dir, 4, OpenMode::ReadOnly).map(drop),
-        ),
+        ("a card", Card::open(&dir, 4, OpenMode::ReadOnly).map(drop)),
         (
             "the default master",
             Master::open_default(&dir, OpenMode::ReadOnly).map(drop),
@@ -82,12 +79,12 @@ fn a_missing_directory_or_card_is_reported_as_what_is_missing() {
             Master::open_card(&dir, 0, OpenMode::ReadOnly).map(drop),
         ),
     ] {
-        let expected = match (name, &result) {
-            ("a card", Err(Error::NoSuchCard { card: 4 })) => true,
-            ("the default master", Err(Error::NoPlaybackVolume)) => true,
-            ("a card's master", Err(Error::NoSuchCard { card: 0 })) => true,
-            _ => false,
-        };
+        let expected = matches!(
+            (name, &result),
+            ("a card", Err(Error::NoSuchCard { card: 4 }))
+                | ("the default master", Err(Error::NoPlaybackVolume))
+                | ("a card's master", Err(Error::NoSuchCard { card: 0 }))
+        );
         assert!(expected, "{name}: {result:?}");
     }
 }

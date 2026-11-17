@@ -38,11 +38,36 @@ fn the_level_of_a_raw_value_follows_the_gain_curve_and_is_clamped_to_zero_to_one
     let min_norm = 10f64.powf(-1.0);
     let wide_half = (10f64.powf(-0.5) - min_norm) / (1.0 - min_norm);
     for (name, range, raw, expected) in [
-        ("no curve, low", VolumeRange::new(0, 40, None).unwrap(), 0, 0.0),
-        ("no curve, linear", VolumeRange::new(0, 40, None).unwrap(), 10, 0.25),
-        ("no curve, high", VolumeRange::new(0, 40, None).unwrap(), 40, 1.0),
-        ("below the range", VolumeRange::new(10, 20, None).unwrap(), -100, 0.0),
-        ("above the range", VolumeRange::new(10, 20, None).unwrap(), 100, 1.0),
+        (
+            "no curve, low",
+            VolumeRange::new(0, 40, None).unwrap(),
+            0,
+            0.0,
+        ),
+        (
+            "no curve, linear",
+            VolumeRange::new(0, 40, None).unwrap(),
+            10,
+            0.25,
+        ),
+        (
+            "no curve, high",
+            VolumeRange::new(0, 40, None).unwrap(),
+            40,
+            1.0,
+        ),
+        (
+            "below the range",
+            VolumeRange::new(10, 20, None).unwrap(),
+            -100,
+            0.0,
+        ),
+        (
+            "above the range",
+            VolumeRange::new(10, 20, None).unwrap(),
+            100,
+            1.0,
+        ),
         ("narrow gain, low", linear_db(), 0, 0.0),
         ("narrow gain is linear in dB", linear_db(), 50, 0.5),
         ("narrow gain, high", linear_db(), 100, 1.0),
@@ -83,10 +108,30 @@ fn a_level_maps_back_to_the_nearest_raw_value_within_the_range() {
     }
     for (name, range, level, expected) in [
         ("no curve", VolumeRange::new(0, 40, None).unwrap(), 0.25, 10),
-        ("no curve, low", VolumeRange::new(0, 40, None).unwrap(), 0.0, 0),
-        ("no curve, high", VolumeRange::new(0, 40, None).unwrap(), 1.0, 40),
-        ("below zero", VolumeRange::new(10, 20, None).unwrap(), -4.0, 10),
-        ("above one", VolumeRange::new(10, 20, None).unwrap(), 4.0, 20),
+        (
+            "no curve, low",
+            VolumeRange::new(0, 40, None).unwrap(),
+            0.0,
+            0,
+        ),
+        (
+            "no curve, high",
+            VolumeRange::new(0, 40, None).unwrap(),
+            1.0,
+            40,
+        ),
+        (
+            "below zero",
+            VolumeRange::new(10, 20, None).unwrap(),
+            -4.0,
+            10,
+        ),
+        (
+            "above one",
+            VolumeRange::new(10, 20, None).unwrap(),
+            4.0,
+            20,
+        ),
         ("narrow gain", linear_db(), 0.5, 50),
         (
             "a flat curve",

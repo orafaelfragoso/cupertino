@@ -5,6 +5,11 @@
 //! starts: its key takes its safe value (the last column), so one typo cannot keep the machine without a login screen. A
 //! line without `=` is a bad line of the key it starts with. `cupertino-sessiond --check-config` lists every bad line.
 //!
+//! A command that names a program earlier versions had and this one does not (a locally edited file the package manager
+//! kept over an upgrade) runs its replacement, and the manager warns: `/usr/lib/cupertino/greeter` is
+//! `/usr/bin/cupertino-server --udev`, `/usr/bin/cupertino-session [args]` is `/usr/bin/cupertino-server --session
+//! [args]` ([`Loaded::replaced`]).
+//!
 //! Names in a list are separated by commas, with spaces around them allowed; a name with a space or `:` inside is bad.
 //!
 //! | Key | Value | Default | When the value is bad |
@@ -209,6 +214,44 @@ pub type Problem = (usize, String);
 pub struct Loaded {
     pub config: LoginConfig,
     pub problems: Vec<Problem>,
+    /// The commands that named a program earlier versions installed and this one does not, each run as its
+    /// replacement: a locally edited file the package manager kept over an upgrade (the new one is beside it as
+    /// `.pacnew`). The manager starts and warns.
+    pub replaced: Vec<Replaced>,
+}
+
+/// A command of the file that names a removed program, and what runs in its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replaced {
+    /// `greeter-command` or `session-command`.
+    pub key: &'static str,
+    /// The removed program.
+    pub program: &'static str,
+    /// The command that runs instead.
+    pub command: Vec<String>,
+}
+
+/// The login screen's program of earlier versions, a wrapper that took no arguments: it ran the compositor with
+/// `--udev` and the login screen's settings file, which the manager now gives every greeter command.
+const REMOVED_GREETER: &str = "/usr/lib/cupertino/greeter";
+/// The session program of earlier versions: it passed its arguments on to the compositor, as `--session` does.
+const REMOVED_SESSION: &str = "/usr/bin/cupertino-session";
+/// The compositor, which runs the login screen (`--udev`) and a user's session (`--session`).
+const SERVER: &str = "/usr/bin/cupertino-server";
+
+/// `words` with a removed program of [`REMOVED_GREETER`] or [`REMOVED_SESSION`] replaced; `None` for any other command.
+fn replace_removed(words: &[String]) -> Option<(&'static str, Vec<String>)> {
+    let (program, args) = words.split_first()?;
+    let (removed, mut command) = match program.as_str() {
+        REMOVED_GREETER => return Some((REMOVED_GREETER, vec![SERVER.into(), "--udev".into()])),
+        REMOVED_SESSION => (
+            REMOVED_SESSION,
+            vec![SERVER.to_owned(), "--session".to_owned()],
+        ),
+        _ => return None,
+    };
+    command.extend(args.iter().cloned());
+    Some((removed, command))
 }
 
 impl LoginConfig {
@@ -291,8 +334,26 @@ impl LoginConfig {
                 fatal.push((0, format!("{key} is required")));
             }
         }
+        let mut replaced = Vec::new();
+        for (key, command) in [
+            ("greeter-command", &mut config.greeter_command),
+            ("session-command", &mut config.session_command),
+        ] {
+            if let Some((program, new)) = replace_removed(command) {
+                *command = new.clone();
+                replaced.push(Replaced {
+                    key,
+                    program,
+                    command: new,
+                });
+            }
+        }
         if fatal.is_empty() {
-            Ok(Loaded { config, problems })
+            Ok(Loaded {
+                config,
+                problems,
+                replaced,
+            })
         } else {
             Err(fatal)
         }

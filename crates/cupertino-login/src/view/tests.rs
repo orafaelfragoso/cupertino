@@ -105,7 +105,30 @@ thread_local! {
     static HELD: Cell<bool> = const { Cell::new(false) };
     /// The notifications the lock screen shows from the next input on, as the daemon would list them.
     static NOTICES: RefCell<Option<Vec<Notice>>> = const { RefCell::new(None) };
+    /// The opacity of the interface of the screens of this thread.
+    static OPACITY: Cell<f64> = const { Cell::new(1.0) };
+    /// The lock screens of this thread show the help button.
+    static HELP: Cell<bool> = const { Cell::new(false) };
+    /// The lock screens of this thread show the back button.
+    static BACK: Cell<bool> = const { Cell::new(false) };
+    /// The lock screens of this thread show this message near the bottom.
+    static LOCK_MESSAGE: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// The lock screens of this thread ask for a locked account.
+    static LOCKED: Cell<bool> = const { Cell::new(false) };
+    /// The lock screens of this thread hide the avatar and the name.
+    static HIDE_USER: Cell<bool> = const { Cell::new(false) };
+    /// The lock screens of this thread show a name field with this text and revision above the password field.
+    static NAME: Cell<Option<(&'static str, u64)>> = const { Cell::new(None) };
+    /// How far the switch between the picker and the password screen has come on this thread.
+    static BLOCK: Cell<f64> = const { Cell::new(1.0) };
+    /// Where the moving avatar starts during that switch: on the password screen, and on the picker for its first tile.
+    static AVATAR_FROM: Cell<Option<Rect>> = const { Cell::new(None) };
+    /// The display options of the lock screens of this thread.
+    static ACCESS: Cell<Access> = const { Cell::new(Access { increase_contrast: false, reduce_transparency: false }) };
 }
+
+/// What the test screens stand on: the drawn fallback.
+static WALLPAPER: crate::wallpaper::Source = crate::wallpaper::Source::Plain;
 
 #[derive(Debug)]
 struct Model {
@@ -130,6 +153,8 @@ struct Model {
     decided: Vec<Decision>,
     now: f64,
     notices: Vec<Notice>,
+    /// The help button opened the help.
+    help_open: bool,
 }
 
 struct Shown;
@@ -183,6 +208,7 @@ impl Application for Shown {
             decided: Vec::new(),
             now: 1.0,
             notices: NOTICES.with_borrow_mut(Option::take).unwrap_or_default(),
+            help_open: false,
         };
         (model, Vec::new())
     }
@@ -195,7 +221,7 @@ impl Application for Shown {
         model.now += 0.01;
         let now = model.now;
         match input {
-            Input::Edited => model.screen.edit(now),
+            Input::Edited(typed) => model.screen.edit_to(now, typed),
             Input::Escape => model.screen.escape(now),
             Input::Submit(typed) => {
                 if model.screen.submit(now, typed.secret()).is_some() {
@@ -212,12 +238,17 @@ impl Application for Shown {
                 let outcome = model.outcome.clone();
                 model.screen.finish_auth(now, outcome).unwrap();
             }
+            Input::Help => model.help_open = !model.help_open,
             Input::Reopen(on) => {
                 if model.panel.reopen() != on {
                     model.panel.toggle_reopen();
                 }
             }
             Input::Decide(decision) => model.decided.push(decision),
+            Input::Step(direction) => model.picker.step(direction, 10),
+            Input::Jump(jump) => model.picker.jump(jump, 10),
+            Input::Select(index) => model.picker.select(index),
+            Input::Focused(index) => model.picker.focus(index),
             _ => {}
         }
         Vec::new()
@@ -239,16 +270,33 @@ impl Application for Shown {
                             enabled: true,
                             busy: s.checking(),
                         },
+                        name: NAME
+                            .get()
+                            .map(|(text, revision)| NameField { text, revision }),
+                        typed: s.typed(),
                         caps_lock: false,
                         spinner: None,
                         denied: s.failure_outline(),
+                        denied_said: s.denied_said(),
                         notice: s.notice(),
-                        help: false,
-                        opacity: 1.0,
+                        help: HELP.get(),
+                        help_open: HELP.get() && model.help_open,
+                        opacity: OPACITY.get(),
+                        block: BLOCK.get(),
                         shake: 0.0,
                         hidden: false,
+                        lock_message: LOCK_MESSAGE.get(),
+                        back: BACK.get(),
+                        locked: LOCKED.get(),
+                        hide_user: HIDE_USER.get(),
+                        access: ACCESS.get(),
+                        large_clock: true,
+                        avatar_from: AVATAR_FROM.get(),
                         power: None,
+                        status: Status::NONE,
                         notices: &model.notices,
+                        wallpaper: &WALLPAPER,
+                        dim: 1.0,
                     },
                     LOCKED_TITLE,
                     |input| input,
@@ -270,7 +318,15 @@ impl Application for Shown {
                         clock: &model.clock,
                         picker: &model.picker,
                         max_per_page: 10,
+                        rtl: false,
+                        large_clock: true,
+                        avatar_from: AVATAR_FROM.get().map(|from| (0, from)),
                         power: None,
+                        status: Status::NONE,
+                        opacity: OPACITY.get(),
+                        block: BLOCK.get(),
+                        wallpaper: &WALLPAPER,
+                        dim: 1.0,
                     },
                     |input| input,
                 );
@@ -1342,6 +1398,46 @@ fn a_typed_character_adds_its_dot_and_moves_the_caret_and_nothing_else_of_the_sc
 }
 
 #[test]
+fn the_time_is_glass_letters_made_once_from_the_screens_own_picture() {
+    let made = widgets::glass_made();
+    let mut run = Run::new(Surface::Lock);
+    // one picture of the time's letters; typing and the caret make none
+    assert_eq!(widgets::glass_made(), made + 1);
+    run.type_text("abc");
+    assert_eq!(widgets::glass_made(), made + 1);
+    // the time is an image laid over the kept picture, not text over what lies under the window: no run of glyphs is
+    // drawn at its size, and a picture of its letters is laid
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let ops: Vec<&PaintOp> = snapshot
+        .display_list
+        .nodes
+        .iter()
+        .flat_map(|n| n.ops.iter())
+        .collect();
+    assert!(!ops.iter().any(|op| matches!(
+        op,
+        PaintOp::Glyphs { run, .. } if (f64::from(run.size) - layout.time_size).abs() < 0.5
+    )));
+    let glass = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.widget.contains("GlassText"))
+        .expect("the time in glass letters");
+    assert!(ops.iter().any(|op| matches!(
+        op,
+        PaintOp::Image { dst, .. } if dst.width() > layout.time_size && dst.width() < glass.rect.width()
+    )));
+}
+
+#[test]
 fn a_typed_character_repaints_only_around_the_field() {
     let mut run = Run::new(Surface::Lock);
     run.type_text("x");
@@ -1351,9 +1447,12 @@ fn a_typed_character_repaints_only_around_the_field() {
     assert!(!stats.is_empty(), "the character was drawn");
     let screen = (SCREEN.width * SCREEN.height) as u64 * 4;
     for frame in &stats {
-        // the wallpaper's gradients are drawn only in the tiles under the change, and the interface is no layer of
-        // its own while fully shown: a key costs a few tiles, not the screen
-        assert_eq!(frame.groups_painted, 0, "{frame:?}");
+        // the kept picture is laid again only in the squares under the change, and the interface is no layer of its
+        // own while fully shown: a key costs a few squares, not the screen; the one layer it may touch is the name's
+        // shadow, whose blur reaches the field's top
+        assert!(frame.groups_painted <= 1, "{frame:?}");
+        assert!(frame.group_composite.bytes < screen / 50, "{frame:?}");
+        assert_eq!(frame.image_decode.bytes, 0, "{frame:?}");
         assert!(
             frame.scratch_images.bytes < screen / 10,
             "a frame of a typed character drew {} bytes of a screen of {screen}: {frame:?}",
@@ -1695,4 +1794,583 @@ fn each_session_panel_is_an_alert_on_regular_glass_and_paints_its_body_only_with
             assert_eq!(window.map(|c| c.a), Some(1.0));
         }
     }
+}
+
+/// A press and release of the left button at `position`.
+fn press_at(run: &mut Run, position: Point) {
+    let pointer = |event| WindowEvent::Pointer(event, Timestamp(0));
+    run.deliver(pointer(PointerEvent::Motion { position }));
+    for pressed in [true, false] {
+        run.deliver(pointer(PointerEvent::Button {
+            position,
+            button: MouseButton::Left,
+            pressed,
+            serial: 1,
+            mods: Mods::NONE,
+        }));
+    }
+}
+
+#[test]
+fn the_screen_s_picture_is_made_once_and_typing_or_a_fade_lays_it_again_without_making_it() {
+    let mut run = Run::new(Surface::Lock);
+    let made = pictures_made();
+    assert!(made >= 1, "the screen stands on its picture");
+    run.type_text("xy");
+    assert_eq!(pictures_made(), made, "typed characters make no picture");
+    run.take_stats();
+    // a frame of the interface fading: each part is a layer of its own size over the kept picture
+    OPACITY.set(0.5);
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(3.0, 3.0),
+        },
+        Timestamp(0),
+    ));
+    let stats = run.take_stats();
+    assert_eq!(
+        pictures_made(),
+        made,
+        "a frame of the fade makes no picture"
+    );
+    let screen = (SCREEN.width * SCREEN.height) as u64;
+    assert!(stats.iter().any(|f| f.groups_painted > 0), "{stats:?}");
+    for frame in &stats {
+        assert!(
+            frame.dirty_pixels < screen / 2,
+            "a frame of the fade drew {} of {screen} pixels: {frame:?}",
+            frame.dirty_pixels
+        );
+        assert_eq!(frame.image_decode.bytes, 0, "{frame:?}");
+    }
+    OPACITY.set(1.0);
+}
+
+#[test]
+fn the_submit_button_shows_once_the_field_holds_text_and_a_press_on_it_submits() {
+    let mut run = Run::new(Surface::Lock);
+    let field = keyed(&run, "password-0");
+    let button = Point::new(field.max_x() - 14.0, field.min_y() + field.height() / 2.0);
+    // empty, a press there only places the caret
+    press_at(&mut run, button);
+    assert!(run.model().submitted.is_empty());
+    let before = glyphs(&run);
+    run.type_text(SECRET);
+    assert!(run.model().screen.typed());
+    let field = keyed(&run, "password-0");
+    press_at(
+        &mut run,
+        Point::new(field.max_x() - 14.0, field.min_y() + field.height() / 2.0),
+    );
+    assert_eq!(
+        run.model().submitted,
+        [true],
+        "the press submitted the password"
+    );
+    assert!(!run.model().screen.typed(), "the new field is empty");
+    assert!(glyphs(&run) >= before);
+}
+
+#[test]
+fn the_help_button_opens_the_help_and_leaves_the_focus_in_the_field() {
+    HELP.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let (_, button) = run
+        .node(|n| n.name.as_deref() == Some(HELP_LABEL))
+        .expect("the help button");
+    assert_eq!(button.role, Role::Button);
+    assert!(button.states.focusable, "the button is a Tab stop");
+    let said = |run: &Run| {
+        run.tree()
+            .iter()
+            .any(|(_, n)| n.name.as_deref() == Some(PASSWORD_HELP))
+    };
+    assert!(!said(&run));
+    let field = keyed(&run, "password-0");
+    let help = keyed(&run, "help");
+    // 6 points past the field, as tall as it
+    assert_eq!(help.min_x() - field.max_x(), 6.0);
+    assert_eq!(help.height(), field.height());
+    run.click("help");
+    assert!(said(&run), "the help shows");
+    assert!(
+        is_password(&run.focused().expect("a focus")),
+        "typing goes on in the field"
+    );
+    run.click("help");
+    assert!(!said(&run), "a second press closes it");
+    HELP.set(false);
+}
+
+#[test]
+fn the_clock_and_the_user_block_are_each_a_part_no_larger_than_they_draw() {
+    let run = Run::new(Surface::Lock);
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    // nothing but the window's own content and the squares of its picture spans the screen
+    let full: Vec<_> = snapshot
+        .nodes
+        .iter()
+        .filter(|n| n.rect.width() >= SCREEN.width && n.rect.height() >= SCREEN.height)
+        .collect();
+    assert!(full.len() <= 2, "{full:?}");
+    let field = keyed(&run, "password-0");
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    assert_eq!(field.min_y(), layout.pill.min_y());
+    assert_eq!(field.width(), layout.pill.width());
+}
+
+#[test]
+fn the_names_shadow_is_a_gaussian_of_half_its_radius_held_by_the_user_block() {
+    // a blur radius of 6 pt is a deviation of 3 pt, and the block's layer holds three deviations past the name
+    let sigma = cupertino_raster_math::blur::sigma_for_radius(widgets::NAME_SHADOW_BLUR as f32);
+    assert_eq!(sigma, 3.0);
+    assert!(3.0 * f64::from(sigma) <= SHADOW_REACH);
+}
+
+#[test]
+fn the_picker_rows_pad_the_avatar_alike_above_and_below_and_select_nothing_until_an_arrow() {
+    let mut run = Run::new(Surface::Picker);
+    let selected = |run: &Run| -> Vec<String> {
+        run.tree()
+            .into_iter()
+            .filter(|(_, n)| n.role == Role::Button && n.states.selected)
+            .filter_map(|(_, n)| n.name)
+            .collect()
+    };
+    // nothing shows as selected until the first arrow, which selects the first row
+    assert!(selected(&run).is_empty());
+    run.key(0xff54, None);
+    assert_eq!(selected(&run).len(), 1);
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    let tile = |index: usize| {
+        let id = run
+            .driver
+            .runtime()
+            .find(run.window, &tile_key(index))
+            .unwrap();
+        snapshot.nodes.iter().find(|n| n.id == id).unwrap()
+    };
+    let first = tile(0);
+    let avatar = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.parent == Some(first.id) && n.widget.contains("Avatar"))
+        .expect("the row's avatar")
+        .rect;
+    let name = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.parent == Some(first.id) && n.widget.contains("Decorative"))
+        .expect("the row's name")
+        .rect;
+    // the selection box is the row's frame: the padding above the avatar is the padding below it, and the avatar sits
+    // 18 pt in from the leading edge with the name 10 pt after it
+    let above = avatar.min_y() - first.rect.min_y();
+    let below = first.rect.max_y() - avatar.max_y();
+    assert!((above - below).abs() < 1e-6, "{above} above, {below} below");
+    assert!((avatar.min_x() - first.rect.min_x() - 18.0).abs() < 1e-6);
+    assert!((name.min_x() - avatar.max_x() - 10.0).abs() < 1e-6);
+    // the name's line is centred on the avatar's middle
+    assert!(
+        (name.center().y - avatar.center().y).abs() < 1.0,
+        "{name:?} {avatar:?}"
+    );
+    assert!((first.rect.height() - layout.row_height).abs() < 1e-6);
+    // the rows touch, and the last row ends 0.1 of the height above the bottom
+    let second = tile(1).rect;
+    assert!(
+        (second.min_x() - first.rect.max_x()).abs() < 1e-6
+            || (second.min_y() - first.rect.max_y()).abs() < 1e-6
+    );
+    let bottom = (0..run.model().picker.tiles().len())
+        .map(|i| tile(i).rect.max_y())
+        .fold(0.0_f64, f64::max);
+    assert!((bottom - 0.9 * SCREEN.height).abs() < 1e-6, "{bottom}");
+}
+
+/// The label nodes of the window's tree whose text is `text`.
+fn labelled(run: &Run, text: &str) -> Option<AccessibilityNode> {
+    run.node(|n| n.name.as_deref() == Some(text))
+        .map(|(_, n)| n)
+}
+
+#[test]
+fn tab_goes_round_the_back_button_the_field_and_the_help_button() {
+    HELP.set(true);
+    BACK.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let start = run.focused().expect("a focus");
+    assert!(is_password(&start), "the field has the focus at first");
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(HELP_LABEL)
+    );
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(BACK_LABEL)
+    );
+    run.key(TAB, None);
+    assert!(is_password(&run.focused().expect("a focus")));
+    // Tab never opens a menu
+    assert!(!run
+        .model()
+        .handled
+        .iter()
+        .any(|m| m.contains("TogglePower")));
+    HELP.set(false);
+    BACK.set(false);
+}
+
+#[test]
+fn the_back_button_stands_6_points_before_the_field_and_goes_back_as_escape_does() {
+    BACK.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let field = keyed(&run, "password-0");
+    let back = keyed(&run, "back");
+    assert_eq!(field.min_x() - back.max_x(), 6.0);
+    assert_eq!(back.height(), 28.0);
+    assert_eq!(back.width(), 28.0);
+    assert_eq!(back.min_y(), field.min_y());
+    run.click("back");
+    assert!(run.model().handled.iter().any(|m| m == "Escape"));
+    BACK.set(false);
+}
+
+#[test]
+fn the_lock_message_stands_near_the_bottom_and_gives_way_to_the_help() {
+    LOCK_MESSAGE.set(Some("Call the desk on 4410"));
+    HELP.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let message = keyed(&run, "lock-message");
+    let field = keyed(&run, "password-0");
+    // 400 points wide, centred, below the field and inside the screen
+    assert!((message.width() - 400.0).abs() < 1e-6, "{message:?}");
+    assert!((message.center().x - SCREEN.width / 2.0).abs() < 1e-6);
+    assert!(message.min_y() > field.max_y());
+    assert!(message.max_y() <= SCREEN.height);
+    assert!(labelled(&run, "Call the desk on 4410").is_some());
+    run.click("help");
+    assert!(labelled(&run, "Call the desk on 4410").is_none());
+    assert!(labelled(&run, PASSWORD_HELP).is_some());
+    LOCK_MESSAGE.set(None);
+    HELP.set(false);
+}
+
+#[test]
+fn a_locked_account_shows_the_lock_and_takes_no_password() {
+    LOCKED.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let field = run.node(is_password).expect("the field").1;
+    assert!(field.states.disabled, "the field takes nothing");
+    assert!(labelled(&run, ACCOUNT_LOCKED).is_some(), "the lock says so");
+    run.type_text("abc");
+    assert!(!run.model().screen.typed());
+    assert!(
+        run.dump().contains(LOCKED_PLACEHOLDER),
+        "the field says the account is locked"
+    );
+    LOCKED.set(false);
+}
+
+#[test]
+fn hiding_the_user_leaves_out_the_avatar_and_the_name() {
+    HIDE_USER.set(true);
+    let run = Run::new(Surface::Lock);
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    assert!(!snapshot.nodes.iter().any(|n| n.widget.contains("Avatar")));
+    assert!(labelled(&run, &run.model().user.display).is_none());
+    HIDE_USER.set(false);
+    let run = Run::new(Surface::Lock);
+    assert!(labelled(&run, &run.model().user.display).is_some());
+}
+
+#[test]
+fn a_denial_is_the_main_hint_210_points_wide_its_baseline_6_hundredths_of_the_height_below_the_name(
+) {
+    let mut run = Run::new(Surface::Lock);
+    run.type_text("wrong");
+    run.key(RETURN, None);
+    let field = keyed(&run, "password-1");
+    let metrics = run.model().metrics;
+    let layout = crate::layout::Layout::new(
+        SCREEN.width,
+        SCREEN.height,
+        metrics.ascent,
+        metrics.descent,
+        metrics.placeholder,
+    );
+    let main = labelled(&run, DENIED)
+        .expect("the denial under the field")
+        .bounds;
+    // the main hint's line: its first baseline 0.06 H below the name's, 210 points wide, centred
+    assert!((main.width() - 210.0).abs() < 1e-6, "{main:?}");
+    assert!((main.center().x - SCREEN.width / 2.0).abs() < 1e-6);
+    let top = layout.hint_baseline - metrics.ascent * crate::layout::HINT_SIZE;
+    assert!((main.min_y() - top).abs() < 1e-6, "{main:?} {top}");
+    assert!(main.min_y() >= field.max_y());
+}
+
+#[test]
+fn the_field_tint_is_the_label_colour_darkened_black_with_more_contrast_and_opaque_without_transparency(
+) {
+    use super::widgets::FieldTint;
+    let normal = FieldTint::of(Access::default(), false);
+    assert_eq!(normal, FieldTint::Label { disabled: false });
+    // the secondary label's white 0.55 at the tint's strength 0.2, its white taken to 0.6 by the 0.4 darken layer
+    let c = normal.color();
+    assert!(
+        (c.a - 0.55 * 0.2).abs() < 1e-6 && (c.r - 0.6).abs() < 1e-6,
+        "{c:?}"
+    );
+    // disabled: the tertiary label's 0.25
+    let c = FieldTint::of(Access::default(), true).color();
+    assert!((c.a - 0.25 * 0.2).abs() < 1e-6, "{c:?}");
+    let contrast = Access {
+        increase_contrast: true,
+        reduce_transparency: false,
+    };
+    let c = FieldTint::of(contrast, false).color();
+    assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0));
+    // Reduce Transparency wins over Increase Contrast: an opaque light field
+    let opaque = Access {
+        increase_contrast: true,
+        reduce_transparency: true,
+    };
+    let c = FieldTint::of(opaque, false).color();
+    assert_eq!(c.a, 1.0);
+    assert!(c.r > 0.85);
+}
+
+#[test]
+fn the_field_stands_a_clear_step_lighter_than_a_dark_picture_and_darker_than_a_light_one() {
+    use super::widgets::FieldTint;
+    use crate::wallpaper::material;
+    let tint = FieldTint::of(Access::default(), false);
+    for dark in [0.0f32, 0.03, 0.06, 0.1] {
+        let on = tint.over(material([dark; 3], [dark; 3]))[0];
+        assert!(on - dark > 0.06, "{dark}: {on}");
+    }
+    for light in [0.6f32, 0.75, 0.9] {
+        let on = tint.over(material([light; 3], [light; 3]))[0];
+        assert!(light - on > 0.08, "{light}: {on}");
+    }
+}
+
+#[test]
+fn notification_cards_stand_on_the_fields_material_made_from_the_picture_under_them() {
+    use super::widgets::FieldTint;
+    NOTICES.set(Some(mixed_notices()));
+    let mut run = Run::new(Surface::Lock);
+    run.deliver(WindowEvent::Pointer(
+        PointerEvent::Motion {
+            position: Point::new(5.0, 5.0),
+        },
+        Timestamp(0),
+    ));
+    let metrics = run.model().metrics;
+    let column = lock_notices::column(SCREEN.width, SCREEN.height);
+    let tallest =
+        lock_notices::card_height(lock_notices::BODY_LINES, metrics.ascent, metrics.descent)
+            + lock_notices::CARD_GAP;
+    let region = [
+        column.min_x() as u32,
+        column.min_y() as u32,
+        column.max_x() as u32,
+        (column.min_y() + 3.0 * tallest).ceil() as u32,
+    ];
+    let frosted = crate::wallpaper::frosted(
+        &WALLPAPER,
+        SCREEN.width as u32,
+        SCREEN.height as u32,
+        1.0,
+        region,
+    );
+    let tint = FieldTint::Label { disabled: false };
+    let (width, pixels) = run.pixels();
+    for key in ["notice-4", "notice-3", "notice-2"] {
+        let card = keyed(&run, key);
+        // in the bottom padding, clear of the text and of the rounded corner
+        let (x, y) = (
+            (card.min_x() + 24.0) as usize,
+            (card.max_y() - lock_notices::CARD_GAP - 5.0) as usize,
+        );
+        let at = ((y - region[1] as usize) * (region[2] - region[0]) as usize + x
+            - region[0] as usize)
+            * 4;
+        let under = [0, 1, 2].map(|k| f32::from(frosted[at + k]) / 255.0);
+        let want = tint.over(under);
+        let got = &pixels[(y * width + x) * 4..][..3];
+        for k in 0..3 {
+            let got = f32::from(got[k]) / 255.0;
+            assert!(
+                (got - want[k]).abs() <= 3.0 / 255.0,
+                "{key} {k}: {got} {}",
+                want[k]
+            );
+        }
+    }
+    NOTICES.set(None);
+}
+
+#[test]
+fn during_the_switch_the_avatar_moves_between_its_tile_and_the_password_screen_at_full_opacity() {
+    let metrics = Run::new(Surface::Lock).model().metrics;
+    let to = crate::view::user_avatar(SCREEN, metrics);
+    let from = Rect::new(100.0, 600.0, to.width(), to.height());
+    // halfway through the switch to the password screen: halfway from the tile to its place
+    BLOCK.set(0.5);
+    AVATAR_FROM.set(Some(from));
+    let run = Run::new(Surface::Lock);
+    let avatar = keyed(&run, "avatar");
+    let mid = Point::new(
+        (from.center().x + to.center().x) / 2.0,
+        (from.center().y + to.center().y) / 2.0,
+    );
+    assert!(
+        (avatar.center().x - mid.x).abs() < 1e-6,
+        "{avatar:?} {mid:?}"
+    );
+    assert!((avatar.center().y - mid.y).abs() < 1e-6);
+    // the rest fades in; the avatar does not: its disc is as it is once the switch is over
+    let disc = |run: &mut Run, avatar: Rect| {
+        let (width, pixels) = run.pixels();
+        let (x, y) = (
+            (avatar.center().x - 0.35 * avatar.width()) as usize,
+            avatar.center().y as usize,
+        );
+        pixels[(y * width + x) * 4..][..3].to_vec()
+    };
+    let mut run = run;
+    let moving = disc(&mut run, avatar);
+    // and back on the picker: the first tile's avatar comes from the password screen's
+    AVATAR_FROM.set(Some(to));
+    let run = Run::new(Surface::Picker);
+    let tile = keyed(&run, "avatar");
+    let row = crate::view::tile_avatar(SCREEN, metrics, &run.model().picker, 10, false, 0).unwrap();
+    assert!(
+        (tile.center().x - (to.center().x + row.center().x) / 2.0).abs() < 1e-6,
+        "{tile:?} {row:?}"
+    );
+    // once the switch is over the avatar is in its place
+    BLOCK.set(1.0);
+    let mut run = Run::new(Surface::Lock);
+    let avatar = keyed(&run, "avatar");
+    assert!((avatar.center().x - to.center().x).abs() < 1e-6);
+    assert!((avatar.center().y - to.center().y).abs() < 1e-6);
+    let settled = disc(&mut run, avatar);
+    for (a, b) in moving.iter().zip(&settled) {
+        assert!(a.abs_diff(*b) <= 2, "{moving:?} {settled:?}");
+    }
+    AVATAR_FROM.set(None);
+}
+
+/// Option+Return on the test screens, delivered as the keyboard would.
+fn option_return(run: &mut Run) {
+    for pressed in [true, false] {
+        run.deliver(WindowEvent::Key(
+            KeyEvent {
+                code: 28,
+                keysym: Keysym(0xff0d),
+                text: None,
+                pressed,
+                repeat: false,
+                mods: Mods::ALT,
+            },
+            Timestamp(0),
+        ));
+    }
+}
+
+#[test]
+fn a_name_field_stands_over_the_password_field_and_takes_the_focus_while_it_is_empty() {
+    NAME.set(Some(("", 0)));
+    BACK.set(true);
+    HELP.set(true);
+    let mut run = Run::new(Surface::Lock);
+    let name = keyed(&run, "name");
+    let field = keyed(&run, "password-0");
+    // both at least 160 x 28, the name field 8 pt over the password field, with the same width
+    assert!(name.width() >= 160.0 && field.width() >= 160.0);
+    assert_eq!((name.height(), field.height()), (28.0, 28.0));
+    assert_eq!(field.min_y() - name.max_y(), 8.0);
+    assert_eq!(name.min_x(), field.min_x());
+    // the name label is not drawn; the name field is
+    assert!(labelled(&run, &run.model().user.display).is_none());
+    let focused = run.focused().expect("a focus");
+    assert_eq!(focused.role, Role::TextInput);
+    // Tab: the name field, the password field, the help button, the back button
+    run.key(TAB, None);
+    assert!(is_password(&run.focused().unwrap()));
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(HELP_LABEL)
+    );
+    run.key(TAB, None);
+    assert_eq!(
+        run.focused().and_then(|n| n.name).as_deref(),
+        Some(BACK_LABEL)
+    );
+    run.key(TAB, None);
+    assert_eq!(run.focused().unwrap().role, Role::TextInput);
+    // Option+Return goes back to the picker
+    option_return(&mut run);
+    assert!(run.model().handled.iter().any(|m| m == "ToggleNames"));
+    // with a name typed the password field has the focus
+    NAME.set(Some(("ada", 1)));
+    let run = Run::new(Surface::Lock);
+    assert!(is_password(&run.focused().expect("a focus")));
+    NAME.set(None);
+    BACK.set(false);
+    HELP.set(false);
+}
+
+#[test]
+fn the_text_of_both_fields_starts_15_points_in() {
+    NAME.set(Some(("ada", 1)));
+    let run = Run::new(Surface::Lock);
+    let snapshot = run.driver.runtime().snapshot(run.window).unwrap();
+    for key in ["name", "password-0"] {
+        let frame = keyed(&run, key);
+        let id = run
+            .driver
+            .runtime()
+            .find(run.window, &Key::from(key))
+            .unwrap();
+        let inner = snapshot
+            .nodes
+            .iter()
+            .find(|n| n.parent == Some(id))
+            .expect("the field in its frame")
+            .rect;
+        assert_eq!(inner.min_x() - frame.min_x(), 15.0, "{key}");
+    }
+    NAME.set(None);
+}
+
+#[test]
+fn option_return_on_the_picker_asks_for_the_name_and_password_screen_and_return_alone_chooses() {
+    let mut run = Run::new(Surface::Picker);
+    option_return(&mut run);
+    assert!(run.model().handled.iter().any(|m| m == "ToggleNames"));
+    assert!(!run.model().handled.iter().any(|m| m.starts_with("Choose")));
+    run.key(RETURN, None);
+    assert!(run.model().handled.iter().any(|m| m.starts_with("Choose")));
 }

@@ -44,7 +44,14 @@ pub enum Heard {
         explicit: bool,
     },
     LogOutRequested,
-    ReduceMotion(bool),
+    /// The session's display options: Reduce Motion, Increase Contrast and Reduce Transparency.
+    Display {
+        reduce_motion: bool,
+        increase_contrast: bool,
+        reduce_transparency: bool,
+    },
+    /// The session's appearance is dark (`true`) or light.
+    Appearance(bool),
     /// The session lock cannot be taken: the server lacks the protocol.
     NoLock,
     DesktopControl(ControlEvent),
@@ -289,10 +296,14 @@ impl SurfaceRoles for LoginRoles {
         if let Some(control) = event.downcast_ref::<ControlEvent>() {
             self.send(Heard::DesktopControl(control.clone()));
         }
-        if let Some(SessionChange::DisplayOptions(options)) =
-            self.session.as_mut().and_then(|s| s.apply(event))
-        {
-            self.send(Heard::ReduceMotion(options.reduce_motion));
+        match self.session.as_mut().and_then(|s| s.apply(event)) {
+            Some(SessionChange::DisplayOptions(options)) => self.send(Heard::Display {
+                reduce_motion: options.reduce_motion,
+                increase_contrast: options.increase_contrast,
+                reduce_transparency: options.reduce_transparency,
+            }),
+            Some(SessionChange::Appearance { dark }) => self.send(Heard::Appearance(dark)),
+            _ => {}
         }
         match *event.downcast_ref::<ShellEvent>()? {
             ShellEvent::Configure { surface, size } => match self.surfaces.get(&surface)? {

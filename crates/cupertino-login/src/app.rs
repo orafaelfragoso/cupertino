@@ -12,6 +12,7 @@
 use crate::options::SessionOptions;
 use crate::roles::{self, Heard, LockWish, LoginRoles};
 use crate::screen::{self, Result, Timer, FRAME};
+use cupertino_defaults::login::ScreenSettings;
 use cupertino_kit::core::{Application, Command, Key, Window, WindowKey};
 use cupertino_kit::geometry::Size;
 use cupertino_kit::text::TextSystem;
@@ -33,11 +34,13 @@ use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::probe;
 use cupertino_login::restore::{self, Applications, SessionMark, Taken};
+use cupertino_login::status::{self, StatusItems};
 use cupertino_login::user::User;
 use cupertino_login::view::{
-    self, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp, Screen,
-    LOCKED_TITLE, LOCK_APP_ID,
+    self, Access, Clock, ControlChoice, ControlRequest, Field, Input, Metrics, RequestingApp,
+    Screen, Status, LOCKED_TITLE, LOCK_APP_ID,
 };
+use cupertino_login::wallpaper::{self, Source};
 use cupertino_login::{session, upower};
 use cupertino_modifiers::Profile;
 use cupertino_shell_client::{
@@ -81,7 +84,16 @@ pub enum Bus {
     ApplicationQuit(String),
     /// What the notification daemon lets the lock screen show now ([`lock_notices`]).
     LockNotices(Vec<Notice>),
+    /// The wallpaper of the lock of this number is ready.
+    Wallpaper { lock: u64, source: Source },
+    /// A reading of the status items.
+    Status(StatusItems),
 }
+
+/// What the lock screen shows until its wallpaper is ready, and the longest it waits for it before it shows its
+/// interface over that (approximate): a picture still being read comes in under the interface when it is ready.
+static WAITING: Source = Source::Solid([0, 0, 0]);
+const WALLPAPER_WAIT: f64 = 0.5;
 
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -98,6 +110,15 @@ pub enum Message {
 /// The session while it is locked or being locked.
 struct Lock {
     screen: LockScreen,
+    /// This lock's number: the wallpaper read for an earlier one is not this one's.
+    number: u64,
+    /// When the lock was asked for, and when its screen showed (its wallpaper ready, or [`WALLPAPER_WAIT`] over).
+    asked: f64,
+    shown: Option<f64>,
+    /// The picture the screens stand on, once read.
+    wallpaper: Option<Source>,
+    /// The password help is open.
+    help_open: bool,
     /// The server's answer to the lock: confirmed (`true`) or refused or ended.
     answer: Option<bool>,
     /// The server confirmed the lock.
@@ -148,6 +169,20 @@ pub struct SessionApp {
     _idle: Option<IdleWatch>,
     /// The session asks for reduced motion: the lock screen follows it.
     reduce_motion: bool,
+    /// The display options the field and its buttons follow.
+    access: Access,
+    /// What `login.conf` says the screens show.
+    settings: ScreenSettings,
+    /// The last reading of the status items.
+    status: StatusItems,
+    /// The clock's hour cycle: the session's.
+    hours: cupertino_defaults::menubar::HourCycle,
+    /// The session's appearance is dark: the lock screen stands on its dark wallpaper.
+    dark: bool,
+    /// The number of the last lock taken.
+    locks: u64,
+    /// For the threads that read a wallpaper.
+    bus_sender: async_channel::Sender<Bus>,
     /// The seat went idle and input has not resumed since.
     idled: bool,
     outputs: Vec<(u32, Size)>,
@@ -287,6 +322,11 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             Err(e) => Bus::Failed(e.to_string()),
         })
     })?;
+    // the status items: the Wi-Fi radio, the battery and, when `login.conf` asks for it, the input source
+    let status_items = bus.clone();
+    status::poll(None, ScreenSettings::load().show_input_menu, move |items| {
+        status_items.send_blocking(Bus::Status(items)).is_ok()
+    })?;
     let battery = send(&bus);
     upower::watch(logind.connection(), move |report| {
         battery(Bus::Battery(report.map_err(|e| e.to_string())))
@@ -339,6 +379,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     if let Err(e) = lock_notices::watch(&session_bus, move |list| notices(Bus::LockNotices(list))) {
         eprintln!("cupertino-login: the lock screen shows no notifications: {e}");
     }
+    let bus_sender = bus.clone();
     drop(bus);
     let login_items = start_login_items(&logind);
     let restore_path = restore::state_path_from_env();
@@ -393,6 +434,16 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
             _session: session,
             _idle: idle,
             reduce_motion: session_state.display.reduce_motion,
+            access: Access {
+                increase_contrast: session_state.display.increase_contrast,
+                reduce_transparency: session_state.display.reduce_transparency,
+            },
+            settings: ScreenSettings::load(),
+            status: StatusItems::default(),
+            hours: screen::session_hour_cycle(),
+            dark: session_state.dark,
+            locks: 0,
+            bus_sender,
             idled: false,
             outputs,
             caps_lock: false,
@@ -660,6 +711,10 @@ impl Application for SessionApp {
             let help = app
                 .failed
                 .help_shown(&app.user.login, app.retries_until_hint);
+            let dim = lock.dim(now);
+            // nothing of the interface shows before its wallpaper does
+            let shown = lock.shown.is_some();
+            let wallpaper = lock.wallpaper.as_ref().unwrap_or(&WAITING);
             for &(output, size) in &app.outputs {
                 let content = view::screen(
                     &Screen {
@@ -669,19 +724,38 @@ impl Application for SessionApp {
                         user: Some(&app.user),
                         field: Field::Password {
                             generation: screen.field(),
-                            enabled: screen.phase() != Phase::Unlocking,
+                            // nothing is typed while an attempt is checked
+                            enabled: screen.phase() != Phase::Unlocking && !screen.checking(),
                             busy: screen.checking(),
                         },
+                        name: None,
+                        typed: screen.typed(),
                         caps_lock: app.caps_lock,
                         spinner: screen.spinner(now),
                         denied: screen.failure_outline(),
+                        denied_said: screen.denied_said(),
                         notice: screen.notice(),
                         help,
-                        opacity: screen.opacity(now),
+                        help_open: help && lock.help_open,
+                        opacity: if shown { screen.opacity(now) } else { 0.0 },
+                        block: 1.0,
                         shake: screen.shake(now),
                         hidden: screen.hidden(),
+                        lock_message: app.settings.lock_message.as_deref(),
+                        back: false,
+                        locked: false,
+                        hide_user: app.settings.hide_user_avatar_and_name,
+                        access: app.access,
+                        large_clock: app.settings.large_clock,
+                        avatar_from: None,
                         power: None,
+                        status: Status {
+                            items: &app.status,
+                            access: None,
+                        },
                         notices: &app.lock_notices,
+                        wallpaper,
+                        dim,
                     },
                     LOCKED_TITLE,
                     Message::Input,
@@ -726,6 +800,13 @@ impl Application for SessionApp {
     }
 }
 
+impl Lock {
+    /// How much of the dimming shows at `now`: none before the screen shows, all of it [`wallpaper::DIM_FADE`] after.
+    fn dim(&self, now: f64) -> f64 {
+        self.shown.map_or(0.0, |at| wallpaper::dimming_at(now - at))
+    }
+}
+
 impl SessionApp {
     /// Ask for a fresh reading of the menu's capabilities; the probe thread answers on its own.
     fn refresh_capabilities(&self) {
@@ -743,11 +824,16 @@ impl SessionApp {
         let screen = self.lock.as_ref().map(|lock| {
             let s = &lock.screen;
             let opacity = s.opacity(now);
+            let dim = lock.dim(now);
             let moving = (opacity > 0.0 && opacity < 1.0)
+                || (lock.shown.is_some() && dim < 1.0)
                 || matches!(s.phase(), Phase::Failed { .. } | Phase::Unlocking)
                 || s.spinner(now).is_some();
             let minute = screen::to_next_minute().unwrap_or(60.0);
-            let by_screen = s.next_wakeup(now).map_or(minute, |w| w.min(minute));
+            let mut by_screen = s.next_wakeup(now).map_or(minute, |w| w.min(minute));
+            if lock.shown.is_none() {
+                by_screen = by_screen.min((lock.asked + WALLPAPER_WAIT - now).max(0.0));
+            }
             if moving {
                 by_screen.min(FRAME)
             } else {
@@ -795,12 +881,18 @@ impl SessionApp {
             Bus::Auth(event) => self.handle_auth(now, event)?,
             Bus::Failed(reason) => return Err(reason.into()),
             Bus::Battery(report) => self.battery(report),
+            Bus::Status(items) => self.status = items,
             // a list that comes while the session is not locked is a late one: it never shows
             Bus::LockNotices(list) => {
                 self.lock_notices = if self.lock.is_some() {
                     list
                 } else {
                     Vec::new()
+                }
+            }
+            Bus::Wallpaper { lock, source } => {
+                if let Some(held) = self.lock.as_mut().filter(|l| l.number == lock) {
+                    held.wallpaper = Some(source);
                 }
             }
             Bus::ApplicationQuit(app) => {
@@ -826,14 +918,36 @@ impl SessionApp {
                     }
                 }
             }
-            Heard::Idle(idle) => self.idled = idle,
+            Heard::Idle(idle) => {
+                self.idled = idle;
+                // the display sleeps or wakes: what was typed does not wait for whoever comes
+                if let Some(lock) = &mut self.lock {
+                    lock.screen.clear_field();
+                }
+            }
             // this process is the one that holds the lock
             Heard::LockRequested { explicit } => self.request_lock(now, explicit)?,
             Heard::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
-            Heard::ReduceMotion(on) => {
-                self.reduce_motion = on;
+            Heard::Display {
+                reduce_motion,
+                increase_contrast,
+                reduce_transparency,
+            } => {
+                self.reduce_motion = reduce_motion;
+                self.access = Access {
+                    increase_contrast,
+                    reduce_transparency,
+                };
                 if let Some(lock) = &mut self.lock {
-                    lock.screen.set_reduce_motion(on);
+                    lock.screen.set_reduce_motion(reduce_motion);
+                }
+            }
+            Heard::Appearance(dark) => {
+                let changed = self.dark != dark;
+                self.dark = dark;
+                // the lock screen takes the wallpaper of the new appearance; the old one shows until it is read
+                if let (true, Some(lock)) = (changed, &self.lock) {
+                    self.read_wallpaper(lock.number);
                 }
             }
             Heard::DesktopControl(event) => {
@@ -919,7 +1033,8 @@ impl SessionApp {
         };
         match input {
             Input::Activity => lock.screen.activity(now),
-            Input::Edited => lock.screen.edit(now),
+            Input::Edited(typed) => lock.screen.edit_to(now, typed),
+            Input::Help => lock.help_open = !lock.help_open,
             Input::Escape => lock.screen.escape(now),
             Input::Submit(typed) => {
                 if let Some(password) = lock.screen.submit(now, typed.secret()) {
@@ -948,7 +1063,7 @@ impl SessionApp {
         let Some(lock) = &mut self.lock else {
             return Ok(());
         };
-        self.clock = screen::clock()?;
+        self.clock = screen::clock(self.hours)?;
         match lock.answer {
             Some(false) => return Err("the server refused or ended the session lock".into()),
             Some(true) if !lock.confirmed => {
@@ -967,11 +1082,45 @@ impl SessionApp {
                 Err(e) => eprintln!("cupertino-login: {e}"),
             }
         }
+        if lock.shown.is_none() && (lock.wallpaper.is_some() || now - lock.asked >= WALLPAPER_WAIT)
+        {
+            lock.shown = Some(now);
+            lock.screen.show_from(now);
+        }
         lock.screen.tick(now);
         if lock.screen.phase() == Phase::Unlocked {
             return self.unlock();
         }
         Ok(())
+    }
+
+    /// Read the wallpaper of the lock `number` for the session's appearance on a thread of its own: it comes back as
+    /// [`Bus::Wallpaper`].
+    fn read_wallpaper(&self, number: u64) {
+        let (sender, dark) = (self.bus_sender.clone(), self.dark);
+        let spawned = std::thread::Builder::new()
+            .name("lock wallpaper".into())
+            .spawn(move || {
+                let settings = cupertino_defaults::compositor::CompositorSettings::path()
+                    .and_then(|path| {
+                        cupertino_defaults::compositor::CompositorSettings::load(&path, None)
+                            .map_err(|e| eprintln!("cupertino-login: {}: {e}", path.display()))
+                            .ok()
+                    })
+                    .map(|(settings, _)| settings)
+                    .unwrap_or_default();
+                let source = wallpaper::for_session(&settings, dark, |dark| {
+                    cupertino_assets::Assets::discover().wallpaper_path(dark)
+                });
+                // the receiver lives as long as the application
+                let _ = sender.send_blocking(Bus::Wallpaper {
+                    lock: number,
+                    source,
+                });
+            });
+        if let Err(e) = spawned {
+            eprintln!("cupertino-login: reading the wallpaper: {e}");
+        }
     }
 
     /// Post, replace or withdraw the low-battery notification. The notification service may be missing or fail: that is
@@ -1015,7 +1164,9 @@ impl SessionApp {
     /// asked, so the lock screen hides after 5 s without input instead of 30 s. Does nothing when the session is locked
     /// already; a panel that is open is cancelled, since the lock screen takes the keyboard.
     fn request_lock(&mut self, now: f64, explicit: bool) -> Result<()> {
-        if self.lock.is_some() {
+        if let Some(lock) = &mut self.lock {
+            // the system is about to sleep, or the session is locked again: the field starts empty
+            lock.screen.clear_field();
             return Ok(());
         }
         if self.panel.is_some() {
@@ -1035,16 +1186,25 @@ impl SessionApp {
             },
         );
         screen.set_reduce_motion(self.reduce_motion);
-        if cupertino_shell_client::test_clock::motion_settled() {
+        let settled = cupertino_shell_client::test_clock::motion_settled();
+        if settled {
             screen.settle_interface();
         }
+        self.locks += 1;
         self.lock = Some(Lock {
             screen,
+            number: self.locks,
+            asked: now,
+            // a fixed test clock shows the screen at once, its dimming fully in
+            shown: settled.then_some(f64::NEG_INFINITY),
+            wallpaper: None,
+            help_open: false,
             answer: None,
             confirmed: false,
         });
+        self.read_wallpaper(self.locks);
         self.wish.borrow_mut().wanted = true;
-        self.clock = screen::clock()?;
+        self.clock = screen::clock(self.hours)?;
         self.control.set_locked(true)?;
         Ok(())
     }
@@ -1077,8 +1237,9 @@ impl SessionApp {
     /// roles then unlock.
     fn unlock(&mut self) -> Result<()> {
         let lock = self.lock.take().expect("only a locked session unlocks");
-        // nothing of this lock's list stays for the next one
+        // nothing of this lock's list stays for the next one, nor its pictures
         self.lock_notices.clear();
+        view::forget_pictures();
         if lock.answer != Some(true) {
             return Err("the session unlocked before the server confirmed the lock".into());
         }

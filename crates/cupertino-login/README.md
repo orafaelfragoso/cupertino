@@ -138,8 +138,8 @@ Everything but the wallpaper is one layer whose opacity is animated. Times are o
 | State | Meaning | Leaves when |
 |---|---|---|
 | `Locked` | Waiting for a password. | Return with a non-empty field: `Authenticating`. |
-| `Authenticating` | The attempt is at PAM. The field takes a retry; Return waits. | The answer: success `Unlocking`, wrong password `Failed`, error `Locked` with a notice. |
-| `Failed` | The field shakes for 0.4 s (not under Reduce Motion) and takes a retry; the pill is outlined in red until the person edits the field. | 0.4 s later: `Locked`. Return with a non-empty field: `Authenticating`. |
+| `Authenticating` | The attempt is at PAM. The field, its buttons and Return take nothing until the answer. | The answer: success `Unlocking`, wrong password `Failed`, error `Locked` with a notice. |
+| `Failed` | The password group (the field and its buttons) shakes for 0.4 s and the avatar a quarter as far, in phase (not under Reduce Motion); a denial while a shake plays leaves it as it is. The field takes a retry. | 0.4 s later: `Locked`. Return with a non-empty field: `Authenticating`. |
 | `Unlocking` | The interface fades out. | The fade ends: `Unlocked`. |
 | `Unlocked` | The process unlocks the session. | |
 
@@ -147,23 +147,26 @@ Keys: the password field is Kit's `SecureField`, which takes the typing and show
 lock screen's root takes Escape before the field). An empty field is not submitted. After 30 s without input the interface
 fades out; the next key or pointer input shows it again and is not typed. A notice (an error that is not a wrong password, or
 text from PAM or the session manager) shows under the field until the next edit. A wrong password says "Incorrect password.
-Try again." under the field besides the red outline and the shake, so a failure is never shown by colour or motion alone.
+Try again." under the field besides the shake, so a failure is never shown by motion alone.
 
 The only way to `Unlocked` is `LockScreen::finish_auth` with `AuthOutcome::Success` for an attempt that `LockScreen::submit`
 handed out. `finish_auth` without an attempt in flight is an error. One attempt runs at a time: `submit` refuses while an
 attempt is being decided, so the rate of attempts is PAM's (its delay after a failure holds the answer back on the worker
 thread, and `pam_faillock` counts and locks out).
 
-**Keyboard and screen reader.** Each lock window is named "Locked", described by the user's name, and its only control is
-the password field, which has the focus from the start and again after each submission or Escape (a new field, keyed by `LockScreen::field`, inside a focus
-scope that gives it the initial focus). Assistive technology reads the field as password text named "Password" whose value is
+**Keyboard and screen reader.** Each lock window is named "Locked", described by the user's name, and its password field
+has the focus from the start and again after each submission or Escape (a new field, keyed by `LockScreen::field`; the
+password group around it is a focus scope keyed by the field, which gives it the initial focus). Tab goes round the
+group: the back button (login screen), the field, the help button while it shows; the submit button takes a press, and
+Return in the field is its key. Assistive technology reads the field as password text named "Password" whose value is
 protected: it learns that there is a value, never the value, its length or the caret. The field is busy from a submission
-until the authenticator answers (`LockScreen::checking`), and its entry is invalid from a wrong password until the next edit,
-with the outline (Kit's `SecureField::busy` and `invalid`; AccessKit's AT-SPI adapter exports busy, and has no mapping yet for
+until the authenticator answers (`LockScreen::checking`), and its entry is invalid from a wrong password until the next edit
+(Kit's `SecureField::busy` and `invalid`; AccessKit's AT-SPI adapter exports busy, and has no mapping yet for
 invalid, so over AT-SPI the denial's words carry it). The denial and the notices are
 assertive live regions, announced once when they appear; the clock, the user's name, the Caps Lock badge and the spinner are
-text nodes. The greeter's tiles are buttons (the arrows move the selection, Return or Space chooses, Tab opens the power
-menu), the power item is a button that opens a Kit menu, and the panels are modal alert dialogs (below).
+text nodes. The greeter's tiles are buttons (the arrows move the selection, Home, End, Page Up and Page Down jump, Return
+or Space chooses, Tab moves the focus), the power item is a button that opens a Kit menu, and the panels are modal alert
+dialogs (below).
 
 ### Notifications
 
@@ -461,7 +464,7 @@ this crate unlocks no keyring itself.
 lock). The register has no difference between the login and the lock screen for the clock, the user view and the field (are the login window's own layout), so the greeter draws the lock screen's for the password, including the hide after
 30 s without input (the picker does not hide). Messages from PAM within one attempt follow one another in the notice (a lock-out is two: that the account is locked and for how long). The manager reads the pictures, because the greeter's user cannot read a home directory.
 
-**Power menu.** A power glyph sits at the top right of every greeter screen. A click or Tab opens a menu of Restart,
+**Power menu.** A power glyph sits at the top right of every greeter screen. A click opens a menu of Restart,
 Shut Down and Sleep. Up and Down move, Return does the selected item, Escape closes. An item shows unless the manager's `Welcome`
 says otherwise (`restart-disabled`, `shut-down-disabled`, `sleep-disabled` in `login.conf`, with `power-off-disabled` for an item
 whose own key is absent). When no item shows, the glyph is hidden. The items send `Request::Power` to the manager (the greeter calls no logind) and
@@ -473,8 +476,8 @@ login screen.
 
 **Ellipsis and administrator's authentication.** While a user session is open (`will_prompt` of the manager's
 `Welcome` and `Users`) the titles are `Restart…` and `Shut Down… (the design's, set from
-). Choosing one then opens the name screen (the "Other…" tile's) with the notice "Other users are
-logged in. To restart, enter an administrator's name and password." (ours, approximate), then the password screen; the screen sends
+). Choosing one then opens the name and password screen with the notice "Other users are
+logged in. To restart, enter an administrator's name and password." (ours, approximate); the screen sends
 `Request::AuthenticatePower { name, action }` instead of `Authenticate`. Escape goes back to the picker. The manager accepts a
 member of `wheel` with the right password, carries the action out and logs `power action authorised` on the screen; a name that is
 no administrator, a wrong password and a lock-out are the login screen's usual failures. The design passes this through the
@@ -492,15 +495,24 @@ column k % columns and row k / columns for k = i % M. One page shows at a time.
 
 | Input | Effect |
 |---|---|
-| Arrow keys | Move the selection one tile (left, right: across pages too) or one row (up, down: within the page). |
+| Arrow keys | Move the selection one tile (left, right: across pages too) or one row (up, down: within the page). Nothing shows as selected until the first arrow or the pointer; the first arrow selects the first tile. |
+| Home, End | Select the first or the last tile. |
+| Page Up, Page Down | Select the first tile of the page before, or of the next page (the last tile on the last page). |
 | Return, a click on a tile | Choose the selected account: the password screen for it. |
 | Pointer over a tile | Select it. |
+| Option+Return | The name and password screen, and back. |
 | Escape on the password screen | Back to the picker, unless an attempt is being decided. |
 
-"Other…" opens the name screen: the "Other…" avatar and a field that takes the name as text (no whitespace, 32 bytes at most,
-Return to go on, Escape to go back). Nothing is looked up for it, so the screen does not say whether the account exists; the
-manager decides at the attempt. A failed attempt counts for the account
-that was chosen (the password help, below).
+"Other…", Option+Return on the picker and `show-full-name = true` in `login.conf` (which starts there and goes back
+there in place of the picker) open the name and password screen: the "Other…" avatar, a Name field over the Password
+field (each at least 160 x 28 pt, 8 pt apart, their text 15 pt in from the leading edge; approximate gap), no picker and
+no name label. The name is text (no whitespace, 32 bytes at most). The focus starts in the Name field while it is empty,
+else in the Password field; Return in the Name field goes on to the Password field, Return in the Password field with
+an empty name goes back to the Name field. Option+Return or Escape goes back to the picker. The names `>restart`,
+`>sleep`, and `>power` or `>shutdown` carry out that power item when the power menu offers it (as its menu item does),
+and nothing else. Nothing is looked up for a name, so the screen does not say whether the account exists; the manager
+decides at the attempt. A failed attempt counts for the account that was chosen (the password help, below). An
+administrator's authorisation for a power item asks on the same screen.
 
 ### Account filters
 
@@ -518,16 +530,26 @@ network users).
 
 | Item | Value |
 |---|---|
-| Shake | 0.4 s, `v = 0.5 + 0.5 sin(6 pi p) d`, `d = 1` for `p < 0.5` else `exp(-0.8 p)`, `x = (v - 0.5) * 2 * 14` pt, zero at `p = 1`; none under the session's Reduce Motion (the lock screen; the greeter has no person's options) |
-| Failure outline | 2 pt red around the password pill after a wrong password, until the person's next edit, with or without Reduce Motion (approximate) |
+| Shake | 0.4 s, `v = 0.5 + 0.5 sin(6 pi p) d`, `d = 1` for `p < 0.5` else `exp(-0.8 p)`, `x = (v - 0.5) * 2 * 14` pt, zero at `p = 1`, of the whole password group, the avatar 0.25 as far in phase (approximate); a denial during a shake starts none; none under the session's Reduce Motion (the lock screen; the greeter has no person's options) |
 | Fade of the interface | linear, `\|to - from\| * 0.25 s` |
 | Interface hides after | 30 s without input, 5 s after a lock the person asked for (the lock shortcut: server `LockNow`, lock request type 8); the greeter always 30 s |
-| Date | size 0.028 S, first baseline 0.09 H, `EEEEMMMMd` as `%A, %B %-d` |
-| Time | size 0.12 S, first baseline 4 date sizes below the date's, `Jmm` as `%H:%M` |
-| User view | 20 pt below the time's bottom; avatar 70 pt with 7 pt above and below; name baseline 23 pt below the view, 15 pt, at most 150 pt wide |
-| Avatar halo and ring | shadow radius 15 opacity 0.25 (a radial fade), ring 1 pt white 0.1 |
-| Password field | 160 x 28 pt, fully rounded, system 13 Medium, placeholder white 0.5; a capsule of white 0.18 with no blurred backdrop (nothing under a lock surface may show) |
-| Wallpaper treatment | black 0.25, then black 0.3, then a radial black 0.2 to 0 from the middle to the corner with the darken blend |
+| Date | size 0.028 S, first baseline 0.09 H, Medium, as `%a %b %-d` ("Mon Nov 16") |
+| Time | size 0.14 S, first baseline 4.3 date sizes below the date's, weight 640, as `%H:%M` or `%-I:%M` by the menu bar clock's hour cycle, else the locale's (`LC_TIME`), in glass letters made from the screen's own picture, never from what lies under the window: the picture under them blurred 20 pt with white 0.78 over it, a 1 pt rim of white 0.5 along their top and left edges and of black 0.12 along their bottom and right (approximate); made once a minute and kept (`wallpaper::glass_letters`, `view::widgets::GlassText`) |
+| User view | at the bottom: the field's bottom edge 0.1 H above the screen's (approximate), the name and the avatar stacked above it; avatar floor(0.05 S) with 7 pt above and below, a plain disc with no ring or shadow; name baseline 23 pt below the view, 15 pt, at most 150 pt wide, with a black shadow of opacity 0.5 and blur radius 6 (a Gaussian of deviation 3 pt), regular on the password screen; never over the time |
+| Hints | two lines under the name: the main hint's first baseline 0.06 H below the name's, at most 210 pt wide, 12 pt, wrapping, centred, white; the sub hint 0.03 H below it (0.035 H when the main hint wraps), at most 450 pt, 11 pt. The main hint says a denial or the authenticator's message, the sub hint the password help (or the denial under a message); both clear of the field, which stands higher when they would not fit (`layout::HINT_*`, `layout::SUB_HINT_*`) |
+| Password field | max(160, ceil(placeholder width) + 28) x 28 pt, continuous corners of radius 14, its top 18 pt below the name's baseline; text 13 Medium, centred, white; placeholder "Enter Password" white 0.5. It stands on a dark frosted material made from the screen's own picture (blur 30 pt, saturation 1.6, grey 0.157 laid over at 0.4, drawn 0.05 of the way toward the mean colour of the picture under the control, lightened to at least 0.08), never from what lies under the window (`wallpaper::frosted`); over it a tint in the secondary label colour (white 0.55, the tertiary 0.25 when the field is disabled) at a strength of 0.2 with a darken layer of 0.4 inside it (approximate); with Increase Contrast the tint is black 0.4; with Reduce Transparency the field is an opaque light grey 0.92 with its text black 0.75 and its placeholder black 0.45 (approximate) (`view::widgets::FieldTint`) |
+| Submit button | 28 pt at the field's trailing end inside it, 2 pt in; a 22 pt ring with an arrow into it, white 0.5; only while the field holds text. A press there submits, as Return does |
+| Help button | 28 pt circle of the field's material with a "?" in white 0.5, 6 pt after the field, once the password help shows (3 failures); a Tab stop; a press shows or hides the help in the sub hint, hides the name and the lock message meanwhile, and leaves the keyboard in the field |
+| Back button | login screen: a 28 pt circle of the field's material 6 pt before the field's leading edge, a 22 pt ring with a left arrow (our own glyph) in white 0.5; a press goes back to the picker, as Escape does |
+| Locked account | a 14 x 14 pt padlock in the field's trailing slot and the placeholder "Locked"; the field takes nothing |
+| Messages | an attempt's message shows 15 s; the lock message (`lock-message` in `login.conf`, both screens) 13 pt regular, white, centred, at most 400 pt wide, its bottom 32 pt above the screen's |
+| Password field cleared | when the display goes to sleep or wakes, and when a lock is asked for while locked |
+| Wallpaper treatment | black 0.25 over it; then black 0.3 blended to keep the lighter, which changes no pixel and is not drawn; then a radial black 0.20 at the middle to none at the edge of a 1200 pt square centred on the screen. It comes in linearly over 0.25 s when a screen first shows (`wallpaper::DIM_FADE`) |
+| Picker and password screen | the switch between them takes 0.5 s, ease-in-out (`picker::SWITCH_DURATION`): the chosen tile's avatar moves between its row and the password screen's place at full opacity, the rest fades in; the interface fades linearly over 0.25 s |
+| Status items | at the top right of both screens, in a bar as tall as the menu bar (33 pt), each 22 pt tall and centred in it, 14 pt apart, ending 20 pt from the trailing edge: from the trailing end the power item (login screen), the accessibility item (login screen), the battery, the Wi-Fi radio, the input source (`show-input-menu`) and the line about the machine (`host-info = hostname`, `version` or `ip`; login screen); text in the menu bar's 13 pt, white; glyphs our own; read every 10 s on a thread of their own (`status`, `view::widgets::StatusItem`) |
+| Accessibility item | login screen: a menu of Increase Contrast, Reduce Transparency and Reduce Motion, each checked while on; they change the field's tint, make it opaque, and stop the shake and the switch's movement (`view::access_menu`) |
+| Hiding the user | `hide-user-avatar-and-name` in `login.conf` leaves out the avatar and the name on both screens |
+| Large clock | `large-clock = false` in `login.conf` leaves out the date and the large time on both screens |
 | Idle lock | after the display sleep plus the password delay, timed by the server |
 | Quit sequence | one application at a time, 45 s each, the next 0.1 s after one quits; interrupt panel 413 x 128 |
 | Login items | global items before the user's, one after the other |
@@ -542,11 +564,10 @@ network users).
 
 | Item | Value | Where |
 |---|---|---|
-| Wallpaper | Procedural gradient with two blobs in the server's dark desktop colours. The design shows the user's wallpaper, which the process cannot ask for yet. | `view::widgets::WALLPAPER_*` |
-| Password and name fields | Kit's chromeless `BareSecureField` and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret in the text colour, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
+| Wallpaper | The lock screen shows the session's wallpaper: the compositor settings' colour, else `wallpaper_dark` in the dark appearance and `wallpaper` otherwise, else the default picture of the assets. The login screen shows the selected user's copy, which the session agent writes and the manager hands on as `UserRow.wallpaper` (`/var/lib/cupertino-login/wallpapers/<uid>.jpg`); it is read at most `MAX_WALLPAPER_BYTES` large, a file that does not decode falls back, and a new file (another inode, size or time) is read again. Without either, a drawn gradient (approximate). A picture is decoded once on a thread of its own, PNG or JPEG of at most 8192 pixels a side, scaled to cover the output and centred; the lock screen shows black until it is in, at most 0.5 s. The screen's picture is made once per output size, scale and wallpaper and kept: a frame lays again only the 256 pt squares of it under what changed | `wallpaper`, `view::widgets::Ground` |
+| Password and name fields | Kit's chromeless `BareSecureField` (its text centred; while it is empty the caret stands just before the centred placeholder, approximate) and `BareField` in the capsule, 10 pt from its leading edge and clear of the 18 pt trailing slot; dots and caret white, the password's placeholder white 0.5 (the name field's in the secondary label colour). The screen's text and fields always take the dark appearance (`PaintCx::pin_appearance`), whatever the session's. | `view::screen`, `view::widgets::FieldFrame` |
 | Consent panel | An alert on regular glass: 260 pt wide, 26 pt corners, padding 22 pt above and 16 pt around, the icon 64 pt and the text 6 pt further in, the title Bold 13 and the message 13 pt 10 pt apart, Don't Allow and Allow as 28 pt capsules 8 pt apart. The surface is 260 x 520 pt, the alert centred in it. | `view::desktop_control`, `view::widgets::AlertBody` |
-| Gap between name and field, notice position | 10 pt (the spinner gap of), 20 pt. | `layout` |
-| Initials, text | Grey fill, initials 0.4 of the avatar; white text, date Medium, time Semibold of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
+| Initials, text | Grey fill, initials 0.4 of the avatar; white text of the theme's family. | `view::widgets::AVATAR_FILL`, `view::INITIALS_SIZE` |
 | Picture | `~/.face` as PNG, cropped to a circle. A file that does not decode is an error; a missing one means initials. | `user` |
 | Confirmation panels | An alert like the consent panel without an icon: 260 pt wide on regular glass with 26 pt corners, padding 22 pt above and 16 pt around, the text 6 pt further in, 28 pt capsule buttons 8 pt apart. | `panel`, `view::panel`, `view::widgets::AlertBody` |
 | Administrator | Members of `wheel` in `/etc/group`; the design's admin group has no counterpart. | `users::ADMIN_GROUP` in `cupertino-sessiond` |
@@ -556,11 +577,13 @@ network users).
 | Panel text | Kit text: the title as body text in Bold, the info line as body text, wrapped at the text column. | `view::panel` |
 | Caps lock glyph | The arrow-over-bar cut-out is ours; gives path constants but not their order. Named "Caps Lock is on" for assistive technology. | `view::widgets::CAPS_GLYPH` |
 | Spinner size and cap | 16 pt square in the 18 pt slot (intrinsic size not in the payload read); round caps at both ends, the design has a flat inner end. Named "Checking the password". | `view::widgets::SPINNER_SIZE` |
-| Notification cards | 344 pt wide at the top right (16 pt margin, 44 pt from the top), 8 pt apart, 16 pt corners, 12 pt padding, white 0.18 fill, application 12 pt, title and body 13 pt, two body lines. | `lock_notices`, `view::widgets::NOTICE_FILL_ALPHA` |
-| Password help | One line 32 pt above the bottom edge (offset, section 2), our words. No hint text: a threshold above 0 only moves the failure count at which the help shows. | `view::PASSWORD_HELP` |
+| Notification cards | 344 pt wide at the top right (16 pt margin, 44 pt from the top), 8 pt apart, 16 pt corners, 12 pt padding, on the field's control material and tint made from the screen's own picture (one piece of it for the column), application 12 pt, title and body 13 pt, two body lines. | `lock_notices`, `view::widgets::NoticeCard` |
+| Password help | In the sub hint, our words. No hint text: a threshold above 0 only moves the failure count at which the help shows. | `view::PASSWORD_HELP` |
 | Logged-in mark | A 9 pt disc (green, 0.20 0.72 0.35) with a white check at the lower right of the avatar of a user who has a session; the tile's description says "Logged in". approximate: the design marks such users in its picker, the shape and place are not read. | `view::widgets::LOGGED_IN_FILL` |
-| Picker tiles | 186 x 112 pt cells (150 pt name plus 18 pt borders, avatar, name line), grid centred from the password screen's user view. Selected tile: white 0.2 rounded square of 86 pt (the register's selection size), 20 pt corners. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::TILE_WIDTH`, `layout::TILE_HEIGHT`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
-| Power item and menu | The status bar is only the power item: 22 pt square, 20 pt from the trailing edge, 6 pt from the top; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
+| Picker tiles | Rows D + 196 wide and D + 14 tall for the avatar's diameter D, which stands with its centre D / 2 + 18 from the leading edge and D / 2 + 7 from the top; the name 10 pt after it, at most 150 pt, 15 pt semibold, white, with the name's shadow; cells are whole rows, touching, the grid centred across, its last row's bottom where the field's is, growing upward; right to left mirrors them. Selection: the row's frame with a 1 pt white 0.1 border and continuous corners of radius 12, no fill. "Other…" avatar: grey disc with an ellipsis. "Larger than 1024 x 768" means both sides larger. | `layout::ROW_*`, `view::widgets::SELECTION_*`, `picker::max_per_page` |
+| Login screen without a wallpaper | A solid deep blue (18, 23, 51), not the drawn gradient. | `wallpaper::LOGIN_FALLBACK` |
+| Power item and menu | 22 pt square, 20 pt from the trailing edge, centred in the 33 pt bar; a ring with a 60 degree gap and a stem, 5.5 pt radius, 1.6 pt stroke. The menu is Kit's menu below the item. | `layout`, `view::widgets::POWER_*`, `view::power_menu` |
+| Status glyphs | Wi-Fi: a dot and three arcs, the arcs past the signal's bars (the menu bar's: from -55 dBm 3, from -67 dBm 2, else 1) at white 0.3, all of them with the radio off or joined to nothing; battery: a 22 x 11 pt outlined body with a cap filled to the charge (red at 20 % or less while not charging) and a bolt while it charges; accessibility: a ring with a figure. The input source's short name is the first of the person's input sources, else the default xkb layout, else "US". | `status`, `view::widgets` |
 | Interrupt panel buttons, words | Cancel 83 pt at x 204, Force Quit 100 pt at x 295, capsules 28 pt high and 8 pt apart, ending with the text column; no default button (Return does nothing). The words are ours; the design fills them in at run time. | `interrupt` |
 | Quit order | Most recently used first; the design walks its process list from the end, order not read. | server `quit.rs` |
 | Force Quit | No confirmation sheet. SIGKILL to the processes of the application's windows. | server `quit.rs` |
@@ -572,9 +595,9 @@ network users).
 
 ## Open issues
 
-- **Not implemented.** The name shadow, the rest of the status bar, the grace period, auto log-out, display sleep after the hide, the picker's
-  page indicator and the animation between the picker and the password screen ('s 0.5 s layout change, peekaboo and the
-  cooldown), 's status bar, and the sessions the manager does not know (a hidden account's) in the power menu's ellipsis.
+- **Not implemented.** The rest of the status bar, the grace period, auto log-out, display sleep after the hide, the picker's
+  page indicator, peekaboo and the cooldown of the switch between the picker and the password screen, and the sessions the
+  manager does not know (a hidden account's) in the power menu's ellipsis.
 ## Modules
 
 | Module | Content |
@@ -586,6 +609,7 @@ network users).
 | `picker` | `Picker` (`new` takes the accounts and whether "Other…" shows; `NoTiles` when nothing is left), `Tile`, `Grid`, `cell_of`, `max_per_page`, `NameEntry` |
 | `view` | The Kit views: `screen` (lock and greeter password and name screens), `picker`, `power_menu`, `panel`, `interrupt`, `full_screen`, `panel_frames`; `Input`, the messages they send; `Typed`, a submitted password |
 | `spinner` | the spinner's frame, head spoke and spoke opacities |
+| `status` | `StatusItems`, `WifiState`, `BatteryState`, `signal_bars`, `input_label`, `os_version`, `host_text`; with feature `dbus`, `poll`: what the status items show |
 | `user` | `User::current` (account, full name, picture), `User::from_row` (a row of the manager's list), `initials`, `format_time` |
 | `panel` | `Kind`, `Action`, `Decision`, `Panel`, `PanelCheckbox`: the countdown, the keys, the button and checkbox frames and the words of the confirmation panels and the power-button panel |
 | `power_button` | `PowerButton`, `Effect`: the power key's hold timing |

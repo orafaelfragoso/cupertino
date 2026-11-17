@@ -218,6 +218,41 @@ pub fn initials(display: &str) -> String {
         .collect()
 }
 
+/// The hour cycle of the locale's time format (`LC_TIME`): 12-hour when it names a 12-hour hour (`%I`, `%l` or `%r`),
+/// else 24-hour.
+pub fn locale_hour_cycle() -> cupertino_defaults::menubar::HourCycle {
+    // Safety: `nl_langinfo` returns a pointer to a nul-terminated string that stays valid until the locale changes.
+    let format = unsafe { CStr::from_ptr(libc::nl_langinfo(libc::T_FMT)) };
+    hour_cycle_of(&format.to_string_lossy())
+}
+
+/// The hour cycle of the `strftime` time format `format`.
+pub fn hour_cycle_of(format: &str) -> cupertino_defaults::menubar::HourCycle {
+    use cupertino_defaults::menubar::HourCycle;
+    if ["%I", "%l", "%r"].iter().any(|h| format.contains(h)) {
+        HourCycle::H12
+    } else {
+        HourCycle::H24
+    }
+}
+
+/// Whether the screen's language reads right to left, by the language of `LC_ALL`, `LC_MESSAGES` or `LANG`.
+pub fn locale_is_rtl() -> bool {
+    let language = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    language_is_rtl(&language)
+}
+
+/// Whether the locale name `locale` (`ar_EG.UTF-8`) names a language written right to left.
+pub fn language_is_rtl(locale: &str) -> bool {
+    const RTL: [&str; 8] = ["ar", "he", "fa", "ur", "yi", "ps", "sd", "ug"];
+    let language = locale.split(['_', '.', '@']).next().unwrap_or("");
+    RTL.contains(&language)
+}
+
 /// Local time `unix_seconds` as text by the `strftime` pattern `format`.
 pub fn format_time(unix_seconds: i64, format: &CStr) -> Result<String, UserError> {
     let t = unix_seconds as libc::time_t;
@@ -241,6 +276,38 @@ pub fn format_time(unix_seconds: i64, format: &CStr) -> Result<String, UserError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hour_cycle_follows_the_locales_time_format() {
+        use cupertino_defaults::menubar::HourCycle;
+        assert_eq!(hour_cycle_of("%H:%M:%S"), HourCycle::H24);
+        assert_eq!(hour_cycle_of("%I:%M:%S %p"), HourCycle::H12);
+        assert_eq!(hour_cycle_of("%r"), HourCycle::H12);
+        assert_eq!(hour_cycle_of("%l:%M"), HourCycle::H12);
+        // 9:05 in the evening in each cycle, as the large time shows it
+        let tm_text = |format: &CStr| {
+            let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+            tm.tm_hour = 21;
+            tm.tm_min = 5;
+            let mut buf = [0u8; 32];
+            // Safety: the buffer length is passed and `format` is nul terminated.
+            let n =
+                unsafe { libc::strftime(buf.as_mut_ptr().cast(), buf.len(), format.as_ptr(), &tm) };
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        };
+        assert_eq!(tm_text(c"%H:%M"), "21:05");
+        assert_eq!(tm_text(c"%-I:%M"), "9:05");
+    }
+
+    #[test]
+    fn right_to_left_languages_are_known_by_their_code() {
+        assert!(language_is_rtl("ar_EG.UTF-8"));
+        assert!(language_is_rtl("he_IL"));
+        assert!(language_is_rtl("fa"));
+        assert!(!language_is_rtl("en_US.UTF-8"));
+        assert!(!language_is_rtl("C"));
+        assert!(!language_is_rtl(""));
+    }
 
     #[test]
     fn initials_take_the_first_and_last_word() {

@@ -29,6 +29,15 @@ const FULL_GRID: Grid = Grid {
 /// The longest name the "Other…" tile takes, in bytes (approximate: `useradd(8) limits a login name to 32).
 const MAX_NAME_BYTES: usize = 32;
 
+/// The switch between the picker and the password screen: how long it takes, eased in and out.
+pub const SWITCH_DURATION: f64 = 0.5;
+
+/// How far the switch is `elapsed` seconds after it began, 0 to 1: the opacity of the screen it shows.
+pub fn switched(elapsed: f64) -> f64 {
+    let t = (elapsed / SWITCH_DURATION).clamp(0.0, 1.0);
+    cupertino_animation::CubicBezier::EASE_IN_EASE_OUT.eval(t)
+}
+
 /// Tiles per page for an output of `width` x `height` points.
 pub fn max_per_page(width: f64, height: f64) -> usize {
     if width > SMALL_SCREEN.0 && height > SMALL_SCREEN.1 {
@@ -96,11 +105,26 @@ pub enum Direction {
     Down,
 }
 
-/// The tiles and the selected one.
+/// The tiles and the selected one. Nothing shows as selected until the first arrow key or the pointer over a tile.
 #[derive(Debug)]
 pub struct Picker {
     tiles: Vec<Tile>,
     selected: usize,
+    /// The selection shows.
+    shown: bool,
+}
+
+/// A key that moves the selection a long way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Jump {
+    /// Home: the first tile.
+    First,
+    /// End: the last tile.
+    Last,
+    /// Page Up: the first tile of the page before.
+    PageBack,
+    /// Page Down: the first tile of the page after.
+    PageForward,
 }
 
 /// There is no account to offer and the "Other…" tile is hidden, so nobody could log in.
@@ -130,7 +154,11 @@ impl Picker {
         if tiles.is_empty() {
             return Err(NoTiles);
         }
-        Ok(Picker { tiles, selected: 0 })
+        Ok(Picker {
+            tiles,
+            selected: 0,
+            shown: false,
+        })
     }
 
     pub fn tiles(&self) -> &[Tile] {
@@ -141,14 +169,41 @@ impl Picker {
         &self.tiles[self.selected]
     }
 
+    /// The tile a choice without a pointer takes (Return): the selected one, or the first while none shows.
     pub fn selected_index(&self) -> usize {
         self.selected
+    }
+
+    /// The selected tile while the selection shows.
+    pub fn selection(&self) -> Option<usize> {
+        self.shown.then_some(self.selected)
     }
 
     /// Select tile `index`, for a pointer over it.
     pub fn select(&mut self, index: usize) {
         assert!(index < self.tiles.len(), "the tile exists");
         self.selected = index;
+        self.shown = true;
+    }
+
+    /// The focus came to tile `index`: it is the one Return and the arrows start from; the selection shows only once
+    /// an arrow or the pointer showed it.
+    pub fn focus(&mut self, index: usize) {
+        assert!(index < self.tiles.len(), "the tile exists");
+        self.selected = index;
+    }
+
+    /// Move the selection to the first or last tile, or a page back or forward, and show it.
+    pub fn jump(&mut self, jump: Jump, max_per_page: usize) {
+        let page = max_per_page.max(1);
+        let last = self.tiles.len() - 1;
+        self.shown = true;
+        self.selected = match jump {
+            Jump::First => 0,
+            Jump::Last => last,
+            Jump::PageBack => (self.selected / page).saturating_sub(1) * page,
+            Jump::PageForward => ((self.selected / page + 1) * page).min(last),
+        };
     }
 
     /// The tiles of the page the selection is on: the range of their indices.
@@ -157,8 +212,13 @@ impl Picker {
         start..(start + max_per_page).min(self.tiles.len())
     }
 
-    /// Move the selection one tile left or right, or one row up or down within its page; at an edge it stays.
+    /// Move the selection one tile left or right, or one row up or down within its page; at an edge it stays. While no
+    /// selection shows, the first arrow only shows it on the first tile.
     pub fn step(&mut self, direction: Direction, max_per_page: usize) {
+        if !self.shown {
+            self.shown = true;
+            return;
+        }
         let columns = Grid::for_count(max_per_page.min(self.tiles.len())).columns;
         let target = match direction {
             Direction::Left => self.selected.checked_sub(1),
@@ -225,6 +285,20 @@ impl NameEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_switch_eases_in_and_out_over_half_a_second() {
+        assert_eq!(switched(0.0), 0.0);
+        assert!(
+            (switched(0.25) - 0.5).abs() < 1e-6,
+            "half way at the middle"
+        );
+        assert!(switched(0.05) < 0.1 * 0.5, "slow at the start");
+        assert!(switched(0.45) > 1.0 - 0.1 * 0.5, "slow at the end");
+        assert_eq!(switched(0.5), 1.0);
+        assert_eq!(switched(3.0), 1.0);
+        assert_eq!(switched(-1.0), 0.0);
+    }
 
     fn account(login: &str, display: &str) -> User {
         User {
@@ -402,6 +476,10 @@ mod tests {
     fn arrows_move_through_the_grid_and_stop_at_its_edges() {
         // 5 tiles (4 users and Other): a 3 x 2 grid, rows [0 1] [2 3] [4]
         let mut p = picker(4);
+        // nothing shows as selected until the first arrow, which shows the first tile
+        assert_eq!(p.selection(), None);
+        p.step(Direction::Down, 12);
+        assert_eq!(p.selection(), Some(0));
         p.step(Direction::Down, 12);
         assert_eq!(p.selected_index(), 2);
         p.step(Direction::Right, 12);
@@ -418,6 +496,29 @@ mod tests {
         assert_eq!(p.selected_index(), 0);
         p.step(Direction::Left, 12);
         assert_eq!(p.selected_index(), 0);
+    }
+
+    #[test]
+    fn home_end_and_the_page_keys_jump_through_the_tiles() {
+        // 14 tiles on pages of 12
+        let mut p = picker(13);
+        p.jump(Jump::Last, 12);
+        assert_eq!(p.selection(), Some(13));
+        p.jump(Jump::PageBack, 12);
+        assert_eq!(p.selection(), Some(0));
+        p.jump(Jump::PageForward, 12);
+        assert_eq!(p.selection(), Some(12));
+        p.jump(Jump::PageForward, 12);
+        assert_eq!(p.selection(), Some(13));
+        p.select(5);
+        p.jump(Jump::PageBack, 12);
+        assert_eq!(p.selection(), Some(0));
+        p.jump(Jump::First, 12);
+        assert_eq!(p.selection(), Some(0));
+        // a key before any selection shows its target at once
+        let mut fresh = picker(13);
+        fresh.jump(Jump::Last, 12);
+        assert_eq!(fresh.selection(), Some(13));
     }
 
     #[test]

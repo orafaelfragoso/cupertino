@@ -22,7 +22,7 @@ use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::GlyphRasterizer;
 use cupertino_wayland_client::{Connection, PixelRect, SurfaceId, Waker};
 
-use crate::gpu_present::{GpuDevice, GpuSurface, PresentError, SurfaceStats};
+use crate::gpu_present::{Draw, GpuDevice, GpuSurface, PresentError, SurfaceStats};
 use crate::renderer::{
     self, Busy, Choice, FallbackScope, Feedback, LossHistory, Reason, RendererClass, RendererKind,
     Requested, Start,
@@ -128,6 +128,18 @@ pub enum Presented {
     /// Shown from a GPU buffer.
     Gpu,
     /// Not for the GPU (the window system or the surface draws into shared memory): present it there.
+    Shm,
+    /// Every buffer is the compositor's still.
+    Busy,
+    /// The frame is not of the size the surface asks for now.
+    Resized,
+}
+
+/// What [`GpuPath::prepare`] did.
+pub enum Prepared {
+    /// A buffer is ready for the frame: draw it there and commit.
+    Gpu(Box<Draw>),
+    /// Not for the GPU: present it in shared memory.
     Shm,
     /// Every buffer is the compositor's still.
     Busy,
@@ -481,20 +493,104 @@ impl GpuPath {
             Ok(()) => Ok(Presented::Gpu),
             Err(PresentError::Busy) => Ok(Presented::Busy),
             Err(PresentError::Resized) => Ok(Presented::Resized),
-            Err(PresentError::Fallback(why)) => {
+            Err(e) => {
+                self.failed(conn, surface, e)?;
+                Ok(Presented::Shm)
+            }
+        }
+    }
+
+    /// Prepare a frame of `pixels` of `surface` to be drawn and committed on the render thread ([`Draw::draw`]) if the
+    /// window system and the surface draw on the GPU; [`GpuPath::finish`] says how that went.
+    pub fn prepare(
+        &mut self,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        preferred: (u32, u32),
+        pixels: (u32, u32),
+        whole: bool,
+    ) -> Result<Prepared, cupertino_wayland_client::Error> {
+        let State::On(gpu) = &self.state else {
+            return Ok(Prepared::Shm);
+        };
+        let kind = self
+            .surfaces
+            .entry(surface)
+            .or_insert_with(|| SurfaceKind::Gpu(GpuSurface::default()));
+        let SurfaceKind::Gpu(s) = kind else {
+            return Ok(Prepared::Shm);
+        };
+        match s.prepare(gpu, conn, surface, preferred, pixels, whole) {
+            Ok(draw) => {
+                s.handed_over();
+                Ok(Prepared::Gpu(Box::new(draw)))
+            }
+            Err(PresentError::Busy) => Ok(Prepared::Busy),
+            Err(PresentError::Resized) => Ok(Prepared::Resized),
+            Err(e) => {
+                self.failed(conn, surface, e)?;
+                Ok(Prepared::Shm)
+            }
+        }
+    }
+
+    /// A frame of `surface` [`GpuPath::prepare`] handed over was drawn (copied from its renderer's texture or not), or
+    /// could not be: the surface's buffers go then, and a lost device or a surface falling back is handled as when
+    /// presenting.
+    pub fn finish(
+        &mut self,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        drawn: Result<bool, PresentError>,
+    ) -> Result<(), cupertino_wayland_client::Error> {
+        let gpu = match &self.state {
+            State::On(gpu) => Some(gpu.as_ref()),
+            _ => None,
+        };
+        let Some(SurfaceKind::Gpu(s)) = self.surfaces.get_mut(&surface) else {
+            return Ok(());
+        };
+        match drawn {
+            Ok(from_texture) => {
+                s.drawn(from_texture);
+                Ok(())
+            }
+            Err(e) => {
+                s.not_drawn(gpu, conn);
+                self.failed(conn, surface, e)
+            }
+        }
+    }
+
+    /// Presenting on `surface` failed by `e`: it falls back to shared memory, or the device was lost.
+    fn failed(
+        &mut self,
+        conn: &mut Connection,
+        surface: SurfaceId,
+        e: PresentError,
+    ) -> Result<(), cupertino_wayland_client::Error> {
+        match e {
+            PresentError::Fallback(why) => {
                 renderer::fallback(
                     FallbackScope::Surface,
                     &format!("the surface draws into shared memory: {why}"),
                 );
-                s.free(Some(gpu), conn);
+                let gpu = match &self.state {
+                    State::On(gpu) => Some(gpu.as_ref()),
+                    _ => None,
+                };
+                if let Some(SurfaceKind::Gpu(s)) = self.surfaces.get_mut(&surface) {
+                    s.free(gpu, conn);
+                }
                 self.surfaces.insert(surface, SurfaceKind::Fallback);
-                Ok(Presented::Shm)
+                Ok(())
             }
-            Err(PresentError::Lost(loss)) => {
+            PresentError::Lost(loss) => {
                 self.lost(conn, loss);
-                Ok(Presented::Shm)
+                Ok(())
             }
-            Err(PresentError::Wayland(e)) => Err(e),
+            PresentError::Wayland(e) => Err(e),
+            PresentError::Busy | PresentError::Resized => Ok(()),
         }
     }
 

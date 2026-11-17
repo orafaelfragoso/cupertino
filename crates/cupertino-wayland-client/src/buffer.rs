@@ -248,7 +248,8 @@ pub(crate) struct Slot {
     pub layout: BufferLayout,
     pub busy: bool,
     pub missed: Missed,
-    map: MmapMut,
+    /// The client's map of the memory; out while the buffer is drawn into on another thread.
+    map: Option<MmapMut>,
     pool: WlShmPool,
     pub buffer: WlBuffer,
 }
@@ -284,14 +285,27 @@ impl Slot {
             layout,
             busy: false,
             missed: Missed::default(),
-            map,
+            map: Some(map),
             pool,
             buffer,
         })
     }
 
     pub(crate) fn pixels_mut(&mut self) -> &mut [u8] {
-        &mut self.map[..]
+        &mut self.map.as_mut().expect("a leased buffer has its memory")[..]
+    }
+
+    /// Whether the buffer may be leased: the compositor does not hold it and its memory is in.
+    pub(crate) fn free(&self) -> bool {
+        !self.busy && self.map.is_some()
+    }
+
+    pub(crate) fn take_map(&mut self) -> MmapMut {
+        self.map.take().expect("a leased buffer has its memory")
+    }
+
+    pub(crate) fn put_map(&mut self, map: MmapMut) {
+        self.map = Some(map);
     }
 }
 

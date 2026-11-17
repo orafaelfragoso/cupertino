@@ -1,8 +1,9 @@
 //! The process's render thread: it owns the process's one GPU device and the device's only context, and everything
 //! made on it (the windows' GPU renderers, the textures their frames stay in, the buffers a presenter draws into)
 //! lives there as a [`Resident`]. Every instance of the process draws through it: a UI thread hands it work with
-//! [`run`], which runs on the render thread and returns its result, and the render thread does one piece of work at a
-//! time, in the order it was handed over.
+//! [`run`], which runs on the render thread and returns its result, or with [`hand_over`], whose result comes back
+//! another way (a window's frame, drawn and committed there); the render thread does one piece of work at a time, in
+//! the order it was handed over, and its [`heartbeat`] says how long the current one has taken.
 //!
 //! The device is made on a warm-up thread ([`request`]: the context, then the programs, compiled or loaded from saved
 //! binaries, and drawn once) and then handed to the render thread, so a driver slow to make a context never holds up
@@ -14,11 +15,12 @@
 //! A device someone else made and lends (the server's) is not the render thread's: a [`crate::gpu::GpuRenderer`] made
 //! on it draws on the lender's thread, as before.
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{JoinHandle, ThreadId};
@@ -173,7 +175,7 @@ impl<T: 'static> Drop for Resident<T> {
             return;
         }
         let value = Moved(value);
-        thread.send(Box::new(move |_| value.drop_here()));
+        thread.send(Box::new(move || value.drop_here()));
     }
 }
 
@@ -191,22 +193,21 @@ impl<T> Moved<T> {
 }
 
 /// Runs `work` on the render thread and returns its result, once the work handed over before it is done. A panic in
-/// `work` goes on in the caller. Never called from the render thread itself.
+/// `work` goes on in the caller. Called on the render thread itself, from work [`hand_over`] gave it, `work` runs
+/// there at once; work that `run` gave it cannot call `run` again.
 pub fn run<T: Send>(work: impl FnOnce(&mut RenderThread) -> T + Send) -> T {
     let thread = handle();
-    assert!(
-        !thread.is_current(),
-        "render_thread::run called on the render thread"
-    );
+    if thread.is_current() {
+        return with_state(work);
+    }
     let (tx, rx) = mpsc::sync_channel(1);
-    let job: Box<dyn FnOnce(&mut RenderThread) + Send + '_> = Box::new(move |on| {
-        let _ = tx.send(catch_unwind(AssertUnwindSafe(|| work(on))));
+    let job: Box<dyn FnOnce() + Send + '_> = Box::new(move || {
+        let _ = tx.send(catch_unwind(AssertUnwindSafe(|| with_state(work))));
     });
     // Safety: the job borrows from the caller's frame for no longer than this call: it returns only once the job has
     // sent its result, or once the job was dropped unrun (its sender with it, which ends the wait below), so nothing
     // the job holds is used after the borrow ends.
-    let job: Job =
-        unsafe { std::mem::transmute::<Box<dyn FnOnce(&mut RenderThread) + Send + '_>, Job>(job) };
+    let job: Job = unsafe { std::mem::transmute::<Box<dyn FnOnce() + Send + '_>, Job>(job) };
     thread.send(job);
     match rx.recv() {
         Ok(Ok(value)) => value,
@@ -215,16 +216,67 @@ pub fn run<T: Send>(work: impl FnOnce(&mut RenderThread) -> T + Send) -> T {
     }
 }
 
-/// Hands `work` to the render thread without waiting for it: it runs after the work handed over before it. For work
-/// whose result nobody waits for, such as freeing what a closing surface drew into.
-pub fn hand_over(work: impl FnOnce(&mut RenderThread) + Send + 'static) {
-    let thread = handle();
-    if thread.is_current() {
-        panic!("render_thread::hand_over called on the render thread");
-    }
-    thread.send(Box::new(work));
+/// Hands `work` to the render thread without waiting for it: it runs after the work handed over before it, and
+/// reaches the render thread's state through [`run`], which runs there at once. For work whose result comes back
+/// another way (a channel), such as drawing and committing a window's frame, or that nobody waits for, such as freeing
+/// what a closing surface drew into. A panic in `work` is the render thread's and ends only `work`.
+pub fn hand_over(work: impl FnOnce() + Send + 'static) {
+    handle().send(Box::new(work));
 }
 
+/// What the render thread is doing, read from any thread without waiting for it: what a watchdog looks at (D17).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Heartbeat {
+    /// How long the work it is doing now has taken; `None` while it waits for work.
+    pub busy_for: Option<Duration>,
+    /// The pieces of work it finished since the process started.
+    pub done: u64,
+}
+
+/// The render thread's heartbeat.
+pub fn heartbeat() -> Heartbeat {
+    let busy = BUSY_SINCE.load(Ordering::Acquire);
+    Heartbeat {
+        busy_for: (busy != 0).then(|| (epoch() + Duration::from_nanos(busy - 1)).elapsed()),
+        done: DONE.load(Ordering::Acquire),
+    }
+}
+
+/// When the work the render thread is doing began, in nanoseconds after [`epoch`] plus one; 0 while it waits.
+static BUSY_SINCE: AtomicU64 = AtomicU64::new(0);
+
+/// The pieces of work the render thread finished.
+static DONE: AtomicU64 = AtomicU64::new(0);
+
+/// The instant the heartbeat counts from.
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+std::thread_local! {
+    /// The render thread's state, on the render thread.
+    static STATE: RefCell<Option<RenderThread>> = const { RefCell::new(None) };
+}
+
+/// `work` with the render thread's state, on the render thread.
+fn with_state<T>(work: impl FnOnce(&mut RenderThread) -> T) -> T {
+    STATE.with(|state| {
+        let mut state = state.try_borrow_mut().expect(
+            "render_thread::run inside work that render_thread::run gave the render thread",
+        );
+        work(
+            state
+                .as_mut()
+                .expect("the render thread's state is made as it starts"),
+        )
+    })
+}
+
+/// A job for the render thread that takes its state.
+fn job(work: impl FnOnce(&mut RenderThread) + Send + 'static) -> Job {
+    Box::new(move || with_state(work))
+}
 /// The device as it stands, without waiting.
 pub fn status() -> Status {
     let shared = &handle().shared;
@@ -291,7 +343,7 @@ pub fn request(
         .name(WARM_UP_THREAD.into())
         .spawn(move || {
             let made = warm(node.as_deref(), cache.as_deref(), &theirs);
-            let _ = jobs.send(Box::new(move |on| attach(on, generation, made)));
+            let _ = jobs.send(job(move |on| attach(on, generation, made)));
             let _ = done_tx.send(());
         });
     match spawned {
@@ -325,7 +377,7 @@ pub fn lost(generation: u64, loss: Loss) {
             _ => return,
         }
     }
-    thread.send(Box::new(move |on| {
+    thread.send(job(move |on| {
         if on.generation() == Some(generation) {
             on.on = None;
             on.lost = Some((generation, loss));
@@ -358,7 +410,7 @@ impl Drop for Claim {
             warm_up.end();
         }
         let (tx, rx) = mpsc::sync_channel(1);
-        thread.send(Box::new(move |on| {
+        thread.send(job(move |on| {
             on.on = None;
             let _ = tx.send(());
         }));
@@ -372,7 +424,7 @@ impl Drop for Claim {
 }
 
 /// The render thread's work.
-type Job = Box<dyn FnOnce(&mut RenderThread) + Send + 'static>;
+type Job = Box<dyn FnOnce() + Send + 'static>;
 
 struct Handle {
     jobs: Sender<Job>,
@@ -422,17 +474,24 @@ fn handle() -> &'static Handle {
     })
 }
 
-/// The render thread: runs each job handed over, in order.
+/// The render thread: runs each job handed over, in order, its heartbeat beating around each.
 fn serve(queue: Receiver<Job>) {
-    let mut on = RenderThread {
-        on: None,
-        lost: None,
-        _thread: PhantomData,
-    };
+    STATE.with(|state| {
+        *state.borrow_mut() = Some(RenderThread {
+            on: None,
+            lost: None,
+            _thread: PhantomData,
+        })
+    });
+    let epoch = epoch();
     while let Ok(job) = queue.recv() {
-        // `run` catches its work's panic; a panic dropping a resident value is the render thread's own and is caught
-        // here so it keeps serving
-        let _ = catch_unwind(AssertUnwindSafe(|| job(&mut on)));
+        let since = epoch.elapsed().as_nanos() as u64 + 1;
+        BUSY_SINCE.store(since, Ordering::Release);
+        // `run` catches its work's panic; a panic in handed-over work or in dropping a resident value is the render
+        // thread's own and is caught here so it keeps serving
+        let _ = catch_unwind(AssertUnwindSafe(job));
+        BUSY_SINCE.store(0, Ordering::Release);
+        DONE.fetch_add(1, Ordering::AcqRel);
     }
 }
 

@@ -163,4 +163,14 @@ impl Serials {
             latest
         }))
     }
+
+    /// A buffer drawn for the configure `serial` (one received) is about to be committed: whether `serial` is to be
+    /// acknowledged now, which it is unless it or a later one already was.
+    pub(crate) fn answer(&mut self, serial: u32) -> bool {
+        let ack = self.acked.is_none_or(|acked| newer(serial, acked));
+        if ack {
+            self.acked = Some(serial);
+        }
+        ack
+    }
 }

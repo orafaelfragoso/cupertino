@@ -4,9 +4,13 @@
 
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_ui_render::{CpuFrame, MemoryTarget, PixelRect, RenderFrameId};
+use cupertino_ui_render::{
+    CpuFrame, DamageRegion, DisplayList, MemoryTarget, PaintResources, PixelRect, RenderError,
+    RenderFrameId, RenderRequest, UiRenderer,
+};
 use cupertino_ui_text::{ImeEvent, TextInputState};
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 use std::task::Waker;
 use std::time::Duration;
 
@@ -549,6 +553,66 @@ pub enum PresentOutcome {
     NotReady,
 }
 
+/// The renderer a window draws its content with, shared with the window system, which draws a submitted frame with it
+/// away from the UI thread ([`WindowSystem::submit`]).
+pub type SharedRenderer = Arc<Mutex<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>>;
+
+/// A window's next frame, recorded on the UI thread, for the window system to draw and show away from it
+/// ([`WindowSystem::submit`]).
+#[derive(Clone)]
+pub struct Submission {
+    pub renderer: SharedRenderer,
+    pub list: Arc<DisplayList>,
+    pub resources: Arc<PaintResources>,
+    /// Physical pixels per logical point.
+    pub scale: f64,
+    pub width: u32,
+    pub height: u32,
+    pub damage: DamageRegion,
+    /// The configure the frame answers, acknowledged with its commit.
+    pub configure: Option<ConfigureId>,
+}
+
+impl Submission {
+    /// The repaint the submission asks of its renderer.
+    pub fn request(&self) -> RenderRequest<'_> {
+        RenderRequest {
+            list: &self.list,
+            resources: &self.resources,
+            scale: self.scale,
+            width: self.width,
+            height: self.height,
+            damage: &self.damage,
+        }
+    }
+}
+
+/// What [`WindowSystem::submit`] did with a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Submitted {
+    /// The window system draws and shows it away from the UI thread: [`WindowEvent::Shown`] says how that went, and
+    /// the window draws no other frame until then.
+    Taken,
+    /// No buffer is free, or the window waits for its configure or for a frame of the size it asks for: the frame
+    /// was not drawn and the next one draws all of it.
+    NotReady,
+    /// The window system does not take frames this way now: draw the frame on the UI thread and present it
+    /// ([`WindowSystem::present_into`], [`WindowSystem::present`]).
+    Declined,
+}
+
+/// How a frame [`WindowSystem::submit`] took was shown ([`WindowEvent::Shown`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shown {
+    /// Committed: the window may draw its next frame when the compositor asks for it.
+    Presented(RenderFrameId),
+    /// Not shown (no buffer was free in the end, the device was lost, the surface fell back to another path): the
+    /// next frame draws all of it.
+    NotReady,
+    /// The renderer failed to draw it; the next frame draws all of it.
+    Failed(RenderError),
+}
+
 /// What [`WindowSystem::present_into`] did with a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Lent {
@@ -695,6 +759,8 @@ pub enum WindowEvent {
     Scale(f64),
     /// The compositor is ready for the next frame, which it will show around this time.
     Frame(Timestamp),
+    /// How the frame the window submitted last ([`WindowSystem::submit`]) was shown.
+    Shown(Shown),
     Pointer(PointerEvent, Timestamp),
     Touch(TouchEvent, Timestamp),
     Key(KeyEvent, Timestamp),
@@ -950,6 +1016,14 @@ pub trait WindowSystem {
     fn activated(&self, window: WindowId) -> Option<bool> {
         let _ = window;
         None
+    }
+    /// Takes `frame` to draw and show away from the UI thread: drawn on the process's render thread (a window drawn on
+    /// the GPU) or on the CPU pool (one drawn into its shared-memory buffers), and committed by the render thread,
+    /// which acknowledges the frame's configure, attaches the buffer and commits, in that order. A window system that
+    /// does not draw this way declines (the default), and the window draws and presents the frame itself.
+    fn submit(&mut self, window: WindowId, frame: &Submission) -> Result<Submitted, PlatformError> {
+        let _ = (window, frame);
+        Ok(Submitted::Declined)
     }
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and
     /// commits it. After a failure the next successful present also covers this frame's damage.

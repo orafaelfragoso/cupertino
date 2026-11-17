@@ -165,6 +165,17 @@ the own fence and a buffer is reused one commit after its release (three buffers
 or that the compositor refuses moves the surface to shared memory for good; the transport destroys its syncobj
 surface object before the first shared-memory attach.
 
+A window's content frame is drawn and committed away from the UI thread (`WindowSystem::submit`): the window system
+takes the frame's display list, resources, damage and the window's renderer (shared, `SharedRenderer`), prepares the
+commit on the UI thread (a free buffer chosen or allocated, its sync points, the configure it answers:
+`Connection::gpu_commit`, `BufferLease::detach`) and hands the rest over. A window on the GPU has its frame drawn on
+the render thread (`gpu_present::Draw`); one drawing into shared memory in ABGR8888 has it drawn on the CPU pool
+(`cupertino_ui_core::pool`), one task per surface, into the buffer it detached. Either way the render thread commits,
+acknowledging the configure, attaching and committing in that order, after it sent the frame back; the next dispatch
+reads it (before what the compositor said of it) and tells the runtime `WindowEvent::Shown`. Until then the window
+draws no other frame, and freeing a surface's GPU buffers waits for the render thread's work before it. The raised
+layer, the surface layers, a solid colour and shared memory in ARGB8888 still present on the UI thread.
+
 `examples/gpu-window.rs` is the presenter's check window, a client for `cupertino-server`:
 `--frames`, `--reset-every`, `--purge-every`, `--losses`, `--renderer` (frames drawn by the GPU renderer and copied
 from its texture), and a `key value` report of what it did.

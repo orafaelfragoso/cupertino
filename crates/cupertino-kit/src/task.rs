@@ -41,7 +41,7 @@ where
     T: Send + 'static,
     M: Send + 'static,
 {
-    perform(cpu_pool, None, work, done)
+    perform(cpu_submit, None, work, done)
 }
 
 /// Runs `work` on the I/O pool and `done` with its result on the UI thread, whose message the application then hears.
@@ -57,11 +57,11 @@ where
     T: Send + 'static,
     M: Send + 'static,
 {
-    perform(io_pool, Some((deadline, Location::caller())), work, done)
+    perform(io_submit, Some((deadline, Location::caller())), work, done)
 }
 
 fn perform<T, M>(
-    pool: fn() -> &'static Pool,
+    submit: fn(Job),
     deadline: Option<(Duration, &'static Location<'static>)>,
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(T) -> M + Send + 'static,
@@ -74,7 +74,7 @@ where
     Command::Perform(Box::pin(async move {
         let slot = Arc::new(Slot::default());
         let filled = Arc::clone(&slot);
-        pool().submit(Job {
+        submit(Job {
             instance,
             deadline,
             run: Box::new(move || {
@@ -153,13 +153,17 @@ struct Job {
     run: Box<dyn FnOnce() + Send>,
 }
 
-/// The process's CPU pool: a thread per core.
-fn cpu_pool() -> &'static Pool {
-    static CPU: OnceLock<Pool> = OnceLock::new();
-    CPU.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(1, usize::from);
-        Pool::start("kit-cpu", cores, None)
-    })
+/// Runs `job` for its instance on the process's CPU pool ([`cupertino_ui_core::pool`]), which windows drawn on the
+/// CPU share.
+fn cpu_submit(job: Job) {
+    cupertino_ui_core::pool::cpu(move || {
+        let _entered = job.instance.as_ref().map(Instance::enter);
+        (job.run)();
+    });
+}
+
+fn io_submit(job: Job) {
+    io_pool().submit(job);
 }
 
 /// The process's I/O pool: [`IO_THREADS`] threads, [`IO_SHARE`] for one instance at most.

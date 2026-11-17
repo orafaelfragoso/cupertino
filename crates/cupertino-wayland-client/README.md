@@ -43,6 +43,16 @@ largest scale of the outputs the surface entered; without the viewporter it is r
 viewport, `BufferLease::set_zoom` magnifies a frame about its centre on the compositor (the viewport's source is the
 middle of the buffer), and the next frame without a zoom shows the whole buffer again.
 
+A present may be sent from another thread (`Commit`, which is `Send`): `BufferLease::detach` takes the buffer out of
+the connection (`DetachedBuffer`, its pixels and what it missed) with the commit that shows it, and
+`Connection::gpu_commit` makes the commit of a dmabuf frame; the buffer counts as the compositor's from then on. The
+commit answers the configure that was the latest when it was made: `Commit::commit` acknowledges it unless a later one
+already was, then attaches, damages, asks for the frame callback and feedback and commits, holding the surface's
+serials (shared with the connection) only while those requests go out, so a configure arriving meanwhile is answered
+by the next frame. A commit of a destroyed surface sends nothing. The detached buffer comes back with
+`Connection::buffer_shown` once its commit went out, or `buffer_unused`; events stay on the connection's queue.
+`ExternalRole` is `Send + Sync` for this.
+
 A surface of one colour (`present_solid`) needs no frame at all: the compositor stretches one pixel over it. The
 viewport is created then even without fractional scaling, and an shm frame presented later on the same surface keeps it
 (buffer scale 1, destination the logical size), so the surface can go from one to the other in either direction.

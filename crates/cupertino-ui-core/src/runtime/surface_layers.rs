@@ -143,7 +143,7 @@ pub(crate) fn split(painting: &mut Painting, marks: &[Marked]) -> Vec<LayerPaint
 pub(crate) struct LayerState {
     pub(crate) damage: DamageTracker,
     /// Made on the layer's first frame.
-    pub(crate) renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame>>>,
+    pub(crate) renderer: Option<Box<dyn UiRenderer<Frame = CpuFrame> + Send>>,
     pub(crate) list: DisplayList,
     /// The rect and look it was last shown with.
     pub(crate) shown: Option<(Rect, SurfaceLayerLook)>,
@@ -223,7 +223,7 @@ impl SurfaceLayers {
         window: WindowId,
         scale: f64,
         resources: &PaintResources,
-        renderers: &mut dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame>>,
+        renderers: &mut dyn FnMut() -> Box<dyn UiRenderer<Frame = CpuFrame> + Send>,
     ) -> Result<PresentOutcome, UiError> {
         let mut drawn = Vec::with_capacity(prepared.paints.len());
         for (paint, damage) in prepared.paints {

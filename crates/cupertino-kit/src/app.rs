@@ -623,7 +623,7 @@ fn fonts(assets: &Assets) -> (FontIndex, Option<String>) {
                 builtin = faces
                     .first()
                     .and_then(|&face| index.family(face))
-                    .map(str::to_owned);
+                    .map(|family| family.to_string());
             }
             Ok(_) => {}
             Err(e) => eprintln!("cupertino-kit: skipping the font {}: {e:?}", source.label()),

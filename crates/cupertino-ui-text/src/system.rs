@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -18,26 +18,32 @@ use unicode_segmentation::UnicodeSegmentation;
 const CACHE_LIMIT: usize = 512;
 const ELLIPSIS: &str = "\u{2026}";
 
-type CacheEntry = (AttributedText, ParagraphStyle, Paragraph);
+type CacheEntry = Arc<(AttributedText, ParagraphStyle, Paragraph)>;
 
-struct State {
-    fonts: FontIndex,
-    /// Two generations: a full `current` becomes `previous` and the old `previous` is dropped, so a hit in either
-    /// keeps the paragraph and a view of more than the limit still reuses its recent ones.
+/// Two generations: a full `current` becomes `previous` and the old `previous` is dropped, so a hit in either keeps the
+/// paragraph and a view of more than the limit still reuses its recent ones.
+#[derive(Default)]
+struct Paragraphs {
     current: HashMap<u64, CacheEntry>,
     previous: HashMap<u64, CacheEntry>,
 }
 
-/// The fonts, the paragraph cache and the glyph rasters of one app. Methods take `&self`, so one `Arc<TextSystem>`
-/// serves measuring and painting, and every renderer's rasterizer on it shares the rasters.
+/// The fonts, the paragraph cache and the glyph rasters of one app, or of every instance of a process that shares
+/// them. Methods take `&self`, so one `Arc<TextSystem>` serves measuring and painting on any thread, and every
+/// renderer's rasterizer on it shares the rasters.
+///
+/// Every cache in it only takes whole entries that never change afterwards, and its lock is held only to look one up
+/// or put one in: text is shaped, and glyphs drawn, outside every lock, so a panic while shaping or drawing leaves the
+/// caches whole for every other user.
 ///
 /// The cache keeps the plain text of every recent paragraph, so text that must not linger, a password above all, is
 /// never shaped: a secure field shapes only its mask.
 pub struct TextSystem {
     theme_family: Arc<str>,
-    state: Mutex<State>,
+    fonts: FontIndex,
+    paragraphs: Mutex<Paragraphs>,
     /// The glyph rasters every rasterizer on this system shares.
-    rasters: Mutex<SharedRasters>,
+    rasters: SharedRasters,
 }
 
 impl fmt::Debug for TextSystem {
@@ -54,30 +60,25 @@ impl TextSystem {
     pub fn new(fonts: FontIndex, theme_family: &str) -> Self {
         Self {
             theme_family: theme_family.into(),
-            state: Mutex::new(State {
-                fonts,
-                current: HashMap::new(),
-                previous: HashMap::new(),
-            }),
-            rasters: Mutex::new(SharedRasters::default()),
+            fonts,
+            paragraphs: Mutex::default(),
+            rasters: SharedRasters::default(),
         }
     }
 
-    pub(crate) fn rasters(&self) -> MutexGuard<'_, SharedRasters> {
-        self.rasters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    pub(crate) fn rasters(&self) -> &SharedRasters {
+        &self.rasters
     }
 
     /// What the glyph rasters shared by this system's rasterizers hold and did.
     pub fn shared_rasters(&self) -> SharedRasterStats {
-        self.rasters().stats()
+        self.rasters.stats()
     }
 
-    fn state(&self) -> MutexGuard<'_, State> {
-        self.state
+    fn paragraphs(&self) -> MutexGuard<'_, Paragraphs> {
+        self.paragraphs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Shapes `text`, or returns the paragraph shaped for an equal request before.
@@ -88,27 +89,29 @@ impl TextSystem {
     ) -> Result<Paragraph, TextError> {
         check_values(text)?;
         let key = cache_key(text, style);
-        let mut state = self.state();
-        if let Some(paragraph) = lookup(&state.current, key, text, style) {
-            return Ok(paragraph);
+        {
+            let mut cache = self.paragraphs();
+            if let Some(entry) = lookup(&cache.current, key, text, style) {
+                return Ok(entry.2.clone());
+            }
+            if let Some(entry) = lookup(&cache.previous, key, text, style) {
+                let paragraph = entry.2.clone();
+                insert(&mut cache, key, entry);
+                return Ok(paragraph);
+            }
         }
-        if let Some(paragraph) = lookup(&state.previous, key, text, style) {
-            state
-                .current
-                .insert(key, (text.clone(), *style, paragraph.clone()));
-            return Ok(paragraph);
-        }
-        let paragraph = shape_paragraph(&mut state.fonts, &self.theme_family, text, style)?;
+        let paragraph = shape_paragraph(&self.fonts, &self.theme_family, text, style)?;
         crate::TextWork::record(|work| work.shaped += 1);
-        insert(&mut state, key, text, style, paragraph.clone());
+        let entry = Arc::new((text.clone(), *style, paragraph.clone()));
+        insert(&mut self.paragraphs(), key, entry);
         Ok(paragraph)
     }
 
     /// How many paragraphs the cache holds: two generations of at most 512 each, however many are shaped, so work that
     /// shapes text ahead of the frame that lays it out (a window's idle time) cannot grow it.
     pub fn cached_paragraphs(&self) -> usize {
-        let state = self.state();
-        state.current.len() + state.previous.len()
+        let cache = self.paragraphs();
+        cache.current.len() + cache.previous.len()
     }
 
     /// The size of `text` laid out within `max_width`.
@@ -123,13 +126,12 @@ impl TextSystem {
 
     /// The font file and coordinates behind a [`FontId`] that layout produced.
     pub fn font_source(&self, font: crate::FontId) -> Result<crate::FontSource, TextError> {
-        self.state().fonts.source(font)
+        self.fonts.source(font)
     }
 
     pub fn metrics(&self, style: &TextStyle) -> Result<FontMetrics, TextError> {
-        let mut state = self.state();
-        let font = resolve(&mut state.fonts, &self.theme_family, style)?;
-        state.fonts.metrics(font)
+        let font = resolve(&self.fonts, &self.theme_family, style)?;
+        self.fonts.metrics(font)
     }
 }
 
@@ -138,24 +140,19 @@ fn lookup(
     key: u64,
     text: &AttributedText,
     style: &ParagraphStyle,
-) -> Option<Paragraph> {
+) -> Option<CacheEntry> {
     generation
         .get(&key)
-        .filter(|(cached_text, cached_style, _)| cached_text == text && cached_style == style)
-        .map(|(_, _, paragraph)| paragraph.clone())
+        .filter(|entry| entry.0 == *text && entry.1 == *style)
+        .cloned()
 }
 
-fn insert(
-    state: &mut State,
-    key: u64,
-    text: &AttributedText,
-    style: &ParagraphStyle,
-    paragraph: Paragraph,
-) {
-    if state.current.len() >= CACHE_LIMIT {
-        state.previous = std::mem::take(&mut state.current);
+/// Puts `entry` in the current generation, which first becomes the previous one when it is full.
+fn insert(cache: &mut Paragraphs, key: u64, entry: CacheEntry) {
+    if cache.current.len() >= CACHE_LIMIT {
+        cache.previous = std::mem::take(&mut cache.current);
     }
-    state.current.insert(key, (text.clone(), *style, paragraph));
+    cache.current.insert(key, entry);
 }
 
 fn check_values(text: &AttributedText) -> Result<(), TextError> {
@@ -176,7 +173,7 @@ fn check_values(text: &AttributedText) -> Result<(), TextError> {
 }
 
 fn resolve(
-    fonts: &mut FontIndex,
+    fonts: &FontIndex,
     theme_family: &str,
     style: &TextStyle,
 ) -> Result<crate::FontId, TextError> {
@@ -190,7 +187,7 @@ fn resolve(
 }
 
 fn shape_paragraph(
-    fonts: &mut FontIndex,
+    fonts: &FontIndex,
     theme_family: &str,
     text: &AttributedText,
     paragraph_style: &ParagraphStyle,
@@ -331,7 +328,7 @@ fn level_runs(
 /// its first character and the style's language; a cluster no font has stays in `primary`, and a cluster of white
 /// space stays in the font before it, so a gap between words does not split a run.
 fn font_runs(
-    fonts: &mut FontIndex,
+    fonts: &FontIndex,
     text: &str,
     range: Range<usize>,
     primary: FontId,
@@ -392,7 +389,7 @@ fn font_runs(
 
 /// An installed face that has every character of `cluster`, loaded for its first character that draws.
 fn installed(
-    fonts: &mut FontIndex,
+    fonts: &FontIndex,
     cluster: &str,
     style: &TextStyle,
 ) -> Result<Option<FontId>, TextError> {

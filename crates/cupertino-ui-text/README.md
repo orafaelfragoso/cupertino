@@ -78,9 +78,16 @@ buffer follow.
   coverage with the stem darkening that `GlyphKey::dilation_q` names (0 is font smoothing off, 1 to 5 is the fill's
   luminance in quarters; build keys with `GlyphKey::for_draw`, and the size the dilation reads is floored to a power of
   1.25), and colour glyphs as premultiplied RGBA without dilation. The rasters are the `TextSystem`'s, shared by
-  every `GlyphRaster` on it within `SHARED_RASTER_BYTES` (2 MiB, the least recently used quarter let go when full), so
+  every `GlyphRaster` on it within `SHARED_RASTER_BYTES` (2 MiB, in two generations of half each: a full one becomes
+  the previous one and the one before goes, and a glyph found in the previous one moves up), so
   a window made again, whose renderer is new, finds its glyphs instead of drawing them
   (`TextSystem::shared_rasters` tells what they hold and did).
+- One `TextSystem` (and its `FontIndex`) can serve every thread and every Kit instance of a process. Its caches, the
+  font index (faces, instances, fallback lists, the installed faces asked for), the paragraphs and the glyph rasters,
+  only take whole entries that never change afterwards, and a lock is held only to look one up or put one in: shaping,
+  reading a font file and drawing a glyph happen outside every lock, so a panic in one user leaves the caches whole for
+  the others. Two threads making the same font instance or loading the same installed face at once share the first
+  one put in, so a request always gives one `FontId`.
 - Timing, release, medians of 15 (the
   shape figure is cold and includes loading the font and the break data, and the grouping of glyphs into clusters
   that every layout reuses): 200 characters shape 85-105 us, reflow 4-5 us; 5000 characters shape 940-980 us, reflow

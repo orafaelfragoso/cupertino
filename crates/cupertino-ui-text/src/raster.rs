@@ -5,7 +5,8 @@ use crate::{
 use cupertino_raster_math::glyph::{declarative_size, mask_bounds, rasterize, Smoothing};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::{tag_from_bytes, CacheKey, FontRef, Setting};
@@ -35,13 +36,38 @@ pub struct SharedRasterStats {
     pub drawn: u64,
 }
 
-/// The glyph rasters of a [`TextSystem`], shared by every [`GlyphRaster`] on it, within [`SHARED_RASTER_BYTES`]: when
-/// full, the least recently used quarter goes. A key that draws nothing is kept too.
+/// The glyph rasters of a [`TextSystem`], shared by every [`GlyphRaster`] on it, within [`SHARED_RASTER_BYTES`], in two
+/// generations of half of it each: a full current generation becomes the previous one and the old previous one goes,
+/// and a glyph found in the previous one moves to the current one. A key that draws nothing is kept too. An entry never
+/// changes once in (its pixels are shared, not copied), and the lock is held only to look one up or put one in: glyphs
+/// are drawn outside it.
 #[derive(Default)]
 pub(crate) struct SharedRasters {
-    glyphs: HashMap<GlyphKey, (Option<RasterGlyph>, u64)>,
-    tick: u64,
-    stats: SharedRasterStats,
+    generations: Mutex<Generations>,
+    found: AtomicU64,
+    drawn: AtomicU64,
+}
+
+#[derive(Default)]
+struct Generations {
+    current: HashMap<GlyphKey, Option<RasterGlyph>>,
+    current_bytes: usize,
+    previous: HashMap<GlyphKey, Option<RasterGlyph>>,
+    previous_bytes: usize,
+}
+
+impl Generations {
+    fn insert(&mut self, key: GlyphKey, glyph: Option<RasterGlyph>) {
+        let size = SharedRasters::size(&glyph);
+        if self.current_bytes + size > SHARED_RASTER_BYTES / 2 {
+            self.previous = std::mem::take(&mut self.current);
+            self.previous_bytes = std::mem::take(&mut self.current_bytes);
+        }
+        if let Some(old) = self.current.insert(key, glyph) {
+            self.current_bytes -= SharedRasters::size(&old);
+        }
+        self.current_bytes += size;
+    }
 }
 
 impl SharedRasters {
@@ -50,40 +76,43 @@ impl SharedRasters {
         64 + glyph.as_ref().map_or(0, |g| g.pixels.len())
     }
 
-    fn get(&mut self, key: &GlyphKey) -> Option<Option<RasterGlyph>> {
-        self.tick += 1;
-        let tick = self.tick;
-        let (glyph, used) = self.glyphs.get_mut(key)?;
-        *used = tick;
-        self.stats.found += 1;
-        Some(glyph.clone())
+    fn generations(&self) -> MutexGuard<'_, Generations> {
+        self.generations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn insert(&mut self, key: GlyphKey, glyph: Option<RasterGlyph>) {
-        self.stats.drawn += 1;
-        let size = Self::size(&glyph);
-        if size > SHARED_RASTER_BYTES / 4 {
+    fn get(&self, key: &GlyphKey) -> Option<Option<RasterGlyph>> {
+        let mut generations = self.generations();
+        let glyph = match generations.current.get(key) {
+            Some(glyph) => glyph.clone(),
+            None => {
+                let glyph = generations.previous.remove(key)?;
+                generations.previous_bytes -= Self::size(&glyph);
+                generations.insert(*key, glyph.clone());
+                glyph
+            }
+        };
+        drop(generations);
+        self.found.fetch_add(1, Ordering::Relaxed);
+        Some(glyph)
+    }
+
+    fn insert(&self, key: GlyphKey, glyph: Option<RasterGlyph>) {
+        self.drawn.fetch_add(1, Ordering::Relaxed);
+        if Self::size(&glyph) > SHARED_RASTER_BYTES / 4 {
             return;
         }
-        if self.stats.bytes + size > SHARED_RASTER_BYTES {
-            let mut ticks: Vec<u64> = self.glyphs.values().map(|(_, t)| *t).collect();
-            ticks.sort_unstable();
-            let cut = ticks[ticks.len() / 4];
-            self.glyphs.retain(|_, (_, t)| *t > cut);
-            self.stats.bytes = self.glyphs.values().map(|(g, _)| Self::size(g)).sum();
-        }
-        self.tick += 1;
-        if let Some((old, _)) = self.glyphs.insert(key, (glyph, self.tick)) {
-            self.stats.bytes -= Self::size(&old);
-        }
-        self.stats.bytes += size;
-        self.stats.glyphs = self.glyphs.len();
+        self.generations().insert(key, glyph);
     }
 
     pub(crate) fn stats(&self) -> SharedRasterStats {
+        let generations = self.generations();
         SharedRasterStats {
-            glyphs: self.glyphs.len(),
-            ..self.stats
+            glyphs: generations.current.len() + generations.previous.len(),
+            bytes: generations.current_bytes + generations.previous_bytes,
+            found: self.found.load(Ordering::Relaxed),
+            drawn: self.drawn.load(Ordering::Relaxed),
         }
     }
 }

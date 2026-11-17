@@ -46,7 +46,8 @@ impl FontIndex {
     /// Shapes `text` with one font instance. Glyphs the font lacks come out as its `.notdef` glyph; picking another
     /// font for them is the caller's job.
     pub fn shape(&self, text: &str, request: &ShapeRequest<'_>) -> Result<ShapedRun, TextError> {
-        let font = self.font(request.font)?;
+        let instance = self.instance_entry(request.font)?;
+        let font = &instance.font;
         let shaper = ShaperFont::new(font);
         let scale = request.size / f32::from(font.units_per_em());
 

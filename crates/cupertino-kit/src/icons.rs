@@ -7,16 +7,24 @@ use cupertino_ui_core::{next_resource_id, IconImage, Icons, PlaceholderIcons};
 use cupertino_ui_render::{ImageResource, PixelFormat};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hash;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// A symbol as asked for: its name, device pixels, colour in 8-bit steps, and whether it is mirrored.
 type Request = (String, u32, [u8; 4], bool);
 
 /// [`SystemIcons`] of the asset packs. Each request keeps its own id and pixels for the life of the app, so a node
 /// repainted and a node reused from the paint cache never name two images with one id.
+///
+/// One can serve every window and every Kit instance of a process. Its caches only take whole images, which never
+/// change afterwards (their pixels are shared), and a cache's lock is held only to look an image up or put one in; the
+/// packs and the host's themes are read and drawn under locks of their own, never a cache's. Two threads drawing the
+/// same request at once share the first image put in.
 pub(crate) struct PackIcons {
-    state: Mutex<(SystemIcons, HashMap<Request, IconImage>)>,
+    /// What reads and draws the packs' icons.
+    packs: Mutex<SystemIcons>,
+    drawn: Mutex<HashMap<Request, IconImage>>,
     /// What a name that is not a valid icon name draws.
     invalid: PlaceholderIcons,
     /// The application's icon: where to find its desktop entry, the entry's `Icon=` once read, the host's icon
@@ -41,6 +49,24 @@ struct Application {
 /// The pack's icon for an application without one of its own.
 const GENERIC_APPLICATION: &str = "application.generic";
 
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The value `cache` holds for `key`, else `draw`'s, drawn with no lock held and put in unless another thread put one in
+/// first, whose value is then the one given.
+fn cached<K: Eq + Hash, V: Clone>(
+    cache: &Mutex<HashMap<K, V>>,
+    key: K,
+    draw: impl FnOnce() -> V,
+) -> V {
+    if let Some(value) = lock(cache).get(&key) {
+        return value.clone();
+    }
+    let value = draw();
+    lock(cache).entry(key).or_insert(value).clone()
+}
+
 impl PackIcons {
     pub(crate) fn new(assets: &Assets) -> Self {
         let entry = std::env::current_exe()
@@ -62,7 +88,8 @@ impl PackIcons {
 
     fn of(icons: SystemIcons, application: Application) -> Self {
         Self {
-            state: Mutex::new((icons, HashMap::new())),
+            packs: Mutex::new(icons),
+            drawn: Mutex::new(HashMap::new()),
             invalid: PlaceholderIcons::default(),
             application,
         }
@@ -90,59 +117,56 @@ impl PackIcons {
             .as_deref()
     }
 
+    /// The packs' raster icon `name` at `px`, when a pack has one.
+    fn pack_raster(&self, name: &str, px: u32) -> Option<IconImage> {
+        let mut packs = lock(&self.packs);
+        if !packs.has_raster(name, px) {
+            return None;
+        }
+        let p = packs.raster(name, px);
+        Some(image_of(p.width(), p.height(), p.data()))
+    }
+
+    /// The host themes' icon `name` at `px`, or that of a file it names.
+    fn theme_icon(&self, name: &str, px: u32) -> Option<IconImage> {
+        let app = &self.application;
+        let themes = app
+            .themes
+            .get_or_init(|| Mutex::new(ThemeIcons::new(&app.assets)));
+        let p = lock(themes).load(name, px)?;
+        Some(image_of(p.width(), p.height(), p.data()))
+    }
+
+    /// The packs' generic application icon at `px` (or its placeholder).
+    fn generic(&self, px: u32) -> IconImage {
+        let mut packs = lock(&self.packs);
+        let p = packs.raster(GENERIC_APPLICATION, px);
+        image_of(p.width(), p.height(), p.data())
+    }
+
     /// The application's icon at `px`: its entry's icon from the packs, else from the host's themes or a file, else
     /// the packs' generic application icon (or its placeholder).
     fn draw_application(&self, px: u32) -> Option<IconImage> {
         let icon = self.entry_icon();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let icons = &mut state.0;
-        if let Some(name) = icon.filter(|n| IconName::new(n).is_ok()) {
-            if icons.has_raster(name, px) {
-                let p = icons.raster(name, px);
-                return Some(image_of(p.width(), p.height(), p.data()));
-            }
-        }
-        if let Some(name) = icon {
-            let app = &self.application;
-            let found = app
-                .themes
-                .get_or_init(|| Mutex::new(ThemeIcons::new(&app.assets)))
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .load(name, px);
-            if let Some(p) = found {
-                return Some(image_of(p.width(), p.height(), p.data()));
-            }
-        }
-        let p = icons.raster(GENERIC_APPLICATION, px);
-        Some(image_of(p.width(), p.height(), p.data()))
+        let packs = icon
+            .filter(|n| IconName::new(n).is_ok())
+            .and_then(|name| self.pack_raster(name, px));
+        let themes = || icon.and_then(|name| self.theme_icon(name, px));
+        Some(packs.or_else(themes).unwrap_or_else(|| self.generic(px)))
     }
-}
 
-impl PackIcons {
     /// The icon of the application `name` at `px`: a pack's icon of that name, else the host's themes or a file, else
     /// the packs' generic application icon.
     fn draw_named(&self, name: &str, px: u32) -> IconImage {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let icons = &mut state.0;
-        if !name.is_empty() {
-            if IconName::new(name).is_ok() && icons.has_raster(name, px) {
-                let p = icons.raster(name, px);
-                return image_of(p.width(), p.height(), p.data());
-            }
-            let app = &self.application;
-            let found = app
-                .themes
-                .get_or_init(|| Mutex::new(ThemeIcons::new(&app.assets)))
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .load(name, px);
-            if let Some(p) = found {
-                return image_of(p.width(), p.height(), p.data());
-            }
-        }
-        let p = icons.raster(GENERIC_APPLICATION, px);
-        image_of(p.width(), p.height(), p.data())
+        let found = (!name.is_empty())
+            .then(|| {
+                IconName::new(name)
+                    .ok()
+                    .and_then(|_| self.pack_raster(name, px))
+                    .or_else(|| self.theme_icon(name, px))
+            })
+            .flatten();
+        found.unwrap_or_else(|| self.generic(px))
     }
 }
 
@@ -179,72 +203,42 @@ impl Icons for PackIcons {
             rgba.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8),
             mirrored,
         );
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let (icons, drawn) = &mut *state;
-        if let Some(image) = drawn.get(&request) {
-            return image.clone();
-        }
-        let pixmap = icons.symbol(name, px, rgba);
-        let (width, height) = (pixmap.width(), pixmap.height());
-        let mut pixels = pixmap.data().to_vec();
-        if mirrored {
-            for row in pixels.chunks_exact_mut(width as usize * 4) {
-                row.as_chunks_mut::<4>().0.reverse();
+        cached(&self.drawn, request, || {
+            let mut packs = lock(&self.packs);
+            let pixmap = packs.symbol(name, px, rgba);
+            let (width, height) = (pixmap.width(), pixmap.height());
+            let mut pixels = pixmap.data().to_vec();
+            drop(packs);
+            if mirrored {
+                for row in pixels.chunks_exact_mut(width as usize * 4) {
+                    row.as_chunks_mut::<4>().0.reverse();
+                }
             }
-        }
-        let image = IconImage {
-            id: next_resource_id(),
-            image: ImageResource {
-                revision: 1,
-                width,
-                height,
-                stride: width * 4,
-                format: PixelFormat::Rgba8Premultiplied,
-                pixels: Arc::from(pixels),
-            },
-        };
-        drawn.insert(request, image.clone());
-        image
+            IconImage {
+                id: next_resource_id(),
+                image: ImageResource {
+                    revision: 1,
+                    width,
+                    height,
+                    stride: width * 4,
+                    format: PixelFormat::Rgba8Premultiplied,
+                    pixels: Arc::from(pixels),
+                },
+            }
+        })
     }
 
     fn named(&self, name: &str, px: u32) -> Option<IconImage> {
-        let key = (name.to_owned(), px.max(1));
-        let cached = self
-            .application
-            .named
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&key)
-            .cloned();
-        if let Some(image) = cached {
-            return Some(image);
-        }
-        let image = self.draw_named(name, key.1);
-        self.application
-            .named
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key, image.clone());
-        Some(image)
+        let px = px.max(1);
+        Some(cached(
+            &self.application.named,
+            (name.to_owned(), px),
+            || self.draw_named(name, px),
+        ))
     }
 
     fn application(&self, px: u32) -> Option<IconImage> {
         let px = px.max(1);
-        if let Some(drawn) = self
-            .application
-            .drawn
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&px)
-        {
-            return drawn.clone();
-        }
-        let image = self.draw_application(px);
-        self.application
-            .drawn
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(px, image.clone());
-        image
+        cached(&self.application.drawn, px, || self.draw_application(px))
     }
 }

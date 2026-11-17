@@ -49,6 +49,9 @@ text that lines up by character (a file's contents); `None` when no pack names o
 The widgets' icons are the asset packs' symbols. `Icons::application`, the icon an alert shows, is the icon named by
 the `Icon=` of the desktop entry whose id is the running program's file name (`cupertino-files.desktop` for
 `cupertino-files`), from the packs, else from the host icon themes or a file, else the packs' generic application icon.
+The icons' caches, like the text system's, can serve every instance of a process: they take whole images that never
+change afterwards, a cache's lock is held only to look one up or put one in, and the packs are read and drawn outside
+it.
 
 `file_icons::FileIcons` gives apps that list files the icon of each item's type as image renditions (1× and 2×) for
 `controls::Image`: the asset packs' and the host icon theme's icon of the type's kind or its nearest ancestor's (as

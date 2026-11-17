@@ -1113,3 +1113,7 @@ One line per change to a decision or approval of a design: date, number, what, w
   `cupertino_wayland_client::app`. `cupertino-control` reaching `cupertino-app-protocols` is a new `shell facade`
   remaining-work line (it reached `cupertino-semantics` before). Messages without fields are written `{}` variants so
   that serde refuses unknown fields; the wire form is unchanged. Wire tests use `wayland-server` as a dev-dependency.
+- 2026-11-17: lead, after the review of wave 3: the layer protocol's limits are one module of named constants,
+  `cupertino_app_protocols::layers`, used by the client, the server and ui-platform, and a test checks the protocol
+  XML states each; the client checks spring response and damping as the 24.8 fixed point carries them and refuses a
+  lens above 4, so no curve or glass it sends ends the connection.

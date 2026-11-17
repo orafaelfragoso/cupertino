@@ -213,8 +213,12 @@ fn expand(path: &str, env: &ComposeEnv) -> Option<PathBuf> {
 }
 
 /// The keysyms and the one character of a line `[modifiers] <a> <b> … : "text" [keysym]  # comment`; `None` for any
-/// other line, and for a result that is not exactly one character.
+/// other line, and for a result that is not exactly one character. A line holding a NUL is none: keysym names are
+/// C strings.
 fn sequence(line: &str) -> Option<(Vec<u32>, char)> {
+    if line.contains('\0') {
+        return None;
+    }
     let (left, right) = line.split_once(':')?;
     let mut keys = Vec::new();
     let mut rest = left;

@@ -368,6 +368,19 @@ impl Cupertino {
         if layout.is_empty() && options.is_empty() {
             return;
         }
+        // the names are C strings
+        if [&layout, &variant, &options]
+            .iter()
+            .any(|n| n.contains('\0'))
+        {
+            tracing::warn!(
+                layout,
+                variant,
+                options,
+                "the configured input sources hold a NUL and form no keymap; the keymap is kept"
+            );
+            return;
+        }
         let cfg = XkbConfig {
             layout: &layout,
             variant: &variant,
@@ -508,6 +521,14 @@ impl Cupertino {
         };
         if let Some(source) = self.overlays.inputs.decoded.get(id) {
             let keymap = source.keymap.clone();
+            // the keymap text is a C string
+            if keymap.contains('\0') {
+                tracing::error!(
+                    source = id,
+                    "the generated keymap holds a NUL; the keymap is kept"
+                );
+                return;
+            }
             match keyboard.set_keymap_from_string(self, keymap) {
                 Ok(()) => {
                     self.overlays.inputs.decoded_active = true;

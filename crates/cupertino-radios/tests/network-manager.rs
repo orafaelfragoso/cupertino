@@ -11,85 +11,59 @@ const SAE: u32 = 0x400;
 const OWE: u32 = 0x800;
 
 #[test]
-fn an_access_point_without_flags_or_keys_is_open() {
-    assert_eq!(security(0, 0, 0), "open");
+fn the_security_of_an_access_point_comes_from_its_keys_then_its_privacy_flag() {
+    for (flags, wpa, rsn, expected) in [
+        (0, 0, 0, "open"),
+        (PRIVACY, 0, 0, "wep"),
+        (PRIVACY, 0, PSK, "wpa2"),
+        (PRIVACY, PSK, 0, "wpa"),
+        (PRIVACY, 0, PSK | SAE, "wpa2-wpa3"),
+        (PRIVACY, 0, SAE, "wpa3"),
+        (PRIVACY, 0, ENTERPRISE, "enterprise"),
+        (PRIVACY, PSK | ENTERPRISE, PSK | SAE, "enterprise"),
+        (0, 0, OWE, "owe"),
+        (PRIVACY, 0, OWE, "owe"),
+        (PRIVACY, PSK, PSK, "wpa2"),
+        // SAE in the old WPA set does not make WPA3
+        (0, SAE, PSK, "wpa2"),
+        (0, SAE, 0, "open"),
+    ] {
+        assert_eq!(
+            security(flags, wpa, rsn),
+            expected,
+            "{flags:#x} {wpa:#x} {rsn:#x}"
+        );
+    }
 }
 
 #[test]
-fn the_privacy_flag_alone_is_wep() {
-    assert_eq!(security(PRIVACY, 0, 0), "wep");
+fn strength_maps_linearly_to_dbm_up_to_100() {
+    for (strength, expected) in [
+        (0, -100),
+        (1, -100),
+        (50, -75),
+        (99, -51),
+        (100, -50),
+        (101, -50),
+        (255, -50),
+    ] {
+        assert_eq!(dbm(strength), expected, "{strength}");
+    }
 }
 
 #[test]
-fn a_psk_key_in_the_rsn_set_is_wpa2_and_in_the_wpa_set_is_wpa() {
-    assert_eq!(security(PRIVACY, 0, PSK), "wpa2");
-    assert_eq!(security(PRIVACY, PSK, 0), "wpa");
-}
-
-#[test]
-fn sae_with_psk_is_the_transition_mode_and_sae_alone_is_wpa3() {
-    assert_eq!(security(PRIVACY, 0, PSK | SAE), "wpa2-wpa3");
-    assert_eq!(security(PRIVACY, 0, SAE), "wpa3");
-}
-
-#[test]
-fn enterprise_wins_over_every_other_key() {
-    assert_eq!(security(PRIVACY, 0, ENTERPRISE), "enterprise");
-    assert_eq!(security(PRIVACY, PSK | ENTERPRISE, PSK | SAE), "enterprise");
-}
-
-#[test]
-fn owe_is_an_encrypted_open_network() {
-    assert_eq!(security(0, 0, OWE), "owe");
-}
-
-#[test]
-fn keys_beat_the_privacy_flag() {
-    assert_eq!(security(PRIVACY, 0, OWE), "owe");
-    assert_eq!(security(PRIVACY, PSK, PSK), "wpa2");
-}
-
-#[test]
-fn sae_in_the_old_wpa_set_does_not_make_wpa3() {
-    assert_eq!(security(0, SAE, PSK), "wpa2");
-    assert_eq!(security(0, SAE, 0), "open");
-}
-
-#[test]
-fn strength_maps_linearly_to_dbm() {
-    assert_eq!(dbm(0), -100);
-    assert_eq!(dbm(50), -75);
-    assert_eq!(dbm(100), -50);
-    assert_eq!(dbm(1), -100);
-    assert_eq!(dbm(99), -51);
-}
-
-#[test]
-fn a_strength_above_100_is_taken_as_100() {
-    assert_eq!(dbm(101), -50);
-    assert_eq!(dbm(255), -50);
-}
-
-#[test]
-fn an_ssid_that_is_text_is_its_own_key() {
-    assert_eq!(ssid_key(b"Home Wi-Fi"), "Home Wi-Fi");
-    assert_eq!(ssid_key("Café".as_bytes()), "Café");
-    assert_eq!(ssid_key(b""), "");
-}
-
-#[test]
-fn an_ssid_that_is_not_text_is_a_nul_and_its_bytes_in_hex() {
-    assert_eq!(ssid_key(&[0xff, 0x41]), "\0ff41");
-    assert_eq!(ssid_key(&[0x00, 0xab]), "\0".to_owned() + "00ab");
-}
-
-#[test]
-fn an_ssid_that_starts_with_a_nul_is_hex_too_so_it_cannot_clash_with_a_key() {
-    assert_eq!(ssid_key(b"\0a"), "\0".to_owned() + "0061");
-}
-
-#[test]
-fn ssids_that_differ_in_bytes_that_are_not_text_have_different_keys() {
+fn an_ssid_is_its_text_or_a_nul_and_its_bytes_in_hex() {
+    for (ssid, expected) in [
+        (&b"Home Wi-Fi"[..], "Home Wi-Fi"),
+        ("Café".as_bytes(), "Café"),
+        (b"", ""),
+        (&[0xff, 0x41], "\0ff41"),
+        (&[0x00, 0xab], "\u{0}00ab"),
+        // a leading NUL is hex too, so text cannot clash with a hex key
+        (b"\0a", "\u{0}0061"),
+    ] {
+        assert_eq!(ssid_key(ssid), expected, "{ssid:?}");
+    }
     assert_ne!(ssid_key(&[0xff, 0x41]), ssid_key(&[0xfe, 0x41]));
     assert_ne!(ssid_key(&[0xff]), ssid_key(&[0xff, 0xff]));
 }

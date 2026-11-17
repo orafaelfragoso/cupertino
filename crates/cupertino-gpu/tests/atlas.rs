@@ -32,7 +32,14 @@ fn the_atlases_of_a_window_hold_sixteen_mebibytes_in_pages_of_the_drivers_granul
 #[test]
 fn entries_are_packed_on_the_lowest_shelf_that_fits_with_a_gap_and_pages_added_up_to_the_cap() {
     for (name, config, earlier, size, expected, new_page) in [
-        ("the first at the corner", COVERAGE, &[][..], (10, 10), slot(0, 0, 0, 10, 10), true),
+        (
+            "the first at the corner",
+            COVERAGE,
+            &[][..],
+            (10, 10),
+            slot(0, 0, 0, 10, 10),
+            true,
+        ),
         (
             "beside the last with a gap",
             COVERAGE,

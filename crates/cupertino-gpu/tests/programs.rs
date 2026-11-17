@@ -22,7 +22,10 @@ fn a_key_is_a_stable_hash_of_its_parts_and_a_program_file_carries_its_cleaned_na
     assert_eq!(key, driver_key("Mesa", "llvmpipe", "OpenGL ES 3.2"));
 
     let file = program_key("ui fill/1", "vertex", "fragment");
-    assert!(file.starts_with("ui_fill_1-") && file.ends_with(".bin"), "{file}");
+    assert!(
+        file.starts_with("ui_fill_1-") && file.ends_with(".bin"),
+        "{file}"
+    );
     assert_eq!(file.len(), "ui_fill_1-".len() + 16 + ".bin".len());
     assert_eq!(file, program_key("ui fill/1", "vertex", "fragment"));
 }
@@ -57,7 +60,11 @@ fn a_change_to_any_part_gives_another_key_and_parts_cannot_slide_into_each_other
             driver_key("a", "", "b"),
             driver_key("", "a", "b"),
         ),
-        ("a vertex change", program.clone(), program_key("blit", "v2", "f")),
+        (
+            "a vertex change",
+            program.clone(),
+            program_key("blit", "v2", "f"),
+        ),
         ("a fragment change", program, program_key("blit", "v", "f2")),
         (
             "program parts sliding",
@@ -117,9 +124,7 @@ fn waiting_for_a_turn_takes_it_when_free_or_let_go_and_gives_up_on_stop_or_patie
         let started = Instant::now();
         let waiter = {
             let dir = dir.clone();
-            std::thread::spawn(move || {
-                wait_turn(&dir, patience, &AtomicBool::new(stop)).is_some()
-            })
+            std::thread::spawn(move || wait_turn(&dir, patience, &AtomicBool::new(stop)).is_some())
         };
         if let_go {
             std::thread::sleep(Duration::from_millis(50));

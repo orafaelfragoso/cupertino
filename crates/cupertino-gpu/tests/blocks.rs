@@ -11,7 +11,11 @@ fn a_block_is_its_floats_and_nothing_else_and_starts_all_zero() {
             std::mem::size_of::<TextureBlock>(),
             TextureBlock::FLOATS,
         ),
-        ("clips", std::mem::size_of::<ClipsBlock>(), ClipsBlock::FLOATS),
+        (
+            "clips",
+            std::mem::size_of::<ClipsBlock>(),
+            ClipsBlock::FLOATS,
+        ),
         ("clip", std::mem::size_of::<ClipBlock>(), 12),
     ] {
         assert_eq!(size, floats * 4, "{name}");
@@ -39,7 +43,11 @@ fn the_floats_follow_the_std140_layout_the_programs_read() {
     assert_eq!(floats.len(), 144);
     let clips = FillBlock::CLIPS;
     for (name, start, expected) in [
-        ("frame and shape", 0, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0][..]),
+        (
+            "frame and shape",
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0][..],
+        ),
         ("the eighth color", 44 + 4 * 7, &[9.0, 10.0, 11.0, 12.0]),
         ("the clips' info", clips, &[7.0]),
         ("the first clip", clips + 12, &[21.0, 22.0, 23.0, 24.0]),

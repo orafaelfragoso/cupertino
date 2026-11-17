@@ -142,13 +142,33 @@ edge, as the CPU renderer composites its kept images. The layers' textures stay 
 16 MiB more; `trim` lets them go. The device counts the textures it made and has not destroyed
 (`Device::live_textures`): a dropped renderer gives back every one, and one trimmed keeps its frame alone.
 
-A window draws with `WindowRenderer`, a `UiRenderer` whose frames are `CpuFrame`s with empty `pixels` and the
-`WindowTexture` in `device`: the window-sized texture, shared between the renderer and its frames, which the
-presenter on the same device copies into its buffers and anything else reads back (`CpuFrame::in_memory`). The
-programs (`GpuPrograms`) are made once per device and shared by every renderer on it (`GpuRenderer::with_programs`).
+A window draws with `WindowRenderer`, a `UiRenderer` whose `GpuRenderer` lives on the process's render thread
+(below) and whose frames are `CpuFrame`s with empty `pixels` and a `WindowFrame` in `device`: the window-sized
+`WindowTexture`, shared between the renderer and its frames and kept on the render thread, which the presenter copies
+into its buffers there and anything else reads back (`CpuFrame::in_memory`). The programs (`GpuPrograms`) are made
+once per device and shared by every renderer on it (`GpuRenderer::with_programs`).
 
 Both renderers are meant to agree on the sample scenes and on generated scenes of each primitive group at scales
 1, 1.5 and 2 on odd sizes, whole and repainting damage, and with scroll layers scrolled frame by frame against the
 same frames drawn whole. The GPU renderer needs an EGL device: the first render node, or the surfaceless platform;
 `CUPERTINO_GPU_REQUIRED=1` makes a missing or software device a failure, `CUPERTINO_EGL_REQUIRED=1` a missing one (a
 run on Mesa's software rasteriser).
+
+## Render thread (`render_thread`)
+
+A Kit process has one render thread (`kit-render`), which owns the process's one GPU device and its only context.
+Whatever is made on the device lives there as a `Resident`: made, opened and dropped on the render thread, owned from
+any thread (a window's renderer, its frames' texture, a surface's buffers). `run` hands the render thread work and
+returns its result once the work before it is done (a panic in it goes on in the caller); `hand_over` hands it work
+nobody waits for. `request` asks for the device: unless it is ready or being made, a warm-up thread (`gpu-warm-up`)
+makes the context on the render node it names (the surfaceless platform without one), makes the renderers' programs
+(saved per driver, made in turn with the session's other processes, `PROGRAM_TURN_PATIENCE`) and draws with each
+once, and hands the device to the render thread, which wakes those who asked; the first request names the node of the
+process's device. `status` and `wait` read where that stands without waiting for the render thread (`Status`: idle,
+warming since when and whether `Device::new` returned, ready with the device's generation, information, warm-up timing
+and the modifiers it renders ARGB8888 to, or failed); a warm-up inside `Device::new` for `DEVICE_HANG` (10 s) is a
+driver that hangs, and its callers give the GPU up. A `Claim` holds the device; the last one going stops a warm-up
+after its step, lets the device go, and waits up to 5 s for both. `lost` lets a reset or purged device go once
+however many instances saw it, and `RenderThread::device_of` reads a device let go as lost by the same loss. A
+`GpuRenderer` made on a device someone else lends (`Device::borrow`, the server's) draws on the lender's thread and
+never meets the render thread.

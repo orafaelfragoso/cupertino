@@ -1,286 +1,32 @@
-//! The GPU path of a process: deciding its renderer by the fallback rule ([`crate::renderer`]), making the device and
-//! its programs on a worker thread while the first frames are drawn on the CPU, switching to the GPU once they are
-//! ready (the windows' renderers then draw on the same device, [`GpuRenderers`]), the GPU buffers of each surface, falling back per surface to shared memory when a buffer cannot be made or
-//! imported, and recovering from a lost context (three resets within a minute leave the process on the CPU; purges
-//! never count).
+//! The GPU path of a window system: deciding its renderer by the fallback rule ([`crate::renderer`]), asking the
+//! process's render thread ([`render_thread`]) for its device while the first frames are drawn on the CPU, switching to
+//! the GPU once the device is ready (the windows' renderers then draw on the render thread, [`GpuRenderers`]), the GPU
+//! buffers of each surface, falling back per surface to shared memory when a buffer cannot be made or imported, and
+//! recovering from a lost context (three resets within a minute leave the window system on the CPU; purges never
+//! count).
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_gpu::syncobj::SyncNode;
-use cupertino_gpu::{
-    program_cache, DetachedDevice, Device, DeviceDesc, Loss, Platform, ProgramCacheStats,
-    FOURCC_ARGB8888,
-};
+use cupertino_gpu::{program_cache, Loss, FOURCC_ARGB8888};
 use cupertino_ui_core::platform::PlatformEvent;
-use cupertino_ui_render::gpu::{GpuConfig, GpuPrograms, GpuRenderer, WindowRenderer};
+use cupertino_ui_render::gpu::{GpuConfig, GpuRenderer, WindowRenderer};
+use cupertino_ui_render::render_thread::{
+    self, Claim, Ready, Resident, Status, WarmTiming, DEVICE_HANG,
+};
 use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::GlyphRasterizer;
-use cupertino_wayland_client::{Connection, PixelRect, SurfaceId};
+use cupertino_wayland_client::{Connection, PixelRect, SurfaceId, Waker};
 
-use crate::gpu_present::{GpuDevice, GpuSurface, PresentError, Programs, SurfaceStats};
+use crate::gpu_present::{GpuDevice, GpuSurface, PresentError, SurfaceStats};
 use crate::renderer::{
     self, Busy, Choice, FallbackScope, Feedback, LossHistory, Reason, RendererClass, RendererKind,
     Requested, Start,
 };
-
-/// What the warm-up thread made, and how long it took.
-pub struct Warm {
-    device: DetachedDevice,
-    programs: Programs,
-    pub timing: WarmTiming,
-}
-
-// Safety: the programs are GL names of the detached device's context, used only once the device is attached on the
-// receiving thread; they carry no thread-bound state of their own.
-unsafe impl Send for Warm {}
-
-/// How long the warm-up took.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WarmTiming {
-    /// Making the context on the device.
-    pub context: Duration,
-    /// Making the programs (compiled, or loaded from saved binaries).
-    pub programs: Duration,
-    pub cache: ProgramCacheStats,
-}
-
-/// How long a process's warm-up waits for another to finish making its programs before making its own. Making them
-/// all takes some 80 ms with the compiler and 5 ms from saved binaries; the frames meanwhile go out on the CPU.
-const PROGRAM_TURN_PATIENCE: Duration = Duration::from_secs(2);
-
-/// What the warm-up thread and its owner share: the stop the owner sets as it goes, and whether the thread is past
-/// making the device (the one step a stop cannot cut short, and the one a hung driver keeps it in).
-#[derive(Debug, Default)]
-pub struct WarmSignals {
-    stop: AtomicBool,
-    device_made: AtomicBool,
-}
-
-impl WarmSignals {
-    /// Ask the thread to end after the step it is in.
-    pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-
-    pub fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Relaxed)
-    }
-
-    /// Whether `Device::new` returned (made the device or failed).
-    pub fn device_made(&self) -> bool {
-        self.device_made.load(Ordering::Acquire)
-    }
-
-    fn note_device_made(&self) {
-        self.device_made.store(true, Ordering::Release);
-    }
-}
-
-/// What [`warm`] gives once its owner stopped it.
-const STOPPED: &str = "the warm-up was stopped";
-
-/// Make the device on `node` (or the driver's default device), with saved programs under `cache`, and its programs.
-/// Once `signals` asks it to stop it returns after the step it is in (making the device, waiting for the programs'
-/// turn, making them), the device going on this thread.
-pub fn warm(
-    node: Option<&Path>,
-    cache: Option<&Path>,
-    signals: &WarmSignals,
-) -> Result<Warm, String> {
-    let _warm = tracing::trace_span!("wl.gpu_warm").entered();
-    let started = Instant::now();
-    let platform = match node {
-        Some(node) => Platform::RenderNode(node.to_path_buf()),
-        None => Platform::Surfaceless,
-    };
-    let made =
-        tracing::trace_span!("wl.gpu_device").in_scope(|| Device::new(&DeviceDesc { platform }));
-    signals.note_device_made();
-    let mut device = made.map_err(|e| e.to_string())?;
-    let context = started.elapsed();
-    if signals.stopped() {
-        return Err(STOPPED.into());
-    }
-    device.set_program_cache(cache);
-    let compiling = Instant::now();
-    // the processes of a session starting together make their programs in turn, so on a cold cache only the first
-    // loads the driver's compiler; a turn that cannot be held is not waited for, and a stop ends the wait
-    let turn = tracing::trace_span!("wl.gpu_program_turn").in_scope(|| {
-        device
-            .program_cache_dir()
-            .and_then(|dir| program_cache::wait_turn(dir, PROGRAM_TURN_PATIENCE, &signals.stop))
-    });
-    if signals.stopped() {
-        return Err(STOPPED.into());
-    }
-    let programs = tracing::trace_span!("wl.gpu_programs")
-        .in_scope(|| Programs::new(&device))
-        .map_err(|e| e.to_string())?;
-    if signals.stopped() {
-        return Err(STOPPED.into());
-    }
-    // the turn covers making the programs only: drawing with them is each process's own work, and holding the turn
-    // through it would make processes starting together wait on one another's draws
-    drop(turn);
-    // the driver finishes each program at its first draw: drawn once here, so the process's first frames do not
-    // wait on its compiler
-    programs.ui.prime(&device).map_err(|e| e.to_string())?;
-    let timing = WarmTiming {
-        context,
-        programs: compiling.elapsed(),
-        cache: device.program_cache_stats(),
-    };
-    let device = device.detach().map_err(|e| e.to_string())?;
-    Ok(Warm {
-        device,
-        programs,
-        timing,
-    })
-}
-
-/// The longest `Device::new` may take on the warm-up thread before the process gives the GPU up and stays on the CPU,
-/// reported as a fallback: a context is made in well under a second, so one still being made after this is a driver
-/// that hangs.
-pub const DEVICE_HANG: Duration = Duration::from_secs(10);
-
-/// The longest a process ending waits for a warm-up thread still inside `Device::new` before leaving it behind.
-const WARM_UP_WAIT_AT_EXIT: Duration = Duration::from_secs(5);
-
-/// The warm-up thread: its result as it comes, its stop and its handle. Dropping it stops the thread after the step
-/// it is in and joins it, so the process never exits with the thread inside the driver; a thread still inside
-/// `Device::new` (which no stop cuts short) is waited for up to [`WarmUp::exit_wait`] and then left behind.
-pub struct WarmUp {
-    rx: Receiver<Result<Warm, String>>,
-    signals: Arc<WarmSignals>,
-    thread: Option<JoinHandle<()>>,
-    started: Instant,
-    /// How long dropping waits for a thread still inside `Device::new`.
-    pub exit_wait: Duration,
-}
-
-impl WarmUp {
-    /// Start the thread making the device and programs on `node` with saved programs under `cache`; `wake` is called
-    /// on the thread once its result is ready.
-    pub fn start(
-        node: Option<PathBuf>,
-        cache: Option<PathBuf>,
-        wake: impl FnOnce() + Send + 'static,
-    ) -> std::io::Result<WarmUp> {
-        WarmUp::spawn(
-            move |signals| warm(node.as_deref(), cache.as_deref(), signals),
-            wake,
-        )
-    }
-
-    /// Start the thread running `work` (the warm-up, or a test's stand-in), then `wake`.
-    pub fn spawn(
-        work: impl FnOnce(&WarmSignals) -> Result<Warm, String> + Send + 'static,
-        wake: impl FnOnce() + Send + 'static,
-    ) -> std::io::Result<WarmUp> {
-        let (tx, rx) = mpsc::channel();
-        let signals = Arc::new(WarmSignals::default());
-        let theirs = Arc::clone(&signals);
-        let thread = std::thread::Builder::new()
-            .name(WARM_UP_THREAD.into())
-            .spawn(move || {
-                // a result nobody takes any more (its owner gave the thread up) goes here, on this thread
-                let _ = tx.send(work(&theirs));
-                wake();
-            })?;
-        Ok(WarmUp {
-            rx,
-            signals,
-            thread: Some(thread),
-            started: Instant::now(),
-            exit_wait: WARM_UP_WAIT_AT_EXIT,
-        })
-    }
-
-    pub fn signals(&self) -> &WarmSignals {
-        &self.signals
-    }
-
-    /// When the warm-up started.
-    pub fn started(&self) -> Instant {
-        self.started
-    }
-
-    /// The result, once there (without waiting, or waiting up to `wait`); the thread is joined as it is taken.
-    pub fn take(&mut self, wait: Option<Duration>) -> Option<Result<Warm, String>> {
-        let result = match wait {
-            None => match self.rx.try_recv() {
-                Ok(r) => r,
-                Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => Err("the warm-up thread ended".into()),
-            },
-            Some(d) => match self.rx.recv_timeout(d) {
-                Ok(r) => r,
-                Err(mpsc::RecvTimeoutError::Timeout) => return None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => Err("the warm-up thread ended".into()),
-            },
-        };
-        // the thread has sent its result and only wakes its owner now
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-        Some(result)
-    }
-
-    /// Whether the thread has been inside `Device::new` for [`DEVICE_HANG`] or longer at `now`, from its deadline
-    /// ([`WarmUp::hang_deadline`]) on.
-    pub fn hung(&self, now: Instant) -> bool {
-        self.thread.is_some()
-            && !self.signals.device_made()
-            && now.saturating_duration_since(self.started) >= DEVICE_HANG
-    }
-
-    /// When the thread counts as hung if it is still inside `Device::new` then; `None` once it is past it.
-    pub fn hang_deadline(&self) -> Option<Instant> {
-        (self.thread.is_some() && !self.signals.device_made()).then(|| self.started + DEVICE_HANG)
-    }
-}
-
-impl Drop for WarmUp {
-    fn drop(&mut self) {
-        self.signals.stop();
-        let Some(thread) = self.thread.take() else {
-            return;
-        };
-        // past `Device::new` the thread ends after the step it is in; inside it, no stop reaches it
-        let result = match self.rx.recv_timeout(self.exit_wait) {
-            Ok(r) => Some(r),
-            Err(mpsc::RecvTimeoutError::Disconnected) => None,
-            Err(mpsc::RecvTimeoutError::Timeout) if self.signals.device_made() => {
-                self.rx.recv().ok()
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                eprintln!(
-                    "renderer: the warm-up thread is still making its device after {} s; the process leaves it",
-                    self.started.elapsed().as_secs()
-                );
-                // dropping the handle detaches the thread; its result, if it ever comes, is dropped on it
-                drop(thread);
-                return;
-            }
-        };
-        if let Some(Ok(warm)) = result {
-            // made current here to be destroyed
-            drop(warm.device.attach());
-        }
-        let _ = thread.join();
-    }
-}
-
-/// The warm-up thread's name.
-pub const WARM_UP_THREAD: &str = "gpu-warm-up";
 
 /// The render node of the device `dev` names (a `dev_t` from dmabuf feedback): the node itself when it is one, else
 /// the render node of the same device; `None` when the process cannot see one (a sandbox without `/dev/dri`).
@@ -323,45 +69,50 @@ fn libc_minor(dev: u64) -> u64 {
     ((dev >> 12) & 0xffff_ff00) | (dev & 0x0000_00ff)
 }
 
-/// What makes the windows' renderers on the process's GPU: its device and the renderers' programs while the process
-/// draws on the GPU, nothing otherwise. A renderer factory holds a clone and asks it for a renderer each time it makes
-/// one, so the renderers made after a switch ([`PlatformEvent::RendererChanged`]) draw on the device the frames are
-/// presented from.
+/// What makes the windows' renderers on the process's GPU: which of the process's devices the window system draws on
+/// while it draws on the GPU, nothing otherwise. A renderer factory holds a clone and asks it for a renderer each time
+/// it makes one, so the renderers made after a switch ([`PlatformEvent::RendererChanged`]) draw on the device the
+/// frames are presented from.
 #[derive(Clone, Default)]
-pub struct GpuRenderers(Rc<RefCell<Option<OnDevice>>>);
-
-/// The process's device and the renderers' programs on it.
-type OnDevice = (Rc<Device>, Rc<GpuPrograms>);
+pub struct GpuRenderers(Rc<Cell<Option<u64>>>);
 
 impl GpuRenderers {
-    /// A window's renderer on the process's GPU, or `None` while the process draws on the CPU.
-    pub fn renderer<R: GlyphRasterizer>(
+    /// A window's renderer on the process's render thread, or `None` while the window system draws on the CPU.
+    pub fn renderer<R: GlyphRasterizer + Send + 'static>(
         &self,
         config: GpuConfig,
         rasterizer: R,
     ) -> Option<WindowRenderer<R>> {
-        let (device, programs) = self.0.borrow().clone()?;
-        device.status().ok()?;
-        Some(WindowRenderer::new(GpuRenderer::with_programs(
-            device, programs, config, rasterizer,
-        )))
+        let generation = self.0.get()?;
+        render_thread::run(move |on| {
+            let device = on.device_of(generation).ok()?;
+            let programs = on.programs()?;
+            let renderer = GpuRenderer::with_programs(
+                Rc::clone(device),
+                Rc::clone(programs),
+                config,
+                rasterizer,
+            );
+            Some(Resident::new(on, renderer))
+        })
+        .map(WindowRenderer::new)
     }
 
     /// Whether renderers are made on the GPU now.
     pub fn on(&self) -> bool {
-        self.0.borrow().is_some()
+        self.0.get().is_some()
     }
 
-    fn set(&self, on: Option<OnDevice>) {
-        *self.0.borrow_mut() = on;
+    fn set(&self, on: Option<u64>) {
+        self.0.set(on);
     }
 }
 
 enum State {
-    /// The process draws on the CPU.
+    /// The window system draws on the CPU.
     Cpu,
-    /// The device and programs are being made; frames are drawn on the CPU meanwhile.
-    Warming(WarmUp),
+    /// The device is being made; frames are drawn on the CPU meanwhile.
+    Warming,
     On(Box<GpuDevice>),
 }
 
@@ -376,7 +127,7 @@ enum SurfaceKind {
 pub enum Presented {
     /// Shown from a GPU buffer.
     Gpu,
-    /// Not for the GPU (the process or the surface draws into shared memory): present it there.
+    /// Not for the GPU (the window system or the surface draws into shared memory): present it there.
     Shm,
     /// Every buffer is the compositor's still.
     Busy,
@@ -384,13 +135,13 @@ pub enum Presented {
     Resized,
 }
 
-/// The process's GPU path.
+/// A window system's GPU path.
 pub struct GpuPath {
     state: State,
     requested: Requested,
     class: RendererClass,
-    /// The rule's class before any window was large or busy: each window's presents counted, no device made and the
-    /// dmabuf protocol not bound.
+    /// The rule's class before any window was large or busy: each window's presents counted, no device asked for and
+    /// the dmabuf protocol not bound.
     waiting: Option<HashMap<SurfaceId, Busy>>,
     node: Option<PathBuf>,
     offered: Vec<u64>,
@@ -401,17 +152,22 @@ pub struct GpuPath {
     choice: Option<Choice>,
     surfaces: HashMap<SurfaceId, SurfaceKind>,
     cache: Option<PathBuf>,
-    /// The warm-up's timing and when the switch happened after the start, once the GPU took over.
+    /// Its hold on the process's device, once it asked for one, and when it asked; dropped after `state` and
+    /// `surfaces`, so what they keep on the render thread goes there before the claim lets the device go.
+    claim: Option<(Claim, Instant)>,
+    /// Wakes the window system's loop once the device it asked for is ready.
+    waker: Waker,
+    /// The warm-up's timing and when the switch happened after the request, once the GPU took over.
     pub warmed: Option<(WarmTiming, Duration)>,
     /// Events for the runtime: a change of renderer.
     events: Vec<PlatformEvent>,
     renderers: GpuRenderers,
-    /// A warm-up given up while its thread hung in `Device::new`, kept to be waited for (a while) at exit.
-    abandoned: Option<WarmUp>,
+    /// A claim given up while the warm-up hung in `Device::new`, kept until the window system goes.
+    abandoned: Option<Claim>,
 }
 
 impl GpuPath {
-    /// Decide by the process's class and the rule (`CUPERTINO_RENDERER` overriding the class) and start the warm-up
+    /// Decide by the process's class and the rule (`CUPERTINO_RENDERER` overriding the class) and ask for the device
     /// when the GPU may be used.
     pub fn start(conn: &mut Connection, class: RendererClass) -> GpuPath {
         Self::start_with(conn, Requested::from_env(), class)
@@ -434,6 +190,8 @@ impl GpuPath {
             choice: None,
             surfaces: HashMap::new(),
             cache: program_cache::default_dir(),
+            claim: None,
+            waker: conn.waker(),
             warmed: None,
             events: Vec::new(),
             renderers: GpuRenderers::default(),
@@ -447,8 +205,8 @@ impl GpuPath {
         path
     }
 
-    /// Run the rule's first half with `wanted` (whether the class wants the GPU now) and make the device if it says
-    /// so. A process that draws on the CPU never binds the dmabuf protocol.
+    /// Run the rule's first half with `wanted` (whether the class wants the GPU now) and ask for the device if it says
+    /// so. A window system that draws on the CPU never binds the dmabuf protocol.
     fn decide(&mut self, conn: &mut Connection, wanted: bool) {
         let wants_device = match self.requested {
             Requested::Cpu => false,
@@ -479,7 +237,7 @@ impl GpuPath {
             }),
             Start::Device { node } => {
                 self.node = node;
-                self.begin_warm(conn);
+                self.begin_warm();
             }
         }
     }
@@ -512,7 +270,8 @@ impl GpuPath {
 
     /// `surface` presented a frame of `size` pixels at `at_ns` (monotonic nanoseconds): while the process waits for
     /// the rule, a window larger than a quarter of the largest output it is on (any output before it entered one) or
-    /// busy for two seconds moves the process to the GPU, its first frames there still the CPU's while it warms up.
+    /// busy for two seconds moves the window system to the GPU, its first frames there still the CPU's while the
+    /// device is made.
     pub fn presented(
         &mut self,
         conn: &mut Connection,
@@ -548,18 +307,19 @@ impl GpuPath {
         }
     }
 
-    fn begin_warm(&mut self, conn: &Connection) {
-        let waker = conn.waker();
-        match WarmUp::start(self.node.clone(), self.cache.clone(), move || waker.wake()) {
-            Ok(warm_up) => {
-                self.state = State::Warming(warm_up);
-                self.choose(Choice {
-                    kind: RendererKind::Cpu,
-                    reason: Reason::WarmingUp,
-                });
-            }
-            Err(e) => self.settle(Err(format!("no warm-up thread: {e}"))),
-        }
+    /// Ask the render thread for the process's device; the window system's loop is woken once it is ready.
+    fn begin_warm(&mut self) {
+        let waker = self.waker.clone();
+        let claim =
+            render_thread::request(self.node.as_deref(), self.cache.as_deref(), move || {
+                waker.wake()
+            });
+        self.claim = Some((claim, Instant::now()));
+        self.state = State::Warming;
+        self.choose(Choice {
+            kind: RendererKind::Cpu,
+            reason: Reason::WarmingUp,
+        });
     }
 
     /// What makes the windows' renderers on the process's GPU.
@@ -567,14 +327,14 @@ impl GpuPath {
         self.renderers.clone()
     }
 
-    /// Whether the process draws on the GPU now.
+    /// Whether the window system draws on the GPU now.
     pub fn on(&self) -> bool {
         matches!(self.state, State::On(_))
     }
 
     /// Whether the device is still being made.
     pub fn warming(&self) -> bool {
-        matches!(self.state, State::Warming { .. })
+        matches!(self.state, State::Warming)
     }
 
     /// The events for the runtime since the last call: the renderer changed.
@@ -582,80 +342,98 @@ impl GpuPath {
         std::mem::take(&mut self.events)
     }
 
-    /// When the run loop must look at the warm-up again even if nothing wakes it: the moment a thread still inside
+    /// When the run loop must look at the warm-up again even if nothing wakes it: the moment a warm-up still inside
     /// `Device::new` counts as hung ([`DEVICE_HANG`]).
     pub fn deadline(&self) -> Option<Instant> {
-        match &self.state {
-            State::Warming(warm_up) => warm_up.hang_deadline(),
+        if !self.warming() {
+            return None;
+        }
+        match render_thread::status() {
+            Status::Warming {
+                since,
+                device_made: false,
+            } => Some(since + DEVICE_HANG),
             _ => None,
         }
     }
 
-    /// Take the warm-up's result when it is ready (without waiting); with `wait`, wait up to that long for it. A
-    /// warm-up whose thread hung in `Device::new` is given up: the process stays on the CPU, reported as a fallback.
-    pub fn poll(&mut self, conn: &mut Connection, wait: Option<Duration>) {
-        let State::Warming(warm_up) = &mut self.state else {
+    /// Take the device once it is ready (without waiting); with `wait`, wait up to that long for it. A warm-up hung
+    /// in `Device::new` is given up: the window system stays on the CPU, reported as a fallback.
+    pub fn poll(&mut self, _conn: &mut Connection, wait: Option<Duration>) {
+        if !self.warming() {
             return;
-        };
-        let started = warm_up.started();
-        let Some(result) = warm_up.take(wait) else {
-            if warm_up.hung(Instant::now()) {
-                warm_up.signals().stop();
-                if let State::Warming(warm_up) = std::mem::replace(&mut self.state, State::Cpu) {
-                    self.abandoned = Some(warm_up);
-                }
-                self.settle(Err(format!(
-                    "the GPU device was not made within {} s",
-                    DEVICE_HANG.as_secs()
-                )));
-            }
-            return;
-        };
-        let switched_after = started.elapsed();
-        match result.and_then(|w| {
-            let timing = w.timing;
-            w.device
-                .attach()
-                .map(|d| (d, w.programs, timing))
-                .map_err(|e| e.to_string())
-        }) {
-            Ok((device, programs, timing)) => {
-                let facts = Ok((device.info().software, device.info().allocator.is_some()));
-                let (kind, reason) =
-                    renderer::settle(self.requested, facts, self.losses.exceeded(Instant::now()));
-                if kind == RendererKind::Gpu {
-                    let sync = self.sync_node();
-                    let gpu = GpuDevice::new(device, programs, &self.offered, sync);
-                    eprintln!(
-                        "renderer: GPU ready {} ms after the start (context {} ms, programs {} ms, {} loaded and {} compiled), {} explicit sync",
-                        switched_after.as_millis(),
-                        timing.context.as_millis(),
-                        timing.programs.as_millis(),
-                        timing.cache.loaded,
-                        timing.cache.compiled,
-                        if gpu.explicit() { "with" } else { "without" },
-                    );
-                    self.warmed = Some((timing, switched_after));
-                    self.renderers
-                        .set(Some((Rc::clone(&gpu.device), Rc::clone(&gpu.ui))));
-                    self.state = State::On(Box::new(gpu));
-                    self.choose(Choice { kind, reason });
-                    self.events
-                        .push(PlatformEvent::RendererChanged(RendererKind::Gpu));
-                    let _ = conn;
-                } else {
-                    self.state = State::Cpu;
-                    self.choose(Choice { kind, reason });
-                }
-            }
-            Err(why) => self.settle(Err(why)),
         }
+        let status = match wait {
+            None => render_thread::status(),
+            Some(d) => render_thread::wait(d),
+        };
+        match status {
+            Status::Warming { since, device_made } => {
+                if !device_made && since.elapsed() >= DEVICE_HANG {
+                    self.abandoned = self.claim.take().map(|(claim, _)| claim);
+                    self.settle(Err(format!(
+                        "the GPU device was not made within {} s",
+                        DEVICE_HANG.as_secs()
+                    )));
+                }
+            }
+            // let go since it was asked for (a loss another window system saw): ask again
+            Status::Idle => self.begin_warm(),
+            Status::Failed(why) => self.settle(Err(why)),
+            Status::Ready(ready) => self.take(&ready),
+        }
+    }
+
+    /// Switch to the device `ready` names, or settle on the CPU when the rule says so.
+    fn take(&mut self, ready: &Ready) {
+        let facts = Ok((ready.info.software, ready.info.allocator.is_some()));
+        let (kind, reason) =
+            renderer::settle(self.requested, facts, self.losses.exceeded(Instant::now()));
+        if kind != RendererKind::Gpu {
+            self.state = State::Cpu;
+            // the device goes unless another window system of the process draws on it
+            self.claim = None;
+            self.choose(Choice { kind, reason });
+            return;
+        }
+        let sync = self.sync_node();
+        let gpu = match GpuDevice::new(ready, &self.offered, sync) {
+            Ok(gpu) => gpu,
+            Err(cupertino_gpu::Error::Lost(loss)) => {
+                // lost before this window system took it over
+                render_thread::lost(ready.generation, loss);
+                self.begin_warm_after(loss);
+                return;
+            }
+            Err(e) => return self.settle(Err(e.to_string())),
+        };
+        let switched_after = self
+            .claim
+            .as_ref()
+            .map_or(Duration::ZERO, |(_, asked)| asked.elapsed());
+        let timing = ready.timing;
+        eprintln!(
+            "renderer: GPU ready {} ms after asking for it (context {} ms, programs {} ms, {} loaded and {} compiled), {} explicit sync",
+            switched_after.as_millis(),
+            timing.context.as_millis(),
+            timing.programs.as_millis(),
+            timing.cache.loaded,
+            timing.cache.compiled,
+            if gpu.explicit() { "with" } else { "without" },
+        );
+        self.warmed = Some((timing, switched_after));
+        self.renderers.set(Some(gpu.generation()));
+        self.state = State::On(Box::new(gpu));
+        self.choose(Choice { kind, reason });
+        self.events
+            .push(PlatformEvent::RendererChanged(RendererKind::Gpu));
     }
 
     fn settle(&mut self, device: Result<(bool, bool), String>) {
         let (kind, reason) =
             renderer::settle(self.requested, device, self.losses.exceeded(Instant::now()));
         self.state = State::Cpu;
+        self.claim = None;
         self.choose(Choice { kind, reason });
     }
 
@@ -669,8 +447,8 @@ impl GpuPath {
         node.supports_eventfd().then_some(node)
     }
 
-    /// Whether `surface` presents from shared memory: the process draws on the CPU (or is warming up), or the surface
-    /// fell back to it.
+    /// Whether `surface` presents from shared memory: the window system draws on the CPU (or is warming up), or the
+    /// surface fell back to it.
     pub fn on_shm(&self, surface: SurfaceId) -> bool {
         match self.state {
             State::On(_) => matches!(self.surfaces.get(&surface), Some(SurfaceKind::Fallback)),
@@ -678,7 +456,7 @@ impl GpuPath {
         }
     }
 
-    /// Present `frame` of `surface` on the GPU if the process and the surface draw there.
+    /// Present `frame` of `surface` on the GPU if the window system and the surface draw there.
     #[allow(clippy::too_many_arguments)]
     pub fn present(
         &mut self,
@@ -720,8 +498,9 @@ impl GpuPath {
         }
     }
 
-    /// The device was reset or purged: every surface's GPU buffers go, and the process makes a new device, or stays on
-    /// the CPU after the third reset within a minute. Frames are drawn on the CPU meanwhile.
+    /// The device was reset or purged: every surface's GPU buffers go, the render thread lets the device go (once for
+    /// the process), and the window system asks for a new one, or stays on the CPU after the third reset within a
+    /// minute. Frames are drawn on the CPU meanwhile.
     pub fn lost(&mut self, conn: &mut Connection, loss: Loss) {
         let State::On(gpu) = std::mem::replace(&mut self.state, State::Cpu) else {
             return;
@@ -735,6 +514,7 @@ impl GpuPath {
                 s.free(Some(&gpu), conn);
             }
         }
+        render_thread::lost(gpu.generation(), loss);
         drop(gpu);
         let lost = format!("the GPU context was lost ({loss:?})");
         if loss.counts_as_failure() {
@@ -743,24 +523,30 @@ impl GpuPath {
             // a purge (suspend, a VT switch, a mode set) is no fault: the next device takes over
             eprintln!("renderer: {lost}");
         }
-        let exceeded = self.losses.record(loss.counts_as_failure(), Instant::now());
         self.events
             .push(PlatformEvent::RendererChanged(RendererKind::Cpu));
-        if exceeded {
+        self.begin_warm_after(loss);
+    }
+
+    /// After `loss`: counted, then a new device asked for, or the CPU kept after the third reset within a minute.
+    fn begin_warm_after(&mut self, loss: Loss) {
+        if self.losses.record(loss.counts_as_failure(), Instant::now()) {
+            self.claim = None;
+            self.state = State::Cpu;
             self.choose(Choice {
                 kind: RendererKind::Cpu,
                 reason: Reason::Losses,
             });
         } else {
-            self.begin_warm(conn);
+            self.begin_warm();
         }
     }
 
-    /// The compositor says what it showed of the buffers is gone: check the own device (a purge or a reset of it is
+    /// The compositor says what it showed of the buffers is gone: check the device (a purge or a reset of it is
     /// handled as a loss) and upload every surface's next frame whole.
     pub fn buffers_lost(&mut self, conn: &mut Connection) {
         let status = match &self.state {
-            State::On(gpu) => gpu.device.status(),
+            State::On(gpu) => gpu.status(),
             _ => return,
         };
         if let Err(cupertino_gpu::Error::Lost(loss)) = status {
@@ -785,7 +571,7 @@ impl GpuPath {
         }
     }
 
-    /// Whether `surface` draws on the GPU (the process does and the surface has not fallen back).
+    /// Whether `surface` draws on the GPU (the window system does and the surface has not fallen back).
     pub fn draws(&self, surface: SurfaceId) -> bool {
         self.on() && !matches!(self.surfaces.get(&surface), Some(SurfaceKind::Fallback))
     }
@@ -820,7 +606,7 @@ impl GpuPath {
     /// Test hook: the device's next status check reads `loss` instead of the driver's own.
     pub fn inject_loss(&self, loss: Loss) {
         if let State::On(gpu) = &self.state {
-            gpu.device.inject_loss(loss);
+            gpu.inject_loss(loss);
         }
     }
 
@@ -829,15 +615,15 @@ impl GpuPath {
         matches!(&self.state, State::On(gpu) if gpu.explicit())
     }
 
-    /// The device's renderer string, while the process draws on the GPU.
+    /// The device's renderer string, while the window system draws on the GPU.
     pub fn device_name(&self) -> Option<String> {
         match &self.state {
-            State::On(gpu) => Some(gpu.device.info().renderer.clone()),
+            State::On(gpu) => Some(gpu.info().renderer.clone()),
             _ => None,
         }
     }
 
-    /// The modifiers buffers may use, while the process draws on the GPU.
+    /// The modifiers buffers may use, while the window system draws on the GPU.
     pub fn modifiers(&self) -> Vec<u64> {
         match &self.state {
             State::On(gpu) => gpu.modifiers().to_vec(),

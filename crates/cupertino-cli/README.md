@@ -43,7 +43,7 @@ The packages install the command with `/usr/share/bash-completion/completions/cu
 
 `src/diagnose_events.rs` reads the diagnostic events with `cupertino_diagnostics::events` (the user store,
 `session.log` and the system journal; [docs/src/diagnose.md](../../docs/src/diagnose.md#diagnostic-events) has the
-record, the limits and the redaction table). It takes its `Sources` from `Context::provided::<Sources>()` when a test
+record, the limits and the redaction table). It takes its `Sources` from `Context::provided::<Sources>()` when the caller
 gives some, else `Sources::system()`. It records no events of its own.
 
 - `diagnose events` is a `Run::Stream`: each event is an `event` whose data is the `cupertino.diag.v1` record, and one
@@ -67,11 +67,6 @@ gives some, else `Sources::system()`. It records no events of its own.
   `detail` scrubbed). `--include-logs` adds `logs`: `server.log`, `server.log.1` and `session.log` of the state
   directory, each line through `events::policy` (the store's salt, so hashes match the events', else a random one). A
   file that exists is `validation`/`file_exists`; one that cannot be written `temporary`/`write_failed`.
-
-`tests/diagnose-events.rs` runs them on a fixture home, a fake journal function and `sh` as a fake
-`journalctl --follow`: the three formats, the filters, the warnings, a follow that prints new store and journal lines
-and ends on a stop from another thread (promptly, its child reaped) and on a closed output, `clear` with and without
-`--yes`, and the export's keys, mode, refusal to overwrite and scrubbed logs.
 
 ## Output
 
@@ -124,8 +119,7 @@ and `problems` there.
 | 7 | `transaction_failed` (reserved) |
 | 8 | `unsupported`: also `not_in_this_release` for the reserved groups `system` and `ai` |
 
-Code 7 is reserved: no command of this release ends with it yet. `tests/cli.rs` runs a command line for each code
-that is reachable and checks that `docs/src/cupertino-command.md` marks the others reserved.
+Code 7 is reserved: no command of this release ends with it yet. `docs/src/cupertino-command.md` marks the reserved codes.
 
 **A closed output.** When the reader of stdout goes away (`EPIPE`, as in `cupertino … | head -1`), the command stops,
 exits 0 and writes nothing to stderr. Any other write error (`ENOSPC`, `EIO`) exits 6 with one stderr line,
@@ -134,7 +128,7 @@ exits 0 and writes nothing to stderr. Any other write error (`ENOSPC`, `EIO`) ex
 **Signals.** While a stream command runs, SIGINT and SIGTERM ask it to stop; a second one of either ends the process at
 once by the signal's default action. A program the command starts gets the default actions of SIGPIPE, SIGINT and
 SIGTERM, unless the parent ignored SIGINT or SIGTERM: the standard library resets the ignored SIGPIPE when it starts a
-process, and `exec` resets caught signals (`tests/stream-process.rs` checks it). A
+process, and `exec` resets caught signals A
 follow stream (one that runs until stopped) then ends with `end {ok: true, exit_code: 0, reason: "stopped"}`; a finite
 stream ends with `temporary`/`interrupted`, exit 6. A one-shot command keeps the default signal actions, and a signal
 the parent ignored stays ignored.
@@ -190,8 +184,7 @@ the rules for stream commands.
   paths under their group, a summary, description and example on every command, every `dev` command a preview,
   unique argument names that differ from the global ones, well-formed value lists, a repeatable positional argument
   last, and no positional argument on a command whose path begins another's (the longest path wins at dispatch, so
-  `diagnose events` is never `diagnose` with an argument). `tests/registry.rs` runs it on `REGISTRY`; a test registry
-  of another test should pass it too.
+  `diagnose events` is never `diagnose` with an argument). It runs on `REGISTRY`; any other registry should pass it too.
 
 The parser takes `--name value` and `--name=value`; `--` ends the options (and `--format` and `--help`) and makes every
 later word a positional argument. A single option given twice is `repeated_option`; a value on a flag is
@@ -221,28 +214,16 @@ later word a positional argument. A single option given twice is `repeated_optio
 - `Context` is what a command may read of the machine: `root()` and `path("/usr/share/…")` (files of the running
   system, under `/` for the real command), `var(name)` and `vars()`, `current_dir()`, `command(program)` (a process
   with the context's environment and working directory: the process's for the real command, the context's variables
-  alone otherwise), `registry()` (the runner's, for the completions and pages), and `provided::<T>()`, a value a test
-  hands in by type with `Context::provide(&value)` (fixture `Sources`, a layer `Policy`, a `StopGrace`). `Context::system()` is the real machine;
-  `Context::isolated(root)` has no variables and works in `root`, so a test never reads the real `HOME`, `/usr` or
+  alone otherwise), `registry()` (the runner's, for the completions and pages), and `provided::<T>()`, a value the caller
+  hands in by type with `Context::provide(&value)` (a `Sources` of another root, a layer `Policy`, a `StopGrace`). `Context::system()` is the real machine;
+  `Context::isolated(root)` has no variables and works in `root`, so it never reads the real `HOME`, `/usr` or
   session.
 - `Runner::new(registry).context(cx).stop(&flag)` runs command lines: `run_to(args, request_id, out, err) -> u8`
-  writes as it goes, `run(args, request_id) -> Output` collects both outputs and the exit code for a test.
+  writes as it goes, `run(args, request_id) -> Output` collects both outputs and the exit code.
   `cupertino_cli::run` and `run_to(args, request_id, out, err, stop)` do the same for `REGISTRY` on the real machine.
 - `main_with(registry)` is a whole program: the process arguments (one that is not UTF-8 is
   `invalid_usage`/`invalid_encoding`), stdout and stderr, and a `StopFlag::on_signals()` flag. The `cupertino` binary
-  is `main_with(REGISTRY)`; `examples/stream_probe.rs` runs probe streams through it for the process tests.
-
-`tests/cli.rs` covers the envelope, usage errors, the parser and the help; `tests/stream.rs` every record type, `seq`,
-the place of `end`, a closed output at every boundary, a full disk and stops from another thread; `tests/stream-process.rs`
-a real pipe closed early and real SIGINT and SIGTERM; `tests/registry.rs` the registry rules and that the command page
-names every command. Per group: `tests/diagnose.rs` (fixture `Sources`), `tests/desktop.rs` (a stand-in compositor that
-answers on `--ready-fd`, stops, the kill after the grace, every error code, the installed binary under SIGTERM),
-`tests/version.rs` (a fixture root with each part present, missing and unreadable), `tests/dev.rs` (fixture checkouts),
-`tests/completions.rs` (bash, zsh and fish run the scripts; a missing shell skips unless `CUPERTINO_SHELLS_REQUIRED=1`)
-and `tests/manual.rs` (the pages, and `mandoc -T lint` unless it is missing and `CUPERTINO_MANDOC_REQUIRED` is not 1).
-`tests/sdk.rs` runs the `sdk` commands against a temporary root with a fake SDK, compiler and pkg-config;
-`ci/c-sdk.py` runs them against a real one, built into a staging root.
-`cupertino-server/tests/desktop-start.rs` runs `desktop start` on the real headless compositor.
+  is `main_with(REGISTRY)`; `examples/stream_probe.rs` runs probe streams through it.
 
 The command is an unprivileged client: a group calls libraries of the `foundation` to `tools` layers or the D-Bus and
 socket interfaces of the services; it never links compositor state.
@@ -251,7 +232,7 @@ socket interfaces of the services; it never links compositor state.
 
 - `sdk check` compiles with the system's `cc` and checks the C ABI only. The Rust project of `sdk new` depends on the
   release's git tag of `cupertino-kit`, so it builds once that tag is published; until then, or offline, `--source`
-  points it at a checkout's crates by path. `ci/c-sdk.py` checks both forms against this checkout.
+  points it at a checkout's crates by path.
 - OWNER DECISION: `sdk new` refuses a `--dir` (or `./<name>`) that is a symbolic link, even one to an empty directory,
   as `validation`/`not_a_directory`. It writes only into a real directory it has found empty or makes itself, so a
   link never redirects the project elsewhere; give the link's target as `--dir` instead.

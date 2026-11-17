@@ -1,5 +1,5 @@
-//! The lock screen and the login screen drawn to PNGs for look checks: `ci/capture.sh login/SURFACE [flags]`
-//! (crates/cupertino-capture/README.md).
+//! The lock screen and the login screen drawn to PNGs for look checks:
+//! `cargo run -p cupertino-login --example login_capture -- SURFACE [flags]` (crates/cupertino-capture/README.md).
 //!
 //! Surfaces: `lock` (the lock screen), `picker` (the login screen's accounts) and `password` (the login screen asking
 //! the chosen account's password). `--field empty|typed|help` shows the password field empty, with a password typed

@@ -9,14 +9,14 @@ manager (`cupertino-sessiond`), with a user picker. The session agent shows the 
 
 [Running](#running) · [Lock screen](#lock-screen) · [Session agent](#session-agent) ·
 [Reopening applications](#reopening-applications) · [Greeter](#greeter) ·
-[Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Tests](#tests)
+[Values applied](#reference-values-applied) · [Open issues](#open-issues) · [Modules](#modules) · [Checks by hand](#checks-by-hand)
 
 Every screen and panel is drawn with CupertinoKit: `view` builds the Kit windows (the lock screen, the greeter's picker, name
 and password screens and power menu, the confirmation panels and the interrupt panel) from the pure models, and Kit's runtime
 draws them, routes their keys and publishes them to assistive technology. The crate has no compositor dependency:
 `cupertino-seat` supplies the logind lookup, and it builds against Smithay's session trait. The state machine (`model`), layout
 (`layout`), panels (`panel`, `interrupt`), views (`view`) and user and clock helpers (`user`) are separate from the process, so
-a test drives the screen on Kit's headless window system without it. Sizes, positions, the shake, the fades and the hide timer
+the screen can be driven on Kit's headless window system without it. Sizes, positions, the shake, the fades and the hide timer
 follow the analysis. Items marked approximate are authored and replaceable.
 
 This is the one shell process that links a library beyond the C runtime: `libpam`, through `pam-client2` 0.5.5 (MPL-2.0, the
@@ -71,8 +71,7 @@ the session manager's `Unlock`, the server's `ApplicationQuit` (on the session b
 the sender's well-known name at that moment; a `NameOwnerChanged` (the manager or the power daemon coming and going) only from
 the bus daemon. Anything else is logged (`... not sent by ... was ignored`) and dropped: another user could otherwise unlock the
 screen or lock it, or a program in the session hurry the log out along (a forged `NameOwnerChanged` is also dropped by
-zbus's own filter; the check does not rely on it). The module tests send each one forged from
-another connection on a private bus, to the process and to everyone, then the genuine one.
+zbus's own filter; the check does not rely on it).
 
 **Idle lock.** The design locks when the display sleeps (request type 5) once the password
 delay has passed. The server owns that timing, since it knows the power source and the idle inhibitors: its idle policy dims,
@@ -82,7 +81,7 @@ without that server.
 
 ### Log lines
 
-The lines go to stderr, and the QEMU check matches them. The greeter logs the same `authentication failed` and
+The lines go to stderr. The greeter logs the same `authentication failed` and
 `authentication error: <reason>` lines as the lock screen.
 
 | Line | When |
@@ -216,7 +215,7 @@ session's login (the shared stack's `authsucc`, or the `authsucc` line of `cuper
 without a password). The lockout message it prints shows as the notice. Not verified on an installed system: enter wrong passwords at the lock screen,
 then `faillock --user $USER` on another console lists them.
 
-The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too (`tests/zeroing.rs`); PAM clears its own copy. Swap can hold a password (no `mlockall`).
+The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Its global allocator (`cupertino_login_ipc::zeroing::ZeroOnFree`) zeroes every block it frees, so the `CString` that pam-client2 drops unzeroed once it has copied the answer into PAM's buffer is cleared too; PAM clears its own copy. Swap can hold a password (no `mlockall`).
 
 While it is typed the password lives in the field's `SecureBuffer` (Kit's, zeroed when the field goes), which holds at most
 `MAX_PASSWORD_BYTES` (512, `PAM_MAX_RESP_SIZE`): a key past it is refused, not an edit and not announced, and text from an input
@@ -651,43 +650,7 @@ network users).
 The process (`main`, `options`, `screen`, `roles`, `app`, `greeter`) is the binary's: `roles` gives the Kit windows their
 Wayland roles and holds the session lock, `app` is the session (`SessionApp`), `greeter` the login screen (`GreeterApp`).
 
-## Tests
-
-```
-cargo test -p cupertino-login --features app
-```
-
-| Test | Proves |
-|---|---|
-| Shake, fade, state machine | The shake curve (peaks of 14 pt, zero outside), the linear fade, typing and the byte limit, wrong password, PAM error and success paths, a result with no attempt in flight, the hide after 30 s, the layout of a 1920 x 1080 output. |
-| Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
-| Panels and power key | Countdown, keys, button and checkbox frames, the checkbox's start state and Space, the power-button panel's four buttons, its keys, its checkbox and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
-| Views (`view`, Kit's headless window system) | While a password is typed the field is a `PasswordInput` named "Password" with a protected value, and neither the Inspector dump, the published tree, the updates nor the messages' `Debug` hold it; Return submits it once and a new empty field takes the focus; Escape empties the field; a wrong password is said in an assertive live region and outlined until the next edit; the field is busy while a held attempt is checked and invalid from its refusal until the next edit, and the refusal is said once; a key past the 512-byte limit is no edit and changes nothing assistive technology reads of the field, and the submission holds 512 bytes; the lock window is modal with the field as its only control; the "Open my windows again" checkbox starts at the saved choice and a click, Space or an assistive technology click flips it without deciding; the checkbox has the focus, Return, Escape, a click and an assistive technology click decide; Tab reaches the checkbox and the buttons; the power-button panel shows the checkbox and its letters choose; a drag on a panel's background moves it; the interrupt panel focuses Try Again, and its force quit question focuses Cancel and Return there kills nothing; the picker offers each account and "Other…" and the arrows step; the lock screen shows and says only what the daemon listed (a redacted notice draws only its application and "Notification"), the field stays the only control with the focus, a notice arriving while locked is said once and the rest are counted, the cards sit at the top right as tall as their text. With `CUPERTINO_LOOK_DIR` set, `pictures_for_review` writes each surface in light and dark at 1× and 2×. |
-| `tests/lock_atspi.rs` | The Kit lock screen with the lock screen's AT-SPI adapter on a private bus with a stand-in registry: while a password is typed, no node of the tree (name, description, text) holds it, the field is password text named "Password" whose text is empty, no message on the bus and no line of the process's diagnostics (each message's `Debug`, the Inspector dumps, the model) holds it, and no key reaches the registry; every answer to an attempt is announced once and assertively; while an attempt is checked the field's AT-SPI state is busy and nothing is said, and the answer ends busy (one `StateChanged` `busy` 0 on the field) and says a wrong password once. |
-| Saved state (`restore`) | The file round-trips with IDs only, mode 0600; a missing file is the choice on; malformed lines, other versions, invalid IDs, duplicates and the 64 cap; identities resolve by ID then `StartupWMClass`; shell programs, terminal entries and bad `Exec` lines are refused; the list is emptied on disk before it is handed out and only once, dropped when saved in the same boot and session or with the choice off, and not handed out when it cannot be emptied; launching skips removed entries, duplicates, login items and failed starts. |
-| `tests/restore.rs` | A stand-in `org.cupertino.Session1` on a private `dbus-daemon` names the applications as they quit; the saved list in a fixture home holds only their desktop file IDs, and the next login starts the one still installed once through its `Exec`; a failed start leaves the rest going. |
-| Options | The session options, and that the greeter takes none. |
-| Login screen wallpaper (`login_wallpaper`) | The appearance picks its picture and a colour beats both; a picture wider than 3840 pixels is scaled down with its proportions and a small one keeps its size, a colour is a 16 x 16 JPEG, the default writes nothing; a missing file, one that is no picture and a directory are errors; the copy is the user's alone (0600) and leaves nothing beside it; a settings file with a wallpaper makes the copy and one without takes it away. |
-| `tests/harden.rs` | The running greeter (waiting on a compositor that never answers, under the test PAM shim) has core file size 0 and refuses its owner the read of `/proc/<pid>/environ`; each of the two calls removed fails it. The check of the environment is skipped as root. |
-| `tests/pam.rs` | The authenticator's attempts against a private PAM policy (`cupertino-test-pam`), run in a copy of the test binary that loads the test shim, so no attempt reaches `/etc/pam.d`, the machine's accounts or the journal: the right password is a success after the account check; a wrong one is denied and the next attempt is a transaction of its own; too many tries is denied; an unknown account, a stack that fails to run and a prompt the lock screen does not answer (echo on, yes/no) are errors; an expired, password-expired or refused account is an error with the right password; the stack's messages (a lock-out said before the prompt, a message after it and after the account check) reach the screen in order before the outcome. The lock and unlock cycle with the real process under the compositor is `cupertino-server`'s `tests/lock_screen.rs`. |
-| `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name (`serve` fails with `NameTaken`; `serve_unnamed` serves the object on the unique name), `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
-| Quit sequence, low battery, autostart | One application at a time, the 0.1 s pause, the 45 s interrupt, Force Quit, the interrupt panel; the notification posted, replaced and withdrawn; the autostart parser (`Hidden`, `OnlyShowIn`, `NotShowIn`, `X-GNOME-Autostart-enabled`, `TryExec`, `Exec` quoting, shadowing, order, the once-per-session marker). |
-
-Not covered by a test:
-
-- The bus calls of the quit sequence and the notifications. The server side of `org.cupertino.Session1` is `cupertino-server`'s
-  `tests/quit.rs`, and the low-battery path runs in the QEMU harness. The process's start, with a saved list in a fixture
-  home, is `cupertino-server`'s `tests/session_restore.rs`.
-- A real log out, restart or shut down with the checkbox on, and the next real login.
-- The logind calls and signals. Against a private bus with a stand-in logind they showed the two inhibitors.
-  A real `Lock` signal would lock the developer's session. The manager's side of `RequestPower` and `SessionReady` is tested in
-  `cupertino-sessiond` (`tests/service.rs`) and by the QEMU checks `28` and `29`.
-- The PAM success path (it needs the user's password), and the unlock against a server.
-- The lock: `cupertino-server`'s `tests/lock_screen.rs` runs this process under a headless server with a stand-in logind. It
-  locks on `PrepareForSleep` and lets go of the sleep delay only once the lock is up; while locked an application gets no
-  key, motion or button; and a return from another console keeps the lock and the application's lack of input. The phase 5
-  QEMU check and `cupertino-shell-client`'s `tests/protocol-flow.rs` cover the unlock.
-- Real suspend, real console switches and real PAM logins: checked by hand, below.
+## Checks by hand
 
 **Checked by hand** (on a test account, never with a real person's password in a capture or log):
 
@@ -706,6 +669,3 @@ Not covered by a test:
    no characters; Accerciser shows the field's text as empty.
 6. Greeter: log out to the login screen, choose a tile with the arrows and Return, type the password and Return. The session
    starts; a wrong password is said and shaken as on the lock screen.
-
-On the development host a wrong password through the real PAM stack (`pam_unix`, service `vlock`) returned `Denied`, and the sleep
-inhibitor showed up in `systemd-inhibit --list`.

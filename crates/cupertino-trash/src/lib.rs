@@ -566,7 +566,10 @@ impl Trash {
     /// What `read` makes of the trash directories of each mounted volume, by mount point; `None` for a volume another
     /// look was still out on after the time a volume is given. `read` runs on the calling thread with the volume
     /// taken, so it may read the directories it is handed.
-    fn ask_volumes<T>(&self, read: impl Fn(&Trash, Vec<PathBuf>) -> T) -> Vec<(PathBuf, Option<T>)> {
+    fn ask_volumes<T>(
+        &self,
+        read: impl Fn(&Trash, Vec<PathBuf>) -> T,
+    ) -> Vec<(PathBuf, Option<T>)> {
         ask_volumes(self.volumes(), self.volume_wait, |top: &Path| {
             read(self, self.trash_dirs_on(top))
         })

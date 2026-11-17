@@ -329,7 +329,9 @@ mod watch {
                         false
                     } else {
                         self.watching.get(&event.wd).is_some_and(|dir| {
-                            let path = event.name.map_or_else(|| dir.clone(), |name| dir.join(name));
+                            let path = event
+                                .name
+                                .map_or_else(|| dir.clone(), |name| dir.join(name));
                             concerns(dirs, &path).is_some()
                         })
                     };

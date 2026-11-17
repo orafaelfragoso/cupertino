@@ -1,9 +1,9 @@
 //! `watch::ConfigWatcher`: change notification for the settings files.
 
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Receiver};
-use std::os::fd::{AsFd, AsRawFd};
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::atomic::write_atomic;

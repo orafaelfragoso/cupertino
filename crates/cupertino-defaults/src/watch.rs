@@ -74,10 +74,7 @@ pub struct ConfigWatcher {
 #[derive(Debug)]
 enum Msg {
     /// `path`, a watched directory or an entry of one, changed; `appeared` when it was created or moved there.
-    Changed {
-        path: PathBuf,
-        appeared: bool,
-    },
+    Changed { path: PathBuf, appeared: bool },
     /// Events were lost (the kernel's queue overflowed): every file is compared.
     Lost,
     /// The notification failed.

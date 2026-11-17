@@ -1016,8 +1016,100 @@ fn a_dropped_stream_discards_the_partial_frame_and_asks_for_a_resync_at_the_next
     assert!(frame.resynced);
     assert_eq!(frame.motion, Motion::default());
     assert!(frame.held_buttons.is_empty());
+    // the discarded press was never reported, so there is nothing to release
+    assert!(frame.keys.is_empty());
     let frame = rig.frame(&[rel(REL_X, 1)]);
     assert_eq!(frame.motion, Motion { dx: 1, dy: 0 });
+}
+
+fn drop_and_resync(rig: &mut Rig, snapshot: &Snapshot) -> Frame {
+    rig.push((EV_SYN, SYN_DROPPED, 0)).unwrap();
+    assert!(matches!(
+        rig.push(SYN).unwrap(),
+        Some(FramerOutput::ResyncNeeded { .. })
+    ));
+    resync(rig, snapshot)
+}
+
+#[test]
+fn a_press_discarded_by_a_drop_and_up_in_the_snapshot_is_no_transition() {
+    let mut rig = Rig::new(&mouse_spec());
+    rig.push(key(BTN_LEFT, 1)).unwrap();
+    let frame = drop_and_resync(&mut rig, &snapshot_for(&mouse_spec()));
+    assert!(frame.keys.is_empty());
+    assert!(frame.held_buttons.is_empty());
+}
+
+#[test]
+fn a_press_discarded_by_a_drop_and_held_in_the_snapshot_comes_out_as_a_press() {
+    let mut rig = Rig::new(&mouse_spec());
+    rig.push(key(BTN_LEFT, 1)).unwrap();
+    let snapshot = Snapshot {
+        keys: bits(&[BTN_LEFT]),
+        ..snapshot_for(&mouse_spec())
+    };
+    let frame = drop_and_resync(&mut rig, &snapshot);
+    assert_eq!(
+        frame.keys,
+        [KeyEvent {
+            code: BTN_LEFT,
+            state: KeyState::Pressed
+        }]
+    );
+}
+
+#[test]
+fn a_reported_press_whose_release_is_discarded_is_released_by_the_snapshot() {
+    let mut rig = Rig::new(&mouse_spec());
+    rig.frame(&[key(BTN_LEFT, 1)]);
+    rig.push(key(BTN_LEFT, 0)).unwrap();
+    let frame = drop_and_resync(&mut rig, &snapshot_for(&mouse_spec()));
+    assert_eq!(
+        frame.keys,
+        [KeyEvent {
+            code: BTN_LEFT,
+            state: KeyState::Released
+        }]
+    );
+    assert!(frame.held_buttons.is_empty());
+}
+
+#[test]
+fn a_switch_change_discarded_by_a_drop_comes_out_of_the_snapshot() {
+    let spec = Spec {
+        switches: vec![SW_LID],
+        ..mouse_spec()
+    };
+    let mut rig = Rig::new(&spec);
+    rig.push((EV_SW, SW_LID, 1)).unwrap();
+    let snapshot = Snapshot {
+        switches: bits(&[SW_LID]),
+        ..snapshot_for(&spec)
+    };
+    let frame = drop_and_resync(&mut rig, &snapshot);
+    assert_eq!(
+        frame.switches,
+        [SwitchEvent {
+            switch: Switch::Lid,
+            on: true
+        }]
+    );
+}
+
+#[test]
+fn a_snapshot_over_a_partial_release_reports_the_release() {
+    let mut rig = Rig::new(&mouse_spec());
+    rig.frame(&[key(BTN_LEFT, 1)]);
+    rig.push(key(BTN_LEFT, 0)).unwrap();
+    let frame = resync(&mut rig, &snapshot_for(&mouse_spec()));
+    assert_eq!(
+        frame.keys,
+        [KeyEvent {
+            code: BTN_LEFT,
+            state: KeyState::Released
+        }]
+    );
+    assert!(frame.held_buttons.is_empty());
 }
 
 #[test]

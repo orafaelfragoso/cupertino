@@ -11,6 +11,8 @@ layer = "models"
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-theme = { path = "../cupertino-theme" }
+
+[dev-dependencies]
 tiny-skia = "0.12"
 
 [[bench]]

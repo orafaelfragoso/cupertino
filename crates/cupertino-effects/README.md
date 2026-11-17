@@ -23,7 +23,6 @@ output a vertex grid with texture coordinates ([`Mesh`](src/mesh.rs)) that any r
 | | full screen 0.5 s, frame bézier (0.25, 0, 0, 1), overlay fade (0, 1, 1, 1) over the first half (`FullScreenTransition`) |
 | | overview zoom (0.25 s, 2.0 s slow), show desktop (spring damping ratio 1.0, response 0.3 s), workspace slide (spring 0.4 s) |
 | `space_slide` | `SpaceSlideState`: the workspace slide solver, a damped chase of the snap target at a fixed 60 Hz with a rubber band outside the first and last workspace; `point_in_x`, `settle_time`, `SlideStart` |
-| `raster` | CPU textured-mesh renderer (2× supersampled), wireframe, test pattern, contact sheet |
 
 ## How it works
 

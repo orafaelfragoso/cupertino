@@ -259,6 +259,24 @@ fn digest(bytes: &[u8]) -> String {
     text
 }
 
+thread_local! {
+    /// Digests of the words seen so far: the same words come back in every file.
+    static TERM_DIGESTS: std::cell::RefCell<std::collections::HashMap<String, String>> = Default::default();
+}
+
+/// Whether the digest of `term` is in `set`.
+fn listed_in(set: &HashSet<&'static str>, term: &str) -> bool {
+    TERM_DIGESTS.with_borrow_mut(|cache| {
+        if let Some(found) = cache.get(term) {
+            return set.contains(found.as_str());
+        }
+        let found = digest(term.as_bytes());
+        let listed = set.contains(found.as_str());
+        cache.insert(term.to_owned(), found);
+        listed
+    })
+}
+
 struct Listed {
     names: HashSet<&'static str>,
     name_heads: HashSet<&'static str>,
@@ -291,11 +309,9 @@ fn listed_matches(text: &str) -> Vec<(&'static str, usize, String)> {
     let words: Vec<regex::Match> = WORD.find_iter(text).collect();
     for (index, word) in words.iter().enumerate() {
         let lower = word.as_str().to_lowercase();
-        if listed.words.contains(digest(lower.as_bytes()).as_str())
+        if listed_in(&listed.words, &lower)
             || LISTED_WORD_HEAD_LENGTHS.iter().any(|&length| {
-                head(&lower, length).is_some_and(|head| {
-                    listed.word_heads.contains(digest(head.as_bytes()).as_str())
-                })
+                head(&lower, length).is_some_and(|head| listed_in(&listed.word_heads, head))
             })
         {
             found.push(("provenance wording", word.start(), word.as_str().to_owned()));
@@ -304,7 +320,7 @@ fn listed_matches(text: &str) -> Vec<(&'static str, usize, String)> {
             let between = &text[word.end()..next.start()];
             if between == " " || between == "-" {
                 let phrase = format!("{lower} {}", next.as_str().to_lowercase());
-                if listed.phrases.contains(digest(phrase.as_bytes()).as_str()) {
+                if listed_in(&listed.phrases, &phrase) {
                     found.push((
                         "analysis wording",
                         word.start(),
@@ -319,7 +335,7 @@ fn listed_matches(text: &str) -> Vec<(&'static str, usize, String)> {
                 break;
             }
             let phrase = &text[word.start()..words[end].end()];
-            if listed.names.contains(digest(phrase.as_bytes()).as_str()) {
+            if listed_in(&listed.names, phrase) {
                 found.push(("vendor or product name", word.start(), phrase.to_owned()));
                 break;
             }
@@ -341,10 +357,7 @@ fn listed_matches(text: &str) -> Vec<(&'static str, usize, String)> {
                 .is_none_or(|byte| !byte.is_ascii_lowercase());
             if before_ok && letters && after_ok {
                 let matched = &text[start..start + length];
-                if listed
-                    .name_heads
-                    .contains(digest(matched.to_lowercase().as_bytes()).as_str())
-                {
+                if listed_in(&listed.name_heads, &matched.to_lowercase()) {
                     found.push(("vendor or product name", start, matched.to_owned()));
                 }
                 start += length;

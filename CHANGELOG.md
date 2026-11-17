@@ -185,7 +185,6 @@ Changes on `main` since `v0.1.0-rc4`.
 - Every package format requires dbus 1.16 or newer and PipeWire 1.4 or newer.
 - Machines installed from the USB image update from their own signed repository: `packaging/keyring/local-release` builds and signs a release, then `sudo pacman -Syu` installs it. pacman refuses an unsigned, tampered or foreign-signed package.
 - Arch is the only target. The Debian and Fedora packages, their PAM files, builder images, install tests and release builds are removed; a final release builds the Arch packages and the ISO. `release.py check-metadata` checks the third-party notices, the shipped licence texts and the PKGBUILD licence lists.
-
 - Upgrade note: a locally edited `/etc/cupertino/login.conf` is kept over an upgrade and can still name `/usr/lib/cupertino/greeter` or `/usr/bin/cupertino-session`, which are gone. The session manager runs `/usr/bin/cupertino-server --udev` and `/usr/bin/cupertino-server --session` in their place, logs a warning and `cupertino-sessiond --check-config` lists it; merge `/etc/cupertino/login.conf.pacnew` into the file to silence it.
 
 ### Install image

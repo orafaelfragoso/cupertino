@@ -997,7 +997,6 @@ dependencies = [
  "cupertino-kit",
  "cupertino-peer",
  "cupertino-pipewire",
- "cupertino-protocol-app",
  "cupertino-radios",
  "cupertino-shell-client",
  "cupertino-ui-wayland",
@@ -1264,7 +1263,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-peer",
- "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-ui-text",
  "cupertino-ui-wayland",
@@ -1348,7 +1346,6 @@ dependencies = [
  "cupertino-kit",
  "cupertino-menu-model",
  "cupertino-peer",
- "cupertino-protocol-app",
  "cupertino-radios",
  "cupertino-shell-client",
  "cupertino-theme",
@@ -1400,7 +1397,6 @@ dependencies = [
  "cupertino-keyboard",
  "cupertino-kit",
  "cupertino-peer",
- "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-theme",
  "cupertino-ui-wayland",
@@ -1461,7 +1457,6 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-peer",
- "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-theme",
  "cupertino-ui-atspi",
@@ -1489,7 +1484,6 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-kit",
- "cupertino-protocol-app",
  "cupertino-protocols",
  "cupertino-screencast",
  "cupertino-shell-client",
@@ -1516,18 +1510,6 @@ dependencies = [
  "cupertino-seat",
  "rustix 1.1.6",
  "zbus",
-]
-
-[[package]]
-name = "cupertino-protocol-app"
-version = "0.1.0"
-dependencies = [
- "cupertino-animation",
- "cupertino-app-protocols",
- "cupertino-defaults",
- "cupertino-geometry",
- "cupertino-wayland-client",
- "wayland-client",
 ]
 
 [[package]]
@@ -1717,7 +1699,6 @@ dependencies = [
  "cupertino-app-protocols",
  "cupertino-defaults",
  "cupertino-geometry",
- "cupertino-protocol-app",
  "cupertino-protocols",
  "cupertino-wayland-client",
  "wayland-client",
@@ -1827,7 +1808,6 @@ version = "0.1.0"
 dependencies = [
  "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-protocol-app",
  "cupertino-wayland-client",
  "tracing",
  "zbus",
@@ -1902,7 +1882,6 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-keyboard",
  "cupertino-menu-model",
- "cupertino-protocol-app",
  "cupertino-ui-gpu",
  "cupertino-ui-menus",
  "cupertino-ui-platform",
@@ -1918,6 +1897,9 @@ dependencies = [
 name = "cupertino-wayland-client"
 version = "0.1.0"
 dependencies = [
+ "cupertino-animation",
+ "cupertino-app-protocols",
+ "cupertino-defaults",
  "cupertino-geometry",
  "memmap2",
  "rustix 1.1.6",

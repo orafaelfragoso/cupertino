@@ -55,8 +55,8 @@ impl Setting {
 
 impl Appearance {
     /// The appearance after `event`; events of other kinds leave it as it is.
-    pub fn after(mut self, event: &cupertino_protocol_app::AppEvent) -> Self {
-        use cupertino_protocol_app::AppEvent;
+    pub fn after(mut self, event: &cupertino_wayland_client::app::AppEvent) -> Self {
+        use cupertino_wayland_client::app::AppEvent;
         match event {
             AppEvent::Appearance { dark } => self.dark = *dark,
             AppEvent::DisplayOptions(options) => {

@@ -10,15 +10,15 @@
 use std::collections::{HashMap, HashSet};
 
 use cupertino_geometry::Rect;
-use cupertino_protocol_app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_ui_platform::{
     LayerChange, LayerProperty, PlatformError, SurfaceLayer, SurfaceLayerLook, WindowId,
 };
+use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
 
 // a change through samples the toolkit takes is one the wire carries
 const _: () =
-    assert!(cupertino_protocol_app::MAX_SAMPLES == cupertino_ui_platform::MAX_LAYER_SAMPLES);
+    assert!(cupertino_wayland_client::app::MAX_SAMPLES == cupertino_ui_platform::MAX_LAYER_SAMPLES);
 
 fn wire(p: LayerProperty) -> Wire {
     match p {

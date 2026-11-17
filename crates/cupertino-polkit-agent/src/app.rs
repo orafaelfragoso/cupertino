@@ -23,13 +23,15 @@ use cupertino_polkit_agent::render::{
 };
 use cupertino_polkit_agent::surfaces;
 use cupertino_polkit_agent::users::{self, display_names};
-use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_shell_client::{Anchor, LayerShell, LayerSurface, ShellEvent};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_atspi::AtspiAdapter;
 use cupertino_ui_core::{AccessibilityAdapter, Action};
 use cupertino_ui_platform::WindowId;
 use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::app::{
+    AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop,
+};
 use cupertino_wayland_client::{
     key, Button, Connection, Event, KeyboardEvent, OutputId, PointerEvent, SurfaceId,
 };

@@ -17,7 +17,6 @@ app = [
     "dep:async-io",
     "dep:cupertino-kit",
     "dep:cupertino-keyboard",
-    "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-assets",
     "dep:cupertino-ui-wayland",
@@ -39,7 +38,6 @@ cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }

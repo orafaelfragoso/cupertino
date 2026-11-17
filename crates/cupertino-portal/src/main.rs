@@ -19,7 +19,7 @@ use cupertino_portal::settings::{Appearance, Service};
 use cupertino_portal::shortcut_keys::ShortcutKeys;
 use cupertino_portal::toolkits::{self, ToolkitSettings};
 use cupertino_portal::{BUS_NAME, PORTAL_PATH};
-use cupertino_protocol_app::{AppEffects, AppEvent};
+use cupertino_wayland_client::app::{AppEffects, AppEvent};
 use cupertino_wayland_client::{Connection, Event};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

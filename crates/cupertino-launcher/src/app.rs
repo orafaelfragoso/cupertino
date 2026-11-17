@@ -33,12 +33,12 @@ use cupertino_launcher::view::{
     TOP_FRACTION,
 };
 use cupertino_launcher::{Frecency, Launcher, LauncherConfig};
-use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, AppActivation, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
     LayerSurfaceConfig, Margin, Session, Shell, ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
+use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{Connection, Error as WaylandError, ExtensionEvent, SurfaceId};
 use std::cell::RefCell;
 use std::collections::HashMap;

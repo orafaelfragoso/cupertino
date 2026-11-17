@@ -19,7 +19,6 @@ app = [
     "dep:cupertino-icons",
     "dep:cupertino-keyboard",
     "dep:cupertino-peer",
-    "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
@@ -39,7 +38,6 @@ cupertino-icons = { path = "../cupertino-icons", optional = true }
 cupertino-kit = { path = "../cupertino-kit" }
 cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
-cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }

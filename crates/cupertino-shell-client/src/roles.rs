@@ -3,11 +3,11 @@
 use crate::dock::GroupBuilder as DockGroup;
 use crate::menu_bar::GroupBuilder as MenuBarGroup;
 use crate::{Dock, DockUpdate, Error, MenuBar, MenuBarUpdate};
-use cupertino_protocol_app::{report_appearance, report_display_options};
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{self, CupertinoMenuBarV1};
 use cupertino_protocols::client::cupertino_session_v1::{self, CupertinoSessionV1};
 use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
+use cupertino_wayland_client::app::{report_appearance, report_display_options};
 use cupertino_wayland_client::{Connection, ExternalRole, OutputId, State, SurfaceId};
 use std::sync::Mutex;
 use wayland_client::protocol::wl_seat::WlSeat;
@@ -470,7 +470,7 @@ impl Shell {
     }
 
     /// Observe the session: its appearance and display options arrive as
-    /// [`cupertino_protocol_app::AppEvent`], its lock state and the user's requests as [`ShellEvent`]s, now and on
+    /// [`cupertino_wayland_client::app::AppEvent`], its lock state and the user's requests as [`ShellEvent`]s, now and on
     /// every change while the observer lives.
     pub fn session(&self, conn: &Connection) -> Session {
         Session(self.0.get_session(&conn.queue_handle(), Quiet))

@@ -5,7 +5,7 @@
 //! (`ext_idle_notify_v1`), and [`Shell`] (`cupertino_shell_v1`) observes the session and gives layer surfaces the
 //! menu-bar and dock roles. What their objects receive arrives as a [`ShellEvent`] inside the transport's
 //! `Event::Extension`, in order with the transport's own events; the session's appearance and display options arrive
-//! as the [`cupertino_protocol_app::AppEvent`] an application's observer reports.
+//! as the [`cupertino_wayland_client::app::AppEvent`] an application's observer reports.
 
 mod control;
 mod dock;

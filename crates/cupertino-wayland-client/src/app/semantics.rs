@@ -1,10 +1,10 @@
 //! Native semantics ride the existing transport queue; no accessibility service is involved.
+use crate::{Connection, State, SurfaceId};
 use cupertino_app_protocols::client::semantics::{
     cupertino_semantic_surface_v1::{self, CupertinoSemanticSurfaceV1},
     cupertino_semantics_v1::CupertinoSemanticsV1,
 };
 use cupertino_app_protocols::semantics::{ActionCall, ActionReply, Outcome, Snapshot, MAX_FRAME};
-use cupertino_wayland_client::{Connection, State, SurfaceId};
 use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
@@ -39,13 +39,14 @@ pub struct SemanticSurface {
 }
 impl Semantics {
     pub fn bind(conn: &mut Connection) -> Option<Self> {
-        conn.bind_extension(1..=VERSION, crate::Quiet).map(Self)
+        conn.bind_extension(1..=VERSION, crate::app::Quiet)
+            .map(Self)
     }
     pub fn surface(
         &self,
         conn: &Connection,
         surface: SurfaceId,
-    ) -> Result<SemanticSurface, cupertino_wayland_client::Error> {
+    ) -> Result<SemanticSurface, crate::Error> {
         let inner = Shared(Arc::new(Mutex::new(Inner::default())));
         let proxy = self.0.get_surface(
             &conn.wl_surface(surface)?,
@@ -113,12 +114,12 @@ impl Drop for SemanticSurface {
         self.proxy.destroy();
     }
 }
-impl Dispatch<CupertinoSemanticsV1, crate::Quiet> for State {
+impl Dispatch<CupertinoSemanticsV1, crate::app::Quiet> for State {
     fn event(
         _: &mut Self,
         _: &CupertinoSemanticsV1,
         _: <CupertinoSemanticsV1 as wayland_client::Proxy>::Event,
-        _: &crate::Quiet,
+        _: &crate::app::Quiet,
         _: &WlConnection,
         _: &QueueHandle<Self>,
     ) {

@@ -66,7 +66,7 @@ as dev-dependencies, and only dev-dependencies point at a `testing` crate. The c
 | `system` (user-space operating-system access) | `cupertino-apps`, `cupertino-assets`, `cupertino-defaults`, `cupertino-diagnostic-events`, `cupertino-icons`, `cupertino-peer`, `cupertino-radios`, `cupertino-trash` | `foundation`, `system` |
 | `platform` (kernel interfaces that more than one program needs) | `cupertino-alsa`, `cupertino-bluetooth`, `cupertino-devices`, `cupertino-netlink`, `cupertino-pipewire`, `cupertino-screencast`, `cupertino-seat` | `foundation`, `platform` |
 | `protocol` (wire schemas) | `cupertino-app-protocols`, `cupertino-login-ipc`, `cupertino-protocols` | `foundation`, `protocol` |
-| `transport` (client connections without widgets) | `cupertino-protocol-app`, `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
+| `transport` (client connections without widgets) | `cupertino-shell-client`, `cupertino-wayland-client` | `foundation`, `system`, `platform`, `protocol`, `transport` |
 | `render` (the compositor's own drawing) | `cupertino-cursor`, `cupertino-decorations`, `cupertino-glass` | `foundation`, `graphics`, `system`, `platform`, `render` |
 | `ui` (the toolkit) | `cupertino-kit`, `cupertino-ui-abi`, `cupertino-ui-atspi`, `cupertino-ui-controls`, `cupertino-ui-core`, `cupertino-ui-gpu`, `cupertino-ui-layout`, `cupertino-ui-menus`, `cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-test`, `cupertino-ui-text`, `cupertino-ui-wayland` | `foundation`, `graphics`, `system`, `protocol`, `transport`, `ui` |
 | `shellkit` (the shell's extension of the toolkit) | none | `foundation`, `system`, `protocol`, `transport`, `ui` |

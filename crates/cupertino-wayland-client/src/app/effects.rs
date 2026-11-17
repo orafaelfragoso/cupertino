@@ -1,8 +1,9 @@
 //! `cupertino_app_effects_v1`: the appearance observer, backdrops, the title bar style, the menu announcement and the
 //! disabled window controls.
 
-use crate::backdrop::BackdropData;
-use crate::{Backdrop, BackdropId, BackdropTone, Fixed, LayerId, Quiet};
+use crate::app::backdrop::BackdropData;
+use crate::app::{Backdrop, BackdropId, BackdropTone, Fixed, LayerId, Quiet};
+use crate::{Connection, Error, State, SurfaceId};
 use cupertino_app_protocols::client::app_effects::cupertino_app_effects_v1::{
     CupertinoAppEffectsV1, TitlebarStyle, WindowControl,
 };
@@ -14,7 +15,6 @@ use cupertino_app_protocols::client::app_effects::cupertino_appearance_v1::{
 };
 use cupertino_app_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
 use cupertino_defaults::accessibility::DisplayOptions;
-use cupertino_wayland_client::{Connection, Error, State, SurfaceId};
 use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
 macro_rules! quiet {

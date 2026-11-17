@@ -1,5 +1,5 @@
-//! The public protocols of the Cupertino server (`cupertino-app-protocols`) as extensions on the transport's queue
-//! (`cupertino-wayland-client`), for any application.
+//! The public protocols of the Cupertino server (`cupertino-app-protocols`) as extensions on the transport's queue,
+//! for any application.
 //!
 //! [`AppEffects`] (`cupertino_app_effects_v1`) observes the session's appearance and display options
 //! ([`AppEffects::appearance`]), creates server-rendered [`Backdrop`]s, sets the title bar style of an

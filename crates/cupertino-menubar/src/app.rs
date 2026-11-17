@@ -33,13 +33,13 @@ use cupertino_menubar::view::{
 };
 use cupertino_menubar::wakeup::Wakeup;
 use cupertino_menubar::worker::{self, Worker};
-use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     MenuBar, MenuBarUpdate, Session as SessionObserver, SessionChange, SessionState, Shell,
     ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
+use cupertino_wayland_client::app::{AppEffects, Backdrop};
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, Event, ExtensionEvent, OutputGeometry, OutputId, SurfaceId,
 };

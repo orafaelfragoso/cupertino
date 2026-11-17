@@ -30,12 +30,12 @@ use cupertino_kit::platform::{
     PresentChange, PresentProperty, SystemAppearance, WindowRequest, WindowSpec, WindowSystem,
 };
 use cupertino_pipewire::Wpctl;
-use cupertino_protocol_app::AppEvent;
 use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
 };
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
+use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, ExtensionEvent, OutputId, SurfaceId,
 };

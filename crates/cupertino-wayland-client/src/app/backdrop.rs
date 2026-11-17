@@ -1,11 +1,11 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
-use crate::{AppEvent, Error};
+use crate::app::{AppEvent, Error};
+use crate::State;
 use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1, GlassStyle as WireStyle, Tone,
 };
 use cupertino_geometry::Rect;
-use cupertino_wayland_client::State;
 use std::sync::atomic::{AtomicU64, Ordering};
 use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
@@ -364,11 +364,7 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for State {
                 Ok(Tone::Appearance) => BackdropTone::Appearance,
                 Ok(Tone::Dark) => BackdropTone::Dark,
                 Ok(Tone::Light) => BackdropTone::Light,
-                _ => {
-                    return state.fail(cupertino_wayland_client::Error::Protocol(
-                        "unknown backdrop tone",
-                    ))
-                }
+                _ => return state.fail(crate::Error::Protocol("unknown backdrop tone")),
             };
             state.emit(AppEvent::BackdropTone {
                 backdrop: data.0,

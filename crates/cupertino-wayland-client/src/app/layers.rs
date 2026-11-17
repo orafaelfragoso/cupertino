@@ -6,13 +6,13 @@
 //! as the layer scales ([`Layer::set_glass_edge`]); from version 6 that line softens with the layer's content blur
 //! ([`Layers::softens_glass_edges`]).
 
-use crate::{AppEvent, Error, Quiet};
+use crate::app::{AppEvent, Error, Quiet};
+use crate::{Connection, State, SurfaceId};
 use cupertino_animation::LayerCurve;
 use cupertino_app_protocols::client::layers::cupertino_layer_v1::{
     self, CupertinoLayerV1, Property as WireProperty,
 };
 use cupertino_app_protocols::client::layers::cupertino_layers_v1::CupertinoLayersV1;
-use cupertino_wayland_client::{Connection, State, SurfaceId};
 use std::sync::atomic::{AtomicU64, Ordering};
 use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
@@ -290,12 +290,12 @@ impl Layer {
 
     /// Draw `style` of glass below the layer's content, in its bounds, magnified by `lens` (1 for none); `None` draws
     /// none.
-    pub fn set_glass(&self, style: Option<crate::GlassStyle>, lens: f64) -> Result<(), Error> {
+    pub fn set_glass(&self, style: Option<crate::app::GlassStyle>, lens: f64) -> Result<(), Error> {
         if !(lens.is_finite() && lens >= 1.0) {
             return Err(Error::InvalidGlass);
         }
         self.0
-            .set_glass(style.map_or(u32::MAX, crate::GlassStyle::wire), lens);
+            .set_glass(style.map_or(u32::MAX, crate::app::GlassStyle::wire), lens);
         Ok(())
     }
 

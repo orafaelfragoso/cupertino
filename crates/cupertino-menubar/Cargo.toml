@@ -18,7 +18,6 @@ cupertino-peer = { path = "../cupertino-peer" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"] }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-kit = { path = "../cupertino-kit" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-shell-client = { path = "../cupertino-shell-client" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 zeroize = "1"

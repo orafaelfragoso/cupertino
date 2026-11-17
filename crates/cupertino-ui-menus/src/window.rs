@@ -4,7 +4,7 @@
 
 use cupertino_keyboard::modifiers::ModifierMap;
 use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_protocol_app::{AppEffects, AppEvent, AppMenu, MenuAddress};
+use cupertino_wayland_client::app::{AppEffects, AppEvent, AppMenu, MenuAddress};
 use cupertino_wayland_client::{Connection, SurfaceId};
 
 use crate::{Activation, AppMenus, WindowExport};

@@ -2,7 +2,7 @@
 
 use crate::{Error, Session, Shell, ShellEvent};
 use cupertino_defaults::accessibility::DisplayOptions;
-use cupertino_protocol_app::AppEvent;
+use cupertino_wayland_client::app::AppEvent;
 use cupertino_wayland_client::{Connection, Event, ExtensionEvent};
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ impl SessionChange {
 }
 
 impl SessionState {
-    /// Take `event` when it is one of the session's state. What an application's [`cupertino_protocol_app::Appearance`]
+    /// Take `event` when it is one of the session's state. What an application's [`cupertino_wayland_client::app::Appearance`]
     /// tells counts as well.
     pub fn apply(&mut self, event: &ExtensionEvent) -> Option<SessionChange> {
         let change = event

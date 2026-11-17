@@ -11,7 +11,6 @@ layer = "transport"
 cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-protocol-app = { path = "../cupertino-protocol-app" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 wayland-client = "0.31"

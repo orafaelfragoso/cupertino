@@ -16,3 +16,6 @@ cupertino-theme = { path = "../cupertino-theme" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
+
+[dev-dependencies]
+tempfile = "3"

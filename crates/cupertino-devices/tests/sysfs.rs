@@ -15,6 +15,8 @@ struct Sys {
     root: PathBuf,
 }
 
+const KEYBOARD: [&str; 5] = ["120013\n", "fffffffffffffffe\n", "0\n", "0\n", "0\n"];
+
 impl Sys {
     fn new(name: &str) -> Self {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sysfs-{name}"));
@@ -92,79 +94,64 @@ impl Sys {
         );
         self.class_link("input", &format!("event{n}"), &node);
     }
-}
 
-#[test]
-fn enumeration_lists_only_card_nodes_lowest_first() {
-    let sys = Sys::new("enumerate-drm");
-    // created out of order; connectors and render nodes are not cards
-    sys.drm_card("0000:00:03.0", 10, None, None);
-    sys.drm_card("0000:00:02.0", 2, Some("1\n"), Some(128));
-    sys.class_link(
-        "drm",
-        "card2-DP-1",
-        "devices/pci0000:00/0000:00:02.0/drm/card2/card2-DP-1",
-    );
-    sys.class_link("drm", "version", "devices/other");
-    let cards = enumerate(&sys.root, Subsystem::Drm).unwrap();
-    let names: Vec<_> = cards.iter().map(Device::sysname).collect();
-    assert_eq!(names, ["card2", "card10"]);
-}
-
-#[test]
-fn enumeration_of_input_lists_only_event_nodes() {
-    let sys = Sys::new("enumerate-input");
-    sys.input(
-        3,
-        "kbd",
-        ["120013\n", "fffffffffffffffe\n", "0\n", "0\n", "0\n"],
-        "0011\n",
-    );
-    sys.class_link(
-        "input",
-        "mouse0",
-        "devices/platform/i8042/serio0/input/input3/mouse0",
-    );
-    sys.class_link(
-        "input",
-        "input3",
-        "devices/platform/i8042/serio0/input/input3",
-    );
-    sys.class_link("input", "eventual", "devices/x");
-    let found = enumerate(&sys.root, Subsystem::Input).unwrap();
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].sysname(), "event3");
-}
-
-#[test]
-fn a_subsystem_has_a_class_directory_name() {
-    assert_eq!(Subsystem::Input.as_str(), "input");
-    assert_eq!(Subsystem::Drm.as_str(), "drm");
-}
-
-#[test]
-fn enumerating_without_a_class_directory_names_the_path() {
-    let sys = Sys::new("no-class");
-    fs::remove_dir_all(sys.path("class/drm")).unwrap();
-    match enumerate(&sys.root, Subsystem::Drm) {
-        Err(Error::Io { path, .. }) => assert_eq!(path, sys.path("class/drm")),
-        other => panic!("{other:?}"),
+    fn first(&self, subsystem: Subsystem) -> Device {
+        enumerate(&self.root, subsystem).unwrap().remove(0)
     }
 }
 
 #[test]
-fn an_empty_class_directory_lists_nothing() {
-    let sys = Sys::new("empty");
-    assert!(enumerate(&sys.root, Subsystem::Input).unwrap().is_empty());
-    assert!(gpus(&sys.root).unwrap().is_empty());
-    assert!(primary_gpu(&sys.root).unwrap().is_none());
+fn enumeration_lists_only_the_device_nodes_of_a_subsystem_lowest_first() {
+    let drm = Sys::new("enumerate-drm");
+    // created out of order; connectors and render nodes are not cards
+    drm.drm_card("0000:00:03.0", 10, None, None);
+    drm.drm_card("0000:00:02.0", 2, Some("1\n"), Some(128));
+    drm.class_link(
+        "drm",
+        "card2-DP-1",
+        "devices/pci0000:00/0000:00:02.0/drm/card2/card2-DP-1",
+    );
+    drm.class_link("drm", "version", "devices/other");
+
+    let input = Sys::new("enumerate-input");
+    input.input(3, "kbd", KEYBOARD, "0011\n");
+    input.class_link(
+        "input",
+        "mouse0",
+        "devices/platform/i8042/serio0/input/input3/mouse0",
+    );
+    input.class_link(
+        "input",
+        "input3",
+        "devices/platform/i8042/serio0/input/input3",
+    );
+    input.class_link("input", "eventual", "devices/x");
+
+    let empty = Sys::new("enumerate-empty");
+    for (name, sys, subsystem, expected) in [
+        ("drm", &drm, Subsystem::Drm, &["card2", "card10"][..]),
+        ("input", &input, Subsystem::Input, &["event3"]),
+        ("empty", &empty, Subsystem::Input, &[]),
+    ] {
+        let found = enumerate(&sys.root, subsystem).unwrap();
+        let names: Vec<_> = found.iter().map(Device::sysname).collect();
+        assert_eq!(names, expected, "{name}");
+    }
+    assert!(gpus(&empty.root).unwrap().is_empty());
+    assert!(primary_gpu(&empty.root).unwrap().is_none());
+
+    fs::remove_dir_all(empty.path("class/drm")).unwrap();
+    match enumerate(&empty.root, Subsystem::Drm) {
+        Err(Error::Io { path, .. }) => assert_eq!(path, empty.path("class/drm")),
+        other => panic!("without a class directory: {other:?}"),
+    }
 }
 
 #[test]
-fn a_device_reads_its_uevent_properties() {
+fn a_device_reads_its_uevent_properties_and_seat() {
     let sys = Sys::new("device");
     sys.drm_card("0000:00:02.0", 0, Some("1\n"), Some(128));
-    let device = &enumerate(&sys.root, Subsystem::Drm).unwrap()[0];
+    let device = sys.first(Subsystem::Drm);
     assert_eq!(device.sysname(), "card0");
     assert_eq!(device.devnode(), Some(Path::new("/dev/dri/card0")));
     assert_eq!(device.devnum(), Some(DevT::new(226, 0)));
@@ -173,59 +160,46 @@ fn a_device_reads_its_uevent_properties() {
     assert_eq!(device.properties().len(), 4);
     assert!(device.syspath().ends_with("drm/card0"));
     assert_eq!(device.seat(), "seat0");
-}
 
-#[test]
-fn a_device_with_an_id_seat_belongs_to_that_seat() {
-    let sys = Sys::new("seat");
     sys.write("devices/a/b/uevent", "ID_SEAT=seat1\n");
     let device = Device::from_syspath(&sys.path("devices/a/b")).unwrap();
-    assert_eq!(device.seat(), "seat1");
-    assert_eq!(device.devnode(), None);
-    assert_eq!(device.devnum(), None);
+    assert_eq!(
+        (device.seat(), device.devnode(), device.devnum()),
+        ("seat1", None, None)
+    );
 }
 
 #[test]
-fn a_device_without_a_uevent_file_is_an_io_error() {
-    let sys = Sys::new("no-uevent");
-    fs::create_dir_all(sys.path("devices/a")).unwrap();
-    match Device::from_syspath(&sys.path("devices/a")) {
-        Err(Error::Io { path, .. }) => assert_eq!(path, sys.path("devices/a/uevent")),
-        other => panic!("{other:?}"),
-    }
-}
-
-#[test]
-fn a_malformed_uevent_is_a_parse_error_naming_the_file() {
+fn a_device_without_a_readable_uevent_names_the_file() {
     let sys = Sys::new("bad-uevent");
+    fs::create_dir_all(sys.path("devices/none")).unwrap();
     sys.write("devices/a/uevent", "MAJOR=13\nbroken line\n");
-    match Device::from_syspath(&sys.path("devices/a")) {
-        Err(Error::Parse { origin, source }) => {
-            assert!(origin.ends_with("devices/a/uevent"), "{origin}");
-            assert_eq!(source, ParseError::MalformedProperty("broken line".into()));
-        }
-        other => panic!("{other:?}"),
-    }
     sys.write("devices/b/uevent", "MAJOR=13\n");
-    assert!(matches!(
-        Device::from_syspath(&sys.path("devices/b")),
-        Err(Error::Parse {
-            source: ParseError::IncompleteDevnum,
-            ..
-        })
-    ));
+    for (dir, expected) in [
+        ("devices/none", None),
+        (
+            "devices/a",
+            Some(ParseError::MalformedProperty("broken line".into())),
+        ),
+        ("devices/b", Some(ParseError::IncompleteDevnum)),
+    ] {
+        let uevent = sys.path(&format!("{dir}/uevent"));
+        match (Device::from_syspath(&sys.path(dir)), expected) {
+            (Err(Error::Io { path, .. }), None) => assert_eq!(path, uevent),
+            (Err(Error::Parse { origin, source }), Some(expected)) => {
+                assert!(origin.ends_with(&format!("{dir}/uevent")), "{origin}");
+                assert_eq!(source, expected);
+            }
+            (other, _) => panic!("{dir}: {other:?}"),
+        }
+    }
 }
 
 #[test]
 fn parents_skip_container_directories_and_stop_below_the_devices_root() {
     let sys = Sys::new("parents");
-    sys.input(
-        3,
-        "kbd",
-        ["120013\n", "fffffffffffffffe\n", "0\n", "0\n", "0\n"],
-        "0011\n",
-    );
-    let event = &enumerate(&sys.root, Subsystem::Input).unwrap()[0];
+    sys.input(3, "kbd", KEYBOARD, "0011\n");
+    let event = sys.first(Subsystem::Input);
     let parent = event.parent(&sys.root).unwrap().unwrap();
     // `input/` has no uevent and is skipped; the nearest device is input3
     assert_eq!(parent.sysname(), "input3");
@@ -243,23 +217,16 @@ fn parents_skip_container_directories_and_stop_below_the_devices_root() {
 }
 
 #[test]
-fn a_keyboard_node_is_classified_from_the_capabilities_above_it() {
-    let sys = Sys::new("classify-keyboard");
-    sys.input(
-        3,
-        "kbd",
-        ["120013\n", "fffffffffffffffe\n", "0\n", "0\n", "0\n"],
-        "0011\n",
-    );
-    let event = &enumerate(&sys.root, Subsystem::Input).unwrap()[0];
-    let class = classify_device(event, &sys.root).unwrap().unwrap();
+fn a_node_is_classified_from_the_capabilities_above_it() {
+    let keyboard = Sys::new("classify-keyboard");
+    keyboard.input(3, "kbd", KEYBOARD, "0011\n");
+    let class = classify_device(&keyboard.first(Subsystem::Input), &keyboard.root)
+        .unwrap()
+        .unwrap();
     assert!(class.keyboard && class.key);
     assert!(!class.mouse && !class.touchpad && !class.switch && !class.clickpad);
-}
 
-#[test]
-fn a_touchpad_node_with_a_button_pad_is_a_clickpad() {
-    let sys = Sys::new("classify-touchpad");
+    let touchpad = Sys::new("classify-touchpad");
     // key: BTN_LEFT, BTN_TOOL_FINGER and BTN_TOUCH; abs: X, Y, MT slot, MT position; props: pointer, buttonpad
     let mut words = vec!["0000000000000000".to_owned(); 12];
     // bits 0x110 (BTN_LEFT), 0x145 (BTN_TOOL_FINGER) and 0x14a (BTN_TOUCH): word 4 holds 0x100..0x13f, word 5 0x140..
@@ -271,108 +238,82 @@ fn a_touchpad_node_with_a_button_pad_is_a_clickpad() {
         "{:x}\n",
         (1u64 << 0) | (1 << 1) | (1 << 0x2f) | (1 << 0x35) | (1 << 0x36)
     );
-    sys.input(5, "pad", ["b\n", &key, "0\n", &abs, "5\n"], "0018\n");
-    let event = &enumerate(&sys.root, Subsystem::Input).unwrap()[0];
-    let class = classify_device(event, &sys.root).unwrap().unwrap();
-    assert!(class.touchpad, "{class:?}");
-    assert!(class.clickpad);
+    touchpad.input(5, "pad", ["b\n", &key, "0\n", &abs, "5\n"], "0018\n");
+    let class = classify_device(&touchpad.first(Subsystem::Input), &touchpad.root)
+        .unwrap()
+        .unwrap();
+    assert!(class.touchpad && class.clickpad, "{class:?}");
     assert!(!class.touchscreen && !class.mouse);
+
+    let card = Sys::new("classify-none");
+    card.drm_card("0000:00:02.0", 0, None, None);
+    assert!(classify_device(&card.first(Subsystem::Drm), &card.root)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
-fn a_node_with_no_capabilities_above_it_is_not_an_input_device() {
-    let sys = Sys::new("classify-none");
-    sys.drm_card("0000:00:02.0", 0, None, None);
-    let card = &enumerate(&sys.root, Subsystem::Drm).unwrap()[0];
-    assert!(classify_device(card, &sys.root).unwrap().is_none());
-}
-
-#[test]
-fn a_capability_file_that_is_not_hex_is_a_parse_error() {
-    let sys = Sys::new("classify-bad");
-    sys.input(
+fn a_capability_file_that_is_not_hex_or_a_missing_bustype_fails_the_classification() {
+    let bad = Sys::new("classify-bad");
+    bad.input(
         3,
         "kbd",
         ["120013\n", "not-hex\n", "0\n", "0\n", "0\n"],
         "0011\n",
     );
-    let event = &enumerate(&sys.root, Subsystem::Input).unwrap()[0];
-    match classify_device(event, &sys.root) {
+    match classify_device(&bad.first(Subsystem::Input), &bad.root) {
         Err(Error::Parse { origin, source }) => {
             assert!(origin.ends_with("capabilities/key"));
             assert!(matches!(source, ParseError::InvalidNumber { .. }));
         }
         other => panic!("{other:?}"),
     }
-}
 
-#[test]
-fn a_missing_bustype_is_an_io_error() {
-    let sys = Sys::new("classify-no-bustype");
-    sys.input(
-        3,
-        "kbd",
-        ["120013\n", "fffffffffffffffe\n", "0\n", "0\n", "0\n"],
-        "0011\n",
-    );
-    fs::remove_file(sys.path("devices/platform/i8042/serio0/input/input3/id/bustype")).unwrap();
-    let event = &enumerate(&sys.root, Subsystem::Input).unwrap()[0];
+    let no_bustype = Sys::new("classify-no-bustype");
+    no_bustype.input(3, "kbd", KEYBOARD, "0011\n");
+    fs::remove_file(no_bustype.path("devices/platform/i8042/serio0/input/input3/id/bustype"))
+        .unwrap();
     assert!(matches!(
-        classify_device(event, &sys.root),
+        classify_device(&no_bustype.first(Subsystem::Input), &no_bustype.root),
         Err(Error::Io { .. })
     ));
 }
 
 #[test]
-fn the_boot_gpu_is_the_primary_one_wherever_it_sits() {
-    let sys = Sys::new("primary-boot");
-    sys.drm_card("0000:00:02.0", 0, Some("0\n"), Some(128));
-    sys.drm_card("0000:00:03.0", 1, Some("1\n"), None);
-    let all = gpus(&sys.root).unwrap();
-    assert_eq!(all.len(), 2);
-    assert!(!all[0].boot_vga && all[1].boot_vga);
+fn the_primary_gpu_is_the_boot_gpu_or_else_the_first_card_and_each_gpu_knows_its_render_node() {
+    let boot = Sys::new("primary-boot");
+    boot.drm_card("0000:00:02.0", 0, Some("0\n"), Some(128));
+    boot.drm_card("0000:00:03.0", 1, Some("1\n"), None);
+    let all = gpus(&boot.root).unwrap();
     assert_eq!(
-        primary_gpu(&sys.root).unwrap().unwrap().device.sysname(),
-        "card1"
+        all.iter().map(|g| g.boot_vga).collect::<Vec<_>>(),
+        [false, true]
     );
-}
-
-#[test]
-fn without_a_boot_gpu_the_first_card_is_primary() {
-    let sys = Sys::new("primary-first");
-    sys.drm_card("0000:00:02.0", 0, None, Some(128));
-    sys.drm_card("0000:00:03.0", 1, Some("0\n"), None);
-    let all = gpus(&sys.root).unwrap();
-    assert!(all.iter().all(|g| !g.boot_vga));
-    assert_eq!(
-        primary_gpu(&sys.root).unwrap().unwrap().device.sysname(),
-        "card0"
-    );
-    assert_eq!(
-        select_primary(all.clone()).unwrap().device.sysname(),
-        "card0"
-    );
-    assert!(select_primary(Vec::new()).is_none());
-}
-
-#[test]
-fn a_gpu_knows_its_render_node() {
-    let sys = Sys::new("render-node");
-    sys.drm_card("0000:00:02.0", 0, Some("1\n"), Some(128));
-    sys.drm_card("0000:00:03.0", 1, None, None);
-    let all = gpus(&sys.root).unwrap();
     assert_eq!(
         all[0].render_node.as_deref(),
         Some(Path::new("/dev/dri/renderD128"))
     );
     assert_eq!(all[1].render_node, None);
-}
+    assert_eq!(
+        primary_gpu(&boot.root).unwrap().unwrap().device.sysname(),
+        "card1"
+    );
 
-#[test]
-fn a_boot_vga_attribute_that_is_not_zero_or_one_is_a_parse_error() {
-    let sys = Sys::new("boot-vga-bad");
-    sys.drm_card("0000:00:02.0", 0, Some("maybe\n"), None);
-    match gpus(&sys.root) {
+    let first = Sys::new("primary-first");
+    first.drm_card("0000:00:02.0", 0, None, Some(128));
+    first.drm_card("0000:00:03.0", 1, Some("0\n"), None);
+    let all = gpus(&first.root).unwrap();
+    assert!(all.iter().all(|g| !g.boot_vga));
+    assert_eq!(
+        primary_gpu(&first.root).unwrap().unwrap().device.sysname(),
+        "card0"
+    );
+    assert_eq!(select_primary(all).unwrap().device.sysname(), "card0");
+    assert!(select_primary(Vec::new()).is_none());
+
+    let bad = Sys::new("boot-vga-bad");
+    bad.drm_card("0000:00:02.0", 0, Some("maybe\n"), None);
+    match gpus(&bad.root) {
         Err(Error::Parse { origin, source }) => {
             assert!(origin.ends_with("0000:00:02.0/boot_vga"), "{origin}");
             assert_eq!(
@@ -383,43 +324,41 @@ fn a_boot_vga_attribute_that_is_not_zero_or_one_is_a_parse_error() {
                 }
             );
         }
-        other => panic!("{other:?}"),
+        other => panic!("a boot_vga that is not 0 or 1: {other:?}"),
     }
 }
 
 #[test]
-fn the_render_override_picks_a_card_by_its_node_or_its_render_node() {
+fn the_render_override_picks_a_card_by_either_node_and_otherwise_falls_back_to_the_primary() {
     let sys = Sys::new("render-select");
     sys.drm_card("0000:00:02.0", 0, Some("1\n"), Some(128));
     sys.drm_card("0000:00:03.0", 1, None, Some(129));
     let all = gpus(&sys.root).unwrap();
-
-    let (gpu, how) = select_render(all.clone(), Some(Path::new("/dev/dri/card1"))).unwrap();
-    assert_eq!((gpu.device.sysname(), how), ("card1", RenderChoice::Named));
-    let (gpu, how) = select_render(all.clone(), Some(Path::new("/dev/dri/renderD129"))).unwrap();
-    assert_eq!((gpu.device.sysname(), how), ("card1", RenderChoice::Named));
-}
-
-#[test]
-fn an_unset_empty_or_unmatched_override_falls_back_to_the_primary() {
-    let sys = Sys::new("render-fallback");
-    sys.drm_card("0000:00:02.0", 0, Some("1\n"), Some(128));
-    sys.drm_card("0000:00:03.0", 1, None, None);
-    let all = gpus(&sys.root).unwrap();
-
-    let (gpu, how) = select_render(all.clone(), None).unwrap();
-    assert_eq!(
-        (gpu.device.sysname(), how),
-        ("card0", RenderChoice::Primary)
-    );
-    let (_, how) = select_render(all.clone(), Some(Path::new(""))).unwrap();
-    assert_eq!(how, RenderChoice::Primary);
-    let (gpu, how) = select_render(all.clone(), Some(Path::new("/dev/dri/card9"))).unwrap();
-    assert_eq!(gpu.device.sysname(), "card0");
-    assert_eq!(
-        how,
-        RenderChoice::Unmatched(PathBuf::from("/dev/dri/card9"))
-    );
+    for (name, chosen, card, how) in [
+        (
+            "a card node",
+            Some("/dev/dri/card1"),
+            "card1",
+            RenderChoice::Named,
+        ),
+        (
+            "a render node",
+            Some("/dev/dri/renderD129"),
+            "card1",
+            RenderChoice::Named,
+        ),
+        ("unset", None, "card0", RenderChoice::Primary),
+        ("empty", Some(""), "card0", RenderChoice::Primary),
+        (
+            "unmatched",
+            Some("/dev/dri/card9"),
+            "card0",
+            RenderChoice::Unmatched(PathBuf::from("/dev/dri/card9")),
+        ),
+    ] {
+        let (gpu, got) = select_render(all.clone(), chosen.map(Path::new)).unwrap();
+        assert_eq!((gpu.device.sysname(), got), (card, how), "{name}");
+    }
     assert!(select_render(Vec::new(), Some(Path::new("/dev/dri/card0"))).is_none());
     assert!(select_render(Vec::new(), None).is_none());
 }
@@ -439,13 +378,11 @@ fn gpu_with_driver(name: &str, driver: Option<&str>) -> Sys {
 }
 
 #[test]
-fn preflight_without_a_gpu_reports_nothing() {
-    let sys = Sys::new("preflight-none");
-    assert!(preflight::run(&sys.root).unwrap().is_none());
-}
+fn preflight_names_the_primary_gpus_driver_and_warns_when_none_is_bound() {
+    assert!(preflight::run(&Sys::new("preflight-none").root)
+        .unwrap()
+        .is_none());
 
-#[test]
-fn preflight_names_the_driver_of_the_primary_gpu() {
     let sys = gpu_with_driver("preflight-i915", Some("i915"));
     let report = preflight::run(&sys.root).unwrap().unwrap();
     assert_eq!(report.driver.as_deref(), Some("i915"));
@@ -456,10 +393,7 @@ fn preflight_names_the_driver_of_the_primary_gpu() {
         report.to_string(),
         "note: primary GPU card0 uses the i915 driver\n"
     );
-}
 
-#[test]
-fn preflight_warns_when_no_driver_is_bound() {
     let sys = gpu_with_driver("preflight-unbound", None);
     let report = preflight::run(&sys.root).unwrap().unwrap();
     assert_eq!(report.driver, None);
@@ -474,7 +408,7 @@ fn preflight_warns_when_no_driver_is_bound() {
 }
 
 #[test]
-fn preflight_finds_nvidia_without_the_drm_module_a_problem() {
+fn preflight_finds_nvidia_without_drm_modesetting_a_problem_with_its_fix() {
     let sys = gpu_with_driver("preflight-nvidia-none", Some("nvidia"));
     sys.write("module/nvidia/version", "570.86.16\n");
     let report = preflight::run(&sys.root).unwrap().unwrap();
@@ -490,10 +424,7 @@ fn preflight_finds_nvidia_without_the_drm_module_a_problem() {
     assert!(report
         .to_string()
         .contains("problem: the nvidia_drm kernel module"));
-}
 
-#[test]
-fn preflight_finds_nvidia_modesetting_off_a_problem_and_on_fine() {
     let sys = gpu_with_driver("preflight-nvidia-off", Some("nvidia"));
     sys.write("module/nvidia_drm/parameters/modeset", "N\n");
     let report = preflight::run(&sys.root).unwrap().unwrap();
@@ -501,29 +432,21 @@ fn preflight_finds_nvidia_modesetting_off_a_problem_and_on_fine() {
     assert!(report.problems[0].what.contains("modesetting is off"));
     assert!(report.problems[0].fix.contains("nvidia-drm.modeset=1"));
 
-    let sys = gpu_with_driver("preflight-nvidia-on", Some("nvidia"));
-    sys.write("module/nvidia_drm/parameters/modeset", "Y\n");
-    sys.write("module/nvidia_drm/parameters/fbdev", "1\n");
-    let report = preflight::run(&sys.root).unwrap().unwrap();
-    assert!(report.problems.is_empty(), "{report}");
-    assert!(report.notes.contains(&"nvidia-drm fbdev is on".to_owned()));
-}
-
-#[test]
-fn preflight_reads_the_fbdev_flag_in_both_spellings() {
-    for (value, shown) in [
+    for (index, (value, shown)) in [
+        ("1\n", "on"),
         ("N\n", "off"),
         ("0\n", "off"),
         ("Y\n", "on"),
         ("weird\n", "weird"),
-    ] {
-        let sys = gpu_with_driver(
-            &format!("preflight-fbdev-{}", shown.len() + value.len()),
-            Some("nvidia"),
-        );
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let sys = gpu_with_driver(&format!("preflight-fbdev-{index}"), Some("nvidia"));
         sys.write("module/nvidia_drm/parameters/modeset", "Y\n");
         sys.write("module/nvidia_drm/parameters/fbdev", value);
         let report = preflight::run(&sys.root).unwrap().unwrap();
+        assert!(report.problems.is_empty(), "{value:?}: {report}");
         assert!(
             report
                 .notes

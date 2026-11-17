@@ -897,6 +897,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+ "tempfile",
  "zbus",
 ]
 
@@ -1454,6 +1455,7 @@ dependencies = [
  "libc",
  "ordered-stream",
  "rustix 1.1.6",
+ "tempfile",
  "tracing",
  "zbus",
 ]
@@ -1785,6 +1787,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "percent-encoding",
+ "tempfile",
 ]
 
 [[package]]

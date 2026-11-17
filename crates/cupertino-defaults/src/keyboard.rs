@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `repeat_delay`, `repeat_interval`, `caps_lock_delay`, `mouse_keys_delay` | milliseconds |
 //! | `repeat_delay_saved` | milliseconds: the delay the settings application restores when key repeat is turned on again (turning it off writes `repeat_delay = 0`); Original, the server does not read it |
-//! | `caps_lock_hold` | milliseconds, 1 to [`CAPS_LOCK_HOLD_MAX_MS`] |
+//! | `caps_lock_hold` | milliseconds, 1 to [`cupertino_keyboard::repeat::CAPS_HOLD_MAX_MS`] |
 //! | `slow_keys_delay` | milliseconds, at least 1 |
 //! | `mouse_keys_max_speed` | points per tick, at least 1 |
 //! | `modifier_profile` | `cupertino`, `classic-pc` |
@@ -24,14 +24,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cupertino_keyboard::modifiers::Profile;
+use cupertino_keyboard::repeat::CAPS_HOLD_MAX_MS;
 
 use crate::conf::{self, parse_list, parse_switch, switch_text, Key, Problem};
 
 /// Environment variable that redirects the settings file.
 pub const KEYBOARD_CONF_ENV: &str = "CUPERTINO_KEYBOARD_CONFIG";
-
-/// Longest caps-lock press that the setting accepts as the hold duration (accepted 1 to 1500 ms).
-pub const CAPS_LOCK_HOLD_MAX_MS: u32 = cupertino_keyboard::repeat::CAPS_HOLD_MAX_MS;
 
 /// `~/` at the start of `path` replaced by `$HOME`.
 pub fn expand_home(path: &str) -> PathBuf {
@@ -274,10 +272,10 @@ const KEYS: &[Key<KeyboardSettings>] = &[
     field_key!(
         "caps_lock_hold",
         caps_lock_hold_ms,
-        |v: &str| ms(v).and_then(|n| if (1..=CAPS_LOCK_HOLD_MAX_MS).contains(&n) {
+        |v: &str| ms(v).and_then(|n| if (1..=CAPS_HOLD_MAX_MS).contains(&n) {
             Ok(n)
         } else {
-            Err(format!("expected 1 to {CAPS_LOCK_HOLD_MAX_MS} ms, got {n}"))
+            Err(format!("expected 1 to {CAPS_HOLD_MAX_MS} ms, got {n}"))
         }),
         number_ref
     ),

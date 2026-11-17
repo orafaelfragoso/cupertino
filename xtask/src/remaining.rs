@@ -1,5 +1,6 @@
 //! The remaining-work list of the layers check only shrinks: a line of `crates/cupertino-layers/remaining.txt` in the
-//! working tree that the file at the merge base does not hold is a new problem, and fails.
+//! working tree that the file at the merge base does not hold is a new problem. While [`GROWTH_FAILS`] is false, during
+//! the layered refactor, a new problem is reported and the check passes.
 //!
 //! An added line passes when the same change removes a line with the same `<layer> <rule> <crate>` (one removed line
 //! for each added one), as when a dependency or a file the line names is renamed, or when its rule is one the layers
@@ -8,6 +9,9 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Whether a line the merge base's list does not hold fails the check. False until the layered refactor's last wave
+/// (`docs/plans/layered-architecture.md`): its moves list problems on the way to fixing them.
+pub const GROWTH_FAILS: bool = false;
 /// The remaining-work file, relative to the repository root.
 const FILE: &str = "crates/cupertino-layers/remaining.txt";
 /// The sources of the layers check, which name every rule.
@@ -91,7 +95,12 @@ pub fn problems(root: &Path, base: &str) -> Result<Vec<String>, String> {
 /// The summary line of a run.
 pub fn summary(problems: &[String]) -> String {
     format!(
-        "remaining-work list: {} problems against the merge base",
-        problems.len()
+        "remaining-work list: {} {} against the merge base",
+        problems.len(),
+        if GROWTH_FAILS {
+            "problems"
+        } else {
+            "new lines, allowed during the refactor"
+        }
     )
 }

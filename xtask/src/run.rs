@@ -188,7 +188,7 @@ pub fn run_vendored(root: &Path) -> bool {
 }
 
 /// Runs the check that the remaining-work list only shrinks since `base` and prints its problems and summary; whether
-/// it passed.
+/// it passed, always while `remaining::GROWTH_FAILS` is false.
 pub fn run_remaining(root: &Path, base: &str) -> bool {
     match remaining::problems(root, base) {
         Ok(problems) => {
@@ -196,7 +196,7 @@ pub fn run_remaining(root: &Path, base: &str) -> bool {
                 eprintln!("{problem}");
             }
             eprintln!("{}", remaining::summary(&problems));
-            problems.is_empty()
+            problems.is_empty() || !remaining::GROWTH_FAILS
         }
         Err(error) => {
             eprintln!("remaining-work list: {error}");

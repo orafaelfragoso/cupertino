@@ -97,7 +97,8 @@ Further rules:
 
 `cargo run -p cupertino-layers` checks them all. The problems that crates still have are listed one per line in
 `crates/cupertino-layers/remaining.txt`: the check fails on a problem the list does not hold and on a line that is no
-longer a problem, so the list only shrinks, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again.
+longer a problem, and `cargo run -q -p cupertino-layers -- --write-remaining` writes it again. Until the layered
+refactor's last wave, a change may add lines (`cargo xtask remaining` reports them); after it the list only shrinks.
 The layers in `ENFORCED` in `cupertino-layers` are closed: none of their problems may be listed. Test code outside a
 crate's `tests/` is refused by the gate of `cargo xtask ci`. Keyboard layouts come from the system's libxkbcommon
 through the registry `xkbcommon` crate, the one Smithay uses too; the server keeps the last keymap that compiled when a

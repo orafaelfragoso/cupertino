@@ -12,13 +12,11 @@
 //!   workspace slide, overview zoom and show desktop as [`transitions::Placement`]s.
 //! * [`mesh`]: the common output, a vertex grid with texture coordinates.
 //! * [`ease`]: easing curves and the interruptible progress animator.
-//! * [`raster`]: a small CPU renderer of textured meshes used for tests and sample images.
 
 pub mod ease;
 pub mod funnel;
 pub mod mesh;
 pub mod minimize;
-pub mod raster;
 pub mod scale;
 pub mod space_slide;
 pub mod transitions;

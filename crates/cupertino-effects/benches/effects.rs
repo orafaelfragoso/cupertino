@@ -1,7 +1,9 @@
 //! Minimal dependency-free benchmark of the per-frame effect paths.
-use cupertino_effects::raster::{draw_mesh, window_test_pattern};
+#[path = "../tests/common/raster.rs"]
+mod raster;
 use cupertino_effects::*;
 use cupertino_geometry::Rect;
+use raster::{draw_mesh, window_test_pattern};
 use std::hint::black_box;
 use std::time::Instant;
 use tiny_skia::Pixmap;

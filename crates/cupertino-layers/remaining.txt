@@ -19,8 +19,6 @@ apps forbidden_edge cupertino-files -> cupertino-wayland-client normal
 apps forbidden_edge cupertino-settings -> cupertino-alsa normal
 apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
-models external_crate cupertino-effects -> tiny-skia normal
-models impure_source cupertino-effects examples/render_effects.rs std::fs
 platform external_crate cupertino-seat -> smithay normal
 shell disallowed_methods cupertino-control clippy.toml
 shell disallowed_methods cupertino-controlcenter clippy.toml

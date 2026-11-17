@@ -2,9 +2,11 @@
 //!
 //! `cargo run -p cupertino-effects --release --example render_effects`
 
-use cupertino_effects::raster::{contact_sheet, draw_mesh, draw_wireframe, window_test_pattern};
+#[path = "../tests/common/raster.rs"]
+mod raster;
 use cupertino_effects::*;
 use cupertino_geometry::Rect;
+use raster::{contact_sheet, draw_mesh, draw_wireframe, output_dir, window_test_pattern};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 const OUT_W: f32 = 1280.0;
@@ -82,8 +84,7 @@ fn frame(effect: &MinimizeEffect, tex: &Pixmap, p: f64, wire: bool) -> Pixmap {
 }
 
 fn main() {
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output");
-    std::fs::create_dir_all(&out).unwrap();
+    let out = output_dir();
     let window = Rect::new(220.0, 50.0, 560.0, 380.0);
     let slot = Rect::new(840.0, 720.0, 64.0, 64.0);
     let tex = window_test_pattern(560, 380);

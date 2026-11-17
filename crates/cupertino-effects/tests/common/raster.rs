@@ -4,7 +4,9 @@
 //! shared edges leave no seams), box-filtered and composited source-over onto the destination.
 //! Textures are sampled bilinearly with clamped coordinates. All pixmaps hold premultiplied RGBA.
 
-use crate::mesh::Mesh;
+#![allow(dead_code)] // each bench and example uses a part of this shared helper
+
+use cupertino_effects::Mesh;
 use tiny_skia::{
     Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform,
 };
@@ -274,4 +276,11 @@ pub fn contact_sheet(frames: &[Pixmap], cols: usize, pad: u32, background: Color
         );
     }
     sheet
+}
+
+/// The directory the sample images are written to, created if missing.
+pub fn output_dir() -> std::path::PathBuf {
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output");
+    std::fs::create_dir_all(&out).unwrap();
+    out
 }

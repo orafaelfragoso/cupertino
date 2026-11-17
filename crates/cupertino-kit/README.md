@@ -33,6 +33,9 @@ Each runs for the instance that asked, its result comes back to that UI thread a
 again on the UI thread. `kit::bus::connect` opens a D-Bus connection whose work the UI loop polls, with no executor
 thread: the connection comes as one message and its close as another. `kit::time` reads the session's local time
 (`local`, `now`) and turns a local date and time back into a moment (`from_local`), daylight saving time included.
+`kit::spawn` starts a program for the instance the thread runs for, and the instance's UI loop reaps it on its first
+turn after it ends (`app::each_turn`, which every `app::run` installs with `Runtime::with_each_turn`), reporting an
+unsuccessful exit on standard error; no thread waits for it.
 
 `app::run` and `app::options` start on the Cupertino theme from the installed theme data, and on
 `ThemeTokens::neutral` when there is none or it is unusable (one line on stderr says why), so an application runs on any

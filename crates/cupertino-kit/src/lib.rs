@@ -9,7 +9,7 @@ mod instance;
 pub mod task;
 pub mod time;
 
-pub use instance::{Entered, Instance};
+pub use instance::{spawn, Entered, Instance};
 
 pub use cupertino_geometry as geometry;
 pub use cupertino_theme::ui as theme;

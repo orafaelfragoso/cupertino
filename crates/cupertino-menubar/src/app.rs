@@ -1476,7 +1476,7 @@ impl App {
                 launch_name(&launch)
             ),
             Some(spec) => {
-                launch::spawn(PROCESS, spec.to_command());
+                cupertino_kit::spawn(PROCESS, spec.to_command());
             }
             None => eprintln!("{PROCESS}: {} has no command", launch_name(&launch)),
         }
@@ -1495,7 +1495,7 @@ impl App {
             Ok(None) => {
                 let mut command = std::process::Command::new(OPEN_COMMAND);
                 command.arg(file);
-                launch::spawn(PROCESS, command);
+                cupertino_kit::spawn(PROCESS, command);
             }
             Err(e) => eprintln!("{PROCESS}: cannot open {}: {e}", file.display()),
         }

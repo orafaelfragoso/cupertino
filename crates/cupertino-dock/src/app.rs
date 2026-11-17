@@ -4,7 +4,7 @@
 //! sends the dock's requests, places the bar, gives the surfaces the keyboard, starts programs, keeps the pins and
 //! loads the icons. Every surface is drawn by CupertinoKit.
 
-use cupertino_apps::launch::{spawn, OPEN_COMMAND};
+use cupertino_apps::launch::OPEN_COMMAND;
 use cupertino_assets::Assets;
 use cupertino_defaults::dock::DockSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
@@ -31,6 +31,7 @@ use cupertino_kit::controls::ImageSource;
 use cupertino_kit::core::{next_resource_id, Application, Command, Window};
 use cupertino_kit::platform::WindowSpec;
 use cupertino_kit::render::{ImageResource, PixelFormat};
+use cupertino_kit::spawn;
 use cupertino_shell_client::{
     Anchor, AppCommand, Corner, Dock as DockRole, DockChange, DockWindowIcon, Gesture,
     KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,

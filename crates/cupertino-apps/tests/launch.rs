@@ -108,10 +108,12 @@ fn a_file_of_a_type_without_a_handler_has_no_default_launch() {
 }
 
 #[test]
-fn spawning_reports_whether_the_program_started() {
-    assert!(!spawn(
+fn spawning_gives_the_started_program_to_its_caller() {
+    assert!(spawn(
         "test",
         std::process::Command::new("/nonexistent/cupertino-test-program")
-    ));
-    assert!(spawn("test", std::process::Command::new("true")));
+    )
+    .is_none());
+    let mut child = spawn("test", std::process::Command::new("true")).unwrap();
+    assert!(child.wait().unwrap().success());
 }

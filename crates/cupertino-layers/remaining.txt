@@ -128,7 +128,6 @@ shell forbidden_edge cupertino-screenshot -> cupertino-shell-client normal
 shell forbidden_edge cupertino-screenshot -> cupertino-wayland-client normal
 system starts_thread cupertino-apps src/activate.rs std::thread::Builder::spawn
 system starts_thread cupertino-apps src/catalogue.rs std::thread::Builder::spawn
-system starts_thread cupertino-apps src/launch.rs std::thread::spawn
 system starts_thread cupertino-defaults src/watch.rs std::thread::Builder::spawn
 system starts_thread cupertino-diagnostic-events src/emitter.rs std::thread::Builder::spawn
 system starts_thread cupertino-diagnostic-events src/profile.rs std::thread::Builder::spawn

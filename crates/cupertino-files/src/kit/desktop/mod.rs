@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cupertino_apps::{launch, Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
+use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_keyboard::modifiers::Profile;
 use cupertino_kit::controls::{Menu, MenuAnchor, MenuItem as KitItem, TextChange, TextField};
 use cupertino_kit::core::{
@@ -525,7 +525,7 @@ impl Model {
             command.env("XDG_ACTIVATION_TOKEN", &token);
             command.env("DESKTOP_STARTUP_ID", &token);
         }
-        launch::spawn(super::APP_ID, command);
+        cupertino_kit::spawn(super::APP_ID, command);
     }
 
     fn trash_selection(&mut self) {

@@ -6,8 +6,9 @@ use cupertino_diagnostic_events as diag;
 use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::process::{Child, Command};
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 thread_local! {
     /// The instance the calling thread runs for, while one is entered.
@@ -24,6 +25,8 @@ struct Shared {
     diag: Option<diag::Scope>,
     /// Its tasks running on the I/O pool now, changed only under the pool's lock.
     io_running: AtomicUsize,
+    /// The programs it started and has not reaped yet.
+    children: Mutex<Vec<Started>>,
 }
 
 impl fmt::Debug for Instance {
@@ -48,6 +51,7 @@ impl Instance {
             name: area.into(),
             diag: Some(diag::Scope::new(area)),
             io_running: AtomicUsize::new(0),
+            children: Mutex::new(Vec::new()),
         }))
     }
 
@@ -57,6 +61,7 @@ impl Instance {
             name: diag::profile::program().into(),
             diag: None,
             io_running: AtomicUsize::new(0),
+            children: Mutex::new(Vec::new()),
         }))
     }
 
@@ -87,6 +92,67 @@ impl Instance {
     pub(crate) fn io_running(&self) -> &AtomicUsize {
         &self.0.io_running
     }
+
+    /// Reaps the programs it started that have ended, each reported as [`spawn`] says.
+    pub(crate) fn reap(&self) {
+        let mut children = self
+            .0
+            .children
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        children.retain_mut(|started| match started.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                if !status.success() {
+                    eprintln!(
+                        "{}: {} exited with {status}",
+                        started.process, started.program
+                    );
+                }
+                false
+            }
+            Err(e) => {
+                eprintln!("{}: {}: {e}", started.process, started.program);
+                false
+            }
+        });
+    }
+}
+
+/// A program an instance started, until it is reaped.
+struct Started {
+    /// The name of the process that started it, which its problems are reported under.
+    process: Box<str>,
+    program: String,
+    child: Child,
+}
+
+/// Runs `command` detached from the calling thread's loop ([`cupertino_apps::launch::spawn`]) and hands it to the
+/// instance the thread runs for, whose UI loop reaps it on its first turn after it ends; no thread waits for it. False
+/// when it did not start. Problems, an unsuccessful exit included, are reported on standard error prefixed with
+/// `process`, the caller's name. On a thread that runs for no instance the program is still started and is not reaped,
+/// which is said on standard error.
+pub fn spawn(process: &str, command: Command) -> bool {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let Some(child) = cupertino_apps::launch::spawn(process, command) else {
+        return false;
+    };
+    match Instance::current() {
+        Some(instance) => instance
+            .0
+            .children
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Started {
+                process: process.into(),
+                program,
+                child,
+            }),
+        None => {
+            eprintln!("{process}: {program} is not reaped: no Kit instance runs on this thread")
+        }
+    }
+    true
 }
 
 /// A thread's time running for an [`Instance`]; dropping it, on the thread that entered, restores what it ran for

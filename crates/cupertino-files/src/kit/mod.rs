@@ -50,7 +50,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use cupertino_apps::{launch, MimeApps, MimeDatabase};
+use cupertino_apps::{MimeApps, MimeDatabase};
 use cupertino_kit::controls::{
     MenuAnchor, Navigation, Selection, SortOrder, SplitLayout, SplitPane, TextChange,
 };
@@ -2219,7 +2219,7 @@ impl Session {
                     Some(token) => spec.with_activation_token(token),
                     None => spec,
                 };
-                launch::spawn(APP_ID, spec.to_command());
+                cupertino_kit::spawn(APP_ID, spec.to_command());
             }
             Err(e) => self.failed(Action::Open, &[path], &e),
         }

@@ -11,7 +11,8 @@ use cupertino_theme::Theme;
 use cupertino_ui_core::layout::LayoutDirection;
 use cupertino_ui_core::platform::{PlatformError, SystemAppearance, WindowSystem};
 use cupertino_ui_core::{
-    Application, Command, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance, UiError,
+    Application, Command, EachTurn, MonotonicClock, Runtime, RuntimeOptions, ThemeForAppearance,
+    UiError,
 };
 use cupertino_ui_render::gpu::GpuConfig;
 use cupertino_ui_render::{CpuConfig, CpuRenderer};
@@ -97,6 +98,7 @@ pub fn run_on_with_appearance<A: Application>(
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
+        .with_each_turn(each_turn())
         .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
@@ -123,6 +125,7 @@ pub fn run_on_with<A: Application>(
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
+        .with_each_turn(each_turn())
         .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
@@ -147,6 +150,7 @@ pub fn run_lock_screen_on_with<A: Application>(
     Runtime::<A, _>::start(system, options, start)
         .with_theme_for(follow)
         .with_personal_refresh(personal.refresh())
+        .with_each_turn(each_turn())
         .timed(renderers)
         .run()
         .map_err(AppError::Runtime)
@@ -491,9 +495,6 @@ fn start_theme(preferences: ThemePreferences) -> Result<(ThemeTokens, Option<The
     })
 }
 
-/// The windows' renderers drawn on the process's GPU while it draws there (the window system's GPU path chose it and
-/// its device is ready), with the CPU renderer otherwise: before the switch, after a loss, and for a renderer the
-/// device cannot make.
 /// The calling thread runs for the instance it entered, or for the process's own when it entered none, until the
 /// guard is dropped.
 fn instance() -> Entered {
@@ -502,6 +503,21 @@ fn instance() -> Entered {
         .enter()
 }
 
+/// What every `run` here does on each turn of its loop ([`Runtime::with_each_turn`]) for the instance the calling
+/// thread runs for: it reaps the programs the instance started ([`crate::spawn`]) that have ended. A runtime driven
+/// otherwise, such as a test's, does the same with it.
+pub fn each_turn() -> EachTurn {
+    let instance = Instance::current();
+    Box::new(move || {
+        if let Some(instance) = &instance {
+            instance.reap();
+        }
+    })
+}
+
+/// The windows' renderers drawn on the process's GPU while it draws there (the window system's GPU path chose it and
+/// its device is ready), with the CPU renderer otherwise: before the switch, after a loss, and for a renderer the
+/// device cannot make.
 fn renderers_on_gpu(options: &mut RuntimeOptions, gpu: GpuRenderers) {
     let text = Arc::clone(&options.text);
     let mut cpu = std::mem::replace(

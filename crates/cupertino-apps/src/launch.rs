@@ -1,12 +1,12 @@
 //! Starting programs from a shell process (the dock, the menu bar): what to start, the command it becomes with the
-//! activation token the process fetched for it, and running that command detached. The token itself is the
+//! activation token the process fetched for it, and starting that command for the caller to reap. The token itself is the
 //! process's to request, on its own Wayland connection.
 
 use crate::entry::DesktopEntry;
 use crate::exec::{command_for_entry, CommandSpec};
 use crate::mimeapps::MimeApps;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 
 /// What opens a target no installed application handles: the session's default handler of its type.
 pub const OPEN_COMMAND: &str = "xdg-open";
@@ -47,25 +47,15 @@ pub fn open_with_default(apps: &MimeApps, file: &Path) -> Option<Launch> {
     })
 }
 
-/// Run `command` detached from the caller's loop; its exit is reaped on a thread. False when it did not start.
-/// Problems, an unsuccessful exit included, are reported on standard error prefixed with `process`, the caller's name.
-pub fn spawn(process: &str, mut command: Command) -> bool {
-    let program = command.get_program().to_string_lossy().into_owned();
+/// Starts `command`, whose exit its caller reaps; `None` when it did not start, which is reported on standard error
+/// prefixed with `process`, the caller's name.
+pub fn spawn(process: &str, mut command: Command) -> Option<Child> {
     match command.spawn() {
-        Ok(mut child) => {
-            let process = process.to_owned();
-            std::thread::spawn(move || match child.wait() {
-                Ok(status) if !status.success() => {
-                    eprintln!("{process}: {program} exited with {status}")
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("{process}: {program}: {e}"),
-            });
-            true
-        }
+        Ok(child) => Some(child),
         Err(e) => {
+            let program = command.get_program().to_string_lossy();
             eprintln!("{process}: cannot run {program}: {e}");
-            false
+            None
         }
     }
 }

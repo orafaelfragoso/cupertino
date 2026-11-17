@@ -64,6 +64,10 @@ pub type ThemeForAppearance = Box<dyn FnMut(&SystemAppearance) -> Arc<ThemeToken
 /// was last asked, with [`crate::set_personal`] already told the other choices.
 pub type PersonalRefresh = Box<dyn FnMut() -> Option<Arc<ThemeTokens>>>;
 
+/// Called on each turn of the loop, after the window system was read: the application's runner keeps up the work it holds
+/// outside the runtime (the processes it started, reaped as they end).
+pub type EachTurn = Box<dyn FnMut()>;
+
 /// How a runtime is set up besides its window system.
 pub struct RuntimeOptions {
     pub theme: Arc<ThemeTokens>,
@@ -422,6 +426,7 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     /// Some window pinned a subtree to an appearance: the pinned themes follow the session from then on.
     pins_seen: bool,
     personal_refresh: Option<PersonalRefresh>,
+    each_turn: Option<EachTurn>,
     /// Follows each scroll event to the screen, when asked ([`Runtime::with_scroll_timing`]).
     scroll_timing: Option<crate::scroll_timing::ScrollTimings>,
     /// Times every frame phase by phase, when asked ([`Runtime::with_frame_timing`]).
@@ -500,6 +505,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             pinned_from: None,
             pins_seen: false,
             personal_refresh: None,
+            each_turn: None,
             scroll_timing: None,
             frame_timing: None,
             tokens: HashMap::new(),
@@ -555,6 +561,17 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     pub fn with_personal_refresh(mut self, refresh: PersonalRefresh) -> Self {
         self.personal_refresh = Some(refresh);
         self
+    }
+
+    /// Call `each_turn` on each turn of the loop, after the window system was read.
+    pub fn with_each_turn(mut self, each_turn: EachTurn) -> Self {
+        self.set_each_turn(each_turn);
+        self
+    }
+
+    /// [`Runtime::with_each_turn`] on a runtime already made.
+    pub fn set_each_turn(&mut self, each_turn: EachTurn) {
+        self.each_turn = Some(each_turn);
     }
 
     /// The theme every window is drawn with.
@@ -652,6 +669,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             self.system
                 .dispatch(Some(Duration::ZERO), &mut self.events)
                 .map_err(UiError::Platform)?;
+            if let Some(each_turn) = self.each_turn.as_mut() {
+                each_turn();
+            }
             if !self.ready() {
                 let pending = self.pending();
                 return Ok(if pending == Pending::default() {

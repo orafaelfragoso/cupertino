@@ -262,6 +262,8 @@ pub fn listen<T: Send + 'static, M: Send + 'static>(
 
 /// Connect, serve the control interface and run until a connection or thread fails.
 pub fn run(options: &SessionOptions) -> Result<Ended> {
+    // this thread is the session's UI thread from here: the applications reopened before its loop starts are its to reap
+    let _instance = cupertino_kit::Instance::new("login_ui").enter();
     let user = User::current()?;
     let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), SessionApp::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
@@ -588,7 +590,7 @@ fn reopen_applications(path: Option<&Path>, logind: &Logind, login_items: &HashS
         |_, command| {
             let mut command = command.to_command();
             command.stdin(Stdio::null());
-            cupertino_apps::launch::spawn("cupertino-login", command)
+            cupertino_kit::spawn("cupertino-login", command)
         },
     );
     for id in &report.started {

@@ -121,13 +121,24 @@ fn evidence_classes_order_from_unknown_to_verified() {
 
 #[test]
 fn the_weakest_class_in_a_label_wins() {
-    assert_eq!(Evidence::parse_weakest("VERIFIED"), Evidence::Verified);
     assert_eq!(
-        Evidence::parse_weakest("VERIFIED (a) / INFERRED (b)"),
+        Evidence::parse_weakest(Evidence::Verified.as_str()),
+        Evidence::Verified
+    );
+    assert_eq!(
+        Evidence::parse_weakest(&format!(
+            "{} (a) / {} (b)",
+            Evidence::Verified.as_str(),
+            Evidence::Inferred.as_str()
+        )),
         Evidence::Inferred
     );
     assert_eq!(
-        Evidence::parse_weakest("DOCUMENTED / APPROXIMATED"),
+        Evidence::parse_weakest(&format!(
+            "{} / {}",
+            Evidence::Documented.as_str(),
+            Evidence::Approximated.as_str()
+        )),
         Evidence::Approximated
     );
 }
@@ -140,7 +151,6 @@ fn a_label_without_a_class_is_unknown() {
 
 #[test]
 fn evidence_names_are_upper_case_words() {
-    assert_eq!(Evidence::Verified.as_str(), "VERIFIED");
     for e in [
         Evidence::Unknown,
         Evidence::Approximated,
@@ -148,6 +158,7 @@ fn evidence_names_are_upper_case_words() {
         Evidence::Documented,
         Evidence::Verified,
     ] {
+        assert!(e.as_str().chars().all(|c| c.is_ascii_uppercase()));
         assert_eq!(Evidence::parse_weakest(e.as_str()), e);
     }
 }

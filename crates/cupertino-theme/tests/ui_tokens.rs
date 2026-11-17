@@ -9,9 +9,18 @@ use cupertino_theme::ui::{
 };
 use cupertino_theme::{Appearance, Color, ControlSize, Theme};
 
-const TOKENS: &str = include_str!("../../../data/theme/tokens.json");
-const MATERIALS: &str = include_str!("../../../data/theme/materials.json");
-const ANIMATIONS: &str = include_str!("../../../data/theme/animations.json");
+const TOKENS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../data/theme/tokens.json"
+));
+const MATERIALS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../data/theme/materials.json"
+));
+const ANIMATIONS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../data/theme/animations.json"
+));
 
 fn prefs(appearance: Appearance) -> ThemePreferences {
     ThemePreferences {

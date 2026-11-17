@@ -739,7 +739,7 @@ Gate:
         `docs/architecture/contracts.yaml`
         (`a_presentation_fades_moves_and_scales_all_its_surface_draws_on_the_server_clock`,
         `a_presentation_is_a_layer_shell_surface_s_own_and_has_four_properties`).
-  - [x] The client side of the protocol on the transport (`cupertino-protocol-app`: `Layers`, `Layer`, the events as
+  - [x] The client side of the protocol on the transport (`cupertino_wayland_client::app`: `Layers`, `Layer`, the events as
         `AppEvent`s) and the window system's presentations: `WindowRequest::Present` with
         `Capabilities::present_animation`, committed without a buffer, or with the first frame of a window the update
         opens (`a_request_for_a_window_the_view_opens_goes_before_its_first_frame`); the animations followed through

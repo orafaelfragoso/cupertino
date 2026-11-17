@@ -636,14 +636,20 @@ seat`, as in W1.T.
 **Owns** `app-protocols semantics`. **Touches** `control protocol-app server shell-client ui-core ui-platform`.
 **After** W2.close.
 
+- [x] (ea73318f8) `cupertino-semantics` is `cupertino_app_protocols::semantics`; its directory is gone.
+
 #### W3.2 `cupertino-wayland-client` absorbs `cupertino-protocol-app` (S)
 
 **Owns** `wayland-client protocol-app`. **Touches** `controlcenter launcher menubar notifications polkit-agent portal
 shell-client ui-menus ui-wayland`. **After** W3.1.
 
+- [x] (75e3d9677) `cupertino-protocol-app` is `cupertino_wayland_client::app`; its directory is gone.
+
 #### W3.3 Conformance of `protocol`, `transport` (S)
 
 **Owns** layer lines and dependencies of `protocols login-ipc shell-client`. **After** W3.2.
+
+- [x] (75e3d9677) No `protocol` or `transport` line was left in `remaining.txt` after W3.2; no change was needed.
 
 #### W3.T Tests of wave 3's crates
 

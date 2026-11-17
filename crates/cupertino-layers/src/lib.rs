@@ -223,7 +223,7 @@ pub const SEPARATE_PROGRAMS: &[&str] = &[
 ];
 
 /// Crates that must not reach these crates through any chain of normal dependencies, external crates included. A name
-/// ending in `*` stands for every crate it starts. The public transport speaks standard protocols only, the public
+/// ending in `*` stands for every crate it starts. The public transport speaks standard and the public Cupertino protocols only, the public
 /// protocol crate stays off the private protocols, the toolkit stays off the private protocols and the privileged shell
 /// client, and the toolkit's renderer stays off the window system.
 pub const WINDOW_SYSTEM: &[(&str, &[&str])] = &[

@@ -25,9 +25,9 @@
 //! glass under it serving both.
 
 use cupertino_geometry::{Insets, Rect};
+use cupertino_theme::ui::{Color, Surface};
 use cupertino_ui_core::{Glass, PaintCx};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{Color, Surface};
 
 /// A glass surface of the window's chrome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -207,7 +207,7 @@ const TOOLBAR_SHADE_REACH: f64 = TOOLBAR_SHADE_OFFSET + 3.0 * TOOLBAR_SHADE_BLUR
 /// The rim of a floating control's glass as a share of black `(sides, ends)`, or none: the firmer one with Increase
 /// Contrast in the light appearance, else a toolbar control's outline ([`TOOLBAR_RIM_LIGHT`], [`TOOLBAR_RIM_DARK`]);
 /// any other glass draws no outline of its own.
-fn edge_rim(theme: &cupertino_ui_theme::ThemeTokens, role: GlassRole) -> Option<(f32, f32)> {
+fn edge_rim(theme: &cupertino_theme::ui::ThemeTokens, role: GlassRole) -> Option<(f32, f32)> {
     let appearance = theme.preferences.appearance;
     if !appearance.is_dark() && appearance.is_high_contrast() {
         Some((EDGE_RIM_CONTRAST_SIDES, EDGE_RIM_CONTRAST_ENDS))
@@ -343,7 +343,7 @@ const BUTTON_RIM_MIDDLE: f32 = 0.3;
 const BUTTON_SHADE_LIGHT: f32 = 0.12;
 
 /// The colours of a translucent button's body and rim in `theme`.
-pub(crate) fn button_body_colors(theme: &cupertino_ui_theme::ThemeTokens) -> (Color, Color) {
+pub(crate) fn button_body_colors(theme: &cupertino_theme::ui::ThemeTokens) -> (Color, Color) {
     let dark = theme.preferences.appearance.is_dark();
     let contrast = theme.preferences.appearance.is_high_contrast();
     let opaque = theme.preferences.reduce_transparency;

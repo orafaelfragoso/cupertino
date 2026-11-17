@@ -6,7 +6,8 @@ tool that checks a pack. A pack is a directory with a `manifest.json`. The origi
 1024-unit source canvases, glass app tiles, sky-blue folders with recessed marks, folded white documents and neutral ribbed bins.
 The pack supplies 16/32-pixel optical editions and 64–1024-pixel master renditions. Lettering is outlined geometry.
 `data/assets/cupertino/CREDITS.md` describes regeneration through the same native SVG loader the shell uses. With no
-pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used.
+pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used. It also finds the
+theme data and loads the theme from it (`theme`; `cupertino-theme` parses it).
 
 ## Manifest
 
@@ -104,6 +105,7 @@ Inter has no keypad Enter symbol (U+2324), so the menu bar names that key `Enter
 | `Assets::credits`, `Assets::roots | the packs' directories, names and credits files |
 | `RASTER_NAMES`, `SYMBOL_NAMES`, `CURSOR_NAMES` | the logical names the shell looks up |
 | `AssetError` | `Read`, `Manifest`, `Font` (raised by the text renderers when no usable face is left) |
+| `theme::load()`, `theme::from_dir(dir)` | the `cupertino_theme::Theme` of the theme data files (`tokens.json`, `materials.json`, `animations.json`): `load` reads them from `theme::spec_dir()`, which is `$CUPERTINO_SPEC_DIR` (`theme::SPEC_DIR_ENV`) when set and not empty, else the directory built in: `$CUPERTINO_THEME_DIR` of the build (packages set `/usr/share/cupertino/theme`), otherwise the checkout's `data/theme` (`build.rs`). A file that cannot be read is `cupertino_theme::Error::Io` with its path |
 
 ## Checking a pack
 

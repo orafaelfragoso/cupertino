@@ -91,7 +91,7 @@ pub(super) type TagColors = Rc<HashMap<TagColor, (Option<Color>, Option<Color>)>
 /// The dots' colours of the installed theme; none when it cannot be read, and the dots are then drawn in the secondary
 /// text colour.
 pub(super) fn tag_colors() -> TagColors {
-    let theme = cupertino_theme::Theme::load()
+    let theme = cupertino_assets::theme::load()
         .map_err(|e| eprintln!("cupertino-files: no theme for the tags' colours: {e}"))
         .ok();
     let colors = TagColor::ALL

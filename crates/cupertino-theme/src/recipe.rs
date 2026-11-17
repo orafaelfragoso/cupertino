@@ -17,7 +17,6 @@ use crate::color::Color;
 use crate::error::{Error, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ColorOp {
@@ -596,15 +595,6 @@ impl MaterialLibrary {
             return Err(Error::NotFound("catalogs".into()));
         }
         Ok(Self { catalogs })
-    }
-
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Self::from_str(&text)
     }
 
     pub fn materials(&self, catalog: Catalog) -> Vec<&str> {

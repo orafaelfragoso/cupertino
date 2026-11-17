@@ -1,11 +1,10 @@
 //! Pictures of a window for a person to compare with a reference: one PNG per appearance, at a backing scale.
 
 use crate::{DriverError, TestDriver};
-use cupertino_theme::Theme;
+use cupertino_theme::ui::{Appearance, ThemeTokens};
 use cupertino_ui_core::{Application, Clock};
 use cupertino_ui_platform::{PlatformError, WindowEvent, WindowId};
 use cupertino_ui_render::PixelFormat;
-use cupertino_ui_theme::{Appearance, ThemeTokens};
 use std::fmt;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -140,7 +139,8 @@ impl<A: Application> TestDriver<A> {
             message: e.to_string(),
         })?;
         let theme = Arc::clone(self.runtime.theme());
-        let data = Theme::from_dir(THEME_DATA).map_err(|e| LookError::Theme(e.to_string()))?;
+        let data = cupertino_assets::theme::from_dir(THEME_DATA)
+            .map_err(|e| LookError::Theme(e.to_string()))?;
         self.window_system_mut()
             .enqueue_window(window, WindowEvent::Scale(scale))?;
         let mut written = Vec::new();

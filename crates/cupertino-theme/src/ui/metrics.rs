@@ -1,12 +1,12 @@
 //! The Cupertino theme's regular control geometry, type roles, focus ring and caret timing. Control geometry comes
-//! from `cupertino_theme`'s control size table (not from the theme data), body and caption sizes
+//! from the control size table (`crate::control_sizes`) (not from the theme data), body and caption sizes
 //! from the theme's type scale; every other value is a design value of its own (approximate).
 
-use crate::{
+use crate::ui::{
     ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, Size, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
 };
-use cupertino_theme::{Result, Theme};
+use crate::{Result, Theme};
 
 /// The smallest pointer and touch target, reached with layout padding.
 const MIN_TARGET: f64 = 24.0;

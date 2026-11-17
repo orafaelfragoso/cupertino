@@ -12,11 +12,15 @@
 //! packs. [`Assets::open`] is the strict check of one pack, for pack authors and tests. Tests and package builds that
 //! must not depend on what is installed set `CUPERTINO_ASSET_SEARCH_PATH` ([`SEARCH_PATH_ENV`]), which replaces the whole
 //! list.
+//!
+//! [`theme`] finds the theme data (`$CUPERTINO_SPEC_DIR`, else the directory built in: `$CUPERTINO_THEME_DIR` of the
+//! build or the checkout's `data/theme`) and loads a `cupertino_theme::Theme` from it.
 
 mod error;
 mod manifest;
 mod name;
 mod report;
+pub mod theme;
 
 pub use error::AssetError;
 pub use manifest::{FontRole, RasterIcon};

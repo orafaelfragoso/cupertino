@@ -126,7 +126,7 @@ struct App {
 /// Connect, take the prompter's names and serve until a connection fails.
 pub fn run() -> Result<()> {
     let assets = Assets::discover();
-    let theme = Theme::load()?;
+    let theme = cupertino_assets::theme::load()?;
     let painter = Painter::new(
         Palette::from_tokens(&theme.tokens, Appearance::Light)?,
         &assets,

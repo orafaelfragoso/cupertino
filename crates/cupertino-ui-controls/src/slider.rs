@@ -4,6 +4,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::motion::{Curve, Tween};
 use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
+use cupertino_theme::ui::{slider_geometry, Color, ColorRole, ThemeTokens};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -13,7 +14,6 @@ use cupertino_ui_layout::{
 };
 use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_render::{Effect, PaintOp};
-use cupertino_ui_theme::{slider_geometry, Color, ColorRole, ThemeTokens};
 
 const HOME: Keysym = Keysym(0xff50);
 const LEFT: Keysym = Keysym(0xff51);

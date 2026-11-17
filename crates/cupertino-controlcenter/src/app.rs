@@ -35,7 +35,6 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     ShellEvent,
 };
-use cupertino_theme::Theme;
 use cupertino_ui_wayland::{RoleEvent, SurfaceRoles, WaylandWindowSystem};
 use cupertino_wayland_client::{
     Connection, Error as WaylandError, ExtensionEvent, OutputId, SurfaceId,
@@ -915,7 +914,10 @@ fn output_gone<O: PartialEq>(output: Option<O>, outputs: &[(O, bool)]) -> bool {
 /// Connect, claim the bus name and serve until the connection or the bus goes. The panel opens on an output only when
 /// it is toggled, so the process also starts and keeps running while the server has no output.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
-    let menu_bar = Theme::load()?.shapes.menu_bar_height.ceil() as i32;
+    let menu_bar = cupertino_assets::theme::load()?
+        .shapes
+        .menu_bar_height
+        .ceil() as i32;
     let mut system = WaylandWindowSystem::connect_as(Profile::cupertino(), Panel::RENDERER)
         .map_err(|e| format!("cannot connect to the Wayland display: {e:?}"))?;
     let appearance = system.appearance().unwrap_or_default();

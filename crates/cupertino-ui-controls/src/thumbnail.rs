@@ -5,6 +5,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::ThumbnailTile;
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
@@ -12,7 +13,6 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_render::{PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextAlign, TextStyle};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 
 /// Room around the picture for the ring of the chosen one, which lies outside it.
 const RING_ROOM: f64 = 3.0;

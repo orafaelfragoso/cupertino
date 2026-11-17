@@ -8,6 +8,8 @@ use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant};
+use cupertino_theme::ui::{FaceTone, ThemeTokens};
 use cupertino_ui_layout::{ContainerKind, LayoutDirection};
 use cupertino_ui_layout::{IdMap, IdSet};
 use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
@@ -15,8 +17,6 @@ use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Layer, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
 };
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
-use cupertino_ui_theme::{FaceTone, ThemeTokens};
 use std::sync::Arc;
 
 struct Painted {
@@ -98,7 +98,7 @@ fn face(tone: GlassTone) -> Option<FaceTone> {
     }
 }
 
-/// `env` with the theme of text on glass of `tone` ([`ThemeTokens::on_glass`](cupertino_ui_theme::ThemeTokens)).
+/// `env` with the theme of text on glass of `tone` ([`ThemeTokens::on_glass`](cupertino_theme::ui::ThemeTokens)).
 fn glass_environment(env: &Environment, tone: GlassTone) -> Environment {
     Environment {
         theme: Arc::new(env.theme.on_glass(face(tone))),

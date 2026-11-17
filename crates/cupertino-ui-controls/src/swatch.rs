@@ -4,6 +4,7 @@
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
@@ -11,7 +12,6 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_render::{GradientStop, Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextAlign, TextStyle};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 
 /// A look the desktop can have, as a picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

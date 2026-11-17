@@ -85,7 +85,7 @@ fn main() {
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("output");
     std::fs::create_dir_all(&out).unwrap();
     let assets = Assets::discover();
-    let theme = Theme::load().expect("specification files");
+    let theme = cupertino_assets::theme::load().expect("specification files");
     let mut shadows = ShadowRasterizer::new();
     let title = "Document — Draft".to_string();
     let states: Vec<(&str, DecorationState)> = vec![

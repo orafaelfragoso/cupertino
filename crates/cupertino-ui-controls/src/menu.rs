@@ -20,6 +20,7 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_menu_model::tracking::{
     Edge, Release, SubmenuAim, Tracking, Under, SUBMENU_OPEN_DELAY, TRACKING_INTERVAL,
 };
+use cupertino_theme::ui::{Color, ColorRole, StateVariant, Surface};
 use cupertino_theme::ControlFamily;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
@@ -34,7 +35,6 @@ use cupertino_ui_platform::{
     DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent, WindowSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Sampling, Shape};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant, Surface};
 use std::cell::RefCell;
 use std::rc::Rc;
 

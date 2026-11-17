@@ -6,6 +6,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::scroll;
 use crate::{IconTile, Scroller, Stack, TileSidebar, TileSidebarItem};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Event, EventCx, FocusTarget, Key,
     MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
@@ -17,7 +18,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
 use cupertino_ui_render::{PaintOp, Sampling, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
-use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::rc::Rc;
 
 const HOME: Keysym = Keysym(0xff50);
@@ -409,7 +409,7 @@ impl<M: 'static> TileRow<M> {
         cx: &mut PaintCx<'_>,
         chrome: Rect,
         rtl: bool,
-        color: cupertino_ui_theme::Color,
+        color: cupertino_theme::ui::Color,
     ) {
         let Some(account) = &self.item.account else {
             return;
@@ -449,7 +449,7 @@ impl<M: 'static> TileRow<M> {
             None => {
                 let (top, _) = crate::form::tile_shades(self.item.tile);
                 look::fill(cx, disc, radius, Some(crate::form::rgb(top)));
-                let white = cupertino_ui_theme::Color::new(1.0, 1.0, 1.0, 1.0);
+                let white = cupertino_theme::ui::Color::new(1.0, 1.0, 1.0, 1.0);
                 if let Some(layout) = sized_label(cx, &account.initials, ACCOUNT_INITIALS_SIZE, 600)
                 {
                     let origin = Point::new(

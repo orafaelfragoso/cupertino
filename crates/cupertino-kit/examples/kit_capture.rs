@@ -58,7 +58,6 @@ use cupertino_kit::prelude::*;
 use cupertino_kit::render::{GradientStop, Paint, PaintOp, PixelFormat, Shape};
 use cupertino_kit::text::{AttributedText, ContentPurpose, TextStyle};
 use cupertino_kit::theme::{Color, ColorRole, ControlSize, ThemeTokens};
-use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
 
@@ -900,7 +899,7 @@ fn draw_with<A: Application>(
         reduce_motion: false,
         steady_caret: false,
     });
-    let theme = Theme::load().map_err(|e| e.to_string())?;
+    let theme = cupertino_assets::theme::load().map_err(|e| e.to_string())?;
     let mut tokens = ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?;
     tune(&mut tokens);
     options.theme = Arc::new(tokens);

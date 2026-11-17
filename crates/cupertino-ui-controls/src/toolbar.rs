@@ -12,6 +12,7 @@ use crate::icon::symbol;
 use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Event,
     EventCx, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
@@ -23,7 +24,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphStyle, TextStyle, Wrap};
-use cupertino_ui_theme::{Color, ColorRole};
 
 /// The toolbar row's height: the controls lie in its middle.
 pub const TOOLBAR_ROW: f64 = 52.0;
@@ -588,7 +588,7 @@ impl<M: 'static> Widget<M> for Capsule<M> {
             .colors
             .get(
                 ColorRole::Separator,
-                cupertino_ui_theme::StateVariant::NORMAL,
+                cupertino_theme::ui::StateVariant::NORMAL,
             )
             .map(|c| divider_color(&theme, c));
         for x in self.divider_positions() {
@@ -621,7 +621,7 @@ impl<M: 'static> Widget<M> for Capsule<M> {
 }
 
 /// The colour of a chosen segment's pill, or of a pressed one's.
-fn pill_color(theme: &cupertino_ui_theme::ThemeTokens, chosen: bool) -> Color {
+fn pill_color(theme: &cupertino_theme::ui::ThemeTokens, chosen: bool) -> Color {
     let dark = theme.preferences.appearance.is_dark();
     match (dark, chosen) {
         (true, true) => Color::new(1.0, 1.0, 1.0, 0.118),
@@ -637,7 +637,7 @@ const DIVIDER_LIGHT: f32 = 0.4;
 
 /// A divider is drawn as strong as the disabled glyphs: a share of white over the dark glass, of black over the light
 /// one; with Increase Contrast the theme's separator, made a little stronger over glass.
-fn divider_color(theme: &cupertino_ui_theme::ThemeTokens, separator: Color) -> Color {
+fn divider_color(theme: &cupertino_theme::ui::ThemeTokens, separator: Color) -> Color {
     let appearance = theme.preferences.appearance;
     if appearance.is_dark() {
         Color::new(1.0, 1.0, 1.0, 0.25)
@@ -983,8 +983,8 @@ const TOOLBAR_TITLE_ALPHA: f32 = 0.76;
 
 /// A glyph's colour, and the title's: the label colour; dimmed when disabled, and the faintest text colour in a window
 /// that is not active, where the toolbar recedes.
-fn glyph_color(theme: &cupertino_ui_theme::ThemeTokens, state: &ControlState) -> Color {
-    let normal = cupertino_ui_theme::StateVariant::NORMAL;
+fn glyph_color(theme: &cupertino_theme::ui::ThemeTokens, state: &ControlState) -> Color {
+    let normal = cupertino_theme::ui::StateVariant::NORMAL;
     let role = if !state.enabled {
         ColorRole::DisabledControlText
     } else if !state.window_active {

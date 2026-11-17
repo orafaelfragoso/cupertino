@@ -13,6 +13,7 @@ use crate::{
     Scroller, Selection, SortOrder, TableView, Text, TextRole, TreeItem, TreeToggle, TreeView,
 };
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Event, EventCx, FocusTarget, Key,
     MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
@@ -24,7 +25,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent, Timestamp};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
-use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::ops::Range;
 use std::rc::Rc;
 

@@ -41,7 +41,6 @@ use cupertino_login::view::{
     GREETER_TITLE, LOCKED_TITLE, LOCK_APP_ID,
 };
 use cupertino_login::wallpaper::Source;
-use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntSize, Pixmap};
 
@@ -354,7 +353,7 @@ fn draw(look: Look, scale: f32, wallpaper: Source, field: FieldState) -> Result<
         reduce_motion: false,
         steady_caret: true,
     });
-    let theme = Theme::load().map_err(|e| e.to_string())?;
+    let theme = cupertino_assets::theme::load().map_err(|e| e.to_string())?;
     let tokens = ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?;
     options.theme = Arc::new(tokens);
     GROUND.set(Some((wallpaper, Arc::clone(&options.text))));

@@ -4,13 +4,13 @@
 
 use crate::look;
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_ui_core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use cupertino_ui_text::{AttributedText, ParagraphStyle, TextAlign, TextStyle};
-use cupertino_ui_theme::{Color, ColorRole, StateVariant};
 
 /// One bar.
 #[derive(Clone, Copy, Debug, PartialEq)]

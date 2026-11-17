@@ -6,6 +6,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::scroll;
 use crate::{Handler, Scroller, Sidebar, SidebarAccessory, SidebarItem, SidebarLook};
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, Action, Change, ControlState, Element, Environment, Event, EventCx,
     FocusTarget, Key, MeasureCx, PaintCx, Phase, Propagation, Role, SemanticsCx, Widget,
@@ -17,7 +18,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{KeyEvent, Keysym, Mods, MouseButton, PointerEvent};
 use cupertino_ui_render::{FillRule, Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::{AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle};
-use cupertino_ui_theme::{ColorRole, StateVariant};
 use std::rc::Rc;
 
 const HOME: Keysym = Keysym(0xff50);
@@ -739,7 +739,7 @@ fn row_label(env: &Environment, text: &str, weight: Option<u16>) -> Option<Parag
 
 /// The spokes of an activity indicator centred on `centre`, the brightest turning around once in
 /// [`ACTIVITY_TURN_NS`] and the others fading behind it; still when motion is reduced.
-fn paint_activity(cx: &mut PaintCx<'_>, centre: Point, color: cupertino_ui_theme::Color) {
+fn paint_activity(cx: &mut PaintCx<'_>, centre: Point, color: cupertino_theme::ui::Color) {
     let lead = if cx.env().theme.motion.reduce {
         0
     } else {
@@ -763,7 +763,7 @@ fn paint_activity(cx: &mut PaintCx<'_>, centre: Point, color: cupertino_ui_theme
                 fill_rule: FillRule::NonZero,
             },
             width: ACTIVITY_SPOKE_WIDTH,
-            paint: Paint::Solid(cupertino_ui_theme::Color {
+            paint: Paint::Solid(cupertino_theme::ui::Color {
                 a: color.a * fade,
                 ..color
             }),

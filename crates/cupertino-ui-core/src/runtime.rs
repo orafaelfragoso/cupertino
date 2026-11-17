@@ -26,6 +26,7 @@ use crate::{
 };
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_menu_model::ActionName;
+use cupertino_theme::ui::{Color, Surface, ThemeTokens};
 use cupertino_ui_layout::{
     layout, layout_cached, Constraints, LayoutCache, LayoutDirection, LayoutOptions, LayoutResult,
     LayoutStats,
@@ -43,7 +44,6 @@ use cupertino_ui_render::{
     RenderRequest, UiRenderer,
 };
 use cupertino_ui_text::TextSystem;
-use cupertino_ui_theme::{Color, Surface, ThemeTokens};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -2954,13 +2954,18 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 // of what a node's cached paint is keyed on
                 w.painter.forget_nodes();
             }
-            cupertino_ui_theme::set_activation(w.activation_progress(now));
+            let progress = w.activation_progress(now);
+            let crossing = (progress < 1.0).then(|| activating(&w.env, pinned, progress));
+            let (env, pinned) = match &crossing {
+                Some((env, pinned)) => (env, pinned),
+                None => (&w.env, pinned),
+            };
             let mut painting = w.painter.paint(
                 tree,
                 root,
                 &w.geometry,
                 &PaintInput {
-                    env: &w.env,
+                    env,
                     focus: w.focus.node(),
                     focus_visible: w.focus.visible(),
                     window_active: w.active || w.keyboard_in_popup,
@@ -2974,7 +2979,6 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     pinned,
                 },
             );
-            cupertino_ui_theme::set_activation(1.0);
             if let Some(fade) = w.fade {
                 fade::dim(&mut painting.list, fade.opacity);
                 if let Some(into) = fade.into {
@@ -3886,6 +3890,31 @@ fn pinned_themes(
     let pinned = [false, true].map(|dark| Some(theme_for(&SystemAppearance { dark, ..session })));
     theme_for(&session);
     pinned
+}
+
+/// `env` and the `pinned` themes with their colours `progress` of the way from a window's inactive colours to its
+/// active ones ([`ColorTokens::set_activation`](cupertino_theme::ui::ColorTokens::set_activation)), for the paint of a
+/// window that just became active.
+fn activating(
+    env: &Environment,
+    pinned: &[Option<Arc<ThemeTokens>>; 2],
+    progress: f32,
+) -> (Environment, [Option<Arc<ThemeTokens>>; 2]) {
+    let cross = |theme: &ThemeTokens| {
+        let mut theme = theme.clone();
+        theme.colors.set_activation(progress);
+        Arc::new(theme)
+    };
+    (
+        Environment {
+            theme: cross(&env.theme),
+            ..env.clone()
+        },
+        [
+            pinned[0].as_deref().map(cross),
+            pinned[1].as_deref().map(cross),
+        ],
+    )
 }
 
 /// The session's appearance and display options as `theme` was made for them.

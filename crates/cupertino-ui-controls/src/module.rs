@@ -3,6 +3,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::{BatteryMeter, ModuleLayout, ModuleToggle, Tile};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -13,7 +14,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextStyle, Wrap,
 };
-use cupertino_ui_theme::{ColorRole, StateVariant};
 
 /// The round button of the row layout.
 const CIRCLE: f64 = 40.0;

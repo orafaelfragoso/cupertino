@@ -19,7 +19,7 @@ app = [
     "dep:cupertino-keyboard",
     "dep:cupertino-protocol-app",
     "dep:cupertino-shell-client",
-    "dep:cupertino-theme",
+    "dep:cupertino-assets",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
     "dep:cupertino-diagnostic-events",
@@ -35,7 +35,7 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-pipewire = { path = "../cupertino-pipewire" }
 cupertino-radios = { path = "../cupertino-radios", features = ["dbus"], optional = true }
-cupertino-theme = { path = "../cupertino-theme", optional = true }
+cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-kit = { path = "../cupertino-kit", optional = true }
 cupertino-keyboard = { path = "../cupertino-keyboard", optional = true }

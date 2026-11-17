@@ -312,8 +312,8 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args(std::env::args().collect());
     let theme = match args.get("--spec-dir") {
-        Some(d) => Theme::from_dir(d),
-        None => Theme::load(),
+        Some(d) => cupertino_assets::theme::from_dir(d),
+        None => cupertino_assets::theme::load(),
     }
     .map_err(|e| anyhow!("{e}"))
     .context("loading specification")?;

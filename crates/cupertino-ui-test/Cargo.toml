@@ -10,10 +10,10 @@ layer = "ui"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-assets = { path = "../cupertino-assets" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
-cupertino-ui-theme = { path = "../cupertino-ui-theme" }
 tiny-skia = "0.12"

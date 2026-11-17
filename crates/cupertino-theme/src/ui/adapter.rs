@@ -1,10 +1,10 @@
 //! The Cupertino theme's light and dark palettes, named by design token. A token resolves in its own appearance only;
 //! one that is missing is an error, never a colour borrowed from another appearance.
 
-use crate::palette::{Palette, StateColors};
-use crate::ColorRole::*;
-use crate::{Appearance, Color, DesignTokens};
-use cupertino_theme::{Error, Result};
+use crate::ui::palette::{Palette, StateColors};
+use crate::ui::ColorRole::*;
+use crate::ui::{Appearance, Color, DesignTokens};
+use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Source {

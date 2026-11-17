@@ -3,7 +3,7 @@ name = "cupertino-assets"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0 AND OFL-1.1"
-description = "The asset packs of the Cupertino processes: finds and reads them (manifest versions 1 and 2), resolves fonts, icons, cursors and wallpaper per logical name through them, with an embedded built-in font"
+description = "The asset packs of the Cupertino processes: finds and reads them (manifest versions 1 and 2), resolves fonts, icons, cursors and wallpaper per logical name through them, with an embedded built-in font; finds the theme data and loads the theme from it"
 [package.metadata.cupertino]
 layer = "system"
 
@@ -12,6 +12,7 @@ name = "cupertino-assets"
 path = "src/bin/cupertino-assets.rs"
 
 [dependencies]
+cupertino-theme = { path = "../cupertino-theme" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"

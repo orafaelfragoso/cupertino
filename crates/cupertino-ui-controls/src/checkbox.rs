@@ -2,6 +2,7 @@ use crate::look::{self, paint_focus_ring};
 use crate::press::{Keys, Outcome, Press};
 use crate::CheckBox;
 use cupertino_geometry::{Insets, Point, Rect, Size};
+use cupertino_theme::ui::{choice_mark, ColorRole, ControlFamily};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Environment, Event,
     EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
@@ -9,7 +10,6 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_render::{Paint, PaintOp, PathVerb, Shape};
 use cupertino_ui_text::ParagraphLayout;
-use cupertino_ui_theme::{choice_mark, ColorRole, ControlFamily};
 
 /// Between the box and its label.
 const LABEL_GAP: f64 = 6.0;

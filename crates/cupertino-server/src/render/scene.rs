@@ -386,7 +386,7 @@ impl RenderResources {
                 None
             }
         };
-        let theme = match Theme::load() {
+        let theme = match cupertino_assets::theme::load() {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::warn!(error = %e, "theme not loaded, material recipes unavailable");

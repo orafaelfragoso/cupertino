@@ -4,12 +4,12 @@
 use cupertino_geometry::Size;
 use std::collections::HashMap;
 
-pub use cupertino_theme::control_sizes::{
+pub use crate::control_sizes::{
     choice_mark, control_geometry, slider_geometry, switch_geometry, ControlFamily,
     ControlGeometry, Corners, SliderGeometry, SwitchGeometry,
 };
-pub use cupertino_theme::glass::FaceTone;
-pub use cupertino_theme::{Appearance, Color, ControlSize, DesignTokens};
+pub use crate::glass::FaceTone;
+pub use crate::{Appearance, Color, ControlSize, DesignTokens};
 
 mod accent;
 mod adapter;
@@ -158,17 +158,6 @@ pub enum InteractionVariant {
     Disabled,
 }
 
-thread_local! {
-    /// How far a window that just became active has come from its inactive colours to its active ones, 0 to 1.
-    static ACTIVATION: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
-}
-
-/// Sets how far the colours of the window being painted have crossed from the inactive to the active ones: 1 is the
-/// active colours (the usual state). The painter sets it around the paint of a window and puts 1 back.
-pub fn set_activation(progress: f32) {
-    ACTIVATION.with(|a| a.set(progress.clamp(0.0, 1.0)));
-}
-
 /// The state a colour is resolved for. Keyboard focus is not part of it: the focus ring is drawn on its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StateVariant {
@@ -201,16 +190,32 @@ impl StateVariant {
     };
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ColorTokens {
     map: HashMap<(ColorRole, StateVariant), Color>,
+    /// How far a window that just became active has come from its inactive colours to its active ones, 0 to 1.
+    activation: f32,
+}
+
+impl Default for ColorTokens {
+    fn default() -> Self {
+        Self::new([])
+    }
 }
 
 impl ColorTokens {
     pub fn new(entries: impl IntoIterator<Item = ((ColorRole, StateVariant), Color)>) -> Self {
         Self {
             map: entries.into_iter().collect(),
+            activation: 1.0,
         }
+    }
+
+    /// Sets how far the colours of the window being painted have crossed from the inactive to the active ones: 1 is
+    /// the active colours (the usual state). The painter sets it on the theme it paints a window with while the
+    /// window's colours cross.
+    pub fn set_activation(&mut self, progress: f32) {
+        self.activation = progress.clamp(0.0, 1.0);
     }
 
     /// The built-in theme, which needs no theme data. Every colour is opaque but the dialog scrim, which dims.
@@ -227,10 +232,7 @@ impl ColorTokens {
 
     /// The Cupertino theme. Light and dark come from `tokens` and fail on a missing token; high contrast is the
     /// built-in palette, which never depends on translucency.
-    pub fn cupertino(
-        tokens: &DesignTokens,
-        appearance: Appearance,
-    ) -> cupertino_theme::Result<Self> {
+    pub fn cupertino(tokens: &DesignTokens, appearance: Appearance) -> crate::Result<Self> {
         if appearance.is_high_contrast() {
             return Ok(Self::neutral(appearance));
         }
@@ -240,7 +242,7 @@ impl ColorTokens {
     /// The colour of `role` in `state`, or its normal colour when the theme has no entry for that state.
     pub fn get(&self, role: ColorRole, state: StateVariant) -> Option<Color> {
         let shown = self.lookup(role, state);
-        let progress = ACTIVATION.with(|a| a.get());
+        let progress = self.activation;
         if state.window_active && progress < 1.0 {
             // a window that just became active: its colours cross from the inactive ones
             let before = self.lookup(
@@ -272,6 +274,7 @@ impl ColorTokens {
                 .iter()
                 .map(|(&(role, state), &color)| ((role, state), f(role, state, color)))
                 .collect(),
+            activation: self.activation,
         }
     }
 }

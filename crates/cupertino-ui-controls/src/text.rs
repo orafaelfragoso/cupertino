@@ -1,6 +1,7 @@
 use crate::look;
 use crate::{Text, TextRole};
 use cupertino_geometry::Point;
+use cupertino_theme::ui::{ColorRole, StateVariant, ThemeTokens, TypeRole};
 use cupertino_ui_core::{
     Change, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
@@ -8,7 +9,6 @@ use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpe
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, Wrap,
 };
-use cupertino_ui_theme::{ColorRole, StateVariant, ThemeTokens, TypeRole};
 
 /// The large title role's size and weight.
 pub(crate) const LARGE_TITLE: TypeRole = TypeRole {

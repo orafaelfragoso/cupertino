@@ -5,6 +5,7 @@
 use crate::look::{self, paint_focus_ring};
 use crate::{Handler, ScrollView, Scroller};
 use cupertino_geometry::{Point, Rect, Size};
+use cupertino_theme::ui::ColorRole;
 use cupertino_ui_core::kinetic::ScrollMotion;
 use cupertino_ui_core::session_scroll_bars;
 use cupertino_ui_core::{
@@ -18,7 +19,6 @@ use cupertino_ui_layout::{
 use cupertino_ui_platform::{
     Keysym, Mods, MouseButton, PointerEvent, ScrollBars, ScrollSource, Timestamp, TouchEvent,
 };
-use cupertino_ui_theme::ColorRole;
 use std::cell::Cell;
 use std::rc::Rc;
 

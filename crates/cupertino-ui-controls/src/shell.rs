@@ -8,6 +8,7 @@ use crate::toolbar::TOOLBAR_ROW;
 use crate::window_drag::DragState;
 use crate::{Handler, SplitLayout, SplitView};
 use cupertino_geometry::{Insets, Rect, Size};
+use cupertino_theme::ui::{ColorRole, StateVariant, Surface};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
     WindowBackground,
@@ -16,7 +17,6 @@ use cupertino_ui_layout::{
     Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
-use cupertino_ui_theme::{ColorRole, StateVariant, Surface};
 
 /// The window's corner radius, which the sidebar panel's corners follow: the theme's, the one the compositor shapes
 /// the window with.
@@ -40,8 +40,8 @@ const EDGE_BAND_COLOR: [u8; 3] = [222, 214, 207];
 /// The warm band along the leading and bottom edges of a panel `size` big.
 fn paint_edge_band(cx: &mut PaintCx<'_>, size: Size) {
     use cupertino_geometry::Point;
+    use cupertino_theme::ui::Color;
     use cupertino_ui_render::GradientStop;
-    use cupertino_ui_theme::Color;
     let edge = Color::from_rgba8([
         EDGE_BAND_COLOR[0],
         EDGE_BAND_COLOR[1],

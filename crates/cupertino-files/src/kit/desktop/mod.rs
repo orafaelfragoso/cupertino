@@ -1188,7 +1188,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ));
     model.notices = Notices::start(zbus::blocking::Connection::session().ok());
     let commands = vec![listen(&model.woken), hear(&model.notes)];
-    model.menu_bar = cupertino_theme::Theme::load()
+    model.menu_bar = cupertino_assets::theme::load()
         .map(|theme| theme.shapes.menu_bar_height)
         .unwrap_or_else(|_| cupertino_theme::ShapeTokens::default().menu_bar_height)
         .ceil();

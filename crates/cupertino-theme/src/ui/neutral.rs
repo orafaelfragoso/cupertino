@@ -2,8 +2,8 @@
 //! nothing depends on what is drawn underneath. The neutral palettes keep the look of the Cupertino light and dark
 //! themes where it reaches the contrast they require; the high-contrast palettes are used by both themes.
 
-use crate::palette::{Palette, StateColors};
-use crate::ColorRole::*;
+use crate::ui::palette::{Palette, StateColors};
+use crate::ui::ColorRole::*;
 
 const BLACK: [u8; 4] = [0, 0, 0, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];

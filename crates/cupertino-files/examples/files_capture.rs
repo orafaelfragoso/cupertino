@@ -38,7 +38,6 @@ use cupertino_kit::platform::{
 };
 use cupertino_kit::render::{PaintOp, PixelFormat};
 use cupertino_kit::theme::ThemeTokens;
-use cupertino_theme::Theme;
 use cupertino_ui_test::{ManualClock, TestDriver};
 use tiny_skia::{IntRect, IntSize, Pixmap};
 
@@ -297,7 +296,7 @@ impl Capture {
             reduce_motion: false,
             steady_caret: false,
         });
-        let theme = Theme::load().map_err(|e| e.to_string())?;
+        let theme = cupertino_assets::theme::load().map_err(|e| e.to_string())?;
         options.theme =
             Arc::new(ThemeTokens::cupertino(&theme, preferences).map_err(|e| e.to_string())?);
         let turns = NonZeroU32::new(TURNS).expect("a turn budget");

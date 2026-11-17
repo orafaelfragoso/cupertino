@@ -7,6 +7,7 @@ use crate::{
     FilePreview, Image, ImageFit, PreviewContent, PreviewStyle, Spacer, Stack, Text, TextRole,
 };
 use cupertino_geometry::{Insets, Rect, Size};
+use cupertino_theme::ui::ColorRole;
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
@@ -16,7 +17,6 @@ use cupertino_ui_layout::{
     SizeSpec,
 };
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
-use cupertino_ui_theme::ColorRole;
 use std::rc::Rc;
 use std::sync::Arc;
 

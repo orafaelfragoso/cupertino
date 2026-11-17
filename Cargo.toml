@@ -68,8 +68,6 @@ opt-level = 3
 opt-level = 1
 [profile.dev.package.cupertino-ui-core]
 opt-level = 1
-[profile.dev.package.cupertino-ui-gpu]
-opt-level = 1
 [profile.dev.package.cupertino-launcher]
 opt-level = 1
 # Every other dependency: built once and kept, so optimising it costs nothing after the first build and speeds up

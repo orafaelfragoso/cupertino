@@ -3,7 +3,7 @@
 //! the model update and view it caused, the frame that drew it and the compositor showing that frame. Without a sink
 //! the runtime keeps nothing and does nothing more than look whether it has one.
 
-use cupertino_ui_platform::{Timestamp, WindowId};
+use crate::platform::{Timestamp, WindowId};
 use cupertino_ui_render::RenderFrameId;
 
 /// One scroll event on its way to the screen. `input` is the window system's timestamp of the event and `presented`

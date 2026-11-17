@@ -3,25 +3,27 @@ name = "cupertino-ui-wayland"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
+description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard; the menus published to the desktop menu bar and the accessibility tree over AT-SPI"
 [package.metadata.cupertino]
 layer = "ui"
 
 [dependencies]
+accesskit = "0.25"
+accesskit_unix = "0.24"
 cupertino-diagnostic-events = { path = "../cupertino-diagnostic-events" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-gpu = { path = "../cupertino-gpu" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
-cupertino-ui-platform = { path = "../cupertino-ui-platform" }
-cupertino-ui-menus = { path = "../cupertino-ui-menus" }
-cupertino-ui-gpu = { path = "../cupertino-ui-gpu" }
+cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 rustix = { version = "1", features = ["time"] }
 tiny-skia = "0.12"
 tracing = "0.1"
+unicode-segmentation = "1.13"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]

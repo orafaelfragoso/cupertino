@@ -1,9 +1,9 @@
 use crate::{Image, ImageFit, ImageSource};
 use cupertino_geometry::{Rect, Size};
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_core::{
     Change, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured};
 use cupertino_ui_render::{PaintOp, Sampling, Shape};
 
 /// Where an image `width` by `height` pixels lands in `area` for `fit`, keeping its aspect ratio.

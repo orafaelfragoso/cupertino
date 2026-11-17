@@ -4,11 +4,11 @@
 //! them. The presentation scales about the popup's centre; growing out of another point `p` moves it by
 //! `(p - c) (1 - s)` along the same curve, which keeps `p` where it is.
 //!
-//! [`Capabilities::present_popups`]: cupertino_ui_platform::Capabilities::present_popups
+//! [`Capabilities::present_popups`]: crate::platform::Capabilities::present_popups
 
+use crate::platform::{PresentChange, PresentProperty};
 use cupertino_animation::{CubicBezier, LayerCurve};
 use cupertino_geometry::{Point, Size};
-use cupertino_ui_platform::{PresentChange, PresentProperty};
 
 use super::morph;
 

@@ -4,21 +4,22 @@
 //! window's next commit. Layers need version 4 of the global (content blur): below it a window has none and the
 //! runtime paints marked subtrees in place. From version 5 a layer's look carries the edge along its glass.
 //!
-//! [`WindowSystem::present_surface_layers`]: cupertino_ui_platform::WindowSystem::present_surface_layers
-//! [`WindowRequest::Layer`]: cupertino_ui_platform::WindowRequest
+//! [`WindowSystem::present_surface_layers`]: cupertino_ui_core::platform::WindowSystem::present_surface_layers
+//! [`WindowRequest::Layer`]: cupertino_ui_core::platform::WindowRequest
 
 use std::collections::{HashMap, HashSet};
 
 use cupertino_geometry::Rect;
-use cupertino_ui_platform::{
+use cupertino_ui_core::platform::{
     LayerChange, LayerProperty, PlatformError, SurfaceLayer, SurfaceLayerLook, WindowId,
 };
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty as Wire, Layers};
 use cupertino_wayland_client::{Connection, ExternalRole, PixelRect, SurfaceId};
 
 // a change through samples the toolkit takes is one the wire carries
-const _: () =
-    assert!(cupertino_wayland_client::app::MAX_SAMPLES == cupertino_ui_platform::MAX_LAYER_SAMPLES);
+const _: () = assert!(
+    cupertino_wayland_client::app::MAX_SAMPLES == cupertino_ui_core::platform::MAX_LAYER_SAMPLES
+);
 
 fn wire(p: LayerProperty) -> Wire {
     match p {
@@ -383,9 +384,10 @@ fn send(
                         .insert(*next_serial, i);
                 }
                 match (curve, samples) {
-                    (cupertino_ui_platform::LayerCurve::Timed { duration, .. }, Some(values)) => {
-                        layer.animate_samples(*next_serial, property, duration, values)
-                    }
+                    (
+                        cupertino_ui_core::platform::LayerCurve::Timed { duration, .. },
+                        Some(values),
+                    ) => layer.animate_samples(*next_serial, property, duration, values),
                     _ => layer.animate(*next_serial, property, change.to, curve, change.velocity),
                 }
             }

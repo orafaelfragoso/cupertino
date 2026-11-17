@@ -5,14 +5,14 @@ use crate::motion::{Curve, Tween};
 use crate::{Slider, SliderStyle};
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_theme::ui::{slider_geometry, Color, ColorRole, ThemeTokens};
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
+};
+use cupertino_ui_core::platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Environment,
     Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{
-    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured, SizeSpec,
-};
-use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent};
 use cupertino_ui_render::{Effect, PaintOp};
 
 const HOME: Keysym = Keysym(0xff50);

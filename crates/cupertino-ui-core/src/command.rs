@@ -1,7 +1,7 @@
 //! A window's keyboard shortcuts. A key reaches them after the focused node and its ancestors let it pass.
 
+use crate::platform::{KeyEvent, Keysym};
 use crate::Shortcut;
-use cupertino_ui_platform::{KeyEvent, Keysym};
 use std::collections::{HashMap, HashSet};
 
 /// Shortcuts and the message each one sends.

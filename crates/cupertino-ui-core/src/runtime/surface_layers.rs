@@ -1,16 +1,14 @@
 //! A window's surface layers ([`Widget::surface_layer`](crate::Widget::surface_layer)): the marked subtrees leave the
 //! window's paint for lists of their own, each drawn at its layout size into a frame of its own, with its own damage,
 //! and handed to the window system with the window's frame
-//! ([`WindowSystem::present_surface_layers`](cupertino_ui_platform::WindowSystem::present_surface_layers)). The
+//! ([`WindowSystem::present_surface_layers`](crate::platform::WindowSystem::present_surface_layers)). The
 //! compositor places and animates them; the application changes their properties with
-//! [`WindowRequest::Layer`](cupertino_ui_platform::WindowRequest). Layout, input and semantics never see the split.
+//! [`WindowRequest::Layer`](crate::platform::WindowRequest). Layout, input and semantics never see the split.
 
 use std::collections::HashMap;
 
+use crate::platform::{PresentOutcome, SurfaceLayer, SurfaceLayerLook, WindowId, WindowSystem};
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_platform::{
-    PresentOutcome, SurfaceLayer, SurfaceLayerLook, WindowId, WindowSystem,
-};
 use cupertino_ui_render::{
     CpuFrame, DamageRegion, DisplayList, PaintNodeId, PaintResources, RenderRequest, UiRenderer,
 };

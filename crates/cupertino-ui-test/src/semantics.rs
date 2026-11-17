@@ -1,7 +1,7 @@
+use cupertino_ui_core::platform::WindowId;
 use cupertino_ui_core::{
     AccessibilityNode, AccessibilityUpdate, AccessibleValue, Checked, NodeId, Relation, Role,
 };
-use cupertino_ui_platform::WindowId;
 use std::collections::{HashMap, HashSet};
 
 /// Roles assistive technology announces by their contents, so a node of one needs no name of its own.

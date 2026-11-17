@@ -1,6 +1,6 @@
 //! Windows whose role a protocol outside the window system gives them, such as a desktop shell's layer surfaces.
 
-use cupertino_ui_platform::WindowSpec;
+use cupertino_ui_core::platform::WindowSpec;
 use cupertino_wayland_client::{Connection, Error, ExtensionEvent, SurfaceId};
 
 /// Gives the windows an application opens roles from protocols the window system does not speak. The application that

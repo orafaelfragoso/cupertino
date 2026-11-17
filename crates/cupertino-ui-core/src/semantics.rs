@@ -5,12 +5,12 @@
 
 use crate::accessibility::{AccessibilityNode, AccessibleValue, Role};
 use crate::cx::{KeyedRelation, Semantics, SemanticsCx};
+use crate::layout::{IdMap, LayoutDirection};
 use crate::route::Geometry;
 use crate::scroll::can_scroll;
 use crate::tree::Tree;
 use crate::NodeId;
 use cupertino_geometry::{Rect, Size};
-use cupertino_ui_layout::{IdMap, LayoutDirection};
 use std::collections::BTreeMap;
 
 pub(crate) struct SemanticsPass {
@@ -204,10 +204,7 @@ pub(crate) fn build_kept<M: 'static>(
     let mut stack = vec![(root, None::<NodeId>, None::<usize>)];
     while let Some((id, owner, recording)) = stack.pop() {
         let Some(node) = tree.get(id) else { continue };
-        let scrolls = matches!(
-            node.spec.kind,
-            cupertino_ui_layout::ContainerKind::Scroll { .. }
-        );
+        let scrolls = matches!(node.spec.kind, crate::layout::ContainerKind::Scroll { .. });
         let rect = rect_of(id);
         // a kept subtree lays in what it put in last time, or starts a run
         let mut recording = recording;

@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use cupertino_ui_platform::WindowId;
+use cupertino_ui_core::platform::WindowId;
 
 /// How long an action's grab serial is used after the action was answered as applied. The compositor keeps it good
 /// this long after it reads the answer, which is later than it is sent.

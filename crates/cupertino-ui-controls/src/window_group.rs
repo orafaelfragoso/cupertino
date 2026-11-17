@@ -1,6 +1,6 @@
 use crate::WindowGroup;
+use cupertino_ui_core::platform::{Keysym, Mods};
 use cupertino_ui_core::{Key, Shortcut, Window, WindowKey};
-use cupertino_ui_platform::{Keysym, Mods};
 
 const N: Keysym = Keysym(0x6e);
 const W: Keysym = Keysym(0x77);

@@ -12,7 +12,5 @@ cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
-cupertino-ui-layout = { path = "../cupertino-ui-layout" }
-cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }

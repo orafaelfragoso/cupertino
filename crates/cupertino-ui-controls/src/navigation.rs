@@ -3,13 +3,13 @@ use crate::window_drag::DragState;
 use crate::{Navigation, NavigationStack, ToolbarGlyph, ToolbarGroup, ToolbarItem};
 use cupertino_geometry::{Insets, Size};
 use cupertino_theme::ui::Surface;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
+};
+use cupertino_ui_core::platform::{Keysym, Mods};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
-};
-use cupertino_ui_platform::{Keysym, Mods};
 
 const BRACKET_LEFT: Keysym = Keysym(0x5b);
 const BRACKET_RIGHT: Keysym = Keysym(0x5d);

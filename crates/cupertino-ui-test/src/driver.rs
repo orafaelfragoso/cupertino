@@ -1,9 +1,9 @@
 use crate::{HeadlessWindowSystem, ManualClock, TimeWentBackwards, Trace, TraceError};
+use cupertino_ui_core::platform::{
+    Capabilities, ClipboardKind, ClipboardToken, PlatformEvent, Timestamp, WindowId, WindowSystem,
+};
 use cupertino_ui_core::{
     Application, Clock, Pending, Runtime, RuntimeOptions, StepStatus, UiError,
-};
-use cupertino_ui_platform::{
-    Capabilities, ClipboardKind, ClipboardToken, PlatformEvent, Timestamp, WindowId, WindowSystem,
 };
 use std::collections::HashMap;
 use std::num::NonZeroU32;

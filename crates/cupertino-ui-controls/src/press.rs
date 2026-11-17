@@ -2,8 +2,8 @@
 //! activates once and release elsewhere disarms it; Space arms and activates on release, Return activates on press.
 //! A cancel (focus, capture or surface lost) disarms without activating. Touch has no hover.
 
+use cupertino_ui_core::platform::{Keysym, MouseButton, PointerEvent, TouchEvent};
 use cupertino_ui_core::{Action, ActivationSource, Event, EventCx, Phase};
-use cupertino_ui_platform::{Keysym, MouseButton, PointerEvent, TouchEvent};
 
 const SPACE: Keysym = Keysym(0x20);
 const RETURN: Keysym = Keysym(0xff0d);

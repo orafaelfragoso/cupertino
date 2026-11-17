@@ -2,8 +2,8 @@
 
 use crate::{DriverError, TestDriver};
 use cupertino_theme::ui::{Appearance, ThemeTokens};
+use cupertino_ui_core::platform::{PlatformError, WindowEvent, WindowId};
 use cupertino_ui_core::{Application, Clock};
-use cupertino_ui_platform::{PlatformError, WindowEvent, WindowId};
 use cupertino_ui_render::PixelFormat;
 use std::fmt;
 use std::num::NonZeroU32;

@@ -12,10 +12,12 @@ mod focus;
 mod frame_timing;
 mod icons;
 pub mod kinetic;
+pub mod layout;
 mod layout_view;
 mod opaque;
 mod paint;
 mod personal;
+pub mod platform;
 mod pointer;
 mod route;
 mod runtime;
@@ -26,6 +28,7 @@ mod task;
 mod tree;
 mod widget;
 
+pub use crate::platform::{GlassStyle, RendererClass};
 pub use accessibility::{
     AccessibilityAdapter, AccessibilityNode, AccessibilityUpdate, AccessibleStates,
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, Relation, Role, SortOrder,
@@ -34,7 +37,6 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cupertino_defaults::appearance::{ScrollClick, SidebarIcons, TitlebarAction};
-pub use cupertino_ui_platform::{GlassStyle, RendererClass};
 pub use cx::{
     glass_outline, EventCx, FocusTarget, Glass, GlassCorners, IdleCx, MeasureCx, OverlayCx,
     OwnedWindows, PaintCx, SemanticsCx, GLASS_CORNER_EXPONENT, GLASS_CORNER_REACH,
@@ -55,14 +57,14 @@ pub use scroll::session_scroll_bars;
 pub use scroll_timing::{ScrollLatency, ScrollTiming, ScrollTimingSink};
 pub use widget::{Change, Element, Propagation, Widget};
 
-use cupertino_geometry::{Point, Rect, Size};
-use cupertino_menu_model::{ActionName, MenuBar};
-use cupertino_theme::ui::{Color, Surface, ThemeTokens};
-use cupertino_ui_layout::{LayoutDirection, LayoutError, LayoutStats};
-use cupertino_ui_platform::{
+use crate::layout::{LayoutDirection, LayoutError, LayoutStats};
+use crate::platform::{
     ClipboardData, DragProgress, DropAction, DropToken, KeyEvent, Keysym, Mods, PlatformError,
     PointerEvent, Timestamp, TouchEvent, WindowId, WindowRequest, WindowSpec,
 };
+use cupertino_geometry::{Point, Rect, Size};
+use cupertino_menu_model::{ActionName, MenuBar};
+use cupertino_theme::ui::{Color, Surface, ThemeTokens};
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::{ImeEvent, TextSystem};
 use std::borrow::Cow;
@@ -235,7 +237,7 @@ pub enum WindowBackground {
     /// window costs nothing to show however large it is. Where it cannot, the window is drawn like any other, filled
     /// with the colour under its content.
     ///
-    /// [`WindowSystem::present_solid`]: cupertino_ui_platform::WindowSystem::present_solid
+    /// [`WindowSystem::present_solid`]: crate::platform::WindowSystem::present_solid
     Solid(Color),
 }
 
@@ -327,7 +329,7 @@ pub enum Event {
     /// A press, drag or composition in progress ends without effect: focus, pointer capture or the surface was lost.
     Cancel,
     /// The last running animation of the window's surface layers ended in the compositor
-    /// ([`WindowEvent::LayersSettled`](cupertino_ui_platform::WindowEvent)); only the window's root hears it.
+    /// ([`WindowEvent::LayersSettled`](crate::platform::WindowEvent)); only the window's root hears it.
     LayersSettled,
     /// The clipboard's text, for the node that asked for it ([`EventCx::request_paste`]).
     Paste(Pasted),

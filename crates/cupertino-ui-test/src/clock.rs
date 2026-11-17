@@ -1,5 +1,5 @@
+use cupertino_ui_core::platform::Timestamp;
 use cupertino_ui_core::Clock;
-use cupertino_ui_platform::Timestamp;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 

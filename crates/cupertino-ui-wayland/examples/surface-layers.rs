@@ -19,11 +19,11 @@ use std::time::{Duration, Instant};
 
 use cupertino_geometry::{Rect, Size};
 use cupertino_keyboard::modifiers::Profile;
-use cupertino_ui_gpu::{GpuConfig, WindowRenderer};
-use cupertino_ui_platform::{
+use cupertino_ui_core::platform::{
     DecorationMode, LayerChange, LayerProperty, PlatformEvent, PresentOutcome, RendererKind,
     SurfaceLayer, SurfaceLayerLook, WindowEvent, WindowRequest, WindowSpec, WindowSystem,
 };
+use cupertino_ui_render::gpu::{GpuConfig, WindowRenderer};
 use cupertino_ui_render::{
     Color, CpuFrame, DamageRegion, DisplayList, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PixelFormat, PixelRect, RenderFrameId, RenderRequest, Shape,
@@ -190,9 +190,9 @@ fn run(report: &std::path::Path, on_gpu: bool) -> Result<(), String> {
                                 LayerChange::new(
                                     LayerProperty::Opacity,
                                     0.0,
-                                    Some(cupertino_ui_platform::LayerCurve::Timed {
+                                    Some(cupertino_ui_core::platform::LayerCurve::Timed {
                                         duration: FADE,
-                                        bezier: cupertino_ui_platform::CubicBezier::new(
+                                        bezier: cupertino_ui_core::platform::CubicBezier::new(
                                             0.0, 0.0, 1.0, 1.0,
                                         ),
                                     }),

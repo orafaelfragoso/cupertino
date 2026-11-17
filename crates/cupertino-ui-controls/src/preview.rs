@@ -8,13 +8,13 @@ use crate::{
 };
 use cupertino_geometry::{Insets, Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
+    SizeSpec,
+};
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
-};
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, Overflow,
-    SizeSpec,
 };
 use cupertino_ui_text::{AttributedText, FontWeight, TextStyle};
 use std::rc::Rc;
@@ -113,8 +113,8 @@ struct Content<M> {
     content: PreviewContent,
     text_family: Option<String>,
     name: String,
-    scroll: cupertino_ui_layout::ScrollState,
-    on_scroll: crate::Handler<cupertino_ui_layout::ScrollState, M>,
+    scroll: cupertino_ui_core::layout::ScrollState,
+    on_scroll: crate::Handler<cupertino_ui_core::layout::ScrollState, M>,
 }
 
 /// The content in its box, as large as the room lets it be, for the pane and for a window; an icon at most `icon`

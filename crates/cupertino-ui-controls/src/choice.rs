@@ -6,16 +6,16 @@ use crate::press::{Keys, Outcome, Press};
 use crate::{FullWidthSegmentedControl, RadioGroup, SegmentedControl};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{choice_mark, ColorRole, ControlFamily, StateVariant, ThemeTokens};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
+};
+use cupertino_ui_core::platform::Keysym;
+use cupertino_ui_core::platform::{MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, Change, Checked, ControlState, Element, Environment,
     Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Relation, Role, SemanticsCx,
     Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
-};
-use cupertino_ui_platform::Keysym;
-use cupertino_ui_platform::{MouseButton, PointerEvent};
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 use std::rc::Rc;
 
@@ -254,9 +254,9 @@ impl<M: Clone + 'static> Widget<M> for Item<M> {
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
             flex: if self.fill {
-                cupertino_ui_layout::Flex::grow(1.0)
+                cupertino_ui_core::layout::Flex::grow(1.0)
             } else {
-                cupertino_ui_layout::Flex::NONE
+                cupertino_ui_core::layout::Flex::NONE
             },
             ..LayoutSpec::new(ContainerKind::Leaf)
         }
@@ -660,7 +660,7 @@ impl<M: Clone + 'static> Widget<M> for FullWidthSegmentedControl<M> {
 
     fn layout(&self) -> LayoutSpec {
         LayoutSpec {
-            width: cupertino_ui_layout::SizeSpec::Fill,
+            width: cupertino_ui_core::layout::SizeSpec::Fill,
             ..self.0.layout()
         }
     }

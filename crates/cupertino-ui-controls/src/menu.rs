@@ -22,17 +22,17 @@ use cupertino_menu_model::tracking::{
 };
 use cupertino_theme::ui::{Color, ColorRole, StateVariant, Surface};
 use cupertino_theme::ControlFamily;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
+};
+use cupertino_ui_core::platform::{
+    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent, WindowSpec,
+};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActivationSource, Change, Checked, CommandRegistry,
     ControlState, Element, Environment, Event, EventCx, FocusTarget, Glass, Key, MeasureCx,
     PaintCx, Phase, Popup, PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window,
     WindowBackground, WindowKey,
-};
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
-};
-use cupertino_ui_platform::{
-    DecorationMode, Keysym, Mods, MouseButton, PointerEvent, Timestamp, TouchEvent, WindowSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Sampling, Shape};
 use std::cell::RefCell;
@@ -1291,7 +1291,7 @@ impl<M: Clone + 'static> Row<M> {
 
     fn key(
         &self,
-        key: &cupertino_ui_platform::KeyEvent,
+        key: &cupertino_ui_core::platform::KeyEvent,
         selected: bool,
         cx: &mut EventCx<'_, M>,
     ) -> bool {

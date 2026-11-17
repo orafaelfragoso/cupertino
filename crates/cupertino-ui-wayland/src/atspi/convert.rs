@@ -1,0 +1,446 @@
+//! Between core's accessibility tree and AccessKit's: nodes out, action requests back.
+
+use std::num::NonZeroU32;
+
+use accesskit::{Invalid, SortDirection, Toggled};
+use cupertino_ui_core::{
+    AccessibilityNode, AccessibleValue, Action, ActionData, ActionRequest, Checked, Live, NodeId,
+    Relation, Role, SortOrder,
+};
+use unicode_segmentation::UnicodeSegmentation;
+
+pub(crate) fn node_id(id: NodeId) -> accesskit::NodeId {
+    accesskit::NodeId(u64::from(id.generation().get()) << 32 | u64::from(id.index()))
+}
+
+/// The core id of an AccessKit id this module gave out; `None` for any other.
+fn core_id(id: accesskit::NodeId) -> Option<NodeId> {
+    let generation = NonZeroU32::new((id.0 >> 32) as u32)?;
+    Some(NodeId::new(id.0 as u32, generation))
+}
+
+/// Whether a node's value is a secret: a password field's, whatever core says, or one core marks protected.
+pub(crate) fn protected(node: &AccessibilityNode) -> bool {
+    node.role == Role::PasswordInput || node.value == Some(AccessibleValue::Protected)
+}
+
+/// The AccessKit node for `node`. A protected node gets no value, offers no way to set one or its selection, and is
+/// never a live region.
+pub(crate) fn node(node: &AccessibilityNode) -> accesskit::Node {
+    let secret = protected(node);
+    let mut out = accesskit::Node::new(role(node.role));
+    match &node.name {
+        // AccessKit names a label from its value
+        Some(name) if node.role == Role::StaticText => out.set_value(name.as_str()),
+        Some(name) => out.set_label(name.as_str()),
+        None => {}
+    }
+    if let Some(description) = &node.description {
+        out.set_description(description.as_str());
+    }
+    if let Some(order) = node.sort {
+        out.set_sort_direction(match order {
+            SortOrder::Ascending => SortDirection::Ascending,
+            SortOrder::Descending => SortDirection::Descending,
+        });
+        // AccessKit's AT-SPI adapter drops the sort direction, so a screen reader hears it in the description
+        if node.description.is_none() {
+            out.set_description(match order {
+                SortOrder::Ascending => "Sorted ascending",
+                SortOrder::Descending => "Sorted descending",
+            });
+        }
+    }
+    match &node.value {
+        _ if secret => {}
+        Some(AccessibleValue::Text { value, .. }) => out.set_value(value.as_str()),
+        Some(AccessibleValue::Number {
+            value,
+            min,
+            max,
+            step,
+        }) => {
+            out.set_numeric_value(*value);
+            out.set_min_numeric_value(*min);
+            out.set_max_numeric_value(*max);
+            if let Some(step) = step {
+                out.set_numeric_value_step(*step);
+            }
+        }
+        Some(AccessibleValue::Toggle(checked)) => out.set_toggled(match checked {
+            Checked::False => Toggled::False,
+            Checked::True => Toggled::True,
+            Checked::Mixed => Toggled::Mixed,
+        }),
+        Some(AccessibleValue::Protected) | None => {}
+    }
+    let s = node.states;
+    if s.disabled {
+        out.set_disabled();
+    }
+    if s.focusable {
+        out.add_action(accesskit::Action::Focus);
+    }
+    if s.selected {
+        out.set_selected(true);
+    }
+    if let Some(expanded) = s.expanded {
+        out.set_expanded(expanded);
+    }
+    if s.busy {
+        out.set_busy();
+    }
+    if s.read_only {
+        out.set_read_only();
+    }
+    if s.required {
+        out.set_required();
+    }
+    if s.invalid {
+        out.set_invalid(Invalid::True);
+    }
+    if s.modal {
+        out.set_modal();
+    }
+    if s.multiselectable {
+        out.set_multiselectable();
+    }
+    if let Some(count) = node.item_count {
+        out.set_size_of_set(count);
+        if node.role == Role::Table {
+            out.set_row_count(count);
+        }
+    }
+    if let Some(level) = node.level {
+        out.set_level(level);
+    }
+    if let Some(index) = node.item_index {
+        out.set_position_in_set(index);
+        if node.role == Role::Row {
+            out.set_row_index(index);
+        }
+    }
+    if let Some(column) = node.column_index {
+        out.set_column_index(column);
+    }
+    let b = node.bounds;
+    out.set_bounds(accesskit::Rect::new(
+        b.min_x(),
+        b.min_y(),
+        b.max_x(),
+        b.max_y(),
+    ));
+    for action in &node.actions {
+        if let Some(action) = action_out(*action).filter(|_| !(secret && edits_value(*action))) {
+            out.add_action(action);
+        }
+    }
+    // AccessKit names a button or menu item from its children; an item that holds its text the same way is named so
+    // too, where a screen reader would otherwise hear an empty list item, tree item, cell or tab
+    if named_by_children(node) {
+        for child in &node.children {
+            out.push_labelled_by(node_id(*child));
+        }
+    }
+    for relation in &node.relations {
+        match relation {
+            Relation::LabelledBy(id) => out.push_labelled_by(node_id(*id)),
+            Relation::DescribedBy(id) => out.push_described_by(node_id(*id)),
+            Relation::Controls(id) => out.push_controlled(node_id(*id)),
+            Relation::FlowsTo(id) => out.push_flow_to(node_id(*id)),
+        }
+    }
+    out.set_children(
+        node.children
+            .iter()
+            .copied()
+            .map(node_id)
+            .collect::<Vec<_>>(),
+    );
+    match node.live {
+        _ if secret => {}
+        Some(Live::Polite) => out.set_live(accesskit::Live::Polite),
+        Some(Live::Assertive) => out.set_live(accesskit::Live::Assertive),
+        None => {}
+    }
+    out
+}
+
+/// Roles a screen reader names by the text they hold when they have no name of their own.
+const NAMED_BY_CHILDREN: [Role; 4] = [Role::ListItem, Role::TreeItem, Role::Cell, Role::Tab];
+
+/// Whether `node` takes its name from its children: an item of one of [`NAMED_BY_CHILDREN`] roles with no name and
+/// no node that labels it.
+pub(crate) fn named_by_children(node: &AccessibilityNode) -> bool {
+    NAMED_BY_CHILDREN.contains(&node.role)
+        && node.name.is_none()
+        && !node
+            .relations
+            .iter()
+            .any(|r| matches!(r, Relation::LabelledBy(_)))
+}
+
+/// The actions that change a value or the selection in it, which a secret never takes from assistive technology.
+fn edits_value(action: Action) -> bool {
+    matches!(action, Action::SetValue | Action::SetSelection)
+}
+
+fn role(role: Role) -> accesskit::Role {
+    use accesskit::Role as A;
+    match role {
+        Role::Window => A::Window,
+        Role::Dialog => A::Dialog,
+        Role::AlertDialog => A::AlertDialog,
+        Role::Group => A::Group,
+        Role::StaticText => A::Label,
+        Role::Link => A::Link,
+        Role::Image => A::Image,
+        Role::Button => A::Button,
+        Role::PopUpButton => A::ComboBox,
+        Role::Switch => A::Switch,
+        Role::CheckBox => A::CheckBox,
+        Role::RadioButton => A::RadioButton,
+        Role::RadioGroup => A::RadioGroup,
+        Role::Slider => A::Slider,
+        Role::SpinButton => A::SpinButton,
+        Role::ProgressIndicator => A::ProgressIndicator,
+        Role::TextInput => A::TextInput,
+        Role::MultilineTextInput => A::MultilineTextInput,
+        Role::PasswordInput => A::PasswordInput,
+        Role::Menu => A::Menu,
+        Role::MenuBar => A::MenuBar,
+        Role::MenuItem => A::MenuItem,
+        Role::MenuItemCheckBox => A::MenuItemCheckBox,
+        Role::MenuItemRadio => A::MenuItemRadio,
+        Role::TabList => A::TabList,
+        Role::Tab => A::Tab,
+        Role::TabPanel => A::TabPanel,
+        Role::List => A::List,
+        Role::ListItem => A::ListItem,
+        Role::Table => A::Table,
+        Role::Row => A::Row,
+        Role::Cell => A::Cell,
+        Role::ColumnHeader => A::ColumnHeader,
+        Role::Tree => A::Tree,
+        Role::TreeItem => A::TreeItem,
+        Role::ScrollView => A::ScrollView,
+        Role::ScrollBar => A::ScrollBar,
+        // AccessKit's splitter is ARIA's separator
+        Role::Separator | Role::Splitter => A::Splitter,
+        Role::Toolbar => A::Toolbar,
+        Role::Tooltip => A::Tooltip,
+    }
+}
+
+/// A line of an editable value as AccessKit reads it: a text run, and the byte its line starts at in the value.
+pub(crate) struct Run {
+    pub(crate) id: accesskit::NodeId,
+    pub(crate) node: accesskit::Node,
+    start: usize,
+}
+
+impl Run {
+    fn lengths(&self) -> &[u8] {
+        self.node.character_lengths()
+    }
+}
+
+/// A character of a line: its byte in the line, its length, and whether a word starts at it.
+struct Character {
+    at: usize,
+    len: u8,
+    word: bool,
+}
+
+/// The text runs of `node`'s editable value, made children of `out` with the caret and selection in them, and the
+/// selection offered when core offers it. One run per line, ending with its line break, made of characters (grapheme
+/// clusters) and words as the text buffer moves by them. `id` names the n-th run. None for a node without editable text,
+/// and none for a secret.
+pub(crate) fn text_runs(
+    node: &AccessibilityNode,
+    out: &mut accesskit::Node,
+    mut id: impl FnMut(usize) -> accesskit::NodeId,
+) -> Vec<Run> {
+    let Some(AccessibleValue::Text {
+        value,
+        editing: Some(editing),
+    }) = &node.value
+    else {
+        return Vec::new();
+    };
+    if protected(node) {
+        return Vec::new();
+    }
+    let mut lines: Vec<(usize, &str)> = value
+        .split_inclusive('\n')
+        .scan(0, |start, line| {
+            let at = *start;
+            *start += line.len();
+            Some((at, line))
+        })
+        .collect();
+    if value.is_empty() || value.ends_with('\n') {
+        lines.push((value.len(), ""));
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for (start, line) in lines {
+        // a word takes the spaces after it
+        let words: Vec<usize> = line
+            .split_word_bound_indices()
+            .filter(|(_, w)| !w.trim().is_empty())
+            .map(|(at, _)| at)
+            .collect();
+        let starts_word = |at: usize| words.binary_search(&at).is_ok();
+        let mut characters: Vec<Character> = Vec::new();
+        for (at, grapheme) in line.grapheme_indices(true) {
+            match u8::try_from(grapheme.len()) {
+                Ok(len) => characters.push(Character {
+                    at,
+                    len,
+                    word: starts_word(at),
+                }),
+                // AccessKit counts a character's bytes in a u8: a longer cluster goes as its scalar values
+                Err(_) => characters.extend(grapheme.char_indices().map(|(i, c)| Character {
+                    at: at + i,
+                    len: c.len_utf8() as u8,
+                    word: i == 0 && starts_word(at),
+                })),
+            }
+        }
+        // a word start is a u8 too, so a line of more characters than that is several runs
+        let chunks: Vec<&[Character]> = if characters.is_empty() {
+            vec![&[]]
+        } else {
+            characters.chunks(usize::from(u8::MAX)).collect()
+        };
+        let first = runs.len();
+        for chunk in chunks {
+            let from = chunk.first().map_or(line.len(), |c| c.at);
+            let to = chunk
+                .last()
+                .map_or(line.len(), |c| c.at + usize::from(c.len));
+            let mut run = accesskit::Node::new(accesskit::Role::TextRun);
+            run.set_value(&line[from..to]);
+            run.set_character_lengths(chunk.iter().map(|c| c.len).collect::<Vec<_>>());
+            run.set_word_starts(
+                (0..chunk.len() as u8)
+                    .filter(|i| chunk[usize::from(*i)].word)
+                    .collect::<Vec<_>>(),
+            );
+            runs.push(Run {
+                id: id(runs.len()),
+                node: run,
+                start: start + from,
+            });
+        }
+        for i in first + 1..runs.len() {
+            let (previous, next) = (runs[i - 1].id, runs[i].id);
+            runs[i - 1].node.set_next_on_line(next);
+            runs[i].node.set_previous_on_line(previous);
+        }
+    }
+    let caret = position(&runs, editing.caret);
+    let other = if editing.caret == editing.selection.start {
+        editing.selection.end
+    } else {
+        editing.selection.start
+    };
+    out.set_text_selection(accesskit::TextSelection {
+        anchor: position(&runs, other),
+        focus: caret,
+    });
+    for run in &runs {
+        out.push_child(run.id);
+    }
+    if node.actions.contains(&Action::SetSelection) {
+        out.add_action(accesskit::Action::SetTextSelection);
+    }
+    runs
+}
+
+/// Where byte `at` of the value lies in its runs: a byte inside a character counts as that character's start.
+fn position(runs: &[Run], at: usize) -> accesskit::TextPosition {
+    let run = runs
+        .iter()
+        .rev()
+        .find(|r| r.start <= at)
+        .unwrap_or(&runs[0]);
+    let mut end = run.start;
+    let character_index = run
+        .lengths()
+        .iter()
+        .take_while(|len| {
+            end += usize::from(**len);
+            end <= at
+        })
+        .count();
+    accesskit::TextPosition {
+        node: run.id,
+        character_index,
+    }
+}
+
+/// The byte of the value at `position`, when it lies in `runs`.
+fn offset(runs: &[Run], position: accesskit::TextPosition) -> Option<usize> {
+    let run = runs.iter().find(|r| r.id == position.node)?;
+    let before = run.lengths().get(..position.character_index)?;
+    Some(run.start + before.iter().map(|len| usize::from(*len)).sum::<usize>())
+}
+
+/// `None` for a selection: AccessKit takes one only on a node with text runs, which [`text_runs`] offers.
+fn action_out(action: Action) -> Option<accesskit::Action> {
+    use accesskit::Action as A;
+    Some(match action {
+        Action::Click => A::Click,
+        Action::Focus => A::Focus,
+        Action::Increment => A::Increment,
+        Action::Decrement => A::Decrement,
+        Action::Expand => A::Expand,
+        Action::Collapse => A::Collapse,
+        Action::ShowMenu => A::ShowContextMenu,
+        Action::ScrollIntoView => A::ScrollIntoView,
+        Action::SetValue => A::SetValue,
+        Action::SetSelection => return None,
+    })
+}
+
+/// Core's request for an AccessKit one, when it maps to an action core knows with the data that action takes. `runs`
+/// gives the text runs a node was last sent with, for a selection in them.
+pub(crate) fn request<'a>(
+    request: &accesskit::ActionRequest,
+    runs: impl FnOnce(NodeId) -> Option<&'a [Run]>,
+) -> Option<ActionRequest> {
+    use accesskit::Action as A;
+    let target = core_id(request.target_node)?;
+    let (action, data) = match (request.action, &request.data) {
+        (A::Click, _) => (Action::Click, None),
+        (A::Focus, _) => (Action::Focus, None),
+        (A::Increment, _) => (Action::Increment, None),
+        (A::Decrement, _) => (Action::Decrement, None),
+        (A::Expand, _) => (Action::Expand, None),
+        (A::Collapse, _) => (Action::Collapse, None),
+        (A::ShowContextMenu, _) => (Action::ShowMenu, None),
+        (A::ScrollIntoView, _) => (Action::ScrollIntoView, None),
+        (A::SetValue, Some(accesskit::ActionData::Value(text))) => {
+            (Action::SetValue, Some(ActionData::Text(text.to_string())))
+        }
+        (A::SetValue, Some(accesskit::ActionData::NumericValue(n))) => {
+            (Action::SetValue, Some(ActionData::Number(*n)))
+        }
+        (A::SetTextSelection, Some(accesskit::ActionData::SetTextSelection(selection))) => {
+            let runs = runs(target)?;
+            let anchor = offset(runs, selection.anchor)?;
+            let focus = offset(runs, selection.focus)?;
+            (
+                Action::SetSelection,
+                Some(ActionData::Selection(anchor.min(focus)..anchor.max(focus))),
+            )
+        }
+        _ => return None,
+    };
+    Some(ActionRequest {
+        target,
+        action,
+        data,
+    })
+}

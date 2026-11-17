@@ -1,4 +1,6 @@
-use cupertino_ui_platform::{ClipboardToken, PlatformEvent, Timestamp, WindowEvent, WindowId};
+use cupertino_ui_core::platform::{
+    ClipboardToken, PlatformEvent, Timestamp, WindowEvent, WindowId,
+};
 use cupertino_ui_text::ImeEvent;
 use std::collections::HashMap;
 

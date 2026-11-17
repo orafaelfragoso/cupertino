@@ -2,14 +2,14 @@
 //! of all a window draws, animated by the compositor, so a panel opens and closes without a frame drawn. From version 3
 //! popups have them too, so a popover grows and shrinks and a menu fades without a frame drawn.
 //!
-//! A window's presentation is made on its first [`WindowRequest::Present`](cupertino_ui_platform::WindowRequest) and
+//! A window's presentation is made on its first [`WindowRequest::Present`](cupertino_ui_core::platform::WindowRequest) and
 //! lives with the window. Each change is sent at once; the window system then commits the surface without a buffer,
 //! or leaves it to the window's first frame. The animations each change starts are followed until they finish or
 //! are replaced, so the window system knows when what is shown is again the window's layout ([`Presentations::settled`]).
 
 use std::collections::HashMap;
 
-use cupertino_ui_platform::{PlatformError, PresentChange, PresentProperty, WindowId};
+use cupertino_ui_core::platform::{PlatformError, PresentChange, PresentProperty, WindowId};
 use cupertino_wayland_client::app::{AppEvent, Layer, LayerId, LayerProperty, Layers};
 use cupertino_wayland_client::{Connection, SurfaceId};
 

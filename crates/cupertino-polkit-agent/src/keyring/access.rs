@@ -5,11 +5,11 @@
 use std::num::NonZeroU32;
 
 use cupertino_geometry::Rect;
+use cupertino_ui_core::platform::WindowId;
 use cupertino_ui_core::{
     AccessibilityNode, AccessibilityUpdate, AccessibleStates, AccessibleValue, Action, Checked,
     Live, NodeId, Relation, Role,
 };
-use cupertino_ui_platform::WindowId;
 
 use crate::access::{control, node, text};
 use crate::keyring::model::Phase;

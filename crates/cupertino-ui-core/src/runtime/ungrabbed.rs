@@ -6,11 +6,11 @@
 
 use super::Dismiss;
 use super::{Runtime, WindowState};
-use crate::{Application, UiError, WindowKey};
-use cupertino_app_protocols::semantics::Outcome;
-use cupertino_ui_platform::{
+use crate::platform::{
     PlatformError, PointerEvent, TouchEvent, WindowEvent, WindowId, WindowSystem,
 };
+use crate::{Application, UiError, WindowKey};
+use cupertino_app_protocols::semantics::Outcome;
 
 /// Whether `w` is a popup that wanted a grab and opened without one.
 fn ungrabbed<M>(w: &WindowState<M>) -> bool {

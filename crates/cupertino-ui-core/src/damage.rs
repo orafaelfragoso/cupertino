@@ -15,10 +15,10 @@
 //! the run holds, none looked up apart, and a run of which nothing changed damages nothing. Any other run gives its
 //! nodes back to be looked up one by one, so a frame damages what comparing every node apart damages.
 
+use crate::layout::{IdMap, IdSet};
 use crate::paint::Painting;
 use cupertino_geometry::Point;
 use cupertino_geometry::Rect;
-use cupertino_ui_layout::{IdMap, IdSet};
 use cupertino_ui_render::{
     scroll_layers, DamageRegion, DisplayList, Layer, PaintNodeId, PaintRevision, Shape, Transform,
 };

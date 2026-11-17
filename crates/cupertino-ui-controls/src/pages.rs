@@ -6,15 +6,15 @@ use crate::press::{Keys, Outcome, Press};
 use crate::PageDots;
 use cupertino_geometry::{Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
+};
+use cupertino_ui_core::platform::Keysym;
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Element,
     Environment, Event, EventCx, FocusTarget, MeasureCx, PaintCx, Propagation, Role, SemanticsCx,
     Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutDirection, LayoutSpec, Measured,
-};
-use cupertino_ui_platform::Keysym;
 use std::rc::Rc;
 
 const LEFT: Keysym = Keysym(0xff51);

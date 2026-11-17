@@ -1,9 +1,9 @@
 use crate::Canvas;
 use cupertino_geometry::Size;
+use cupertino_ui_core::layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 
 impl<M: 'static> Widget<M> for Canvas<M> {
     type State = ();

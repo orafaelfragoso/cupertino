@@ -3,12 +3,12 @@ use crate::look;
 use crate::Tabs;
 use cupertino_geometry::{Insets, Point, Rect};
 use cupertino_theme::ui::{ColorRole, ControlFamily};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_core::{
     Change, ControlState, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
-};
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{FillRule, PaintOp, PathVerb, Shape};
 

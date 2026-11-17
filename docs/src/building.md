@@ -621,7 +621,7 @@ named `instructions` per crate (`benches/instructions.rs`), with what each measu
 |---|---|
 | `cupertino-raster-math` | The blur's plan and kernel for a 4K output, the blur of a 4K backdrop, the coverage of a continuous-corner rounded rectangle and the dithered store over a panel's pixels at 2x |
 | `cupertino-glass` | One glass sample of the CPU model: inside, on the edge, in a corner, in the neck between joined shapes |
-| `cupertino-ui-layout` | A file manager window's solve (about 480 nodes): cold, cached, resized |
+| `cupertino-ui-core` | A file manager window's solve (about 480 nodes): cold, cached, resized |
 | `cupertino-ui-render` | A 1280 × 800 window with text, a drop shadow and a blur at 2x: its first frame, a whole repaint, one row's damage |
 | `cupertino-ui-text` | 64 file names shaped and laid out, as a list and as an icon grid shows them, and laid out again |
 | `cupertino-launcher` | The index of 5 000 applications, seven queries, the scorer alone |
@@ -636,7 +636,7 @@ It needs Valgrind (`pacman -S valgrind`). The framework's runner, `gungraun-runn
 `Cargo.lock` exactly (`cargo install gungraun-runner --version VERSION --locked`). Counts and baselines are kept under
 `target/gungraun` with the Callgrind profile of each benchmark, which `callgrind_annotate` reads. The setup a benchmark
 names (building the tree, the scene, the index) is not counted. The wall-clock benches beside them (`cargo bench -p
-cupertino-ui-layout --bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo
+cupertino-ui-core --bench layout`, `cargo bench -p cupertino-launcher --bench matching` and the other crates' `cargo
 bench`) stay, for the time a call takes.
 
 Counts move a little with the hash seeds of a run (under 0.1% here), so a change has to rise well past that to count. A

@@ -19,8 +19,8 @@ use cupertino_gpu::{
     program_cache, DetachedDevice, Device, DeviceDesc, Loss, Platform, ProgramCacheStats,
     FOURCC_ARGB8888,
 };
-use cupertino_ui_gpu::{GpuConfig, GpuPrograms, GpuRenderer, WindowRenderer};
-use cupertino_ui_platform::PlatformEvent;
+use cupertino_ui_core::platform::PlatformEvent;
+use cupertino_ui_render::gpu::{GpuConfig, GpuPrograms, GpuRenderer, WindowRenderer};
 use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::GlyphRasterizer;
 use cupertino_wayland_client::{Connection, PixelRect, SurfaceId};

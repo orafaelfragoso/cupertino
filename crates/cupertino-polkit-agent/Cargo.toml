@@ -12,7 +12,6 @@ default = []
 # the `cupertino-polkit-agent` and `cupertino-keyring-prompter` processes
 app = [
     "dep:cupertino-shell-client",
-    "dep:cupertino-ui-atspi",
     "dep:cupertino-ui-wayland",
     "dep:cupertino-wayland-client",
 ]
@@ -27,8 +26,6 @@ cupertino-peer = { path = "../cupertino-peer" }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
-cupertino-ui-atspi = { path = "../cupertino-ui-atspi", optional = true }
-cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 aes = "0.8"

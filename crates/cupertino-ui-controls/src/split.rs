@@ -2,15 +2,15 @@ use crate::look::{self, paint_focus_ring};
 use crate::{Handler, SplitLayout, SplitPane, SplitView, Stack};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::ColorRole;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
+    Overflow, SizeSpec, SplitSpec,
+};
+use cupertino_ui_core::platform::{CursorShape, Keysym, MouseButton, PointerEvent};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Element, Event,
     EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
-    Overflow, SizeSpec, SplitSpec,
-};
-use cupertino_ui_platform::{CursorShape, Keysym, MouseButton, PointerEvent};
 use std::cell::Cell;
 
 const RETURN: Keysym = Keysym(0xff0d);

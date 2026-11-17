@@ -3,7 +3,7 @@ name = "cupertino-ui-core"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "CupertinoKit runtime: the application model, elements and the retained node tree, event routing, focus, commands and tasks, and the accessibility tree"
+description = "CupertinoKit runtime: the application model, elements and the retained node tree, event routing, focus, commands and tasks, the accessibility tree, layout and the window-system interface"
 
 [package.metadata.cupertino]
 layer = "ui"
@@ -14,11 +14,21 @@ async-task = "4.7"
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
-cupertino-ui-layout = { path = "../cupertino-ui-layout" }
-cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-theme = { path = "../cupertino-theme" }
 rustix = { version = "1", features = ["time"] }
 tracing = "0.1"
+
+[dev-dependencies]
+gungraun = "=0.20.0"
+
+[[bench]]
+name = "layout"
+harness = false
+
+[[bench]]
+name = "instructions"
+harness = false

@@ -3,14 +3,14 @@ use crate::scroll;
 use crate::{CalloutPointer, Popover};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant, Surface};
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured,
+};
+use cupertino_ui_core::platform::{DecorationMode, Keysym, WindowSpec};
 use cupertino_ui_core::{
     Change, CommandRegistry, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Popup,
     PopupAnchor, Propagation, Role, SemanticsCx, Widget, Window, WindowBackground, WindowKey,
 };
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured,
-};
-use cupertino_ui_platform::{DecorationMode, Keysym, WindowSpec};
 use std::rc::Rc;
 
 const ESCAPE: Keysym = Keysym(0xff1b);

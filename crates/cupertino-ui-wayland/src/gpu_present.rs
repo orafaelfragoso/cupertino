@@ -9,7 +9,7 @@
 //! once a frame. A buffer uses only a modifier the compositor offers and the driver renders to; linear is never added
 //! on a hardware driver ([`usable_modifiers`]).
 //!
-//! The drawing itself: a frame drawn on the same device ([`cupertino_ui_gpu::WindowRenderer`]) is copied from its
+//! The drawing itself: a frame drawn on the same device ([`cupertino_ui_render::gpu::WindowRenderer`]) is copied from its
 //! texture into the buffer, texel for texel from the first pixel (the buffer may be larger by the size step), and
 //! nothing is uploaded. A frame of the CPU renderer has its pixels uploaded into a texture of the buffer's size, only
 //! what the frame changed, and drawn over the buffer; a frame drawn on another device is read back first.
@@ -25,7 +25,7 @@ use cupertino_gpu::{
     Loss, Pipeline, PipelineDesc, Region, Sampler, SamplerDesc, Texture, TextureDesc,
     TextureFormat, TextureUsage, Topology, FOURCC_ARGB8888, MODIFIER_INVALID, MODIFIER_LINEAR,
 };
-use cupertino_ui_gpu::{GpuPrograms, WindowTexture};
+use cupertino_ui_render::gpu::{GpuPrograms, WindowTexture};
 use cupertino_ui_render::CpuFrame;
 use cupertino_wayland_client::{
     Connection, DmabufAttributes, DmabufPlaneRef, Error as WlError, GpuBufferId, GpuFrame,

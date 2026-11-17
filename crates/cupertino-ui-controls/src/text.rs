@@ -2,10 +2,12 @@ use crate::look;
 use crate::{Text, TextRole};
 use cupertino_geometry::Point;
 use cupertino_theme::ui::{ColorRole, StateVariant, ThemeTokens, TypeRole};
+use cupertino_ui_core::layout::{
+    Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured,
+};
 use cupertino_ui_core::{
     Change, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role, SemanticsCx, Widget,
 };
-use cupertino_ui_layout::{Constraints, ContainerKind, LayoutDirection, LayoutSpec, Measured};
 use cupertino_ui_text::{
     AttributedText, FontWeight, ParagraphLayout, ParagraphStyle, TextAlign, Wrap,
 };

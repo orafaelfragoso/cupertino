@@ -7,8 +7,8 @@
 
 use super::{Runtime, WindowState};
 use crate::cx::IdleCx;
+use crate::platform::{Timestamp, WindowSystem};
 use crate::{Application, UiError};
-use cupertino_ui_platform::{Timestamp, WindowSystem};
 use std::collections::BTreeSet;
 use std::time::Duration;
 

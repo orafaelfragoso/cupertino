@@ -4,11 +4,11 @@
 
 use cupertino_geometry::{Point, Size};
 use cupertino_theme::ui::Surface;
+use cupertino_ui_core::layout::{
+    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, Glass, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
-};
-use cupertino_ui_layout::{
-    Align, Axis, Constraints, ContainerKind, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{FillRule, Paint, PaintOp, PathVerb, Shape};
 

@@ -4,15 +4,15 @@
 //! node repaints only when it changed or its size did, and keeps its paint revision otherwise.
 
 use crate::cx::{OverlayCx, PaintCx};
+use crate::layout::{ContainerKind, LayoutDirection};
+use crate::layout::{IdMap, IdSet};
+use crate::platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use crate::route::{Geometry, Placement};
 use crate::tree::Tree;
 use crate::{Environment, NodeId, WindowBackground};
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use cupertino_theme::ui::{Color, ColorRole, StateVariant};
 use cupertino_theme::ui::{FaceTone, ThemeTokens};
-use cupertino_ui_layout::{ContainerKind, LayoutDirection};
-use cupertino_ui_layout::{IdMap, IdSet};
-use cupertino_ui_platform::{GlassRegion, GlassStyle, GlassTone, MaterialRegion, Timestamp};
 use cupertino_ui_render::{
     DisplayList, Effect, Group, ImageResource, Layer, Paint, PaintNode, PaintNodeId, PaintOp,
     PaintResources, PaintRevision, PathVerb, ResourceId, Shape, Transform,
@@ -75,7 +75,7 @@ struct Foreground {
     own: GlassTone,
 }
 
-/// The tone of each glass region of a window ([`WindowEvent::GlassTone`](cupertino_ui_platform::WindowEvent)): the
+/// The tone of each glass region of a window ([`WindowEvent::GlassTone`](crate::platform::WindowEvent)): the
 /// window's own material, and each region of the last materials asked for, by index.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct GlassTones {

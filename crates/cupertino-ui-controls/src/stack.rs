@@ -1,11 +1,11 @@
 use crate::{Separator, Spacer, Stack, Wrap};
 use cupertino_geometry::{Rect, Size};
 use cupertino_theme::ui::{ColorRole, StateVariant};
+use cupertino_ui_core::layout::{
+    Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
+};
 use cupertino_ui_core::{
     Change, Element, Event, EventCx, MeasureCx, PaintCx, Propagation, SemanticsCx, Widget,
-};
-use cupertino_ui_layout::{
-    Axis, Constraints, ContainerKind, Flex, Justify, LayoutSpec, Measured, SizeSpec,
 };
 use cupertino_ui_render::{Paint, PaintOp, Shape};
 

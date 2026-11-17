@@ -7,6 +7,7 @@ mod cpu;
 mod effects;
 mod geometry;
 mod glyph_cache;
+pub mod gpu;
 mod image_cache;
 mod layers;
 mod raster;

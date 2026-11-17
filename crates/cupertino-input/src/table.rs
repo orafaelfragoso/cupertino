@@ -150,7 +150,9 @@ impl TableCurve {
     /// `(setting + 1) / (acceleration + 1); otherwise both entries are blended toward each other
     /// with `ratio = (setting − lo) / (hi − lo)`, `lo`'s points inserted first.
     ///
-    /// `None` when the setting is negative (acceleration off) or the table is empty.
+    /// `None` when the setting is negative (acceleration off), the table is empty, or a used
+    /// entry has no points or a point whose `x` is not finite and above zero, which the curve
+    /// cannot interpolate.
     pub fn new(table: &AccelTable, setting: f64) -> Option<Self> {
         if setting < 0.0 {
             return None;
@@ -162,6 +164,12 @@ impl TableCurve {
             Some(i) => (i.saturating_sub(1), i),
             None => (last, last),
         };
+        let usable = |e: &TableEntry| {
+            !e.points.is_empty() && e.points.iter().all(|p| p.0 > 0.0 && p.0.is_finite())
+        };
+        if !usable(&entries[lo]) || !usable(&entries[hi]) {
+            return None;
+        }
         let mut points = Vec::new();
         if lo == hi {
             let e = &entries[hi];

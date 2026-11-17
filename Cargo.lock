@@ -1885,6 +1885,7 @@ dependencies = [
 name = "cupertino-ui-text"
 version = "0.1.0"
 dependencies = [
+ "cupertino-assets",
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-keyboard",

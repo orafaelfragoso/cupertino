@@ -1,5 +1,8 @@
-//! Stage model: groups, centre stage, strip of recent groups, swap animation, add by drag, strip
-//! hide/peek, desktop hiding.
+//! Stage model: window groups, a centre stage, a strip of recent groups, spring swap animation,
+//! add-to-stage by drag, strip hide/peek and desktop hiding. Pure logic (no compositor dependency).
+//!
+//! The strip layout settings and their default values are as designed and the swap spring is as designed; paddings and dwell times are approximate or unknown and
+//! configurable through [`StageConfig`].
 //!
 //! Layout
 //! defaults were, and the strip moves with the window manager's generic
@@ -9,13 +12,15 @@
 //! inside its slot, 1 = shown on the stage at the window's stage frame) and an animated slot
 //! rectangle. [`Stage::window_frames`] combines them; swaps retarget the springs without jumps.
 
+pub mod config;
+
+pub use config::{ClickDesktop, Grouping, StageConfig};
+
 use std::collections::HashMap;
 
+use crate::geometry::{Point, Rect};
+use crate::ids::{AppId, WindowId};
 use cupertino_animation::AnimatedValue;
-use cupertino_wm::geometry::{Point, Rect};
-use cupertino_wm::ids::{AppId, WindowId};
-
-use crate::config::{ClickDesktop, Grouping, StageConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GroupId(pub u64);

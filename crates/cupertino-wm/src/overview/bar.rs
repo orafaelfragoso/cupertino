@@ -2,9 +2,9 @@
 //! one on a pill; open (the pointer at the top) it grows and shows a live picture of every desktop with its name
 //! below. The add button is a bare plus at the band's top-right corner in both states.
 
+use crate::geometry::{Point, Rect};
+use crate::ids::WorkspaceId;
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
-use cupertino_wm::geometry::{Point, Rect};
-use cupertino_wm::ids::WorkspaceId;
 
 #[derive(Clone, Debug)]
 pub struct BarConfig {

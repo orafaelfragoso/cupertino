@@ -2,7 +2,7 @@
 //! desktop places scaled into the work area and are pushed apart and shrunk until no pair overlaps
 //! by more than the tolerance.
 
-pub use cupertino_wm::geometry::Rect;
+pub use crate::geometry::Rect;
 
 /// Constants of the packing.: the work-area inset, the gap argument, the
 /// vertical offset, the stop tolerance, the shrink constant and the pass limit. the gap's

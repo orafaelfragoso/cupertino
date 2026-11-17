@@ -4,7 +4,7 @@
 //! the application switcher's panel is the dock's too.
 
 use cupertino_animation::{AnimatedValue, Curve};
-use cupertino_overview::{OverviewConfig, OverviewMode, OverviewWindow, Transition};
+use cupertino_wm::overview::{OverviewConfig, OverviewMode, OverviewWindow, Transition};
 use cupertino_wm::{OutputId, Point, Rect, WindowId, Wm, WorkspaceId};
 
 /// The menu bar gives way to an opening overview over this many seconds, about three frames at 60 Hz, and comes back

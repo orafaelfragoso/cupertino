@@ -1,18 +1,18 @@
 //! The overview as the dock process shows it: the layout of the windows the server lists (the
-//! reference packing in `cupertino-overview`, which the dock answers with one `overview_frame` per
+//! reference packing in `cupertino_wm::overview`, which the dock answers with one `overview_frame` per
 //! window), the desktops bar (names, opening on the pointer at the top to show the desktops' pictures, the add button,
 //! the remove button after a rest on a picture, drag-reorder), the selection ring and name, dragging a window onto a
 //! desktop, and what a click or key asks the server for. The server owns the open/close transition and the windows
 //! themselves; this model is always at the final layout.
 
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
-use cupertino_overview::bar::{BarHit, BarLayout};
-use cupertino_overview::{
+use cupertino_wm::geometry::{Point, Rect};
+use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
+use cupertino_wm::overview::bar::{BarHit, BarLayout};
+use cupertino_wm::overview::{
     Highlight, Key, Overview, OverviewAction, OverviewConfig, OverviewMode, OverviewWindow,
     PlacedWindow,
 };
-use cupertino_wm::geometry::{Point, Rect};
-use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
 
 /// Wayland layer-shell namespace of the overview's surface.
 pub const NAMESPACE: &str = "cupertino-dock-overview";

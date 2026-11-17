@@ -1052,7 +1052,7 @@ impl Cupertino {
                 // the window stays where it was taken and the overview opens on its output
                 self.command(Command::PointerRelease);
                 if let Some(output) = self.output_at(pos).map(|o| o.id) {
-                    self.open_overview(output, cupertino_overview::OverviewMode::Overview);
+                    self.open_overview(output, cupertino_wm::overview::OverviewMode::Overview);
                 }
             }
             if !self.wm.is_interacting() {

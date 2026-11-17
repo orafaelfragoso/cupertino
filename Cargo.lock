@@ -1086,7 +1086,6 @@ dependencies = [
  "cupertino-icons",
  "cupertino-keyboard",
  "cupertino-kit",
- "cupertino-overview",
  "cupertino-shell-client",
  "cupertino-trash",
  "cupertino-ui-wayland",
@@ -1444,15 +1443,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-overview"
-version = "0.1.0"
-dependencies = [
- "cupertino-animation",
- "cupertino-theme",
- "cupertino-wm",
-]
-
-[[package]]
 name = "cupertino-peer"
 version = "0.1.0"
 dependencies = [
@@ -1675,7 +1665,6 @@ dependencies = [
  "cupertino-gpu",
  "cupertino-input",
  "cupertino-keyboard",
- "cupertino-overview",
  "cupertino-peer",
  "cupertino-protocols",
  "cupertino-raster-math",
@@ -1683,7 +1672,6 @@ dependencies = [
  "cupertino-scene",
  "cupertino-seat",
  "cupertino-semantics",
- "cupertino-stage",
  "cupertino-theme",
  "cupertino-wm",
  "image",
@@ -1767,14 +1755,6 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
-]
-
-[[package]]
-name = "cupertino-stage"
-version = "0.1.0"
-dependencies = [
- "cupertino-animation",
- "cupertino-wm",
 ]
 
 [[package]]
@@ -1985,7 +1965,6 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-diagnostic-events",
  "cupertino-protocols",
- "cupertino-stage",
  "cupertino-wm",
  "wayland-client",
 ]

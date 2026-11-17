@@ -398,18 +398,30 @@ Stop, change nothing more, and report when:
 
 ### Checks before you report
 
-Only for what you changed; the lead runs the full gates when a wave closes.
+Only for what you changed; the lead runs the layers check, the gate and the reverse dependencies at each merge
+(`cargo xtask ci --profile integration --base <batch base>`) and the full gates when a wave closes.
 
 ```bash
-cargo xtask ci --profile agent         # fmt, clippy and the tests of the crates you changed, and the gate
+cargo xtask ci --profile agent --dry-run  # first: see what the plan selects
+cargo xtask ci --profile agent            # fmt, clippy and nextest of the crates you changed; no layers, no gate
 cargo run -q -p cupertino-layers -- --graph > crates/cupertino-layers/graph/layers.dot
-cargo run -q -p cupertino-layers -- --write-remaining
+cargo run -q -p cupertino-layers -- --write-remaining   # once W0.2 is merged
 cargo run -q -p cupertino-layers
 ```
 
+`.config/validation.toml` sends a change to `Cargo.toml`, `Cargo.lock`, `.config/`, any `build.rs` or `third-party/` to
+the whole workspace, whatever the scope; a crate merge always changes `Cargo.lock`. When the dry run says "checks the
+whole workspace", do not run it: check the crates you own and touch by name instead,
 
-Commit the regenerated graph and remaining-work list with your change. No benchmarks, no workspace-wide validation, no
-`sleep` or `pgrep` loops.
+```bash
+cargo fmt -p <crate>...
+CARGO_BUILD_WARNINGS=deny cargo clippy --locked --all-targets --all-features -p <crate>...
+cargo nextest run --locked --all-features -p <crate>...
+```
+
+and say so in the report. At most two `cargo xtask ci` runs build at once across checkouts (`[limits] slots`); a run
+waiting for a slot is not a failure. Commit the regenerated graph and remaining-work list with your change. No
+benchmarks, no workspace-wide validation, no `sleep` or `pgrep` loops.
 
 ### Report
 

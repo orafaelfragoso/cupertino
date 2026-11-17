@@ -66,6 +66,14 @@ const SWITCH_GIVE_UP: Duration = Duration::from_secs(5);
 /// How long a started session may take to announce that its agent is up before the login screen is shown again without it
 /// (the design's login waits for the session at most 15.0 s).
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a started session may take to have its first frame ready on its terminal in the background (`SessionPrepared`)
+/// before it is brought to the console all the same, so a compositor that never says so does not keep the person on the login
+/// screen (approximate, ours: a session is ready in under a second).
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a session that logs out stays after the login screen took the console, so the login screen's compositor has put
+/// its first frame up before the end of the session's compositor takes that compositor's last frame off the display
+/// (approximate, ours: a frame takes a few milliseconds).
+const LOG_OUT_GRACE: Duration = Duration::from_millis(500);
 /// How long the login screen's session has to end when the manager hands over to a new version before its worker is
 /// killed and logind ends what is left (approximate, ours: the compositor ends in well under a second).
 const GREETER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -209,10 +217,29 @@ struct Session {
     ready: bool,
     /// When the login screen stops waiting for `SessionReady`; `None` once the session is ready or the wait is over.
     ready_deadline: Option<Instant>,
+    /// When the session is brought to the console without its `SessionPrepared`: `Some` while its compositor gets its first
+    /// frame ready on its terminal in the background, `None` once the session was brought to the console.
+    prepare_deadline: Option<Instant>,
+    /// The agent announced the session before it was on the console: the login screen is cleared once the switch to the
+    /// session is over, not while it is still shown.
+    clear_when_shown: bool,
+    /// The session logs out (`LogOut`): it is not returned to, and it ends once the login screen has the console.
+    ending: Option<Ending>,
     /// The unique bus name of the agent that announced the session, for what the manager sends it.
     agent: Option<String>,
     /// The terminal the session runs on, held until the session is gone.
     _terminal: Option<File>,
+}
+
+/// Where a session that logs out is in its end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// The login screen is taking the console.
+    AfterSwitch,
+    /// The login screen has the console: logind ends the session then.
+    At(Instant),
+    /// logind was asked to end it.
+    Asked,
 }
 
 /// A session of an earlier run of the manager that this run found in logind (`Service` names the PAM service that opened it, so
@@ -610,7 +637,16 @@ impl Manager {
             self.upgrade.is_some().then_some(self.upgrade_check_at),
         ]
         .into_iter()
-        .chain(self.sessions.iter().map(|session| session.ready_deadline))
+        .chain(self.sessions.iter().flat_map(|session| {
+            [
+                session.ready_deadline,
+                session.prepare_deadline,
+                session.ending.and_then(|ending| match ending {
+                    Ending::At(at) => Some(at),
+                    _ => None,
+                }),
+            ]
+        }))
         .flatten()
         .min();
         let timeout = deadline.map(|at| {
@@ -946,7 +982,11 @@ impl Manager {
             .map(|account| account.uid);
         let existing = uid
             .filter(|_| power.is_none())
-            .and_then(|uid| self.sessions.iter().find(|session| session.uid == uid))
+            .and_then(|uid| {
+                self.sessions
+                    .iter()
+                    .find(|session| session.uid == uid && session.ending.is_none())
+            })
             .map(|session| session.id.clone());
         let (mode, vt, terminal) = if existing.is_some() || power.is_some() {
             (Mode::Verify, self.config.vt, None)
@@ -1137,6 +1177,9 @@ impl Manager {
                     worker: None,
                     ready: true,
                     ready_deadline: None,
+                    prepare_deadline: None,
+                    clear_when_shown: false,
+                    ending: None,
                     agent: None,
                     _terminal: terminal,
                 });
@@ -1170,6 +1213,21 @@ impl Manager {
     fn leader_exited(&mut self, id: &str) {
         if let Err(e) = self.logind.terminate_session(id) {
             eprintln!("cupertino-sessiond: {e}");
+        }
+        // a session that ended before it was shown is never brought to the console; the login screen stops waiting for it
+        let unshown = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id)
+            .and_then(|session| session.prepare_deadline.take())
+            .is_some();
+        if unshown {
+            eprintln!(
+                "cupertino-sessiond: session {id} ended before it was shown; clearing the login screen"
+            );
+            session_start_failed("console", "the session ended before it was shown");
+            self.show_login_screen();
+            return;
         }
         match self.logind.active_session() {
             Ok(Some(foreground)) if foreground == id => {
@@ -1531,6 +1589,9 @@ impl Manager {
             worker: Some(id),
             ready: false,
             ready_deadline: None,
+            prepare_deadline: None,
+            clear_when_shown: false,
+            ending: None,
             agent: None,
             _terminal: terminal,
         });
@@ -1541,15 +1602,16 @@ impl Manager {
         {
             self.attempt = None;
         }
-        match self.bring_to_console(session_id) {
-            // the login screen keeps its spinner until the session's agent says it is up, at most [`SESSION_READY_TIMEOUT`]
+        // the login screen stays on the console, with its spinner, while the session's compositor gets ready in the
+        // background, at most [`PREPARE_TIMEOUT`]
+        match self.keep_in_background(session_id) {
             Ok(()) => {
                 if let Some(session) = self
                     .sessions
                     .iter_mut()
                     .find(|session| session.id == session_id)
                 {
-                    session.ready_deadline = Some(Instant::now() + SESSION_READY_TIMEOUT);
+                    session.prepare_deadline = Some(Instant::now() + PREPARE_TIMEOUT);
                 }
             }
             Err(e) => {
@@ -1560,11 +1622,11 @@ impl Manager {
         }
     }
 
-    /// The session is brought to the console as soon as its leader runs: the compositor of a session on a terminal that is not
-    /// in the foreground does not start its shell processes (it waits for the terminal), so its agent cannot announce the
-    /// session before the switch. A session on such a terminal stays inactive until then; if logind has activated it by itself,
-    /// the login screen's session takes the console back first.
-    fn bring_to_console(&mut self, session_id: &str) -> Result<()> {
+    /// A session stays on its terminal in the background while its compositor takes the display's devices, draws its first
+    /// frame and says so (`SessionPrepared`): the console switches only then, from the login screen straight to the session's
+    /// picture, never to a terminal that nothing draws on yet. If logind has activated the session by itself, the login
+    /// screen's session takes the console back first.
+    fn keep_in_background(&mut self, session_id: &str) -> Result<()> {
         if self.logind.is_active(session_id)? {
             eprintln!("cupertino-sessiond: logind activated session {session_id} by itself; activating the login screen's session again");
             let greeter = self
@@ -1573,10 +1635,121 @@ impl Manager {
                 .ok_or("the login screen has no session to activate again")?;
             self.logind.activate_session(greeter)?;
         } else {
-            eprintln!("cupertino-sessiond: session {session_id} is not active; activating it");
+            eprintln!("cupertino-sessiond: session {session_id} starts in the background until its first frame is ready");
         }
-        self.activate(session_id)?;
         Ok(())
+    }
+
+    /// Bring a session that got ready in the background to the console. The login screen keeps its spinner until the session's
+    /// agent says it is up, at most [`SESSION_READY_TIMEOUT`]; for an agent that said so already it is cleared once the switch
+    /// is over.
+    fn bring_to_console(&mut self, session_id: &str) {
+        let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        session.prepare_deadline = None;
+        let ready = session.ready;
+        match self.activate(session_id) {
+            Ok(()) => {
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
+                    if ready {
+                        session.clear_when_shown = true;
+                    } else {
+                        session.ready_deadline = Some(Instant::now() + SESSION_READY_TIMEOUT);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("cupertino-sessiond: {e}");
+                session_start_failed("console", &e.to_string());
+                self.send(&Event::Reset);
+            }
+        }
+    }
+
+    /// `SessionPrepared` of a session's compositor: its first frame is ready, so the session is brought to the console. A
+    /// session on the console already (the wait for it was over) is left as it is.
+    fn session_prepared(
+        &mut self,
+        caller: &CallerSession,
+    ) -> std::result::Result<(), ReadyRefusal> {
+        let id = caller.id.as_str();
+        let session = self
+            .sessions
+            .iter()
+            .find(|session| session.id == id && session.uid == caller.uid)
+            .ok_or(ReadyRefusal::UnknownSession)?;
+        if session.prepare_deadline.is_none() {
+            eprintln!("cupertino-sessiond: session {id} has its first frame ready; it is on the console already");
+            return Ok(());
+        }
+        eprintln!(
+            "cupertino-sessiond: session {id} has its first frame ready; bringing it to the console"
+        );
+        self.bring_to_console(id);
+        Ok(())
+    }
+
+    /// `LogOut` of a session's agent, once its applications have quit: the login screen takes the console first, and the
+    /// session ends [`LOG_OUT_GRACE`] after the switch is over, so the person goes from the session's picture straight to the
+    /// login screen and never sees the session's compositor end. A session in the background, or one with no login screen to
+    /// switch to, ends at once.
+    fn log_out(&mut self, caller: &CallerSession) -> std::result::Result<(), ReadyRefusal> {
+        let id = caller.id.clone();
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id && session.uid == caller.uid)
+            .ok_or(ReadyRefusal::UnknownSession)?;
+        if session.ending.is_some() {
+            return Ok(());
+        }
+        let foreground = match self.logind.is_active(&id) {
+            Ok(active) => active,
+            Err(e) => {
+                eprintln!("cupertino-sessiond: {e}");
+                false
+            }
+        };
+        let greeter = self
+            .greeter_session
+            .clone()
+            .filter(|_| foreground && self.switch.is_none());
+        if let Some(greeter) = greeter {
+            eprintln!("cupertino-sessiond: session {id} logs out; the login screen takes the console first");
+            match self.activate(&greeter) {
+                Ok(()) => {
+                    if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id)
+                    {
+                        session.ending = Some(Ending::AfterSwitch);
+                    }
+                    self.show_login_screen();
+                    return Ok(());
+                }
+                Err(e) => eprintln!("cupertino-sessiond: {e}"),
+            }
+        }
+        eprintln!("cupertino-sessiond: session {id} logs out");
+        self.end_session(&id);
+        Ok(())
+    }
+
+    /// Have logind end session `id`, which logged out.
+    fn end_session(&mut self, id: &str) {
+        if let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) {
+            session.ending = Some(Ending::Asked);
+        }
+        if let Err(e) = self.logind.terminate_session(id) {
+            eprintln!("cupertino-sessiond: {e}");
+        }
     }
 
     /// The open attempt cannot go on (its worker failed or died): `Internal` before the decision, a `Reset` after it.
@@ -1640,6 +1813,26 @@ impl Manager {
         }
         if gave_up {
             self.show_login_screen();
+        }
+        let unprepared: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|session| session.prepare_deadline.is_some_and(|at| at <= now))
+            .map(|session| session.id.clone())
+            .collect();
+        for id in unprepared {
+            eprintln!("cupertino-sessiond: session {id} did not say within {} s that its first frame is ready; bringing it to the console all the same", PREPARE_TIMEOUT.as_secs());
+            self.bring_to_console(&id);
+        }
+        let ended: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|session| matches!(session.ending, Some(Ending::At(at)) if at <= now))
+            .map(|session| session.id.clone())
+            .collect();
+        for id in ended {
+            eprintln!("cupertino-sessiond: the login screen has the console; ending session {id}, which logged out");
+            self.end_session(&id);
         }
         if self.upgrade_check_at <= now {
             self.upgrade_check_at = now + upgrade::CHECK_INTERVAL;
@@ -1743,17 +1936,40 @@ impl Manager {
             return;
         };
         match self.logind.is_active(&switch.target) {
-            Ok(true) => self.switch = None,
+            Ok(true) => {}
             Ok(false) if now >= switch.give_up_at => {
                 eprintln!("cupertino-sessiond: session {} is not in the foreground {} s after the switch; the switch is over", switch.target, SWITCH_GIVE_UP.as_secs());
-                self.switch = None;
             }
-            Ok(false) => switch.next_poll = now + SWITCH_POLL,
+            Ok(false) => {
+                switch.next_poll = now + SWITCH_POLL;
+                return;
+            }
             Err(e) => {
                 // the target is gone (its session ended) or logind failed: either way nothing is under way
                 eprintln!("cupertino-sessiond: {e}");
-                self.switch = None;
             }
+        }
+        if let Some(switch) = self.switch.take() {
+            self.switch_over(&switch.target, now);
+        }
+    }
+
+    /// The switch of the console to `target` is over: a session that logs out ends [`LOG_OUT_GRACE`] from `now`, and the login
+    /// screen is cleared once the session its agent announced before the switch is shown.
+    fn switch_over(&mut self, target: &str, now: Instant) {
+        for session in &mut self.sessions {
+            if session.ending == Some(Ending::AfterSwitch) {
+                session.ending = Some(Ending::At(now + LOG_OUT_GRACE));
+            }
+        }
+        let cleared = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == target && session.clear_when_shown)
+            .map(|session| session.clear_when_shown = false)
+            .is_some();
+        if cleared {
+            self.show_login_screen();
         }
     }
 
@@ -1870,6 +2086,18 @@ impl Manager {
                     eprintln!("cupertino-sessiond: the caller of SessionReady stopped waiting");
                 }
             }
+            Call::Prepared { session, reply } => {
+                let result = self.session_prepared(&session);
+                if reply.send(result).is_err() {
+                    eprintln!("cupertino-sessiond: the caller of SessionPrepared stopped waiting");
+                }
+            }
+            Call::LogOut { session, reply } => {
+                let result = self.log_out(&session);
+                if reply.send(result).is_err() {
+                    eprintln!("cupertino-sessiond: the caller of LogOut stopped waiting");
+                }
+            }
         }
     }
 
@@ -1896,7 +2124,18 @@ impl Manager {
         session.ready = true;
         session.ready_deadline = None;
         eprintln!("cupertino-sessiond: session {id} is ready");
-        self.show_login_screen();
+        // a session still in the background has its shell up before the switch: the login screen, still shown, keeps its
+        // spinner until the switch is over
+        let shown = session.prepare_deadline.is_none()
+            && self
+                .switch
+                .as_ref()
+                .is_none_or(|switch| switch.target != id);
+        if shown {
+            self.show_login_screen();
+        } else {
+            session.clear_when_shown = true;
+        }
         Ok(())
     }
 
@@ -1994,7 +2233,15 @@ impl Manager {
             return Ok(());
         };
         // dropping the record releases the terminal
-        self.sessions.remove(index);
+        let unshown = self.sessions.remove(index).prepare_deadline.is_some();
+        if unshown {
+            eprintln!(
+                "cupertino-sessiond: session {id} ended before it was shown; clearing the login screen"
+            );
+            self.show_login_screen();
+            self.hand_over_if_due(Instant::now());
+            return Ok(());
+        }
         let foreground = match self.logind.active_session() {
             Ok(foreground) => foreground,
             Err(e) => {

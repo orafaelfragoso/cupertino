@@ -1033,8 +1033,7 @@ fn a_session_resumed_or_made_while_locked_is_copied_black() {
     let source = c.output_source();
     let capture = c.session(&mut h, &source, true);
     let locker = locked(&mut h);
-    // the lock screen is drawn and the fade from black after the resume is over, so only the black copy keeps its
-    // colour out of the frames below
+    // the lock screen is drawn, so only the black copy keeps its colour out of the frames below
     h.clients_until(&mut [&mut c], "the lock surface to be drawn", |s| {
         s.lock_surface_of(0).is_some_and(|surface| {
             with_renderer_surface_state(&surface, |state| state.buffer().is_some()).unwrap_or(false)
@@ -1042,14 +1041,13 @@ fn a_session_resumed_or_made_while_locked_is_copied_black() {
     });
 
     h.state.session_activated();
-    let after_fade = h.state.now() + 1.0;
+    let after_resume = h.state.now() + 1.0;
     let event_loop = &mut h.event_loop;
-    common::set_time_with(&mut h.state, after_fade, |state| {
+    common::set_time_with(&mut h.state, after_resume, |state| {
         app.pump();
         headless::step(state, event_loop, Duration::from_millis(2)).unwrap();
         app.pump();
     });
-    assert_eq!(h.state.activation_overlay_alpha(), None);
     next_frame(
         &mut h,
         &mut c,

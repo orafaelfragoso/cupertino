@@ -554,8 +554,8 @@ pub struct SceneParams<'a> {
     /// The surface that has the keyboard: a session panel there casts an active alert's shadow.
     pub keyboard_focus: Option<WlSurface>,
     pub lock: LockView,
-    /// Black overlays over everything, front to back: the activation fade, then the power dimming.
-    pub session_overlays: [Option<SessionOverlay>; 2],
+    /// Black overlays over everything, front to back: the power dimming.
+    pub session_overlays: [Option<SessionOverlay>; 1],
     /// The frame leaves the compositor (screen capture, screenshot files, recordings): the surfaces of the
     /// authentication prompt are left out.
     pub for_capture: bool,
@@ -585,7 +585,7 @@ fn session_overlays(p: &SceneParams<'_>, stack: &mut Composition) {
 
 fn push_session_overlays(
     size: (f64, f64),
-    overlays: &[Option<SessionOverlay>; 2],
+    overlays: &[Option<SessionOverlay>],
     stack: &mut Composition,
 ) {
     const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -3735,7 +3735,7 @@ mod tests {
     }
 
     #[test]
-    fn session_overlays_cover_everything_activation_fade_first() {
+    fn session_overlays_cover_everything() {
         let mut stack = Composition::new(1.0);
         stack.push(SceneLayer::Windows, marker(SceneKind::Shadow));
         stack.push(SceneLayer::Cursor, marker(SceneKind::CursorImage));
@@ -3745,16 +3745,10 @@ mod tests {
         );
         push_session_overlays(
             (100.0, 80.0),
-            &[
-                Some(SessionOverlay {
-                    kind: SceneKind::ActivationFade,
-                    alpha: 0.5,
-                }),
-                Some(SessionOverlay {
-                    kind: SceneKind::PowerOverlay,
-                    alpha: 0.25,
-                }),
-            ],
+            &[Some(SessionOverlay {
+                kind: SceneKind::PowerOverlay,
+                alpha: 0.25,
+            })],
             &mut stack,
         );
         let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
@@ -3767,7 +3761,6 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                SceneKind::ActivationFade,
                 SceneKind::PowerOverlay,
                 SceneKind::SnapPreview,
                 SceneKind::CursorImage,
@@ -3779,7 +3772,7 @@ mod tests {
     #[test]
     fn an_idle_session_adds_no_overlay() {
         let mut stack = Composition::new(1.0);
-        push_session_overlays((100.0, 80.0), &[None, None], &mut stack);
+        push_session_overlays((100.0, 80.0), &[None], &mut stack);
         let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
         assert!(composed.frame.items().is_empty());
     }

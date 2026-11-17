@@ -113,6 +113,28 @@ struct InFlight {
     held: bool,
 }
 
+/// A display enabled while the session waits in the background to be shown ([`Preparing`]): its output is announced to
+/// clients, which draw on it, and its DRM output is set up when the session is shown, since setting one up needs the
+/// device's master, which only the shown session holds.
+struct Prepared {
+    head: HeadId,
+    output: OutputId,
+    /// What the output is announced with, for its DRM output.
+    announced: smithay::output::Output,
+    mode: HeadMode,
+    drm_mode: control::Mode,
+    connector: connector::Handle,
+}
+
+/// The session started on its terminal in the background ([`run`]): before the console comes to it, it opens the GPU,
+/// announces its displays' outputs, starts its shell and draws its first frame once off screen (the wallpaper read, the
+/// programs and textures made), then tells the session manager it can be shown ([`tell_prepared`]).
+struct Preparing {
+    since: Instant,
+    /// The session manager was told.
+    told: bool,
+}
+
 /// A connected display: its connector and the DRM modes behind its head's modes.
 struct DrmHead {
     head: HeadId,
@@ -154,6 +176,8 @@ struct Card {
     scanner: DrmScanner,
     /// The enabled heads' outputs.
     surfaces: HashMap<crtc::Handle, Surface>,
+    /// The heads enabled while the session waited to be shown, by CRTC, set up when it is.
+    prepared: HashMap<crtc::Handle, Prepared>,
     /// Every connected head, by the CRTC the scanner gave its connector.
     heads: HashMap<crtc::Handle, DrmHead>,
     /// Connected connectors the scanner found no free CRTC for, told once.
@@ -171,6 +195,8 @@ pub struct UdevBackend {
     scale: Option<f64>,
     /// The session is paused: the DRM device rejects every frame until it resumes.
     paused: bool,
+    /// The session has not been shown yet: it gets ready in the background.
+    preparing: Option<Preparing>,
     /// The display sleeps (`power.rs`): every CRTC is off and nothing is rendered until it wakes.
     asleep: bool,
     /// A render reported the rendering context lost: nothing is drawn with it again, and the next frame makes a new one
@@ -192,7 +218,8 @@ fn frame_due(stopped: bool, waiting: bool, due: bool) -> bool {
 /// How long the loop may sleep: until the earliest output is due to draw, a flip in flight is overdue,
 /// [`Cupertino::tick`] has time-driven work ([`Cupertino::next_tick_deadline`]) or the run's limit (`end`) comes.
 /// Events (clients, input, vblanks) wake it sooner; with nothing due it sleeps ([`super::REST_WAIT`]). Outputs that cannot
-/// draw (paused, asleep, off) wait for an event, not a frame deadline.
+/// draw (paused, asleep, off) wait for an event, not a frame deadline; a session getting ready in the background looks
+/// every [`PREPARE_POLL`] whether its first frame can be made.
 fn loop_timeout(state: &Cupertino, end: Option<Instant>) -> Duration {
     // a passed deadline nothing acted on must not spin the loop
     const PASSED: Duration = Duration::from_millis(1);
@@ -219,7 +246,14 @@ fn loop_timeout(state: &Cupertino, end: Option<Instant>) -> Duration {
         _ => None,
     };
     let end = end.map(|end| end.saturating_duration_since(Instant::now()));
-    super::loop_wait([tick, frames, end])
+    // a session in the background looks for its wallpaper until it can be shown
+    let preparing = match state.backend.as_ref() {
+        Some(Backend::Udev(u)) if u.preparing.as_ref().is_some_and(|p| !p.told) => {
+            Some(PREPARE_POLL)
+        }
+        _ => None,
+    };
+    super::loop_wait([tick, frames, end, preparing])
 }
 
 impl UdevBackend {
@@ -319,8 +353,12 @@ fn open_card(session: &LogindSession, path: &Path) -> Result<Opened> {
         )
         .map_err(|e| anyhow!("opening {}: {e}", path.display()))?;
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
+    // the displays keep what they show (the login screen, the session before, the console) until a frame of ours replaces
+    // it, rather than going dark when the device is opened: a CRTC in the mode it had changes its picture without a
+    // modeset, and what no head of ours drives is switched off after each scan ([`switch_off_strays`]). Opening the device
+    // so commits nothing, which a session in the background (no DRM master) could not
     let (drm, notifier) =
-        DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
+        DrmDevice::new(fd.clone(), false).map_err(|e| anyhow!("drm device: {e}"))?;
     let gbm = GbmDevice::new(fd.clone()).map_err(|e| anyhow!("gbm device: {e} (the driver's GBM backend is missing or refused the device; run `cupertino-server --check-hardware`)"))?;
     let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| {
         anyhow!(
@@ -421,6 +459,7 @@ fn card(
         manager,
         scanner: DrmScanner::new(),
         surfaces: HashMap::new(),
+        prepared: HashMap::new(),
         heads: HashMap::new(),
         waiting: HashSet::new(),
         events,
@@ -595,7 +634,7 @@ pub fn run(
         }
         bail!("this machine is not set up for the TTY backend:\n{report}");
     }
-    let (session, mut notifier) = LogindSession::new().map_err(|e| {
+    let (session, notifier) = LogindSession::new().map_err(|e| {
         anyhow!(
             "opening a logind session: {e} (start from a text console such as Ctrl+Alt+F3, or from a display manager's session entry; a running desktop session already controls the seat)"
         )
@@ -605,22 +644,16 @@ pub fn run(
     if seat != SEAT0 {
         bail!("the session is on seat {seat}, but devices are only known on {SEAT0}");
     }
-    // A session on a virtual terminal in the background holds no DRM master and gets only
-    // revoked input devices. Only the session's own events run until it activates, on a loop of
-    // their own: the compositor's sources (shell processes, clients) need the outputs first.
-    if !session.is_active() {
-        tracing::info!("waiting for the session to become active");
-        let mut waiting: EventLoop<'_, ()> =
-            EventLoop::try_new().context("creating the session wait loop")?;
-        waiting
-            .handle()
-            .insert_source(&mut notifier, |_, &mut (), _| {})
-            .map_err(|e| anyhow!("inserting the session source: {e}"))?;
-        while !session.is_active() {
-            waiting
-                .dispatch(None, &mut ())
-                .map_err(|e| anyhow!("waiting for the session: {e}"))?;
-        }
+    // A session on a virtual terminal in the background holds no DRM master and gets only revoked input devices. It
+    // gets ready all the same ([`Preparing`]): taking control of the session put its terminal in graphics mode, so the
+    // console draws nothing there when it comes to it, and the GPU, the renderer, the outputs and the first frame are made
+    // here, before the session manager is told to switch to it; only the DRM outputs and the input devices wait for the
+    // activation.
+    let hidden = !session.is_active();
+    if hidden {
+        tracing::info!(
+            "the session is in the background: getting its first frame ready before it is shown"
+        );
     }
     let gpus =
         cupertino_devices::gpus(Path::new("/sys")).map_err(|e| anyhow!("listing GPUs: {e}"))?;
@@ -701,7 +734,11 @@ pub fn run(
         render_node: node,
         cards: HashMap::from([(node, card)]),
         scale,
-        paused: false,
+        paused: hidden,
+        preparing: hidden.then(|| Preparing {
+            since: Instant::now(),
+            told: false,
+        }),
         asleep: false,
         renderer_lost: false,
         depth,
@@ -732,7 +769,12 @@ pub fn run(
                 }
             }
             SessionEvent::ActivateSession => {
-                tracing::info!("session resumed");
+                let first = udev(state).is_some_and(|u| u.preparing.is_some());
+                if first {
+                    tracing::info!("session shown");
+                } else {
+                    tracing::info!("session resumed");
+                }
                 if let Err(e) = input::open_all(&session_inputs, state) {
                     tracing::error!(error = %e, "reopening the input devices failed");
                 }
@@ -746,14 +788,16 @@ pub fn run(
                     for s in u.cards.values_mut().flat_map(|c| c.surfaces.values_mut()) {
                         // Smithay keeps a frame that waited for its vblank at the pause and holds every later frame of
                         // the CRTC behind it; if that vblank never comes, the head freezes. Another session had the
-                        // device, so no flip of ours is under way: clearing the CRTC drops the frame, and the next one
-                        // is a full modeset (as after any resume)
+                        // device, so no flip of ours is under way: the frame counts as shown, and the display keeps
+                        // what it shows until the next frame replaces it (clearing the CRTC would blank it)
                         if s.pending {
-                            drop_pending_frame(s, "the pause");
+                            retire_pending_frame(s);
                         }
                         s.pending = false;
                     }
                 }
+                // the displays enabled while the session was getting ready get their DRM outputs now
+                set_up_prepared(state);
                 for o in &mut state.outputs {
                     o.scheduler.reset();
                 }
@@ -798,7 +842,10 @@ pub fn run(
         )
         .map_err(|e| anyhow!("inserting the uevent source: {e}"))?;
 
-    input::open_all(&inputs, state)?;
+    // the input devices of a session in the background are revoked: they are opened when it is shown
+    if !hidden {
+        input::open_all(&inputs, state)?;
+    }
     scan_connectors(state);
     if state.outputs.is_empty() {
         return Err(anyhow!("no connected output"));
@@ -810,6 +857,7 @@ pub fn run(
             .map_err(|e| anyhow!("event loop: {e}"))?;
         state.tick();
         render_outputs(state);
+        prepare_first_frame(state);
         let _ = state.display_handle.flush_clients();
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break;
@@ -840,10 +888,12 @@ fn scan_card(state: &mut Cupertino, node: DrmNode) {
     let Some(Backend::Udev(u)) = state.backend.as_mut() else {
         return;
     };
-    // a paused session cannot set a mode; its activation scans again
-    if u.paused {
+    // a paused session cannot set a mode; its activation scans again. A session getting ready to be shown announces its
+    // heads' outputs, and sets their modes when it is shown
+    if u.paused && u.preparing.is_none() {
         return;
     }
+    let paused = u.paused;
     let Some(u) = u.cards.get_mut(&node) else {
         return;
     };
@@ -896,6 +946,7 @@ fn scan_card(state: &mut Cupertino, node: DrmNode) {
             return;
         };
         u.surfaces.remove(&crtc);
+        u.prepared.remove(&crtc);
         if let Some(head) = u.heads.remove(&crtc) {
             state.disconnect_head(head.head);
         }
@@ -906,6 +957,38 @@ fn scan_card(state: &mut Cupertino, node: DrmNode) {
             .find(|(c, info)| *c == crtc && info.handle() == connector)
         {
             connector_connected(state, node, info.clone(), crtc);
+        }
+    }
+    if !paused {
+        if let Some(card) = udev(state).and_then(|u| u.cards.get_mut(&node)) {
+            switch_off_strays(card);
+        }
+    }
+}
+
+/// Switch off every CRTC of `card` that shows something but drives no head of ours: what the session before (or the
+/// console) left on a display this session does not drive, a display turned off here or one that waits for a CRTC. The
+/// device is opened without blanking its displays, so this is what keeps them from showing an old picture.
+fn switch_off_strays(card: &mut Card) {
+    let device = card.manager.device();
+    for crtc in device.crtcs().to_vec() {
+        if card.surfaces.contains_key(&crtc) {
+            continue;
+        }
+        let lit = device
+            .get_crtc(crtc)
+            .is_ok_and(|info| info.mode().is_some() || info.framebuffer().is_some());
+        if !lit {
+            continue;
+        }
+        match device.set_crtc(crtc, None, (0, 0), &[], None) {
+            Ok(()) => tracing::info!(
+                ?crtc,
+                "switched off a CRTC that no display of this session uses"
+            ),
+            Err(e) => {
+                tracing::warn!(?crtc, error = %e, "switching off a CRTC no display of this session uses failed")
+            }
         }
     }
 }
@@ -1071,6 +1154,7 @@ pub(crate) fn head_op(
     op: HeadOp,
 ) -> Result<()> {
     let (node, crtc) = u.head_place(head).context("the head has no connector")?;
+    let preparing = u.preparing.is_some();
     let u = u.cards.get_mut(&node).expect("the head's card");
     let drm_head = &u.heads[&crtc];
     match op {
@@ -1084,80 +1168,43 @@ pub(crate) fn head_op(
             let drm_mode = drm_head.drm_mode(mode)?;
             let connector = drm_head.connector;
             let output = state.prepare_head_output(head)?;
-            let elements =
-                DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
-            let mut planes = u.manager.device().planes(&crtc).ok();
-            if let Some(p) = planes.as_mut() {
-                // overlay planes misbehave on the proprietary NVIDIA driver
-                if u.manager
-                    .device()
-                    .get_driver()
-                    .map(|d| d.name().to_string_lossy().to_lowercase().contains("nvidia"))
-                    .unwrap_or(false)
-                {
-                    p.overlay = vec![];
-                }
+            if preparing {
+                // the output is announced now, so the shell draws on it before the session is shown; its DRM output
+                // waits for the activation ([`set_up_prepared`])
+                let id = state.create_head_output(head, output.clone());
+                tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, "output announced; it is set up when the session is shown");
+                u.prepared.insert(
+                    crtc,
+                    Prepared {
+                        head,
+                        output: id,
+                        announced: output,
+                        mode,
+                        drm_mode,
+                        connector,
+                    },
+                );
+                return Ok(());
             }
-            match u.manager.initialize_output(
-                crtc,
-                drm_mode,
-                &[connector],
-                &output,
-                planes,
-                &mut u.renderer,
-                &elements,
-            ) {
-                Ok(drm_output) => {
-                    let id = state.create_head_output(head, output.clone());
-                    let refresh =
-                        Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
-                    u.surfaces.insert(
-                        crtc,
-                        Surface {
-                            output: id,
-                            drm_output,
-                            copy: None,
-                            pending: false,
-                            refresh,
-                            latch: LateLatch::default(),
-                            target: None,
-                            in_flight: None,
-                        },
-                    );
-                    let format = u.surfaces[&crtc].drm_output.format();
-                    // a frame shrunk to the display's pixels is dithered at the display's depth
-                    if let Some(entry) = state.outputs.iter_mut().find(|o| o.id == id) {
-                        entry.cache.supersample.depth = crate::output_depth::format_bits(format);
-                    }
-                    tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, format = %format, bits = crate::output_depth::format_bits(format), "output initialised");
-                    Ok(())
-                }
-                Err(e) => {
-                    // a paused session is busy for every mode, as a device another program holds
-                    let paused = matches!(
-                        e,
-                        DrmOutputManagerError::Drm(DrmError::DeviceInactive)
-                            | DrmOutputManagerError::Frame(FrameError::DrmError(
-                                DrmError::DeviceInactive
-                            ))
-                    );
-                    let e = if paused {
-                        anyhow::Error::new(std::io::Error::new(ErrorKind::ResourceBusy, e))
-                    } else {
-                        anyhow::Error::new(e)
-                    };
-                    Err(e.context(format!("initialising {}", output.name())))
-                }
-            }
+            let drm_output = initialize_output(u, crtc, drm_mode, connector, &output)?;
+            let id = state.create_head_output(head, output.clone());
+            add_surface(state, u, crtc, id, drm_output, mode, &output);
+            Ok(())
         }
         HeadOp::Disable => {
             // dropping the DRM output turns its CRTC off
             u.surfaces.remove(&crtc);
+            u.prepared.remove(&crtc);
             state.drop_head_output(head);
             Ok(())
         }
         HeadOp::SetMode(mode) => {
             let drm_mode = drm_head.drm_mode(mode)?;
+            if let Some(prepared) = u.prepared.get_mut(&crtc) {
+                prepared.mode = mode;
+                prepared.drm_mode = drm_mode;
+                return Ok(());
+            }
             let surface = u
                 .surfaces
                 .get_mut(&crtc)
@@ -1178,6 +1225,8 @@ pub(crate) fn head_op(
             reset_frames(state, surface.output);
             Ok(())
         }
+        // a display that is not shown yet has nothing to blank
+        HeadOp::Power(_) if u.prepared.contains_key(&crtc) => Ok(()),
         HeadOp::Power(on) => {
             let surface = u
                 .surfaces
@@ -1193,6 +1242,243 @@ pub(crate) fn head_op(
                 reset_frames(state, surface.output);
             }
             Ok(())
+        }
+    }
+}
+
+/// Set up the DRM output of a display of `card` on `crtc` in `drm_mode`, for `output`. Nothing is committed: the first
+/// frame queued sets the mode, which needs no modeset when the CRTC has it already.
+fn initialize_output(
+    card: &mut Card,
+    crtc: crtc::Handle,
+    drm_mode: control::Mode,
+    connector: connector::Handle,
+    output: &smithay::output::Output,
+) -> Result<DrmSurfaceOutput> {
+    let elements =
+        DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
+    let mut planes = card.manager.device().planes(&crtc).ok();
+    if let Some(p) = planes.as_mut() {
+        // overlay planes misbehave on the proprietary NVIDIA driver
+        if card
+            .manager
+            .device()
+            .get_driver()
+            .map(|d| d.name().to_string_lossy().to_lowercase().contains("nvidia"))
+            .unwrap_or(false)
+        {
+            p.overlay = vec![];
+        }
+    }
+    card.manager
+        .initialize_output(
+            crtc,
+            drm_mode,
+            &[connector],
+            output,
+            planes,
+            &mut card.renderer,
+            &elements,
+        )
+        .map_err(|e| {
+            // a paused session is busy for every mode, as a device another program holds
+            let paused = matches!(
+                e,
+                DrmOutputManagerError::Drm(DrmError::DeviceInactive)
+                    | DrmOutputManagerError::Frame(FrameError::DrmError(DrmError::DeviceInactive))
+            );
+            let e = if paused {
+                anyhow::Error::new(std::io::Error::new(ErrorKind::ResourceBusy, e))
+            } else {
+                anyhow::Error::new(e)
+            };
+            e.context(format!("initialising {}", output.name()))
+        })
+}
+
+/// Drive the display on `crtc` of `card` with `drm_output`, the DRM output of the registered output `id`.
+fn add_surface(
+    state: &mut Cupertino,
+    card: &mut Card,
+    crtc: crtc::Handle,
+    id: OutputId,
+    drm_output: DrmSurfaceOutput,
+    mode: HeadMode,
+    output: &smithay::output::Output,
+) {
+    let refresh = Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
+    let format = drm_output.format();
+    card.surfaces.insert(
+        crtc,
+        Surface {
+            output: id,
+            drm_output,
+            copy: None,
+            pending: false,
+            refresh,
+            latch: LateLatch::default(),
+            target: None,
+            in_flight: None,
+        },
+    );
+    // a frame shrunk to the display's pixels is dithered at the display's depth
+    if let Some(entry) = state.outputs.iter_mut().find(|o| o.id == id) {
+        entry.cache.supersample.depth = crate::output_depth::format_bits(format);
+    }
+    tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, format = %format, bits = crate::output_depth::format_bits(format), "output initialised");
+}
+
+/// The session is shown for the first time: the displays enabled while it got ready get their DRM outputs, and their first
+/// frames follow at once. One that cannot be set up in its mode is enabled again the ordinary way, which tries smaller
+/// modes.
+fn set_up_prepared(state: &mut Cupertino) {
+    let Some(mut backend) = state.backend.take() else {
+        return;
+    };
+    let mut again = Vec::new();
+    if let Backend::Udev(u) = &mut backend {
+        if let Some(preparing) = u.preparing.take() {
+            tracing::info!(
+                after = ?preparing.since.elapsed(),
+                told = preparing.told,
+                "the session is shown"
+            );
+        }
+        for card in u.cards.values_mut() {
+            for (crtc, prepared) in std::mem::take(&mut card.prepared) {
+                match initialize_output(
+                    card,
+                    crtc,
+                    prepared.drm_mode,
+                    prepared.connector,
+                    &prepared.announced,
+                ) {
+                    Ok(drm_output) => add_surface(
+                        state,
+                        card,
+                        crtc,
+                        prepared.output,
+                        drm_output,
+                        prepared.mode,
+                        &prepared.announced,
+                    ),
+                    Err(e) => {
+                        tracing::warn!(error = %format!("{e:#}"), "the display prepared in the background cannot be set up; enabling it again");
+                        again.push(prepared.head);
+                    }
+                }
+            }
+        }
+    }
+    state.backend = Some(backend);
+    if again.is_empty() {
+        return;
+    }
+    for head in again {
+        state.drop_head_output(head);
+        if let Err(e) = state.enable_head(head) {
+            tracing::warn!(error = %format!("{e:#}"), "enabling the display failed");
+        }
+    }
+    state.heads_changed();
+}
+
+/// How long a session in the background waits for its wallpaper before it says it can be shown all the same (approximate,
+/// ours: an image is read in a fraction of a second; the session manager stops waiting after 5 s).
+const PREPARE_LIMIT: Duration = Duration::from_secs(3);
+/// How often the loop of a session in the background looks whether the wallpaper is in, since no frame does.
+const PREPARE_POLL: Duration = Duration::from_millis(10);
+
+/// A session in the background gets its first frame ready: its displays' scenes are composed until the wallpaper of each
+/// is read, then each is drawn once off screen (its programs, the wallpaper's texture and the glass made), and the session
+/// manager is told that the session can be shown. After [`PREPARE_LIMIT`] it is told all the same.
+fn prepare_first_frame(state: &mut Cupertino) {
+    let Some(mut backend) = state.backend.take() else {
+        return;
+    };
+    if let Backend::Udev(u) = &mut backend {
+        if let Some(since) = u
+            .preparing
+            .as_ref()
+            .filter(|preparing| !preparing.told)
+            .map(|preparing| preparing.since)
+        {
+            let outputs: Vec<OutputId> = u
+                .cards
+                .values()
+                .flat_map(|card| card.prepared.values().map(|p| p.output))
+                .collect();
+            let indices: Vec<usize> = outputs
+                .iter()
+                .filter_map(|id| state.outputs.iter().position(|o| o.id == *id))
+                .collect();
+            let renderer = u.renderer();
+            // composing asks for the wallpaper and takes in what the reader has
+            for idx in &indices {
+                let _ = state.compose_output(renderer, *idx, false);
+            }
+            let read = !state.overlays.wallpaper.pending();
+            let late = since.elapsed() >= PREPARE_LIMIT;
+            if read || late {
+                if read {
+                    for idx in &indices {
+                        if let Err(e) = state.draw_output_image(renderer, *idx, false, false) {
+                            tracing::warn!(error = %format!("{e:#}"), "drawing the first frame off screen failed");
+                        }
+                    }
+                } else {
+                    tracing::warn!(limit = ?PREPARE_LIMIT, "the wallpaper is not read yet; the session can be shown all the same");
+                }
+                if let Some(preparing) = u.preparing.as_mut() {
+                    preparing.told = true;
+                }
+                tracing::info!(after = ?since.elapsed(), "the first frame is ready");
+                tell_prepared();
+            }
+        }
+    }
+    state.backend = Some(backend);
+}
+
+/// Tell the session manager that this session can be shown (`SessionPrepared` of `org.cupertino.LoginManager1` on the
+/// system bus, the manager's interface), on a thread of its own, since the call waits for the manager. A manager that did
+/// not start this session, or none at all (a session started from a text console), answers with an error, which is only
+/// logged: such a session is shown by whatever switches to its terminal.
+fn tell_prepared() {
+    const MANAGER: &str = "org.cupertino.LoginManager1";
+    const MANAGER_PATH: &str = "/org/cupertino/LoginManager1";
+    let told = std::thread::Builder::new()
+        .name("cupertino-prepared".to_owned())
+        .spawn(|| {
+            let answer = zbus::blocking::Connection::system().and_then(|bus| {
+                bus.call_method(
+                    Some(MANAGER),
+                    MANAGER_PATH,
+                    Some(MANAGER),
+                    "SessionPrepared",
+                    &(),
+                )
+                .map(drop)
+            });
+            match answer {
+                Ok(()) => tracing::info!("the session manager was told that the session can be shown"),
+                Err(e) => tracing::info!(error = %e, "the session manager was not told that the session can be shown"),
+            }
+        });
+    if let Err(e) = told {
+        tracing::warn!(error = %e, "cannot tell the session manager that the session can be shown");
+    }
+}
+
+/// Let go of the frame `surface` queued before the pause, whose vblank went to the session that had the device: it counts
+/// as shown, so the next frame is not held behind it, and the display keeps what it shows until that frame replaces it.
+fn retire_pending_frame(surface: &mut Surface) {
+    surface.target = None;
+    surface.in_flight = None;
+    match surface.drm_output.frame_submitted() {
+        Ok(_) => tracing::info!("let go of the frame queued before the pause"),
+        Err(e) => {
+            tracing::warn!(error = %e, "letting go of the frame queued before the pause failed")
         }
     }
 }

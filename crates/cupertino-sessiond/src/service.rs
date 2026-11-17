@@ -7,6 +7,8 @@
 //! | `RequestPower(s action)` | the active user session | restart (`restart`), shut down (`shut-down`) or sleep (`sleep`) the computer |
 //! | `SwitchToLoginWindow()` | the active user session | the login screen takes the console; the caller has locked its screen first |
 //! | `SessionReady()` | a user session | the session's agent is up; the manager registers the caller as the session's agent |
+//! | `SessionPrepared()` | a user session | the session's compositor has its first frame ready in the background; the manager brings the session to the console |
+//! | `LogOut()` | a user session | the session's applications have quit; the login screen takes the console, then the session ends |
 //! | `SetSystemAccessibility(a{ss} options)` | an administrator at the console, through the installed settings application | writes the machine's accessibility defaults ([`crate::system_accessibility`]) |
 //! | `CanSetSystemAccessibility() → b` | — | whether the caller would be allowed to (a hint for the settings application; the setter checks again) |
 //!
@@ -67,6 +69,14 @@ pub enum Call {
         session: CallerSession,
         reply: SyncSender<Result<(), SwitchRefusal>>,
     },
+    Prepared {
+        session: CallerSession,
+        reply: SyncSender<Result<(), ReadyRefusal>>,
+    },
+    LogOut {
+        session: CallerSession,
+        reply: SyncSender<Result<(), ReadyRefusal>>,
+    },
 }
 
 /// Why `SwitchToLoginWindow` is not carried out.
@@ -78,7 +88,7 @@ pub enum SwitchRefusal {
     Failed,
 }
 
-/// Why `SessionReady` is not accepted.
+/// Why `SessionReady`, `SessionPrepared` or `LogOut` is not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadyRefusal {
     /// The manager did not start the caller's session (a session of a getty, for instance).
@@ -332,6 +342,27 @@ impl LoginManager {
         .map_err(|ReadyRefusal::UnknownSession| {
             Error::UnknownSession("the session manager did not start this session".to_owned())
         })
+    }
+
+    /// The caller's session has its first frame ready on its terminal in the background (its compositor calls it): the
+    /// manager brings it to the console. A session on the console already stays as it is.
+    async fn session_prepared(&self, #[zbus(header)] header: Header<'_>) -> Result<(), Error> {
+        let (session, _) = self.caller(&header, Need::UserSession).await?;
+        self.ask(|reply| Call::Prepared { session, reply })?
+            .map_err(|ReadyRefusal::UnknownSession| {
+                Error::UnknownSession("the session manager did not start this session".to_owned())
+            })
+    }
+
+    /// End the caller's session, whose applications have quit (the agent calls it for a confirmed log out): the login screen
+    /// takes the console first and the session ends once it has it.
+    async fn log_out(&self, #[zbus(header)] header: Header<'_>) -> Result<(), Error> {
+        let (session, _) = self.caller(&header, Need::UserSession).await?;
+        self.ask(|reply| Call::LogOut { session, reply })?.map_err(
+            |ReadyRefusal::UnknownSession| {
+                Error::UnknownSession("the session manager did not start this session".to_owned())
+            },
+        )
     }
 
     /// Set the machine's accessibility defaults: `options` are keys of the machine's file with values as the file writes

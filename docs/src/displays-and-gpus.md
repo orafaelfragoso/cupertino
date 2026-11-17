@@ -31,7 +31,7 @@ How Cupertino treats monitors, the GPU driver and X11 programs on the text-conso
 - when the session becomes active again,
 - after the event queue overflowed.
 
-A paused session does not scan. The scan compares the displays with every connector that has a CRTC, not only with the one that changed.
+A paused session does not scan, except a session that has not been shown yet: it starts in the background, announces its displays' outputs and draws its first frame off screen, and sets their modes when the console comes to it. Opening a card does not blank its displays: they keep what they show until the first frame of the session replaces it, which needs no modeset when the display is in the same mode already, and after each scan of an active session every CRTC that drives no display of it is switched off. The scan compares the displays with every connector that has a CRTC, not only with the one that changed.
 
 **When a display appears to clients.** An output is announced to applications only once its display shows it. A display that fails to turn on announces nothing. An output that goes away is withdrawn at once, but its global stays bindable for 5 seconds before it is destroyed, so a client that binds it late is not disconnected. Panels on it are closed first, and none of them keeps the keyboard: an open control panel is dismissed and the window that had the keyboard gets it back.
 

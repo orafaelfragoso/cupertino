@@ -21,9 +21,7 @@ use cupertino_diagnostic_events::{self as diag, Severity, Value};
 
 use smithay::reexports::calloop::channel::{self, Event};
 
-use crate::display_power::{
-    overlay_alpha, ActivationFade, DisplayState, Effect, Facts, IdlePolicy,
-};
+use crate::display_power::{overlay_alpha, DisplayState, Effect, Facts, IdlePolicy};
 use crate::state::Cupertino;
 
 /// The idle policy and the facts it is fed.
@@ -35,8 +33,6 @@ pub struct Power {
     idle_blocked: bool,
     /// Asks logind to suspend; `None` without a system bus.
     bus: Option<mpsc::Sender<BusRequest>>,
-    /// The fade from black after logind resumes this session.
-    fade: ActivationFade,
 }
 
 impl Power {
@@ -46,7 +42,6 @@ impl Power {
             on_battery: None,
             idle_blocked: false,
             bus: None,
-            fade: ActivationFade::default(),
         }
     }
 
@@ -153,7 +148,7 @@ impl Cupertino {
         let facts = self.display_power_facts();
         let effects = self.power.policy.tick(now, facts);
         self.apply_power_effects(effects);
-        if self.power.policy.animating(now) || self.power.fade.animating(now) {
+        if self.power.policy.animating(now) {
             self.request_redraw();
         }
     }
@@ -164,14 +159,13 @@ impl Cupertino {
         self.power.policy.pause();
     }
 
-    /// logind made this session the active one (the console returned to it): the display is on with fresh idle
-    /// countdowns, and the screen fades in from black.
+    /// logind made this session the active one (the console came to it, or returned to it): the display is on with fresh
+    /// idle countdowns. The first frame shows the scene as it is, at once: what the display showed stays up until that
+    /// frame replaces it, so the switch goes from one picture straight to the other.
     pub fn session_activated(&mut self) {
         let now = self.now();
         let effects = self.power.policy.resume(now);
         self.apply_power_effects(effects);
-        tracing::info!("fading in from black");
-        self.power.fade.begin(now);
         self.request_redraw();
     }
 
@@ -225,12 +219,6 @@ impl Cupertino {
     pub fn power_overlay_alpha(&self) -> Option<f64> {
         let alpha = overlay_alpha(self.power.policy.factor(self.now()));
         // the sRGB curve leaves a rounding residue at factor 1
-        (alpha >= 1e-6).then_some(alpha)
-    }
-
-    /// Opacity of the black overlay while the screen fades in after the session became active.
-    pub fn activation_overlay_alpha(&self) -> Option<f64> {
-        let alpha = self.power.fade.alpha(self.now());
         (alpha >= 1e-6).then_some(alpha)
     }
 

@@ -111,16 +111,10 @@ impl Cupertino {
         let drag_icon = self.drag_icon.clone();
         let keyboard_focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
         let lock = self.lock_view(idx);
-        let session_overlays = [
-            self.activation_overlay_alpha().map(|alpha| SessionOverlay {
-                kind: SceneKind::ActivationFade,
-                alpha,
-            }),
-            self.power_overlay_alpha().map(|alpha| SessionOverlay {
-                kind: SceneKind::PowerOverlay,
-                alpha,
-            }),
-        ];
+        let session_overlays = [self.power_overlay_alpha().map(|alpha| SessionOverlay {
+            kind: SceneKind::PowerOverlay,
+            alpha,
+        })];
         let res = self.render.as_ref()?;
         let out = &mut self.outputs[idx];
         let mode = out

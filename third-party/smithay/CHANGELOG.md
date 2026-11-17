@@ -21,6 +21,11 @@ Remove four unused tracing imports, cast the SIGBUS handler through a pointer be
 and advance swapchain buffer ages with compare/exchange instead of deprecated `fetch_update`. Age zero and overflow
 handling and sequentially consistent ordering are preserved without raising the declared Rust version.
 
+`DrmCompositor` commits the first frame after its creation or `reset_state` with modesets allowed, also when the
+crtc already has the surface's mode and connectors: the frame takes over what another program left on the crtc (a
+`DrmDevice` created without disabling the connectors, a resumed session), and a flip alone could be refused, for a
+primary plane format the driver changes only in a modeset. The kernel still modesets only when the state needs it.
+
 Removing a `wl_shm` buffer destruction hook removed another hook of that buffer instead of the given one. A
 client that destroyed its `xdg_toplevel_icon_v1` and then a buffer it had added to it got the `no_buffer`
 protocol error and was disconnected.

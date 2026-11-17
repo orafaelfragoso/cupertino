@@ -2534,7 +2534,10 @@ where
         } = self.queued_frame.take().unwrap();
 
         let allow_partial_update = prepared_frame.kind == PreparedFrameKind::Partial;
-        let flip = if self.surface.commit_pending() {
+        // the first frame after a reset (a new compositor, a re-activated session) may take over a crtc another program left
+        // in the same mode: it is committed with modesets allowed, so the driver can change what a flip alone may not (the
+        // primary plane's format), and the kernel still modesets only when something needs it
+        let flip = if self.surface.commit_pending() || self.reset_pending {
             prepared_frame
                 .frame
                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)

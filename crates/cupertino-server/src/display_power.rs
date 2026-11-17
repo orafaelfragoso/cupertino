@@ -91,41 +91,6 @@ pub fn overlay_alpha(factor: f64) -> f64 {
     (1.0 - encoded).clamp(0.0, 1.0)
 }
 
-/// How long the screen takes to fade in from black when this session becomes the active one
-/// (the design's session transition is a 0.25 s fade; the fade is approximate here, see [`ActivationFade`]).
-pub const ACTIVATION_FADE_S: f64 = 0.25;
-
-/// The fade from black after logind resumes this session (fast user switching, a console switch back). The design cross-fades
-/// the old session's snapshot into the new one with `e = 0.5 (1 - cos(pi p))` over [`ACTIVATION_FADE_S`]; each session
-/// here is a separate compositor on its own terminal and has no image of the old one, so approximate: the compositor that
-/// becomes active fades in from black with the same duration and curve.
-#[derive(Debug, Default)]
-pub struct ActivationFade {
-    started: Option<f64>,
-}
-
-impl ActivationFade {
-    /// The session became active at `now`: start (or restart) the fade.
-    pub fn begin(&mut self, now: f64) {
-        self.started = Some(now);
-    }
-
-    /// Alpha of the black overlay at `now`: 1 at the start, `1 - e` with `e = 0.5 (1 - cos(pi p))`, 0 from the end.
-    pub fn alpha(&self, now: f64) -> f64 {
-        let Some(started) = self.started else {
-            return 0.0;
-        };
-        let p = ((now - started) / ACTIVATION_FADE_S).clamp(0.0, 1.0);
-        1.0 - 0.5 * (1.0 - (std::f64::consts::PI * p).cos())
-    }
-
-    /// The fade is running, so every frame differs.
-    pub fn animating(&self, now: f64) -> bool {
-        self.started
-            .is_some_and(|started| now - started < ACTIVATION_FADE_S)
-    }
-}
-
 /// The policy's state.
 #[derive(Debug)]
 pub struct IdlePolicy {
@@ -434,32 +399,6 @@ mod tests {
             None,
             "an inhibitor holds every countdown"
         );
-    }
-
-    #[test]
-    fn the_activation_fade_runs_from_black_to_clear_on_a_cosine_over_a_quarter_second() {
-        let mut fade = ActivationFade::default();
-        assert_eq!(
-            (fade.alpha(5.0), fade.animating(5.0)),
-            (0.0, false),
-            "no fade before a resume"
-        );
-        fade.begin(10.0);
-        assert!((fade.alpha(10.0) - 1.0).abs() < 1e-12);
-        assert!(
-            (fade.alpha(10.125) - 0.5).abs() < 1e-12,
-            "the middle of the curve"
-        );
-        assert!(
-            (fade.alpha(10.0625) - (1.0 - 0.5 * (1.0 - (std::f64::consts::PI / 4.0).cos()))).abs()
-                < 1e-12
-        );
-        assert!(fade.animating(10.24));
-        assert!((fade.alpha(10.25)).abs() < 1e-12 && !fade.animating(10.25));
-        assert_eq!(fade.alpha(11.0), 0.0);
-        // a second resume starts again
-        fade.begin(20.0);
-        assert!((fade.alpha(20.0) - 1.0).abs() < 1e-12);
     }
 
     #[test]

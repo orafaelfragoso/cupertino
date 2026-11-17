@@ -21,7 +21,6 @@ apps forbidden_edge cupertino-settings -> cupertino-pipewire normal
 apps forbidden_edge cupertino-settings -> cupertino-wayland-client normal
 foundation external_crate cupertino-apps -> notify normal
 foundation external_crate cupertino-apps -> zbus normal
-foundation external_crate cupertino-capture -> tiny-skia normal
 foundation external_crate cupertino-defaults -> inotify normal
 foundation external_crate cupertino-defaults -> libc normal
 foundation external_crate cupertino-icons -> image normal
@@ -53,9 +52,6 @@ foundation impure_source cupertino-assets src/bin/cupertino-assets.rs std::proce
 foundation impure_source cupertino-assets src/lib.rs std::env
 foundation impure_source cupertino-assets src/lib.rs std::fs
 foundation impure_source cupertino-build-info src/lib.rs std::fs
-foundation impure_source cupertino-capture src/lib.rs std::env
-foundation impure_source cupertino-capture src/lib.rs std::fs
-foundation impure_source cupertino-capture src/lib.rs std::process
 foundation impure_source cupertino-defaults src/accessibility.rs std::fs
 foundation impure_source cupertino-defaults src/atomic.rs std::fs
 foundation impure_source cupertino-defaults src/atomic.rs std::process

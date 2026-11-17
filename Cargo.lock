@@ -1787,6 +1787,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-session-tests"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-sessiond"
 version = "0.1.0"
 dependencies = [

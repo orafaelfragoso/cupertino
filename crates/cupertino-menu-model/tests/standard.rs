@@ -289,7 +289,6 @@ fn unhandled_features_are_omitted_not_disabled() {
 }
 
 #[test]
-#[ignore = "menu_bar leaves an empty group for each unhandled feature (src/standard.rs); only exported() drops them"]
 fn the_standard_menus_hold_no_empty_groups() {
     for features in [Features::default(), full()] {
         let b = bar(&features);

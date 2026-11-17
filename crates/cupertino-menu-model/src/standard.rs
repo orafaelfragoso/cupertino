@@ -49,7 +49,7 @@ fn system(label: &str, command: SystemCommand, chord: Option<Chord>) -> Entry {
     })
 }
 
-/// The standard menus of an application named `app_name`.
+/// The standard menus of an application named `app_name`, without the groups its features leave empty.
 pub fn menu_bar(app_name: &str, features: &Features) -> MenuBar {
     use Scope::{App, Win};
     let app = Menu::new(
@@ -183,8 +183,12 @@ pub fn menu_bar(app_name: &str, features: &Features) -> MenuBar {
             )],
         ],
     );
-    MenuBar {
+    let mut bar = MenuBar {
         app,
         menus: vec![file, edit, view],
+    };
+    for menu in std::iter::once(&mut bar.app).chain(&mut bar.menus) {
+        menu.sections.retain(|section| !section.is_empty());
     }
+    bar
 }

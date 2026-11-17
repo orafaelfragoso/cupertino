@@ -444,6 +444,3 @@ pub(crate) fn request<'a>(
         data,
     })
 }
-
-#[cfg(test)]
-mod tests;

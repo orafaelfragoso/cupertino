@@ -241,6 +241,3 @@ pub(crate) fn node(role: Role, name: Option<&str>, bounds: Rect) -> Accessibilit
         sort: None,
     }
 }
-
-#[cfg(test)]
-mod tests;

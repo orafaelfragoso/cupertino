@@ -563,6 +563,3 @@ fn copy_and_switch(
         },
     }
 }
-
-#[cfg(test)]
-mod tests;

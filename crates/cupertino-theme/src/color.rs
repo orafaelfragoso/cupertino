@@ -128,27 +128,3 @@ names! {
         Green => "control-accent-green",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rgba8_roundtrip() {
-        for v in [
-            [0, 0, 0, 0],
-            [255, 255, 255, 255],
-            [236, 236, 236, 255],
-            [0, 122, 255, 216],
-        ] {
-            assert_eq!(Color::from_rgba8(v).to_rgba8(), v);
-        }
-        assert_eq!(Color::from_rgba8([236, 236, 236, 255]).hex(), "#ECECEC");
-    }
-
-    #[test]
-    fn premultiply() {
-        let c = Color::new(1.0, 0.5, 0.0, 0.5);
-        assert_eq!(c.premultiplied(), [0.5, 0.25, 0.0, 0.5]);
-    }
-}

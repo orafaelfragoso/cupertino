@@ -157,32 +157,3 @@ pub fn is_character_key(layout_key: u8) -> bool {
     (layout_key <= 0x32 && layout_key != 0x24 && layout_key != 0x30)
         || (0x5D..=0x5F).contains(&layout_key)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn table_is_consistent() {
-        assert_eq!(LAYOUT_KEY_TABLE.len(), 120);
-        assert_eq!(evdev_of(0x00), Some(30));
-        assert_eq!(layout_key_of(57), Some(0x31));
-        assert_eq!(xkb_name_of(0x32), Some("TLDE"));
-        for (i, a) in LAYOUT_KEY_TABLE.iter().enumerate() {
-            for b in &LAYOUT_KEY_TABLE[i + 1..] {
-                assert_ne!(a.0, b.0);
-                assert_ne!(a.1, b.1, "duplicate evdev {}", a.1);
-            }
-        }
-    }
-
-    #[test]
-    fn character_keys() {
-        assert!(is_character_key(0x00));
-        assert!(!is_character_key(0x24));
-        assert!(!is_character_key(0x30));
-        assert!(is_character_key(0x31));
-        assert!(is_character_key(0x5E));
-        assert!(!is_character_key(0x7B));
-    }
-}

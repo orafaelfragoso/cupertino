@@ -92,13 +92,6 @@ impl CRuntime {
     }
 }
 
-#[cfg(test)]
-impl Drop for CRuntime {
-    fn drop(&mut self) {
-        ffi::hook("drop");
-    }
-}
-
 /// The runtime in its owner's thread-local. When the thread exits without `ck_runtime_release`, this drops the runtime
 /// and frees the slot. A panic there would abort the host, so the runtime is dropped inside `catch_unwind` and leaked
 /// if it panics, no other thread-local is touched, and the registry lock is taken whether it is poisoned or not.
@@ -315,10 +308,4 @@ pub(crate) fn take_posted(
         let _ = rustix::io::read(&live.wake, &mut [0; 8]);
     }
     Ok(n)
-}
-
-#[cfg(test)]
-pub(crate) fn wake_fd(handle: CkRuntime) -> std::os::fd::RawFd {
-    use std::os::fd::AsRawFd;
-    lock().live(handle, true).unwrap().wake.as_raw_fd()
 }

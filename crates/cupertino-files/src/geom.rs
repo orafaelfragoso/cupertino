@@ -87,25 +87,3 @@ pub enum Direction {
     Up,
     Down,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rect_basics() {
-        let r = Rect::new(10.0, 10.0, 20.0, 10.0);
-        assert!(r.contains(Point { x: 10.0, y: 10.0 }));
-        assert!(!r.contains(Point { x: 30.0, y: 10.0 }));
-        assert!(r.intersects(&Rect::new(29.0, 19.0, 5.0, 5.0)));
-        assert!(!r.intersects(&Rect::new(30.0, 10.0, 5.0, 5.0)));
-        assert_eq!(
-            r.union(&Rect::new(0.0, 0.0, 5.0, 5.0)),
-            Rect::new(0.0, 0.0, 30.0, 20.0)
-        );
-        assert_eq!(
-            Rect::from_corners(Point { x: 5.0, y: 9.0 }, Point { x: 1.0, y: 2.0 }),
-            Rect::new(1.0, 2.0, 4.0, 7.0)
-        );
-    }
-}

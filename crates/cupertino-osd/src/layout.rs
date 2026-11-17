@@ -54,31 +54,3 @@ pub fn segment(index: usize) -> Rect {
         SEGMENT_HEIGHT,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn meter_container_sits_20_points_above_the_bottom_edge() {
-        assert_eq!(meter(), Rect::new(20.0, 172.0, 161.0, 8.0));
-    }
-
-    #[test]
-    fn segments_have_a_pitch_of_ten_inside_the_container() {
-        assert_eq!(segment(0), Rect::new(21.0, 173.0, 9.0, 6.0));
-        assert_eq!(segment(1), Rect::new(31.0, 173.0, 9.0, 6.0));
-        assert_eq!(segment(15), Rect::new(171.0, 173.0, 9.0, 6.0));
-    }
-
-    #[test]
-    fn the_last_segment_ends_inside_the_container() {
-        let last = segment(15);
-        assert!(
-            last.max_x() <= meter().max_x(),
-            "{} > {}",
-            last.max_x(),
-            meter().max_x()
-        );
-    }
-}

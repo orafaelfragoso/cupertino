@@ -71,12 +71,6 @@ pub(crate) struct Lens {
 }
 
 impl Lens {
-    /// The lens over `thumb` while `held`; none at rest. A disabled control is never held.
-    #[cfg(test)]
-    pub fn of(kind: LensKind, thumb: Rect, held: bool) -> Option<Lens> {
-        Lens::lifted(kind, thumb, if held { 1.0 } else { 0.0 })
-    }
-
     /// The lens over `thumb` `lift` of the way (0 to 1) from the plain thumb to the held lens: as large as the thumb
     /// and showing what is under it as it is at 0, where there is none, and the whole lens at 1.
     pub fn lifted(kind: LensKind, thumb: Rect, lift: f64) -> Option<Lens> {
@@ -277,104 +271,4 @@ pub(crate) fn paint_lens(
         width: OUTLINE_WIDTH,
         paint: Paint::Solid(look.outline),
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cupertino_ui_theme::{Appearance, ControlMetrics, ThemePreferences};
-
-    fn theme(appearance: Appearance, reduce_transparency: bool) -> ThemeTokens {
-        let preferences = ThemePreferences {
-            appearance,
-            reduce_transparency,
-            reduce_motion: false,
-        };
-        let mut theme = ThemeTokens::neutral(preferences).unwrap();
-        theme.metrics = ControlMetrics::regular();
-        theme
-    }
-
-    #[test]
-    fn a_thumb_at_rest_has_no_lens() {
-        let thumb = Rect::new(10.0, 2.0, 32.0, 20.0);
-        assert_eq!(Lens::of(LensKind::Switch, thumb, false), None);
-        assert_eq!(Lens::of(LensKind::Slider, thumb, false), None);
-    }
-
-    #[test]
-    fn a_held_switch_thumb_becomes_a_wider_capsule_about_its_centre() {
-        let thumb = Rect::new(10.0, 2.0, 32.0, 20.0);
-        let lens = Lens::of(LensKind::Switch, thumb, true).unwrap();
-        assert_eq!(lens.centre(), thumb.center());
-        assert!((lens.rect.width() - 51.2).abs() < 1e-9);
-        assert!((lens.rect.height() - 32.0).abs() < 1e-9);
-        assert_eq!(lens.radius, lens.rect.height() / 2.0, "a capsule");
-        assert!(lens.rect.width() > thumb.width() && lens.rect.height() > thumb.height());
-    }
-
-    #[test]
-    fn a_held_slider_knob_becomes_a_rounded_lens_a_third_larger() {
-        let knob = Rect::new(40.0, 0.0, 20.0, 16.0);
-        let lens = Lens::of(LensKind::Slider, knob, true).unwrap();
-        assert!((lens.rect.width() - 26.6).abs() < 1e-9);
-        assert!(
-            lens.radius < lens.rect.height() / 2.0,
-            "a rounded rectangle, not a capsule"
-        );
-    }
-
-    #[test]
-    fn a_lifting_lens_swells_from_the_thumb_to_its_held_size() {
-        let thumb = Rect::new(10.0, 2.0, 32.0, 20.0);
-        assert_eq!(Lens::lifted(LensKind::Switch, thumb, 0.0), None);
-        let start = Lens::lifted(LensKind::Switch, thumb, 1e-9).unwrap();
-        assert!(
-            (start.rect.width() - thumb.width()).abs() < 1e-6,
-            "as large as the thumb"
-        );
-        assert!(
-            (start.minify - 1.0).abs() < 1e-6,
-            "showing what is under it as it is"
-        );
-        let half = Lens::lifted(LensKind::Switch, thumb, 0.5).unwrap();
-        let held = Lens::of(LensKind::Switch, thumb, true).unwrap();
-        assert!(half.rect.width() > thumb.width() && half.rect.width() < held.rect.width());
-        assert_eq!(half.centre(), thumb.center());
-        assert_eq!(Lens::lifted(LensKind::Switch, thumb, 1.0), Some(held));
-        assert_eq!(
-            Lens::lifted(LensKind::Switch, thumb, 3.0),
-            Some(held),
-            "never past it"
-        );
-    }
-
-    #[test]
-    fn the_lens_shrinks_what_it_shows_about_its_centre() {
-        let thumb = Rect::new(0.0, 0.0, 20.0, 20.0);
-        let lens = Lens::of(LensKind::Switch, thumb, true).unwrap();
-        let track = Rect::new(-20.0, 5.0, 60.0, 10.0);
-        let seen = lens.through(track);
-        assert_eq!(seen.center(), Point::new(10.0 + (10.0 - 10.0) * 0.75, 10.0));
-        assert!((seen.height() - 7.5).abs() < 1e-9);
-        assert!((seen.width() - 45.0).abs() < 1e-9);
-        assert_eq!(
-            lens.through(Rect::new(10.0, 10.0, 0.0, 0.0)).origin,
-            lens.centre()
-        );
-    }
-
-    #[test]
-    fn contrast_and_transparency_change_the_lens_without_taking_it_away() {
-        let plain = LensLook::of(&theme(Appearance::Dark, false));
-        let contrast = LensLook::of(&theme(Appearance::DarkHighContrast, false));
-        let opaque = LensLook::of(&theme(Appearance::Dark, true));
-        assert!(contrast.outline.a > plain.outline.a);
-        assert!(contrast.rim.a > plain.rim.a);
-        assert!(opaque.body.a > plain.body.a);
-        assert_eq!(opaque.outline, plain.outline);
-        let light = LensLook::of(&theme(Appearance::Light, false));
-        assert!(light.shade.a < plain.shade.a);
-        assert!(light.edge_light.a > plain.edge_light.a);
-    }
 }

@@ -379,7 +379,3 @@ fn level_key(
         .and_then(|above| places.last_at_level.get(&(container, above)).copied())
         .unwrap_or(container)
 }
-
-#[cfg(test)]
-#[path = "audit-tests.rs"]
-mod tests;

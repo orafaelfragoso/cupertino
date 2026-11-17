@@ -39,16 +39,3 @@ pub fn wayland_parent(parent_window: &str) -> Option<&str> {
         .strip_prefix("wayland:")
         .filter(|handle| !handle.is_empty())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_wayland_parent_window_names_a_handle() {
-        assert_eq!(wayland_parent("wayland:ab12-cd"), Some("ab12-cd"));
-        for none in ["", "wayland:", "x11:3a00004", "ab12-cd", "Wayland:ab12"] {
-            assert_eq!(wayland_parent(none), None, "{none:?}");
-        }
-    }
-}

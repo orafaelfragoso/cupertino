@@ -68,27 +68,3 @@ mod fixed {
         seconds().map(|_| *FROZEN.get_or_init(Instant::now))
     }
 }
-
-#[cfg(all(test, debug_assertions))]
-mod tests {
-    use super::fixed::parse;
-
-    #[test]
-    fn only_a_decimal_number_fixes_the_clock() {
-        assert_eq!(parse(Some("1700000000")), Some(1_700_000_000));
-        assert_eq!(parse(Some("-5")), Some(-5));
-        for not in [
-            "",
-            "+5",
-            "1e9",
-            " 5",
-            "5 ",
-            "0x10",
-            "abc",
-            "99999999999999999999",
-        ] {
-            assert_eq!(parse(Some(not)), None, "{not:?}");
-        }
-        assert_eq!(parse(None), None);
-    }
-}

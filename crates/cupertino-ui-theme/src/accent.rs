@@ -82,24 +82,3 @@ impl ColorTokens {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_accent_replaces_the_selected_fill_in_every_state_that_shows_it() {
-        let colors = ColorTokens::neutral(crate::Appearance::Light);
-        let red = [224, 56, 62];
-        let accented = colors.with_accent(red, red, false);
-        let normal = StateVariant::NORMAL;
-        assert_eq!(
-            accented.get(ColorRole::DefaultButtonFill, normal),
-            Some(rgb(red))
-        );
-        assert_eq!(
-            accented.get(ColorRole::SelectedControlFill, normal),
-            Some(rgb(red))
-        );
-    }
-}

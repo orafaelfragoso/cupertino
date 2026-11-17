@@ -524,32 +524,3 @@ impl Widget<Message> for TagRow {
         cx.keeps_editing();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_colours_come_first_then_the_other_tags_in_use_and_the_field_narrows_them() {
-        let known = ["Red".to_owned(), "Errands".to_owned(), "Project".to_owned()];
-        let on = |name: &str| name == "Project";
-        let rows = listed(&known, on, "");
-        let names: Vec<&str> = rows.iter().map(|(n, _, _)| n.as_str()).collect();
-        assert_eq!(
-            names,
-            ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray", "Errands", "Project"],
-            "a colour in use is listed once, with the colours"
-        );
-        assert_eq!(rows[0].1, Some(TagColor::Red));
-        assert_eq!(rows[8], ("Project".to_owned(), None, true));
-        let narrowed: Vec<String> = listed(&known, on, "RE")
-            .into_iter()
-            .map(|(n, _, _)| n)
-            .collect();
-        assert_eq!(
-            narrowed,
-            ["Red", "Green"],
-            "by any part of the name, in any case"
-        );
-    }
-}

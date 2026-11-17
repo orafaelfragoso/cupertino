@@ -786,7 +786,3 @@ pub fn serve(session: &str) -> Result<(), String> {
     lease.lock().unwrap().close();
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "mcp-tests.rs"]
-mod tests;

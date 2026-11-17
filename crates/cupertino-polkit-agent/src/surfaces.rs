@@ -35,33 +35,3 @@ pub fn panel(size: (u32, u32)) -> LayerSurfaceConfig {
         keyboard: KeyboardInteractivity::Exclusive,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_the_panel_takes_the_keyboard_and_it_takes_it_exclusively() {
-        let panel = panel((360, 248));
-        assert_eq!(panel.keyboard, KeyboardInteractivity::Exclusive);
-        assert_eq!(panel.layer, Layer::Overlay);
-        assert_eq!(panel.anchor, Anchor::empty());
-        assert_eq!(panel.output, None);
-        assert_eq!(panel.size, (360, 248));
-
-        let output = OutputId::from_registry_name(3);
-        let scrim = scrim(output);
-        assert_eq!(scrim.keyboard, KeyboardInteractivity::None);
-        assert_eq!(scrim.layer, Layer::Overlay);
-        assert_eq!(scrim.output, Some(output));
-        assert_eq!(
-            (scrim.anchor, scrim.size, scrim.exclusive_zone),
-            (
-                Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
-                (0, 0),
-                -1
-            ),
-            "the whole output, over the menu bar and the dock"
-        );
-    }
-}

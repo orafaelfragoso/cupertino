@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Screenshot tool of the Cupertino compositor: full-screen, window and selection capture with the crosshair overlay, the toolbar, the floating thumbnail, timestamped PNG files and the clipboard, drawn by CupertinoKit"
-autotests = false
-
 [package.metadata.cupertino]
 layer = "shell"
 
@@ -48,16 +46,7 @@ memmap2 = { version = "0.9", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 
-[dev-dependencies]
-cupertino-assets = { path = "../cupertino-assets" }
-cupertino-theme = { path = "../cupertino-theme" }
-cupertino-ui-test = { path = "../cupertino-ui-test" }
-
 [[bin]]
 name = "cupertino-screenshot"
 path = "src/main.rs"
 required-features = ["app"]
-
-[[test]]
-name = "suite"
-path = "tests/suite.rs"

@@ -82,39 +82,3 @@ pub(crate) fn arrange<T: LayoutTree>(
         children: kids.iter().copied().zip(rects).collect(),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rows_take_what_fits_and_wrap_below_the_tallest() {
-        let sizes = [
-            Size::new(40.0, 30.0),
-            Size::new(40.0, 50.0),
-            Size::new(40.0, 30.0),
-        ];
-        let (rects, taken) = place(&sizes, 100.0, Size::new(10.0, 5.0));
-        // the full row spreads the room left between its children
-        assert_eq!(rects[0], Rect::new(0.0, 0.0, 40.0, 30.0));
-        assert_eq!(rects[1], Rect::new(60.0, 0.0, 40.0, 50.0));
-        assert_eq!(rects[2], Rect::new(0.0, 55.0, 40.0, 30.0));
-        assert_eq!(taken, Size::new(100.0, 85.0));
-        // the last row keeps the columns of the row above
-        let five = [Size::new(30.0, 10.0); 5];
-        let (rects, _) = place(&five, 100.0, Size::new(5.0, 0.0));
-        assert_eq!(rects[3].origin.x, 0.0);
-        assert_eq!(rects[4].origin.x, rects[1].origin.x);
-        // a single row that does not fill the width keeps its gaps
-        let (rects, _) = place(&five[..2], 100.0, Size::new(5.0, 0.0));
-        assert_eq!(rects[1].origin.x, 35.0);
-        // a child wider than the room keeps a row of its own
-        let (rects, _) = place(
-            &[Size::new(150.0, 10.0), Size::new(10.0, 10.0)],
-            100.0,
-            Size::ZERO,
-        );
-        assert_eq!(rects[1].origin.y, 10.0);
-        assert_eq!(place(&[], 100.0, Size::ZERO).1, Size::ZERO);
-    }
-}

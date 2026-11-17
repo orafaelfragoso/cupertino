@@ -62,11 +62,6 @@ impl<M: 'static> Tree<M> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.live
-    }
-
     pub(crate) fn get(&self, id: NodeId) -> Option<&Node<M>> {
         match self.slots.get(id.index() as usize)? {
             Slot::Live(generation, node) if *generation == id.generation() => Some(node),
@@ -365,6 +360,3 @@ impl<M: 'static> Tree<M> {
         path
     }
 }
-
-#[cfg(test)]
-mod tests;

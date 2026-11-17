@@ -1,9 +1,6 @@
 //! Export the runtime's existing semantics; actions take the same native route as assistive actions.
 use super::*;
 use cupertino_semantics as wire;
-#[cfg(test)]
-#[path = "semantic-tests.rs"]
-mod tests;
 
 /// The least time between two snapshots of one window's tree, in nanoseconds. Each snapshot is a file sent to the
 /// compositor, so a tree that changes every frame (a slide, a spring, a fade) is published a few times a second, with

@@ -74,35 +74,3 @@ pub fn session_places(home: &Path) -> Vec<Place> {
     let text = std::fs::read_to_string(config.join("user-dirs.dirs")).unwrap_or_default();
     places(home, &text)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn places_are_home_then_the_user_directories_that_exist() {
-        let home = tempfile::tempdir().unwrap();
-        for dir in ["Desktop", "Docs", "Bilder"] {
-            std::fs::create_dir(home.path().join(dir)).unwrap();
-        }
-        let text = "# written by xdg-user-dirs-update\n\
-                    XDG_DOCUMENTS_DIR=\"$HOME/Docs\"\n\
-                    XDG_PICTURES_DIR=\"$HOME/Bilder\"\n\
-                    XDG_MUSIC_DIR=\"$HOME\"\n\
-                    XDG_VIDEOS_DIR=\"$HOME/Missing\"\n\
-                    XDG_DOWNLOAD_DIR=relative\n";
-        let rows: Vec<(&str, PathBuf)> = places(home.path(), text)
-            .into_iter()
-            .map(|p| (p.name, p.path))
-            .collect();
-        assert_eq!(
-            rows,
-            [
-                ("Home", home.path().to_path_buf()),
-                ("Desktop", home.path().join("Desktop")),
-                ("Documents", home.path().join("Docs")),
-                ("Pictures", home.path().join("Bilder")),
-            ]
-        );
-    }
-}

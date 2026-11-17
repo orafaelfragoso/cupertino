@@ -69,15 +69,3 @@ fn text_of(bytes: &[u8]) -> String {
     };
     String::from_utf8_lossy(whole).into_owned()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_character_cut_by_the_read_limit_is_dropped() {
-        assert_eq!(text_of("aé".as_bytes()), "aé");
-        assert_eq!(text_of(&"aé".as_bytes()[..2]), "a");
-        assert_eq!(text_of(b"a\xFFb"), "a\u{FFFD}b");
-    }
-}

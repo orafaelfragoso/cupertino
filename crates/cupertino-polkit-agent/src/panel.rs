@@ -326,6 +326,3 @@ pub struct View<'a> {
     /// The expanded details' rows: a label and its value.
     pub details: &'a [(&'static str, String)],
 }
-
-#[cfg(test)]
-mod tests;

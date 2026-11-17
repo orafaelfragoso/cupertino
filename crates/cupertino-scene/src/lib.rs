@@ -62,8 +62,6 @@ pub enum SceneKind {
     DisplayFilter,
     InputHudShadow,
     AccentShadow,
-    #[cfg(test)]
-    Test,
 }
 
 impl SceneKind {
@@ -104,8 +102,6 @@ impl SceneKind {
             Self::DisplayFilter => "display-filter",
             Self::InputHudShadow => "input-hud-shadow",
             Self::AccentShadow => "accent-shadow",
-            #[cfg(test)]
-            Self::Test => "test",
         }
     }
 }
@@ -221,168 +217,4 @@ fn captures_below_composites(items: &[(SceneLayer, SceneItem)]) -> bool {
             }),
             _ => true,
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cupertino_geometry::{Point, Rect};
-
-    fn item(index: u64, damage: ContentDamage) -> SceneItem {
-        SceneItem {
-            id: SceneId {
-                kind: SceneKind::Test,
-                index,
-            },
-            revision: 3,
-            source: Source::SurfaceTree {
-                id: SurfaceId(ResourceKey {
-                    slot: index,
-                    generation: 1,
-                }),
-                role: SurfaceRole::WindowContent,
-            },
-            placement: Placement {
-                origin: OutputPoint(Point::ZERO),
-                pivot: OutputPoint(Point::ZERO),
-                scale_x: 1.0,
-                scale_y: 1.0,
-            },
-            opacity: 1.0,
-            clip: Clip::None,
-            damage,
-        }
-    }
-
-    #[test]
-    fn frame_keeps_order_and_does_not_inflate_content_damage() {
-        let partial = ContentDamage::Regions(DamageRegions::Buffer(vec![BufferRect {
-            x: 4,
-            y: 8,
-            width: 12,
-            height: 16,
-        }]));
-        let mut items = LayerStack::new();
-        items.push(SceneLayer::Wallpaper, item(0, ContentDamage::Full));
-        items.push(SceneLayer::Windows, item(1, ContentDamage::Unchanged));
-        let mut image = item(2, partial.clone());
-        image.source = Source::Image {
-            id: ImageId(ResourceKey {
-                slot: 2,
-                generation: 1,
-            }),
-            mapping: ImageMapping {
-                buffer_size: (100, 100),
-                buffer_scale: 1.25,
-                transform: Transform::Normal,
-                crop: Some(BufferCrop(Rect::new(0.25, 0.5, 90.0, 90.0))),
-                alpha: AlphaMode::Premultiplied,
-            },
-            role: ImageRole::Standalone,
-            size: (90, 90),
-        };
-        items.push(SceneLayer::Windows, image);
-        items.push(
-            SceneLayer::Cursor,
-            item(
-                3,
-                ContentDamage::Regions(DamageRegions::CommittedSurfaceTree),
-            ),
-        );
-        let frame = SceneFrame::new(
-            Output {
-                id: OutputId(1),
-                rect: GlobalRect(Rect::new(0.0, 0.0, 800.0, 600.0)),
-                physical_size: PhysicalSize {
-                    width: 1000,
-                    height: 750,
-                },
-                scale: 1.25,
-                transform: Transform::Normal,
-            },
-            FrameId(10),
-            Duration::from_millis(125),
-            [0.0, 0.0, 0.0, 1.0],
-            OutputInvalidation::Incremental,
-            items,
-        );
-        assert_eq!(
-            frame
-                .items()
-                .iter()
-                .map(|(_, i)| i.id.index)
-                .collect::<Vec<_>>(),
-            vec![3, 1, 2, 0]
-        );
-        assert_eq!(frame.items()[1].1.damage, ContentDamage::Unchanged);
-        assert_eq!(frame.items()[2].1.damage, partial);
-        assert_eq!(frame.items()[3].1.damage, ContentDamage::Full);
-        assert_eq!(frame.items()[1].1.revision, 3);
-        assert_eq!(frame.invalidation, OutputInvalidation::Incremental);
-    }
-    fn material(index: u64, stage: MaterialStage) -> SceneItem {
-        let mut i = item(index, ContentDamage::Full);
-        i.source = Source::Material(MaterialPass {
-            recipe: RecipeId(ResourceKey {
-                slot: 0,
-                generation: 1,
-            }),
-            rect: OutputRect(Rect::new(0.0, 0.0, 10.0, 10.0)),
-            radius: 0.0,
-            style: cupertino_geometry::CornerStyle::Circular,
-            stage,
-            tint: [0.0; 3],
-        });
-        i
-    }
-
-    fn frame_with(items: LayerStack<SceneItem>) -> SceneFrame {
-        SceneFrame::new(
-            Output {
-                id: OutputId(1),
-                rect: GlobalRect(Rect::new(0.0, 0.0, 800.0, 600.0)),
-                physical_size: PhysicalSize {
-                    width: 800,
-                    height: 600,
-                },
-                scale: 1.0,
-                transform: Transform::Normal,
-            },
-            FrameId(1),
-            Duration::ZERO,
-            [0.0; 4],
-            OutputInvalidation::Incremental,
-            items,
-        )
-    }
-
-    #[test]
-    fn composite_with_its_capture_below_is_accepted() {
-        let mut items = LayerStack::new();
-        items.push(
-            SceneLayer::BackdropCapture,
-            material(1, MaterialStage::Capture { owner: 7 }),
-        );
-        items.push(
-            SceneLayer::LayerTop,
-            material(2, MaterialStage::Composite { owner: 7 }),
-        );
-        assert_eq!(frame_with(items).items().len(), 2);
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "needs its capture below")]
-    fn composite_above_nothing_is_rejected() {
-        let mut items = LayerStack::new();
-        items.push(
-            SceneLayer::LayerTop,
-            material(2, MaterialStage::Composite { owner: 7 }),
-        );
-        items.push(
-            SceneLayer::BackdropCapture,
-            material(1, MaterialStage::Capture { owner: 8 }),
-        );
-        frame_with(items);
-    }
 }

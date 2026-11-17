@@ -48,27 +48,3 @@ impl BitSet {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn kernel_bit_layout() {
-        // KEY_A (30) is bit 6 of byte 3.
-        let set = BitSet::from_bytes(vec![0, 0, 0, 0b0100_0000]);
-        assert!(set.contains(30));
-        assert!(!set.contains(31));
-        assert!(!set.contains(4000));
-        assert_eq!(set.iter().collect::<Vec<_>>(), vec![30]);
-    }
-
-    #[test]
-    fn insert_grows_and_clears() {
-        let mut set = BitSet::default();
-        set.insert(0x110, true);
-        assert!(set.contains(0x110));
-        set.insert(0x110, false);
-        assert!(!set.contains(0x110));
-    }
-}

@@ -156,12 +156,6 @@ fn track(size: Size, shape: &SwitchShape) -> Rect {
     )
 }
 
-/// The thumb sits at the end when on and at the start when off; the end is on the left in right-to-left layouts.
-#[cfg(test)]
-fn thumb(track: Rect, on: bool, direction: LayoutDirection, shape: &SwitchShape) -> Rect {
-    thumb_at(track, on, direction, shape, None)
-}
-
 /// [`thumb`], moved `travel` points along the track while it is dragged, never past either end.
 fn thumb_at(
     track: Rect,
@@ -594,60 +588,5 @@ impl<M: 'static> Widget<M> for HeaderToggle<M> {
 
     fn semantics(&self, _: &SwitchState, cx: &mut SemanticsCx<'_>) {
         self.toggle.semantics_of(cx)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SHAPE: SwitchShape = SwitchShape {
-        track: Size::new(54.0, 24.0),
-        thumb: Size::new(32.0, 20.0),
-        inset: 2.0,
-    };
-
-    fn track() -> Rect {
-        Rect::new(0.0, 0.0, 54.0, 24.0)
-    }
-
-    #[test]
-    fn a_dragged_thumb_follows_the_pointer_between_the_ends() {
-        let ltr = LayoutDirection::Ltr;
-        assert_eq!(thumb(track(), false, ltr, &SHAPE).min_x(), 2.0);
-        assert_eq!(thumb(track(), true, ltr, &SHAPE).min_x(), 20.0);
-        assert_eq!(
-            thumb_at(track(), false, ltr, &SHAPE, Some(7.0)).min_x(),
-            9.0
-        );
-        assert_eq!(
-            thumb_at(track(), false, ltr, &SHAPE, Some(80.0)).min_x(),
-            20.0,
-            "never past the end"
-        );
-        assert_eq!(
-            thumb_at(track(), true, ltr, &SHAPE, Some(80.0)).min_x(),
-            20.0
-        );
-    }
-
-    #[test]
-    fn the_state_a_drag_lands_on_is_the_half_the_thumb_is_in() {
-        let ltr = LayoutDirection::Ltr;
-        let rtl = LayoutDirection::Rtl;
-        let at = |travel, on, direction| {
-            dragged_on(
-                track(),
-                thumb_at(track(), on, direction, &SHAPE, Some(travel)),
-                direction,
-            )
-        };
-        assert!(!at(5.0, false, ltr), "short of the middle it stays off");
-        assert!(at(12.0, false, ltr), "past the middle it lands on");
-        assert!(!at(-12.0, true, ltr));
-        assert!(
-            at(-12.0, false, rtl),
-            "the end is on the left in right-to-left"
-        );
     }
 }

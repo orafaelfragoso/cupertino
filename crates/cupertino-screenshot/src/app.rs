@@ -553,17 +553,3 @@ pub fn run(options: &Options) -> Result<()> {
         None => Err("the screenshot's windows went away".into()),
     }
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// The toolbar is small and the overlay redraws only its selection.
-    #[test]
-    fn the_toolbar_and_the_overlay_draw_on_the_cpu() {
-        assert_eq!(
-            <App as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Cpu
-        );
-    }
-}

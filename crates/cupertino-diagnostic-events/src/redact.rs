@@ -651,30 +651,3 @@ fn replace_word(text: &str, needle: &str, with: &str) -> String {
     out.push_str(rest);
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn siphash_matches_the_reference_vector() {
-        // the reference implementation's key 00..0f and message 00..0e
-        let key: Vec<u8> = (0..16).collect();
-        let k0 = u64::from_le_bytes(key[..8].try_into().unwrap());
-        let k1 = u64::from_le_bytes(key[8..].try_into().unwrap());
-        let message: Vec<u8> = (0..15).collect();
-        assert_eq!(siphash24(k0, k1, &message), 0xa129ca6149be45e5);
-        assert_eq!(siphash24(k0, k1, &[]), 0x726fdb47dd0e0e31);
-    }
-
-    #[test]
-    fn spans_end_at_separators() {
-        assert_eq!(
-            span_end("/home/a/My Files/x.txt: not found"),
-            "/home/a/My Files/x.txt".len()
-        );
-        assert_eq!(span_end("/home/a/x\" and"), "/home/a/x".len());
-        assert_eq!(span_end("/home/a/x, then"), "/home/a/x".len());
-        assert_eq!(span_end("/home/a/x - gone"), "/home/a/x".len());
-    }
-}

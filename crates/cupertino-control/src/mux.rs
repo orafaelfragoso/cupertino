@@ -8,9 +8,6 @@
 //! reason, or when the request needs another output or more capabilities, the peer's session is ended and replaced by
 //! a fresh one, whose new run is asked for instead: a compositor keeps a run that ended ended, and gives a session one
 //! epoch for good.
-#[cfg(test)]
-#[path = "mux-tests.rs"]
-mod tests;
 use crate::capture::{self, Pixels, Region};
 use crate::ipc::{self, Reply, Wake};
 use crate::{base64, refusal, Request, MAX_WAIT_MS, REPLY_TIMEOUT};

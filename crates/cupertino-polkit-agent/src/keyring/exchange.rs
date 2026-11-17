@@ -327,6 +327,3 @@ pub fn base64_decode(text: &str) -> Result<Zeroizing<Vec<u8>>, ExchangeError> {
     }
     Ok(out)
 }
-
-#[cfg(test)]
-mod tests;

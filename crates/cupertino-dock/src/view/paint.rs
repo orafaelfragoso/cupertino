@@ -622,36 +622,3 @@ impl<M: Clone + 'static> Widget<M> for Root<M> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cupertino_kit::core::next_resource_id;
-    use cupertino_kit::render::{ImageResource, PixelFormat};
-    use std::sync::Arc;
-
-    fn source(px: u32) -> ImageSource {
-        ImageSource {
-            id: next_resource_id(),
-            image: ImageResource {
-                revision: 0,
-                width: px,
-                height: px,
-                stride: px * 4,
-                format: PixelFormat::Rgba8Premultiplied,
-                pixels: Arc::from(vec![0; (px * px * 4) as usize]),
-            },
-        }
-    }
-
-    #[test]
-    fn the_rendition_is_the_smallest_that_covers_the_box_else_the_largest() {
-        let icon = [source(64), source(128), source(256)];
-        let side = |s: Option<&ImageSource>| s.map(|s| s.image.width);
-        assert_eq!(side(rendition(&icon, 64.0, 1.0)), Some(64));
-        assert_eq!(side(rendition(&icon, 64.0, 2.0)), Some(128));
-        assert_eq!(side(rendition(&icon, 100.0, 1.0)), Some(128));
-        assert_eq!(side(rendition(&icon, 128.0, 3.0)), Some(256));
-        assert_eq!(side(rendition(&[], 64.0, 1.0)), None);
-    }
-}

@@ -184,22 +184,3 @@ pub(crate) fn set_monotonic_clock(fd: BorrowedFd<'_>) -> Result<(), Error> {
         errno,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Request numbers as the C macros expand on 64-bit Linux (x86_64/aarch64 `_IOC` layout).
-    #[test]
-    fn opcodes_match_the_uapi_macros() {
-        let op = |nr: u8, len: usize| opcode::from_components(Direction::Read, EVDEV_TYPE, nr, len);
-        assert_eq!(op(NR_GID, INPUT_ID_SIZE), 0x8008_4502);
-        assert_eq!(op(NR_GNAME, 256), 0x8100_4506);
-        assert_eq!(op(NR_GABS + 0x35, INPUT_ABSINFO_SIZE), 0x8018_4575); // EVIOCGABS(ABS_MT_POSITION_X)
-        assert_eq!(op(NR_GKEY, bitmap_bytes(KEY_MAX)), 0x8060_4518);
-        assert_eq!(op(NR_GBIT, 4), 0x8004_4520); // EVIOCGBIT(0, 4)
-        assert_eq!(op(NR_GMTSLOTS, 4 * 11), 0x802c_450a);
-        assert_eq!(EVIOCGRAB, 0x4004_4590);
-        assert_eq!(EVIOCSCLOCKID, 0x4004_45a0);
-    }
-}

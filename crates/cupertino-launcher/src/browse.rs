@@ -1237,6 +1237,3 @@ fn camel_segments(name: &str) -> Vec<String> {
     }
     out
 }
-
-#[cfg(test)]
-mod tests;

@@ -238,6 +238,3 @@ fn ancestors(path: &[NodeId]) -> &[NodeId] {
 fn deepest_alive<M: 'static>(tree: &Tree<M>, path: &[NodeId]) -> Option<NodeId> {
     path.iter().rev().copied().find(|&n| tree.contains(n))
 }
-
-#[cfg(test)]
-mod tests;

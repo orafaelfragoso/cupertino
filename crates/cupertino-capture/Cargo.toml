@@ -11,6 +11,3 @@ layer = "foundation"
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 tiny-skia = "0.12"
-
-[dev-dependencies]
-tempfile = "3"

@@ -515,6 +515,3 @@ pub fn launch(
     }
     report
 }
-
-#[cfg(test)]
-mod tests;

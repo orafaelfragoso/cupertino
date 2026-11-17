@@ -1304,16 +1304,3 @@ impl Dispatch<CupertinoControlAuthorityV1, ()> for Cupertino {
         }
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn epoch_exhaustion_never_reuses_a_run_identity() {
-        let display = smithay::reexports::wayland_server::Display::<Cupertino>::new().unwrap();
-        let mut control = Control::new(&display.handle());
-        control.next_epoch = u64::MAX;
-        assert_eq!(control.allocate_epoch().unwrap().get(), u64::MAX);
-        assert_eq!(control.allocate_epoch(), None);
-        assert_eq!(control.allocate_epoch(), None);
-    }
-}

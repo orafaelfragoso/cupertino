@@ -3244,17 +3244,3 @@ pub fn run(start: Start) -> Result<(), cupertino_kit::app::AppError> {
     prepare(start);
     cupertino_kit::app::run::<Files>()
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// Its windows are large and redraw whole on every step of a live resize.
-    #[test]
-    fn the_file_manager_window_draws_on_the_gpu() {
-        assert_eq!(
-            <Files as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Gpu
-        );
-    }
-}

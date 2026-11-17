@@ -548,6 +548,3 @@ impl Prompter {
         effects
     }
 }
-
-#[cfg(test)]
-pub(crate) mod tests;

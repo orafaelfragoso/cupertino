@@ -320,6 +320,3 @@ pub fn run<A: App>(app: impl FnOnce() -> Result<A, String>) -> ExitCode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

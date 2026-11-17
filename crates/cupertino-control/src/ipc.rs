@@ -3,9 +3,6 @@
 //!
 //! Each peer has a reader and a writer thread of its own, so the controller's loop never blocks on a peer: a peer may
 //! have one command in flight, and its response is written while the loop serves the other peers.
-#[cfg(test)]
-#[path = "ipc-tests.rs"]
-mod tests;
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;

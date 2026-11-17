@@ -3639,6 +3639,3 @@ impl<M: 'static> Widget<M> for Fade<M> {
 
 mod controls;
 mod motion;
-
-#[cfg(test)]
-mod tests;

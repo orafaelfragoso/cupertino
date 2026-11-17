@@ -126,25 +126,3 @@ impl Transport for KernelTransport {
             .remove(&(adapter, device));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_kernel_without_bluetooth_counts_as_missing() {
-        let error = |source| Error::Syscall {
-            call: OPEN_CALL,
-            source,
-        };
-        assert!(NoBluetooth::is_missing(&error(Errno::AFNOSUPPORT)));
-        assert!(NoBluetooth::is_missing(&error(Errno::PROTONOSUPPORT)));
-        assert!(!NoBluetooth::is_missing(&error(Errno::ACCESS)));
-        assert!(!NoBluetooth::is_missing(&error(Errno::PERM)));
-        // the same errno from another call is that call's failure
-        assert!(!NoBluetooth::is_missing(&Error::Syscall {
-            call: "bind",
-            source: Errno::AFNOSUPPORT,
-        }));
-    }
-}

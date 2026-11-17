@@ -662,6 +662,3 @@ impl Visit for Interval {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

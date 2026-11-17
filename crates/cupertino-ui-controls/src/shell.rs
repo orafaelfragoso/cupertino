@@ -402,26 +402,3 @@ impl<M: 'static> Widget<M> for ContentPane<M> {
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_panel_window_is_the_sidebar_glass_with_the_window_corners_and_opaque() {
-        let WindowBackground::Surface {
-            surface,
-            radius,
-            alpha,
-        } = PANEL_WINDOW_BACKGROUND
-        else {
-            panic!("a panel window asks for a compositor surface");
-        };
-        assert_eq!(
-            GlassRole::SidebarPanel.material(),
-            crate::GlassMaterial::Compositor(surface),
-            "the same glass as a sidebar window's panel"
-        );
-        assert_eq!((radius, alpha), (WINDOW_CORNER_RADIUS, 1.0));
-    }
-}

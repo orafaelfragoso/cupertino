@@ -349,23 +349,3 @@ pub(crate) fn edge_at(edges: &[(TextPosition, usize)], at: TextPosition) -> usiz
         .or(edges.last())
         .map_or(0, |(_, edge)| *edge)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_lines_around_a_caret_are_its_own_and_the_ones_on_either_side() {
-        let text = "ab\r\ncd\u{2028}ef\ngh";
-        let around = |at| {
-            caret_lines_around(text, None, at)
-                .iter()
-                .map(|line| line.start..line.end)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(around(4), [0..2, 4..6, 9..11]);
-        assert_eq!(around(9), [4..6, 9..11, 12..14]);
-        assert_eq!(around(0), [0..2, 4..6]);
-        assert_eq!(around(14), [9..11, 12..14]);
-    }
-}

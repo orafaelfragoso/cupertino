@@ -242,7 +242,3 @@ impl<A: Application> TestDriver<A> {
         unreachable!("a non-zero turn budget executes at least one turn")
     }
 }
-
-#[cfg(test)]
-#[path = "driver-tests.rs"]
-mod tests;

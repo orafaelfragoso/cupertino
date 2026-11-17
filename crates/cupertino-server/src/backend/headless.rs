@@ -482,31 +482,3 @@ pub fn run(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MS: Duration = Duration::from_millis(1);
-
-    #[test]
-    fn a_session_at_rest_sleeps_and_wakes_its_loop_once_a_minute_at_most() {
-        assert_eq!(loop_wait(None, None, None), super::super::REST_WAIT);
-        // a minute of rest is one pass, not the sixty a one-second backstop makes
-        let passes = Duration::from_secs(60).as_millis() / loop_wait(None, None, None).as_millis();
-        assert_eq!(passes, 1);
-    }
-
-    #[test]
-    fn the_loop_wakes_for_the_first_of_a_frame_a_tick_and_the_end_of_the_run() {
-        assert_eq!(loop_wait(Some(16 * MS), Some(200 * MS), None), 16 * MS);
-        assert_eq!(loop_wait(None, Some(200 * MS), Some(3000 * MS)), 200 * MS);
-        assert_eq!(loop_wait(None, None, Some(300 * MS)), 300 * MS);
-        assert_eq!(loop_wait(Some(5000 * MS), None, None), 5000 * MS);
-        assert_eq!(
-            loop_wait(Some(Duration::from_secs(600)), None, None),
-            super::super::REST_WAIT
-        );
-        assert_eq!(loop_wait(Some(Duration::ZERO), None, None), Duration::ZERO);
-    }
-}

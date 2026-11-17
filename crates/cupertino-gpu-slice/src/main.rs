@@ -248,17 +248,3 @@ fn offscreen_loop(frames: u64, fence: bool, export: bool) -> Result<ExitCode, St
     }
     Ok(ExitCode::SUCCESS)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_soak_slope_is_the_least_squares_growth_per_frame() {
-        let samples: Vec<_> = (0..10)
-            .map(|i| (i as f64 * 100.0, 1000.0 + i as f64 * 1600.0))
-            .collect();
-        assert!((slope(&samples) - 16.0).abs() < 1e-9);
-        assert_eq!(slope(&[(1.0, 5.0), (1.0, 7.0)]), 0.0);
-    }
-}

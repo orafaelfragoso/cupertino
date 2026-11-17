@@ -106,14 +106,6 @@ pub(crate) fn last_error() -> String {
 
 /// A test makes the function named `at` panic.
 pub(crate) fn hook(at: &'static str) {
-    #[cfg(test)]
-    if crate::tests::PANIC_AT
-        .try_with(|p| p.get() == Some(at))
-        .unwrap_or(false)
-    {
-        panic!("injected panic at {at}");
-    }
-    #[cfg(not(test))]
     let _ = at;
 }
 

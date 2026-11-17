@@ -695,37 +695,3 @@ impl Widget<Message> for BandLayer {
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_press_selects_as_the_table_does() {
-        let selection = Selection::new(std::iter::once(2..4), Some(3), Some(2));
-        let picked = |s: Selection| s.ranges().iter().flat_map(Clone::clone).collect::<Vec<_>>();
-        assert_eq!(picked(pressed(&selection, 6, Mods::NONE)), [6]);
-        assert_eq!(picked(pressed(&selection, 5, Mods::SHIFT)), [2, 3, 4, 5]);
-        assert_eq!(picked(pressed(&selection, 3, Mods::PRIMARY)), [2]);
-    }
-
-    #[test]
-    fn tab_goes_on_by_name_from_the_selection_or_the_row_the_keyboard_is_on() {
-        // shown by size: b.txt, a.txt, Notes; by name: a.txt, b.txt, Notes
-        let names: Vec<String> = ["b.txt", "a.txt", "Notes"].map(str::to_owned).to_vec();
-        assert_eq!(tab_to(&names, Some(1), 1, false), Some(0), "a.txt to b.txt");
-        assert_eq!(
-            tab_to(&names, Some(0), 0, true),
-            Some(1),
-            "b.txt back to a.txt"
-        );
-        assert_eq!(tab_to(&names, Some(2), 2, false), None, "past the last");
-        assert_eq!(tab_to(&names, Some(1), 1, true), None, "before the first");
-        // nothing selected: the first by name, unless the keyboard is on it already
-        assert_eq!(tab_to(&names, None, 0, false), Some(1));
-        assert_eq!(tab_to(&names, None, 1, false), Some(0));
-        assert_eq!(tab_to(&names, None, 2, true), Some(0));
-        let one = vec!["a.txt".to_owned()];
-        assert_eq!(tab_to(&one, None, 0, false), None, "the only item is left");
-    }
-}

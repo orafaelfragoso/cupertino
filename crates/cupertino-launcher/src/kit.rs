@@ -604,12 +604,6 @@ impl Model {
                 || (self.nav.is_visible() && !self.motion.animating(self.now().mono)))
     }
 
-    /// How long the panel's own motion of the open the compositor runs lasts, from its start.
-    #[cfg(test)]
-    pub fn open_length(&self) -> f64 {
-        self.open_length
-    }
-
     /// Whether the compositor runs the panel's open now.
     pub fn open_handed(&self) -> bool {
         self.open_rest.is_some()

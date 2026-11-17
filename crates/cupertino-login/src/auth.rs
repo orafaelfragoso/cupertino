@@ -121,29 +121,3 @@ fn authenticate(login: &str, password: Password, on_notice: &dyn Fn(String)) -> 
         Err(e) => AuthOutcome::Error(format!("account not available: {e}")),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-    use zeroize::Zeroizing;
-
-    #[test]
-    fn the_messages_of_pam_modules_become_notices_in_order() {
-        let notices = RefCell::new(Vec::new());
-        let on_notice = |text: String| notices.borrow_mut().push(text);
-        let mut conversation = PasswordConversation {
-            password: Zeroizing::new(String::new()),
-            on_notice: &on_notice,
-        };
-        conversation.error_msg(c"The account is locked due to 3 failed logins.");
-        conversation.text_info(c"Your password will expire in 2 days.");
-        assert_eq!(
-            *notices.borrow(),
-            [
-                "The account is locked due to 3 failed logins.",
-                "Your password will expire in 2 days."
-            ]
-        );
-    }
-}

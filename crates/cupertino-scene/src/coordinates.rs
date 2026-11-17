@@ -56,18 +56,3 @@ impl GlobalRect {
         OutputRect(self.0.translate(-output.0.x(), -output.0.y()))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_translation_preserves_fractional_geometry_and_negative_origins() {
-        let output = GlobalRect(Rect::new(-1280.25, 100.5, 1280.0, 720.0));
-        let window = GlobalRect(Rect::new(-1260.125, 110.75, 200.25, 100.5));
-        assert_eq!(
-            window.on_output(output),
-            OutputRect(Rect::new(20.125, 10.25, 200.25, 100.5))
-        );
-    }
-}

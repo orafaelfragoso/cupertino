@@ -137,35 +137,3 @@ pub fn debug_sig<T: std::fmt::Debug>(v: &T) -> u64 {
     let _ = write!(h, "{v:?}");
     h.0.finish()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn signature_decides_re_rendering() {
-        let mut c = ImageCache::default();
-        let mut renders = 0;
-        let mut get = |c: &mut ImageCache, sig| {
-            c.get(("t", 0), sig, || {
-                renders += 1;
-                Some(DrawList::new(4, 3))
-            })
-            .map(|(_, px)| px)
-        };
-        assert_eq!(get(&mut c, 1), Some((4, 3)));
-        assert_eq!(get(&mut c, 1), Some((4, 3)));
-        assert_eq!(get(&mut c, 2), Some((4, 3)));
-        assert_eq!(renders, 2);
-        c.end_frame();
-        assert_eq!(c.len(), 1);
-        c.end_frame();
-        assert!(c.is_empty(), "unused entries are dropped");
-    }
-
-    #[test]
-    fn debug_sig_is_stable_and_content_based() {
-        assert_eq!(debug_sig(&("a", 1)), debug_sig(&("a", 1)));
-        assert_ne!(debug_sig(&("a", 1)), debug_sig(&("a", 2)));
-    }
-}

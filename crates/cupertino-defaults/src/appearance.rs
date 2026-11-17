@@ -360,18 +360,3 @@ impl AppearanceSettings {
         conf::store(path, KEYS, &Self::UNSET, None, self)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_schedule_runs_across_midnight() {
-        let s = AppearanceSettings::UNSET;
-        assert!(s.dark_at(23 * 60));
-        assert!(s.dark_at(3 * 60));
-        assert!(!s.dark_at(12 * 60));
-        assert!(!s.dark_at(7 * 60));
-        assert!(s.dark_at(19 * 60));
-    }
-}

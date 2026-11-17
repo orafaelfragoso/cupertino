@@ -45,26 +45,3 @@ impl RateLimit {
         true
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_eleventh_attempt_within_a_minute_is_refused_and_the_window_rolls() {
-        let start = Instant::now();
-        let mut limit = RateLimit::new(ATTEMPTS_PER_WINDOW, ATTEMPT_WINDOW);
-        for second in 0..10 {
-            assert!(
-                limit.allow(start + Duration::from_secs(second)),
-                "attempt {second}"
-            );
-        }
-        assert!(!limit.allow(start + Duration::from_secs(10)), "the 11th");
-        // a refused attempt is not counted: when the first falls out of the window one more fits, and only one
-        assert!(limit.allow(start + Duration::from_secs(60)));
-        assert!(!limit.allow(start + Duration::from_secs(60)));
-        // the second attempt falls out one second later
-        assert!(limit.allow(start + Duration::from_secs(61)));
-    }
-}

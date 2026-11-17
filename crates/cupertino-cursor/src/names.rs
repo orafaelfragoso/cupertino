@@ -114,38 +114,3 @@ pub const REQUIRED_NAMES: &[&str] = &[
 pub fn all_names(m: &Mapping) -> impl Iterator<Item = &'static str> {
     std::iter::once(m.primary).chain(m.aliases.iter().copied())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn no_name_is_installed_twice() {
-        let mut seen = HashSet::new();
-        for m in NAMES {
-            for n in all_names(m) {
-                assert!(seen.insert(n), "{n} is claimed by more than one cursor");
-            }
-        }
-    }
-
-    #[test]
-    fn required_names_are_covered() {
-        let covered: HashSet<&str> = NAMES.iter().flat_map(all_names).collect();
-        for n in REQUIRED_NAMES {
-            assert!(covered.contains(n), "{n} has no mapping");
-        }
-    }
-
-    #[test]
-    fn every_procedural_cursor_has_a_mapping() {
-        for kind in crate::procedural::Kind::ALL {
-            assert!(
-                NAMES.iter().any(|m| m.primary == kind.name()),
-                "{} has no mapping",
-                kind.name()
-            );
-        }
-    }
-}

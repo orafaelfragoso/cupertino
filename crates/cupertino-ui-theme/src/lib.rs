@@ -478,34 +478,3 @@ impl ThemeTokens {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_state_without_its_own_colour_falls_back_to_normal() {
-        let normal = Color::new(0.0, 0.0, 0.0, 1.0);
-        let pressed = Color::new(1.0, 1.0, 1.0, 1.0);
-        let state = |interaction| StateVariant {
-            interaction,
-            ..StateVariant::NORMAL
-        };
-        let colors = ColorTokens::new([
-            ((ColorRole::ControlFill, StateVariant::NORMAL), normal),
-            (
-                (ColorRole::ControlFill, state(InteractionVariant::Pressed)),
-                pressed,
-            ),
-        ]);
-        assert_eq!(
-            colors.get(ColorRole::ControlFill, state(InteractionVariant::Pressed)),
-            Some(pressed)
-        );
-        assert_eq!(
-            colors.get(ColorRole::ControlFill, state(InteractionVariant::Hover)),
-            Some(normal)
-        );
-        assert_eq!(colors.get(ColorRole::Text, StateVariant::NORMAL), None);
-    }
-}

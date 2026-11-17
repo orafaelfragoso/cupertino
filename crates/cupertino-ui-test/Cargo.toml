@@ -17,6 +17,3 @@ cupertino-ui-render = { path = "../cupertino-ui-render" }
 cupertino-ui-text = { path = "../cupertino-ui-text" }
 cupertino-ui-theme = { path = "../cupertino-ui-theme" }
 tiny-skia = "0.12"
-
-[dev-dependencies]
-cupertino-ui-layout = { path = "../cupertino-ui-layout" }

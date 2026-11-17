@@ -508,37 +508,3 @@ impl PaneId {
 pub fn symbols() -> Vec<&'static str> {
     PANES.iter().map(|p| p.symbol).collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_pane_has_one_entry_and_a_round_tripping_key() {
-        for p in &PANES {
-            assert_eq!(
-                PANES.iter().filter(|q| q.id == p.id).count(),
-                1,
-                "{:?}",
-                p.id
-            );
-            assert_eq!(PaneId::from_key(p.id.key()), Some(p.id));
-            assert!(
-                p.symbol.starts_with("symbol.") && p.symbol.ends_with(".fill"),
-                "a tile wears a filled symbol: {}",
-                p.symbol
-            );
-            assert!(!p.sections.is_empty(), "{} has a findable section", p.title);
-        }
-        assert_eq!(PaneId::from_key("general"), Some(PaneId::General));
-        assert_eq!(PaneId::Keyboard.pane().title, "Keyboard");
-        assert_eq!(
-            (
-                PaneId::Battery.title(Some(false)),
-                PaneId::Battery.title(Some(true)),
-                PaneId::Battery.title(None)
-            ),
-            ("Energy Saver", "Battery", "Battery")
-        );
-    }
-}

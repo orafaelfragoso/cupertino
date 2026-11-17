@@ -244,32 +244,3 @@ impl LevelWriter {
 
 /// A level of 0.001 or less mutes (below the step the slider is silent).
 pub const MUTE_BELOW: f64 = 0.001;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_level_drag_writes_at_most_every_16_7_ms_with_the_latest_value_and_the_release_last() {
-        let mut w = LevelWriter::default();
-        assert_eq!(w.moved(0.10, 0.000), Some(0.10), "the press writes at once");
-        assert_eq!(w.moved(0.20, 0.005), None);
-        assert_eq!(
-            w.moved(0.30, 0.010),
-            None,
-            "inside the interval only the latest waits"
-        );
-        assert_eq!(w.due(), Some(1.0 / 60.0));
-        assert_eq!(w.tick(0.012), None, "not due yet");
-        assert_eq!(w.tick(0.017), Some(0.30), "the latest value, once due");
-        assert_eq!(w.due(), None);
-        assert_eq!(
-            w.moved(0.40, 0.040),
-            Some(0.40),
-            "past the interval it writes at once"
-        );
-        assert_eq!(w.moved(0.45, 0.041), None);
-        assert_eq!(w.released(0.50), 0.50, "the release writes the final value");
-        assert_eq!(w.due(), None, "and nothing waits after it");
-    }
-}

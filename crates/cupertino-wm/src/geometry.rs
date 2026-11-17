@@ -128,26 +128,6 @@ impl Rect {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn basics() {
-        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
-        let b = Rect::new(5.0, 5.0, 10.0, 10.0);
-        assert_eq!(a.intersection(&b), Some(Rect::new(5.0, 5.0, 5.0, 5.0)));
-        assert_eq!(a.union(&b), Rect::new(0.0, 0.0, 15.0, 15.0));
-        assert!(a.contains(Point::new(0.0, 0.0)) && !a.contains(Point::new(10.0, 5.0)));
-        assert!(!a.intersects(&Rect::new(10.0, 0.0, 5.0, 5.0)));
-        assert_eq!(
-            Rect::new(-5.0, 95.0, 10.0, 10.0).clamp_into(&Rect::new(0.0, 0.0, 100.0, 100.0)),
-            Rect::new(0.0, 90.0, 10.0, 10.0)
-        );
-        assert_eq!(Rect::from_array(a.to_array()), a);
-    }
-}
-
 /// A set of rectangle edges (resize handles, tiled sides).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Edges {

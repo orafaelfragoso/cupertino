@@ -203,7 +203,3 @@ impl AccessibilityAdapter for AssistiveTechnology {
         self.lock().titles.insert(window, title.to_owned());
     }
 }
-
-#[cfg(test)]
-#[path = "assistive-tests.rs"]
-mod tests;

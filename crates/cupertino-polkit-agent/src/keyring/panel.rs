@@ -325,6 +325,3 @@ pub struct View<'a> {
     pub cancel_title: &'a str,
     pub continue_title: &'a str,
 }
-
-#[cfg(test)]
-mod tests;

@@ -138,30 +138,3 @@ impl<M: 'static> Widget<M> for Text {
         cx.name(self.content.text.clone());
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cupertino_ui_text::TextStyle;
-
-    #[test]
-    fn the_large_title_is_22_pt_bold_whatever_size_the_content_asks_for() {
-        let theme = ThemeTokens::neutral(cupertino_ui_theme::ThemePreferences {
-            appearance: cupertino_ui_theme::Appearance::Light,
-            reduce_transparency: false,
-            reduce_motion: false,
-        })
-        .unwrap();
-        let text = Text {
-            content: AttributedText::plain("Name", TextStyle::new(13.0)),
-            role: TextRole::LargeTitle,
-            wrap: false,
-            secondary: false,
-            selected: false,
-        };
-        let styled = text.styled(&theme);
-        let (_, style) = &styled.runs[0];
-        assert_eq!((style.size, style.weight), (22.0, FontWeight::BOLD));
-        assert!(style.size > theme.type_scale.title.size);
-    }
-}

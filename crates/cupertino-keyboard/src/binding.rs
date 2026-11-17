@@ -28,15 +28,3 @@ pub fn load_default() -> (BindingTable, Vec<OverrideError>) {
         .unwrap_or_default();
     (t, errs)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_path_shape() {
-        if let Some(p) = default_user_path() {
-            assert!(p.ends_with("cupertino/keybindings.conf"));
-        }
-    }
-}

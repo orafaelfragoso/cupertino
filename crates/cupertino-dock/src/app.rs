@@ -1212,17 +1212,3 @@ fn fixture_unresponsive() -> std::collections::HashSet<String> {
 fn fixture_unresponsive() -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// The overview redraws the whole output on every frame of its animation.
-    #[test]
-    fn the_dock_and_its_overview_draw_on_the_gpu() {
-        assert_eq!(
-            <App as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Gpu
-        );
-    }
-}

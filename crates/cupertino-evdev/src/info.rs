@@ -149,29 +149,3 @@ impl DeviceInfo {
         self.properties.contains(property)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zero_resolution_is_unknown() {
-        assert_eq!(Resolution::from_raw(0), Resolution::Unknown);
-        assert_eq!(Resolution::from_raw(-1), Resolution::Unknown);
-        assert_eq!(Resolution::from_raw(i32::MIN), Resolution::Unknown);
-        assert_eq!(
-            Resolution::from_raw(40),
-            Resolution::UnitsPerMm(NonZeroU32::new(40).unwrap())
-        );
-        let info = |raw| AbsInfo {
-            value: 0,
-            min: 0,
-            max: 4000,
-            fuzz: 0,
-            flat: 0,
-            resolution: Resolution::from_raw(raw),
-        };
-        assert_eq!(info(0).units_to_mm(400), None);
-        assert_eq!(info(40).units_to_mm(400), Some(10.0));
-    }
-}

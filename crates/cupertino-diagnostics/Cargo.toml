@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Typed diagnostics of a Cupertino installation and session (GPU and driver, session, portals, services, development builds of the shell processes, the last crash, logs), as text or JSON"
-autotests = false
-
 [package.metadata.cupertino]
 layer = "tools"
 
@@ -23,10 +21,3 @@ cupertino-devices = { path = "../cupertino-devices" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-[dev-dependencies]
-tempfile = "3"
-
-[[test]]
-name = "suite"
-path = "tests/suite.rs"

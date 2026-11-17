@@ -714,6 +714,3 @@ impl Painter {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

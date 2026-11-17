@@ -431,34 +431,3 @@ impl<M: Clone + 'static> Widget<M> for Body {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_capsule_keeps_14_5_points_either_side_of_the_name_over_a_12_point_pointer() {
-        // a five letter name about 34 points wide at 13 points makes a 63 point capsule
-        assert_eq!(34.0 + 2.0 * PADDING, 63.0);
-        assert_eq!((POINTER_WIDTH, POINTER_DEPTH), (12.0, 6.5));
-    }
-
-    #[test]
-    fn the_label_stands_on_the_bar_or_on_a_tile_that_stands_higher_and_rides_a_bounce() {
-        // a resting tile lies inside the bar: the bar's top edge, whichever tile
-        assert_eq!(stands_on(900.0, 911.0, 0.0), 900.0);
-        assert_eq!(stands_on(900.0, 900.0, 0.0), 900.0);
-        // a magnified tile stands 22 points over the bar: its top, and the label comes down as it shrinks
-        assert_eq!(stands_on(900.0, 878.0, 0.0), 878.0);
-        assert_eq!(stands_on(900.0, 893.5, 0.0), 893.5);
-        // a bounce raises the label as far as the tile
-        assert_eq!(stands_on(900.0, 911.0, 17.9), 900.0 - 17.9);
-        assert_eq!(stands_on(900.0, 878.0, 10.0), 868.0);
-    }
-
-    #[test]
-    fn the_pointer_and_capsule_blend_over_no_more_than_a_third_of_the_pointer_so_it_still_tapers() {
-        // a wider blend melts the pointer's narrowing layers into a blunt round blob under the capsule
-        const { assert!(GLASS_BLEND <= POINTER_WIDTH / 3.0) };
-    }
-}

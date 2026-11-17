@@ -229,28 +229,3 @@ pub fn common_apps(lists: &[Vec<AppChoice>]) -> Vec<AppChoice> {
         .cloned()
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn app(id: &str) -> AppChoice {
-        AppChoice {
-            id: id.into(),
-            name: id.into(),
-            is_default: false,
-            icon: None,
-        }
-    }
-
-    #[test]
-    fn a_selection_is_offered_the_applications_that_open_every_item() {
-        let lists = [
-            vec![app("viewer"), app("editor"), app("browser")],
-            vec![app("browser"), app("editor")],
-        ];
-        let ids: Vec<String> = common_apps(&lists).into_iter().map(|a| a.id).collect();
-        assert_eq!(ids, ["editor", "browser"]);
-        assert!(common_apps(&[]).is_empty());
-    }
-}

@@ -1,7 +1,5 @@
 //! PipeWire video source streams for screen sharing. See the README.
 
-#[cfg(feature = "fake")]
-pub mod fake;
 pub mod format;
 mod node;
 

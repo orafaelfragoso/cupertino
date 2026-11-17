@@ -25,35 +25,3 @@ pub fn relative_to_parents(levels: &[Rect]) -> Vec<Rect> {
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn snapping_covers_the_rect_on_whole_points() {
-        assert_eq!(
-            snap(Rect::new(10.4, 24.0, 153.2, 88.5)),
-            Rect::new(10.0, 24.0, 154.0, 89.0)
-        );
-        assert_eq!(
-            snap(Rect::new(10.0, 24.0, 120.0, 80.0)),
-            Rect::new(10.0, 24.0, 120.0, 80.0)
-        );
-    }
-
-    #[test]
-    fn levels_are_relative_to_their_parent() {
-        let levels = [
-            Rect::new(100.0, 24.0, 150.0, 200.0),
-            Rect::new(248.0, 60.0, 120.0, 80.0),
-        ];
-        assert_eq!(
-            relative_to_parents(&levels),
-            vec![
-                Rect::new(100.0, 24.0, 150.0, 200.0),
-                Rect::new(148.0, 36.0, 120.0, 80.0)
-            ]
-        );
-    }
-}

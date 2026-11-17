@@ -10,6 +10,3 @@ layer = "foundation"
 
 [dependencies]
 cupertino-typeahead = { path = "../cupertino-typeahead" }
-
-[dev-dependencies]
-tempfile = "3"

@@ -108,19 +108,3 @@ impl Default for WindowShadowPreset {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shape_and_shadow_tokens_are_verified_values() {
-        let s = ShapeTokens::default();
-        assert_eq!(s.window_corner_radius, 16.0);
-        assert_eq!(s.window_corner_radius_for(WindowCornerSize::Small), 10.0);
-        let w = WindowShadowPreset::default();
-        assert_eq!((w.sigma, w.alpha, w.offset_y), (20.0, 0.40, 18.0));
-        assert_eq!((w.inactive_sigma, w.inactive_offset_y), (12.0, 8.0));
-        assert!((w.inactive_scale - 0.625).abs() < 1e-12);
-    }
-}

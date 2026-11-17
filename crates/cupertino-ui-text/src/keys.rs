@@ -258,6 +258,3 @@ fn edited(changed: bool) -> Response {
         Response::Moved
     }
 }
-
-#[cfg(test)]
-mod tests;

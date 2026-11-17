@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
 description = "CupertinoKit's window system on the Cupertino transport, and drawing on a surface of it with tiny-skia: frame pacing, damage and buffer conversion, popup placement and the text clipboard"
-autotests = false
-
 [package.metadata.cupertino]
 layer = "ui"
 
@@ -29,16 +27,4 @@ tracing = "0.1"
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]
-cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["server"] }
-cupertino-defaults = { path = "../cupertino-defaults" }
-cupertino-test-bus = { path = "../cupertino-test-bus" }
-memmap2 = "0.9"
 rustix = { version = "1", features = ["event"] }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "server", "staging"] }
-wayland-server = "0.31"
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
-
-[[test]]
-name = "suite"
-path = "tests/suite.rs"

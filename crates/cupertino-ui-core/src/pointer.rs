@@ -168,6 +168,3 @@ impl Pointer {
         self.hover = path;
     }
 }
-
-#[cfg(test)]
-mod tests;

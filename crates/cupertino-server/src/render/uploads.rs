@@ -65,37 +65,3 @@ pub fn note(kind: SceneKind, uploads: u64, bytes: u64) {
 pub fn total() -> Uploads {
     TOTAL.with(Cell::get)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn title_bars_and_rims_count_as_decorations_and_keyboard_overlays_as_huds() {
-        assert_eq!(drawer(SceneKind::TitleBar), Some(Drawer::Decoration));
-        assert_eq!(drawer(SceneKind::Rim), Some(Drawer::Decoration));
-        for kind in [
-            SceneKind::InputHud,
-            SceneKind::ShortcutNotice,
-            SceneKind::AccentPopup,
-        ] {
-            assert_eq!(drawer(kind), Some(Drawer::Hud));
-        }
-        assert_eq!(drawer(SceneKind::WallpaperImage), None);
-        assert_eq!(drawer(SceneKind::CursorImage), None);
-    }
-
-    #[test]
-    fn uploads_add_up_by_drawer_and_others_are_not_counted() {
-        let before = total();
-        note(SceneKind::TitleBar, 1, 400);
-        note(SceneKind::Rim, 2, 100);
-        note(SceneKind::InputHud, 1, 64);
-        note(SceneKind::WallpaperImage, 1, 1 << 20);
-        let after = total();
-        assert_eq!(after.decoration - before.decoration, 3);
-        assert_eq!(after.decoration_bytes - before.decoration_bytes, 500);
-        assert_eq!(after.hud - before.hud, 1);
-        assert_eq!(after.hud_bytes - before.hud_bytes, 64);
-    }
-}

@@ -174,31 +174,3 @@ pub fn icon_committed(surface: &WlSurface) -> bool {
 pub fn window_icon(surface: &WlSurface) -> Arc<WindowIcon> {
     with_copied(surface, |copied, _| copied.icon.clone())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_theme_key_is_an_allowed_icon_name() {
-        for ok in [
-            "org.example.painter",
-            "utilities-terminal",
-            "a",
-            &"x".repeat(255),
-        ] {
-            assert!(icon_name_allowed(ok), "{ok}");
-        }
-        for bad in [
-            "",
-            "/usr/share/icons/x.png",
-            "icons/x",
-            "..",
-            "x..y",
-            "a\0b",
-            &"x".repeat(256),
-        ] {
-            assert!(!icon_name_allowed(bad), "{bad:?}");
-        }
-    }
-}

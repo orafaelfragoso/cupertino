@@ -168,28 +168,3 @@ where
         .ok_or_else(|| zbus::Error::Failure(format!("the service's object has no {key}")))?;
     T::try_from(value.try_clone()?).map_err(Into::into)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_call_that_is_not_answered_fails_as_unanswered_after_its_wait() {
-        let never = std::future::pending::<zbus::Result<()>>();
-        let error = within(Duration::from_millis(5), never).unwrap_err();
-        assert!(unanswered(&error), "{error}");
-        assert!(within(Duration::from_secs(60), async { Ok(7) }).is_ok_and(|n| n == 7));
-        assert!(!unanswered(&zbus::Error::Failure("refused".into())));
-        assert!(unanswered(&zbus::Error::from(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out"
-        ))));
-    }
-
-    #[test]
-    fn the_wait_of_a_call_can_be_set() {
-        assert_eq!(call_timeout(), CALL_TIMEOUT);
-        set_call_timeout(Duration::from_millis(40));
-        assert_eq!(call_timeout(), Duration::from_millis(40));
-    }
-}

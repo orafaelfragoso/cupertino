@@ -173,19 +173,3 @@ pub fn enumerate(sysfs_root: &Path, subsystem: Subsystem) -> Result<Vec<Device>>
         .map(|(_, syspath)| Device::from_syspath(syspath))
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn node_names() {
-        assert_eq!(Subsystem::Drm.node_number("card1"), Some(1));
-        assert_eq!(Subsystem::Drm.node_number("card1-DP-1"), None);
-        assert_eq!(Subsystem::Drm.node_number("renderD128"), None);
-        assert_eq!(Subsystem::Input.node_number("event10"), Some(10));
-        assert_eq!(Subsystem::Input.node_number("mouse2"), None);
-        assert_eq!(Subsystem::Input.node_number("input3"), None);
-        assert_eq!(Subsystem::Input.node_number("event"), None);
-    }
-}

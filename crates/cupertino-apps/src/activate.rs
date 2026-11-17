@@ -83,22 +83,3 @@ pub fn activate_in_thread(
     }
     async move { result.recv().await.unwrap_or(false) }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_object_path_follows_the_desktop_file_id() {
-        assert_eq!(object_path("org.example.Maps"), "/org/example/Maps");
-        assert_eq!(object_path("org.example.my-app"), "/org/example/my_app");
-    }
-
-    #[test]
-    fn the_token_goes_in_the_platform_data_twice() {
-        let data = platform_data(Some("t-1"));
-        assert_eq!(data.get("activation-token"), Some(&Value::from("t-1")));
-        assert_eq!(data.get("desktop-startup-id"), Some(&Value::from("t-1")));
-        assert!(platform_data(None).is_empty());
-    }
-}

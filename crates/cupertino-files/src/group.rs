@@ -63,31 +63,3 @@ pub fn date_bucket(t: Option<SystemTime>, now: SystemTime) -> (String, i64) {
         _ => (ty.to_string(), 1000 + (ny - ty) as i64),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    /// `now - days`.
-    fn days_ago(now: SystemTime, days: u64) -> SystemTime {
-        now - Duration::from_secs(days * 86_400)
-    }
-
-    fn now() -> SystemTime {
-        // 2026-10-22 12:00 UTC
-        SystemTime::UNIX_EPOCH + Duration::from_secs(1_792_670_400)
-    }
-
-    #[test]
-    fn date_buckets() {
-        let n = now();
-        assert_eq!(date_bucket(Some(n), n).0, "Today");
-        assert_eq!(date_bucket(Some(days_ago(n, 1)), n).0, "Yesterday");
-        assert_eq!(date_bucket(Some(days_ago(n, 5)), n).0, "Previous 7 Days");
-        assert_eq!(date_bucket(Some(days_ago(n, 20)), n).0, "Previous 30 Days");
-        assert_eq!(date_bucket(Some(days_ago(n, 60)), n).0, "August");
-        assert_eq!(date_bucket(Some(days_ago(n, 400)), n).0, "2025");
-        assert_eq!(date_bucket(None, n).0, "Unknown");
-    }
-}

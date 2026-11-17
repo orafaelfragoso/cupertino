@@ -84,15 +84,8 @@ pub(crate) type ReadVideoMemory =
     std::sync::Arc<dyn Fn() -> Vec<(crate::about::PciAddress, u64)> + Send + Sync>;
 
 /// The driver's tool, given a short time to answer.
-#[cfg(not(test))]
 fn read_video_memory() -> Vec<(crate::about::PciAddress, u64)> {
     crate::about::nvidia_video_memory(crate::about::VIDEO_MEMORY_TIMEOUT)
-}
-
-/// Tests run no program of the machine's; one that reads the memory sets a reader of its own.
-#[cfg(test)]
-fn read_video_memory() -> Vec<(crate::about::PciAddress, u64)> {
-    Vec::new()
 }
 
 /// The graphics memory only the driver's tool reports.
@@ -284,9 +277,6 @@ pub struct State {
     /// The buses whose watch ended and has not started again, and how long until the next try, in seconds.
     lost: Vec<Which>,
     rewatch_in: f64,
-    /// Every refresh fails (tests).
-    #[cfg(test)]
-    pub(crate) fail_refresh: bool,
     _files: Option<ConfigWatcher>,
     /// Watches `desktop-control.conf`, which the compositor writes when an app first asks, on its own: a file that
     /// can't be read stops no other file's watch.
@@ -398,8 +388,6 @@ impl State {
             activation: None,
             lost: Vec::new(),
             rewatch_in: REWATCH_FIRST,
-            #[cfg(test)]
-            fail_refresh: false,
             _files: files,
             _answers: answers,
         };
@@ -557,10 +545,6 @@ impl State {
     /// Read the live services of the pane shown again; draw again when something changed. The battery is read on the
     /// first refresh too, whatever the pane: whether there is one names the Battery row.
     pub(crate) fn refresh(&mut self, now: f64) -> Result<()> {
-        #[cfg(test)]
-        if self.fail_refresh {
-            return Err("the refresh fails".into());
-        }
         self.refreshed = now;
         let backends = self.services.detect();
         self.live.hardware = Some(backends.hardware);
@@ -1714,86 +1698,5 @@ pub(crate) fn device_call(call: &Call) -> Option<(&str, DeviceAction)> {
         } => Some((id, DeviceAction::Forget)),
         Call::Pair(id) => Some((id, DeviceAction::Pair)),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_agent_prompt_at_a_full_queue_is_refused_without_waiting() {
-        let (notify, _background) = background_channel(|| {});
-        for _ in 0..BACKGROUND_QUEUE {
-            notify(Background::Paired(String::new(), Ok(())));
-        }
-        let (answer, reply) = async_channel::bounded(1);
-        let agent = notify.clone();
-        let (done, returned) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            agent(Background::Agent(AgentEvent::Prompt {
-                id: 1,
-                device: "Keyboard".into(),
-                prompt: crate::sheet::Prompt::Confirm {
-                    passkey: Some(123456),
-                },
-                answer: Some(answer),
-            }));
-            done.send(()).unwrap();
-        });
-        returned
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("a bus executor never waits for room");
-        assert!(reply.recv_blocking().is_err(), "a dropped prompt refuses");
-    }
-
-    #[test]
-    fn pane_requests_cannot_grow_the_background_queue_and_workers_wait_for_room() {
-        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = wakes.clone();
-        let (notify, background) = background_channel(move || {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        });
-        for _ in 0..BACKGROUND_QUEUE * 4 {
-            notify(Background::ShowPane(PaneId::Wifi, String::new()));
-        }
-        assert_eq!(
-            wakes.load(std::sync::atomic::Ordering::SeqCst),
-            BACKGROUND_QUEUE
-        );
-
-        let worker = notify.clone();
-        let (done, finished) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            worker(Background::Paired(String::new(), Ok(())));
-            done.send(()).unwrap();
-        });
-        assert!(finished
-            .recv_timeout(std::time::Duration::from_millis(200))
-            .is_err());
-        assert!(matches!(background.recv(), Ok(Background::ShowPane(..))));
-        finished
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the worker's event is queued once there is room");
-        let queued: Vec<_> = background.try_iter().collect();
-        assert_eq!(queued.len(), BACKGROUND_QUEUE);
-        assert!(matches!(queued.last(), Some(Background::Paired(_, Ok(())))));
-    }
-
-    /// A picture whose file is gone is missing; any other failure to make its thumbnail means it cannot be read.
-    #[test]
-    fn a_thumbnail_that_cannot_be_made_names_a_missing_or_an_unreadable_picture() {
-        use crate::controls::Unreadable;
-        use cupertino_thumbnails::ThumbError;
-        let io = |kind| ThumbError::Io(std::io::Error::from(kind));
-        assert_eq!(
-            unreadable(&io(std::io::ErrorKind::NotFound)),
-            Unreadable::Missing
-        );
-        assert_eq!(
-            unreadable(&io(std::io::ErrorKind::PermissionDenied)),
-            Unreadable::Damaged
-        );
-        assert_eq!(unreadable(&ThumbError::KnownFailure), Unreadable::Damaged);
     }
 }

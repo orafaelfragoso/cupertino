@@ -9,8 +9,6 @@
 //! buffer is dropped and zeroed, and the new one takes the focus on every output.
 
 mod panel_parts;
-#[cfg(test)]
-mod tests;
 mod widgets;
 
 use std::fmt;

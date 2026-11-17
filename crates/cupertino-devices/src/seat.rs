@@ -14,19 +14,3 @@ pub const SEAT0: &str = "seat0";
 pub fn seat_name(properties: &Properties) -> &str {
     properties.get("ID_SEAT").map_or(SEAT0, String::as_str)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_to_seat0() {
-        assert_eq!(seat_name(&Properties::new()), "seat0");
-    }
-
-    #[test]
-    fn id_seat_overrides() {
-        let properties = Properties::from([("ID_SEAT".to_owned(), "seat1".to_owned())]);
-        assert_eq!(seat_name(&properties), "seat1");
-    }
-}

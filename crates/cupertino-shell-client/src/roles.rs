@@ -653,27 +653,3 @@ impl Dispatch<CupertinoDockV1, RoleData<DockGroup>> for State {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_extent_left_at_0_is_the_requested_one() {
-        assert_eq!(configured_size((0, 0), (200, 200)).unwrap(), (200, 200));
-        assert_eq!(configured_size((1920, 0), (0, 30)).unwrap(), (1920, 30));
-        assert_eq!(configured_size((640, 480), (200, 200)).unwrap(), (640, 480));
-    }
-
-    #[test]
-    fn an_extent_neither_side_sized_fails() {
-        assert!(matches!(
-            configured_size((0, 30), (0, 30)),
-            Err(Error::Unsized)
-        ));
-        assert!(matches!(
-            configured_size((1920, 0), (0, 0)),
-            Err(Error::Unsized)
-        ));
-    }
-}

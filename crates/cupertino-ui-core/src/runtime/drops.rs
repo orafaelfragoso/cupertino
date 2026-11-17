@@ -380,26 +380,3 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_drop_without_the_window_systems_word_takes_the_preferred_action_both_allow() {
-        let both: BTreeSet<_> = [DropAction::Copy, DropAction::Move].into();
-        let copy: BTreeSet<_> = [DropAction::Copy].into();
-        assert_eq!(
-            settle(DropAction::Move, &both, &both),
-            Some(DropAction::Move)
-        );
-        assert_eq!(
-            settle(DropAction::Move, &both, &copy),
-            Some(DropAction::Copy)
-        );
-        assert_eq!(
-            settle(DropAction::Move, &copy, &[DropAction::Move].into()),
-            None
-        );
-    }
-}

@@ -17,6 +17,3 @@ path = "src/bin/cupertino-cursor.rs"
 
 [dependencies]
 tiny-skia = "0.12"
-
-[dev-dependencies]
-tempfile = "3"

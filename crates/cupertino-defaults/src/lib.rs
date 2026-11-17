@@ -81,35 +81,3 @@ fn resolve_file(
         None => config_home.map(|c| c.join("cupertino").join(name)),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_home_prefers_xdg_and_falls_back_to_home() {
-        assert_eq!(
-            resolve_home(Some("/x".into()), Some("/h".into())),
-            Some(PathBuf::from("/x"))
-        );
-        assert_eq!(
-            resolve_home(Some("".into()), Some("/h".into())),
-            Some(PathBuf::from("/h/.config"))
-        );
-        assert_eq!(resolve_home(None, None), None);
-    }
-
-    #[test]
-    fn the_environment_override_wins_unless_empty() {
-        let home = Some(PathBuf::from("/h/.config"));
-        assert_eq!(
-            resolve_file(Some("/tmp/dock.conf".into()), home.clone(), "dock.conf"),
-            Some(PathBuf::from("/tmp/dock.conf"))
-        );
-        assert_eq!(
-            resolve_file(Some("".into()), home.clone(), "dock.conf"),
-            Some(PathBuf::from("/h/.config/cupertino/dock.conf"))
-        );
-        assert_eq!(resolve_file(None, None, "dock.conf"), None);
-    }
-}

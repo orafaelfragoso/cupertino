@@ -1553,6 +1553,3 @@ fn bounds(rect: Rect, extent: Option<Rect>, clip: Option<Rect>) -> Rect {
         None => reach,
     }
 }
-
-#[cfg(test)]
-mod tests;

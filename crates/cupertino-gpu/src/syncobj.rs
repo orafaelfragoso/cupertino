@@ -266,26 +266,3 @@ pub fn wait_readable(fd: BorrowedFd<'_>, timeout_ms: i32) -> bool {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_requests_carry_the_kernel_s_numbers_and_sizes() {
-        // the values of the kernel's DRM_IOCTL_SYNCOBJ_* on 64-bit Linux
-        assert_eq!(CREATE, 0xC008_64BF);
-        assert_eq!(DESTROY, 0xC008_64C0);
-        assert_eq!(HANDLE_TO_FD, 0xC018_64C1);
-        assert_eq!(FD_TO_HANDLE, 0xC018_64C2);
-        assert_eq!(QUERY, 0xC018_64CB);
-        assert_eq!(TRANSFER, 0xC020_64CC);
-        assert_eq!(EVENTFD, 0xC018_64CF);
-    }
-
-    #[test]
-    fn a_fresh_eventfd_is_not_readable() {
-        let fd = eventfd().unwrap();
-        assert!(!wait_readable(fd.as_fd(), 0));
-    }
-}

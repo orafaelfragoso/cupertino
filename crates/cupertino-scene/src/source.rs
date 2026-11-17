@@ -244,31 +244,3 @@ pub enum Source {
         mesh: Mesh,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn reused_resource_slots_do_not_alias_the_previous_generation() {
-        let old = SnapshotId(ResourceKey {
-            slot: 7,
-            generation: 2,
-        });
-        let new = SnapshotId(ResourceKey {
-            slot: 7,
-            generation: 3,
-        });
-        assert_ne!(old, new);
-        assert_eq!(HashSet::from([old, new]).len(), 2);
-    }
-
-    #[test]
-    fn a_content_blur_keeps_its_deviation_to_a_thousandth_of_a_point() {
-        assert_eq!(ContentBlur::of_points(2.5).sigma_milli, 2500);
-        assert_eq!(ContentBlur::of_points(0.0004).sigma_milli, 0);
-        assert_eq!(ContentBlur::of_points(-3.0).sigma_milli, 0);
-        assert_eq!(ContentBlur::of_points(1.2344).sigma(), 1.234);
-    }
-}

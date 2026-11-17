@@ -10,11 +10,5 @@ layer = "platform"
 
 [features]
 default = []
-# `fake::FakeWpctl`, a stand-in wpctl for the tests of the crates that use this one
-fake = ["dep:tempfile"]
 
 [dependencies]
-tempfile = { version = "3", optional = true }
-
-[dev-dependencies]
-tempfile = "3"

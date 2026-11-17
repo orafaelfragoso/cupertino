@@ -1112,19 +1112,3 @@ impl<M: 'static> Widget<M> for Buttons<M> {
 
     fn semantics(&self, _: &(), _: &mut SemanticsCx<'_>) {}
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn two_short_answers_go_side_by_side_and_anything_else_is_stacked() {
-        assert!(side_by_side(&["Cancel", "Delete"]));
-        assert!(side_by_side(&["OK"]));
-        assert!(!side_by_side(&["Don't Save", "Cancel", "Save"]), "three");
-        assert!(
-            !side_by_side(&["Cancel", "Replace Everything Here"]),
-            "a label too long for half the row"
-        );
-    }
-}

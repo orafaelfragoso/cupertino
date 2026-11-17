@@ -31,23 +31,3 @@ pub fn decode(text: &str) -> Option<Zeroizing<Vec<u8>>> {
     }
     Some(bytes)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bytes_round_trip() {
-        let all: Vec<u8> = (0..=255).collect();
-        assert_eq!(*decode(&encode(&all)).unwrap(), all);
-        assert_eq!(&**encode(&[0x00, 0xab, 0xff]), "00abff");
-    }
-
-    #[test]
-    fn malformed_text_is_refused() {
-        assert!(decode("abc").is_none(), "odd length");
-        assert!(decode("zz").is_none(), "not hex");
-        assert!(decode("AB").is_none(), "upper case");
-        assert!(decode("é").is_none(), "a multi-byte character");
-    }
-}

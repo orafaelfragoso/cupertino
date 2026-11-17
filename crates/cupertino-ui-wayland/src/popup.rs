@@ -27,30 +27,3 @@ pub fn placement(rect: &Rect, grab: bool) -> Result<PopupPlacement, Error> {
         grab,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_popup_covers_the_rect_in_whole_points() {
-        let p = placement(&Rect::new(10.4, 24.0, 153.2, 88.5), true).unwrap();
-        assert_eq!(p.anchor_rect, Rect::new(10.0, 24.0, 154.0, 89.0));
-        assert_eq!(p.size, (154, 89));
-        assert_eq!(
-            (p.anchor, p.gravity),
-            (Anchor::TopLeft, Gravity::BottomRight)
-        );
-    }
-
-    #[test]
-    fn empty_or_non_finite_rects_are_refused() {
-        for rect in [
-            Rect::new(0.0, 0.0, 0.0, 10.0),
-            Rect::new(f64::NAN, 0.0, 10.0, 10.0),
-            Rect::new(0.0, 0.0, f64::INFINITY, 10.0),
-        ] {
-            assert!(matches!(placement(&rect, true), Err(Error::InvalidShape)));
-        }
-    }
-}

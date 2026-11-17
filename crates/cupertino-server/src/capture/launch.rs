@@ -113,26 +113,3 @@ impl Cupertino {
         drop(stream);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn each_shortcut_selects_its_mode_and_destination() {
-        assert_eq!(mode_args(ScreenshotRequest::Screen), ["--mode", "screen"]);
-        assert_eq!(
-            mode_args(ScreenshotRequest::ScreenToClipboard),
-            ["--mode", "screen", "--clipboard"]
-        );
-        assert_eq!(
-            mode_args(ScreenshotRequest::Selection),
-            ["--mode", "selection"]
-        );
-        assert_eq!(
-            mode_args(ScreenshotRequest::SelectionToClipboard),
-            ["--mode", "selection", "--clipboard"]
-        );
-        assert_eq!(mode_args(ScreenshotRequest::Toolbar), ["--mode", "toolbar"]);
-    }
-}

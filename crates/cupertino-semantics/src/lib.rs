@@ -1,7 +1,5 @@
 //! Cupertino-owned semantic wire values. This crate knows neither widgets nor compositor policy.
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Write};

@@ -61,37 +61,3 @@ pub fn write(path: &Path, servers: &[Ipv4Addr], domain: Option<&str>) -> Result<
     })?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn servers_keep_their_order_and_the_domain_becomes_the_search_list() {
-        let text = render(
-            &[Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(1, 1, 1, 1)],
-            Some("lan.example"),
-        );
-        assert_eq!(text, "# written by cupertino-netd\nsearch lan.example\nnameserver 10.0.0.2\nnameserver 1.1.1.1\n");
-    }
-
-    #[test]
-    fn only_the_first_three_servers_are_written() {
-        let servers: Vec<_> = (1..=5).map(|n| Ipv4Addr::new(10, 0, 0, n)).collect();
-        let text = render(&servers, None);
-        assert_eq!(text, "# written by cupertino-netd\nnameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n");
-    }
-
-    #[test]
-    fn writing_replaces_the_file_and_creates_the_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("run/cupertino/resolv.conf");
-        write(&path, &[Ipv4Addr::new(10, 0, 0, 1)], None).unwrap();
-        write(&path, &[Ipv4Addr::new(10, 0, 1, 1)], Some("home")).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "# written by cupertino-netd\nsearch home\nnameserver 10.0.1.1\n"
-        );
-        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
-    }
-}

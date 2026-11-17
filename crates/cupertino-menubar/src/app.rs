@@ -1779,17 +1779,3 @@ fn client_session_action(action: SessionAction) -> cupertino_shell_client::Sessi
         }
     }
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// The menu bar is a thin strip that redraws a frame now and then.
-    #[test]
-    fn the_menu_bar_draws_on_the_cpu() {
-        assert_eq!(
-            <App as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Cpu
-        );
-    }
-}

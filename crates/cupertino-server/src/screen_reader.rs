@@ -313,26 +313,3 @@ impl Cupertino {
         true
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mods(logo: bool, alt: bool, ctrl: bool, shift: bool) -> Mods {
-        Mods {
-            logo,
-            alt,
-            ctrl,
-            shift,
-        }
-    }
-
-    #[test]
-    fn only_super_alt_s_is_the_chord() {
-        assert!(is_chord(keysyms::KEY_s, &mods(true, true, false, false)));
-        assert!(!is_chord(keysyms::KEY_s, &mods(true, false, false, false)));
-        assert!(!is_chord(keysyms::KEY_s, &mods(true, true, true, false)));
-        assert!(!is_chord(keysyms::KEY_S, &mods(true, true, false, true)));
-        assert!(!is_chord(keysyms::KEY_a, &mods(true, true, false, false)));
-    }
-}

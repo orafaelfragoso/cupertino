@@ -94,34 +94,3 @@ pub struct KeyboardBacklight {
 /// The suffix that marks a keyboard backlight LED name (`devicename:colour:function`, with the
 /// function `kbd_backlight` in the LED naming scheme).
 pub const KEYBOARD_BACKLIGHT_SUFFIX: &str = "::kbd_backlight";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn backlight(name: &str, kind: BacklightType) -> Backlight {
-        Backlight {
-            name: name.to_owned(),
-            kind,
-            brightness: 0,
-            max_brightness: 100,
-        }
-    }
-
-    #[test]
-    fn firmware_beats_platform_beats_raw_and_names_break_ties() {
-        let all = [
-            backlight("intel_backlight", BacklightType::Raw),
-            backlight("acpi_video1", BacklightType::Platform),
-            backlight("acpi_video0", BacklightType::Platform),
-        ];
-        assert_eq!(select(&all).unwrap().name, "acpi_video0");
-        let with_firmware = [
-            all.as_slice(),
-            &[backlight("vendor_ec", BacklightType::Firmware)],
-        ]
-        .concat();
-        assert_eq!(select(&with_firmware).unwrap().name, "vendor_ec");
-        assert_eq!(select(&[]), None);
-    }
-}

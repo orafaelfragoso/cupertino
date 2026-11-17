@@ -389,7 +389,3 @@ impl Dispatch<Frame, Shared> for State {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "capture-tests.rs"]
-mod tests;

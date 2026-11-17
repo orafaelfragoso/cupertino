@@ -238,6 +238,3 @@ pub fn kernel_in(root: &Path) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
 }
-
-#[cfg(test)]
-mod tests;

@@ -10,8 +10,6 @@ layer = "foundation"
 
 [dependencies]
 
-[dev-dependencies]
-
 [[bench]]
 name = "throughput"
 harness = false

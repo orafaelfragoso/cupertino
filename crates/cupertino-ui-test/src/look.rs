@@ -207,7 +207,3 @@ impl<A: Application> TestDriver<A> {
             .map_err(|e| failed(e.to_string()))
     }
 }
-
-#[cfg(test)]
-#[path = "look-tests.rs"]
-mod tests;

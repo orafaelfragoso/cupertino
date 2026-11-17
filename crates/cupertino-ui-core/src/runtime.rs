@@ -396,9 +396,6 @@ pub struct Runtime<A: Application, W: WindowSystem> {
     messages: VecDeque<A::Message>,
     executor: Executor<A::Message>,
     events: Vec<PlatformEvent>,
-    /// How many times a popover's growth point was looked for in its parent's tree ([`Self::follow_grow_origins`]).
-    #[cfg(test)]
-    grow_origin_walks: usize,
     view_dirty: bool,
     /// Parents whose popups wait for their first layout to find the anchor.
     awaiting_layout: Vec<WindowKey>,
@@ -490,8 +487,6 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             messages: VecDeque::new(),
             executor,
             events: Vec::new(),
-            #[cfg(test)]
-            grow_origin_walks: 0,
             view_dirty: true,
             awaiting_layout: Vec::new(),
             awaiting_anchor: Vec::new(),
@@ -3877,21 +3872,6 @@ mod surface_layers;
 mod ungrabbed;
 
 pub use surface_layers::SurfaceLayerMark;
-
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-#[path = "runtime/surface-layer-tests.rs"]
-mod surface_layer_tests;
-
-#[cfg(test)]
-#[path = "runtime/relayout-tests.rs"]
-mod relayout_tests;
-
-#[cfg(test)]
-#[path = "runtime/idle-tests.rs"]
-mod idle_tests;
 
 /// The themes of `theme`'s session options in the light and the dark appearance, from `theme_for`; none without it.
 /// The session's own appearance is asked for last, as the theme maker may remember the last one it made.

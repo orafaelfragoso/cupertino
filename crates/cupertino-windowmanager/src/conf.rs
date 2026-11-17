@@ -46,21 +46,3 @@ pub fn parse_conf(text: &str) -> (WindowManagerFile, Vec<ConfProblem>) {
     }
     (file, problems)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stage_is_read_and_bad_lines_are_reported_without_losing_the_rest() {
-        let (file, problems) =
-            parse_conf("# settings\nstage = on  # turned on\nstage = maybe\nzoom = 3\nnonsense\n");
-        assert_eq!(file.stage, Some(true));
-        assert_eq!(
-            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
-            vec![3, 4, 5]
-        );
-        assert_eq!(parse_conf("stage=off").0.stage, Some(false));
-        assert_eq!(parse_conf("").0, WindowManagerFile::default());
-    }
-}

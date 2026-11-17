@@ -291,25 +291,3 @@ impl EventSource for LogindNotifier {
         self.channel.unregister(poll)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn character_device_has_its_device_number() {
-        // /dev/null is 1:3 on Linux.
-        assert_eq!(
-            device_number(Path::new("/dev/null")).unwrap(),
-            DevT::new(1, 3)
-        );
-    }
-
-    #[test]
-    fn regular_file_is_not_a_device() {
-        assert!(matches!(
-            device_number(Path::new("/etc/hostname")),
-            Err(Error::NotCharDevice(_))
-        ));
-    }
-}

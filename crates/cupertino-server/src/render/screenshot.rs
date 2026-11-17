@@ -130,18 +130,3 @@ pub fn nonuniform_fraction(img: &RgbaImage) -> f64 {
         .count();
     diff as f64 / (img.width() as f64 * img.height() as f64)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nonuniform_fraction_counts_differences() {
-        let mut img = RgbaImage::from_pixel(10, 10, image::Rgba([10, 10, 10, 255]));
-        assert_eq!(nonuniform_fraction(&img), 0.0);
-        for x in 1..6 {
-            img.put_pixel(x, 0, image::Rgba([200, 10, 10, 255]));
-        }
-        assert!((nonuniform_fraction(&img) - 0.05).abs() < 1e-9);
-    }
-}

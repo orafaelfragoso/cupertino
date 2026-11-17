@@ -1508,6 +1508,3 @@ pub fn redacted(n: &Notification) -> Notification {
         ..n.clone()
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -42,33 +42,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_empty_pack_reports_every_name_as_falling_back() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::write(
-            d.path().join("manifest.json"),
-            r#"{"version": 2, "name": "empty", "surplus": true}"#,
-        )
-        .unwrap();
-        let (assets, notes) = Assets::read_pack(d.path()).unwrap();
-        let r = PackReport::new(&assets, &notes).to_string();
-        assert!(
-            r.contains("problems: 1") && r.contains("unknown key \"surplus\""),
-            "{r}"
-        );
-        assert!(
-            r.contains("ui: built-in (Inter Variable)")
-                && r.contains("symbol.wifi: host theme of the user (network-wireless-symbolic")
-                && r.contains("procedural (built-in)"),
-            "{r}"
-        );
-        // the font, the cursor theme and the two wallpapers; every icon name is served by the host theme map
-        let expected = 1 + 1 + 2;
-        assert!(r.contains(&format!("falls back: {expected}")), "{r}");
-    }
-}

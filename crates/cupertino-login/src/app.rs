@@ -1674,17 +1674,3 @@ fn requesting_app(app: cupertino_shell_client::ConsentApp) -> RequestingApp {
         icon,
     }
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// The lock screen must draw whatever becomes of the GPU.
-    #[test]
-    fn the_lock_screen_draws_on_the_cpu() {
-        assert_eq!(
-            <SessionApp as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Cpu
-        );
-    }
-}

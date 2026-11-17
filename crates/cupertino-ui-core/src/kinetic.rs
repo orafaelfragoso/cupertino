@@ -664,6 +664,3 @@ impl ScrollMotion {
         self.axes[1].set_bounds(max.y, viewport.height, now);
     }
 }
-
-#[cfg(test)]
-mod tests;

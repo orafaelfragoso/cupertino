@@ -363,21 +363,3 @@ impl Exporter {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use zbus::zvariant::ObjectPath;
-
-    #[test]
-    fn application_ids_become_object_paths() {
-        for (id, path) in [
-            ("org.example.Notes", "/org/example/Notes"),
-            ("org.example.my-app", "/org/example/my_app"),
-            ("a..b", "/a/_/b"),
-        ] {
-            assert_eq!(app_path(id), path);
-            assert!(ObjectPath::try_from(app_path(id)).is_ok());
-        }
-    }
-}

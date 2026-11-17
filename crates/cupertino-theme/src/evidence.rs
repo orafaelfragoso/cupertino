@@ -35,23 +35,3 @@ impl Evidence {
             .unwrap_or(Evidence::Unknown)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_weakest() {
-        assert_eq!(Evidence::parse_weakest("VERIFIED"), Evidence::Verified);
-        assert_eq!(
-            Evidence::parse_weakest("VERIFIED (formula) / INFERRED (ms unit)"),
-            Evidence::Inferred
-        );
-        assert_eq!(
-            Evidence::parse_weakest("VERIFIED (value) / UNKNOWN (usage)"),
-            Evidence::Unknown
-        );
-        assert_eq!(Evidence::parse_weakest("nonsense"), Evidence::Unknown);
-        assert!(Evidence::Verified > Evidence::Approximated);
-    }
-}

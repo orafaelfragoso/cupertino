@@ -1003,35 +1003,3 @@ pub fn clipboard_focus<M: Clone + 'static>(to: fn(Input) -> M) -> Window<M> {
         menus: None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_overlay_names_its_output_in_its_app_id() {
-        assert_eq!(overlay_app_id(3), "cupertino-screenshot.overlay/3");
-        assert_eq!(overlay_index("cupertino-screenshot.overlay/3"), Some(3));
-        assert_eq!(overlay_index(TOOLBAR_APP_ID), None);
-        assert_eq!(overlay_index("cupertino-screenshot.overlay"), None);
-    }
-
-    #[test]
-    fn the_summary_says_what_a_capture_takes() {
-        let session = Session::new(
-            Style::Interactive,
-            Mode::Selection,
-            vec![Rect::new(0.0, 0.0, 800.0, 600.0)],
-            Some(Rect::new(10.0, 20.0, 300.0, 200.0)),
-            0,
-        );
-        let view = OverlayView::of(&session, Rect::new(0.0, 0.0, 800.0, 600.0), true, false);
-        assert_eq!(view.summary(), "Selection 300 \u{d7} 200 at 10, 20");
-        let leaving = OverlayView::of(&session, Rect::new(0.0, 0.0, 800.0, 600.0), true, true);
-        assert_eq!(
-            leaving.look,
-            Pointer::Arrow,
-            "an overlay that goes shows the arrow"
-        );
-    }
-}

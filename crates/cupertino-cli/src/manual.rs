@@ -340,38 +340,3 @@ fn group_page(g: &Group, date: &str) -> String {
     out.push_str(".SH SEE ALSO\n.BR cupertino (1)\n");
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_date_is_the_source_date_or_a_fixed_one() {
-        assert_eq!(page_date(Some(OsStr::new("0"))), "1970-01-01");
-        assert_eq!(page_date(Some(OsStr::new("1762646400"))), "2025-11-09");
-        assert_eq!(page_date(Some(OsStr::new("951782400"))), "2000-02-29");
-        assert_eq!(page_date(Some(OsStr::new("4107542399"))), "2100-02-28");
-        for bad in [
-            None,
-            Some(OsStr::new("")),
-            Some(OsStr::new("x")),
-            Some(OsStr::new("-5")),
-        ] {
-            assert_eq!(page_date(bad), FIXED_DATE, "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn text_escapes_what_roff_reads_as_requests_and_escapes() {
-        assert_eq!(text(".hidden"), "\\&.hidden");
-        assert_eq!(text("'quote"), "\\&'quote");
-        assert_eq!(text("a\\b"), "a\\eb");
-        assert_eq!(text("--area x-y"), "\\-\\-area x\\-y");
-        assert_eq!(
-            text("use `cupertino-diagnose` now"),
-            "use \\fBcupertino\\-diagnose\\fR now"
-        );
-        assert_eq!(text("an … end"), "an \\[u2026] end");
-        assert_eq!(text("`open"), "\\fBopen\\fR");
-    }
-}

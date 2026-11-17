@@ -924,12 +924,3 @@ impl Launcher {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
-
-/// Fixtures shared with the tests of other modules.
-#[cfg(test)]
-pub(crate) mod tests_support {
-    pub use super::tests::{app, test_launcher};
-}

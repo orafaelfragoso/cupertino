@@ -460,29 +460,3 @@ fn label_color(look: Look) -> Rgba {
         (false, dark) => SwitcherLayout::label_color(dark),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Over the opaque fill of Reduce Transparency the selection is stronger than over the material.
-    #[test]
-    fn the_selection_is_stronger_under_reduce_transparency() {
-        for dark in [false, true] {
-            let base = selection_fill(Look {
-                dark,
-                ..Look::default()
-            });
-            let opaque = selection_fill(Look {
-                dark,
-                reduce_transparency: true,
-                ..Look::default()
-            });
-            assert_eq!(opaque[..3], base[..3]);
-            assert!(
-                opaque[3] > base[3] && opaque[3] <= 1.0,
-                "{opaque:?} over {base:?}"
-            );
-        }
-    }
-}

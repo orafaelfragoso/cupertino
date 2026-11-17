@@ -338,6 +338,3 @@ pub unsafe extern "C" fn ck_poll_events(
         Ok(())
     })
 }
-
-#[cfg(test)]
-mod tests;

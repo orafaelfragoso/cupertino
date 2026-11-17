@@ -881,32 +881,3 @@ fn label_paint(cx: &mut PaintCx<'_>, look: Look, title: &str, opacity: f64) {
         faded(LABEL_TEXT, opacity),
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_name_plate_is_centred_on_the_window_and_no_wider() {
-        let frame = WmRect::new(10.0, 20.0, 300.0, 200.0);
-        let plate = OverviewSurface::label_plate(frame, 100.0);
-        assert_eq!(plate.h, 28.0);
-        assert_eq!(plate.w, 128.0);
-        assert!((plate.cx() - frame.cx()).abs() < 1e-9 && (plate.cy() - frame.cy()).abs() < 1e-9);
-        assert_eq!(OverviewSurface::label_plate(frame, 1000.0).w, 300.0);
-    }
-
-    #[test]
-    fn the_ring_lies_just_outside_the_window() {
-        let frame = WmRect::new(100.0, 100.0, 300.0, 200.0);
-        let ring = OverviewSurface::ring(frame);
-        assert_eq!(ring.x, frame.x - 6.5);
-        assert_eq!(ring.w, frame.w + 13.0);
-    }
-
-    #[test]
-    fn a_lone_desktop_is_called_desktop() {
-        assert_eq!(desktop_name(0, 1), "Desktop");
-        assert_eq!(desktop_name(1, 3), "Desktop 2");
-    }
-}

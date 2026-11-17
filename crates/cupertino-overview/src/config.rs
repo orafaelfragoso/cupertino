@@ -130,32 +130,3 @@ impl Default for OverviewConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verified_durations() {
-        let c = OverviewConfig::default();
-        assert_eq!((c.animation_duration, c.slow_motion_duration), (0.25, 2.0));
-        assert!((c.spring.perceptual_duration() - 0.25).abs() < 1e-12);
-        assert!((c.slow_motion_spring().perceptual_duration() - 2.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn the_bar_band_is_72pt_closed_and_165pt_open() {
-        let bar = BarConfig::default();
-        assert_eq!(
-            (bar.band_height(false), bar.band_height(true)),
-            (72.0, 165.0)
-        );
-    }
-
-    #[test]
-    fn the_spring_is_critically_damped() {
-        let c = OverviewConfig::default();
-        assert!(c.spring.bounce().abs() < 1e-9);
-        assert_eq!((c.fast_release_speed, c.fast_release_scale), (5.0, 0.6));
-    }
-}

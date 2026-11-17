@@ -1,1 +1,0 @@
-llvmpipe (LLVM 23.1.4) / OpenGL ES 3.2 Mesa 26.2.6-arch1.1

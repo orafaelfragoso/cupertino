@@ -10,6 +10,3 @@ layer = "models"
 
 [dependencies]
 cupertino-scene = { path = "../cupertino-scene" }
-
-[dev-dependencies]
-cupertino-geometry = { path = "../cupertino-geometry" }

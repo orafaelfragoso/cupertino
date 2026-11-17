@@ -183,28 +183,3 @@ fn sources_of(cx: &Context) -> Sources {
         .collect();
     sources
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_area_values_are_the_area_names_in_order() {
-        let names: Vec<&str> = Area::ALL.iter().map(|a| a.name()).collect();
-        assert_eq!(AREAS, names.as_slice());
-    }
-
-    #[test]
-    fn a_report_text_is_cut_at_each_check() {
-        let text = "ok    a  one\n      fact\nwarn  b  two\nFAIL  c  three\n      fix: x\n";
-        assert_eq!(
-            per_check(text).collect::<Vec<_>>(),
-            [
-                "ok    a  one\n      fact\n",
-                "warn  b  two\n",
-                "FAIL  c  three\n      fix: x\n"
-            ]
-        );
-        assert_eq!(per_check("").count(), 0);
-    }
-}

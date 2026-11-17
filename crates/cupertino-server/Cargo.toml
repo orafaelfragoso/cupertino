@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Smithay-based Wayland compositor: window policy from cupertino-wm, GLES shadows, rounded corners and material passes, dock and overview placeholders"
-autotests = false
-
 [package.metadata.cupertino]
 layer = "core"
 
@@ -64,7 +62,6 @@ cupertino-profile = { path = "../cupertino-profile" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 async-channel = "2"
 libc = "0.2"
-resvg = { version = "0.49", default-features = false }
 tiny-skia = "0.12"
 wayland-backend = "0.3"
 wayland-client = "0.31"
@@ -94,22 +91,5 @@ default-features = false
 features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backend_gbm", "renderer_gl"]
 
 [dev-dependencies]
-cupertino-screencast = { path = "../cupertino-screencast", features = ["fake"] }
-cupertino-test-bus = { path = "../cupertino-test-bus" }
-cupertino-test-pam = { path = "../cupertino-test-pam" }
 # the greeter test's stand-in session manager speaks the login screen's protocol
-cupertino-login-ipc = { path = "../cupertino-login-ipc" }
-tempfile = "3"
-async-io = "2"
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
-wayland-protocols-plasma = { version = "0.3", features = ["client"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 # the asset icons the switcher test compares the dock process's panel with
-cupertino-icons = { path = "../cupertino-icons" }
-rustix = { version = "1", features = ["shm", "mm"] }
-
-[[test]]
-name = "suite"
-path = "tests/suite.rs"

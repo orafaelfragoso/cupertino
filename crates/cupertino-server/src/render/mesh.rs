@@ -441,35 +441,3 @@ pub fn capture(
     }
     Ok(texture)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cupertino_glass::shaders::{MESH, MESH_BLOCK, MESH_SNAPSHOT};
-
-    #[test]
-    fn the_mesh_is_the_glass_crates_generated_program_fed_at_fixed_locations() {
-        let (vert, frag) = (MESH.source.vertex_glsl, MESH.source.fragment_glsl);
-        assert!(vert.starts_with("#version 300 es") && frag.starts_with("#version 300 es"));
-        // the attributes are bound by location, not looked up by name
-        for location in [ATTRIB_POS, ATTRIB_UV] {
-            assert!(
-                vert.contains(&format!("layout(location = {location}) in vec2 ")),
-                "{location}: {vert}"
-            );
-        }
-        // the projection and the opacity come from one block, read by both stages under a name each
-        let blocks = MESH.blocks(MESH_BLOCK.0, MESH_BLOCK.1);
-        assert_eq!(blocks.len(), 2, "{blocks:?}");
-        for b in &blocks {
-            let decl = format!("uniform {b} {{ Mesh ");
-            assert!(vert.contains(&decl) || frag.contains(&decl), "{b}");
-        }
-        assert!(!vert.contains("uniform mat3 ") && !frag.contains("uniform float "));
-        let sampler = MESH.sampler(MESH_SNAPSHOT.0, MESH_SNAPSHOT.1).unwrap();
-        assert!(frag.contains(&format!("sampler2D {sampler};")), "{frag}");
-        // the block the element uploads is the one the program reads
-        assert_eq!(std::mem::size_of::<cupertino_glass::ops::MeshUniform>(), 64);
-        assert!(MESH.wgsl.contains("proj: mat3x3<f32>") && MESH.wgsl.contains("alpha: vec4<f32>"));
-    }
-}

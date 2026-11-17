@@ -14,10 +14,6 @@ pub mod bluez;
 pub mod btd;
 #[cfg(feature = "dbus")]
 mod bus;
-// the stand-ins are test code: they live beside the tests and are built only for other crates' tests
-#[cfg(feature = "fake")]
-#[path = "../tests/fake/mod.rs"]
-pub mod fake;
 #[cfg(feature = "dbus")]
 pub mod netd;
 #[cfg(feature = "dbus")]

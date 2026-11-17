@@ -103,19 +103,6 @@ impl FieldTint {
             FieldTint::Opaque => Color::new(OPAQUE_FIELD, OPAQUE_FIELD, OPAQUE_FIELD, 1.0),
         }
     }
-
-    /// The field's colour with the tint laid over the material's colour `under` (0 to 1).
-    #[cfg(test)]
-    pub(crate) fn over(self, under: [f32; 3]) -> [f32; 3] {
-        let tint = self.color();
-        let [r, g, b, a] = [tint.r, tint.g, tint.b, tint.a];
-        let rgb = [r, g, b];
-        let mut out = [0.0; 3];
-        for k in 0..3 {
-            out[k] = under[k] + (rgb[k] - under[k]) * a;
-        }
-        out
-    }
 }
 
 /// Caps Lock badge: a rounded square of corner radius 4 in 16-unit space, centred in the field's trailing slot.
@@ -258,13 +245,6 @@ thread_local! {
     static MADE: Cell<u64> = const { Cell::new(0) };
     /// How many pictures of glass letters were made on this thread.
     static GLASS_MADE: Cell<u64> = const { Cell::new(0) };
-}
-
-/// How many pictures of glass letters (the large time) were made on this thread: once per text, size and place on a
-/// screen, so once a minute for the time.
-#[cfg(test)]
-pub(crate) fn glass_made() -> u64 {
-    GLASS_MADE.get()
 }
 
 /// How many pictures of a whole screen were made from their source on this thread: once per screen size, scale and

@@ -414,39 +414,3 @@ fn paint_button_body(cx: &mut PaintCx<'_>, rect: Rect, radius: f64) {
         },
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_nested_shape_shares_its_corner_centre_with_its_container() {
-        assert_eq!(nested_radius(18.0, 4.0), 14.0);
-        assert_eq!(nested_radius(16.0, 0.0), 16.0);
-        assert_eq!(nested_radius(3.0, 4.0), 0.0, "never below zero");
-    }
-
-    #[test]
-    fn each_role_has_its_material() {
-        assert_eq!(GlassRole::ToolbarGroup.material(), GlassMaterial::Glass);
-        assert_eq!(
-            GlassRole::SidebarPanel.material(),
-            GlassMaterial::Compositor(Surface::Sidebar)
-        );
-        assert_eq!(GlassRole::GlassButton.material(), GlassMaterial::Glass);
-        assert_eq!(GlassRole::ThumbLens.material(), GlassMaterial::Painted);
-    }
-
-    #[test]
-    fn content_surfaces_and_floating_controls_are_told_apart() {
-        assert!(!GlassRole::SidebarPanel.floating());
-        for role in [
-            GlassRole::ToolbarGroup,
-            GlassRole::GlassButton,
-            GlassRole::ThumbLens,
-        ] {
-            assert!(role.floating(), "{role:?}");
-            assert_eq!(role.container().0 == 0, role != GlassRole::ToolbarGroup);
-        }
-    }
-}

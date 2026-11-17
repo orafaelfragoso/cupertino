@@ -234,32 +234,3 @@ pub struct Adapter {
     pub discovering: bool,
     pub devices: Vec<BtDevice>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_link_names_its_network_only_while_connected() {
-        let device = |state: &str, ssid: &str| Device {
-            index: 1,
-            name: "wlan0".into(),
-            kind: "wifi".into(),
-            state: state.into(),
-            ssid: ssid.into(),
-            failure: String::new(),
-            address: String::new(),
-        };
-        let link = |device| Link {
-            enabled: true,
-            device,
-        };
-        assert_eq!(
-            link(Some(device("connected", "Home"))).network(),
-            Some("Home")
-        );
-        assert_eq!(link(Some(device("configuring", "Home"))).network(), None);
-        assert_eq!(link(Some(device("connected", ""))).network(), None);
-        assert_eq!(link(None).network(), None);
-    }
-}

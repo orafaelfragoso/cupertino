@@ -66,29 +66,6 @@ pub(crate) fn keeps_editing<M: 'static>(tree: &Tree<M>, id: NodeId) -> bool {
     declared(tree, id).is_some_and(|s| s.keeps_editing)
 }
 
-/// The pass of walking every node: [`build_kept`] with nothing kept.
-#[cfg(test)]
-pub(crate) fn build<M: 'static>(
-    tree: &Tree<M>,
-    root: NodeId,
-    geometry: &Geometry,
-    focus: Option<NodeId>,
-    direction: LayoutDirection,
-    scale: f64,
-    raised: &[(NodeId, Rect)],
-) -> SemanticsPass {
-    build_kept(
-        tree,
-        root,
-        geometry,
-        focus,
-        direction,
-        scale,
-        raised,
-        &mut KeptSemantics::default(),
-    )
-}
-
 /// What the walk did for one kept subtree ([`Element::kept`](crate::Element::kept)), so a pass where it did not change
 /// lays the same in without asking its widgets again: what each node was asked with, the nodes it put in the tree as
 /// they stood when the walk was done with them (before the relations to keyed nodes, the fallbacks and the focus,
@@ -566,6 +543,3 @@ pub(crate) fn diff(
         .collect();
     (changed, removed)
 }
-
-#[cfg(test)]
-mod tests;

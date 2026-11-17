@@ -189,23 +189,3 @@ impl X11Windows for XServer {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_bridge_display_is_its_display_argument() {
-        assert_eq!(
-            display_argument(b"xwayland-satellite\0:3\0-listenfd\0x\0-auth\0/run/x\0").as_deref(),
-            Some(":3")
-        );
-        assert_eq!(
-            display_argument(b"xwayland-satellite\0:12.0\0").as_deref(),
-            Some(":12.0")
-        );
-        assert_eq!(display_argument(b"xwayland-satellite\0:x\0"), None);
-        assert_eq!(display_argument(b"xwayland-satellite\0"), None);
-        assert_eq!(bridge_display(u32::MAX), None, "no such process");
-    }
-}

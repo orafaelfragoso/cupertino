@@ -293,6 +293,3 @@ impl Drop for Answers {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

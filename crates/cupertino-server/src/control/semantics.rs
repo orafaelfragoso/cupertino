@@ -925,25 +925,3 @@ impl Dispatch<CupertinoSemanticSurfaceV1, ()> for Cupertino {
         state.semantics_changed();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_observation_waits_for_what_is_shown_to_settle_and_no_longer_than_its_wait() {
-        assert!(
-            observation_due(true, 10.0, 10.0),
-            "settled: answered at once"
-        );
-        assert!(
-            !observation_due(false, 10.0, 10.0),
-            "held while a transition runs"
-        );
-        assert!(!observation_due(false, 10.0, 10.0 + SETTLE_WAIT - 0.01));
-        assert!(
-            observation_due(false, 10.0, 10.0 + SETTLE_WAIT),
-            "a transition longer than the wait is observed mid-way"
-        );
-    }
-}

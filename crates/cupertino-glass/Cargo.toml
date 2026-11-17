@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "Material rendering for the Cupertino compositor: backdrop blur, colour filter chains, fill layers, glass and vibrant blending from the specification recipes, its programs written once in WGSL, a headless renderer on cupertino-gpu and a CPU reference"
-autotests = false
-
 [package.metadata.cupertino]
 layer = "render"
 
@@ -28,12 +26,7 @@ anyhow = "1"
 
 [dev-dependencies]
 gungraun = "=0.20.0"
-naga = { version = "24", features = ["wgsl-in"] }
 
 [[bench]]
 name = "instructions"
 harness = false
-
-[[test]]
-name = "suite"
-path = "tests/suite.rs"

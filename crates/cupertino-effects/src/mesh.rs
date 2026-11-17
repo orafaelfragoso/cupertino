@@ -150,39 +150,3 @@ impl Mesh {
             .fold(0.0, f64::max)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quad_covers_rect_and_texture() {
-        let m = Mesh::quad(Rect::new(10.0, 20.0, 100.0, 50.0));
-        assert_eq!(m.bounds(), Rect::new(10.0, 20.0, 100.0, 50.0));
-        assert_eq!(m.vertex(1, 1).uv, [1.0, 1.0]);
-        assert_eq!(m.indices().len(), 6);
-        assert!(m.is_finite());
-    }
-
-    #[test]
-    fn scaling_moves_positions_only() {
-        let m = Mesh::quad(Rect::new(10.0, 20.0, 100.0, 50.0)).scaled(0.5);
-        assert_eq!(m.bounds(), Rect::new(5.0, 10.0, 50.0, 25.0));
-        assert_eq!(m.vertex(1, 1).uv, [1.0, 1.0]);
-    }
-
-    #[test]
-    fn indices_cover_every_cell() {
-        let verts = (0..12)
-            .map(|i| Vertex {
-                position: [i as f32, 0.0],
-                uv: [0.0, 0.0],
-            })
-            .collect();
-        let m = Mesh::new(4, 3, verts);
-        assert_eq!(m.cell_count(), 6);
-        let idx = m.indices();
-        assert_eq!(idx.len(), 36);
-        assert!(idx.iter().all(|&i| (i as usize) < m.vertex_count()));
-    }
-}

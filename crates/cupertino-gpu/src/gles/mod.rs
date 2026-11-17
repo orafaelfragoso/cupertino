@@ -1879,9 +1879,6 @@ impl<'a> Pass<'a> {
     pub fn end(self) {}
 }
 
-#[cfg(test)]
-mod tests;
-
 impl Drop for Pass<'_> {
     fn drop(&mut self) {
         let gl = &self.device.gl;

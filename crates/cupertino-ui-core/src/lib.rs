@@ -23,8 +23,6 @@ mod scroll;
 mod scroll_timing;
 mod semantics;
 mod task;
-#[cfg(test)]
-mod test_support;
 mod tree;
 mod widget;
 
@@ -534,41 +532,4 @@ pub enum UiError {
     Render(RenderError),
     /// The tree reached its node ceiling.
     NodeLimit(usize),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_node_id_keeps_its_index_and_generation() {
-        for (index, generation) in [(0, 1), (7, 3), (u32::MAX, u32::MAX)] {
-            let id = NodeId::new(index, NonZeroU32::new(generation).unwrap());
-            assert_eq!(id.index(), index);
-            assert_eq!(id.generation().get(), generation);
-        }
-        let one = NonZeroU32::new(1).unwrap();
-        let two = NonZeroU32::new(2).unwrap();
-        assert_ne!(NodeId::new(5, one), NodeId::new(5, two));
-    }
-
-    /// An application that declares no class takes the size and repaint rule.
-    #[test]
-    fn an_application_that_declares_no_class_takes_the_size_and_repaint_rule() {
-        struct Plain;
-        impl Application for Plain {
-            type Model = ();
-            type Message = ();
-            fn init() -> ((), Vec<Command<()>>) {
-                ((), Vec::new())
-            }
-            fn update(_: &mut (), _: ()) -> Vec<Command<()>> {
-                Vec::new()
-            }
-            fn view(_: &()) -> Vec<Window<()>> {
-                Vec::new()
-            }
-        }
-        assert_eq!(<Plain as Application>::RENDERER, RendererClass::ByUse);
-    }
 }

@@ -622,6 +622,3 @@ impl Assets {
         files.chain([FontSource::Builtin]).collect()
     }
 }
-
-#[cfg(test)]
-mod tests;

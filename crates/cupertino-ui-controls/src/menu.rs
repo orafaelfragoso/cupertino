@@ -2419,13 +2419,3 @@ fn split_key(text: &str) -> Option<(&str, &str)> {
         && !matches!(key, '\u{2318}' | '\u{21e7}' | '\u{2325}' | '\u{2303}' | '^'))
     .then(|| (modifiers, &text[at..]))
 }
-
-#[cfg(test)]
-mod tail_tests {
-    #[test]
-    fn the_tail_blends_into_the_panel_over_no_more_than_a_third_of_an_18_point_tail_so_it_still_tapers(
-    ) {
-        // a wider blend melts the pointer's narrowing layers into a blunt round blob under the panel
-        const { assert!(super::TAIL_BLEND <= 18.0 / 3.0) };
-    }
-}

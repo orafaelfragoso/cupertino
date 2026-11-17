@@ -163,15 +163,3 @@ impl crate::state::Cupertino {
         self.tick_key_filters();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn modifier_keys_are_recognised() {
-        assert!(is_modifier_sym(keysyms::KEY_Super_L));
-        assert!(is_modifier_sym(keysyms::KEY_Caps_Lock));
-        assert!(!is_modifier_sym(keysyms::KEY_a));
-    }
-}

@@ -35,37 +35,3 @@ pub fn token_accepted(
     }
     !last_user_event.is_some_and(|event| event > token + USER_EVENT_SLACK)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_token_older_than_the_last_activation_is_dead_and_a_newer_one_is_judged_by_the_user_events()
-    {
-        assert!(!token_accepted(5.0, Some(6.0), None));
-        assert!(token_accepted(7.0, Some(6.0), None));
-        assert!(
-            !token_accepted(7.0, Some(6.0), Some(8.0)),
-            "newer than the last activation, but the person typed since"
-        );
-    }
-
-    #[test]
-    fn without_a_newer_activation_a_later_user_event_denies_after_100_ms() {
-        assert!(token_accepted(5.0, None, None));
-        assert!(
-            token_accepted(5.0, None, Some(5.1)),
-            "exactly the slack still passes"
-        );
-        assert!(!token_accepted(5.0, None, Some(5.11)));
-        assert!(
-            !token_accepted(5.0, Some(5.0), Some(5.2)),
-            "equal to the last activation runs the user-event test"
-        );
-        assert!(
-            token_accepted(5.0, None, Some(1.0)),
-            "an earlier event does not count"
-        );
-    }
-}

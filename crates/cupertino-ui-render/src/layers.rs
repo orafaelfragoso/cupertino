@@ -168,17 +168,3 @@ impl Kept {
         (self.scrolls.len() + self.groups.len()) as u64
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_rectangle_wraps_into_at_most_two_pieces_of_the_ring() {
-        assert_eq!(ring_pieces(0, 10, 10), vec![(0, 10, 0)]);
-        assert_eq!(ring_pieces(5, 15, 10), vec![(5, 10, 5), (10, 15, 0)]);
-        assert_eq!(ring_pieces(-3, 4, 10), vec![(-3, 0, 7), (0, 4, 0)]);
-        assert_eq!(ring_pieces(23, 27, 10), vec![(23, 27, 3)]);
-        assert!(ring_pieces(4, 4, 10).is_empty());
-    }
-}

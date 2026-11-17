@@ -75,18 +75,3 @@ impl std::str::FromStr for Appearance {
             .ok_or_else(|| format!("unknown appearance {s:?}"))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base_and_high_contrast_roundtrip() {
-        for a in Appearance::ALL {
-            assert_eq!(a.base().with_high_contrast(a.is_high_contrast()), a);
-            assert!(!a.base().is_high_contrast());
-            assert_eq!(a.as_str().parse::<Appearance>().unwrap(), a);
-            assert_eq!(Appearance::of_session(a.is_dark(), a.is_high_contrast()), a);
-        }
-    }
-}

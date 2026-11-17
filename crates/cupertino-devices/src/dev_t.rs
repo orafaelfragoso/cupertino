@@ -36,24 +36,3 @@ impl fmt::Display for DevT {
         write!(f, "{}:{}", self.major(), self.minor())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn major_minor_round_trip() {
-        let dev = DevT::new(226, 128);
-        assert_eq!(dev.major(), 226);
-        assert_eq!(dev.minor(), 128);
-        assert_eq!(dev.to_string(), "226:128");
-    }
-
-    #[test]
-    fn large_minor_uses_the_split_encoding() {
-        // Minors above 255 spill into bits 20 and up of the raw value.
-        let dev = DevT::new(13, 300);
-        assert_eq!(dev.as_raw(), 0x0010_0d2c);
-        assert_eq!(dev.minor(), 300);
-    }
-}

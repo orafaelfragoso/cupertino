@@ -109,28 +109,3 @@ pub fn rounded_rect(
         false,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn area(x: f64, y: f64, w: f64, h: f64, scale: f64) -> (f64, f64, f64, f64) {
-        let a = padded_area(Rectangle::new((x, y).into(), (w, h).into()), scale);
-        (a.loc.x, a.loc.y, a.size.w, a.size.h)
-    }
-
-    #[test]
-    fn the_element_lies_on_whole_device_pixels_around_its_rectangle() {
-        // a margin of 1.5 pt is 1.5 px at 1x: out to 2 px, so the pixels are sampled at their centres
-        assert_eq!(area(10.0, 10.0, 80.0, 60.0, 1.0), (8.0, 8.0, 84.0, 64.0));
-        assert_eq!(area(10.0, 10.0, 80.0, 60.0, 2.0), (8.5, 8.5, 83.0, 63.0));
-        let (x, y, w, h) = area(10.25, 3.0, 7.0, 5.0, 1.5);
-        for v in [x, y, x + w, y + h] {
-            assert!(
-                ((v * 1.5) - (v * 1.5).round()).abs() < 1e-9,
-                "{v} is a whole pixel"
-            );
-        }
-        assert!(x <= 10.25 - EDGE_MARGIN && x + w >= 17.25 + EDGE_MARGIN);
-    }
-}

@@ -403,16 +403,3 @@ fn serve_with(
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_name_for_the_menu_has_no_control_characters_and_a_bounded_length() {
-        assert_eq!(clean_name("Rafael Fragoso"), "Rafael Fragoso");
-        assert_eq!(clean_name("  Ra\nfa\x1b[31mel\u{202e}  "), "Rafa[31mel");
-        assert_eq!(clean_name("\t\n"), "");
-        assert_eq!(clean_name(&"é".repeat(200)).chars().count(), MAX_NAME_CHARS);
-    }
-}

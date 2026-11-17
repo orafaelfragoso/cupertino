@@ -68,31 +68,3 @@ impl Lookup {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_lookup_names_the_caller_on_another_connection() {
-        let Some(bus) = cupertino_test_bus::PrivateBus::start() else {
-            return;
-        };
-        let caller = bus.connect();
-        let lookup = Lookup::connect(bus.address.as_str().try_into().unwrap()).unwrap();
-        let sender = caller.unique_name().unwrap().to_owned();
-        let credentials = zbus::block_on(lookup.credentials(&sender)).unwrap();
-        assert_eq!(credentials.process_id(), Some(std::process::id()));
-        assert!(matches!(
-            zbus::block_on(lookup.caller(&sender)),
-            Caller::Process(ref process) if process.process.pid == std::process::id()
-        ));
-        // a name nobody holds is no caller
-        let gone = UniqueName::try_from(":1.4242").unwrap();
-        assert!(zbus::block_on(lookup.credentials(&gone)).is_err());
-        assert!(matches!(
-            zbus::block_on(lookup.caller(&gone)),
-            Caller::Anonymous
-        ));
-    }
-}

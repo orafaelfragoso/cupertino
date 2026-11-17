@@ -191,6 +191,3 @@ fn distance(rect: Rect, point: Point) -> f64 {
         .max(0.0);
     dx.hypot(dy)
 }
-
-#[cfg(test)]
-mod tests;

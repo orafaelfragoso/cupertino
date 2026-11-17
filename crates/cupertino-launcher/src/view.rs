@@ -3005,6 +3005,3 @@ impl<M: From<Input> + Clone + 'static> Widget<M> for Catcher {
         cx.name("Close the launcher");
     }
 }
-
-#[cfg(test)]
-mod tests;

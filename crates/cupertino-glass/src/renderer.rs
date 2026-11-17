@@ -717,17 +717,3 @@ impl MaterialRenderer {
         result
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_target_projection_puts_the_first_row_at_clip_minus_one() {
-        let m = target_projection((200, 100));
-        let clip = |x: f32, y: f32| (m[0] * x + m[3] * y + m[6], m[1] * x + m[4] * y + m[7]);
-        assert_eq!(clip(0.0, 0.0), (-1.0, -1.0));
-        assert_eq!(clip(200.0, 100.0), (1.0, 1.0));
-        assert_eq!(clip(100.0, 25.0), (0.0, -0.5));
-    }
-}

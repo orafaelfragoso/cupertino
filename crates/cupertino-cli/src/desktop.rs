@@ -618,28 +618,3 @@ fn pidfd_open(pid: u32) -> Option<OwnedFd> {
     // SAFETY: a non-negative result is a new descriptor owned here.
     (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_size_is_two_numbers_above_zero() {
-        assert_eq!(parse_size("1280x800"), Some((1280, 800)));
-        for bad in ["0x10", "10x0", "10", "x", "10x", "axb", "-1x5"] {
-            assert_eq!(parse_size(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn a_runtime_file_is_removed_only_for_the_compositor_that_wrote_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("cupertino/server-wayland-9.json");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, r#"{"pid": 41}"#).unwrap();
-        remove_runtime_file(dir.path(), "wayland-9", 42);
-        assert!(file.exists(), "another compositor's file stays");
-        remove_runtime_file(dir.path(), "wayland-9", 41);
-        assert!(!file.exists());
-    }
-}

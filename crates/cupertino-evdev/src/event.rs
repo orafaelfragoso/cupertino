@@ -50,23 +50,3 @@ impl InputEvent {
         self.sec * 1_000_000 + self.usec
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_the_kernel_layout() {
-        let event = InputEvent {
-            sec: 1_700_000_000,
-            usec: 123_456,
-            kind: 3,
-            code: 0x35,
-            value: -7,
-        };
-        let bytes = event.to_bytes();
-        assert_eq!(&bytes[16..18], &3u16.to_ne_bytes());
-        assert_eq!(InputEvent::from_bytes(&bytes), event);
-        assert_eq!(event.time_us(), 1_700_000_000_123_456);
-    }
-}

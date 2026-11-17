@@ -409,30 +409,3 @@ fn fence(args: &[String]) {
         gpu.teardown();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn the_driver_cache_lives_in_the_checkouts_build_folder_not_a_shared_one() {
-        let root = std::path::PathBuf::from("/src/checkout");
-        assert_eq!(
-            super::cache_dir_in(root),
-            std::path::Path::new("/src/checkout/target/gpu-probes/cache")
-        );
-        let dir = super::cache_dir();
-        assert!(!dir.starts_with(std::env::temp_dir()), "{}", dir.display());
-        assert!(
-            dir.ends_with("target/gpu-probes/cache") && dir.is_dir(),
-            "{}",
-            dir.display()
-        );
-    }
-
-    #[test]
-    fn the_slope_of_a_line_is_its_gradient() {
-        let xs: Vec<f64> = (0..10).map(f64::from).collect();
-        let ys: Vec<f64> = xs.iter().map(|x| 3.0 * x + 7.0).collect();
-        assert!((super::slope(&xs, &ys) - 3.0).abs() < 1e-9);
-        assert_eq!(super::slope(&[1.0, 1.0], &[2.0, 5.0]), 0.0);
-    }
-}

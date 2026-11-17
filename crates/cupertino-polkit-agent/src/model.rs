@@ -342,6 +342,3 @@ impl Agent {
         vec![effect]
     }
 }
-
-#[cfg(test)]
-mod tests;

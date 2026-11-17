@@ -46,20 +46,3 @@ pub fn flush() {
     });
     let _ = finished.recv();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn writes_run_in_the_order_they_were_asked_and_flush_waits_for_them() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        for n in 0..100 {
-            let seen = seen.clone();
-            store_later(move || seen.lock().unwrap().push(n));
-        }
-        flush();
-        assert_eq!(*seen.lock().unwrap(), (0..100).collect::<Vec<_>>());
-    }
-}

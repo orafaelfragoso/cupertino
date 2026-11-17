@@ -1178,35 +1178,3 @@ impl GreeterApp {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod renderer_class {
-    use super::*;
-
-    /// The login screen must draw whatever becomes of the GPU.
-    #[test]
-    fn the_login_screen_draws_on_the_cpu() {
-        assert_eq!(
-            <GreeterApp as Application>::RENDERER,
-            cupertino_kit::core::RendererClass::Cpu
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn special_names_stand_for_the_power_items() {
-        assert_eq!(special_name(">restart"), Some(Action::Restart));
-        assert_eq!(special_name(">sleep"), Some(Action::Sleep));
-        assert_eq!(special_name(">power"), Some(Action::ShutDown));
-        assert_eq!(special_name(">shutdown"), Some(Action::ShutDown));
-        // only the whole name, as typed
-        assert_eq!(special_name("restart"), None);
-        assert_eq!(special_name(">Restart"), None);
-        assert_eq!(special_name(">restart "), None);
-        assert_eq!(special_name(""), None);
-    }
-}

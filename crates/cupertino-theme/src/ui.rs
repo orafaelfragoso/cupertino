@@ -3,6 +3,7 @@
 
 use cupertino_geometry::Size;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub use crate::animation::{
     DEFAULT_SPRING, EASE_CURVE, EASE_IN_CURVE, EASE_IN_OUT_CURVE, EASE_OUT_CURVE, LINEAR_CURVE,
@@ -195,7 +196,8 @@ impl StateVariant {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorTokens {
-    map: HashMap<(ColorRole, StateVariant), Color>,
+    /// Shared, so a copy that differs only in its activation (a crossing window's, made each frame) copies no colour.
+    map: Arc<HashMap<(ColorRole, StateVariant), Color>>,
     /// How far a window that just became active has come from its inactive colours to its active ones, 0 to 1.
     activation: f32,
 }
@@ -209,7 +211,7 @@ impl Default for ColorTokens {
 impl ColorTokens {
     pub fn new(entries: impl IntoIterator<Item = ((ColorRole, StateVariant), Color)>) -> Self {
         Self {
-            map: entries.into_iter().collect(),
+            map: Arc::new(entries.into_iter().collect()),
             activation: 1.0,
         }
     }
@@ -272,11 +274,12 @@ impl ColorTokens {
     /// The same table with each colour replaced by `f(role, state, colour)`.
     pub fn map(&self, f: impl Fn(ColorRole, StateVariant, Color) -> Color) -> Self {
         Self {
-            map: self
-                .map
-                .iter()
-                .map(|(&(role, state), &color)| ((role, state), f(role, state, color)))
-                .collect(),
+            map: Arc::new(
+                self.map
+                    .iter()
+                    .map(|(&(role, state), &color)| ((role, state), f(role, state, color)))
+                    .collect(),
+            ),
             activation: self.activation,
         }
     }

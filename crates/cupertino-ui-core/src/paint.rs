@@ -106,6 +106,16 @@ fn glass_environment(env: &Environment, tone: GlassTone) -> Environment {
     }
 }
 
+/// `env` with its colours `progress` of the way from the window's inactive colours to its active ones.
+fn crossed(env: &Environment, progress: f32) -> Environment {
+    let mut theme = ThemeTokens::clone(&env.theme);
+    theme.colors.set_activation(progress);
+    Environment {
+        theme: Arc::new(theme),
+        ..env.clone()
+    }
+}
+
 /// What a node lies on, which its children inherit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Under {
@@ -591,6 +601,10 @@ pub(crate) struct PaintInput<'a> {
     /// The window's theme in the light and the dark appearance, for subtrees pinned to one
     /// ([`PaintCx::pin_appearance`]); `None` keeps such a subtree in the window's.
     pub(crate) pinned: &'a [Option<Arc<ThemeTokens>>; 2],
+    /// How far the window's colours have crossed from its inactive ones to its active ones, 0 to 1
+    /// ([`ColorTokens::set_activation`](cupertino_theme::ui::ColorTokens::set_activation)); 1 when they do not cross.
+    /// `env` and `pinned` are the themes before the crossing, so what the painter makes from them outlives it.
+    pub(crate) activation: f32,
 }
 
 /// The paint node a UI node draws into, so tests and the inspector can find a node's operations.
@@ -670,6 +684,15 @@ impl Painter {
                 })
             })
             .clone();
+        let (pin_envs, glass_envs) = if input.activation < 1.0 {
+            // the crossing changes no colour of the tables, only how they are read, so the copies share them
+            (
+                pin_envs.map(|env| crossed(&env, input.activation)),
+                glass_envs.map(|envs| envs.map(|env| crossed(&env, input.activation))),
+            )
+        } else {
+            (pin_envs, glass_envs)
+        };
         // the appearance each node pinned its subtree to, as its children inherit it
         let mut pinned_below: IdMap<NodeId, Option<bool>> = IdMap::default();
         let mut pins = false;
@@ -943,8 +966,7 @@ impl Painter {
                 if let Some(background) = background {
                     let bounds = Rect::new(0.0, 0.0, size.width, size.height);
                     let surface_fill = |surface, alpha| {
-                        input
-                            .env
+                        pin_envs[0]
                             .theme
                             .surface(surface)
                             .fill
@@ -971,7 +993,7 @@ impl Painter {
                                 window_active: input.window_active,
                                 ..StateVariant::NORMAL
                             };
-                            let theme = &input.env.theme.colors;
+                            let theme = &pin_envs[0].theme.colors;
                             (
                                 Shape::Rect(bounds),
                                 theme.get(ColorRole::WindowBackground, state),

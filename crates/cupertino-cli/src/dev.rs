@@ -20,11 +20,10 @@ pub(crate) const GROUP: Group = Group {
 const COMMANDS: &[Command] = &[
     Command {
         path: &["dev", "layers"],
-        summary: "Checks that the crates of a checkout depend on each other as the layer rules allow, and that the \
-                  licences of what the MPL-2.0 crates link are accepted",
+        summary: "Checks that the crates of a checkout follow the layer rules",
         description: "Reads `cargo metadata` of the checkout and checks every dependency between its crates against \
-                      the layer rules, the dependency paths and crates that are denied, the workspace licences and \
-                      the licence closure of the MPL-2.0 crates, as the `cupertino-layers` program does. Cargo is \
+                      the layer rules, their further rules, the facades, the external crates and the declared \
+                      licences, against the checkout's list of remaining work, as the `cupertino-layers` program does. Cargo is \
                       `$CARGO`, else `cargo` on `PATH`; it runs offline with the lock file as it is.\n\n\
                       The checkout is the one given with --root, else the nearest directory above the working \
                       directory whose Cargo.toml has a [workspace] and which holds crates/cupertino-layers. Outside a \
@@ -77,7 +76,7 @@ struct LayersData<'a> {
     root: &'a Path,
     crates: usize,
     edges: usize,
-    exceptions: usize,
+    remaining: usize,
     by_layer: BTreeMap<&'static str, Vec<&'a str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dot: Option<String>,
@@ -149,7 +148,7 @@ fn layers_data<'a>(
         root,
         crates: findings.layers.len(),
         edges: findings.edges.len(),
-        exceptions: findings.policy.exceptions.len(),
+        remaining: findings.remaining.len(),
         by_layer: findings
             .by_layer()
             .into_iter()

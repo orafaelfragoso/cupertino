@@ -14,7 +14,7 @@ cupertino diagnose [--area <area>]... [--strict]   # replaces `cupertino-diagnos
 cupertino desktop start --backend nested|headless|tty [--size WxH] [--scale S] [--spawn <command line>]...
 cupertino appearance assets check <dir>     # replaces `cupertino-assets check <dir>`
 cupertino completions bash|zsh|fish         # the completion script of a shell
-cupertino dev layers [--root <dir>] [--graph]      # preview: the layer and licence checks of a checkout
+cupertino dev layers [--root <dir>] [--graph]      # preview: the layer checks of a checkout
 cupertino dev manual <dir>                  # preview: write the manual pages into <dir>
 cupertino --format jsonl diagnose           # JSON lines: a check event per check, the counts, an end record
 cupertino diagnose events [--since 24h] [--component <name>]... [--id <prefix>]... [--severity info|warn|error|fatal] [--follow]

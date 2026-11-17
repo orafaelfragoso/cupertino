@@ -1,57 +1,73 @@
 //! Layer rules of the workspace. A crate declares its layer in its manifest
-//! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers, excusing the edges in
-//! [`EXCEPTIONS`]. The check also fails on any chain of dependencies that [`DENIED_PATHS`] forbids, and on any chain of
-//! normal dependencies, external crates included, that [`DENIED_CRATES`] forbids.
+//! (`[package.metadata.cupertino] layer = "<layer>"`). [`RULES`] says which layers each layer may depend on; the
+//! further rules are checks of their own: no layer reaches up through a chain of dependencies, `foundation` and
+//! `models` sources stay pure, components stay apart, the window-system boundaries ([`WINDOW_SYSTEM`]) hold, `shell`
+//! and `apps` crates reach the toolkit through its facades ([`FACADES`]), external crates stay in their layers
+//! ([`EXTERNAL_CRATES`]) and every crate declares a licence.
 //!
-//! [`check_workspace`] runs every check on a checkout, as the `cupertino-layers` binary and `cupertino dev layers` do.
+//! Problems that today's crates still have are listed in the committed remaining-work file ([`REMAINING`]): the check
+//! fails on a problem the file does not list and on a line that is no longer a problem, and the lines of the layers in
+//! [`ENFORCED`] must be absent. [`check_workspace`] runs every check on a checkout, as the `cupertino-layers` binary
+//! and `cupertino dev layers` do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-mod closure;
+mod clippy;
 mod graph;
+mod sources;
 mod workspace;
 
-pub use closure::REQUIRED_MPL_ROOTS;
-pub use graph::{denied_crate_paths, denied_paths, dot, without_counts, GRAPH_SNAPSHOT};
+pub use clippy::{clippy_toml, DISALLOWED_METHODS};
+pub use graph::{crate_paths, dot, reaches_up, without_counts, GRAPH_SNAPSHOT};
 pub use workspace::{check_workspace, check_workspace_with, Findings, LayersError, Policy, POLICY};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// The committed remaining-work file, relative to the workspace root.
+pub const REMAINING: &str = "crates/cupertino-layers/remaining.txt";
+
+/// The layers, from the bottom. The order is the height: a crate reaches up when it reaches a later layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Layer {
-    /// Dependency-free building blocks: geometry, animation, design tokens, settings, toolkit-facing models.
+    /// Values, maths and data models with no I/O.
     Foundation,
-    /// Shared drawing maths every renderer and shader implements: coverage, blur, shadows, gradients, dithering.
+    /// Drawing maths shared by every renderer, and the GPU device.
     Graphics,
-    /// Pure desktop policy without I/O.
+    /// Desktop policy as pure logic.
     Models,
-    /// Kernel interfaces: devices, input events, seat.
+    /// User-space operating-system access: settings, application database, icons, trash, diagnostics, bus callers.
+    System,
+    /// Kernel interfaces that more than one program needs: devices and their input events, the seat.
     Platform,
-    /// Generated Wayland message types and versioned IPC schemas.
+    /// Wire schemas: generated Wayland types, versioned IPC messages.
     Protocol,
-    /// Client connection, seat and surface transport, without widgets.
+    /// Client connections without widgets.
     Transport,
-    /// Rendering fundamentals and desktop GPU effects.
+    /// The compositor's own drawing: materials, decorations, cursors.
     Render,
     /// The application toolkit.
     Ui,
-    /// The display server.
+    /// The shell's extension of the toolkit.
+    Shellkit,
+    /// The compositor.
     Core,
-    /// Shell processes, each shipped on its own.
-    Shell,
-    /// System daemons, each shipped on its own.
+    /// Processes with no interface of their own.
     Services,
+    /// The shell host, its components and the separate toolkit programs of the shell.
+    Shell,
     /// Applications.
     Apps,
     /// Developer and theming tools.
     Tools,
+    /// Test harnesses and tests that start programs from more than one crate.
+    Testing,
 }
 
 use Layer::*;
 
 impl Layer {
-    pub const ALL: [Layer; 13] = [
-        Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui, Core, Shell,
-        Services, Apps, Tools,
+    pub const ALL: [Layer; 16] = [
+        Foundation, Graphics, Models, System, Platform, Protocol, Transport, Render, Ui, Shellkit,
+        Core, Services, Shell, Apps, Tools, Testing,
     ];
 
     /// The value of `package.metadata.cupertino.layer`.
@@ -60,16 +76,19 @@ impl Layer {
             Foundation => "foundation",
             Graphics => "graphics",
             Models => "models",
+            System => "system",
             Platform => "platform",
             Protocol => "protocol",
             Transport => "transport",
             Render => "render",
             Ui => "ui",
+            Shellkit => "shellkit",
             Core => "core",
-            Shell => "shell",
             Services => "services",
+            Shell => "shell",
             Apps => "apps",
             Tools => "tools",
+            Testing => "testing",
         }
     }
 
@@ -114,55 +133,89 @@ impl fmt::Display for Kind {
     }
 }
 
-/// The layers each layer may depend on. A crate may only declare a layer that has a row.
+/// The layers each layer may depend on, in normal, build and dev dependencies. A crate may only declare a layer that
+/// has a row. Besides the rows, every crate may have `testing` crates as dev-dependencies, and only dev-dependencies
+/// point at a `testing` crate.
 pub type Rules = &'static [(Layer, &'static [Layer])];
 
-/// Thirteen layers: dependencies point down the stack, same-layer dependencies only inside the library layers,
-/// `services` and `tools`. The graphics layer sits on the foundation alone, so the toolkit, the render layer and the
-/// compositor draw from one definition of the maths without reaching each other.
+/// The layer table.
 pub const RULES: Rules = &[
     (Foundation, &[Foundation]),
     (Graphics, &[Foundation, Graphics]),
     (Models, &[Foundation, Models]),
+    (System, &[Foundation, System]),
     (Platform, &[Foundation, Platform]),
     (Protocol, &[Foundation, Protocol]),
-    (Transport, &[Foundation, Platform, Protocol, Transport]),
-    (Render, &[Foundation, Graphics, Platform, Render]),
-    (Ui, &[Foundation, Graphics, Protocol, Transport, Ui]),
+    (
+        Transport,
+        &[Foundation, System, Platform, Protocol, Transport],
+    ),
+    (Render, &[Foundation, Graphics, System, Platform, Render]),
+    (Ui, &[Foundation, Graphics, System, Protocol, Transport, Ui]),
+    (Shellkit, &[Foundation, System, Protocol, Transport, Ui]),
     (
         Core,
-        &[Foundation, Graphics, Models, Platform, Protocol, Render],
-    ),
-    (
-        Shell,
         &[
-            Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui,
+            Foundation, Graphics, Models, System, Platform, Protocol, Render, Core,
         ],
     ),
     (
         Services,
-        &[Foundation, Models, Platform, Protocol, Services],
+        &[
+            Foundation, Models, System, Platform, Protocol, Transport, Services,
+        ],
     ),
     (
-        Apps,
-        &[Foundation, Graphics, Models, Protocol, Transport, Ui],
+        Shell,
+        &[Foundation, Models, System, Protocol, Ui, Shellkit, Shell],
     ),
+    (Apps, &[Foundation, Models, System, Protocol, Ui]),
     (
         Tools,
         &[
-            Foundation, Graphics, Models, Platform, Protocol, Transport, Render, Ui, Tools,
+            Foundation, Graphics, Models, System, Platform, Protocol, Transport, Render, Ui,
+            Shellkit, Tools,
+        ],
+    ),
+    (
+        Testing,
+        &[
+            Foundation, Graphics, Models, System, Platform, Protocol, Transport, Render, Ui,
+            Shellkit, Core, Services, Shell, Apps, Tools, Testing,
         ],
     ),
 ];
 
-/// Layers that must not reach other layers through any chain of dependencies, exceptions included: the toolkit never
-/// reaches the server, a shell process or a daemon.
-pub const DENIED_PATHS: &[(Layer, &[Layer])] = &[(Ui, &[Core, Shell, Services])];
+/// The closed layers: none of their problems may be listed in the remaining-work file.
+pub const ENFORCED: &[Layer] = &[];
 
-/// Crates that must not reach these crates through any chain of normal dependencies: the public transport speaks
-/// standard Wayland protocols only, never the desktop's private ones or another compositor's extensions, and the
-/// public crates that applications link stay off the private protocols and the privileged shell client.
-pub const DENIED_CRATES: &[(&str, &[&str])] = &[
+/// The layers whose sources must stay pure: no I/O, no threads, no `unsafe`, no FFI.
+pub const PURE_LAYERS: &[Layer] = &[Foundation, Models];
+
+/// The standard library modules a pure source must not use.
+pub const IMPURE: &[&str] = &[
+    "std::fs",
+    "std::net",
+    "std::process",
+    "std::env",
+    "std::thread",
+];
+
+/// The shell host, the one `shell` crate that may depend on other `shell` crates: the components it runs.
+pub const SHELL_HOST: &str = "cupertino-shell";
+
+/// The `shell` crates that are programs of their own, never components of the host.
+pub const SEPARATE_PROGRAMS: &[&str] = &[
+    "cupertino-login",
+    "cupertino-prompts",
+    "cupertino-screenshot",
+];
+
+/// Crates that must not reach these crates through any chain of normal dependencies, external crates included. A name
+/// ending in `*` stands for every crate it starts. The public transport speaks standard protocols only, the public
+/// protocol crate stays off the private protocols, the toolkit stays off the private protocols and the privileged shell
+/// client, and the toolkit's renderer stays off the window system.
+pub const WINDOW_SYSTEM: &[(&str, &[&str])] = &[
     (
         "cupertino-wayland-client",
         &[
@@ -174,110 +227,125 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
     ),
     ("cupertino-app-protocols", &["cupertino-protocols"]),
     (
-        "cupertino-protocol-app",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-menus",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-wayland",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-abi",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
         "cupertino-kit",
         &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
-        "cupertino-ui-controls",
+        "cupertino-ui-*",
         &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-core",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-layout",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-platform",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-gpu",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-ui-wayland",
-            "cupertino-wayland-client",
-            "cupertino-server",
-            "smithay",
-            "wayland-client",
-            "wayland-backend",
-            "wayland-protocols",
-            "wayland-server",
-            "pipewire",
-        ],
     ),
     (
         "cupertino-ui-render",
-        &[
-            "cupertino-protocols",
-            "cupertino-shell-client",
-            "cupertino-ui-wayland",
-            "cupertino-wayland-client",
-            "cupertino-server",
-            "smithay",
-            "wayland-client",
-            "wayland-backend",
-            "wayland-protocols",
-            "wayland-server",
-            "pipewire",
-        ],
+        &["cupertino-ui-wayland", "cupertino-wayland-client"],
     ),
-    (
-        "cupertino-ui-test",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-text",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    (
-        "cupertino-ui-theme",
-        &["cupertino-protocols", "cupertino-shell-client"],
-    ),
-    ("cupertino-files", &["cupertino-shell-client"]),
-    ("cupertino-settings", &["cupertino-shell-client"]),
-    ("cupertino-scene", RENDERER_AND_PROTOCOL),
-    ("cupertino-render-api", RENDERER_AND_PROTOCOL),
-    ("cupertino-effects", RENDERER_AND_PROTOCOL),
-    ("cupertino-wm", RENDERER_AND_PROTOCOL),
-    ("cupertino-stage", RENDERER_AND_PROTOCOL),
 ];
 
-/// What the scene, the renderer seam and the policy models that feed them must never reach: a graphics API, the
-/// compositor library, a window-system protocol, the desktop's private protocols, or the server that implements the
-/// renderer. Keeping them out of the dependency closure is what lets another GPU backend replace the GLES one.
-const RENDERER_AND_PROTOCOL: &[&str] = &[
-    "smithay",
-    "wgpu",
-    "wgpu-core",
-    "wgpu-hal",
-    "wayland-server",
-    "wayland-client",
-    "wayland-backend",
-    "wayland-protocols",
-    "cupertino-glass",
-    "cupertino-protocols",
-    "cupertino-server",
+/// A facade: the crates that a crate of `layers` never depends on, in any kind of dependency, and reaches through
+/// `facade` instead.
+#[derive(Clone, Copy, Debug)]
+pub struct Facade {
+    pub hidden: &'static [&'static str],
+    pub facade: &'static str,
+    pub layers: &'static [Layer],
+}
+
+/// The toolkit's facades.
+pub const FACADES: &[Facade] = &[
+    Facade {
+        hidden: &[
+            "cupertino-ui-core",
+            "cupertino-ui-controls",
+            "cupertino-ui-text",
+            "cupertino-ui-render",
+            "cupertino-ui-wayland",
+            "cupertino-ui-test",
+            "cupertino-ui-abi",
+            "cupertino-theme",
+            "cupertino-animation",
+            "cupertino-raster-math",
+            "cupertino-gpu",
+            "cupertino-wayland-client",
+            "cupertino-app-protocols",
+        ],
+        facade: "cupertino-kit",
+        layers: &[Shell, Apps],
+    },
+    Facade {
+        hidden: &["cupertino-shell-client", "cupertino-protocols"],
+        facade: "cupertino-kit-shell",
+        layers: &[Shell, Apps],
+    },
 ];
+
+/// External crates that only some layers may depend on directly. A name ending in `*` stands for every crate it
+/// starts.
+#[derive(Clone, Copy, Debug)]
+pub struct External {
+    pub crates: &'static [&'static str],
+    /// The layers that may depend on them in any kind of dependency.
+    pub layers: &'static [Layer],
+    /// The layers that may depend on them as dev-dependencies only.
+    pub dev_layers: &'static [Layer],
+}
+
+/// Where the external crates that carry a layer's concerns may be used.
+pub const EXTERNAL_CRATES: &[External] = &[
+    External {
+        crates: &["smithay", "smithay-*"],
+        layers: &[Core],
+        dev_layers: &[],
+    },
+    External {
+        crates: &["tiny-skia", "resvg", "usvg", "image", "png"],
+        layers: &[Graphics, System, Render, Ui, Core, Services, Tools, Testing],
+        dev_layers: &[Models],
+    },
+    External {
+        crates: &[
+            "wayland-client",
+            "wayland-backend",
+            "wayland-protocols*",
+            "wayland-scanner",
+        ],
+        layers: &[
+            Protocol, Transport, Ui, Shellkit, Core, Services, Tools, Testing,
+        ],
+        dev_layers: &[],
+    },
+    External {
+        crates: &["xkbcommon"],
+        layers: &[Transport, Ui, Core, Services, Tools, Testing],
+        dev_layers: &[],
+    },
+    External {
+        crates: &["wayland-server"],
+        layers: &[Protocol, Core, Testing],
+        dev_layers: &Layer::ALL,
+    },
+    External {
+        crates: &["zbus"],
+        layers: &[
+            System, Platform, Ui, Shellkit, Core, Services, Shell, Apps, Tools, Testing,
+        ],
+        dev_layers: &[],
+    },
+    External {
+        crates: &["libc", "rustix", "nix", "inotify", "notify"],
+        layers: &[
+            Graphics, System, Platform, Protocol, Transport, Render, Ui, Shellkit, Core, Services,
+            Shell, Apps, Tools, Testing,
+        ],
+        dev_layers: &[],
+    },
+];
+
+/// Whether `name` is `pattern`, or starts with it when `pattern` ends in `*`.
+pub fn matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => pattern == name,
+    }
+}
 
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.
 pub fn allows(rules: Rules, from: Layer, to: Layer) -> bool {
@@ -286,87 +354,15 @@ pub fn allows(rules: Rules, from: Layer, to: Layer) -> bool {
         .any(|(l, to_layers)| *l == from && to_layers.contains(&to))
 }
 
-/// The part of the project that answers for an exception.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Area {
-    Compositor,
-    Rendering,
-    Design,
-    Apps,
-    Services,
-    Packaging,
-}
-
-impl fmt::Display for Area {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Area::Compositor => "compositor",
-            Area::Rendering => "rendering",
-            Area::Design => "design",
-            Area::Apps => "apps",
-            Area::Services => "services",
-            Area::Packaging => "packaging",
-        })
+/// Whether `rules` allow `edge`: a `testing` crate only as a dev-dependency, which every crate may have, and any other
+/// crate as its row says.
+pub fn allows_edge(rules: Rules, edge: &Edge) -> bool {
+    if edge.to_layer == Testing {
+        edge.kind == Kind::Dev
+    } else {
+        allows(rules, edge.from_layer, edge.to_layer)
     }
 }
-
-/// Whether an exception stays or is debt that an issue removes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tracking {
-    /// A reviewed edge that stays: a dev-only edge for tests, or an approved render primitive.
-    Permanent,
-    /// Migration debt, removed by the work of this issue number.
-    Issue(u32),
-}
-
-impl fmt::Display for Tracking {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Tracking::Permanent => f.write_str("permanent"),
-            Tracking::Issue(n) => write!(f, "migration #{n}"),
-        }
-    }
-}
-
-/// A forbidden edge that the check excuses. It matches only an edge of the same kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Exception {
-    pub from: &'static str,
-    pub to: &'static str,
-    pub kind: Kind,
-    pub tracking: Tracking,
-    pub area: Area,
-    pub reason: &'static str,
-}
-
-impl Exception {
-    pub fn matches(&self, edge: &Edge) -> bool {
-        self.from == edge.from && self.to == edge.to && self.kind == edge.kind
-    }
-}
-
-const SOUND_PANE: &str =
-    "the sound pane drives the default sink and the mixer itself until audio goes through a service";
-
-/// Edges that exist today and that [`RULES`] forbid. Stale entries are errors, so the list only shrinks.
-pub const EXCEPTIONS: &[Exception] = &[
-    Exception {
-        from: "cupertino-settings",
-        to: "cupertino-alsa",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(21),
-        area: Area::Services,
-        reason: SOUND_PANE,
-    },
-    Exception {
-        from: "cupertino-settings",
-        to: "cupertino-pipewire",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(21),
-        area: Area::Services,
-        reason: SOUND_PANE,
-    },
-];
 
 /// A dependency between two workspace crates.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -396,30 +392,55 @@ pub fn edges(layers: &BTreeMap<String, Layer>, deps: &BTreeSet<Dep>) -> Vec<Edge
         .collect()
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Problem {
+    /// A dependency the layer table does not allow.
     Forbidden(Edge),
-    DeniedPath(Vec<String>),
-    StaleException(Exception),
-    /// An MPL-2.0 crate with a normal dependency on a crate under a GPL licence: `(from, to, licence of to)`.
-    GplDependency(String, String, String),
-    /// An MPL-2.0 crate without the licence text in a `LICENSE` file next to its manifest.
-    MissingLicenceText(String),
-    /// A crate that must be in the workspace under MPL-2.0 is not there.
-    MissingMplRoot(String),
-    /// A crate that must be under MPL-2.0 is not: `(crate, its licence)`.
-    NonMplRoot(String, String),
-    /// A crate in the normal or build closure of an MPL-2.0 workspace crate, external ones included, whose licence is
-    /// not accepted for it.
-    UnapprovedLicence {
-        root: String,
-        package: String,
-        version: String,
+    /// A crate that reaches a crate of a higher layer through a chain of dependencies, as crate names from the crate.
+    ReachesUp {
+        path: Vec<String>,
+        from_layer: Layer,
+        to_layer: Layer,
+    },
+    /// A `shell` crate that depends on another `shell` crate, other than the host on a component.
+    ComponentsApart(Edge),
+    /// A `shell` or `apps` crate that depends on a crate it reaches through `facade`.
+    Facade { edge: Edge, facade: &'static str },
+    /// A chain of normal dependencies across a window-system boundary, as crate names from the crate.
+    WindowSystem {
+        from_layer: Layer,
+        path: Vec<String>,
+    },
+    /// A direct dependency on an external crate that the crate's layer may not use in that kind of dependency.
+    ExternalCrate {
+        from: String,
+        from_layer: Layer,
+        to: String,
+        kind: Kind,
+    },
+    /// A source of a pure layer that uses `what`: a standard library module, `unsafe` or `ffi`. `file` is relative to
+    /// the crate's directory.
+    Impure {
+        krate: String,
+        layer: Layer,
+        file: String,
+        what: &'static str,
+    },
+    /// A crate whose `license` is missing or no licence expression.
+    UndeclaredLicence {
+        krate: String,
+        layer: Layer,
         licence: String,
     },
+    /// A line of the remaining-work file that is no longer a problem.
+    StaleRemaining(String),
+    /// A line of the remaining-work file for a layer in [`ENFORCED`].
+    EnforcedRemaining(String),
     /// The committed DOT snapshot of the layers, at this path relative to the workspace root, no longer matches the
     /// workspace.
     StaleGraph(String),
+    /// The `clippy.toml` at this path relative to the workspace root differs from the list of disallowed methods.
+    StaleClippy(String),
 }
 
 impl Problem {
@@ -427,47 +448,94 @@ impl Problem {
     pub fn kind(&self) -> &'static str {
         match self {
             Problem::Forbidden(_) => "forbidden_edge",
-            Problem::DeniedPath(_) => "denied_path",
-            Problem::StaleException(_) => "stale_exception",
-            Problem::GplDependency(..) => "gpl_dependency",
-            Problem::MissingLicenceText(_) => "missing_licence_text",
-            Problem::MissingMplRoot(_) => "missing_mpl_root",
-            Problem::NonMplRoot(..) => "non_mpl_root",
-            Problem::UnapprovedLicence { .. } => "unapproved_licence",
+            Problem::ReachesUp { .. } => "reaches_up",
+            Problem::ComponentsApart(_) => "components_apart",
+            Problem::Facade { .. } => "facade",
+            Problem::WindowSystem { .. } => "window_system",
+            Problem::ExternalCrate { .. } => "external_crate",
+            Problem::Impure { .. } => "impure_source",
+            Problem::UndeclaredLicence { .. } => "undeclared_licence",
+            Problem::StaleRemaining(_) => "stale_remaining",
+            Problem::EnforcedRemaining(_) => "enforced_remaining",
             Problem::StaleGraph(_) => "stale_graph",
+            Problem::StaleClippy(_) => "stale_clippy",
         }
     }
 
     /// The crate the problem starts at.
     pub fn from(&self) -> &str {
         match self {
-            Problem::Forbidden(e) => &e.from,
-            Problem::DeniedPath(path) => path.first().map_or("", String::as_str),
-            Problem::StaleException(x) => x.from,
-            Problem::GplDependency(from, ..) => from,
-            Problem::MissingLicenceText(name)
-            | Problem::MissingMplRoot(name)
-            | Problem::NonMplRoot(name, _) => name,
-            Problem::UnapprovedLicence { root, .. } => root,
-            Problem::StaleGraph(_) => "cupertino-layers",
+            Problem::Forbidden(e)
+            | Problem::ComponentsApart(e)
+            | Problem::Facade { edge: e, .. } => &e.from,
+            Problem::ReachesUp { path, .. } | Problem::WindowSystem { path, .. } => {
+                path.first().map_or("", String::as_str)
+            }
+            Problem::ExternalCrate { from, .. } => from,
+            Problem::Impure { krate, .. } | Problem::UndeclaredLicence { krate, .. } => krate,
+            Problem::StaleRemaining(_)
+            | Problem::EnforcedRemaining(_)
+            | Problem::StaleGraph(_)
+            | Problem::StaleClippy(_) => "cupertino-layers",
         }
     }
 
     /// The crate it leads to, when it is about a dependency.
     pub fn to(&self) -> Option<&str> {
         match self {
-            Problem::Forbidden(e) => Some(&e.to),
-            Problem::DeniedPath(path) => path.last().map(String::as_str),
-            Problem::StaleException(x) => Some(x.to),
-            Problem::GplDependency(_, to, _) => Some(to),
-            Problem::UnapprovedLicence { package, .. } => Some(package),
-            Problem::MissingLicenceText(_)
-            | Problem::MissingMplRoot(_)
-            | Problem::NonMplRoot(..)
-            | Problem::StaleGraph(_) => None,
+            Problem::Forbidden(e)
+            | Problem::ComponentsApart(e)
+            | Problem::Facade { edge: e, .. } => Some(&e.to),
+            Problem::ReachesUp { path, .. } | Problem::WindowSystem { path, .. } => {
+                path.last().map(String::as_str)
+            }
+            Problem::ExternalCrate { to, .. } => Some(to),
+            _ => None,
         }
     }
+
+    /// The layer of the crate the problem starts at, for a problem of the rules.
+    pub fn layer(&self) -> Option<Layer> {
+        match self {
+            Problem::Forbidden(e)
+            | Problem::ComponentsApart(e)
+            | Problem::Facade { edge: e, .. } => Some(e.from_layer),
+            Problem::ReachesUp { from_layer, .. }
+            | Problem::WindowSystem { from_layer, .. }
+            | Problem::ExternalCrate { from_layer, .. } => Some(*from_layer),
+            Problem::Impure { layer, .. } | Problem::UndeclaredLicence { layer, .. } => {
+                Some(*layer)
+            }
+            _ => None,
+        }
+    }
+
+    /// The problem's line in the remaining-work file, `<layer> <kind> <crate> …`, for a problem of the rules. It
+    /// names only what the problem is about, so it changes only when the problem does.
+    pub fn line(&self) -> Option<String> {
+        let layer = self.layer()?;
+        let kind = self.kind();
+        let rest = match self {
+            Problem::Forbidden(e)
+            | Problem::ComponentsApart(e)
+            | Problem::Facade { edge: e, .. } => {
+                format!("{} -> {} {}", e.from, e.to, e.kind)
+            }
+            Problem::ReachesUp { .. } | Problem::WindowSystem { .. } => {
+                format!("{} -> {}", self.from(), self.to().unwrap_or_default())
+            }
+            Problem::ExternalCrate { from, to, kind, .. } => format!("{from} -> {to} {kind}"),
+            Problem::Impure {
+                krate, file, what, ..
+            } => format!("{krate} {file} {what}"),
+            Problem::UndeclaredLicence { krate, .. } => krate.clone(),
+            _ => return None,
+        };
+        Some(format!("{layer} {kind} {rest}"))
+    }
 }
+
+const WRITE_REMAINING: &str = "cargo run -q -p cupertino-layers -- --write-remaining";
 
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -477,114 +545,130 @@ impl fmt::Display for Problem {
                 "{} ({}) must not depend on {} ({}), {} dependency",
                 e.from, e.from_layer, e.to, e.to_layer, e.kind
             ),
-            Problem::DeniedPath(path) => {
-                write!(f, "denied dependency path {}", path.join(" -> "))
-            }
-            Problem::StaleException(x) => write!(
-                f,
-                "{} no longer has a {} dependency on {}: remove its exception",
-                x.from, x.kind, x.to
-            ),
-            Problem::GplDependency(from, to, licence) => write!(
-                f,
-                "{from} is MPL-2.0 and must not depend on {to} ({licence}), normal dependency"
-            ),
-            Problem::MissingLicenceText(name) => {
-                write!(
-                    f,
-                    "{name} is MPL-2.0 and has no LICENSE with the MPL-2.0 text"
-                )
-            }
-            Problem::MissingMplRoot(name) => {
-                write!(f, "required MPL root {name} is missing from workspace")
-            }
-            Problem::NonMplRoot(name, licence) => {
-                write!(f, "required MPL root {name} has non-MPL licence {licence}")
-            }
-            Problem::UnapprovedLicence {
-                root,
-                package,
-                version,
-                licence,
+            Problem::ReachesUp {
+                path,
+                from_layer,
+                to_layer,
             } => write!(
                 f,
-                "{root} MPL closure: {package} {version} has unapproved licence {licence}"
+                "{} ({from_layer}) reaches up to {} ({to_layer}): {}",
+                self.from(),
+                self.to().unwrap_or_default(),
+                path.join(" -> ")
+            ),
+            Problem::ComponentsApart(e) => write!(
+                f,
+                "{} must not depend on {}: shell crates stay apart, {} dependency",
+                e.from, e.to, e.kind
+            ),
+            Problem::Facade { edge, facade } => write!(
+                f,
+                "{} ({}) must reach {} through {facade}, {} dependency",
+                edge.from, edge.from_layer, edge.to, edge.kind
+            ),
+            Problem::WindowSystem { path, .. } => {
+                write!(f, "window-system boundary crossed: {}", path.join(" -> "))
+            }
+            Problem::ExternalCrate {
+                from,
+                from_layer,
+                to,
+                kind,
+            } => write!(
+                f,
+                "{from} ({from_layer}) must not use the external crate {to}, {kind} dependency"
+            ),
+            Problem::Impure {
+                krate,
+                layer,
+                file,
+                what,
+            } => write!(f, "{krate} ({layer}) is pure and its {file} uses {what}"),
+            Problem::UndeclaredLicence { krate, licence, .. } => {
+                write!(f, "{krate} declares no licence expression (`{licence}`)")
+            }
+            Problem::StaleRemaining(line) => write!(
+                f,
+                "{REMAINING} lists `{line}`, which is no longer a problem: {WRITE_REMAINING}"
+            ),
+            Problem::EnforcedRemaining(line) => write!(
+                f,
+                "{REMAINING} lists `{line}` of an enforced layer: fix it instead"
             ),
             Problem::StaleGraph(path) => write!(
                 f,
                 "{path} is out of date: cargo run -q -p cupertino-layers -- --graph > {path}"
             ),
+            Problem::StaleClippy(path) => write!(
+                f,
+                "{path} differs from the disallowed methods: cargo run -q -p cupertino-layers -- --write-clippy"
+            ),
         }
     }
 }
 
-/// Every edge `rules` forbid that `exceptions` do not excuse, every path `denied` forbids, then every exception
-/// without a matching edge.
-pub fn check(
-    rules: Rules,
-    edges: &[Edge],
-    exceptions: &[Exception],
-    denied: &[(Layer, &[Layer])],
-) -> Vec<Problem> {
+/// The problems of the dependency rules: every edge the table forbids, every chain that reaches up, every dependency
+/// between `shell` crates other than the host's on a component, and every dependency on a crate behind a facade.
+pub fn check(rules: Rules, edges: &[Edge], facades: &[Facade]) -> Vec<Problem> {
     let mut out: Vec<Problem> = edges
         .iter()
-        .filter(|e| !allows(rules, e.from_layer, e.to_layer) && exception(exceptions, e).is_none())
+        .filter(|e| !allows_edge(rules, e))
         .cloned()
         .map(Problem::Forbidden)
         .collect();
+    out.extend(reaches_up(edges));
     out.extend(
-        denied_paths(edges, denied)
-            .into_iter()
-            .map(Problem::DeniedPath),
+        edges
+            .iter()
+            .filter(|e| e.from_layer == Shell && e.to_layer == Shell)
+            .filter(|e| e.from != SHELL_HOST || SEPARATE_PROGRAMS.contains(&e.to.as_str()))
+            .cloned()
+            .map(Problem::ComponentsApart),
     );
-    for x in exceptions {
-        if !edges.iter().any(|e| x.matches(e)) {
-            out.push(Problem::StaleException(*x));
-        }
+    for facade in facades {
+        out.extend(
+            edges
+                .iter()
+                .filter(|e| {
+                    facade.layers.contains(&e.from_layer) && facade.hidden.contains(&e.to.as_str())
+                })
+                .map(|e| Problem::Facade {
+                    edge: e.clone(),
+                    facade: facade.facade,
+                }),
+        );
     }
     out
 }
 
-/// The exception that excuses `edge`.
-pub fn exception<'a>(exceptions: &'a [Exception], edge: &Edge) -> Option<&'a Exception> {
-    exceptions.iter().find(|x| x.matches(edge))
-}
-
-/// Whether the SPDX expression `licence` names `MPL-2.0` first: the crate's own code is under the MPL (a bundled font
-/// or similar may add terms with `AND`).
-pub fn is_mpl(licence: &str) -> bool {
-    licence.split_whitespace().next() == Some("MPL-2.0")
-}
-
-/// Whether the SPDX expression `licence` names a GPL or AGPL licence (LGPL is not one).
-pub fn is_gpl(licence: &str) -> bool {
-    licence
-        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+')))
-        .any(|id| id.starts_with("GPL-") || id.starts_with("AGPL-"))
-}
-
-/// A problem for each normal dependency of an MPL-2.0 workspace crate on a workspace crate under a GPL licence, and for
-/// each MPL-2.0 crate for which `has_text` finds no licence text. `licences` is the SPDX expression of each workspace
-/// crate; build and dev dependencies are not linked into the crate and do not count.
-pub fn licence_problems(
-    licences: &BTreeMap<String, String>,
+/// A problem for each direct dependency of a workspace crate on an external crate (one without a layer in `layers`)
+/// that `externals` keep out of the crate's layer for that kind of dependency.
+pub fn external_problems(
+    layers: &BTreeMap<String, Layer>,
     deps: &BTreeSet<Dep>,
-    has_text: impl Fn(&str) -> bool,
+    externals: &[External],
 ) -> Vec<Problem> {
-    let mut out: Vec<Problem> = deps
-        .iter()
-        .filter(|(_, _, kind)| *kind == Kind::Normal)
-        .filter_map(|(from, to, _)| {
-            let (from_licence, to_licence) = (licences.get(from)?, licences.get(to)?);
-            (is_mpl(from_licence) && is_gpl(to_licence))
-                .then(|| Problem::GplDependency(from.clone(), to.clone(), to_licence.clone()))
+    deps.iter()
+        .filter(|(_, to, _)| !layers.contains_key(to))
+        .filter_map(|(from, to, kind)| {
+            let from_layer = *layers.get(from)?;
+            let rule = externals
+                .iter()
+                .find(|x| x.crates.iter().any(|p| matches(p, to)))?;
+            let allowed = rule.layers.contains(&from_layer)
+                || *kind == Kind::Dev && rule.dev_layers.contains(&from_layer);
+            (!allowed).then(|| Problem::ExternalCrate {
+                from: from.clone(),
+                from_layer,
+                to: to.clone(),
+                kind: *kind,
+            })
         })
-        .collect();
-    out.extend(
-        licences
-            .iter()
-            .filter(|(name, licence)| is_mpl(licence) && !has_text(name))
-            .map(|(name, _)| Problem::MissingLicenceText(name.clone())),
-    );
-    out
+        .collect()
+}
+
+/// Whether `licence` is a licence expression.
+pub fn is_licence(licence: &str) -> bool {
+    !licence.trim().is_empty()
+        && spdx::Expression::parse_mode(licence, spdx::ParseMode::LAX).is_ok()
 }
